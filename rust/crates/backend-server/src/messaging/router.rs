@@ -32,17 +32,19 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use silverhand_backend_core::messaging::{
-    ConversationId, DirectLineAuthority, SendMessageOutcome, SendMessageUnitOfWork, UserId,
+use silverhand_backend_core::{
+    identity::{ConversationId, UserId},
+    messaging::{
+        AddressRefusal, ChannelAccess, ChannelAccessRefusal, DirectLineAuthority, SendCapability,
+        SendMessageOutcome, SendMessageUnitOfWork, TargetAddress,
+    },
+    runtime_credential::RuntimePrincipal,
 };
 use std::sync::Arc;
 
 use super::{
     ack::send_ack,
-    adapters::{
-        AddressRefusal, AgentCredential, AgentRefusal, ChannelAccess, ChannelAccessRefusal,
-        HumanRefusal, SendCapability, SendPorts, TargetAddress, agent_send, human_send,
-    },
+    adapters::{AgentRefusal, HumanRefusal, SendPorts, agent_send, human_send},
     admission::PayloadRefusal,
     agent_output::agent_send_output,
     envelope::fence_message_send_body,
@@ -53,12 +55,6 @@ use super::{
         invalid_input, missing_identifier,
     },
 };
-
-/// The authenticated human behind a request, injected upstream. Deliberately carries
-/// only the identity: anything else it might carry would be a fact this door should ask
-/// its own gates about.
-#[derive(Clone, Debug)]
-pub struct HumanPrincipal(pub UserId);
 
 /// Everything the doors need, supplied by whoever composes them.
 ///
@@ -114,7 +110,7 @@ where
     U: SendMessageUnitOfWork + Send + Sync + 'static,
 {
     // The principal is read, never derived. Absent means the composition is wrong.
-    let Some(HumanPrincipal(author)) = request.extensions().get::<HumanPrincipal>().cloned() else {
+    let Some(author) = request.extensions().get::<UserId>().cloned() else {
         return composition_failure("human principal");
     };
     // The channel this send is for is the caller's own coordinate, checked by the gate
@@ -143,7 +139,6 @@ where
 }
 
 async fn agent_route<C, T, K, D, U>(
-    Path(aid): Path<String>,
     State(state): Shared<C, T, K, D, U>,
     request: Request,
 ) -> Response
@@ -154,14 +149,7 @@ where
     D: DirectLineAuthority + Send + Sync + 'static,
     U: SendMessageUnitOfWork + Send + Sync + 'static,
 {
-    // Presence only, and that is the whole of this parameter's role here. The path names
-    // the CREDENTIAL, which is whoever authenticates the request's business; where the
-    // words go is a required field of the body. Re-deriving either from this string
-    // would be a second answer to a question that already has one.
-    if aid.is_empty() {
-        return missing_identifier("agent id required").into_response();
-    }
-    let Some(credential) = request.extensions().get::<AgentCredential>().cloned() else {
+    let Some(credential) = request.extensions().get::<RuntimePrincipal>().cloned() else {
         return composition_failure("agent credential");
     };
     let body = collected(request).await;
@@ -303,6 +291,14 @@ fn internal(body: &'static str) -> Response {
         .into_response()
 }
 
+fn authority_failure(cause: &crate::error::BoundaryFailure) -> Response {
+    tracing::error!(
+        error_chain = %crate::error::describe(cause),
+        "message-send pre-send authority failed"
+    );
+    internal("Internal Server Error")
+}
+
 /// Each door maps ITS OWN reasons to its own words, and that mapping is the only thing
 /// allowed to differ — which is why it lives at the route, not in the door. Neither
 /// function has an arm for a reason its door cannot produce, because neither refusal
@@ -315,6 +311,7 @@ fn human_wire(refusal: HumanRefusal) -> Response {
         HumanRefusal::Access(ChannelAccessRefusal::Forbidden) => {
             gate_refusal(StatusCode::FORBIDDEN, "forbidden")
         }
+        HumanRefusal::Authority(cause) => authority_failure(&cause),
         HumanRefusal::Payload(PayloadRefusal::Shape(issues)) => {
             invalid_input(issues).into_response()
         }
@@ -344,6 +341,7 @@ fn agent_wire(refusal: AgentRefusal) -> Response {
         // 403 degrades to `forbidden` — and it reads the bucket to tell the agent what a human
         // has to grant.
         AgentRefusal::CapabilityDenied => capability_denied(),
+        AgentRefusal::Authority(cause) => authority_failure(&cause),
         AgentRefusal::Send(cause) => refused_send(&cause),
     }
 }

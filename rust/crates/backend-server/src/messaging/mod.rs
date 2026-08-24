@@ -31,12 +31,14 @@ pub(crate) mod outcome;
 pub(crate) mod references;
 pub mod router;
 pub(crate) mod send_request;
+mod target_observer;
 pub(crate) mod unresolved_wire;
 
 /// The pre-parse body bound. Public because it is part of the contract rather than an
 /// implementation detail: the refusal reports it, and a client that pre-checks its own
 /// request needs the same number.
 pub use send_request::MESSAGE_SEND_MAX_BODY_BYTES;
+pub use target_observer::TargetAddressRefusalLog;
 
 // The shared contracts this crate answers to. A test module rather than a public path: the
 // artifacts they read are checked in beside the other implementation, and the rule they

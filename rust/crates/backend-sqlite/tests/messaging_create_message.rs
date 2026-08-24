@@ -4,6 +4,7 @@
 //! artifact under the system temp root; no live database is opened, and the store
 //! under test provisions nothing.
 
+use silverhand_backend_core::identity::{AgentId, ConversationId, UserId};
 use silverhand_backend_core::messaging::ParticipantHandle;
 use silverhand_backend_core::messaging::mention_cc::{
     CommittedMentionCopy, MentionCopyOutcome, MentionCopySource, render_copy_body,
@@ -16,12 +17,12 @@ use silverhand_backend_core::messaging::post_commit::{
     announce_send,
 };
 use silverhand_backend_core::messaging::{
-    ActiveAuthor, ActorRefusal, AddressedPrincipals, AgentId, AttachmentId, ConversationId,
-    ConversationRefusal, DirectLineAuthority, EnvironmentUnavailable, FromKind,
-    MAX_MESSAGE_CONTENT_BYTES, MessageAuthor, MessageContent, MessageId, MessageSeq, PrincipalKind,
-    ReferencePositions, ReplyTargetRefusal, RuntimeKind, SendActor, SendClock, SendDestination,
-    SendEntropy, SendMessage, SendMessageDraft, SendMessageError, SendMessageUnitOfWork,
-    THREAD_PREVIEW_MAX_UTF16, ThreadListEntry, ThreadRootId, ThreadRootRefusal, UserId,
+    ActiveAuthor, ActorRefusal, AddressedPrincipals, AttachmentId, ConversationRefusal,
+    DirectLineAuthority, EnvironmentUnavailable, FromKind, MAX_MESSAGE_CONTENT_BYTES,
+    MessageAuthor, MessageContent, MessageId, MessageSeq, PrincipalKind, ReferencePositions,
+    ReplyTargetRefusal, RuntimeKind, SendActor, SendClock, SendDestination, SendEntropy,
+    SendMessage, SendMessageDraft, SendMessageError, SendMessageUnitOfWork,
+    THREAD_PREVIEW_MAX_UTF16, ThreadListEntry, ThreadRootId, ThreadRootRefusal,
     attachments::AttachmentRef, thread_root_preview,
 };
 use silverhand_backend_core::persistence::PersistenceFailure;
@@ -29,8 +30,10 @@ use silverhand_backend_sqlite::messaging::{HostEnvironment, MessagingStore};
 use sqlx::{Row, SqliteConnection};
 use std::{
     error::Error,
+    future::Future,
     path::PathBuf,
     sync::atomic::{AtomicUsize, Ordering},
+    task::{Context, Poll, Waker},
 };
 use tempfile::TempDir;
 
@@ -359,7 +362,7 @@ fn draft(actor: SendActor, conversation: &str, content: &str) -> SendMessageDraf
 struct GrantsEveryAddressedAgent;
 
 impl DirectLineAuthority for GrantsEveryAddressedAgent {
-    fn direct_lines(
+    async fn direct_lines(
         &self,
         _author: &UserId,
         addressed: &AddressedPrincipals,
@@ -378,7 +381,7 @@ impl DirectLineAuthority for GrantsEveryAddressedAgent {
 struct Grants(Vec<(&'static str, &'static str)>);
 
 impl DirectLineAuthority for Grants {
-    fn direct_lines(
+    async fn direct_lines(
         &self,
         _author: &UserId,
         addressed: &AddressedPrincipals,
@@ -396,8 +399,17 @@ impl DirectLineAuthority for Grants {
     }
 }
 
+fn ready<F: Future>(future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    let mut context = Context::from_waker(Waker::noop());
+    match future.as_mut().poll(&mut context) {
+        Poll::Ready(output) => output,
+        Poll::Pending => panic!("the driver-free authority unexpectedly suspended"),
+    }
+}
+
 fn prepared_with(draft: SendMessageDraft, authority: &impl DirectLineAuthority) -> SendMessage {
-    SendMessage::prepare(draft, &EveryBracketedRun, authority).unwrap()
+    ready(SendMessage::prepare(draft, &EveryBracketedRun, authority)).unwrap()
 }
 
 fn mentioning_outsider(conversation: &str) -> SendMessageDraft {
@@ -413,7 +425,12 @@ fn grants_outsider() -> Grants {
 }
 
 fn prepared(draft: SendMessageDraft) -> SendMessage {
-    SendMessage::prepare(draft, &EveryBracketedRun, &GrantsEveryAddressedAgent).unwrap()
+    ready(SendMessage::prepare(
+        draft,
+        &EveryBracketedRun,
+        &GrantsEveryAddressedAgent,
+    ))
+    .unwrap()
 }
 
 fn send(actor: SendActor, conversation: &str, content: &str) -> SendMessage {

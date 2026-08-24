@@ -13,9 +13,9 @@ use axum::{
 use serde_json::Value;
 use silverhand_backend_core::{
     host_runtime::{CreateHostInvite, EntropySource, SystemClock},
-    persistence::PersistenceFailure,
+    identity::UserId,
 };
-use silverhand_backend_server::host_runtime::{self, HOSTS_PATH, SessionUserResolver};
+use silverhand_backend_server::host_runtime::{self, HOSTS_PATH};
 use silverhand_backend_sqlite::host_runtime::SqliteHostRuntimeStore;
 use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
 use tempfile::TempDir;
@@ -46,18 +46,6 @@ impl EntropySource for FixedEntropy {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Sessions;
-
-impl SessionUserResolver for Sessions {
-    async fn resolve_session_user(
-        &self,
-        bearer_token: String,
-    ) -> Result<Option<String>, PersistenceFailure> {
-        Ok((bearer_token == "session-ok").then(|| "user-1".to_owned()))
-    }
-}
-
 async fn fixture(name: &str) -> (TempDir, std::path::PathBuf, SqliteHostRuntimeStore) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join(name);
@@ -77,7 +65,6 @@ async fn fixture(name: &str) -> (TempDir, std::path::PathBuf, SqliteHostRuntimeS
 fn app(store: SqliteHostRuntimeStore) -> Router {
     host_runtime::router(
         CreateHostInvite::new(store, FixedEntropy::sequence(), SystemClock),
-        Sessions,
         None,
     )
 }
@@ -170,11 +157,13 @@ async fn real_credential_failure_rolls_back_and_logs_once_without_the_secret() {
 }
 
 async fn request(app: &Router, body: &'static str) -> (StatusCode, String) {
-    let request = Request::post(HOSTS_PATH)
-        .header("authorization", "Bearer session-ok")
+    let mut request = Request::post(HOSTS_PATH)
         .header("content-type", "application/json")
         .body(Body::from(body))
         .unwrap();
+    request
+        .extensions_mut()
+        .insert(UserId::parse("user-1").unwrap());
     let response = app.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();

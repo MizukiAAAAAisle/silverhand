@@ -253,12 +253,15 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use silverhand_backend_core::messaging::{
-        AgentId, AttachmentId, ConversationId, EnvironmentUnavailable, ReplyTargetRefusal,
-        SendEntropy, ThreadRootRefusal,
-        freshness::{FreshnessGuardInvariant, StaleEventId},
-    };
     use silverhand_backend_core::persistence::PersistenceFailure;
+    use silverhand_backend_core::{
+        identity::{AgentId, ConversationId},
+        messaging::{
+            AttachmentId, EnvironmentUnavailable, ReplyTargetRefusal, SendEntropy,
+            ThreadRootRefusal,
+            freshness::{FreshnessGuardInvariant, StaleEventId},
+        },
+    };
     use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;

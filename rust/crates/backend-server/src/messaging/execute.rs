@@ -12,10 +12,13 @@
 //! stage takes the actor as data: it has no arm per principal, so there is no place
 //! for the two paths to drift.
 
-use silverhand_backend_core::messaging::{
-    AgentId, ConversationId, DirectLineAuthority, FromKind, MessageReference, PrincipalKind,
-    ReferencePositions, SendActor, SendDestination, SendMessage, SendMessageDraft,
-    SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, UserId,
+use silverhand_backend_core::{
+    identity::{AgentId, ConversationId, UserId},
+    messaging::{
+        DirectLineAuthority, FromKind, MessageReference, PrincipalKind, ReferencePositions,
+        SendActor, SendDestination, SendMessage, SendMessageDraft, SendMessageError,
+        SendMessageOutcome, SendMessageUnitOfWork,
+    },
 };
 
 use super::admission::ValidatedSendPayload;
@@ -89,7 +92,7 @@ where
     };
 
     let source_conversation = draft.source_conversation.clone();
-    let command = SendMessage::prepare(draft, positions, authority)?;
+    let command = SendMessage::prepare(draft, positions, authority).await?;
     let outcome = unit_of_work.send_message(command).await?;
     report_unresolved_references(&source_conversation, &outcome);
     Ok(outcome)
@@ -178,10 +181,11 @@ fn unresolved_tokens(references: &[MessageReference]) -> String {
 mod tests {
     use std::sync::Mutex;
 
-    use silverhand_backend_core::messaging::{
-        AddressedPrincipals, AgentId, MessageContent, UserId,
-    };
     use silverhand_backend_core::persistence::PersistenceFailure;
+    use silverhand_backend_core::{
+        identity::{AgentId, UserId},
+        messaging::{AddressedPrincipals, MessageContent},
+    };
 
     use super::*;
     use crate::messaging::admission::validate_human_payload;
@@ -223,7 +227,7 @@ mod tests {
     struct GrantsNothing;
 
     impl DirectLineAuthority for GrantsNothing {
-        fn direct_lines(
+        async fn direct_lines(
             &self,
             _author: &UserId,
             _addressed: &AddressedPrincipals,

@@ -16,6 +16,7 @@
 //! are what stop a Rust-only snapshot from hiding in that field.
 
 use std::{
+    convert::Infallible,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -26,19 +27,18 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::{Value, json};
-use silverhand_backend_core::messaging::{
-    AddressedPrincipals, AgentId, ConversationId, ConversationRefusal, DirectLineAuthority,
-    SendDestination, SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
-    UserId,
-};
 use silverhand_backend_core::persistence::PersistenceFailure;
-use silverhand_backend_server::messaging::{
-    adapters::{
-        AddressRefusal, AgentCredential, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
-        ResolvedStream, SendCapability, TargetAddress,
+use silverhand_backend_core::{
+    identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
+    messaging::{
+        AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
+        ConversationRefusal, DirectLineAuthority, DirectPairAllocation, ResolvedStream,
+        SendCapability, SendDestination, SendMessage, SendMessageError, SendMessageOutcome,
+        SendMessageUnitOfWork, TargetAddress,
     },
-    router::{HumanPrincipal, SendState, send_router},
+    runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
+use silverhand_backend_server::messaging::router::{SendState, send_router};
 use tower::ServiceExt;
 
 const CONVERSATION: &str = "conv-1";
@@ -100,12 +100,14 @@ impl SendMessageUnitOfWork for RecordingUnit {
 struct OpenChannel;
 
 impl ChannelAccess for OpenChannel {
-    fn may_post(
+    type Error = Infallible;
+
+    async fn may_post(
         &self,
         _channel: &ConversationId,
         _author: &UserId,
-    ) -> Result<(), ChannelAccessRefusal> {
-        Ok(())
+    ) -> Result<Result<(), ChannelAccessRefusal>, Self::Error> {
+        Ok(Ok(()))
     }
 }
 
@@ -115,31 +117,40 @@ impl ChannelAccess for OpenChannel {
 struct RecordingAddress(Arc<Mutex<Option<String>>>);
 
 impl TargetAddress for RecordingAddress {
-    fn resolve(&self, _agent: &AgentId, target: &str) -> Result<ResolvedStream, AddressRefusal> {
+    type Error = Infallible;
+
+    async fn resolve(
+        &self,
+        _agent: &AgentId,
+        target: &str,
+        _allocation: DirectPairAllocation,
+    ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
         *self.0.lock().unwrap() = Some(target.to_owned());
-        Ok(ResolvedStream {
+        Ok(Ok(ResolvedStream {
             conversation: ConversationId::parse(CONVERSATION).unwrap(),
             thread_root: None,
-        })
+        }))
     }
 }
 
 struct GrantsSend;
 
 impl SendCapability for GrantsSend {
-    fn may_send_messages(
+    type Error = Infallible;
+
+    async fn may_send_messages(
         &self,
         _agent: &AgentId,
         _conversation: &ConversationId,
-    ) -> Result<(), CapabilityDenied> {
-        Ok(())
+    ) -> Result<Result<(), CapabilityDenied>, Self::Error> {
+        Ok(Ok(()))
     }
 }
 
 struct GrantsNothing;
 
 impl DirectLineAuthority for GrantsNothing {
-    fn direct_lines(
+    async fn direct_lines(
         &self,
         _author: &UserId,
         _addressed: &AddressedPrincipals,
@@ -193,12 +204,18 @@ fn request(case: &Value) -> Request<Body> {
         "human" => {
             request
                 .extensions_mut()
-                .insert(HumanPrincipal(UserId::parse(USER).unwrap()));
+                .insert(UserId::parse(USER).unwrap());
         }
         _ => {
-            request.extensions_mut().insert(AgentCredential::AgentSlot {
-                agent: AgentId::parse(AGENT).unwrap(),
-            });
+            request
+                .extensions_mut()
+                .insert(RuntimePrincipal::AgentSlot {
+                    agent: AgentId::parse(AGENT).unwrap(),
+                    custody: RuntimeCustody::new(
+                        RuntimeGeneration::new(1).unwrap(),
+                        DaemonInstanceId::parse("daemon-1").unwrap(),
+                    ),
+                });
         }
     }
     request

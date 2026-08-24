@@ -156,7 +156,7 @@ pub trait DirectLineAuthority {
         &self,
         author: &UserId,
         addressed: &AddressedPrincipals,
-    ) -> Result<Vec<AgentId>, PersistenceFailure>;
+    ) -> impl Future<Output = Result<Vec<AgentId>, PersistenceFailure>> + Send;
 }
 
 /// One create-message request, prepared: every field has satisfied its own
@@ -187,7 +187,7 @@ impl SendMessage {
     /// author may open a line to. An agent author asks nothing: a direct line is a
     /// person's to open, so the grants are empty by construction rather than by a
     /// caller's say-so.
-    pub fn prepare(
+    pub async fn prepare(
         draft: SendMessageDraft,
         positions: &impl ReferencePositions,
         authority: &impl DirectLineAuthority,
@@ -196,7 +196,8 @@ impl SendMessage {
         let direct_lines = match &draft.actor {
             SendActor::User(author) => DirectLineGrants(
                 authority
-                    .direct_lines(author, &addressed)?
+                    .direct_lines(author, &addressed)
+                    .await?
                     .into_iter()
                     .collect(),
             ),
@@ -277,7 +278,7 @@ mod tests {
     struct GrantsEveryAddressedAgent;
 
     impl DirectLineAuthority for GrantsEveryAddressedAgent {
-        fn direct_lines(
+        async fn direct_lines(
             &self,
             _author: &UserId,
             addressed: &AddressedPrincipals,
@@ -375,6 +376,7 @@ mod tests {
                         &EveryBracketedRun,
                         &GrantsEveryAddressedAgent,
                     )
+                    .await
                     .unwrap(),
                 )
                 .await;

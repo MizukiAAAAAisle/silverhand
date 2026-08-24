@@ -6,7 +6,6 @@ mod agent_enrollment;
 
 pub use agent_enrollment::{
     AddAgentMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
-    AgentId, AgentMembershipTx, AgentWorkspaceMembership, EnrollmentKey, MembershipInsertOutcome,
-    Principal, UserId, WorkspaceId, add_workspace_agent_member, can_enroll_agent,
-    enroll_agent_into_workspace,
+    AgentMembershipTx, AgentWorkspaceMembership, EnrollmentKey, MembershipInsertOutcome, Principal,
+    add_workspace_agent_member, can_enroll_agent, enroll_agent_into_workspace,
 };

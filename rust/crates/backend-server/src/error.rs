@@ -1,5 +1,30 @@
 use std::error::Error;
 
+#[derive(Debug)]
+pub(crate) struct BoundaryFailure {
+    source: Box<dyn Error + Send + Sync + 'static>,
+}
+
+impl BoundaryFailure {
+    pub(crate) fn new(source: impl Error + Send + Sync + 'static) -> Self {
+        Self {
+            source: Box::new(source),
+        }
+    }
+}
+
+impl std::fmt::Display for BoundaryFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("pre-send authority failed")
+    }
+}
+
+impl Error for BoundaryFailure {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
 pub(crate) fn describe(error: &(dyn Error + 'static)) -> String {
     let mut messages = vec![error.to_string()];
     let mut current = error.source();

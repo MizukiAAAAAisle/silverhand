@@ -10,11 +10,19 @@
 //! what a send would act on — position rule, destination grammar, deduplication and order
 //! together.
 
-use silverhand_backend_core::messaging::{
-    AddressedPrincipals, AgentId, ConversationId, DirectLineAuthority, MessageContent,
-    PrincipalKind, SendActor, SendDestination, SendMessage, SendMessageDraft, UserId,
+use std::{
+    future::Future,
+    task::{Context, Poll, Waker},
 };
+
 use silverhand_backend_core::persistence::PersistenceFailure;
+use silverhand_backend_core::{
+    identity::{AgentId, ConversationId, UserId},
+    messaging::{
+        AddressedPrincipals, DirectLineAuthority, MessageContent, PrincipalKind, SendActor,
+        SendDestination, SendMessage, SendMessageDraft,
+    },
+};
 
 use super::references::MarkdownReferencePositions;
 
@@ -30,8 +38,17 @@ const MENTION_CC: &str = include_str!(concat!(
 
 struct GrantsNothing;
 
+fn ready<F: Future>(future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    let mut context = Context::from_waker(Waker::noop());
+    match future.as_mut().poll(&mut context) {
+        Poll::Ready(output) => output,
+        Poll::Pending => panic!("the driver-free authority unexpectedly suspended"),
+    }
+}
+
 impl DirectLineAuthority for GrantsNothing {
-    fn direct_lines(
+    async fn direct_lines(
         &self,
         _author: &UserId,
         _addressed: &AddressedPrincipals,
@@ -53,18 +70,22 @@ fn addressed(body: &str) -> Vec<(String, String)> {
         freshness_bypass: false,
     };
 
-    SendMessage::prepare(draft, &MarkdownReferencePositions, &GrantsNothing)
-        .expect("a body with no attachments and no grants prepares")
-        .addressed()
-        .iter()
-        .map(|reference| {
-            let kind = match reference.kind() {
-                PrincipalKind::Agent => "agent",
-                PrincipalKind::Human => "human",
-            };
-            (kind.to_owned(), reference.handle().as_str().to_owned())
-        })
-        .collect()
+    ready(SendMessage::prepare(
+        draft,
+        &MarkdownReferencePositions,
+        &GrantsNothing,
+    ))
+    .expect("a body with no attachments and no grants prepares")
+    .addressed()
+    .iter()
+    .map(|reference| {
+        let kind = match reference.kind() {
+            PrincipalKind::Agent => "agent",
+            PrincipalKind::Human => "human",
+        };
+        (kind.to_owned(), reference.handle().as_str().to_owned())
+    })
+    .collect()
 }
 
 fn parsed(artifact: &str) -> serde_json::Value {

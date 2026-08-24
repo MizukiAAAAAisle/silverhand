@@ -5,6 +5,7 @@ use silverhand_backend_core::{
         CredentialAuthState, CredentialKind, HostCredentialLookup, HostInviteUnitOfWork,
         HostInviteWriteError, NewLongLivedCredential, NewUserInviteHost,
     },
+    identity::UserId,
     persistence::PersistenceFailure,
 };
 use sqlx::{
@@ -70,7 +71,7 @@ impl SqliteHostRuntimeStore {
         )
         .bind(host.id())
         .bind(host.name())
-        .bind(host.user_id())
+        .bind(host.user_id().as_str())
         .bind(host.created_at())
         .execute(&mut *tx)
         .await
@@ -122,10 +123,16 @@ impl HostCredentialLookup for SqliteHostRuntimeStore {
         .map_err(PersistenceFailure::from_source)?;
         row.map(|row| -> Result<CredentialAuthState, sqlx::Error> {
             let kind: String = row.try_get("kind")?;
+            let host_user_id = row
+                .try_get::<Option<String>, _>("host_user_id")?
+                .map(|raw| {
+                    UserId::parse(raw).map_err(|source| sqlx::Error::Decode(Box::new(source)))
+                })
+                .transpose()?;
             Ok(CredentialAuthState {
                 credential_id: row.try_get("credential_id")?,
                 host_id: row.try_get("host_id")?,
-                host_user_id: row.try_get("host_user_id")?,
+                host_user_id,
                 kind: decode_credential_kind(&kind)?,
                 expires_at: row.try_get("expires_at")?,
                 consumed_at: row.try_get("consumed_at")?,
@@ -155,15 +162,12 @@ fn decode_credential_kind(kind: &str) -> Result<CredentialKind, sqlx::Error> {
 struct InvalidCredentialKind;
 
 #[cfg(test)]
-#[path = "../../tests/support/current_schema_snapshot.rs"]
-mod current_schema;
-
-#[cfg(test)]
 mod tests {
     use silverhand_backend_core::host_runtime::{
         CreateHostInvite, HostTokenRejection, OsEntropy, SystemClock, VerifyHostTokenFact,
         verify_host_token,
     };
+    use silverhand_backend_core::identity::UserId;
     use sqlx::Connection;
     use tempfile::TempDir;
 
@@ -172,7 +176,7 @@ mod tests {
     async fn fixture() -> (TempDir, SqliteHostRuntimeStore) {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("host.sqlite");
-        let mut connection = super::current_schema::create_current_schema(&path).await;
+        let mut connection = crate::current_schema::create_current_schema(&path).await;
         sqlx::query(
             "INSERT INTO users (id, name, display_name, created_at, updated_at)
              VALUES ('user-1', 'user-1', 'User One', 1, 1)",
@@ -189,7 +193,10 @@ mod tests {
     async fn persists_only_the_hash_and_verifies_after_reopening() {
         let (directory, store) = fixture().await;
         let service = CreateHostInvite::new(store.clone(), OsEntropy, SystemClock);
-        let fact = service.execute("user-1".into()).await.unwrap();
+        let fact = service
+            .execute(UserId::parse("user-1").unwrap())
+            .await
+            .unwrap();
         let host_id = fact.host.id().to_owned();
         let redacted = format!("{:?}", fact.connect_token);
         let raw_token = fact.connect_token.reveal_once();
@@ -203,7 +210,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            matches!(verified, VerifyHostTokenFact::Accepted { host_id: ref verified_id, ref user_id, .. } if verified_id == &host_id && user_id == "user-1")
+            matches!(verified, VerifyHostTokenFact::Accepted { host_id: ref verified_id, ref user_id, .. } if verified_id == &host_id && user_id.as_str() == "user-1")
         );
 
         let row = sqlx::query("SELECT token_hash FROM host_credentials WHERE host_id = ?")
@@ -261,7 +268,12 @@ mod tests {
             .unwrap();
         let service = CreateHostInvite::new(store.clone(), OsEntropy, SystemClock);
 
-        assert!(service.execute("user-1".into()).await.is_err());
+        assert!(
+            service
+                .execute(UserId::parse("user-1").unwrap())
+                .await
+                .is_err()
+        );
         let host_count: i64 = sqlx::query_scalar("SELECT count(*) FROM hosts")
             .fetch_one(&store.pool)
             .await
@@ -292,7 +304,7 @@ mod tests {
     async fn real_schema_credential_predicates_match_the_ts_verdicts() {
         let (_directory, store) = fixture().await;
         let fact = CreateHostInvite::new(store.clone(), OsEntropy, SystemClock)
-            .execute("user-1".into())
+            .execute(UserId::parse("user-1").unwrap())
             .await
             .unwrap();
         let host_id = fact.host.id().to_owned();

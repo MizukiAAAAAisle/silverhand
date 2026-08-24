@@ -9,12 +9,12 @@
 //! flow; separate ports make it a property of the dependency graph, because no
 //! attempt can be reached only through another.
 
-use std::{error::Error, future::Future};
+use std::{collections::HashSet, error::Error, future::Future};
 
 use super::{
-    AgentId, CommittedMessageView, ConversationId, CreatedMessage, MainCommittedSend,
-    MessageCreatedFact, MessageId, NotificationId, ParticipantHandle, ReplyCommittedSend, UserId,
-    WorkspaceId,
+    AgentId, CommittedMessageView, ConversationId, CreatedMessage, DirectPairOpenedFact,
+    MainCommittedSend, MessageCreatedFact, MessageId, NotificationId, ParticipantHandle,
+    PrincipalIdentity, ReplyCommittedSend, UserId, WorkspaceId,
     mention_cc::{CommittedMentionCopy, MentionCopyOutcome, MentionCopySkip},
 };
 
@@ -29,6 +29,7 @@ use super::{
 pub struct PostCommitPlan {
     mentions: Option<MentionIntent>,
     delivery: DeliveryPlan,
+    opened_direct_pairs: Vec<DirectPairOpenedFact>,
 }
 
 impl PostCommitPlan {
@@ -36,8 +37,16 @@ impl PostCommitPlan {
     /// plainly: this factory is public, so every crate that can call it is inside the
     /// same trusted boundary. What it does guarantee is that a fact already returned
     /// cannot be replaced or modified — not that one cannot be fabricated.
-    pub fn committed(mentions: Option<MentionIntent>, delivery: DeliveryPlan) -> Self {
-        Self { mentions, delivery }
+    pub fn committed(
+        mentions: Option<MentionIntent>,
+        delivery: DeliveryPlan,
+        opened_direct_pairs: Vec<DirectPairOpenedFact>,
+    ) -> Self {
+        Self {
+            mentions,
+            delivery,
+            opened_direct_pairs,
+        }
     }
 
     /// What this send says about naming people, when it named anyone inside a
@@ -57,6 +66,12 @@ impl PostCommitPlan {
 
     pub fn delivery(&self) -> &DeliveryPlan {
         &self.delivery
+    }
+
+    /// Direct-pair rows this transaction created. They are facts to publish only
+    /// after the transaction commits; a rollback never exposes this plan.
+    fn opened_direct_pairs(&self) -> &[DirectPairOpenedFact] {
+        &self.opened_direct_pairs
     }
 }
 
@@ -540,78 +555,100 @@ where
     R: MentionSkipRecord,
 {
     let mut report = EffectReport::default();
-    let author = match &fact.message.from_user_id {
-        Some(author) => author.clone(),
-        // Only a person's mention is copied, so an absent author means there is
-        // nothing here to announce.
-        None => return report,
-    };
+    let mut announced_lines = HashSet::new();
+    if let Some(author) = &fact.message.from_user_id {
+        // Only a person's mention is copied. Pair-open facts are independent of
+        // the sender, though, and are covered below even when there is no author.
+        for outcome in &fact.mention_copies {
+            match outcome {
+                MentionCopyOutcome::Copied {
+                    agent,
+                    copy,
+                    handle: _,
+                } => {
+                    let id = copy.id.clone();
+                    attempt(
+                        &mut report,
+                        &id,
+                        EffectStep::DirectLineInvalidation,
+                        ports
+                            .direct_lines
+                            .direct_lines_changed(author, &copy.conversation_id),
+                    )
+                    .await;
+                    announced_lines.insert(copy.conversation_id.clone());
+                    attempt(
+                        &mut report,
+                        &id,
+                        EffectStep::CopyPublished,
+                        ports.publication.publish_copy(copy),
+                    )
+                    .await;
+                    attempt(
+                        &mut report,
+                        &id,
+                        EffectStep::AuthorNotified,
+                        ports.notification.notify_author(author, agent, copy),
+                    )
+                    .await;
+                    attempt(
+                        &mut report,
+                        &id,
+                        EffectStep::RuntimeStarted,
+                        ports.start.start(&copy.conversation_id, agent),
+                    )
+                    .await;
+                    attempt(
+                        &mut report,
+                        &id,
+                        EffectStep::CopyDelivered,
+                        ports.delivery.deliver(agent, copy),
+                    )
+                    .await;
+                }
+                MentionCopyOutcome::Skipped {
+                    handle,
+                    reason,
+                    agent,
+                } => {
+                    attempt(
+                        &mut report,
+                        &fact.message.id,
+                        EffectStep::SkipRecorded,
+                        ports.skips.record_skip(&SkippedMention {
+                            handle,
+                            reason: *reason,
+                            agent: agent.as_ref(),
+                            source_conversation: &fact.message.conversation_id,
+                            source_message: &fact.message.id,
+                        }),
+                    )
+                    .await;
+                }
+            }
+        }
+    }
 
-    for outcome in &fact.mention_copies {
-        match outcome {
-            MentionCopyOutcome::Copied {
-                agent,
-                copy,
-                handle: _,
-            } => {
-                let id = copy.id.clone();
-                attempt(
-                    &mut report,
-                    &id,
-                    EffectStep::DirectLineInvalidation,
-                    ports
-                        .direct_lines
-                        .direct_lines_changed(&author, &copy.conversation_id),
-                )
-                .await;
-                attempt(
-                    &mut report,
-                    &id,
-                    EffectStep::CopyPublished,
-                    ports.publication.publish_copy(copy),
-                )
-                .await;
-                attempt(
-                    &mut report,
-                    &id,
-                    EffectStep::AuthorNotified,
-                    ports.notification.notify_author(&author, agent, copy),
-                )
-                .await;
-                attempt(
-                    &mut report,
-                    &id,
-                    EffectStep::RuntimeStarted,
-                    ports.start.start(&copy.conversation_id, agent),
-                )
-                .await;
-                attempt(
-                    &mut report,
-                    &id,
-                    EffectStep::CopyDelivered,
-                    ports.delivery.deliver(agent, copy),
-                )
-                .await;
-            }
-            MentionCopyOutcome::Skipped {
-                handle,
-                reason,
-                agent,
-            } => {
-                attempt(
-                    &mut report,
-                    &fact.message.id,
-                    EffectStep::SkipRecorded,
-                    ports.skips.record_skip(&SkippedMention {
-                        handle,
-                        reason: *reason,
-                        agent: agent.as_ref(),
-                        source_conversation: &fact.message.conversation_id,
-                        source_message: &fact.message.id,
-                    }),
-                )
-                .await;
-            }
+    // A transaction-aware mint records the rows it created instead of publishing
+    // before commit. A mention copy already invalidated its line above; any future
+    // transactional creator that did not also create a copy is still covered here.
+    for opened in fact.post_commit.opened_direct_pairs() {
+        if announced_lines.contains(opened.conversation()) {
+            continue;
+        }
+        for participant in opened.participants().both() {
+            let PrincipalIdentity::Human(viewer) = participant else {
+                continue;
+            };
+            attempt(
+                &mut report,
+                &fact.message.id,
+                EffectStep::DirectLineInvalidation,
+                ports
+                    .direct_lines
+                    .direct_lines_changed(viewer, opened.conversation()),
+            )
+            .await;
         }
     }
     report
@@ -1059,7 +1096,7 @@ mod tests {
             content: "copied".to_owned(),
             metadata: MentionCopyMetadata {
                 subtype: MENTION_COPY_SUBTYPE,
-                source_workspace_id: "ws-1".to_owned(),
+                source_workspace_id: WorkspaceId::parse("ws-1").unwrap(),
                 source_workspace_name: "Space".to_owned(),
                 source_conversation_id: ConversationId::parse("conv-1").unwrap(),
                 source_conversation_title: "Channel".to_owned(),
@@ -1102,6 +1139,7 @@ mod tests {
                 Some(intent_for(viewers))
             },
             DeliveryPlan::MainLine(MainDeliveryPlan::committed(recipients.clone(), recipients)),
+            Vec::new(),
         )
     }
 
@@ -1132,6 +1170,7 @@ mod tests {
             PostCommitPlan::committed(
                 None,
                 DeliveryPlan::MainLine(MainDeliveryPlan::committed(Vec::new(), Vec::new())),
+                Vec::new(),
             ),
             false,
             outcomes,
@@ -1187,6 +1226,37 @@ mod tests {
         assert_eq!(
             report.steps_for(&MessageId::parse("copy-1").unwrap()),
             IN_ORDER
+        );
+        assert!(report.failed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_transaction_recorded_pair_is_covered_even_without_a_copy() {
+        let recorder = default_recorder();
+        let participants = crate::messaging::DirectPairParticipants::between(
+            PrincipalIdentity::Human(UserId::parse("user-1").unwrap()),
+            PrincipalIdentity::Agent(AgentId::parse("agent-1").unwrap()),
+        )
+        .unwrap();
+        let opened = DirectPairOpenedFact::committed(
+            ConversationId::parse("line-new").unwrap(),
+            participants,
+        );
+        let plan = PostCommitPlan::committed(
+            None,
+            DeliveryPlan::MainLine(MainDeliveryPlan::committed(Vec::new(), Vec::new())),
+            vec![opened],
+        );
+
+        let report = announce_send(&fact_with(Vec::new(), plan), ports(&recorder)).await;
+
+        assert_eq!(
+            recorder.steps_of("user-1|line-new"),
+            vec![EffectStep::DirectLineInvalidation]
+        );
+        assert_eq!(
+            report.steps_for(&MessageId::parse("source-message").unwrap()),
+            vec![EffectStep::DirectLineInvalidation]
         );
         assert!(report.failed.is_empty());
     }
@@ -1479,6 +1549,7 @@ mod tests {
                     Some(intent_for(viewers))
                 },
                 DeliveryPlan::ReplyCluster(ReplyAudience::committed(followers)),
+                Vec::new(),
             ),
             ..fact(Vec::new())
         }
@@ -1655,6 +1726,7 @@ mod tests {
                 DeliveryPlan::ReplyCluster(ReplyAudience::committed(vec![
                     AgentId::parse("agent-2").unwrap(),
                 ])),
+                Vec::new(),
             ),
             ..fact(Vec::new())
         };

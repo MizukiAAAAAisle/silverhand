@@ -63,6 +63,11 @@ pub struct EmptyUserId;
 
 opaque_identity!(AgentId, EmptyAgentId, "agent id must not be empty");
 opaque_identity!(
+    WorkspaceId,
+    EmptyWorkspaceId,
+    "workspace id must not be empty"
+);
+opaque_identity!(
     ConversationId,
     EmptyConversationId,
     "conversation id must not be empty"
@@ -88,10 +93,15 @@ mod tests {
     #[test]
     fn runtime_coordinates_share_the_same_nonempty_identity_rule() {
         assert!(AgentId::parse("").is_err());
+        assert!(WorkspaceId::parse("").is_err());
         assert!(ConversationId::parse("").is_err());
         assert!(DaemonInstanceId::parse("").is_err());
 
         assert_eq!(AgentId::parse("agent-1").unwrap().as_str(), "agent-1");
+        assert_eq!(
+            WorkspaceId::parse("workspace-1").unwrap().as_str(),
+            "workspace-1"
+        );
         assert_eq!(
             ConversationId::parse("conversation-1").unwrap().as_str(),
             "conversation-1"

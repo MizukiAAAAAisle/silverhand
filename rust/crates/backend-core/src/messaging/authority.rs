@@ -9,15 +9,14 @@ use std::future::Future;
 
 use crate::persistence::PersistenceFailure;
 
-use super::{AgentId, ConversationId, PrincipalKind, SendActor, SendMessageError, UserId};
+use super::{AgentId, ConversationId, PrincipalIdentity, SendActor, SendMessageError, UserId};
 
 /// One side of a direct pair. `deleted_at_ms` is the pair's own record of a
 /// departure, kept because a principal row can be gone without the pair knowing
 /// when.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConversationEndpoint {
-    pub kind: PrincipalKind,
-    pub id: String,
+    pub principal: PrincipalIdentity,
     pub deleted_at_ms: Option<i64>,
 }
 
@@ -218,9 +217,9 @@ mod tests {
             &mut self,
             endpoint: &ConversationEndpoint,
         ) -> Result<bool, PersistenceFailure> {
-            Ok(match endpoint.kind {
-                PrincipalKind::Agent => self.known_agents.contains(&endpoint.id),
-                PrincipalKind::Human => self.known_users.contains(&endpoint.id),
+            Ok(match &endpoint.principal {
+                PrincipalIdentity::Agent(agent) => self.known_agents.contains(agent.as_str()),
+                PrincipalIdentity::Human(user) => self.known_users.contains(user.as_str()),
             })
         }
     }
@@ -266,13 +265,11 @@ mod tests {
     fn live_pair() -> DirectPairEndpoints {
         DirectPairEndpoints {
             a: ConversationEndpoint {
-                kind: PrincipalKind::Agent,
-                id: "agent-1".to_owned(),
+                principal: PrincipalIdentity::Agent(AgentId::parse("agent-1").unwrap()),
                 deleted_at_ms: None,
             },
             b: ConversationEndpoint {
-                kind: PrincipalKind::Human,
-                id: "user-1".to_owned(),
+                principal: PrincipalIdentity::Human(UserId::parse("user-1").unwrap()),
                 deleted_at_ms: None,
             },
         }

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { apiPaths } from './api/paths.js';
+import { BACKEND_ADMISSION } from './backend-admission.generated.js';
 import { PROTOCOL_VERSIONS } from './protocol-versions.js';
 
 /**
@@ -12,9 +13,9 @@ import { PROTOCOL_VERSIONS } from './protocol-versions.js';
  * OUTBOUND_PROTOCOL_VERSION, the DB schema version, app semver, or a build
  * commit. One boundary, one axis.
  *
- * The NUMERIC values of the triple below live in the single protocol-version
- * authority (`protocol-versions.ts`); this module owns the desktop↔server
- * ADMISSION SEMANTICS, not the numbers. It is deliberately a different gate
+ * The numeric values and transport names used by both sides live in the shared
+ * backend-admission artifact; this module owns the desktop↔server admission
+ * semantics, not those values. It is deliberately a different gate
  * from the daemon boundaries: those use strict equality, this one a min-window
  * range so a desktop and server one generation apart can still interoperate.
  *
@@ -65,7 +66,8 @@ export const DESKTOP_SERVER_API_EPOCH = PROTOCOL_VERSIONS.desktopApi;
  * Sent by the desktop main process on every backend REST request and the
  * event-WS upgrade.
  */
-export const DESKTOP_API_EPOCH_HEADER = 'x-silverhand-desktop-api-epoch';
+export const DESKTOP_API_EPOCH_HEADER =
+  BACKEND_ADMISSION.desktopApiEpochHeader;
 
 /**
  * Parse the dedicated epoch header at the server boundary. Never throws.

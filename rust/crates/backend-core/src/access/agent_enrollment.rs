@@ -11,35 +11,10 @@ use std::future::Future;
 
 use thiserror::Error;
 
-use crate::persistence::PersistenceFailure;
-
-/// A workspace identity.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct WorkspaceId(String);
-
-/// An agent identity.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct AgentId(String);
-
-/// A human-user identity.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct UserId(String);
-
-macro_rules! opaque_id {
-    ($ty:ident) => {
-        impl $ty {
-            pub fn new(value: impl Into<String>) -> Self {
-                Self(value.into())
-            }
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-        }
-    };
-}
-opaque_id!(WorkspaceId);
-opaque_id!(AgentId);
-opaque_id!(UserId);
+use crate::{
+    identity::{AgentId, UserId, WorkspaceId},
+    persistence::PersistenceFailure,
+};
 
 /// Who is asking to enroll an agent. `Agent` carries no further fields because
 /// no enrollment rule reads any: an agent principal can never enroll.

@@ -22,9 +22,12 @@
 #[path = "support/log_capture.rs"]
 mod log_capture;
 
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    convert::Infallible,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use axum::{
@@ -34,19 +37,20 @@ use axum::{
 };
 use futures_util::stream;
 use serde_json::Value;
-use silverhand_backend_core::messaging::{
-    AddressedPrincipals, AgentId, ConversationId, ConversationRefusal, DirectLineAuthority,
-    PrincipalKind, SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
-    UserId,
-};
 use silverhand_backend_core::persistence::PersistenceFailure;
+use silverhand_backend_core::{
+    identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
+    messaging::{
+        AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
+        ConversationRefusal, DirectLineAuthority, DirectPairAllocation, PrincipalKind,
+        ResolvedStream, SendCapability, SendMessage, SendMessageError, SendMessageOutcome,
+        SendMessageUnitOfWork, TargetAddress,
+    },
+    runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
+};
 use silverhand_backend_server::messaging::{
     MESSAGE_SEND_MAX_BODY_BYTES,
-    adapters::{
-        AddressRefusal, AgentCredential, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
-        ResolvedStream, SendCapability, TargetAddress,
-    },
-    router::{HumanPrincipal, SendState, send_router},
+    router::{SendState, send_router},
 };
 use tower::ServiceExt;
 
@@ -77,12 +81,15 @@ fn breaks_after_one_frame() -> Body {
 struct Channel(Result<(), ChannelAccessRefusal>);
 
 impl ChannelAccess for Channel {
-    fn may_post(
+    type Error = Infallible;
+
+    async fn may_post(
         &self,
         _channel: &ConversationId,
         _author: &UserId,
-    ) -> Result<(), ChannelAccessRefusal> {
-        self.0.clone()
+    ) -> Result<Result<(), ChannelAccessRefusal>, Self::Error> {
+        tokio::task::yield_now().await;
+        Ok(self.0)
     }
 }
 
@@ -110,12 +117,20 @@ struct Address {
 }
 
 impl TargetAddress for Address {
-    fn resolve(&self, _agent: &AgentId, _target: &str) -> Result<ResolvedStream, AddressRefusal> {
+    type Error = Infallible;
+
+    async fn resolve(
+        &self,
+        _agent: &AgentId,
+        _target: &str,
+        _allocation: DirectPairAllocation,
+    ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
+        tokio::task::yield_now().await;
         self.calls.record();
-        self.outcome.clone().map(|()| ResolvedStream {
+        Ok(self.outcome.map(|()| ResolvedStream {
             conversation: resolved_stream(),
             thread_root: None,
-        })
+        }))
     }
 }
 
@@ -132,20 +147,23 @@ struct Grant {
 }
 
 impl SendCapability for Grant {
-    fn may_send_messages(
+    type Error = Infallible;
+
+    async fn may_send_messages(
         &self,
         _agent: &AgentId,
         _conversation: &ConversationId,
-    ) -> Result<(), CapabilityDenied> {
+    ) -> Result<Result<(), CapabilityDenied>, Self::Error> {
+        tokio::task::yield_now().await;
         self.calls.record();
-        self.outcome
+        Ok(self.outcome)
     }
 }
 
 struct GrantsNothing;
 
 impl DirectLineAuthority for GrantsNothing {
-    fn direct_lines(
+    async fn direct_lines(
         &self,
         _author: &UserId,
         _addressed: &AddressedPrincipals,
@@ -260,7 +278,7 @@ fn human_request(path: &str, body: Body) -> Request<Body> {
     let mut request = Request::post(path).body(body).unwrap();
     request
         .extensions_mut()
-        .insert(HumanPrincipal(UserId::parse("user-1").unwrap()));
+        .insert(UserId::parse("user-1").unwrap());
     request
 }
 
@@ -268,9 +286,15 @@ fn agent_request(path: &str, body: Body) -> Request<Body> {
     let mut request = Request::post(path).body(body).unwrap();
     // Unanchored by default: reach is then the resolver's answer alone, so a cell about
     // something else is not silently also a reach cell.
-    request.extensions_mut().insert(AgentCredential::AgentSlot {
-        agent: AgentId::parse("agent-1").unwrap(),
-    });
+    request
+        .extensions_mut()
+        .insert(RuntimePrincipal::AgentSlot {
+            agent: AgentId::parse("agent-1").unwrap(),
+            custody: RuntimeCustody::new(
+                RuntimeGeneration::new(1).unwrap(),
+                DaemonInstanceId::parse("daemon-1").unwrap(),
+            ),
+        });
     request
 }
 
@@ -303,9 +327,13 @@ fn anchored_request(source: ConversationId) -> Request<Body> {
         .unwrap();
     request
         .extensions_mut()
-        .insert(AgentCredential::ConversationSlot {
+        .insert(RuntimePrincipal::ConversationSlot {
             agent: AgentId::parse("agent-1").unwrap(),
             source,
+            custody: RuntimeCustody::new(
+                RuntimeGeneration::new(1).unwrap(),
+                DaemonInstanceId::parse("daemon-1").unwrap(),
+            ),
         });
     request
 }
@@ -423,10 +451,11 @@ async fn the_envelope_bound_admits_its_own_size_and_nothing_over() {
     );
 }
 
-/// Once the envelope is admitted, a missing path parameter is answered before the body
-/// is read at all — and each door names its own coordinate.
+/// Once the envelope is admitted, the human door parses its conversation coordinate
+/// before reading the body. The agent coordinate belongs to runtime authentication and
+/// is exercised with that middleware in the served-app composition.
 #[tokio::test]
-async fn a_missing_identifier_answers_before_the_body_is_parsed() {
+async fn a_missing_human_identifier_answers_before_the_body_is_parsed() {
     let unit = CountingUnitOfWork::default();
     // The body is malformed too. If parsing came first this would be `invalid input`;
     // the identifier wins.
@@ -439,14 +468,6 @@ async fn a_missing_identifier_answers_before_the_body_is_parsed() {
     .await;
     assert_eq!(human_status, StatusCode::BAD_REQUEST);
     assert!(human_body.contains("channel id required"), "{human_body}");
-
-    let (agent_status, agent_body) = answered(
-        open(unit.clone()),
-        agent_request(AGENT_PATH_WITHOUT_ID, unparseable()),
-    )
-    .await;
-    assert_eq!(agent_status, StatusCode::BAD_REQUEST);
-    assert!(agent_body.contains("agent id required"), "{agent_body}");
 
     assert_eq!(unit.calls(), 0);
 }
@@ -794,7 +815,7 @@ async fn each_address_refusal_reaches_the_agent_in_its_own_words() {
     for (refusal, status, body) in cases {
         let unit = CountingUnitOfWork::default();
         let (answered_status, answered_body) = answered(
-            mounted(Ok(()), Err(refusal.clone()), Ok(()), unit.clone()),
+            mounted(Ok(()), Err(refusal), Ok(()), unit.clone()),
             agent_request(AGENT_PATH, Body::from(agent_send_body(16))),
         )
         .await;
@@ -1052,7 +1073,7 @@ async fn the_human_gate_does_not_borrow_the_agent_doors_codes() {
     ] {
         let unit = CountingUnitOfWork::default();
         let (answered_status, body) = answered(
-            mounted(Err(refusal.clone()), Ok(()), Ok(()), unit.clone()),
+            mounted(Err(refusal), Ok(()), Ok(()), unit.clone()),
             human_request(HUMAN_PATH, Body::from(human_send_body(16))),
         )
         .await;

@@ -61,9 +61,13 @@ mod addressing;
 mod author;
 mod authority;
 mod command;
+mod direct_pair;
 mod fact;
 mod identity;
+mod pre_send;
 mod principal;
+
+pub(crate) use crate::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 
 pub mod attachments;
 pub mod environment;
@@ -87,6 +91,10 @@ pub use command::{
     MessageContent, SendActor, SendDestination, SendMessage, SendMessageDraft, SendMessageError,
     SendMessageUnitOfWork,
 };
+pub use direct_pair::{
+    DirectPairMint, DirectPairMinted, DirectPairOpenedFact, DirectPairOpenedPort,
+    DirectPairParticipants, OpenDirectPairError, SameDirectPairParticipant, open_direct_pair,
+};
 pub use environment::{EnvironmentUnavailable, SendClock, SendEntropy};
 pub use fact::{
     CommittedMessageView, CreatedMessage, FromKind, MainCommittedSend, MessageCreatedFact,
@@ -95,7 +103,12 @@ pub use fact::{
 };
 pub use freshness::StaleRefusal;
 pub use identity::{
-    AgentId, AttachmentId, ConversationId, EmptyIdentifier, InvalidSeq, MessageId, MessageSeq,
-    NotificationId, ThreadRootId, UserId, WorkspaceId,
+    AttachmentId, EmptyIdentifier, InvalidSeq, MessageId, MessageSeq, NotificationId, ThreadRootId,
+    mint_conversation_id,
+};
+pub use pre_send::{
+    AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, DeliveryIntent,
+    DirectPairAllocation, ResolvedStream, SendCapability, TargetAddress,
+    TargetAddressOperatorReason, TargetAddressRefusalPort, TargetAddressRefusalReport,
 };
 pub use principal::{InvalidHandle, ParticipantHandle, PrincipalKind};

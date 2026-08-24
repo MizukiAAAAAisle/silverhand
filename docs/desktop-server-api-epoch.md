@@ -2,7 +2,8 @@
 
 > #task:1761. This document is the operating manual for the
 > `DESKTOP_SERVER_API_EPOCH` axis defined in
-> `packages/shared/src/desktop-server-api-epoch.ts` (the single code root).
+> `packages/shared/src/desktop-server-api-epoch.ts` (the admission-semantics
+> root), with shared values in `packages/shared/src/backend-admission.json`.
 > Both release-artifact entry points (desktop packaging via
 > `scripts/package.sh`, standalone server bundle via the
 > `packages/server` build) run `scripts/epoch-runbook-reminder.mjs`, which
@@ -23,15 +24,14 @@ participates in:
 Never reuse one axis for another boundary, and never infer compatibility from
 app semver, git commit, or build identity.
 
-**Single numeric authority.** The digits behind all three wire axes (and the
-desktop minimum-client / minimum-server pair) live in ONE record,
-`packages/shared/src/protocol-versions.ts`; the constants above only re-export
-their own field. The CURRENT production values are not restated anywhere else —
-synthetic mismatch values in tests (built from the exported current) and
-historical numbers in archaeology prose are the only other numerals, and neither
-is a second write-point. Bump a version by editing that record and nothing else.
-The DB schema version (last table row) is a separate axis with its own authority
-and is NOT part of this record.
+**Single numeric authority.** Host and outbound daemon versions remain in
+`packages/shared/src/protocol-versions.ts`. The desktop epoch triple and the
+transport admission names shared by the TypeScript desktop/client and Rust
+server live in `packages/shared/src/backend-admission.json`.
+`backend-admission.generated.ts` is a checked projection, not another
+write-point. Bump the desktop triple by editing the JSON artifact and regenerating
+the projection; Rust consumes the same artifact during its build. The DB schema
+version is a separate axis with its own authority.
 
 The contract is **safe version skew (default plan A)**: a compatible pair runs
 normally; an incompatible pair is rejected *before any business DTO is read* —
@@ -80,7 +80,7 @@ needs its own triple.
 Check it, don't assume it — the current epoch is a working-tree value and says
 nothing about what shipped. A release IS a tag: read the LAST PUBLISHED value
 from the newest matching release tag with the recipe in §6 (it handles tags cut
-before `protocol-versions.ts` existed). An untagged local or dogfood build is
+before the shared authority existed). An untagged local or dogfood build is
 not a release and puts no peer in the field — it carries both sides from one
 tree and has zero skew by construction (§4.2). If the current epoch already
 appears in a published tag, fall back to the rules below.
@@ -95,14 +95,15 @@ appears in a published tag, fall back to the rules below.
   prevent; changing a discriminant, nullability, pagination/cursor
   semantics, permission semantics old clients would misinterpret; changing
   event ordering guarantees). In the SAME commit as the breaking change, edit
-  the desktop triple in `packages/shared/src/protocol-versions.ts` — and ONLY
-  there — to the same new value:
+  the desktop triple in `packages/shared/src/backend-admission.json` — and ONLY
+  there — to the same new value, then run
+  `pnpm --filter @silverhand/shared generate:backend-admission`:
 
   ```
-  // packages/shared/src/protocol-versions.ts
-  desktopApi       = N+1
-  desktopMinClient = N+1
-  desktopMinServer = N+1
+  // packages/shared/src/backend-admission.json
+  "desktopApi": N+1
+  "desktopMinClient": N+1
+  "desktopMinServer": N+1
   ```
 
   Bumping only `desktopApi` while a minimum stays behind silently re-admits the
@@ -223,8 +224,8 @@ exit; this section is the §11 record of its closure.
 
 ## 6. Release-time version-step check (all three wire axes) — MANUAL
 
-The single authority (`protocol-versions.ts`) removes *duplicate* version
-numbers; it does NOT prove the numbers move correctly across releases. That is a
+The single authorities remove *duplicate* version numbers; they do NOT prove
+the numbers move correctly across releases. That is a
 release-time discipline, done by a human against the release tags — deliberately
 NOT code and NOT a test. The rule for **every** wire axis
 (`HOST_PROTOCOL_VERSION`, `OUTBOUND_PROTOCOL_VERSION`, `DESKTOP_SERVER_API_EPOCH`
@@ -255,10 +256,12 @@ git show "$TAG:packages/host/src/outbound-protocol.ts"  # OUTBOUND_PROTOCOL_VERS
 
 # Desktop triple — newest desktop-v* tag:
 TAG=$(git tag --list 'desktop-v*' --sort=-v:refname | head -1)
-git show "$TAG:packages/shared/src/protocol-versions.ts"          # authority (the triple)
-# ...or, for a tag cut before that file existed (e.g. desktop-v0.2.3), read the
+git show "$TAG:packages/shared/src/backend-admission.json"        # authority (the triple)
+# ...or, for a tag cut before that file existed, read protocol-versions.ts;
+# for an even older tag (e.g. desktop-v0.2.3), read the
 # old desktop-epoch file — NOT host/protocol.ts, which exists in that tag and
 # would silently return the wrong axis:
+git show "$TAG:packages/shared/src/protocol-versions.ts"
 git show "$TAG:packages/shared/src/desktop-server-api-epoch.ts"   # the three epoch constants
 ```
 

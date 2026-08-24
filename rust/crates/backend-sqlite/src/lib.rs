@@ -30,6 +30,11 @@ use thiserror::Error;
 pub mod auth;
 pub mod host_runtime;
 pub mod runtime_credential;
+pub mod scope_event;
+
+#[cfg(test)]
+#[path = "../tests/support/current_schema_snapshot.rs"]
+mod current_schema;
 
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 const DEFERRED_READ_BEGIN: &str = "BEGIN DEFERRED";

@@ -12,7 +12,7 @@
 
 use super::{
     AgentId, ConversationId, FromKind, MessageId, MessageSeq, ParticipantHandle, PrincipalKind,
-    UserId, addressing::format_reference_token,
+    UserId, WorkspaceId, addressing::format_reference_token,
 };
 
 /// The subtype a stored copy carries, so a reader can recognise one without
@@ -85,7 +85,7 @@ pub struct CommittedMentionCopy {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MentionCopyMetadata {
     pub subtype: &'static str,
-    pub source_workspace_id: String,
+    pub source_workspace_id: WorkspaceId,
     pub source_workspace_name: String,
     pub source_conversation_id: ConversationId,
     pub source_conversation_title: String,

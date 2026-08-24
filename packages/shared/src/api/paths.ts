@@ -1,8 +1,10 @@
+import { BACKEND_ADMISSION } from '../backend-admission.generated.js';
+
 export const apiPaths = {
   health: '/api/health',
   serverInfo: '/api/server/info',
   runtimes: '/api/runtimes',
-  eventWebSocket: '/api/ws/events',
+  eventWebSocket: BACKEND_ADMISSION.eventWebSocketPath,
   presence: '/api/presence',
 
   // hosts

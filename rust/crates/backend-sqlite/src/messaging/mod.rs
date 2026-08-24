@@ -10,23 +10,28 @@
 //! type reaches the application or the wire.
 
 use std::{
+    convert::Infallible,
     path::Path,
+    sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use std::collections::HashSet;
 
+use silverhand_backend_core::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 use silverhand_backend_core::messaging::{
-    self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationId,
-    ConversationRefusal, CreatedMessage, DirectPairEndpoints, EndpointPrincipalReads,
-    EnvironmentUnavailable, FromKind, InvalidSeq, MessageAuthor, MessageCreatedFact, MessageId,
-    MessageReference, MessageSeq, NotificationId, ParticipantHandle, PostAuthorityReads,
-    PrincipalKind, ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy,
-    SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, ThreadFollowerSource,
-    ThreadListEntry, ThreadReplyFact, ThreadRootId, ThreadRootRefusal, UserId,
+    self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationRefusal,
+    CreatedMessage, DirectPairEndpoints, DirectPairMint, DirectPairMinted, DirectPairOpenedPort,
+    DirectPairParticipants, EndpointPrincipalReads, EnvironmentUnavailable, FromKind, InvalidSeq,
+    MessageAuthor, MessageCreatedFact, MessageId, MessageReference, MessageSeq, NotificationId,
+    OpenDirectPairError, ParticipantHandle, PostAuthorityReads, PrincipalIdentity, PrincipalKind,
+    ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy, SendMessage,
+    SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, ThreadFollowerSource,
+    ThreadListEntry, ThreadReplyFact, ThreadRootId, ThreadRootRefusal,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
     freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
     mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
+    mint_conversation_id, open_direct_pair,
     post_commit::{
         CommittedMentionRow, DeliveryPlan, EffectFailure, MainDeliveryPlan, MentionIntent,
         MentionedViewerRecord, PostCommitPlan, ReplyAudience,
@@ -40,7 +45,9 @@ use sqlx::{
 use thiserror::Error;
 
 mod author;
+mod authorities;
 use author::{AuthorEvidence, resolve_authors};
+pub use authorities::{SqliteTargetAddress, TargetAddressStoreError};
 
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 const POOL_CONNECTIONS: u32 = 4;
@@ -282,6 +289,7 @@ const ENDPOINT_KIND_HUMAN: &str = "human";
 const ENDPOINT_KIND_AGENT: &str = "agent";
 
 /// The host capabilities this store uses unless a caller injects others.
+#[derive(Clone, Copy)]
 pub struct HostEnvironment;
 
 impl SendClock for HostEnvironment {
@@ -305,6 +313,7 @@ fn unix_ms_since_epoch(moment: SystemTime) -> Result<i64, EnvironmentUnavailable
     i64::try_from(since_epoch.as_millis()).map_err(EnvironmentUnavailable::from_source)
 }
 
+#[derive(Clone)]
 pub struct MessagingStore<E = HostEnvironment> {
     pool: SqlitePool,
     environment: E,
@@ -362,6 +371,12 @@ impl MessagingStore<HostEnvironment> {
 }
 
 impl<E> MessagingStore<E> {
+    pub fn target_address<O, R>(&self, opened: O, refusals: R) -> SqliteTargetAddress<E, O, R>
+    where
+        E: Clone,
+    {
+        SqliteTargetAddress::new(self.clone(), opened, refusals)
+    }
     /// Opens an existing product database with injected host capabilities. A
     /// missing file is a failure rather than an empty database.
     pub async fn open_with(
@@ -418,6 +433,81 @@ impl<E> MessagingStore<E> {
     ) -> Result<Option<ThreadListEntry>, PersistenceFailure> {
         let mut tx = self.pool.begin().await.map_err(driver)?;
         project_list_entry(&mut tx, conversation, root).await
+    }
+}
+
+impl<E: SendEntropy + Send + Sync> MessagingStore<E> {
+    pub async fn open_direct_pair<O>(
+        &self,
+        opened: &O,
+        participants: DirectPairParticipants,
+        now_unix_ms: i64,
+    ) -> Result<ConversationId, OpenDirectPairError<PersistenceFailure, O::Error>>
+    where
+        O: DirectPairOpenedPort,
+    {
+        let mut mint = AutocommitDirectPairMint { store: self };
+        open_direct_pair(&mut mint, opened, participants, now_unix_ms).await
+    }
+}
+
+struct AutocommitDirectPairMint<'store, E> {
+    store: &'store MessagingStore<E>,
+}
+
+impl<E: SendEntropy + Send + Sync> DirectPairMint for AutocommitDirectPairMint<'_, E> {
+    type Error = PersistenceFailure;
+
+    async fn mint_direct_pair(
+        &mut self,
+        participants: &DirectPairParticipants,
+        now_unix_ms: i64,
+    ) -> Result<DirectPairMinted, Self::Error> {
+        let minted = mint_conversation_id(&self.store.environment).map_err(|source| {
+            PersistenceFailure::from_source(MessagingStoreError::Environment(source))
+        })?;
+        let first = participants.first();
+        let second = participants.second();
+        let created = sqlx::query(OPEN_DIRECT_PAIR)
+            .bind(minted.as_str())
+            .bind(principal_kind(first))
+            .bind(first.as_str())
+            .bind(principal_kind(second))
+            .bind(second.as_str())
+            .bind(now_unix_ms)
+            .bind(now_unix_ms)
+            .execute(&self.store.pool)
+            .await
+            .map_err(driver)?
+            .rows_affected()
+            == 1;
+
+        let conversation: Option<String> = sqlx::query_scalar(SELECT_DIRECT_PAIR)
+            .bind(principal_kind(first))
+            .bind(first.as_str())
+            .bind(principal_kind(second))
+            .bind(second.as_str())
+            .fetch_optional(&self.store.pool)
+            .await
+            .map_err(driver)?;
+        let conversation = conversation.ok_or_else(|| {
+            PersistenceFailure::from_source(MessagingStoreError::MalformedIdentity {
+                field: "conversations.direct_pair",
+            })
+        })?;
+        let conversation = ConversationId::parse(conversation).map_err(|_| {
+            PersistenceFailure::from_source(MessagingStoreError::MalformedIdentity {
+                field: "conversations.id",
+            })
+        })?;
+        Ok(DirectPairMinted::committed(conversation, created))
+    }
+}
+
+fn principal_kind(principal: &PrincipalIdentity) -> &'static str {
+    match principal.kind() {
+        PrincipalKind::Agent => ENDPOINT_KIND_AGENT,
+        PrincipalKind::Human => ENDPOINT_KIND_HUMAN,
     }
 }
 
@@ -539,6 +629,7 @@ impl<E: SendClock + SendEntropy + Send + Sync> MessagingStore<E> {
         let mut scope = TxScope {
             tx: self.begin_root_write().await.map_err(driver)?,
             entropy: &self.environment,
+            opened_direct_pairs: Vec::new(),
         };
         match scope.write(command, message_id, created_at_ms).await {
             Ok(outcome) => {
@@ -666,6 +757,84 @@ impl<E: SendClock + SendEntropy + Send + Sync> SendMessageUnitOfWork for Messagi
 struct TxScope<'connection, 'entropy, E> {
     tx: Transaction<'connection, Sqlite>,
     entropy: &'entropy E,
+    opened_direct_pairs: Vec<silverhand_backend_core::messaging::DirectPairOpenedFact>,
+}
+
+#[derive(Default)]
+struct RecordedDirectPairOpens(
+    Mutex<Vec<silverhand_backend_core::messaging::DirectPairOpenedFact>>,
+);
+
+impl RecordedDirectPairOpens {
+    fn into_facts(self) -> Vec<silverhand_backend_core::messaging::DirectPairOpenedFact> {
+        self.0.into_inner().expect("direct-pair recorder poisoned")
+    }
+}
+
+impl DirectPairOpenedPort for RecordedDirectPairOpens {
+    type Error = Infallible;
+
+    async fn direct_pair_opened(
+        &self,
+        fact: &silverhand_backend_core::messaging::DirectPairOpenedFact,
+    ) -> Result<(), Self::Error> {
+        self.0
+            .lock()
+            .expect("direct-pair recorder poisoned")
+            .push(fact.clone());
+        Ok(())
+    }
+}
+
+struct TransactionDirectPairMint<'scope, 'connection, 'entropy, E> {
+    scope: &'scope mut TxScope<'connection, 'entropy, E>,
+}
+
+impl<E: SendEntropy + Send + Sync> DirectPairMint for TransactionDirectPairMint<'_, '_, '_, E> {
+    type Error = SendMessageError;
+
+    async fn mint_direct_pair(
+        &mut self,
+        participants: &DirectPairParticipants,
+        now_unix_ms: i64,
+    ) -> Result<DirectPairMinted, Self::Error> {
+        let minted = mint_conversation_id(self.scope.entropy)?;
+        let first = participants.first();
+        let second = participants.second();
+        let created = sqlx::query(OPEN_DIRECT_PAIR)
+            .bind(minted.as_str())
+            .bind(principal_kind(first))
+            .bind(first.as_str())
+            .bind(principal_kind(second))
+            .bind(second.as_str())
+            .bind(now_unix_ms)
+            .bind(now_unix_ms)
+            .execute(&mut *self.scope.tx)
+            .await
+            .map_err(driver)?
+            .rows_affected()
+            == 1;
+
+        let conversation: Option<String> = sqlx::query_scalar(SELECT_DIRECT_PAIR)
+            .bind(principal_kind(first))
+            .bind(first.as_str())
+            .bind(principal_kind(second))
+            .bind(second.as_str())
+            .fetch_optional(&mut *self.scope.tx)
+            .await
+            .map_err(driver)?;
+        let conversation = conversation.ok_or_else(|| {
+            infrastructure(MessagingStoreError::MalformedIdentity {
+                field: "conversations.direct_pair",
+            })
+        })?;
+        let conversation = ConversationId::parse(conversation).map_err(|_| {
+            infrastructure(MessagingStoreError::MalformedIdentity {
+                field: "conversations.id",
+            })
+        })?;
+        Ok(DirectPairMinted::committed(conversation, created))
+    }
 }
 
 impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
@@ -1265,12 +1434,14 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         message: &CreatedMessage,
     ) -> Result<PostCommitPlan, SendMessageError> {
         let mentions = self.mention_intent(target, command, message).await?;
+        let opened_direct_pairs = std::mem::take(&mut self.opened_direct_pairs);
 
         if let Some(root) = &message.thread_root_id {
             let audience = self.cluster_audience(root, command.actor()).await?;
             return Ok(PostCommitPlan::committed(
                 mentions,
                 DeliveryPlan::ReplyCluster(ReplyAudience::committed(audience)),
+                opened_direct_pairs,
             ));
         }
 
@@ -1294,11 +1465,11 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .fetch_all(&mut *self.tx)
             .await
             .map_err(driver)?;
-        let recipients: Vec<messaging::AgentId> = participants
+        let recipients: Vec<AgentId> = participants
             .into_iter()
             .filter(|candidate| excluded.as_deref() != Some(candidate.as_str()))
             .map(|candidate| {
-                messaging::AgentId::parse(candidate).map_err(|_| {
+                AgentId::parse(candidate).map_err(|_| {
                     infrastructure(MessagingStoreError::MalformedIdentity { field: "agents.id" })
                 })
             })
@@ -1312,6 +1483,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         Ok(PostCommitPlan::committed(
             mentions,
             DeliveryPlan::MainLine(MainDeliveryPlan::committed(recipients, start_eligible)),
+            opened_direct_pairs,
         ))
     }
 
@@ -1346,12 +1518,6 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         let Some(workspace_id) = workspace_id else {
             return Ok(None);
         };
-        let workspace = messaging::WorkspaceId::parse(workspace_id).map_err(|_| {
-            infrastructure(MessagingStoreError::MalformedIdentity {
-                field: "conversations.workspace_id",
-            })
-        })?;
-
         Ok(Some(MentionIntent::committed(
             handles,
             match command.actor() {
@@ -1359,7 +1525,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                 SendActor::Agent(_) => None,
             },
             trigger_name_of(message),
-            workspace,
+            workspace_id,
             conversation.clone(),
             title,
             message.id.clone(),
@@ -1370,21 +1536,30 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     async fn conversation_place(
         &mut self,
         conversation: &ConversationId,
-    ) -> Result<(Option<String>, String), SendMessageError> {
+    ) -> Result<(Option<WorkspaceId>, String), SendMessageError> {
         let row = sqlx::query(SELECT_CONVERSATION_PLACE)
             .bind(conversation.as_str())
             .fetch_one(&mut *self.tx)
             .await
             .map_err(driver)?;
-        Ok((
-            row.try_get("workspace_id").map_err(driver)?,
-            row.try_get("title").map_err(driver)?,
-        ))
+        let workspace_id: Option<String> = row.try_get("workspace_id").map_err(driver)?;
+        let workspace_id = workspace_id
+            .map(WorkspaceId::parse)
+            .transpose()
+            .map_err(|_| {
+                infrastructure(MessagingStoreError::MalformedIdentity {
+                    field: "conversations.workspace_id",
+                })
+            })?;
+        Ok((workspace_id, row.try_get("title").map_err(driver)?))
     }
 
-    async fn workspace_name(&mut self, workspace: &str) -> Result<String, SendMessageError> {
+    async fn workspace_name(
+        &mut self,
+        workspace: &WorkspaceId,
+    ) -> Result<String, SendMessageError> {
         let name: Option<String> = sqlx::query_scalar(SELECT_WORKSPACE_NAME)
-            .bind(workspace)
+            .bind(workspace.as_str())
             .fetch_optional(&mut *self.tx)
             .await
             .map_err(driver)?;
@@ -1398,7 +1573,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     async fn agent_by_name(
         &mut self,
         handle: &ParticipantHandle,
-    ) -> Result<Option<messaging::AgentId>, SendMessageError> {
+    ) -> Result<Option<AgentId>, SendMessageError> {
         let found: Option<String> = sqlx::query_scalar(SELECT_AGENT_ID_BY_NAME)
             .bind(handle.as_str())
             .fetch_optional(&mut *self.tx)
@@ -1406,7 +1581,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .map_err(driver)?;
         match found {
             None => Ok(None),
-            Some(id) => Ok(Some(messaging::AgentId::parse(id).map_err(|_| {
+            Some(id) => Ok(Some(AgentId::parse(id).map_err(|_| {
                 infrastructure(MessagingStoreError::MalformedIdentity { field: "agents.id" })
             })?)),
         }
@@ -1419,50 +1594,27 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     async fn open_direct_pair(
         &mut self,
         author: &UserId,
-        agent: &messaging::AgentId,
+        agent: &AgentId,
         created_at_ms: i64,
     ) -> Result<ConversationId, SendMessageError> {
-        let human = (ENDPOINT_KIND_HUMAN, author.as_str());
-        let machine = (ENDPOINT_KIND_AGENT, agent.as_str());
-        let (first, second) = if machine <= human {
-            (machine, human)
-        } else {
-            (human, machine)
+        let participants = DirectPairParticipants::between(
+            PrincipalIdentity::Human(author.clone()),
+            PrincipalIdentity::Agent(agent.clone()),
+        )
+        .expect("a human and an agent are distinct principals");
+        let opened = RecordedDirectPairOpens::default();
+        let result = {
+            let mut mint = TransactionDirectPairMint { scope: self };
+            open_direct_pair(&mut mint, &opened, participants, created_at_ms).await
         };
-
-        let minted = ConversationId::mint(self.entropy)?;
-        sqlx::query(OPEN_DIRECT_PAIR)
-            .bind(minted.as_str())
-            .bind(first.0)
-            .bind(first.1)
-            .bind(second.0)
-            .bind(second.1)
-            .bind(created_at_ms)
-            .bind(created_at_ms)
-            .execute(&mut *self.tx)
-            .await
-            .map_err(driver)?;
-
-        // Absent only if the statement above neither wrote the row nor conflicted
-        // with it, which the conflict target rules out.
-        let existing: Option<String> = sqlx::query_scalar(SELECT_DIRECT_PAIR)
-            .bind(first.0)
-            .bind(first.1)
-            .bind(second.0)
-            .bind(second.1)
-            .fetch_optional(&mut *self.tx)
-            .await
-            .map_err(driver)?;
-        let existing = existing.ok_or_else(|| {
-            infrastructure(MessagingStoreError::MalformedIdentity {
-                field: "conversations.direct_pair",
-            })
-        })?;
-        ConversationId::parse(existing).map_err(|_| {
-            infrastructure(MessagingStoreError::MalformedIdentity {
-                field: "conversations.id",
-            })
-        })
+        match result {
+            Ok(conversation) => {
+                self.opened_direct_pairs.extend(opened.into_facts());
+                Ok(conversation)
+            }
+            Err(OpenDirectPairError::Mint(error)) => Err(error),
+            Err(OpenDirectPairError::Announcement(never)) => match never {},
+        }
     }
 
     /// Writes the copy into the line: the same three facts a send writes anywhere —
@@ -1489,7 +1641,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             }),
             metadata: mention_cc::MentionCopyMetadata {
                 subtype: mention_cc::MENTION_COPY_SUBTYPE,
-                source_workspace_id: place.workspace_id.to_owned(),
+                source_workspace_id: place.workspace_id.clone(),
                 source_workspace_name: place.workspace_name.to_owned(),
                 source_conversation_id: place.source.clone(),
                 source_conversation_title: place.source_title.to_owned(),
@@ -1525,7 +1677,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     async fn notify_author_of_copy(
         &mut self,
         author: &UserId,
-        agent: &messaging::AgentId,
+        agent: &AgentId,
         place: &MentionCopyPlace<'_>,
         message: &CreatedMessage,
         created_at_ms: i64,
@@ -1541,10 +1693,10 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .bind(id.as_str())
             .bind(author.as_str())
             .bind(agent.as_str())
-            .bind(place.workspace_id)
+            .bind(place.workspace_id.as_str())
             .bind(place.source.as_str())
             .bind(message.id.as_str())
-            .bind(place.workspace_id)
+            .bind(place.workspace_id.as_str())
             .bind(place.source.as_str())
             .bind(message.id.as_str())
             .bind(mention_notification_payload(&payload)?)
@@ -1662,8 +1814,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             SendActor::Agent(agent) => self.agent_exists(agent).await?,
             SendActor::User(user) => {
                 self.endpoint_principal_exists(&ConversationEndpoint {
-                    kind: PrincipalKind::Human,
-                    id: user.as_str().to_owned(),
+                    principal: messaging::PrincipalIdentity::Human(user.clone()),
                     deleted_at_ms: None,
                 })
                 .await?
@@ -1718,7 +1869,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         conversation: &ConversationId,
         root_row: Option<&MessageRow>,
         root: &ThreadRootId,
-        agent: &messaging::AgentId,
+        agent: &AgentId,
         current_seq: MessageSeq,
         queued_at_ms: i64,
     ) -> Result<(), SendMessageError> {
@@ -1768,7 +1919,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     async fn ensure_delivery(
         &mut self,
         conversation: &ConversationId,
-        agent: &messaging::AgentId,
+        agent: &AgentId,
         message_id: &str,
         delivery_kind: &'static str,
         queued_at_ms: i64,
@@ -1793,7 +1944,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         &mut self,
         root: &ThreadRootId,
         actor: &SendActor,
-    ) -> Result<Vec<messaging::AgentId>, SendMessageError> {
+    ) -> Result<Vec<AgentId>, SendMessageError> {
         let rows: Vec<String> = sqlx::query_scalar(SELECT_CLUSTER_AUDIENCE)
             .bind(root.as_str())
             .fetch_all(&mut *self.tx)
@@ -1807,7 +1958,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         rows.into_iter()
             .filter(|candidate| sender != Some(candidate.as_str()))
             .map(|candidate| {
-                messaging::AgentId::parse(candidate).map_err(|_| {
+                AgentId::parse(candidate).map_err(|_| {
                     infrastructure(MessagingStoreError::MalformedIdentity {
                         field: "thread_followers.principal_id",
                     })
@@ -1840,9 +1991,7 @@ fn actor_of(kind: PrincipalKind, id: String) -> Result<SendActor, SendMessageErr
         })
     };
     Ok(match kind {
-        PrincipalKind::Agent => {
-            SendActor::Agent(messaging::AgentId::parse(id).map_err(|_| malformed())?)
-        }
+        PrincipalKind::Agent => SendActor::Agent(AgentId::parse(id).map_err(|_| malformed())?),
         PrincipalKind::Human => SendActor::User(UserId::parse(id).map_err(|_| malformed())?),
     })
 }
@@ -1850,7 +1999,7 @@ fn actor_of(kind: PrincipalKind, id: String) -> Result<SendActor, SendMessageErr
 /// Where a copy came from, carried together because every write of a copy needs all
 /// of it.
 struct MentionCopyPlace<'facts> {
-    workspace_id: &'facts str,
+    workspace_id: &'facts WorkspaceId,
     workspace_name: &'facts str,
     source: ConversationId,
     source_title: &'facts str,
@@ -1887,7 +2036,7 @@ fn mention_copy_metadata(
 ) -> Result<String, SendMessageError> {
     serde_json::to_string(&serde_json::json!({
         "subtype": metadata.subtype,
-        "source_workspace_id": metadata.source_workspace_id,
+        "source_workspace_id": metadata.source_workspace_id.as_str(),
         "source_workspace_name": metadata.source_workspace_name,
         "source_conversation_id": metadata.source_conversation_id.as_str(),
         "source_conversation_title": metadata.source_conversation_title,
@@ -1956,7 +2105,7 @@ struct MessageRow {
 }
 
 impl MessageRow {
-    fn authored_by(&self, agent: &messaging::AgentId) -> bool {
+    fn authored_by(&self, agent: &AgentId) -> bool {
         self.from_kind == FROM_KIND_AGENT && self.from_agent_id.as_deref() == Some(agent.as_str())
     }
 }
@@ -1966,12 +2115,12 @@ impl<E: Send + Sync> EndpointPrincipalReads for TxScope<'_, '_, E> {
         &mut self,
         endpoint: &ConversationEndpoint,
     ) -> Result<bool, PersistenceFailure> {
-        let statement = match endpoint.kind {
-            PrincipalKind::Agent => SELECT_AGENT_EXISTS,
-            PrincipalKind::Human => SELECT_USER_EXISTS,
+        let statement = match &endpoint.principal {
+            messaging::PrincipalIdentity::Agent(_) => SELECT_AGENT_EXISTS,
+            messaging::PrincipalIdentity::Human(_) => SELECT_USER_EXISTS,
         };
         let found: Option<i64> = sqlx::query_scalar(statement)
-            .bind(endpoint.id.as_str())
+            .bind(endpoint.principal.as_str())
             .fetch_optional(&mut *self.tx)
             .await
             .map_err(driver)?;
@@ -2012,10 +2161,7 @@ impl<E: Send + Sync> PostAuthorityReads for TxScope<'_, '_, E> {
         }))
     }
 
-    async fn agent_exists(
-        &mut self,
-        agent: &messaging::AgentId,
-    ) -> Result<bool, PersistenceFailure> {
+    async fn agent_exists(&mut self, agent: &AgentId) -> Result<bool, PersistenceFailure> {
         let found: Option<i64> = sqlx::query_scalar(SELECT_AGENT_EXISTS)
             .bind(agent.as_str())
             .fetch_optional(&mut *self.tx)
@@ -2027,7 +2173,7 @@ impl<E: Send + Sync> PostAuthorityReads for TxScope<'_, '_, E> {
     async fn is_agent_participant(
         &mut self,
         conversation: &ConversationId,
-        agent: &messaging::AgentId,
+        agent: &AgentId,
     ) -> Result<bool, PersistenceFailure> {
         let found: Option<i64> = sqlx::query_scalar(SELECT_AGENT_PARTICIPATES)
             .bind(conversation.as_str())
@@ -2078,14 +2224,17 @@ fn endpoint_from_row(
     let deleted_at_ms: Option<i64> = row.try_get(deleted_column).map_err(driver)?;
     let (kind, id) = kind.zip(id).ok_or_else(malformed)?;
 
-    let kind = match kind.as_str() {
-        ENDPOINT_KIND_HUMAN => PrincipalKind::Human,
-        ENDPOINT_KIND_AGENT => PrincipalKind::Agent,
+    let principal = match kind.as_str() {
+        ENDPOINT_KIND_HUMAN => {
+            messaging::PrincipalIdentity::Human(UserId::parse(id).map_err(|_| malformed())?)
+        }
+        ENDPOINT_KIND_AGENT => {
+            messaging::PrincipalIdentity::Agent(AgentId::parse(id).map_err(|_| malformed())?)
+        }
         _ => return Err(malformed()),
     };
     Ok(ConversationEndpoint {
-        kind,
-        id,
+        principal,
         deleted_at_ms,
     })
 }
@@ -2154,10 +2303,6 @@ fn metadata_json(attachments: &[AttachmentSnapshot]) -> Result<Option<String>, S
 }
 
 #[cfg(test)]
-#[path = "../../tests/support/current_schema_snapshot.rs"]
-mod current_schema;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use sqlx::Connection;
@@ -2214,7 +2359,7 @@ mod tests {
     async fn the_audience_read_is_bounded_by_the_cluster_not_the_installation() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("plan.sqlite");
-        let mut connection = super::current_schema::create_current_schema(&path).await;
+        let mut connection = crate::current_schema::create_current_schema(&path).await;
 
         let plan: Vec<String> = sqlx::query(EXPLAIN_CLUSTER_AUDIENCE)
             .bind("root-1")
@@ -2257,7 +2402,7 @@ mod tests {
     async fn the_entitlement_decision_cannot_be_taken_without_the_writer() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("entitlement-writer.sqlite");
-        current_schema::create_current_schema(&path)
+        crate::current_schema::create_current_schema(&path)
             .await
             .close()
             .await
@@ -2277,7 +2422,7 @@ mod tests {
                 vec![ParticipantHandle::parse("nobody").unwrap()],
                 None,
                 "Lio".into(),
-                messaging::WorkspaceId::parse("ws-1").unwrap(),
+                WorkspaceId::parse("ws-1").unwrap(),
                 ConversationId::parse("conv-1").unwrap(),
                 "Channel".into(),
                 MessageId::parse("message-1").unwrap(),
@@ -2311,7 +2456,7 @@ mod tests {
     async fn the_entitlement_read_is_bounded_by_the_named_set_not_the_installation() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("entitlement-plan.sqlite");
-        let mut connection = super::current_schema::create_current_schema(&path).await;
+        let mut connection = crate::current_schema::create_current_schema(&path).await;
 
         let plan: Vec<String> = sqlx::query(EXPLAIN_ENTITLED_VIEWERS)
             .bind(r#"["human"]"#)
@@ -2359,7 +2504,7 @@ mod tests {
     async fn the_batch_author_lookups_are_bounded_by_the_requested_ids() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("author-plan.sqlite");
-        let mut connection = super::current_schema::create_current_schema(&path).await;
+        let mut connection = crate::current_schema::create_current_schema(&path).await;
 
         let agents_plan: Vec<String> = sqlx::query(author::EXPLAIN_LIVE_AGENTS)
             .bind(r#"["agent-1","agent-2"]"#)
@@ -2417,7 +2562,7 @@ mod tests {
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("mixed-batch.sqlite");
-        let mut db = super::current_schema::create_current_schema(&path).await;
+        let mut db = crate::current_schema::create_current_schema(&path).await;
 
         for statement in [
             "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
@@ -2537,7 +2682,7 @@ mod tests {
     async fn one_broken_runtime_fails_the_whole_batch_with_its_source() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("broken-runtime-batch.sqlite");
-        let mut db = super::current_schema::create_current_schema(&path).await;
+        let mut db = crate::current_schema::create_current_schema(&path).await;
 
         for statement in [
             "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
@@ -2592,7 +2737,7 @@ mod tests {
     async fn the_two_participation_texts_agree_when_a_follower_no_longer_exists() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("liveness.sqlite");
-        let mut db = super::current_schema::create_current_schema(&path).await;
+        let mut db = crate::current_schema::create_current_schema(&path).await;
 
         for statement in [
             "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
