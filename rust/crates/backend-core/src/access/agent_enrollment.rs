@@ -269,7 +269,7 @@ mod tests {
         ) -> Result<Option<AgentAuthorityFacts>, PersistenceFailure> {
             Ok(Some(AgentAuthorityFacts {
                 id: agent_id.clone(),
-                created_by_user_id: UserId::new("owner"),
+                created_by_user_id: UserId::parse("owner").unwrap(),
             }))
         }
     }
@@ -329,7 +329,7 @@ mod tests {
 
     fn owner() -> Principal {
         Principal::Human {
-            user_id: UserId::new("owner"),
+            user_id: UserId::parse("owner").unwrap(),
         }
     }
 
@@ -346,8 +346,8 @@ mod tests {
             &uow,
             &clock,
             &owner(),
-            WorkspaceId::new("ws"),
-            AgentId::new("agent"),
+            WorkspaceId::parse("ws").unwrap(),
+            AgentId::parse("agent").unwrap(),
         )
         .await
         .unwrap();
@@ -376,8 +376,8 @@ mod tests {
             &uow,
             &clock,
             &owner(),
-            WorkspaceId::new("ws"),
-            AgentId::new("ghost"),
+            WorkspaceId::parse("ws").unwrap(),
+            AgentId::parse("ghost").unwrap(),
         )
         .await
         .unwrap_err();

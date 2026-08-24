@@ -25,10 +25,13 @@ use std::future::Future;
 
 use thiserror::Error;
 
-use super::agent_enrollment::{Principal, UserId, WorkspaceId};
+use super::agent_enrollment::Principal;
 use super::clock::EnrollmentClock;
 use super::role::{WorkspaceRole, role_governs_workspace};
-use crate::persistence::PersistenceFailure;
+use crate::{
+    identity::{UserId, WorkspaceId},
+    persistence::PersistenceFailure,
+};
 
 /// A person's display identity, resolved for the enrollment response. Read
 /// through [`HumanEnrollmentReadPort`] before the write, because "does this user
@@ -265,7 +268,7 @@ mod tests {
 
     fn admin() -> Principal {
         Principal::Human {
-            user_id: UserId::new("actor"),
+            user_id: UserId::parse("actor").unwrap(),
         }
     }
 
@@ -277,7 +280,7 @@ mod tests {
     #[test]
     fn an_agent_principal_never_governs_even_with_a_role_fact() {
         let actor = Principal::Agent {
-            agent_id: super::super::AgentId::new("a"),
+            agent_id: crate::identity::AgentId::parse("a").unwrap(),
         };
         assert!(!human_enrollment_authorized(
             &actor,
@@ -315,8 +318,8 @@ mod tests {
             &sink,
             &FixedClock(1_700_000_000_123),
             &admin(),
-            WorkspaceId::new("ws"),
-            UserId::new("invitee"),
+            WorkspaceId::parse("ws").unwrap(),
+            UserId::parse("invitee").unwrap(),
         )
         .await
         .unwrap();
@@ -343,8 +346,8 @@ mod tests {
             &sink,
             &FixedClock(42),
             &admin(),
-            WorkspaceId::new("ws"),
-            UserId::new("owner"),
+            WorkspaceId::parse("ws").unwrap(),
+            UserId::parse("owner").unwrap(),
         )
         .await
         .unwrap();

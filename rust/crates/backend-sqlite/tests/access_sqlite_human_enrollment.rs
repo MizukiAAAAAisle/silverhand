@@ -18,9 +18,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use silverhand_backend_core::access::{
-    AddHumanMemberError, EnrollmentClock, HumanEnrollmentReadPort, Principal, UserId,
-    ViewerWorkspacesChangedSink, WorkspaceId, WorkspaceRole, add_workspace_human_member,
+    AddHumanMemberError, EnrollmentClock, HumanEnrollmentReadPort, Principal,
+    ViewerWorkspacesChangedSink, WorkspaceRole, add_workspace_human_member,
 };
+use silverhand_backend_core::identity::{UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_sqlite::access::SqliteAccessStore;
 use tempfile::TempDir;
@@ -172,7 +173,7 @@ async fn stored_membership(probe: &mut SqliteConnection, user: &str) -> Option<(
 
 fn human(user: &str) -> Principal {
     Principal::Human {
-        user_id: UserId::new(user),
+        user_id: UserId::parse(user).unwrap(),
     }
 }
 
@@ -188,8 +189,8 @@ async fn enroll(
         sink,
         &clock(),
         &actor,
-        WorkspaceId::new(WORKSPACE),
-        UserId::new(target),
+        WorkspaceId::parse(WORKSPACE).unwrap(),
+        UserId::parse(target).unwrap(),
     )
     .await
 }
@@ -320,7 +321,7 @@ async fn an_agent_actor_is_refused_in_the_lock_and_writes_nothing() {
     let sink = CountingSink::default();
 
     let actor = Principal::Agent {
-        agent_id: silverhand_backend_core::access::AgentId::new("agent-x"),
+        agent_id: silverhand_backend_core::identity::AgentId::parse("agent-x").unwrap(),
     };
     let error = enroll(&store, &sink, actor, TARGET).await.unwrap_err();
 
@@ -338,7 +339,7 @@ async fn the_read_port_derives_the_avatar_url_and_reports_a_missing_user_as_none
     let (_dir, path) = schema_with_fixtures().await;
     let store = SqliteAccessStore::open(&path).await.unwrap();
 
-    let present = store.user(&UserId::new(TARGET)).await.unwrap().unwrap();
+    let present = store.user(&UserId::parse(TARGET).unwrap()).await.unwrap().unwrap();
     assert_eq!(present.display_name, "Target");
     assert_eq!(
         present.avatar_url.as_deref(),
@@ -347,10 +348,10 @@ async fn the_read_port_derives_the_avatar_url_and_reports_a_missing_user_as_none
     );
 
     // An actor user with no avatar columns has no avatar URL.
-    let no_avatar = store.user(&UserId::new(ADMIN)).await.unwrap().unwrap();
+    let no_avatar = store.user(&UserId::parse(ADMIN).unwrap()).await.unwrap().unwrap();
     assert_eq!(no_avatar.avatar_url, None);
 
     // A user that does not exist is the `None` the surface maps to 404.
-    let missing = store.user(&UserId::new("ghost")).await.unwrap();
+    let missing = store.user(&UserId::parse("ghost").unwrap()).await.unwrap();
     assert!(missing.is_none());
 }

@@ -13,20 +13,21 @@
 //! create-only capability seed runs only when it created the row. The join-time
 //! candidate is *not* sampled here — the application samples its clock after
 //! authorization and hands the candidate in, so a re-enrollment keeps the stored
-//! value and the time source stays in the application. Every driver error is
-//! handed to the port's caller as the source of a `PersistenceFailure`; nothing
-//! is logged here.
+//! value and the time source stays in the application. This crate owns no clock
+//! at all: the production [`EnrollmentClock`](silverhand_backend_core::access::SystemEnrollmentClock)
+//! lives beside its port in the application layer, because reading the host wall
+//! clock is not persistence. Every driver error is handed to the port's caller as
+//! the source of a `PersistenceFailure`; nothing is logged here.
 
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::access::{
     AddHumanMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
-    AgentId, AgentWorkspaceMembership, Capability, EnrollmentClock, EnrollmentKey,
-    HumanEnrollmentCommit, HumanEnrollmentKey, HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork,
-    HumanUser, Principal, UserId, WorkspaceRole, WorkspaceUserMembership,
-    human_enrollment_authorized,
+    AgentWorkspaceMembership, Capability, EnrollmentKey, HumanEnrollmentCommit, HumanEnrollmentKey,
+    HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, HumanUser, Principal, WorkspaceRole,
+    WorkspaceUserMembership, human_enrollment_authorized,
 };
+use silverhand_backend_core::identity::{AgentId, UserId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
     SqlitePool,
@@ -68,41 +69,6 @@ pub struct SqliteAccessStore {
     pool: SqlitePool,
 }
 
-/// The production [`EnrollmentClock`]: the host wall clock, read once by the
-/// application before the write transaction opens.
-///
-/// It matches `Date.now()` for every reachable time and never fails. A time at
-/// or after the Unix epoch yields a positive millisecond count; a pre-epoch host
-/// clock yields a *negative* one (as `Date.now()` returns for dates before 1970)
-/// rather than a faked zero or a refusal; and only a time beyond the `i64`
-/// millisecond range — hundreds of millions of years out, unreachable in
-/// practice — saturates to the nearest bound instead of wrapping. Reading the
-/// clock is therefore not a failure mode, so this surface never emits a `500`
-/// the product route could not.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SystemClock;
-
-impl EnrollmentClock for SystemClock {
-    fn now_unix_millis(&self) -> i64 {
-        unix_millis(SystemTime::now())
-    }
-}
-
-/// The signed, saturating Unix-millisecond conversion behind [`SystemClock`],
-/// split out as a pure function of its input so the epoch, pre-epoch and
-/// overflow edges are pinned by fixed-input tests rather than the wall clock.
-fn unix_millis(now: SystemTime) -> i64 {
-    match now.duration_since(UNIX_EPOCH) {
-        // At or after the epoch: a positive count, saturating only past i64::MAX.
-        Ok(elapsed) => i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX),
-        // Before the epoch: a negative count, saturating only past i64::MIN.
-        Err(before) => match i64::try_from(before.duration().as_millis()) {
-            Ok(millis) => -millis,
-            Err(_) => i64::MIN,
-        },
-    }
-}
-
 /// Startup and driver failures, surfaced only to the composition root that opens
 /// the store. The ports below hand the driver error over as a source instead.
 #[derive(Debug, Error)]
@@ -117,6 +83,31 @@ pub enum SqliteAccessStoreError {
 #[derive(Debug, Error)]
 #[error("workspace_users.role holds an unrecognized value: {0}")]
 struct CorruptRoleToken(String);
+
+/// A committed row whose identifier column decodes to a value the domain refuses
+/// — today only the empty string, which `identity::parse` rejects. The product
+/// schema's ids are non-empty by construction, so such a row is a
+/// persistence-integrity fault: it is surfaced as the source of a
+/// [`PersistenceFailure`] (a safe `500`), never coerced to a sentinel id and never
+/// mistaken for the `404` that a *requested* empty id earns at the wire.
+#[derive(Debug, Error)]
+#[error("{table}.{column} holds an unusable identifier")]
+struct CorruptStoredIdentifier {
+    table: &'static str,
+    column: &'static str,
+}
+
+/// A read that failed in the driver or on a row that cannot be decoded into the
+/// domain. Both reach the caller as the source of one `PersistenceFailure`; the
+/// split exists so an integrity fault names its exact column instead of
+/// masquerading as a driver error.
+#[derive(Debug, Error)]
+enum AccessReadFailure {
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
+    #[error(transparent)]
+    Integrity(#[from] CorruptStoredIdentifier),
+}
 
 /// The internal outcome of the human-enrollment transaction. `Forbidden` is the
 /// in-lock authority refusal (a rollback), kept distinct from the driver
@@ -167,14 +158,24 @@ impl SqliteAccessStore {
     async fn agent_authority(
         &self,
         agent_id: &AgentId,
-    ) -> Result<Option<AgentAuthorityFacts>, SqliteAccessStoreError> {
+    ) -> Result<Option<AgentAuthorityFacts>, AccessReadFailure> {
         let created_by: Option<String> = sqlx::query_scalar(SELECT_AGENT_AUTHORITY)
             .bind(agent_id.as_str())
             .fetch_optional(&self.pool)
             .await?;
-        Ok(created_by.map(|user_id| AgentAuthorityFacts {
+        let Some(user_id) = created_by else {
+            return Ok(None);
+        };
+        // A stored owner id the domain refuses is corruption of a committed row,
+        // not a product answer, so it fails the read rather than resolving the
+        // agent to an unusable owner.
+        let created_by_user_id = UserId::parse(user_id).map_err(|_| CorruptStoredIdentifier {
+            table: "agents",
+            column: "created_by_user_id",
+        })?;
+        Ok(Some(AgentAuthorityFacts {
             id: agent_id.clone(),
-            created_by_user_id: UserId::new(user_id),
+            created_by_user_id,
         }))
     }
 
@@ -227,35 +228,35 @@ impl SqliteAccessStore {
         })
     }
 
-    async fn user_record(
-        &self,
-        user_id: &UserId,
-    ) -> Result<Option<HumanUser>, SqliteAccessStoreError> {
+    async fn user_record(&self, user_id: &UserId) -> Result<Option<HumanUser>, AccessReadFailure> {
         let row: Option<(String, String, String, Option<String>, i64, i64)> =
             sqlx::query_as(SELECT_USER)
                 .bind(user_id.as_str())
                 .fetch_optional(&self.pool)
                 .await?;
-        Ok(row.map(
-            |(id, name, display_name, avatar_storage_key, created_at, updated_at)| {
-                // Mirror `principalAvatarUrl`: a present, non-empty storage key
-                // yields a versioned avatar path, otherwise there is no avatar.
-                let avatar_url = match avatar_storage_key {
-                    Some(ref key) if !key.is_empty() => {
-                        Some(format!("/api/users/{id}/avatar?v={updated_at}"))
-                    }
-                    _ => None,
-                };
-                HumanUser {
-                    id: UserId::new(id),
-                    name,
-                    display_name,
-                    avatar_url,
-                    created_at,
-                    updated_at,
-                }
-            },
-        ))
+        let Some((id, name, display_name, avatar_storage_key, created_at, updated_at)) = row else {
+            return Ok(None);
+        };
+        // Mirror `principalAvatarUrl`: a present, non-empty storage key yields a
+        // versioned avatar path, otherwise there is no avatar.
+        let avatar_url = match avatar_storage_key {
+            Some(ref key) if !key.is_empty() => {
+                Some(format!("/api/users/{id}/avatar?v={updated_at}"))
+            }
+            _ => None,
+        };
+        let id = UserId::parse(id).map_err(|_| CorruptStoredIdentifier {
+            table: "users",
+            column: "id",
+        })?;
+        Ok(Some(HumanUser {
+            id,
+            name,
+            display_name,
+            avatar_url,
+            created_at,
+            updated_at,
+        }))
     }
 
     #[tracing::instrument(skip(self))]
@@ -382,42 +383,5 @@ impl HumanEnrollmentUnitOfWork for SqliteAccessStore {
                     PersistenceFailure::from_source(CorruptRoleToken(token)),
                 ),
             })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::unix_millis;
-    use std::time::{Duration, UNIX_EPOCH};
-
-    #[test]
-    fn the_epoch_maps_to_zero() {
-        assert_eq!(unix_millis(UNIX_EPOCH), 0);
-    }
-
-    #[test]
-    fn a_time_after_the_epoch_is_a_positive_millisecond_count() {
-        let now = UNIX_EPOCH + Duration::from_millis(1_700_000_000_123);
-        assert_eq!(unix_millis(now), 1_700_000_000_123);
-    }
-
-    #[test]
-    fn a_pre_epoch_time_is_negative_never_a_faked_zero() {
-        let before = UNIX_EPOCH
-            .checked_sub(Duration::from_millis(1500))
-            .expect("platform represents pre-epoch instants");
-        assert_eq!(
-            unix_millis(before),
-            -1500,
-            "a pre-1970 clock must read negative, exactly as Date.now() does"
-        );
-    }
-
-    #[test]
-    fn a_time_beyond_the_i64_millisecond_range_saturates_rather_than_wrapping() {
-        let far_future = UNIX_EPOCH
-            .checked_add(Duration::from_millis(u64::MAX))
-            .expect("platform represents far-future instants");
-        assert_eq!(unix_millis(far_future), i64::MAX);
     }
 }

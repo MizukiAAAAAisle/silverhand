@@ -4,6 +4,7 @@
 
 mod agent_enrollment;
 mod clock;
+mod governance;
 mod human_enrollment;
 mod role;
 
@@ -12,7 +13,8 @@ pub use agent_enrollment::{
     AgentWorkspaceMembership, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentKey, Principal,
     add_workspace_agent_member, can_enroll_agent,
 };
-pub use clock::EnrollmentClock;
+pub use clock::{EnrollmentClock, SystemEnrollmentClock};
+pub use governance::{WorkspaceAccessPolicy, WorkspaceGovernance};
 pub use human_enrollment::{
     AddHumanMemberError, HumanEnrollmentCommit, HumanEnrollmentKey, HumanEnrollmentReadPort,
     HumanEnrollmentUnitOfWork, HumanUser, ViewerWorkspacesChangedSink, WorkspaceUserMembership,

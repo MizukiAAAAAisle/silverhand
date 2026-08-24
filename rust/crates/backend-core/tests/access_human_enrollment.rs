@@ -14,11 +14,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use silverhand_backend_core::access::{
-    AddHumanMemberError, AgentId, EnrollmentClock, HumanEnrollmentCommit, HumanEnrollmentKey,
-    HumanEnrollmentUnitOfWork, Principal, UserId, ViewerWorkspacesChangedSink, WorkspaceId,
-    WorkspaceRole, WorkspaceUserMembership, add_workspace_human_member,
-    human_enrollment_authorized,
+    AddHumanMemberError, EnrollmentClock, HumanEnrollmentCommit, HumanEnrollmentKey,
+    HumanEnrollmentUnitOfWork, Principal, ViewerWorkspacesChangedSink, WorkspaceRole,
+    WorkspaceUserMembership, add_workspace_human_member, human_enrollment_authorized,
 };
+use silverhand_backend_core::identity::{AgentId, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 
 const JOINED_AT_MS: i64 = 1_700_000_000_000;
@@ -152,12 +152,12 @@ impl ViewerWorkspacesChangedSink for FakeAccess {
 }
 
 fn ws() -> WorkspaceId {
-    WorkspaceId::new("ws-1")
+    WorkspaceId::parse("ws-1").unwrap()
 }
 
 fn human(user: &str) -> Principal {
     Principal::Human {
-        user_id: UserId::new(user),
+        user_id: UserId::parse(user).unwrap(),
     }
 }
 
@@ -166,7 +166,7 @@ async fn enroll(
     actor: Principal,
     target: &str,
 ) -> Result<WorkspaceUserMembership, AddHumanMemberError> {
-    add_workspace_human_member(fake, fake, &clock(), &actor, ws(), UserId::new(target)).await
+    add_workspace_human_member(fake, fake, &clock(), &actor, ws(), UserId::parse(target).unwrap()).await
 }
 
 #[tokio::test]
@@ -231,7 +231,7 @@ async fn an_actor_who_holds_no_role_is_refused() {
 async fn an_agent_principal_can_never_enroll() {
     let fake = FakeAccess::default();
     let actor = Principal::Agent {
-        agent_id: AgentId::new("agent-1"),
+        agent_id: AgentId::parse("agent-1").unwrap(),
     };
 
     let err = enroll(&fake, actor, "invitee").await.unwrap_err();

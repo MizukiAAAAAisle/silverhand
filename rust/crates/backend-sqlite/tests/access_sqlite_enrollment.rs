@@ -14,9 +14,10 @@ use sqlx::{
 use std::path::Path;
 
 use silverhand_backend_core::access::{
-    AddAgentMemberError, AgentId, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentClock,
-    Principal, UserId, WorkspaceId, add_workspace_agent_member,
+    AddAgentMemberError, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentClock, Principal,
+    add_workspace_agent_member,
 };
+use silverhand_backend_core::identity::{AgentId, UserId, WorkspaceId};
 use silverhand_backend_sqlite::access::SqliteAccessStore;
 use tempfile::TempDir;
 
@@ -133,7 +134,7 @@ async fn capability_tokens(probe: &mut SqliteConnection) -> Vec<String> {
 
 fn human(user: &str) -> Principal {
     Principal::Human {
-        user_id: UserId::new(user),
+        user_id: UserId::parse(user).unwrap(),
     }
 }
 
@@ -147,8 +148,8 @@ async fn enrolling_a_new_owned_agent_seeds_every_default_capability() {
         &store,
         &clock(),
         &human(OWNER),
-        WorkspaceId::new(WORKSPACE),
-        AgentId::new(AGENT),
+        WorkspaceId::parse(WORKSPACE).unwrap(),
+        AgentId::parse(AGENT).unwrap(),
     )
     .await
     .unwrap();
@@ -180,8 +181,8 @@ async fn re_enrolling_is_idempotent_and_keeps_the_original_join_time() {
         &store,
         &clock(),
         &human(OWNER),
-        WorkspaceId::new(WORKSPACE),
-        AgentId::new(AGENT),
+        WorkspaceId::parse(WORKSPACE).unwrap(),
+        AgentId::parse(AGENT).unwrap(),
     )
     .await
     .unwrap();
@@ -191,8 +192,8 @@ async fn re_enrolling_is_idempotent_and_keeps_the_original_join_time() {
         &store,
         &clock(),
         &human(OWNER),
-        WorkspaceId::new(WORKSPACE),
-        AgentId::new(AGENT),
+        WorkspaceId::parse(WORKSPACE).unwrap(),
+        AgentId::parse(AGENT).unwrap(),
     )
     .await
     .unwrap();
@@ -224,8 +225,8 @@ async fn concurrent_first_enrollments_create_the_membership_exactly_once() {
                 &store,
                 &clock(),
                 &human(OWNER),
-                WorkspaceId::new(WORKSPACE),
-                AgentId::new(AGENT),
+                WorkspaceId::parse(WORKSPACE).unwrap(),
+                AgentId::parse(AGENT).unwrap(),
             )
             .await
         })
@@ -238,8 +239,8 @@ async fn concurrent_first_enrollments_create_the_membership_exactly_once() {
                 &store,
                 &clock(),
                 &human(OWNER),
-                WorkspaceId::new(WORKSPACE),
-                AgentId::new(AGENT),
+                WorkspaceId::parse(WORKSPACE).unwrap(),
+                AgentId::parse(AGENT).unwrap(),
             )
             .await
         })
@@ -274,8 +275,8 @@ async fn re_enrollment_never_re_widens_a_narrowed_capability_set() {
         &store,
         &clock(),
         &human(OWNER),
-        WorkspaceId::new(WORKSPACE),
-        AgentId::new(AGENT),
+        WorkspaceId::parse(WORKSPACE).unwrap(),
+        AgentId::parse(AGENT).unwrap(),
     )
     .await
     .unwrap();
@@ -298,8 +299,8 @@ async fn re_enrollment_never_re_widens_a_narrowed_capability_set() {
         &store,
         &clock(),
         &human(OWNER),
-        WorkspaceId::new(WORKSPACE),
-        AgentId::new(AGENT),
+        WorkspaceId::parse(WORKSPACE).unwrap(),
+        AgentId::parse(AGENT).unwrap(),
     )
     .await
     .unwrap();
@@ -323,8 +324,8 @@ async fn a_missing_agent_is_refused_before_any_write() {
         &store,
         &clock(),
         &human(OWNER),
-        WorkspaceId::new(WORKSPACE),
-        AgentId::new("ghost"),
+        WorkspaceId::parse(WORKSPACE).unwrap(),
+        AgentId::parse("ghost").unwrap(),
     )
     .await
     .unwrap_err();
@@ -344,8 +345,8 @@ async fn a_foreign_agent_is_refused_before_any_write() {
         &store,
         &clock(),
         &human(OTHER),
-        WorkspaceId::new(WORKSPACE),
-        AgentId::new(AGENT),
+        WorkspaceId::parse(WORKSPACE).unwrap(),
+        AgentId::parse(AGENT).unwrap(),
     )
     .await
     .unwrap_err();
