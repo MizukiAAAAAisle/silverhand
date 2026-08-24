@@ -61,12 +61,24 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "host_agent_background"),
 ];
 
-/// The declarations in those same roots that this lane did NOT add.
+/// The declarations this lane did NOT add, across EVERY root in `CRATE_ROOTS`.
 ///
 /// It exists so the seam ledger can be CLOSED over the tree rather than trusted:
 /// recognising a declaration no inventory knows about requires knowing what was
 /// already there. Without it, forgetting an entry above is silent — twice now the
 /// same defect.
+///
+/// It spans the roots that own no seam as well, because a closure whose SCAN RANGE
+/// is derived from the seam table can only find omissions in roots that table
+/// already names. A module added to a root with no seam entry would be read by no
+/// gate at all, and every table-driven gate would pass — the next lane module lands
+/// in `backend-sqlite`, a root in exactly that state.
+///
+/// Membership answers "was it already there", which no parser can decide. The tree
+/// gate holds every declaration to EXACTLY ONE classification; the classification
+/// itself was reconciled once against the root declarations at base `08d5e4de` — 1
+/// in backend-app, 15 in backend-core, 15 in backend-server, 11 in backend-sqlite,
+/// with no seam entry among them.
 ///
 /// CP1-temporary, with G3's accounting: it guards "every lane module is registered
 /// where it is guarded", it is deleted when the seam is extracted into the
@@ -74,6 +86,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
 /// merge that brings new modules into these roots must extend one list or the
 /// other, and having to choose is the point.
 const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
+    ("backend-app", "current_schema"),
     ("backend-core", "access"),
     ("backend-core", "auth"),
     ("backend-core", "direct_pair_read"),
@@ -104,6 +117,17 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-server", "scope_events"),
     ("backend-server", "wire"),
     ("backend-server", "workspaces"),
+    ("backend-sqlite", "access"),
+    ("backend-sqlite", "auth"),
+    ("backend-sqlite", "current_schema"),
+    ("backend-sqlite", "direct_pair_read"),
+    ("backend-sqlite", "host_runtime"),
+    ("backend-sqlite", "messaging"),
+    ("backend-sqlite", "runtime_credential"),
+    ("backend-sqlite", "runtime_delivery"),
+    ("backend-sqlite", "scope_event"),
+    ("backend-sqlite", "unread_read"),
+    ("backend-sqlite", "workspace_cold_read"),
 ];
 
 /// The seam modules that are DIRECTORY modules, owning a `<name>/mod.rs`. G5 reads
@@ -397,49 +421,126 @@ fn split_visibility(item: &str) -> (bool, &str) {
     (false, item)
 }
 
+/// Whether `text` ends with `keyword` as a whole token rather than as the tail of a
+/// longer identifier.
+fn ends_with_token(text: &str, keyword: &str) -> bool {
+    match text.strip_suffix(keyword) {
+        Some(before) => !before
+            .ends_with(|character: char| character.is_ascii_alphanumeric() || character == '_'),
+        None => false,
+    }
+}
+
+/// The LAST whole-token occurrence of `keyword`, split into what precedes it and
+/// what follows.
+fn split_last_token<'a>(chunk: &'a str, keyword: &str) -> Option<(&'a str, &'a str)> {
+    let mut searched = chunk.len();
+    while let Some(found) = chunk[..searched].rfind(keyword) {
+        let before = &chunk[..found];
+        if !before
+            .ends_with(|character: char| character.is_ascii_alphanumeric() || character == '_')
+        {
+            return Some((before, &chunk[found + keyword.len()..]));
+        }
+        searched = found;
+    }
+    None
+}
+
+/// Whether an item's leading text ends in a visibility, which is how an exported
+/// `use` is told from a private one when the item is read from its end.
+fn ends_with_visibility(before: &str) -> bool {
+    let trimmed = before.trim_end();
+    let head = match trimmed.strip_suffix(')') {
+        Some(restricted) => match restricted.rfind('(') {
+            Some(open) => restricted[..open].trim_end(),
+            None => return false,
+        },
+        None => trimmed,
+    };
+    ends_with_token(head, "pub")
+}
+
+/// The `mod NAME` a chunk ENDS with, at any visibility and behind any attributes.
+///
+/// Read from the END because a `;`-delimited chunk also carries the tail of whatever
+/// preceded it: a crate root that holds code as well as declarations — the
+/// composition root does — puts closing braces and expressions in front of its `mod`
+/// lines, and a start-anchored match finds none of them. Inline modules stay excluded
+/// for free: `mod tests {` leaves a brace where the name would be.
+fn trailing_declaration(chunk: &str) -> Option<&str> {
+    let (_, name) = split_last_token(chunk.trim_end(), "mod ")?;
+    let name = name.trim();
+    is_identifier(name).then_some(name)
+}
+
+/// The use tree of an EXPORTED `use` a chunk ends with. A private `use` names the
+/// path for one file and adds no path anyone else can reach.
+fn trailing_export(chunk: &str) -> Option<&str> {
+    let (before, tree) = split_last_token(chunk, "use ")?;
+    ends_with_visibility(before).then_some(tree)
+}
+
 /// Whether this source takes OWNERSHIP of `namespace` — declares it, or re-exports
 /// it under a second path.
 ///
 /// Deliberately not "mentions it": a crate root legitimately consumes another
 /// crate's namespace, and prose and a struct field can carry the same word. Only a
-/// declaration or an exported `use` creates a second owner — a private `use` names
-/// the namespace for one file and adds no path anyone else can reach.
+/// declaration or an exported `use` creates a second owner.
 ///
 /// Item-based rather than line-based, because a visibility qualifier, a leading
 /// attribute and a braced group spanning several lines are all legal ways to own a
 /// name, and a line-anchored equality test recognises none of them.
 fn declares_or_reexports(source: &str, namespace: &str) -> bool {
-    strip_comments(source).split(';').any(|item| {
-        let (exported, rest) = split_visibility(strip_attributes(item));
-        if let Some(module) = rest.strip_prefix("mod ") {
-            // Any visibility: a second `mod` of this name is a second module, and
-            // a private one still owns the directory.
-            return module.trim() == namespace;
-        }
-        match rest.strip_prefix("use ") {
-            Some(reexport) => exported && names_identifier(reexport, namespace),
-            None => false,
-        }
+    strip_comments(source).split(';').any(|chunk| {
+        // Any visibility: a second `mod` of this name is a second module, and a
+        // private one still owns the directory.
+        trailing_declaration(chunk) == Some(namespace)
+            || trailing_export(chunk).is_some_and(|tree| names_identifier(tree, namespace))
     })
 }
 
 /// Every module a crate root declares from a file, by name.
-///
-/// Inline modules are excluded on purpose: `mod tests { .. }` declares no seam line
-/// and owns no directory.
+fn module_declarations(source: &str) -> BTreeSet<String> {
+    strip_comments(source)
+        .split(';')
+        .filter_map(|chunk| trailing_declaration(chunk).map(str::to_owned))
+        .collect()
+}
+
 fn root_module_declarations(crate_dir: &str) -> BTreeSet<String> {
     let root = rust_root()
         .join("crates")
         .join(crate_dir)
         .join("src/lib.rs");
-    strip_comments(&read(&root))
-        .split(';')
-        .filter_map(|item| {
-            let (_, rest) = split_visibility(strip_attributes(item));
-            let name = rest.strip_prefix("mod ")?.trim();
-            is_identifier(name).then(|| name.to_owned())
-        })
+    module_declarations(&read(&root))
+}
+
+/// Every module either inventory classifies for this root. A root absent from both
+/// yields the empty set, which is what makes an unregistered declaration there a
+/// failure rather than an unvisited file.
+fn registered_modules(crate_dir: &str) -> BTreeSet<String> {
+    SEAM_ROOT_MODULES
+        .iter()
+        .chain(ROOT_MODULES_WE_DID_NOT_ADD)
+        .filter(|(owner, _)| *owner == crate_dir)
+        .map(|(_, module)| (*module).to_owned())
         .collect()
+}
+
+/// What a root declares that nothing classifies, and what an inventory claims that
+/// the root no longer declares.
+///
+/// Pure over the two sets so the seamless-root case can be driven through this same
+/// comparison, without waiting for another lane to add a module to prove it.
+fn classification_gaps(
+    declared: &BTreeSet<String>,
+    registered: &BTreeSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    (
+        declared.difference(registered).cloned().collect(),
+        registered.difference(declared).cloned().collect(),
+    )
 }
 
 /// Whether the source reaches `namespace` as a path segment. Bare substring
@@ -475,13 +576,18 @@ fn names_path_segment(source: &str, namespace: &str) -> bool {
         })
 }
 
-/// G0 — every lane module sits in the inventory that guards it.
+/// G0 — every module in every crate root sits in the inventory that guards it.
 ///
 /// The gates below are driven by tables, and a module missing from a table is not
 /// guarded by anything, with no signal at all. That failure has now happened twice,
 /// so the tables are checked against the tree instead of trusted: a declaration no
 /// inventory knows about fails here, and a shape mismatch (a flat module listed
 /// where a `mod.rs` is read) fails here rather than as a confusing missing path.
+///
+/// The scan range is `CRATE_ROOTS`, never a range derived from a table being
+/// verified. A closure that enumerates only the roots the seam ledger already names
+/// cannot see the omission that matters — a module added to a root with no seam
+/// entry, where no gate reads the file and every table-driven gate passes.
 #[test]
 fn g0_every_lane_module_sits_in_the_inventory_that_guards_it() {
     // Controls, both directions: a declaration is recognised at any visibility and
@@ -508,45 +614,105 @@ fn g0_every_lane_module_sits_in_the_inventory_that_guards_it() {
         strip_attributes("#![forbid(unsafe_code)]\n\npub mod access"),
         "pub mod access"
     );
+    // A root that also carries CODE puts the tail of a function in front of its
+    // declarations, which is how the composition root declares its only module.
+    assert_eq!(
+        trailing_declaration(
+            "\n    rendered\n}\n\n#[cfg(test)]\n#[path = \"../x.rs\"]\nmod current_schema"
+        ),
+        Some("current_schema")
+    );
+    assert_eq!(
+        trailing_declaration("pub(crate) mod policy"),
+        Some("policy")
+    );
+    assert_eq!(trailing_declaration("mod tests {\n    use super::*"), None);
+    assert_eq!(trailing_declaration("let rendered = demod x"), None);
+    assert_eq!(trailing_declaration("fn cold_read() {}"), None);
+    assert_eq!(
+        trailing_export("}\n\npub(crate) use crate::cold_read"),
+        Some("crate::cold_read")
+    );
+    assert_eq!(trailing_export("}\n\nuse crate::cold_read"), None);
 
-    for crate_dir in SEAM_ROOT_MODULES
-        .iter()
-        .map(|(crate_dir, _)| *crate_dir)
-        .collect::<BTreeSet<&str>>()
-    {
-        let registered: BTreeSet<String> = SEAM_ROOT_MODULES
-            .iter()
-            .chain(ROOT_MODULES_WE_DID_NOT_ADD)
-            .filter(|(owner, _)| *owner == crate_dir)
-            .map(|(_, module)| (*module).to_owned())
-            .collect();
-        assert_eq!(
-            root_module_declarations(crate_dir),
-            registered,
-            "{crate_dir}/src/lib.rs declares a module no inventory knows about, or an \
-             inventory names one it no longer declares"
+    // Each classification is a claim about one module, and a set union of the two
+    // tables would silently absorb a repeated or doubled one.
+    let seam: BTreeSet<(&str, &str)> = SEAM_ROOT_MODULES.iter().copied().collect();
+    assert_eq!(
+        seam.len(),
+        SEAM_ROOT_MODULES.len(),
+        "the seam ledger repeats an entry"
+    );
+    let inherited: BTreeSet<(&str, &str)> = ROOT_MODULES_WE_DID_NOT_ADD.iter().copied().collect();
+    assert_eq!(
+        inherited.len(),
+        ROOT_MODULES_WE_DID_NOT_ADD.len(),
+        "the inherited list repeats an entry"
+    );
+    let both: Vec<&(&str, &str)> = seam.intersection(&inherited).collect();
+    assert!(
+        both.is_empty(),
+        "{both:?} is claimed as this lane's seam and as already present"
+    );
+
+    for crate_dir in CRATE_ROOTS {
+        let (unclassified, absent) = classification_gaps(
+            &root_module_declarations(crate_dir),
+            &registered_modules(crate_dir),
+        );
+        assert!(
+            unclassified.is_empty(),
+            "{crate_dir}/src/lib.rs declares {unclassified:?}, which no inventory \
+             classifies: an unregistered module is guarded by nothing"
+        );
+        assert!(
+            absent.is_empty(),
+            "an inventory claims {absent:?} in {crate_dir}/src/lib.rs, which no longer \
+             declares them"
         );
     }
 
+    // The case the previous range could not reach: a root owning no seam entry.
+    // Driven through the same parser and the same comparison as the roots above,
+    // from a fixture, so it holds without another lane adding a module to prove it.
+    let seamless_root = "#![forbid(unsafe_code)]\n\npub mod access;\npub mod host_agent;\n";
+    assert_eq!(
+        classification_gaps(
+            &module_declarations(seamless_root),
+            &["access".to_owned()].into_iter().collect(),
+        )
+        .0,
+        vec!["host_agent".to_owned()],
+        "a declaration in a root with no seam entry must still be reported"
+    );
+
+    let mut directory_shaped: BTreeSet<(&str, &str)> = BTreeSet::new();
     for (crate_dir, module) in SEAM_ROOT_MODULES {
         let module_dir = rust_root()
             .join("crates")
             .join(crate_dir)
             .join("src")
             .join(module);
-        let directory_shaped = module_dir.join("mod.rs").is_file();
+        let is_directory = module_dir.join("mod.rs").is_file();
         assert!(
-            directory_shaped != module_dir.with_extension("rs").is_file(),
+            is_directory != module_dir.with_extension("rs").is_file(),
             "{}: a module is either a directory with mod.rs or a flat file",
             module_dir.display()
         );
-        assert_eq!(
-            directory_shaped,
-            DIRECTORY_NAMESPACES.contains(&(crate_dir, module)),
-            "{}: the directory inventory and the tree disagree about this module's shape",
-            module_dir.display()
-        );
+        if is_directory {
+            directory_shaped.insert((crate_dir, module));
+        }
     }
+    // Exact, both ways: a flat module listed here would send G5 at a missing path,
+    // and an entry outside the ledger would fence a namespace this lane never added.
+    assert_eq!(
+        DIRECTORY_NAMESPACES
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        directory_shaped,
+        "the directory inventory and the tree disagree about which seam modules own a mod.rs"
+    );
 
     for entry in ACTIVATION_NAMESPACES {
         assert!(
