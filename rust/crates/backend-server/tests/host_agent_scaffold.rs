@@ -37,6 +37,7 @@ const DRIVER_WIRE_RUNTIME: &[&str] = &[
 ];
 
 const LANE_NAMESPACES: &[(&str, &str)] = &[
+    ("backend-core", "capability"),
     ("backend-core", "policy"),
     ("backend-server", "host_agent_background"),
 ];
@@ -435,6 +436,43 @@ fn g5_namespaces_declare_and_never_carry_business() {
             assert!(
                 is_declaration,
                 "{} carries `{line}`: a namespace declares and re-exports only",
+                path.display()
+            );
+        }
+    }
+}
+
+/// G6 — the capability namespace decides, and never acquires.
+///
+/// A pure decision over already-read facts is what lets one rule serve a face
+/// that reads before an independent write and a face that must read under the
+/// write lock it commits in. The two properties that make it pure are carried
+/// differently, and only one of them needs a fence:
+///
+///  - "holds no driver" is already compile-enforced — `backend-core`'s production
+///    closure reaches no driver, wire or runtime crate (G1);
+///  - "acquires nothing" is a SIGNATURE property: these functions take facts and
+///    return a verdict, so a rule that wanted to read would have to change its
+///    signature and every call site. This gate is the tripwire against the first
+///    step towards that — declaring a port or going async inside the namespace.
+///
+/// A LEXICAL fence, with the same accounting as G3: it guards the named boundary
+/// "capability acquires no facts", it is removed when a compile-level carrier
+/// exists (a sealed fact-provider trait owned outside this namespace would be
+/// one), and it is owned by this lane.
+#[test]
+fn g6_capability_decides_over_facts_and_declares_no_port() {
+    let paths = lane_source_paths("backend-core", "capability");
+    assert!(
+        paths.len() >= 4,
+        "expected the capability namespace to carry its leaves, found {paths:?}"
+    );
+    for path in paths {
+        let source = strip_comments(&read(&path));
+        for forbidden in ["async fn", "impl Future", "-> impl Future", "trait "] {
+            assert!(
+                !source.contains(forbidden),
+                "{} carries `{forbidden}`: a capability decides over facts it was handed",
                 path.display()
             );
         }
