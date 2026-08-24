@@ -6,9 +6,12 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    fs,
+    env, fs,
     path::{Path, PathBuf},
+    process::Command,
 };
+
+use serde_json::Value;
 
 /// Driver, wire and runtime families. `backend-core` stays free of all of them
 /// through its whole normal + build dependency closure.
@@ -49,126 +52,125 @@ fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
-/// Declared dependency names per manifest section.
-fn manifest_sections(crate_dir: &str) -> BTreeMap<String, BTreeSet<String>> {
-    let source = read(
-        &rust_root()
-            .join("crates")
-            .join(crate_dir)
-            .join("Cargo.toml"),
+/// Cargo's own resolution of the workspace, read once per gate.
+///
+/// A hand-written manifest or lock parser cannot see target-specific edges,
+/// `package = ` renames, feature-gated optional edges, or two versions of one
+/// name, so every dependency assertion below reads the resolved graph instead of
+/// re-deriving one. `--locked --offline` keeps the lock file untouched.
+struct ResolvedGraph {
+    /// Package id to package name; ids are the only stable identity, because two
+    /// versions of one crate share a name.
+    names: BTreeMap<String, String>,
+    /// Package id to dependency-kind (`normal`, `build`, `dev`) to package ids,
+    /// merged across every target so a `cfg(...)` edge cannot hide.
+    edges: BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
+    /// Workspace member name to package id.
+    members: BTreeMap<String, String>,
+}
+
+fn resolved_graph() -> ResolvedGraph {
+    let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let output = Command::new(cargo)
+        .args(["metadata", "--locked", "--offline", "--format-version", "1"])
+        .current_dir(rust_root())
+        .output()
+        .expect("run cargo metadata");
+    assert!(
+        output.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let mut sections = BTreeMap::new();
-    let mut current = String::new();
-    for line in source.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            current = name.to_owned();
-            continue;
-        }
-        if !current.ends_with("dependencies") {
-            continue;
-        }
-        let Some((key, _)) = line.split_once('=') else {
-            continue;
-        };
-        let name = key.trim().split('.').next().unwrap_or("").trim();
-        if !name.is_empty() {
-            sections
-                .entry(current.clone())
-                .or_insert_with(BTreeSet::new)
-                .insert(name.to_owned());
+    let metadata: Value = serde_json::from_slice(&output.stdout).expect("cargo metadata json");
+
+    let mut names = BTreeMap::new();
+    for package in metadata["packages"].as_array().expect("packages") {
+        names.insert(
+            package["id"].as_str().expect("package id").to_owned(),
+            package["name"].as_str().expect("package name").to_owned(),
+        );
+    }
+
+    let mut members = BTreeMap::new();
+    for id in metadata["workspace_members"]
+        .as_array()
+        .expect("workspace members")
+    {
+        let id = id.as_str().expect("member id").to_owned();
+        members.insert(names[&id].clone(), id);
+    }
+
+    let mut edges: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> = BTreeMap::new();
+    for node in metadata["resolve"]["nodes"]
+        .as_array()
+        .expect("resolve nodes")
+    {
+        let id = node["id"].as_str().expect("node id").to_owned();
+        let per_kind = edges.entry(id).or_default();
+        for dependency in node["deps"].as_array().expect("node deps") {
+            let target = dependency["pkg"].as_str().expect("dep pkg").to_owned();
+            for dependency_kind in dependency["dep_kinds"].as_array().expect("dep kinds") {
+                // A normal dependency carries no `kind` at all.
+                let kind = dependency_kind["kind"].as_str().unwrap_or("normal");
+                per_kind
+                    .entry(kind.to_owned())
+                    .or_default()
+                    .insert(target.clone());
+            }
         }
     }
-    sections
+
+    ResolvedGraph {
+        names,
+        edges,
+        members,
+    }
 }
 
-fn declared(crate_dir: &str, section: &str) -> BTreeSet<String> {
-    manifest_sections(crate_dir)
-        .remove(section)
-        .unwrap_or_default()
-}
+impl ResolvedGraph {
+    fn member(&self, package: &str) -> &str {
+        self.members
+            .get(package)
+            .unwrap_or_else(|| panic!("{package} is not a workspace member"))
+    }
 
-/// Resolved edges from the lock file. Third-party packages carry no resolved
-/// dev-dependencies, so this is the normal + build graph for them.
-fn locked_edges() -> BTreeMap<String, BTreeSet<String>> {
-    let source = read(&rust_root().join("Cargo.lock"));
-    let mut edges = BTreeMap::new();
-    let mut name = String::new();
-    let mut in_dependencies = false;
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if trimmed == "[[package]]" {
-            name.clear();
-            in_dependencies = false;
-            continue;
-        }
-        if let Some(value) = trimmed.strip_prefix("name = ") {
-            name = value.trim_matches('"').to_owned();
-            continue;
-        }
-        if trimmed == "dependencies = [" {
-            in_dependencies = true;
-            continue;
-        }
-        if in_dependencies {
-            if trimmed == "]" {
-                in_dependencies = false;
+    fn kind(&self, id: &str, kind: &str) -> BTreeSet<String> {
+        self.edges
+            .get(id)
+            .and_then(|per_kind| per_kind.get(kind))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Everything cargo can compile into `package`: its own normal and build
+    /// edges, then the normal and build edges of everything those reach. A dev
+    /// edge is never transitive, so it is only ever a hop away from its own
+    /// package and never enters this closure.
+    fn production_closure(&self, package: &str) -> BTreeSet<String> {
+        let root = self.member(package);
+        let mut seen = BTreeSet::new();
+        let mut queue: VecDeque<String> = self
+            .kind(root, "normal")
+            .into_iter()
+            .chain(self.kind(root, "build"))
+            .collect();
+        while let Some(id) = queue.pop_front() {
+            if !seen.insert(id.clone()) {
                 continue;
             }
-            let dependency = trimmed
-                .trim_end_matches(',')
-                .trim_matches('"')
-                .split(' ')
-                .next()
-                .unwrap_or("")
-                .to_owned();
-            if !dependency.is_empty() {
-                edges
-                    .entry(name.clone())
-                    .or_insert_with(BTreeSet::new)
-                    .insert(dependency);
-            }
+            queue.extend(self.kind(&id, "normal"));
+            queue.extend(self.kind(&id, "build"));
         }
+        seen.iter().map(|id| self.names[id].clone()).collect()
     }
-    edges
-}
 
-fn workspace_members() -> BTreeMap<String, String> {
-    BTreeMap::from([
-        ("silverhand-backend-app".into(), "backend-app".into()),
-        ("silverhand-backend-core".into(), "backend-core".into()),
-        ("silverhand-backend-server".into(), "backend-server".into()),
-        ("silverhand-backend-sqlite".into(), "backend-sqlite".into()),
-    ])
-}
-
-/// Normal + build closure. Workspace members contribute their declared normal
-/// and build sections, never their dev-dependencies.
-fn production_closure(crate_dir: &str) -> BTreeSet<String> {
-    let edges = locked_edges();
-    let members = workspace_members();
-    let mut seen = BTreeSet::new();
-    let mut queue: VecDeque<String> = declared(crate_dir, "dependencies")
-        .into_iter()
-        .chain(declared(crate_dir, "build-dependencies"))
-        .collect();
-    while let Some(package) = queue.pop_front() {
-        if !seen.insert(package.clone()) {
-            continue;
-        }
-        let next: BTreeSet<String> = match members.get(&package) {
-            Some(member_dir) => declared(member_dir, "dependencies")
-                .into_iter()
-                .chain(declared(member_dir, "build-dependencies"))
-                .collect(),
-            None => edges.get(&package).cloned().unwrap_or_default(),
-        };
-        queue.extend(next);
+    /// Test-only edges of a workspace member, by package name.
+    fn dev_dependencies(&self, package: &str) -> BTreeSet<String> {
+        self.kind(self.member(package), "dev")
+            .iter()
+            .map(|id| self.names[id].clone())
+            .collect()
     }
-    seen
 }
 
 fn strip_comments(source: &str) -> String {
@@ -269,7 +271,8 @@ fn names_path_segment(source: &str, namespace: &str) -> bool {
 
 #[test]
 fn g1_core_carries_no_driver_wire_or_runtime_dependency() {
-    let closure = production_closure("backend-core");
+    let graph = resolved_graph();
+    let closure = graph.production_closure("silverhand-backend-core");
     let forbidden: Vec<&str> = DRIVER_WIRE_RUNTIME
         .iter()
         .copied()
@@ -284,16 +287,23 @@ fn g1_core_carries_no_driver_wire_or_runtime_dependency() {
 
 #[test]
 fn g1_the_persistence_and_wire_crates_keep_their_direction() {
+    let graph = resolved_graph();
     assert!(
-        !declared("backend-sqlite", "dependencies").contains("silverhand-backend-server"),
+        !graph
+            .production_closure("silverhand-backend-sqlite")
+            .contains("silverhand-backend-server"),
         "backend-sqlite must not depend on the wire crate"
     );
     assert!(
-        !production_closure("backend-server").contains("silverhand-backend-sqlite"),
+        !graph
+            .production_closure("silverhand-backend-server")
+            .contains("silverhand-backend-sqlite"),
         "backend-server production code must not be able to name the SQLite adapter"
     );
     assert!(
-        declared("backend-server", "dev-dependencies").contains("silverhand-backend-sqlite"),
+        graph
+            .dev_dependencies("silverhand-backend-server")
+            .contains("silverhand-backend-sqlite"),
         "the SQLite adapter is a backend-server test-only dependency"
     );
 }
