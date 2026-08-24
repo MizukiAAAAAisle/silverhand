@@ -17,10 +17,8 @@
 
 use sqlx::{Connection, SqliteConnection};
 
-use silverhand_backend_core::access::{
-    Principal, WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceRole,
-};
-use silverhand_backend_core::identity::{AgentId, UserId, WorkspaceId};
+use silverhand_backend_core::access::{WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceRole};
+use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_sqlite::access::SqliteAccessStore;
 use tempfile::TempDir;
 

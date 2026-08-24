@@ -10,8 +10,8 @@
 //! from an invented one, and authority answers second.
 
 use crate::{
-    capability::{decision::Decision, principal::Principal},
-    identity::{AgentId, UserId},
+    capability::decision::Decision,
+    identity::{AgentId, Principal, UserId},
 };
 
 /// The facts authority reads: who created the agent, and nothing else.

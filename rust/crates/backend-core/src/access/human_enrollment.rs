@@ -27,9 +27,9 @@ use std::future::Future;
 
 use thiserror::Error;
 
-use super::agent_enrollment::Principal;
 use super::clock::EnrollmentClock;
 use super::role::{WorkspaceRole, role_governs_workspace};
+use crate::identity::Principal;
 use crate::{
     identity::{UserId, WorkspaceId},
     persistence::PersistenceFailure,

@@ -34,11 +34,11 @@ use axum::{
 };
 use silverhand_backend_core::access::{
     AddAgentMemberError, AddHumanMemberError, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
-    EnrollmentClock, HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, Principal, ViewerAnnounce,
+    EnrollmentClock, HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, ViewerAnnounce,
     ViewerWorkspacesChangedSink, WorkspaceAccessPolicy, WorkspaceGovernance,
     add_workspace_agent_member, add_workspace_human_member,
 };
-use silverhand_backend_core::identity::{AgentId, UserId, WorkspaceId};
+use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 
 use crate::error;

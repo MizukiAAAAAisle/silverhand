@@ -16,8 +16,8 @@ use std::future::Future;
 use crate::identity::WorkspaceId;
 use crate::persistence::PersistenceFailure;
 
-use super::agent_enrollment::Principal;
 use super::role::{WorkspaceRole, role_governs_workspace};
+use crate::identity::Principal;
 
 /// The request-boundary door: the caller's standing to add members to a
 /// workspace. It resolves the workspace and the caller's role CEILING together —

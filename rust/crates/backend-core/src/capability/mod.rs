@@ -15,4 +15,3 @@ pub mod agent_audit;
 pub mod agent_authority;
 pub mod agent_view;
 pub mod decision;
-pub mod principal;

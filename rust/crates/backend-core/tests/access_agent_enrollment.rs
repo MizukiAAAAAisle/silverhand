@@ -14,9 +14,9 @@ use std::sync::{Arc, Mutex};
 use silverhand_backend_core::access::{
     AddAgentMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
     AgentWorkspaceMembership, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentClock,
-    EnrollmentKey, Principal, add_workspace_agent_member,
+    EnrollmentKey, add_workspace_agent_member,
 };
-use silverhand_backend_core::identity::{AgentId, UserId, WorkspaceId};
+use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 
 const JOINED_AT_MS: i64 = 1_700_000_000_000;

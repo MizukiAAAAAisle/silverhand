@@ -4834,7 +4834,7 @@ mod tests {
             &store,
             &hub,
             &FixedClock(JOIN_MS),
-            &silverhand_backend_core::access::Principal::Human {
+            &silverhand_backend_core::identity::Principal::Human {
                 user_id: UserId::parse("admin-1").unwrap(),
             },
             WorkspaceId::parse("workspace-1").unwrap(),
