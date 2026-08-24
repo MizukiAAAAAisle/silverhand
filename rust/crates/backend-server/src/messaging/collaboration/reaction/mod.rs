@@ -24,15 +24,15 @@ use silverhand_backend_core::{
     identity::{AgentId, UserId},
     messaging::MessageId,
     messaging::collaboration::reaction::{
-        ReactionActor, ReactionAftermath, ReactionChange, ReactionEmoji, ReactionMutation,
-        ReactionMutationPort, ReactionReadPort, change_reaction,
+        ReactionAftermath, ReactionChange, ReactionEmoji, ReactionMutation, ReactionMutationPort,
+        ReactionReadPort, change_reaction,
     },
     runtime_credential::RuntimePrincipal,
 };
 
 use wire::{
-    detail_success, internal_error, internal_error_response, invalid_input, invalid_reaction,
-    mutation_refusal, mutation_success, not_found,
+    detail_success, internal_error, internal_error_response, invalid_reaction, mutation_refusal,
+    mutation_success, not_found, parse_agent_body, parse_human_body,
 };
 
 pub const HUMAN_PATH: &str = "/api/messages/{id}/reactions";
@@ -87,17 +87,6 @@ struct AgentPath {
     aid: String,
 }
 
-#[derive(Deserialize)]
-struct HumanBody {
-    emoji: String,
-}
-
-#[derive(Deserialize)]
-struct AgentBody {
-    message_id: String,
-    emoji: String,
-}
-
 async fn human_add<M, R, A>(
     state: State<ReactionState<M, R, A>>,
     principal: Option<Extension<UserId>>,
@@ -144,17 +133,11 @@ where
     let Ok(message) = MessageId::parse(path.id) else {
         return not_found();
     };
-    let Ok(body) = serde_json::from_slice::<HumanBody>(&body) else {
-        return invalid_input();
+    let body = match parse_human_body(&body) {
+        Ok(body) => body,
+        Err(error) => return error.into_response(),
     };
-    mutate(
-        &state.0,
-        ReactionActor::Human(viewer),
-        message,
-        body.emoji,
-        change,
-    )
-    .await
+    mutate_human(&state.0, viewer, message, body, change).await
 }
 
 async fn agent_add<M, R, A>(
@@ -206,22 +189,25 @@ where
     if principal.agent() != &path_agent {
         return not_found();
     }
-    let Ok(body) = serde_json::from_slice::<AgentBody>(&body) else {
-        return invalid_input();
+    let (message, emoji) = match parse_agent_body(&body) {
+        Ok(body) => body,
+        Err(error) => return error.into_response(),
     };
-    let Ok(message) = MessageId::parse(body.message_id) else {
-        return not_found();
-    };
-    let actor = ReactionActor::Agent {
-        id: principal.agent().clone(),
-        source: principal.source().cloned(),
-    };
-    mutate(&state.0, actor, message, body.emoji, change).await
+    let message = MessageId::parse(message).expect("agent body parser rejects an empty message id");
+    mutate_agent(
+        &state.0,
+        principal.agent().clone(),
+        principal.source().cloned(),
+        message,
+        emoji,
+        change,
+    )
+    .await
 }
 
-async fn mutate<M, R, A>(
+async fn mutate_human<M, R, A>(
     state: &Inner<M, R, A>,
-    actor: ReactionActor,
+    actor: UserId,
     message: MessageId,
     raw_emoji: String,
     change: ReactionChange,
@@ -235,23 +221,70 @@ where
         Ok(emoji) => emoji,
         Err(error) => return invalid_reaction(error),
     };
-    let occurred_at_ms = match SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
-    {
+    let occurred_at_ms = match now_ms() {
         Some(value) => value,
         None => return internal_error("system time is outside reaction storage range"),
     };
-    let command = ReactionMutation::new(actor, message, emoji, change, occurred_at_ms);
+    execute_mutation(
+        state,
+        ReactionMutation::human(actor, message, emoji, change, occurred_at_ms),
+    )
+    .await
+}
+
+async fn mutate_agent<M, R, A>(
+    state: &Inner<M, R, A>,
+    actor: AgentId,
+    source: Option<silverhand_backend_core::identity::ConversationId>,
+    message: MessageId,
+    raw_emoji: String,
+    change: ReactionChange,
+) -> Response
+where
+    M: ReactionMutationPort,
+    R: ReactionReadPort,
+    A: ReactionAftermath,
+{
+    let occurred_at_ms = match now_ms() {
+        Some(value) => value,
+        None => return internal_error("system time is outside reaction storage range"),
+    };
+    execute_mutation(
+        state,
+        ReactionMutation::agent(actor, source, message, raw_emoji, change, occurred_at_ms),
+    )
+    .await
+}
+
+async fn execute_mutation<M, R, A>(state: &Inner<M, R, A>, command: ReactionMutation) -> Response
+where
+    M: ReactionMutationPort,
+    R: ReactionReadPort,
+    A: ReactionAftermath,
+{
     match change_reaction(&state.mutation, &state.aftermath, command).await {
-        Ok(Ok(outcome)) => mutation_success(&outcome),
+        Ok(Ok(execution)) => {
+            if let Some(failure) = execution.publication_failure() {
+                tracing::error!(
+                    error_chain = %crate::error::describe(failure),
+                    "reaction publication failed"
+                );
+            }
+            mutation_success(execution.outcome())
+        }
         Ok(Err(refusal)) => mutation_refusal(refusal),
         Err(error) => {
             tracing::error!(error_chain = %crate::error::describe(&error), "reaction mutation failed");
             internal_error_response()
         }
     }
+}
+
+fn now_ms() -> Option<i64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
 }
 
 async fn human_detail<M, R, A>(

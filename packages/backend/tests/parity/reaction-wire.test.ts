@@ -36,6 +36,18 @@ function fixtureCase(name: string): (typeof fixture)[number] {
   return expected;
 }
 
+function normalizeDetail(body: any, agentId: string): unknown {
+  return {
+    reactions: body.reactions.map((reaction: any) => ({
+      ...reaction,
+      reactors: reaction.reactors.map((reactor: any) => ({
+        ...reactor,
+        id: reactor.id === 'local' ? 'user-1' : reactor.id === agentId ? 'agent-1' : reactor.id,
+      })),
+    })),
+  };
+}
+
 describe('reaction wire is signed by the production TypeScript routes', () => {
   let t: TestApp | null = null;
   afterEach(() => { t?.cleanup(); t = null; });
@@ -56,15 +68,18 @@ describe('reaction wire is signed by the production TypeScript routes', () => {
         ...event.payload,
         message_id: 'message-1',
         conversation_id: 'conversation-1',
-        reactor_id: 'user-1',
+        reactor_id: (event.payload as any).reactor_kind === 'agent' ? 'agent-1' : 'user-1',
       });
     });
 
     await assertCase('human_add', await http(t).post(`/api/messages/${message}/reactions`, { emoji: '👀' }));
-    expect(events).toEqual([fixtureCase('human_add').event]);
-    unsubscribe();
+    expect(events).toEqual([(fixtureCase('human_add') as any).event]);
     await assertCase('human_duplicate', await http(t).post(`/api/messages/${message}/reactions`, { emoji: '👀' }));
     await assertCase('human_remove', await http(t).del(`/api/messages/${message}/reactions`, { body: JSON.stringify({ emoji: '👀' }), headers: { 'content-type': 'application/json' } }));
+
+    await assertCase('human_malformed_json', await http(t).post(`/api/messages/${message}/reactions`, undefined, { body: '{' }));
+    await assertCase('human_missing_emoji', await http(t).post(`/api/messages/${message}/reactions`, {}));
+    await assertCase('human_non_string_emoji', await http(t).post(`/api/messages/${message}/reactions`, { emoji: 7 }));
     await assertCase('invalid_reaction', await http(t).post(`/api/messages/${message}/reactions`, { emoji: 'not emoji' }));
     await assertCase('missing_message', await http(t).post('/api/messages/missing/reactions', { emoji: '👍' }));
     await assertCase('system_target', await http(t).post(`/api/messages/${system}/reactions`, { emoji: '👍' }));
@@ -75,11 +90,64 @@ describe('reaction wire is signed by the production TypeScript routes', () => {
     await assertCase('archived_conversation', await http(t).post(`/api/messages/${message}/reactions`, { emoji: '👍' }));
     t.ctx.db.prepare('UPDATE conversations SET archived_at = NULL WHERE id = ?').run(channel);
 
-    await assertCase('agent_add', await http(t, conversationSlotAuth(t, channel, agent)).post(`/internal/agents/${agent}/react-message`, { message_id: message, emoji: '🎯' }));
-    await assertCase('agent_wrong_source', await http(t, conversationSlotAuth(t, other, agent)).post(`/internal/agents/${agent}/react-message`, { message_id: message, emoji: '🚀' }));
-    t.ctx.db.prepare("DELETE FROM workspace_agent_capabilities WHERE workspace_id = ? AND agent_id = ? AND capability = 'send_messages'").run(workspace, agent);
-    await assertCase('agent_capability_denied', await http(t, conversationSlotAuth(t, channel, agent)).post(`/internal/agents/${agent}/react-message`, { message_id: message, emoji: '🚀' }));
+    const detailMessage = insertMessage(t, channel);
+    t.ctx.db.prepare("UPDATE users SET display_name = 'Local Display' WHERE id = 'local'").run();
+    t.ctx.db.prepare(
+      `INSERT INTO message_reactions (id, message_id, reactor_kind, reactor_id, emoji, created_at)
+       VALUES ('detail-user-one', ?, 'user', 'local', '👍', 10),
+              ('detail-agent-one', ?, 'agent', ?, '👍', 11),
+              ('detail-user-two', ?, 'user', 'local', '🎯', 12)`,
+    ).run(detailMessage, detailMessage, agent, detailMessage);
+    const detailResponse = await http(t).get(`/api/messages/${detailMessage}/reactions`);
+    expect(detailResponse.status).toBe((fixtureCase('human_detail') as any).status);
+    expect(normalizeDetail(await detailResponse.json(), agent)).toEqual(
+      (fixtureCase('human_detail') as any).body,
+    );
+    await assertCase('human_detail_missing', await http(t).get('/api/messages/missing/reactions'));
+    const invisible = await createChannel(t, workspace, 'invisible', agent);
+    t.ctx.db.prepare(
+      "DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'local'",
+    ).run(invisible);
+    const invisibleMessage = insertMessage(t, invisible);
+    await assertCase(
+      'human_detail_invisible',
+      await http(t).get(`/api/messages/${invisibleMessage}/reactions`),
+    );
 
-    expect(fixture.map(entry => entry.name)).toHaveLength(11);
+    const agentHttp = http(t, conversationSlotAuth(t, channel, agent));
+    await assertCase(
+      'agent_empty_message_id',
+      await agentHttp.post(`/internal/agents/${agent}/react-message`, { message_id: '', emoji: '🎯' }),
+    );
+    await assertCase(
+      'agent_invalid_reaction',
+      await agentHttp.post(`/internal/agents/${agent}/react-message`, { message_id: message, emoji: 'not emoji' }),
+    );
+
+    await assertCase('agent_add', await agentHttp.post(`/internal/agents/${agent}/react-message`, { message_id: message, emoji: '🎯' }));
+    await assertCase('agent_remove', await agentHttp.del(`/internal/agents/${agent}/react-message`, { body: JSON.stringify({ message_id: message, emoji: '🎯' }), headers: { 'content-type': 'application/json' } }));
+    await assertCase('agent_remove_idempotent', await agentHttp.del(`/internal/agents/${agent}/react-message`, { body: JSON.stringify({ message_id: message, emoji: '🎯' }), headers: { 'content-type': 'application/json' } }));
+    const agentRemove = events.find(
+      (event: any) => event.op === 'remove' && event.reactor_kind === 'agent',
+    );
+    expect(agentRemove).toEqual((fixtureCase('agent_remove') as any).event);
+
+    const wrongHttp = http(t, conversationSlotAuth(t, other, agent));
+    await assertCase('agent_wrong_source', await wrongHttp.post(`/internal/agents/${agent}/react-message`, { message_id: message, emoji: '🚀' }));
+    await assertCase('agent_invalid_emoji_missing_target', await agentHttp.post(`/internal/agents/${agent}/react-message`, { message_id: 'missing', emoji: 'not emoji' }));
+    await assertCase('agent_invalid_emoji_wrong_source', await wrongHttp.post(`/internal/agents/${agent}/react-message`, { message_id: message, emoji: 'not emoji' }));
+    t.ctx.db.prepare("DELETE FROM workspace_agent_capabilities WHERE workspace_id = ? AND agent_id = ? AND capability = 'send_messages'").run(workspace, agent);
+    await assertCase('agent_capability_denied', await agentHttp.post(`/internal/agents/${agent}/react-message`, { message_id: message, emoji: '🚀' }));
+    await assertCase('agent_invalid_emoji_capability_denied', await agentHttp.post(`/internal/agents/${agent}/react-message`, { message_id: message, emoji: 'not emoji' }));
+    unsubscribe();
+
+    expect([...new Set(fixture.map(entry => entry.surface))].sort()).toEqual([
+      'agent_delete',
+      'agent_post',
+      'human_delete',
+      'human_get',
+      'human_post',
+    ]);
+    expect(fixture.map(entry => entry.name)).toHaveLength(24);
   });
 });

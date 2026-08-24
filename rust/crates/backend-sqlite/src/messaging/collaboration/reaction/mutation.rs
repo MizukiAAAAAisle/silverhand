@@ -30,12 +30,6 @@ impl ReactionMutationPort for SqliteReactionStore {
             };
             return rollback_refusal(tx, refusal).await;
         };
-        if message.from_kind == "system" {
-            return rollback_refusal(tx, ReactionMutationRefusal::SystemMessageNotReactable).await;
-        }
-        if !matches!(message.from_kind.as_str(), "user" | "agent") {
-            return Err(ReactionStoreError::InvalidMessageAuthor);
-        }
         if mutation
             .actor()
             .source()
@@ -73,6 +67,18 @@ impl ReactionMutationPort for SqliteReactionStore {
                 return rollback_refusal(tx, ReactionMutationRefusal::CapabilityDenied).await;
             }
         }
+        let emoji = match mutation.validate_emoji() {
+            Ok(emoji) => emoji,
+            Err(error) => {
+                return rollback_refusal(tx, ReactionMutationRefusal::InvalidReaction(error)).await;
+            }
+        };
+        if message.from_kind == "system" {
+            return rollback_refusal(tx, ReactionMutationRefusal::SystemMessageNotReactable).await;
+        }
+        if !matches!(message.from_kind.as_str(), "user" | "agent") {
+            return Err(ReactionStoreError::InvalidMessageAuthor);
+        }
         if conversation.closed {
             return rollback_refusal(tx, ReactionMutationRefusal::ConversationClosed).await;
         }
@@ -92,7 +98,7 @@ impl ReactionMutationPort for SqliteReactionStore {
                 .bind(mutation.message().as_str())
                 .bind(reactor.kind())
                 .bind(reactor.id())
-                .bind(mutation.emoji().as_str())
+                .bind(emoji.as_str())
                 .bind(mutation.occurred_at_ms())
                 .execute(&mut *tx)
                 .await?
@@ -107,7 +113,7 @@ impl ReactionMutationPort for SqliteReactionStore {
                 .bind(mutation.message().as_str())
                 .bind(reactor.kind())
                 .bind(reactor.id())
-                .bind(mutation.emoji().as_str())
+                .bind(emoji.as_str())
                 .execute(&mut *tx)
                 .await?
                 .rows_affected()
@@ -118,29 +124,27 @@ impl ReactionMutationPort for SqliteReactionStore {
             "SELECT COUNT(*) FROM message_reactions WHERE message_id = ? AND emoji = ?",
         )
         .bind(mutation.message().as_str())
-        .bind(mutation.emoji().as_str())
+        .bind(emoji.as_str())
         .fetch_one(&mut *tx)
         .await?;
-        if count < 0 {
-            return Err(ReactionStoreError::InvalidCount);
-        }
-        let fact = changed.then(|| {
-            ReactionChangedFact::committed(
+        let count =
+            silverhand_backend_core::messaging::collaboration::reaction::ReactionCount::new(count)
+                .map_err(|_| ReactionStoreError::InvalidCount)?;
+        let committed = if changed {
+            CommittedReaction::committed_change(ReactionChangedFact::committed(
                 mutation.message().clone(),
                 message.conversation,
                 message.thread_root,
-                mutation.emoji().clone(),
+                emoji,
                 mutation.change(),
                 reactor,
                 count,
-            )
-        });
+            ))
+        } else {
+            CommittedReaction::unchanged(emoji, count)
+        };
         tx.commit().await?;
-        Ok(Ok(CommittedReaction::committed(
-            mutation.emoji().clone(),
-            count,
-            fact,
-        )))
+        Ok(Ok(committed))
     }
 }
 

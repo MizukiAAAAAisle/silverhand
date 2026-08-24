@@ -5,7 +5,7 @@ use crate::{
     messaging::MessageId,
 };
 
-use super::ReactionEmoji;
+use super::{InvalidReactionEmoji, ReactionCount, ReactionEmoji};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Reactor {
@@ -68,23 +68,48 @@ pub enum ReactionChange {
 pub struct ReactionMutation {
     actor: ReactionActor,
     message: MessageId,
-    emoji: ReactionEmoji,
+    emoji: ReactionEmojiCandidate,
     change: ReactionChange,
     occurred_at_ms: i64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ReactionEmojiCandidate {
+    Validated(ReactionEmoji),
+    Deferred(String),
+}
+
 impl ReactionMutation {
-    pub fn new(
-        actor: ReactionActor,
+    pub fn human(
+        actor: UserId,
         message: MessageId,
         emoji: ReactionEmoji,
         change: ReactionChange,
         occurred_at_ms: i64,
     ) -> Self {
         Self {
-            actor,
+            actor: ReactionActor::Human(actor),
             message,
-            emoji,
+            emoji: ReactionEmojiCandidate::Validated(emoji),
+            change,
+            occurred_at_ms,
+        }
+    }
+
+    /// Agent emoji semantics are intentionally deferred until the mutation port
+    /// has resolved target/source/participation/capability in the published order.
+    pub fn agent(
+        actor: AgentId,
+        source: Option<ConversationId>,
+        message: MessageId,
+        raw_emoji: String,
+        change: ReactionChange,
+        occurred_at_ms: i64,
+    ) -> Self {
+        Self {
+            actor: ReactionActor::Agent { id: actor, source },
+            message,
+            emoji: ReactionEmojiCandidate::Deferred(raw_emoji),
             change,
             occurred_at_ms,
         }
@@ -96,8 +121,11 @@ impl ReactionMutation {
     pub fn message(&self) -> &MessageId {
         &self.message
     }
-    pub fn emoji(&self) -> &ReactionEmoji {
-        &self.emoji
+    pub fn validate_emoji(&self) -> Result<ReactionEmoji, InvalidReactionEmoji> {
+        match &self.emoji {
+            ReactionEmojiCandidate::Validated(emoji) => Ok(emoji.clone()),
+            ReactionEmojiCandidate::Deferred(raw) => ReactionEmoji::parse(raw),
+        }
     }
     pub fn change(&self) -> ReactionChange {
         self.change
@@ -109,6 +137,8 @@ impl ReactionMutation {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ReactionMutationRefusal {
+    #[error("reaction emoji is outside the published grammar")]
+    InvalidReaction(InvalidReactionEmoji),
     #[error("reaction target is outside the runtime's visible scope")]
     TargetHidden,
     #[error("message not found")]
@@ -135,7 +165,7 @@ pub struct ReactionChangedFact {
     emoji: ReactionEmoji,
     change: ReactionChange,
     reactor: Reactor,
-    count: i64,
+    count: ReactionCount,
 }
 
 impl ReactionChangedFact {
@@ -147,7 +177,7 @@ impl ReactionChangedFact {
         emoji: ReactionEmoji,
         change: ReactionChange,
         reactor: Reactor,
-        count: i64,
+        count: ReactionCount,
     ) -> Self {
         Self {
             message,
@@ -177,39 +207,49 @@ impl ReactionChangedFact {
     pub fn reactor(&self) -> &Reactor {
         &self.reactor
     }
-    pub fn count(&self) -> i64 {
+    pub fn count(&self) -> ReactionCount {
         self.count
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CommittedReaction {
-    changed: bool,
-    emoji: ReactionEmoji,
-    count: i64,
-    fact: Option<ReactionChangedFact>,
+pub enum CommittedReaction {
+    Changed(ReactionChangedFact),
+    Unchanged {
+        emoji: ReactionEmoji,
+        count: ReactionCount,
+    },
 }
 
 impl CommittedReaction {
-    pub fn committed(emoji: ReactionEmoji, count: i64, fact: Option<ReactionChangedFact>) -> Self {
-        Self {
-            changed: fact.is_some(),
-            emoji,
-            count,
-            fact,
-        }
+    pub fn committed_change(fact: ReactionChangedFact) -> Self {
+        Self::Changed(fact)
     }
+
+    pub fn unchanged(emoji: ReactionEmoji, count: ReactionCount) -> Self {
+        Self::Unchanged { emoji, count }
+    }
+
     pub fn changed(&self) -> bool {
-        self.changed
+        matches!(self, Self::Changed(_))
     }
     pub fn emoji(&self) -> &ReactionEmoji {
-        &self.emoji
+        match self {
+            Self::Changed(fact) => fact.emoji(),
+            Self::Unchanged { emoji, .. } => emoji,
+        }
     }
-    pub fn count(&self) -> i64 {
-        self.count
+    pub fn count(&self) -> ReactionCount {
+        match self {
+            Self::Changed(fact) => fact.count(),
+            Self::Unchanged { count, .. } => *count,
+        }
     }
     pub fn fact(&self) -> Option<&ReactionChangedFact> {
-        self.fact.as_ref()
+        match self {
+            Self::Changed(fact) => Some(fact),
+            Self::Unchanged { .. } => None,
+        }
     }
 }
 
@@ -223,17 +263,36 @@ pub trait ReactionMutationPort {
     > + Send;
 }
 
-/// Post-commit owner. Implementations report their own failures; a publication
-/// fault cannot turn a committed write into a refusal or request compensation.
+/// Post-commit owner. A publication fault remains typed and source-preserving so
+/// the request boundary can audit it exactly once; it cannot turn a committed
+/// write into a refusal or request compensation.
 pub trait ReactionAftermath {
-    fn announce(&self, fact: &ReactionChangedFact) -> impl Future<Output = ()> + Send;
+    fn announce(
+        &self,
+        fact: &ReactionChangedFact,
+    ) -> impl Future<Output = Result<(), ReactionPublicationFailure>> + Send;
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("the committed reaction could not be published")]
+pub struct ReactionPublicationFailure {
+    #[source]
+    source: Box<dyn Error + Send + Sync + 'static>,
+}
+
+impl ReactionPublicationFailure {
+    pub fn from_source(error: impl Error + Send + Sync + 'static) -> Self {
+        Self {
+            source: Box::new(error),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReactionMutationOutcome {
     changed: bool,
     emoji: ReactionEmoji,
-    count: i64,
+    count: ReactionCount,
 }
 
 impl ReactionMutationOutcome {
@@ -243,8 +302,24 @@ impl ReactionMutationOutcome {
     pub fn emoji(&self) -> &ReactionEmoji {
         &self.emoji
     }
-    pub fn count(&self) -> i64 {
+    pub fn count(&self) -> ReactionCount {
         self.count
+    }
+}
+
+#[derive(Debug)]
+pub struct ReactionExecution {
+    outcome: ReactionMutationOutcome,
+    publication_failure: Option<ReactionPublicationFailure>,
+}
+
+impl ReactionExecution {
+    pub fn outcome(&self) -> &ReactionMutationOutcome {
+        &self.outcome
+    }
+
+    pub fn publication_failure(&self) -> Option<&ReactionPublicationFailure> {
+        self.publication_failure.as_ref()
     }
 }
 
@@ -252,17 +327,22 @@ pub async fn change_reaction<P: ReactionMutationPort>(
     port: &P,
     aftermath: &impl ReactionAftermath,
     mutation: ReactionMutation,
-) -> Result<Result<ReactionMutationOutcome, ReactionMutationRefusal>, P::Error> {
+) -> Result<Result<ReactionExecution, ReactionMutationRefusal>, P::Error> {
     let committed = match port.mutate(mutation).await? {
         Ok(committed) => committed,
         Err(refusal) => return Ok(Err(refusal)),
     };
-    if let Some(fact) = committed.fact() {
-        aftermath.announce(fact).await;
-    }
-    Ok(Ok(ReactionMutationOutcome {
-        changed: committed.changed(),
-        emoji: committed.emoji().clone(),
-        count: committed.count(),
+    let publication_failure = if let Some(fact) = committed.fact() {
+        aftermath.announce(fact).await.err()
+    } else {
+        None
+    };
+    Ok(Ok(ReactionExecution {
+        outcome: ReactionMutationOutcome {
+            changed: committed.changed(),
+            emoji: committed.emoji().clone(),
+            count: committed.count(),
+        },
+        publication_failure,
     }))
 }

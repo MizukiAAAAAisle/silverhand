@@ -66,7 +66,7 @@ pub fn changed_event(fact: &ReactionChangedFact) -> ReactionChangedBody<'_> {
         },
         reactor_kind: fact.reactor().kind(),
         reactor_id: fact.reactor().id(),
-        count: fact.count(),
+        count: fact.count().value(),
     }
 }
 
@@ -74,7 +74,7 @@ pub(super) fn mutation_success(outcome: &ReactionMutationOutcome) -> Response {
     Json(MutationBody {
         changed: outcome.changed(),
         emoji: outcome.emoji().as_str(),
-        count: outcome.count(),
+        count: outcome.count().value(),
     })
     .into_response()
 }
@@ -102,6 +102,7 @@ pub(super) fn detail_success(detail: &[ReactionDetail]) -> Response {
 
 pub(super) fn mutation_refusal(refusal: ReactionMutationRefusal) -> Response {
     match refusal {
+        ReactionMutationRefusal::InvalidReaction(error) => invalid_reaction(error),
         ReactionMutationRefusal::TargetHidden => not_found(),
         ReactionMutationRefusal::MessageNotFound => coded(
             StatusCode::NOT_FOUND,
@@ -159,12 +160,116 @@ pub(super) fn invalid_reaction(error: InvalidReactionEmoji) -> Response {
         "invalid_reaction",
     )
 }
-pub(super) fn invalid_input() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({"error":"invalid input"})),
-    )
-        .into_response()
+pub(super) struct InvalidInput(Vec<serde_json::Value>);
+
+impl InvalidInput {
+    pub(super) fn into_response(self) -> Response {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"invalid input","issues":self.0})),
+        )
+            .into_response()
+    }
+}
+
+pub(super) fn parse_human_body(bytes: &[u8]) -> Result<String, InvalidInput> {
+    let value = serde_json::from_slice::<serde_json::Value>(bytes)
+        .unwrap_or_else(|_| serde_json::json!({}));
+    let object = match value.as_object() {
+        Some(object) => object,
+        None => return Err(invalid_root(&value)),
+    };
+    required_string(object.get("emoji"), "emoji").map_err(|issue| invalid_issues(vec![issue]))
+}
+
+pub(super) fn parse_agent_body(bytes: &[u8]) -> Result<(String, String), InvalidInput> {
+    let value = serde_json::from_slice::<serde_json::Value>(bytes)
+        .unwrap_or_else(|_| serde_json::json!({}));
+    let object = match value.as_object() {
+        Some(object) => object,
+        None => return Err(invalid_root(&value)),
+    };
+    let mut issues = Vec::new();
+    let message = match required_string(object.get("message_id"), "message_id") {
+        Ok(message) if message.is_empty() => {
+            issues.push(serde_json::json!({
+                "code":"too_small",
+                "minimum":1,
+                "type":"string",
+                "inclusive":true,
+                "exact":false,
+                "message":"String must contain at least 1 character(s)",
+                "path":["message_id"]
+            }));
+            None
+        }
+        Ok(message) => Some(message),
+        Err(issue) => {
+            issues.push(issue);
+            None
+        }
+    };
+    let emoji = match required_string(object.get("emoji"), "emoji") {
+        Ok(emoji) => Some(emoji),
+        Err(issue) => {
+            issues.push(issue);
+            None
+        }
+    };
+    match (message, emoji) {
+        (Some(message), Some(emoji)) => Ok((message, emoji)),
+        _ => Err(invalid_issues(issues)),
+    }
+}
+
+fn required_string(
+    value: Option<&serde_json::Value>,
+    member: &'static str,
+) -> Result<String, serde_json::Value> {
+    match value {
+        Some(serde_json::Value::String(value)) => Ok(value.clone()),
+        value => {
+            let received = value.map(json_type).unwrap_or("undefined");
+            let message = if value.is_none() {
+                "Required".to_owned()
+            } else {
+                format!("Expected string, received {received}")
+            };
+            Err(serde_json::json!({
+                "code":"invalid_type",
+                "expected":"string",
+                "received":received,
+                "path":[member],
+                "message":message
+            }))
+        }
+    }
+}
+
+fn invalid_root(value: &serde_json::Value) -> InvalidInput {
+    let received = json_type(value);
+    invalid_issues(vec![serde_json::json!({
+        "code":"invalid_type",
+        "expected":"object",
+        "received":received,
+        "path":[],
+        "message":format!("Expected object, received {received}")
+    })])
+}
+
+fn invalid_issues(issues: Vec<serde_json::Value>) -> InvalidInput {
+    InvalidInput(issues)
+}
+
+fn json_type(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
 }
 pub(super) fn not_found() -> Response {
     (

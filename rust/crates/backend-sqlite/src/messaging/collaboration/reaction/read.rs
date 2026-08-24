@@ -93,8 +93,12 @@ impl ReactionReadPort for SqliteReactionStore {
                 .map_err(|_| ReactionStoreError::MalformedIdentity)?;
             let emoji = ReactionEmoji::parse(&row.try_get::<String, _>("emoji")?)
                 .map_err(|_| ReactionStoreError::MalformedEmoji)?;
-            let count: i64 = row.try_get("count")?;
-            if count <= 0 {
+            let count =
+                silverhand_backend_core::messaging::collaboration::reaction::ReactionCount::new(
+                    row.try_get("count")?,
+                )
+                .map_err(|_| ReactionStoreError::InvalidCount)?;
+            if count.value() == 0 {
                 return Err(ReactionStoreError::InvalidCount);
             }
             let aggregate = ReactionAggregate::projected(

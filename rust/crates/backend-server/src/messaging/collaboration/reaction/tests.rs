@@ -63,8 +63,34 @@ fn fixture_event(name: &str) -> Value {
 struct Events(Arc<Mutex<Vec<ReactionChangedFact>>>);
 
 impl ReactionAftermath for Events {
-    async fn announce(&self, fact: &ReactionChangedFact) {
+    async fn announce(
+        &self,
+        fact: &ReactionChangedFact,
+    ) -> Result<
+        (),
+        silverhand_backend_core::messaging::collaboration::reaction::ReactionPublicationFailure,
+    > {
         self.0.lock().unwrap().push(fact.clone());
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FailingEvents;
+
+impl ReactionAftermath for FailingEvents {
+    async fn announce(
+        &self,
+        _fact: &ReactionChangedFact,
+    ) -> Result<
+        (),
+        silverhand_backend_core::messaging::collaboration::reaction::ReactionPublicationFailure,
+    > {
+        Err(
+            silverhand_backend_core::messaging::collaboration::reaction::ReactionPublicationFailure::from_source(
+                io::Error::other("scope event hub failed"),
+            ),
+        )
     }
 }
 
@@ -159,13 +185,22 @@ async fn seeded() -> (
 }
 
 async fn call(app: axum::Router, method: Method, uri: &str, body: Value) -> (StatusCode, Value) {
+    call_raw(app, method, uri, body.to_string()).await
+}
+
+async fn call_raw(
+    app: axum::Router,
+    method: Method,
+    uri: &str,
+    body: impl Into<String>,
+) -> (StatusCode, Value) {
     let response = app
         .oneshot(
             Request::builder()
                 .method(method)
                 .uri(uri)
                 .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
+                .body(Body::from(body.into()))
                 .unwrap(),
         )
         .await
@@ -496,6 +531,36 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             "{name}"
         );
     }
+    assert_eq!(
+        call_raw(
+            human.clone(),
+            Method::POST,
+            "/api/messages/message-1/reactions",
+            "{",
+        )
+        .await,
+        fixture_case("human_malformed_json")
+    );
+    assert_eq!(
+        call(
+            human.clone(),
+            Method::POST,
+            "/api/messages/message-1/reactions",
+            json!({}),
+        )
+        .await,
+        fixture_case("human_missing_emoji")
+    );
+    assert_eq!(
+        call(
+            human.clone(),
+            Method::POST,
+            "/api/messages/message-1/reactions",
+            json!({"emoji":7}),
+        )
+        .await,
+        fixture_case("human_non_string_emoji")
+    );
     let first = events.0.lock().unwrap()[0].clone();
     assert_eq!(
         serde_json::to_value(wire::changed_event(&first)).unwrap(),
@@ -521,7 +586,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
         .unwrap();
     assert_eq!(
         call(
-            human,
+            human.clone(),
             Method::POST,
             "/api/messages/message-1/reactions",
             json!({"emoji":"👍"})
@@ -534,11 +599,90 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
         .await
         .unwrap();
 
+    sqlx::query("UPDATE users SET display_name='Local Display' WHERE id='user-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE agents SET name='reaction-agent', display_name='' WHERE id='agent-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO messages \
+         (id, conversation_id, from_kind, from_user_id, content, seq, created_at) \
+         VALUES ('detail-message', 'conversation-1', 'user', 'user-1', 'detail', 4, 4)",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO message_reactions \
+         (id, message_id, reactor_kind, reactor_id, emoji, created_at) VALUES \
+         ('detail-user-one', 'detail-message', 'user', 'user-1', '👍', 10), \
+         ('detail-agent-one', 'detail-message', 'agent', 'agent-1', '👍', 11), \
+         ('detail-user-two', 'detail-message', 'user', 'user-1', '🎯', 12)",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(
+        call(
+            human.clone(),
+            Method::GET,
+            "/api/messages/detail-message/reactions",
+            Value::Null,
+        )
+        .await,
+        fixture_case("human_detail")
+    );
+    assert_eq!(
+        call(
+            human.clone(),
+            Method::GET,
+            "/api/messages/missing/reactions",
+            Value::Null,
+        )
+        .await,
+        fixture_case("human_detail_missing")
+    );
+    let invisible = router(store.reactions(), store.reactions(), events.clone())
+        .layer(Extension(UserId::parse("user-2").unwrap()));
+    assert_eq!(
+        call(
+            invisible,
+            Method::GET,
+            "/api/messages/message-1/reactions",
+            Value::Null,
+        )
+        .await,
+        fixture_case("human_detail_invisible")
+    );
+
     let agent = router(store.reactions(), store.reactions(), events.clone())
         .layer(Extension(runtime_principal("conversation-1")));
     assert_eq!(
         call(
-            agent,
+            agent.clone(),
+            Method::POST,
+            "/internal/agents/agent-1/react-message",
+            json!({"message_id":"","emoji":"🎯"}),
+        )
+        .await,
+        fixture_case("agent_empty_message_id")
+    );
+    assert_eq!(
+        call(
+            agent.clone(),
+            Method::POST,
+            "/internal/agents/agent-1/react-message",
+            json!({"message_id":"message-1","emoji":"not emoji"}),
+        )
+        .await,
+        fixture_case("agent_invalid_reaction")
+    );
+    assert_eq!(
+        call(
+            agent.clone(),
             Method::POST,
             "/internal/agents/agent-1/react-message",
             json!({"message_id":"message-1","emoji":"🎯"})
@@ -546,11 +690,52 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
         .await,
         fixture_case("agent_add")
     );
+    assert_eq!(
+        call(
+            agent.clone(),
+            Method::DELETE,
+            "/internal/agents/agent-1/react-message",
+            json!({"message_id":"message-1","emoji":"🎯"}),
+        )
+        .await,
+        fixture_case("agent_remove")
+    );
+    assert_eq!(
+        call(
+            agent.clone(),
+            Method::DELETE,
+            "/internal/agents/agent-1/react-message",
+            json!({"message_id":"message-1","emoji":"🎯"}),
+        )
+        .await,
+        fixture_case("agent_remove_idempotent")
+    );
+    let agent_remove = events
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|fact| {
+            fact.reactor().kind() == "agent"
+                && fact.change()
+                    == silverhand_backend_core::messaging::collaboration::reaction::ReactionChange::Remove
+        })
+        .unwrap()
+        .clone();
+    assert_eq!(
+        serde_json::to_value(wire::changed_event(&agent_remove)).unwrap(),
+        fixture_event("agent_remove")
+    );
+    let cross_event_count = events.0.lock().unwrap().len();
+    let cross_row_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM message_reactions")
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
     let wrong = router(store.reactions(), store.reactions(), events.clone())
         .layer(Extension(runtime_principal("conversation-other")));
     assert_eq!(
         call(
-            wrong,
+            wrong.clone(),
             Method::POST,
             "/internal/agents/agent-1/react-message",
             json!({"message_id":"message-1","emoji":"🚀"})
@@ -558,8 +743,28 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
         .await,
         fixture_case("agent_wrong_source")
     );
+    assert_eq!(
+        call(
+            agent.clone(),
+            Method::POST,
+            "/internal/agents/agent-1/react-message",
+            json!({"message_id":"missing","emoji":"not emoji"}),
+        )
+        .await,
+        fixture_case("agent_invalid_emoji_missing_target")
+    );
+    assert_eq!(
+        call(
+            wrong,
+            Method::POST,
+            "/internal/agents/agent-1/react-message",
+            json!({"message_id":"message-1","emoji":"not emoji"}),
+        )
+        .await,
+        fixture_case("agent_invalid_emoji_wrong_source")
+    );
     sqlx::query("DELETE FROM workspace_agent_capabilities WHERE workspace_id='workspace-1' AND agent_id='agent-1' AND capability='send_messages'").execute(&mut db).await.unwrap();
-    let denied = router(store.reactions(), store.reactions(), events)
+    let denied = router(store.reactions(), store.reactions(), events.clone())
         .layer(Extension(runtime_principal("conversation-1")));
     assert_eq!(
         call(
@@ -570,6 +775,46 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
         )
         .await,
         fixture_case("agent_capability_denied")
+    );
+    let denied = router(store.reactions(), store.reactions(), Events::default())
+        .layer(Extension(runtime_principal("conversation-1")));
+    assert_eq!(
+        call(
+            denied,
+            Method::POST,
+            "/internal/agents/agent-1/react-message",
+            json!({"message_id":"message-1","emoji":"not emoji"}),
+        )
+        .await,
+        fixture_case("agent_invalid_emoji_capability_denied")
+    );
+    assert_eq!(events.0.lock().unwrap().len(), cross_event_count);
+    let rows_after_cross: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM message_reactions")
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(rows_after_cross, cross_row_count);
+
+    let fixture: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../packages/backend/tests/fixtures/reaction-wire.json"
+    )))
+    .unwrap();
+    let surfaces = fixture
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| case["surface"].as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        surfaces,
+        std::collections::BTreeSet::from([
+            "agent_delete",
+            "agent_post",
+            "human_delete",
+            "human_get",
+            "human_post",
+        ])
     );
 }
 
@@ -731,4 +976,57 @@ async fn malformed_persisted_reaction_data_is_a_safe_read_failure_with_its_sourc
         "{chain}"
     );
     assert!(!chain.contains("not-emoji"), "{chain}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn publication_failure_is_audited_once_without_compensating_the_committed_reaction() {
+    let (_directory, path, store, _events) = seeded().await;
+    let app = router(store.reactions(), store.reactions(), FailingEvents)
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+    let logs = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_target(false)
+        .with_writer(logs.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let (status, body) = call(
+        app,
+        Method::POST,
+        "/api/messages/message-1/reactions",
+        json!({"emoji":"👍"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"changed":true,"emoji":"👍","count":1}));
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM message_reactions \
+         WHERE message_id='message-1' AND reactor_kind='user' \
+         AND reactor_id='user-1' AND emoji='👍'",
+    )
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    let errors = logs
+        .events()
+        .into_iter()
+        .filter(|event| event["level"] == "ERROR")
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        errors[0]["fields"]["message"],
+        "reaction publication failed"
+    );
+    let chain = errors[0]["fields"]["error_chain"].as_str().unwrap();
+    assert!(
+        chain.contains("the committed reaction could not be published"),
+        "{chain}"
+    );
+    assert!(chain.contains("scope event hub failed"), "{chain}");
 }

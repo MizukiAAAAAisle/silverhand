@@ -2,17 +2,17 @@ use std::{error::Error, future::Future};
 
 use crate::{identity::UserId, messaging::MessageId};
 
-use super::{ReactionEmoji, Reactor};
+use super::{ReactionCount, ReactionEmoji, Reactor};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReactionAggregate {
     emoji: ReactionEmoji,
-    count: i64,
+    count: ReactionCount,
     viewer_reacted: bool,
 }
 
 impl ReactionAggregate {
-    pub fn projected(emoji: ReactionEmoji, count: i64, viewer_reacted: bool) -> Self {
+    pub fn projected(emoji: ReactionEmoji, count: ReactionCount, viewer_reacted: bool) -> Self {
         Self {
             emoji,
             count,
@@ -22,7 +22,7 @@ impl ReactionAggregate {
     pub fn emoji(&self) -> &ReactionEmoji {
         &self.emoji
     }
-    pub fn count(&self) -> i64 {
+    pub fn count(&self) -> ReactionCount {
         self.count
     }
     pub fn viewer_reacted(&self) -> bool {
