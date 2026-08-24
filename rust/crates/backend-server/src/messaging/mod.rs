@@ -29,6 +29,7 @@ pub(crate) mod admission;
 pub mod aftermath;
 pub(crate) mod agent_output;
 pub(crate) mod author_wire;
+pub mod collaboration;
 pub(crate) mod envelope;
 pub(crate) mod execute;
 pub(crate) mod message_wire;
