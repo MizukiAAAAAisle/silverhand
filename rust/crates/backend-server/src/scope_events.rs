@@ -1603,6 +1603,7 @@ mod tests {
     use futures_util::{SinkExt, StreamExt};
     use silverhand_backend_core::{
         auth::{AuthenticateHumanSession, SessionBearer},
+        direct_pair_read::DirectPairReadModel,
         identity::AgentId,
         messaging::{
             AddressedPrincipals, CapabilityDenied, CreatedMessage, DirectLineAuthority,
@@ -1623,6 +1624,7 @@ mod tests {
         scope_event::AuthorizeEventScope,
     };
     use silverhand_backend_sqlite::{
+        direct_pair_read::SqliteDirectPairReadModel,
         messaging::MessagingStore,
         unread_read::{SqliteUnreadReadModel, UnreadReadModelError},
     };
@@ -2138,6 +2140,90 @@ mod tests {
                 conversation_id: first_pair.as_str().to_owned(),
             }
         );
+    }
+
+    /// The viewer event is only an identity hint. Arrival, unread movement, and
+    /// clearing all use that same carrier; every resulting value comes from a fresh
+    /// cold read over committed SQLite state, never from replay sequence arithmetic.
+    #[tokio::test]
+    async fn direct_pair_invalidation_and_the_cold_authority_are_symmetric_both_ways() {
+        let (_directory, path) = direct_pair_database().await;
+        let store = MessagingStore::open_with(&path, FixedEntropy(7))
+            .await
+            .unwrap();
+        let hub = ScopeEventHub::test("epoch-1");
+        let cold = SqliteDirectPairReadModel::open(&path).await.unwrap();
+
+        assert!(
+            cold.list_direct_pairs(&user())
+                .await
+                .unwrap()
+                .items()
+                .is_empty()
+        );
+        let pair = store
+            .open_direct_pair(&hub, pair_participants(), 10)
+            .await
+            .unwrap();
+        let arrived = cold.list_direct_pairs(&user()).await.unwrap();
+        assert_eq!(arrived.items().len(), 1);
+        assert_eq!(arrived.items()[0].conversation(), &pair);
+        assert_eq!(arrived.items()[0].unread_count().get(), 0);
+
+        let mut db = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO messages (id, conversation_id, from_kind, from_agent_id, content, seq, \
+             created_at) VALUES ('message-1', ?, 'agent', 'agent-1', 'hello', 1, 11)",
+        )
+        .bind(pair.as_str())
+        .execute(&mut db)
+        .await
+        .unwrap();
+        db.close().await.unwrap();
+        let unread = HubUnreadPublisher::new(
+            hub.clone(),
+            SqliteUnreadReadModel::open(&path).await.unwrap(),
+        );
+        UnreadPublication::publish_unread(&unread, &pair)
+            .await
+            .unwrap();
+        assert_eq!(
+            cold.list_direct_pairs(&user()).await.unwrap().items()[0]
+                .unread_count()
+                .get(),
+            1
+        );
+
+        let mut db = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO conversation_reads (user_id, conversation_id, thread_root_id, \
+             last_read_seq, read_at) VALUES ('user-1', ?, NULL, 1, 12)",
+        )
+        .bind(pair.as_str())
+        .execute(&mut db)
+        .await
+        .unwrap();
+        db.close().await.unwrap();
+        UnreadPublication::publish_unread(&unread, &pair)
+            .await
+            .unwrap();
+        assert_eq!(
+            cold.list_direct_pairs(&user()).await.unwrap().items()[0]
+                .unread_count()
+                .get(),
+            0
+        );
+
+        let events = scope_events(&hub, EventScope::Viewer(user()));
+        assert_eq!(events.len(), 3);
+        assert!(events.iter().all(|event| event
+            == &ProductEvent::DirectPairsChanged {
+                conversation_id: pair.as_str().to_owned(),
+            }));
     }
 
     #[tokio::test]

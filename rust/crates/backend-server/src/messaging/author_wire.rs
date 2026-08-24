@@ -28,15 +28,19 @@ fn kind_word(kind: PrincipalKind) -> &'static str {
 
 /// The avatar route for a principal, which is per KIND. Choosing the wrong one is invisible to
 /// every type here, so it is part of what the projection gate asserts.
-fn avatar_url(kind: PrincipalKind, id: &str, revision: Option<AvatarRevision>) -> Value {
+pub(crate) fn principal_avatar_url(
+    kind: PrincipalKind,
+    id: &str,
+    revision: Option<AvatarRevision>,
+) -> Option<String> {
     match revision {
-        None => Value::Null,
+        None => None,
         Some(revision) => {
             let collection = match kind {
                 PrincipalKind::Agent => "agents",
                 PrincipalKind::Human => "users",
             };
-            json!(format!(
+            Some(format!(
                 "/api/{collection}/{id}/avatar?v={}",
                 revision.cache_buster()
             ))
@@ -53,7 +57,7 @@ pub(crate) fn author_dto(author: &MessageAuthor) -> Value {
             "id": agent.id().as_str(),
             "name": agent.name(),
             "display_name": agent.display_name(),
-            "avatar_url": avatar_url(PrincipalKind::Agent, agent.id().as_str(), agent.avatar()),
+            "avatar_url": principal_avatar_url(PrincipalKind::Agent, agent.id().as_str(), agent.avatar()),
             // Present because an agent always has one — the domain's constructor requires it, so
             // this arm cannot be reached without a runtime to report.
             "runtime": agent.runtime().as_str(),
@@ -64,7 +68,7 @@ pub(crate) fn author_dto(author: &MessageAuthor) -> Value {
             "id": human.id().as_str(),
             "name": human.name(),
             "display_name": human.display_name(),
-            "avatar_url": avatar_url(PrincipalKind::Human, human.id().as_str(), human.avatar()),
+            "avatar_url": principal_avatar_url(PrincipalKind::Human, human.id().as_str(), human.avatar()),
             // PRESENT AND NULL, never omitted. A person has no runtime, and the contract pins the
             // member rather than dropping it so a reader never has to tell "no runtime" from "this
             // payload forgot to say".

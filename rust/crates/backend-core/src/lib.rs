@@ -7,6 +7,7 @@
 
 pub mod access;
 pub mod auth;
+pub mod direct_pair_read;
 pub mod foundation_message;
 pub mod host_runtime;
 pub mod identity;

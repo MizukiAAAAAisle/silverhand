@@ -1,0 +1,74 @@
+{
+  "authority_case": {
+    "viewer_user_id": "user-1",
+    "response": {
+      "direct_pairs": [
+        {
+          "conversation_id": "pair-agent",
+          "counterpart": {
+            "status": "active",
+            "kind": "agent",
+            "id": "agent-1",
+            "name": "agent",
+            "display_name": "Agent One",
+            "avatar_url": null,
+            "runtime": "codex"
+          },
+          "unread_count": 1,
+          "read_only": false,
+          "created_at": 100
+        },
+        {
+          "conversation_id": "pair-human",
+          "counterpart": {
+            "status": "active",
+            "kind": "human",
+            "id": "user-2",
+            "name": "other",
+            "display_name": "Other Human",
+            "avatar_url": null,
+            "runtime": null
+          },
+          "unread_count": 0,
+          "read_only": false,
+          "created_at": 200
+        }
+      ]
+    }
+  },
+  "additional_wire_cases": [
+    {
+      "direct_pairs": [
+        {
+          "conversation_id": "pair-deleted-agent",
+          "counterpart": {
+            "status": "deleted",
+            "kind": "agent",
+            "id": "agent-gone"
+          },
+          "unread_count": 0,
+          "read_only": true,
+          "created_at": 300
+        }
+      ]
+    },
+    {
+      "direct_pairs": [
+        {
+          "conversation_id": "pair-deleted-human",
+          "counterpart": {
+            "status": "deleted",
+            "kind": "human",
+            "id": "user-gone"
+          },
+          "unread_count": 4,
+          "read_only": true,
+          "created_at": 400
+        }
+      ]
+    },
+    {
+      "direct_pairs": []
+    }
+  ]
+}

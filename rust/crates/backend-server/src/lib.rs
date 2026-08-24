@@ -3,6 +3,7 @@
 
 pub mod auth;
 mod bearer;
+pub mod direct_pairs;
 mod error;
 pub mod host_runtime;
 pub mod http;
