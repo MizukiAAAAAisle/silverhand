@@ -1,0 +1,8 @@
+[
+  {"name":"workspace_member","setup":"workspace_member","status":200,"body":{"agents":[{"conversation_id":"c","agent_id":"agent-a","joined_at":1},{"conversation_id":"c","agent_id":"agent-b","joined_at":2}]}},
+  {"name":"archived_workspace_member","setup":"archived_workspace_member","status":200,"body":{"agents":[{"conversation_id":"c","agent_id":"agent-a","joined_at":1},{"conversation_id":"c","agent_id":"agent-b","joined_at":2}]}},
+  {"name":"public_workspace_nonmember_has_no_widen","setup":"public_workspace_nonmember","status":403,"body":{"error":"forbidden"}},
+  {"name":"direct_pair_endpoint_has_empty_committed_roster","setup":"direct_pair_endpoint","status":200,"body":{"agents":[]}},
+  {"name":"direct_pair_nonendpoint","setup":"direct_pair_nonendpoint","status":403,"body":{"error":"forbidden"}},
+  {"name":"missing_conversation","setup":"missing_conversation","status":404,"body":{"error":"channel not found"}}
+]

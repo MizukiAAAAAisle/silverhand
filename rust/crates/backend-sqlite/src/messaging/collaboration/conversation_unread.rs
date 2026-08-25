@@ -89,7 +89,7 @@ impl From<ConversationUnreadStoreError> for PersistenceFailure {
 }
 
 #[derive(Debug)]
-enum Placement {
+pub(super) enum Placement {
     Workspace(WorkspaceId),
     DirectPair(PrincipalIdentity, PrincipalIdentity),
 }
@@ -240,7 +240,7 @@ async fn validate_streams(
     Ok(())
 }
 
-fn decode_placement(row: &SqliteRow) -> Result<Placement, ConversationUnreadStoreError> {
+pub(super) fn decode_placement(row: &SqliteRow) -> Result<Placement, ConversationUnreadStoreError> {
     let status: String = row.try_get("status")?;
     if !matches!(
         status.as_str(),
@@ -328,7 +328,7 @@ fn decode_endpoint(
     }
 }
 
-async fn participates(
+pub(super) async fn participates(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
     conversation: &ConversationId,
