@@ -1,0 +1,54 @@
+[
+  {
+    "name": "active_success",
+    "surface": "active",
+    "path": "/api/workspaces/workspace-1/channels",
+    "status": 200,
+    "body": {
+      "channels": [
+        {"id":"conversation-public","workspace_id":"workspace-1","placement_kind":"workspace","roster_policy":"open","title":"Public","status":"active","spawned_by_agent_id":null,"closed_at":null,"close_summary":null,"archived_at":null,"latest_message_seq":0,"created_at":1,"updated_at":1,"visibility":"public","is_member":false},
+        {"id":"conversation-member","workspace_id":"workspace-1","placement_kind":"workspace","roster_policy":"open","title":"Member","status":"idle","spawned_by_agent_id":null,"closed_at":null,"close_summary":null,"archived_at":null,"latest_message_seq":0,"created_at":2,"updated_at":2,"visibility":"private","is_member":true}
+      ],
+      "viewer_sort": {
+        "list_key":"channels:workspace-1",
+        "modes":{"":"manual"},
+        "entries":[
+          {"entity_id":"conversation-member","rank":1,"last_accessed_at":4,"starred_at":5},
+          {"entity_id":"conversation-public","rank":2,"last_accessed_at":3,"starred_at":null}
+        ]
+      }
+    }
+  },
+  {"name":"active_missing","surface":"active","path":"/api/workspaces/missing/channels","status":404,"body":{"error":"workspace not found"}},
+  {"name":"active_forbidden","surface":"active","path":"/api/workspaces/workspace-2/channels","status":403,"body":{"error":"forbidden"}},
+  {
+    "name":"workspace_archived_success",
+    "surface":"workspace_archived",
+    "path":"/api/workspaces/workspace-1/channels/archived",
+    "status":200,
+    "body":{"channels":[{"id":"conversation-archived","workspace_id":"workspace-1","placement_kind":"workspace","roster_policy":"open","title":"Archived","status":"archived","spawned_by_agent_id":null,"closed_at":null,"close_summary":null,"archived_at":10,"latest_message_seq":0,"created_at":3,"updated_at":10,"visibility":"private","is_member":true}]}
+  },
+  {"name":"workspace_archived_missing","surface":"workspace_archived","path":"/api/workspaces/missing/channels/archived","status":404,"body":{"error":"workspace not found"}},
+  {"name":"workspace_archived_forbidden","surface":"workspace_archived","path":"/api/workspaces/workspace-2/channels/archived","status":403,"body":{"error":"forbidden"}},
+  {
+    "name":"global_success",
+    "surface":"global_archived",
+    "path":"/api/archived-channels",
+    "schema_accepted":true,
+    "status":200,
+    "body":{"channels":[{"channel":{"id":"conversation-archived","workspace_id":"workspace-1","placement_kind":"workspace","roster_policy":"open","title":"Archived","status":"archived","spawned_by_agent_id":null,"closed_at":null,"close_summary":null,"archived_at":10,"latest_message_seq":0,"created_at":3,"updated_at":10,"visibility":"private"},"workspace":{"id":"workspace-1","name":"Workspace","archived_at":null}}]}
+  },
+  {"name":"global_workspace_success","surface":"global_archived","path":"/api/archived-channels?workspace_id=workspace-1","schema_accepted":true,"status":200,"body_case":"global_success"},
+  {"name":"global_missing","surface":"global_archived","path":"/api/archived-channels?workspace_id=missing","schema_accepted":true,"status":404,"body":{"error":"workspace not found"}},
+  {"name":"global_forbidden","surface":"global_archived","path":"/api/archived-channels?workspace_id=workspace-2","schema_accepted":true,"status":403,"body":{"error":"forbidden"}},
+  {"name":"global_whitespace_since","surface":"global_archived","path":"/api/archived-channels?since=%20%20","schema_accepted":true,"status":200,"body_case":"global_success"},
+  {"name":"global_feff_workspace_blank","surface":"global_archived","path":"/api/archived-channels?workspace_id=%EF%BB%BF","schema_accepted":true,"status":200,"body_case":"global_success"},
+  {"name":"global_nel_workspace_preserved","surface":"global_archived","path":"/api/archived-channels?workspace_id=%C2%85","schema_accepted":true,"status":404,"body":{"error":"workspace not found"}},
+  {"name":"global_exponent_since","surface":"global_archived","path":"/api/archived-channels?since=1e3","schema_accepted":true,"status":200,"body":{"channels":[]}},
+  {"name":"global_hex_since","surface":"global_archived","path":"/api/archived-channels?since=0xA","schema_accepted":true,"status":200,"body_case":"global_success"},
+  {"name":"global_beyond_existing","surface":"global_archived","path":"/api/archived-channels?workspace_id=workspace-1&since=9223372036854775808","schema_accepted":true,"status":200,"body":{"channels":[]}},
+  {"name":"global_beyond_missing","surface":"global_archived","path":"/api/archived-channels?workspace_id=missing&since=9223372036854775808","schema_accepted":true,"status":404,"body":{"error":"workspace not found"}},
+  {"name":"global_invalid_negative","surface":"global_archived","path":"/api/archived-channels?since=-1","schema_accepted":false,"status":400,"body":{"error":"invalid input"}},
+  {"name":"global_invalid_fraction","surface":"global_archived","path":"/api/archived-channels?since=1.5","schema_accepted":false,"status":400,"body":{"error":"invalid input"}},
+  {"name":"global_invalid_infinity","surface":"global_archived","path":"/api/archived-channels?since=1e400","schema_accepted":false,"status":400,"body":{"error":"invalid input"}}
+]

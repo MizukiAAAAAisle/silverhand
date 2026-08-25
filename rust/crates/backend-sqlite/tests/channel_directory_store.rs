@@ -212,6 +212,20 @@ async fn selected_candidates_and_sort_state_decode_before_product_filtering() {
         .execute(&mut db)
         .await
         .unwrap();
+    sqlx::query("UPDATE conversations SET latest_message_seq=-1 WHERE id='hidden'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    assert!(read.active(&viewer, &workspace).await.is_err());
+
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE conversations SET latest_message_seq=0 WHERE id='hidden'")
+        .execute(&mut db)
+        .await
+        .unwrap();
     sqlx::query("UPDATE user_sort_entry SET entity_id='' WHERE entity_id='hidden'")
         .execute(&mut db)
         .await

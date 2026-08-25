@@ -145,6 +145,7 @@ pub struct ChannelDirectoryRow {
     closed_at: Option<i64>,
     close_summary: Option<String>,
     archived_at: Option<i64>,
+    latest_message_seq: i64,
     created_at: i64,
     updated_at: i64,
     visibility: ChannelVisibility,
@@ -163,6 +164,7 @@ impl ChannelDirectoryRow {
         closed_at: Option<i64>,
         close_summary: Option<String>,
         archived_at: Option<i64>,
+        latest_message_seq: i64,
         created_at: i64,
         updated_at: i64,
         visibility: ChannelVisibility,
@@ -173,6 +175,9 @@ impl ChannelDirectoryRow {
         }
         if roster == DirectoryRoster::Fixed && visibility == ChannelVisibility::Public {
             return Err(ChannelDirectoryProjectionError::PublicFixedRoster);
+        }
+        if latest_message_seq < 0 {
+            return Err(ChannelDirectoryProjectionError::NegativeLatestMessageSeq);
         }
         Ok(Self {
             source_viewer,
@@ -185,6 +190,7 @@ impl ChannelDirectoryRow {
             closed_at,
             close_summary,
             archived_at,
+            latest_message_seq,
             created_at,
             updated_at,
             visibility,
@@ -214,6 +220,9 @@ impl ChannelDirectoryRow {
     }
     pub const fn archived_at(&self) -> Option<i64> {
         self.archived_at
+    }
+    pub const fn latest_message_seq(&self) -> i64 {
+        self.latest_message_seq
     }
     pub const fn created_at(&self) -> i64 {
         self.created_at
@@ -704,6 +713,8 @@ pub enum ChannelDirectoryProjectionError {
     EmptyOwnerName,
     #[error("a fixed-roster channel cannot be public")]
     PublicFixedRoster,
+    #[error("stored latest message sequence is negative")]
+    NegativeLatestMessageSeq,
     #[error("directory aggregate differs from the requested viewer or workspace")]
     ForeignDirectoryCoordinate,
     #[error("directory contains a row from another viewer or workspace")]
@@ -831,6 +842,7 @@ mod tests {
             None,
             None,
             archived,
+            0,
             created,
             created,
             visibility,

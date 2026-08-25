@@ -290,7 +290,7 @@ async fn viewer_is_workspace_member(
         .bind(workspace.as_str()).bind(viewer.as_str()).fetch_one(&mut **tx).await
 }
 
-const ROW_COLUMNS_BEFORE_VIEWER: &str = "c.id,c.workspace_id,c.placement_kind,c.roster_policy,c.title,c.title_key,c.status,c.spawned_by_agent_id,c.closed_at,c.close_summary,c.archived_at,c.created_at,c.updated_at,c.visibility,c.endpoint_a_kind,c.endpoint_a_id,c.endpoint_a_deleted_at,c.endpoint_b_kind,c.endpoint_b_id,c.endpoint_b_deleted_at,CASE WHEN c.spawned_by_agent_id IS NULL THEN 1 ELSE EXISTS(SELECT 1 FROM agents spawned WHERE spawned.id=c.spawned_by_agent_id) END AS spawned_agent_valid,EXISTS(SELECT 1 FROM conversation_users cu WHERE cu.conversation_id=c.id AND cu.user_id=";
+const ROW_COLUMNS_BEFORE_VIEWER: &str = "c.id,c.workspace_id,c.placement_kind,c.roster_policy,c.title,c.title_key,c.status,c.spawned_by_agent_id,c.closed_at,c.close_summary,c.archived_at,c.latest_message_seq,c.created_at,c.updated_at,c.visibility,c.endpoint_a_kind,c.endpoint_a_id,c.endpoint_a_deleted_at,c.endpoint_b_kind,c.endpoint_b_id,c.endpoint_b_deleted_at,CASE WHEN c.spawned_by_agent_id IS NULL THEN 1 ELSE EXISTS(SELECT 1 FROM agents spawned WHERE spawned.id=c.spawned_by_agent_id) END AS spawned_agent_valid,EXISTS(SELECT 1 FROM conversation_users cu WHERE cu.conversation_id=c.id AND cu.user_id=";
 const ROW_COLUMNS_AFTER_VIEWER: &str = ") AS is_member";
 
 async fn load_workspace_rows(
@@ -384,6 +384,7 @@ fn decode_channel(
         row.try_get("closed_at")?,
         row.try_get("close_summary")?,
         row.try_get("archived_at")?,
+        row.try_get("latest_message_seq")?,
         row.try_get("created_at")?,
         row.try_get("updated_at")?,
         visibility,

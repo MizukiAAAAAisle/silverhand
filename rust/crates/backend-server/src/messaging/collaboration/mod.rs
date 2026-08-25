@@ -10,6 +10,7 @@ pub mod conversation_ref;
 pub mod conversation_unread;
 pub mod message_unread;
 pub mod notification;
+mod query_number;
 pub mod reaction;
 pub mod runtime_control;
 pub mod saved;
