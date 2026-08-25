@@ -74,8 +74,8 @@ async fn modes<P: AttentionProjectionPort>(
         Ok(value) => value,
         Err(_) => return error(StatusCode::FORBIDDEN, "forbidden"),
     };
-    match state.0.modes(&viewer, workspace).await {
-        Ok(Ok(value)) => modes_wire(&value),
+    match state.0.modes(&viewer, &workspace).await {
+        Ok(Ok(value)) => modes_wire(&workspace, &value),
         Ok(Err(AttentionModesRefusal::Forbidden)) => error(StatusCode::FORBIDDEN, "forbidden"),
         Err(error) => {
             tracing::error!(error_chain=%crate::error::describe(&error),"attention mode projection failed");
@@ -103,7 +103,7 @@ fn badge_wire(value: &AttentionBadgeRollup) -> Response {
     .into_response()
 }
 
-fn modes_wire(value: &WorkspaceAttentionModes) -> Response {
+fn modes_wire(workspace: &WorkspaceId, value: &WorkspaceAttentionModes) -> Response {
     let channels = value
         .channels()
         .iter()
@@ -111,13 +111,13 @@ fn modes_wire(value: &WorkspaceAttentionModes) -> Response {
             json!({
                 "conversation_id": channel.conversation().as_str(),
                 "mode": channel.mode().as_str(),
-                "effective_mode": channel.effective_mode().as_str(),
+                "effective_mode": channel.effective_mode(value.muted()).as_str(),
                 "directed_unread_count": channel.directed_unread_count().get(),
             })
         })
         .collect::<Vec<_>>();
     Json(json!({
-        "workspace_id": value.workspace().as_str(),
+        "workspace_id": workspace.as_str(),
         "muted": value.muted(),
         "channels": channels,
     }))

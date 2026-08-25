@@ -40,7 +40,7 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The stored channel default the oracle passes as `@channelDefaultMode`: a channel
 /// with no per-viewer preference is treated as 'all' (loud).
-const CHANNEL_DEFAULT_MODE: &str = "all";
+pub(crate) const CHANNEL_DEFAULT_MODE: &str = "all";
 
 // ---------------------------------------------------------------------------
 // Predicate fragments — the oracle's SQL, `@viewer` rewritten to the `p` CTE.
@@ -143,12 +143,24 @@ macro_rules! effective_directed_mention {
     };
 }
 
+/// The one per-message collapse shared by every tiered-attention face.
+macro_rules! directed_claim_count {
+    () => {
+        "COUNT(DISTINCT n.message_id)"
+    };
+}
+
+pub(crate) use directed_claim_count;
+pub(crate) use effective_directed_mention;
+
 /// The directed badge term: distinct unread mentions in QUIET conversations the viewer
 /// is seated in — the tier a positional count does not already cover.
 macro_rules! badge_directed_term {
     () => {
         concat!(
-            "SELECT COUNT(DISTINCT n.message_id) AS c FROM notifications n JOIN conversations c ON \
+            "SELECT ",
+            directed_claim_count!(),
+            " AS c FROM notifications n JOIN conversations c ON \
              c.id = n.conversation_id JOIN conversation_users cu ON cu.conversation_id = c.id AND \
              cu.user_id = (SELECT viewer FROM p) WHERE n.user_id = (SELECT viewer FROM p) AND ",
             effective_directed_mention!(),
@@ -238,8 +250,9 @@ const BADGE_COUNTS_BY_WORKSPACE: &str = concat!(
     rollup_unread!(),
     " WHERE ",
     loud_positional!(),
-    " GROUP BY c.workspace_id UNION ALL SELECT c.workspace_id AS workspace_id, COUNT(DISTINCT \
-     n.message_id) AS c FROM notifications n JOIN conversations c ON c.id=n.conversation_id JOIN \
+    " GROUP BY c.workspace_id UNION ALL SELECT c.workspace_id AS workspace_id, ",
+    directed_claim_count!(),
+    " AS c FROM notifications n JOIN conversations c ON c.id=n.conversation_id JOIN \
      conversation_users cu ON cu.conversation_id=c.id AND cu.user_id=(SELECT viewer FROM p) WHERE \
      n.user_id=(SELECT viewer FROM p) AND ",
     effective_directed_mention!(),

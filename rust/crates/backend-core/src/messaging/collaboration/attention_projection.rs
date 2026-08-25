@@ -110,7 +110,6 @@ impl AttentionBadgeRollup {
 pub struct ChannelAttentionTier {
     conversation: ConversationId,
     mode: ChannelAttentionMode,
-    effective_mode: ChannelAttentionMode,
     directed_unread_count: AttentionCount,
 }
 
@@ -118,13 +117,11 @@ impl ChannelAttentionTier {
     pub fn projected(
         conversation: ConversationId,
         mode: ChannelAttentionMode,
-        effective_mode: ChannelAttentionMode,
         directed_unread_count: AttentionCount,
     ) -> Self {
         Self {
             conversation,
             mode,
-            effective_mode,
             directed_unread_count,
         }
     }
@@ -137,8 +134,12 @@ impl ChannelAttentionTier {
         self.mode
     }
 
-    pub fn effective_mode(&self) -> ChannelAttentionMode {
-        self.effective_mode
+    pub fn effective_mode(&self, workspace_muted: bool) -> ChannelAttentionMode {
+        if workspace_muted {
+            ChannelAttentionMode::Mute
+        } else {
+            self.mode
+        }
     }
 
     pub fn directed_unread_count(&self) -> AttentionCount {
@@ -148,26 +149,13 @@ impl ChannelAttentionTier {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceAttentionModes {
-    workspace: WorkspaceId,
     muted: bool,
     channels: Vec<ChannelAttentionTier>,
 }
 
 impl WorkspaceAttentionModes {
-    pub fn projected(
-        workspace: WorkspaceId,
-        muted: bool,
-        channels: Vec<ChannelAttentionTier>,
-    ) -> Self {
-        Self {
-            workspace,
-            muted,
-            channels,
-        }
-    }
-
-    pub fn workspace(&self) -> &WorkspaceId {
-        &self.workspace
+    pub fn projected(muted: bool, channels: Vec<ChannelAttentionTier>) -> Self {
+        Self { muted, channels }
     }
 
     pub fn muted(&self) -> bool {
@@ -195,7 +183,7 @@ pub trait AttentionProjectionPort {
     fn modes(
         &self,
         viewer: &UserId,
-        workspace: WorkspaceId,
+        workspace: &WorkspaceId,
     ) -> impl Future<
         Output = Result<Result<WorkspaceAttentionModes, AttentionModesRefusal>, Self::Error>,
     > + Send;
@@ -238,5 +226,16 @@ mod tests {
             duplicate,
             Err(AttentionBadgeProjectionError::DuplicateWorkspace)
         );
+    }
+
+    #[test]
+    fn effective_tier_has_no_independent_projection_channel() {
+        let tier = ChannelAttentionTier::projected(
+            ConversationId::parse("c").unwrap(),
+            ChannelAttentionMode::Mentions,
+            AttentionCount::new(0).unwrap(),
+        );
+        assert_eq!(tier.effective_mode(false), ChannelAttentionMode::Mentions);
+        assert_eq!(tier.effective_mode(true), ChannelAttentionMode::Mute);
     }
 }

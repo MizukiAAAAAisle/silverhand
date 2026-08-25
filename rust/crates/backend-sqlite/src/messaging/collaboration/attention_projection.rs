@@ -2,7 +2,10 @@
 
 use crate::{
     messaging::MessagingStore,
-    unread_read::{UnreadReadModelError, attention_badge_counts},
+    unread_read::{
+        CHANNEL_DEFAULT_MODE, UnreadReadModelError, attention_badge_counts, directed_claim_count,
+        effective_directed_mention,
+    },
 };
 use silverhand_backend_core::{
     identity::{ConversationId, UserId, WorkspaceId},
@@ -19,55 +22,24 @@ use silverhand_backend_core::{
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;
 
-const CHANNEL_DEFAULT_MODE: &str = "all";
-
-// Mirrors the one effective-directed-claim predicate shared by the TS badge and
-// modes faces: unread mention_self, anchored, and above its own stream cursor.
-const CHANNEL_TIERS: &str = r#"
-WITH p(viewer, workspace, channel_default_mode) AS (SELECT ?, ?, ?)
-SELECT c.id AS conversation_id,
-       COALESCE((SELECT cap.mode
-                   FROM channel_attention_preferences cap
-                  WHERE cap.user_id=(SELECT viewer FROM p)
-                    AND cap.conversation_id=c.id),
-                (SELECT channel_default_mode FROM p)) AS mode,
-       CASE WHEN EXISTS(
-                    SELECT 1 FROM workspace_attention_preferences wap
-                     WHERE wap.user_id=(SELECT viewer FROM p)
-                       AND wap.workspace_id=c.workspace_id
-                       AND wap.muted=1)
-            THEN 'mute'
-            ELSE COALESCE((SELECT cap.mode
-                             FROM channel_attention_preferences cap
-                            WHERE cap.user_id=(SELECT viewer FROM p)
-                              AND cap.conversation_id=c.id),
-                          (SELECT channel_default_mode FROM p))
-       END AS effective_mode,
-       (SELECT COUNT(DISTINCT n.message_id)
-          FROM notifications n
-         WHERE n.user_id=(SELECT viewer FROM p)
-           AND n.conversation_id=c.id
-           AND n.kind='mention_self'
-           AND n.read_at IS NULL
-           AND EXISTS(
-                 SELECT 1 FROM messages dm
-                  WHERE dm.id=n.message_id
-                    AND dm.seq > COALESCE((
-                          SELECT dcr.last_read_seq FROM conversation_reads dcr
-                           WHERE dcr.user_id=n.user_id
-                             AND dcr.conversation_id=n.conversation_id
-                             AND dcr.thread_root_id IS dm.thread_root_id), 0)
-               )) AS directed_unread_count
-  FROM conversations c
-  JOIN conversation_users cu
-    ON cu.conversation_id=c.id AND cu.user_id=(SELECT viewer FROM p)
- WHERE c.workspace_id=(SELECT workspace FROM p)
-   AND c.placement_kind='workspace'
-   AND c.roster_policy='open'
-   AND c.id IS NOT NULL
-   AND c.archived_at IS NULL
- ORDER BY c.created_at ASC, c.id ASC
-"#;
+// Composes the same crate-private directed-claim/count fragments and default tier
+// as the badge authority. A predicate change therefore recompiles both faces.
+const CHANNEL_TIERS: &str = concat!(
+    "WITH p(viewer, workspace, channel_default_mode) AS (SELECT ?, ?, ?) \
+     SELECT c.id AS conversation_id, COALESCE((SELECT cap.mode FROM \
+     channel_attention_preferences cap WHERE cap.user_id=(SELECT viewer FROM p) AND \
+     cap.conversation_id=c.id), (SELECT channel_default_mode FROM p)) AS mode, ",
+    "(SELECT ",
+    directed_claim_count!(),
+    " FROM notifications n WHERE n.user_id=(SELECT viewer FROM p) AND \
+     n.conversation_id=c.id AND ",
+    effective_directed_mention!(),
+    ") AS directed_unread_count FROM conversations c JOIN conversation_users cu ON \
+     cu.conversation_id=c.id AND cu.user_id=(SELECT viewer FROM p) WHERE \
+     c.workspace_id=(SELECT workspace FROM p) AND c.placement_kind='workspace' AND \
+     c.roster_policy='open' AND c.id IS NOT NULL AND c.archived_at IS NULL ORDER BY \
+     c.created_at ASC, c.id ASC"
+);
 
 const MUTED_VISIBLE_WORKSPACES: &str = r#"
 SELECT p.workspace_id
@@ -173,7 +145,7 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
     async fn modes(
         &self,
         viewer: &UserId,
-        workspace: WorkspaceId,
+        workspace: &WorkspaceId,
     ) -> Result<Result<WorkspaceAttentionModes, AttentionModesRefusal>, Self::Error> {
         let mut tx = self
             .pool
@@ -225,9 +197,6 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
             let raw_mode: String = row
                 .try_get("mode")
                 .map_err(AttentionProjectionStoreError::from)?;
-            let raw_effective: String = row
-                .try_get("effective_mode")
-                .map_err(AttentionProjectionStoreError::from)?;
             let raw_count: i64 = row
                 .try_get("directed_unread_count")
                 .map_err(AttentionProjectionStoreError::from)?;
@@ -236,8 +205,6 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
                     .map_err(|_| AttentionProjectionStoreError::MalformedIdentity)?,
                 ChannelAttentionMode::parse(&raw_mode)
                     .ok_or(AttentionProjectionStoreError::MalformedMode)?,
-                ChannelAttentionMode::parse(&raw_effective)
-                    .ok_or(AttentionProjectionStoreError::MalformedMode)?,
                 AttentionCount::new(raw_count)
                     .map_err(|_| AttentionProjectionStoreError::MalformedCount)?,
             ));
@@ -245,8 +212,6 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
         tx.commit()
             .await
             .map_err(AttentionProjectionStoreError::from)?;
-        Ok(Ok(WorkspaceAttentionModes::projected(
-            workspace, muted, channels,
-        )))
+        Ok(Ok(WorkspaceAttentionModes::projected(muted, channels)))
     }
 }

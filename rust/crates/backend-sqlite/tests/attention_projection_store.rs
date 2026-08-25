@@ -53,7 +53,7 @@ async fn badge_and_modes_share_the_directed_claim_and_stable_channel_order() {
     );
 
     let modes = store
-        .modes(&viewer, WorkspaceId::parse("w").unwrap())
+        .modes(&viewer, &WorkspaceId::parse("w").unwrap())
         .await
         .unwrap()
         .unwrap();
@@ -65,7 +65,7 @@ async fn badge_and_modes_share_the_directed_claim_and_stable_channel_order() {
             .map(|row| (
                 row.conversation().as_str(),
                 row.mode().as_str(),
-                row.effective_mode().as_str(),
+                row.effective_mode(modes.muted()).as_str(),
                 row.directed_unread_count().get(),
             ))
             .collect::<Vec<_>>(),
@@ -90,7 +90,7 @@ async fn modes_hides_missing_and_nonmember_workspaces() {
     for workspace in ["missing", "hidden"] {
         assert!(matches!(
             store
-                .modes(&viewer, WorkspaceId::parse(workspace).unwrap())
+                .modes(&viewer, &WorkspaceId::parse(workspace).unwrap())
                 .await
                 .unwrap(),
             Err(AttentionModesRefusal::Forbidden)
@@ -118,11 +118,7 @@ async fn cursor_and_liveness_move_badge_and_mode_explanation_together() {
         .await
         .unwrap();
     assert_eq!(store.badges(&viewer).await.unwrap().total().get(), 0);
-    let modes = store
-        .modes(&viewer, workspace.clone())
-        .await
-        .unwrap()
-        .unwrap();
+    let modes = store.modes(&viewer, &workspace).await.unwrap().unwrap();
     assert_eq!(
         modes
             .channels()
@@ -153,7 +149,7 @@ async fn cursor_and_liveness_move_badge_and_mode_explanation_together() {
         .await
         .unwrap();
     assert_eq!(store.badges(&viewer).await.unwrap().total().get(), 0);
-    let modes = store.modes(&viewer, workspace).await.unwrap().unwrap();
+    let modes = store.modes(&viewer, &workspace).await.unwrap().unwrap();
     assert_eq!(
         modes
             .channels()
@@ -186,7 +182,7 @@ async fn strict_decode_rejects_corrupt_mode_and_mute_with_source_chain() {
         .execute(&mut db)
         .await
         .unwrap();
-    let error = store.modes(&viewer, workspace.clone()).await.unwrap_err();
+    let error = store.modes(&viewer, &workspace).await.unwrap_err();
     assert!(error.source().is_some());
     assert!(format!("{error:?}").contains("MalformedMode"));
 
@@ -200,7 +196,7 @@ async fn strict_decode_rejects_corrupt_mode_and_mute_with_source_chain() {
     .execute(&mut db)
     .await
     .unwrap();
-    let error = store.modes(&viewer, workspace).await.unwrap_err();
+    let error = store.modes(&viewer, &workspace).await.unwrap_err();
     assert!(error.source().is_some());
     assert!(format!("{error:?}").contains("MalformedMute"));
 }

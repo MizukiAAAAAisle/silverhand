@@ -55,43 +55,32 @@ impl AttentionProjectionPort for Ports {
     async fn modes(
         &self,
         _: &UserId,
-        workspace: WorkspaceId,
+        workspace: &WorkspaceId,
     ) -> Result<Result<WorkspaceAttentionModes, AttentionModesRefusal>, Self::Error> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        if (self.setup != "tiered" && self.setup != "tiered_unmuted")
-            || workspace.as_str() != "w"
+        if self.setup != "coordinate"
+            && ((self.setup != "tiered" && self.setup != "tiered_unmuted")
+                || workspace.as_str() != "w")
         {
             return Ok(Err(AttentionModesRefusal::Forbidden));
         }
         let muted = self.setup == "tiered";
         Ok(Ok(WorkspaceAttentionModes::projected(
-            workspace,
             muted,
             vec![
                 ChannelAttentionTier::projected(
                     ConversationId::parse("c-a").unwrap(),
                     ChannelAttentionMode::Mentions,
-                    if muted {
-                        ChannelAttentionMode::Mute
-                    } else {
-                        ChannelAttentionMode::Mentions
-                    },
                     AttentionCount::new(1).unwrap(),
                 ),
                 ChannelAttentionTier::projected(
                     ConversationId::parse("c-c").unwrap(),
-                    ChannelAttentionMode::Mute,
                     ChannelAttentionMode::Mute,
                     AttentionCount::new(0).unwrap(),
                 ),
                 ChannelAttentionTier::projected(
                     ConversationId::parse("c-b").unwrap(),
                     ChannelAttentionMode::All,
-                    if muted {
-                        ChannelAttentionMode::Mute
-                    } else {
-                        ChannelAttentionMode::All
-                    },
                     AttentionCount::new(0).unwrap(),
                 ),
             ],
@@ -145,4 +134,16 @@ async fn authentication_refusal_reaches_no_projection() {
     assert_eq!(status, 500);
     assert_eq!(body, json!({"error":"internal error"}));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn modes_wire_uses_the_admitted_request_coordinate_not_a_port_return_channel() {
+    let (status, body) = call(
+        Ports::new("coordinate"),
+        "/api/attention/modes?workspace_id=requested-b",
+        true,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["workspace_id"], "requested-b");
 }
