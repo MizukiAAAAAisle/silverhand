@@ -5,7 +5,8 @@ mod tests;
 
 use axum::{
     Json, Router,
-    extract::{Extension, Path, State},
+    body::to_bytes,
+    extract::{Extension, Path, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, put},
@@ -14,9 +15,11 @@ use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
     identity::{ConversationId, UserId, WorkspaceId},
     messaging::collaboration::attention_preference::{
-        AttentionPreferenceAftermath, AttentionPreferencePort, AttentionPreferenceRefusal,
-        ChannelAttentionMode, CommittedAttentionPreference, set_channel_attention_preference,
-        set_workspace_attention_preference,
+        AttentionPreferenceAftermath, AttentionPreferencePort, ChannelAttentionAdmissionRefusal,
+        ChannelAttentionCommit, ChannelAttentionMode, ChannelAttentionWriteRefusal,
+        WorkspaceAttentionAdmissionRefusal, WorkspaceAttentionCommit,
+        WorkspaceAttentionReadRefusal, WorkspaceAttentionWriteRefusal,
+        commit_channel_attention_preference, commit_workspace_attention_preference,
     },
 };
 use std::sync::Arc;
@@ -34,7 +37,6 @@ impl<P, A> Clone for AttentionState<P, A> {
         Self(Arc::clone(&self.0))
     }
 }
-
 pub fn router<P, A>(port: P, aftermath: A) -> Router
 where
     P: AttentionPreferencePort + Send + Sync + 'static,
@@ -54,38 +56,40 @@ async fn set_channel<P: AttentionPreferencePort, A: AttentionPreferenceAftermath
     State(state): State<AttentionState<P, A>>,
     principal: Option<Extension<UserId>>,
     Path(id): Path<String>,
-    body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+    request: Request,
 ) -> Response {
     let Some(Extension(viewer)) = principal else {
         return internal();
     };
     let conversation = match ConversationId::parse(id) {
-        Ok(value) => value,
+        Ok(v) => v,
         Err(_) => return error(StatusCode::BAD_REQUEST, "channel id required"),
     };
-    // Product target/admission precedes body validation on this route. The port
-    // therefore receives the parsed body only after the wire adapter has it,
-    // while SQLite repeats the authoritative target/access checks in-lock.
-    let value = body.map(|Json(value)| value).unwrap_or_else(|_| json!({}));
-    let parsed = parse_channel_body(&value);
-    let issues = parsed.as_ref().err().cloned();
-    match set_channel_attention_preference(
-        &state.0.port,
-        &state.0.aftermath,
-        viewer,
-        conversation,
-        parsed.ok(),
-    )
-    .await
+    // Target/access is resolved before the body is polled. The body therefore
+    // cannot be retained across a SQLite writer reservation.
+    let target = match state.0.port.admit_channel(&viewer, &conversation).await {
+        Ok(Ok(v)) => v,
+        Ok(Err(r)) => return channel_admission_refusal(r),
+        Err(e) => {
+            tracing::error!(error_chain=%crate::error::describe(&e),"channel attention admission failed");
+            return internal();
+        }
+    };
+    let value = read_json(request).await;
+    let mode = match parse_channel_body(&value) {
+        Ok(v) => v,
+        Err(issues) => return invalid(issues),
+    };
+    drop(value);
+    match commit_channel_attention_preference(&state.0.port, &state.0.aftermath, target, mode).await
     {
         Ok(Ok(done)) => {
             report_effect(done.first_failure());
             channel_success(done.committed())
         }
-        Ok(Err(AttentionPreferenceRefusal::InvalidInput)) => invalid(issues.unwrap_or_default()),
-        Ok(Err(reason)) => refusal(reason),
-        Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error),"channel attention preference failed");
+        Ok(Err(r)) => channel_write_refusal(r),
+        Err(e) => {
+            tracing::error!(error_chain=%crate::error::describe(&e),"channel attention write failed");
             internal()
         }
     }
@@ -100,18 +104,16 @@ async fn get_workspace<P: AttentionPreferencePort, A: AttentionPreferenceAfterma
         return internal();
     };
     let workspace = match WorkspaceId::parse(id) {
-        Ok(value) => value,
+        Ok(v) => v,
         Err(_) => return error(StatusCode::BAD_REQUEST, "workspace id required"),
     };
     match state.0.port.get_workspace(&viewer, workspace).await {
-        Ok(Ok(preference)) => Json(json!({
-            "workspace_id": preference.workspace().as_str(),
-            "muted": preference.muted()
-        }))
-        .into_response(),
-        Ok(Err(reason)) => refusal(reason),
-        Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error),"workspace attention preference read failed");
+        Ok(Ok(v)) => {
+            Json(json!({"workspace_id":v.workspace().as_str(),"muted":v.muted()})).into_response()
+        }
+        Ok(Err(r)) => workspace_read_refusal(r),
+        Err(e) => {
+            tracing::error!(error_chain=%crate::error::describe(&e),"workspace attention read failed");
             internal()
         }
     }
@@ -121,65 +123,76 @@ async fn set_workspace<P: AttentionPreferencePort, A: AttentionPreferenceAfterma
     State(state): State<AttentionState<P, A>>,
     principal: Option<Extension<UserId>>,
     Path(id): Path<String>,
-    body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+    request: Request,
 ) -> Response {
     let Some(Extension(viewer)) = principal else {
         return internal();
     };
     let workspace = match WorkspaceId::parse(id) {
-        Ok(value) => value,
+        Ok(v) => v,
         Err(_) => return error(StatusCode::BAD_REQUEST, "workspace id required"),
     };
-    let value = body.map(|Json(value)| value).unwrap_or_else(|_| json!({}));
-    let parsed = parse_workspace_body(&value);
-    let issues = parsed.as_ref().err().cloned();
-    match set_workspace_attention_preference(
-        &state.0.port,
-        &state.0.aftermath,
-        viewer,
-        workspace,
-        parsed.ok(),
-    )
-    .await
+    let target = match state
+        .0
+        .port
+        .admit_workspace_write(&viewer, &workspace)
+        .await
+    {
+        Ok(Ok(v)) => v,
+        Ok(Err(r)) => return workspace_admission_refusal(r),
+        Err(e) => {
+            tracing::error!(error_chain=%crate::error::describe(&e),"workspace attention admission failed");
+            return internal();
+        }
+    };
+    let value = read_json(request).await;
+    let muted = match parse_workspace_body(&value) {
+        Ok(v) => v,
+        Err(issues) => return invalid(issues),
+    };
+    drop(value);
+    match commit_workspace_attention_preference(&state.0.port, &state.0.aftermath, target, muted)
+        .await
     {
         Ok(Ok(done)) => {
             report_effect(done.first_failure());
             workspace_success(done.committed())
         }
-        Ok(Err(AttentionPreferenceRefusal::InvalidInput)) => invalid(issues.unwrap_or_default()),
-        Ok(Err(reason)) => refusal(reason),
-        Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error),"workspace attention preference failed");
+        Ok(Err(r)) => workspace_write_refusal(r),
+        Err(e) => {
+            tracing::error!(error_chain=%crate::error::describe(&e),"workspace attention write failed");
             internal()
         }
     }
 }
 
-fn parse_channel_body(value: &Value) -> Result<ChannelAttentionMode, Vec<Value>> {
-    let object = root_object(value)?;
-    match object.get("mode") {
-        Some(Value::String(raw)) => ChannelAttentionMode::parse(raw).ok_or_else(|| vec![json!({
-            "received":raw,"code":"invalid_enum_value","options":["all","mentions","mute"],"path":["mode"],
-            "message":format!("Invalid enum value. Expected 'all' | 'mentions' | 'mute', received '{raw}'")
-        })]),
-        Some(value) => Err(vec![type_issue("string", received(value), "mode")]),
-        None => Err(vec![type_issue("string", "undefined", "mode")]),
+async fn read_json(request: Request) -> Value {
+    match to_bytes(request.into_body(), usize::MAX)
+        .await
+        .ok()
+        .and_then(|v| serde_json::from_slice(&v).ok())
+    {
+        Some(value) => value,
+        None => json!({}),
     }
 }
-
+fn parse_channel_body(value: &Value) -> Result<ChannelAttentionMode, Vec<Value>> {
+    let object = root_object(value)?;
+    match object.get("mode"){
+        Some(Value::String(raw))=>ChannelAttentionMode::parse(raw).ok_or_else(||vec![json!({"received":raw,"code":"invalid_enum_value","options":["all","mentions","mute"],"path":["mode"],"message":format!("Invalid enum value. Expected 'all' | 'mentions' | 'mute', received '{raw}'")})]),
+        Some(value)=>Err(vec![type_issue("string",received(value),"mode")]),None=>Err(vec![type_issue("string","undefined","mode")])
+    }
+}
 fn parse_workspace_body(value: &Value) -> Result<bool, Vec<Value>> {
     let object = root_object(value)?;
     match object.get("muted") {
-        Some(Value::Bool(value)) => Ok(*value),
+        Some(Value::Bool(v)) => Ok(*v),
         Some(value) => Err(vec![type_issue("boolean", received(value), "muted")]),
         None => Err(vec![type_issue("boolean", "undefined", "muted")]),
     }
 }
-
 fn root_object(value: &Value) -> Result<&Map<String, Value>, Vec<Value>> {
-    value.as_object().ok_or_else(|| {
-        vec![json!({"code":"invalid_type","expected":"object","received":received(value),"path":[],"message":format!("Expected object, received {}",received(value))})]
-    })
+    value.as_object().ok_or_else(||vec![json!({"code":"invalid_type","expected":"object","received":received(value),"path":[],"message":format!("Expected object, received {}",received(value))})])
 }
 fn received(value: &Value) -> &'static str {
     match value {
@@ -212,33 +225,55 @@ fn error(status: StatusCode, message: &'static str) -> Response {
 fn internal() -> Response {
     error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
 }
-fn refusal(value: AttentionPreferenceRefusal) -> Response {
+fn channel_admission_refusal(value: ChannelAttentionAdmissionRefusal) -> Response {
     match value {
-        AttentionPreferenceRefusal::ChannelNotFound => {
+        ChannelAttentionAdmissionRefusal::ChannelNotFound => {
             error(StatusCode::NOT_FOUND, "channel not found")
         }
-        AttentionPreferenceRefusal::Forbidden => error(StatusCode::FORBIDDEN, "forbidden"),
-        AttentionPreferenceRefusal::WorkspaceNotFound => {
-            error(StatusCode::NOT_FOUND, "workspace not found")
-        }
-        AttentionPreferenceRefusal::InvalidInput => invalid(Vec::new()),
+        ChannelAttentionAdmissionRefusal::Forbidden => error(StatusCode::FORBIDDEN, "forbidden"),
     }
 }
-fn channel_success(fact: &CommittedAttentionPreference) -> Response {
-    let preference = fact
-        .channel_preference()
-        .expect("channel write returns channel fact");
-    Json(json!({"conversation_id":preference.conversation().as_str(),"mode":preference.mode().as_str()})).into_response()
+fn channel_write_refusal(value: ChannelAttentionWriteRefusal) -> Response {
+    match value {
+        ChannelAttentionWriteRefusal::ChannelNotFound => {
+            error(StatusCode::NOT_FOUND, "channel not found")
+        }
+        ChannelAttentionWriteRefusal::Forbidden => error(StatusCode::FORBIDDEN, "forbidden"),
+    }
 }
-fn workspace_success(fact: &CommittedAttentionPreference) -> Response {
-    let preference = fact
-        .workspace_preference()
-        .expect("workspace write returns workspace fact");
-    Json(json!({"workspace_id":preference.workspace().as_str(),"muted":preference.muted()}))
+fn workspace_read_refusal(value: WorkspaceAttentionReadRefusal) -> Response {
+    match value {
+        WorkspaceAttentionReadRefusal::Forbidden => error(StatusCode::FORBIDDEN, "forbidden"),
+        WorkspaceAttentionReadRefusal::WorkspaceNotFound => {
+            error(StatusCode::NOT_FOUND, "workspace not found")
+        }
+    }
+}
+fn workspace_admission_refusal(value: WorkspaceAttentionAdmissionRefusal) -> Response {
+    match value {
+        WorkspaceAttentionAdmissionRefusal::Forbidden => error(StatusCode::FORBIDDEN, "forbidden"),
+        WorkspaceAttentionAdmissionRefusal::WorkspaceNotFound => {
+            error(StatusCode::NOT_FOUND, "workspace not found")
+        }
+    }
+}
+fn workspace_write_refusal(value: WorkspaceAttentionWriteRefusal) -> Response {
+    match value {
+        WorkspaceAttentionWriteRefusal::Forbidden => error(StatusCode::FORBIDDEN, "forbidden"),
+        WorkspaceAttentionWriteRefusal::WorkspaceNotFound => {
+            error(StatusCode::NOT_FOUND, "workspace not found")
+        }
+    }
+}
+fn channel_success(value: &impl ChannelAttentionCommit) -> Response {
+    Json(json!({"conversation_id":value.conversation().as_str(),"mode":value.mode().as_str()}))
         .into_response()
 }
+fn workspace_success(value: &impl WorkspaceAttentionCommit) -> Response {
+    Json(json!({"workspace_id":value.workspace().as_str(),"muted":value.muted()})).into_response()
+}
 fn report_effect(
-    error: Option<&silverhand_backend_core::messaging::collaboration::attention_preference::AttentionPreferenceEffectFailure>,
+    error:Option<&silverhand_backend_core::messaging::collaboration::attention_preference::AttentionPreferenceEffectFailure>,
 ) {
     if let Some(error) = error {
         tracing::error!(error_chain=%crate::error::describe(error),"attention preference effect failed");

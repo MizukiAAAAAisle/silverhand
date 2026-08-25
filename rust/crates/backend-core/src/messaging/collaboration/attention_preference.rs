@@ -9,7 +9,6 @@ pub enum ChannelAttentionMode {
     Mentions,
     Mute,
 }
-
 impl ChannelAttentionMode {
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
@@ -19,7 +18,6 @@ impl ChannelAttentionMode {
             _ => None,
         }
     }
-
     pub fn as_str(self) -> &'static str {
         match self {
             Self::All => "all",
@@ -30,29 +28,29 @@ impl ChannelAttentionMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AttentionPreferenceRefusal {
+pub enum ChannelAttentionAdmissionRefusal {
     ChannelNotFound,
     Forbidden,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChannelAttentionWriteRefusal {
+    ChannelNotFound,
+    Forbidden,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkspaceAttentionReadRefusal {
+    Forbidden,
     WorkspaceNotFound,
-    InvalidInput,
 }
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ChannelAttentionPreference {
-    conversation: ConversationId,
-    mode: ChannelAttentionMode,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkspaceAttentionAdmissionRefusal {
+    Forbidden,
+    WorkspaceNotFound,
 }
-
-impl ChannelAttentionPreference {
-    pub fn committed(conversation: ConversationId, mode: ChannelAttentionMode) -> Self {
-        Self { conversation, mode }
-    }
-    pub fn conversation(&self) -> &ConversationId {
-        &self.conversation
-    }
-    pub fn mode(&self) -> ChannelAttentionMode {
-        self.mode
-    }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkspaceAttentionWriteRefusal {
+    Forbidden,
+    WorkspaceNotFound,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -60,7 +58,6 @@ pub struct WorkspaceAttentionPreference {
     workspace: WorkspaceId,
     muted: bool,
 }
-
 impl WorkspaceAttentionPreference {
     pub fn projected(workspace: WorkspaceId, muted: bool) -> Self {
         Self { workspace, muted }
@@ -73,109 +70,70 @@ impl WorkspaceAttentionPreference {
     }
 }
 
-/// The one committed identity from which both viewer-private effects and the
-/// HTTP acknowledgement are projected. Preference writes intentionally remain
-/// PUT-idempotent storage operations that publish on every successful request,
-/// matching the existing product contract even when the value was unchanged.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CommittedAttentionPreference {
-    Channel {
-        viewer: UserId,
-        workspace: WorkspaceId,
-        preference: ChannelAttentionPreference,
-    },
-    Workspace {
-        viewer: UserId,
-        preference: WorkspaceAttentionPreference,
-    },
+/// Consumer-language views over adapter-owned committed projections. The
+/// concrete value is minted inside the adapter from its winning authority row;
+/// core exposes no public from-parts constructor that can splice coordinates.
+pub trait ChannelAttentionCommit: Send + Sync {
+    fn viewer(&self) -> &UserId;
+    fn workspace(&self) -> &WorkspaceId;
+    fn conversation(&self) -> &ConversationId;
+    fn mode(&self) -> ChannelAttentionMode;
 }
-
-impl CommittedAttentionPreference {
-    pub fn channel(
-        viewer: UserId,
-        workspace: WorkspaceId,
-        conversation: ConversationId,
-        mode: ChannelAttentionMode,
-    ) -> Self {
-        Self::Channel {
-            viewer,
-            workspace,
-            preference: ChannelAttentionPreference::committed(conversation, mode),
-        }
-    }
-    pub fn workspace(viewer: UserId, workspace: WorkspaceId, muted: bool) -> Self {
-        Self::Workspace {
-            viewer,
-            preference: WorkspaceAttentionPreference::projected(workspace, muted),
-        }
-    }
-    pub fn viewer(&self) -> &UserId {
-        match self {
-            Self::Channel { viewer, .. } | Self::Workspace { viewer, .. } => viewer,
-        }
-    }
-    pub fn workspace_id(&self) -> &WorkspaceId {
-        match self {
-            Self::Channel { workspace, .. } => workspace,
-            Self::Workspace { preference, .. } => preference.workspace(),
-        }
-    }
-    pub fn conversation_id(&self) -> Option<&ConversationId> {
-        match self {
-            Self::Channel { preference, .. } => Some(preference.conversation()),
-            Self::Workspace { .. } => None,
-        }
-    }
-    pub fn channel_preference(&self) -> Option<&ChannelAttentionPreference> {
-        match self {
-            Self::Channel { preference, .. } => Some(preference),
-            Self::Workspace { .. } => None,
-        }
-    }
-    pub fn workspace_preference(&self) -> Option<&WorkspaceAttentionPreference> {
-        match self {
-            Self::Workspace { preference, .. } => Some(preference),
-            Self::Channel { .. } => None,
-        }
-    }
+pub trait WorkspaceAttentionCommit: Send + Sync {
+    fn viewer(&self) -> &UserId;
+    fn workspace(&self) -> &WorkspaceId;
+    fn muted(&self) -> bool;
 }
 
 pub trait AttentionPreferencePort {
     type Error: Error + Send + Sync + 'static;
+    type ChannelTarget: Send;
+    type WorkspaceTarget: Send;
+    type ChannelCommit: ChannelAttentionCommit;
+    type WorkspaceCommit: WorkspaceAttentionCommit;
 
-    fn set_channel(
+    /// Read-only preflight before the HTTP adapter reads the body.
+    fn admit_channel(
         &self,
-        viewer: UserId,
-        conversation: ConversationId,
-        mode: Option<ChannelAttentionMode>,
+        viewer: &UserId,
+        conversation: &ConversationId,
     ) -> impl Future<
-        Output = Result<
-            Result<CommittedAttentionPreference, AttentionPreferenceRefusal>,
-            Self::Error,
-        >,
+        Output = Result<Result<Self::ChannelTarget, ChannelAttentionAdmissionRefusal>, Self::Error>,
     > + Send;
-
+    /// Rechecks the same authority inside the root write transaction.
+    fn commit_channel(
+        &self,
+        target: Self::ChannelTarget,
+        mode: ChannelAttentionMode,
+    ) -> impl Future<
+        Output = Result<Result<Self::ChannelCommit, ChannelAttentionWriteRefusal>, Self::Error>,
+    > + Send;
     fn get_workspace(
         &self,
         viewer: &UserId,
         workspace: WorkspaceId,
     ) -> impl Future<
         Output = Result<
-            Result<WorkspaceAttentionPreference, AttentionPreferenceRefusal>,
+            Result<WorkspaceAttentionPreference, WorkspaceAttentionReadRefusal>,
             Self::Error,
         >,
     > + Send;
-
-    fn set_workspace(
+    fn admit_workspace_write(
         &self,
-        viewer: UserId,
-        workspace: WorkspaceId,
-        muted: Option<bool>,
+        viewer: &UserId,
+        workspace: &WorkspaceId,
     ) -> impl Future<
         Output = Result<
-            Result<CommittedAttentionPreference, AttentionPreferenceRefusal>,
+            Result<Self::WorkspaceTarget, WorkspaceAttentionAdmissionRefusal>,
             Self::Error,
         >,
+    > + Send;
+    fn commit_workspace(
+        &self,
+        target: Self::WorkspaceTarget,
+        muted: bool,
+    ) -> impl Future<
+        Output = Result<Result<Self::WorkspaceCommit, WorkspaceAttentionWriteRefusal>, Self::Error>,
     > + Send;
 }
 
@@ -185,7 +143,6 @@ pub struct AttentionPreferenceEffectFailure {
     #[source]
     source: Box<dyn Error + Send + Sync + 'static>,
 }
-
 impl AttentionPreferenceEffectFailure {
     pub fn from_source(source: impl Error + Send + Sync + 'static) -> Self {
         Self {
@@ -193,155 +150,173 @@ impl AttentionPreferenceEffectFailure {
         }
     }
 }
-
 pub trait AttentionPreferenceAftermath {
-    fn preference_changed(
+    fn channel_preference_changed(
         &self,
-        fact: &CommittedAttentionPreference,
+        fact: &impl ChannelAttentionCommit,
     ) -> impl Future<Output = Result<(), AttentionPreferenceEffectFailure>> + Send;
-    fn badge_changed(
+    fn channel_badge_changed(
         &self,
-        fact: &CommittedAttentionPreference,
+        fact: &impl ChannelAttentionCommit,
+    ) -> impl Future<Output = Result<(), AttentionPreferenceEffectFailure>> + Send;
+    fn workspace_preference_changed(
+        &self,
+        fact: &impl WorkspaceAttentionCommit,
+    ) -> impl Future<Output = Result<(), AttentionPreferenceEffectFailure>> + Send;
+    fn workspace_badge_changed(
+        &self,
+        fact: &impl WorkspaceAttentionCommit,
     ) -> impl Future<Output = Result<(), AttentionPreferenceEffectFailure>> + Send;
 }
 
 #[derive(Debug)]
-pub struct AttentionPreferenceExecution {
-    committed: CommittedAttentionPreference,
+pub struct AttentionPreferenceExecution<C> {
+    committed: C,
     first_failure: Option<AttentionPreferenceEffectFailure>,
 }
-
-impl AttentionPreferenceExecution {
-    pub fn committed(&self) -> &CommittedAttentionPreference {
+impl<C> AttentionPreferenceExecution<C> {
+    pub fn committed(&self) -> &C {
         &self.committed
     }
     pub fn first_failure(&self) -> Option<&AttentionPreferenceEffectFailure> {
         self.first_failure.as_ref()
     }
 }
-
-async fn finish(
+async fn channel_effects(
     aftermath: &impl AttentionPreferenceAftermath,
-    committed: CommittedAttentionPreference,
-) -> AttentionPreferenceExecution {
-    let mut first_failure = aftermath.preference_changed(&committed).await.err();
-    if let Err(error) = aftermath.badge_changed(&committed).await
-        && first_failure.is_none()
+    fact: &impl ChannelAttentionCommit,
+) -> Option<AttentionPreferenceEffectFailure> {
+    let mut first = aftermath.channel_preference_changed(fact).await.err();
+    if let Err(error) = aftermath.channel_badge_changed(fact).await
+        && first.is_none()
     {
-        first_failure = Some(error);
+        first = Some(error);
     }
-    AttentionPreferenceExecution {
+    first
+}
+async fn workspace_effects(
+    aftermath: &impl AttentionPreferenceAftermath,
+    fact: &impl WorkspaceAttentionCommit,
+) -> Option<AttentionPreferenceEffectFailure> {
+    let mut first = aftermath.workspace_preference_changed(fact).await.err();
+    if let Err(error) = aftermath.workspace_badge_changed(fact).await
+        && first.is_none()
+    {
+        first = Some(error);
+    }
+    first
+}
+
+pub async fn commit_channel_attention_preference<P: AttentionPreferencePort>(
+    port: &P,
+    aftermath: &impl AttentionPreferenceAftermath,
+    target: P::ChannelTarget,
+    mode: ChannelAttentionMode,
+) -> Result<
+    Result<AttentionPreferenceExecution<P::ChannelCommit>, ChannelAttentionWriteRefusal>,
+    P::Error,
+> {
+    let committed = match port.commit_channel(target, mode).await? {
+        Ok(v) => v,
+        Err(r) => return Ok(Err(r)),
+    };
+    let first_failure = channel_effects(aftermath, &committed).await;
+    Ok(Ok(AttentionPreferenceExecution {
         committed,
         first_failure,
-    }
+    }))
 }
-
-pub async fn set_channel_attention_preference<P: AttentionPreferencePort>(
+pub async fn commit_workspace_attention_preference<P: AttentionPreferencePort>(
     port: &P,
     aftermath: &impl AttentionPreferenceAftermath,
-    viewer: UserId,
-    conversation: ConversationId,
-    mode: Option<ChannelAttentionMode>,
-) -> Result<Result<AttentionPreferenceExecution, AttentionPreferenceRefusal>, P::Error> {
-    match port.set_channel(viewer, conversation, mode).await? {
-        Ok(committed) => Ok(Ok(finish(aftermath, committed).await)),
-        Err(refusal) => Ok(Err(refusal)),
-    }
+    target: P::WorkspaceTarget,
+    muted: bool,
+) -> Result<
+    Result<AttentionPreferenceExecution<P::WorkspaceCommit>, WorkspaceAttentionWriteRefusal>,
+    P::Error,
+> {
+    let committed = match port.commit_workspace(target, muted).await? {
+        Ok(v) => v,
+        Err(r) => return Ok(Err(r)),
+    };
+    let first_failure = workspace_effects(aftermath, &committed).await;
+    Ok(Ok(AttentionPreferenceExecution {
+        committed,
+        first_failure,
+    }))
 }
 
-pub async fn set_workspace_attention_preference<P: AttentionPreferencePort>(
-    port: &P,
-    aftermath: &impl AttentionPreferenceAftermath,
-    viewer: UserId,
-    workspace: WorkspaceId,
-    muted: Option<bool>,
-) -> Result<Result<AttentionPreferenceExecution, AttentionPreferenceRefusal>, P::Error> {
-    match port.set_workspace(viewer, workspace, muted).await? {
-        Ok(committed) => Ok(Ok(finish(aftermath, committed).await)),
-        Err(refusal) => Ok(Err(refusal)),
-    }
-}
+/// The removed public from-parts/cross-arm constructors stay absent.
+/// ```compile_fail
+/// # use silverhand_backend_core::messaging::collaboration::attention_preference::*;
+/// let _ = CommittedChannelAttentionPreference::from_authoritative_channel;
+/// ```
+const _: () = ();
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{convert::Infallible, io, sync::Mutex};
-
-    struct Port;
-    impl AttentionPreferencePort for Port {
-        type Error = Infallible;
-        async fn set_channel(
-            &self,
-            viewer: UserId,
-            conversation: ConversationId,
-            mode: Option<ChannelAttentionMode>,
-        ) -> Result<Result<CommittedAttentionPreference, AttentionPreferenceRefusal>, Self::Error>
-        {
-            Ok(Ok(CommittedAttentionPreference::channel(
-                viewer,
-                WorkspaceId::parse("w").unwrap(),
-                conversation,
-                mode.unwrap(),
-            )))
+    use std::{io, sync::Mutex};
+    struct ChannelFact {
+        viewer: UserId,
+        workspace: WorkspaceId,
+        conversation: ConversationId,
+    }
+    impl ChannelAttentionCommit for ChannelFact {
+        fn viewer(&self) -> &UserId {
+            &self.viewer
         }
-        async fn get_workspace(
-            &self,
-            _: &UserId,
-            workspace: WorkspaceId,
-        ) -> Result<Result<WorkspaceAttentionPreference, AttentionPreferenceRefusal>, Self::Error>
-        {
-            Ok(Ok(WorkspaceAttentionPreference::projected(
-                workspace, false,
-            )))
+        fn workspace(&self) -> &WorkspaceId {
+            &self.workspace
         }
-        async fn set_workspace(
-            &self,
-            viewer: UserId,
-            workspace: WorkspaceId,
-            muted: Option<bool>,
-        ) -> Result<Result<CommittedAttentionPreference, AttentionPreferenceRefusal>, Self::Error>
-        {
-            Ok(Ok(CommittedAttentionPreference::workspace(
-                viewer,
-                workspace,
-                muted.unwrap(),
-            )))
+        fn conversation(&self) -> &ConversationId {
+            &self.conversation
+        }
+        fn mode(&self) -> ChannelAttentionMode {
+            ChannelAttentionMode::Mentions
         }
     }
     struct Effects(Mutex<Vec<&'static str>>);
     impl AttentionPreferenceAftermath for Effects {
-        async fn preference_changed(
+        async fn channel_preference_changed(
             &self,
-            _: &CommittedAttentionPreference,
+            _: &impl ChannelAttentionCommit,
         ) -> Result<(), AttentionPreferenceEffectFailure> {
             self.0.lock().unwrap().push("preference");
             Err(AttentionPreferenceEffectFailure::from_source(
                 io::Error::other("hub"),
             ))
         }
-        async fn badge_changed(
+        async fn channel_badge_changed(
             &self,
-            _: &CommittedAttentionPreference,
+            _: &impl ChannelAttentionCommit,
         ) -> Result<(), AttentionPreferenceEffectFailure> {
             self.0.lock().unwrap().push("badge");
             Ok(())
         }
+        async fn workspace_preference_changed(
+            &self,
+            _: &impl WorkspaceAttentionCommit,
+        ) -> Result<(), AttentionPreferenceEffectFailure> {
+            Ok(())
+        }
+        async fn workspace_badge_changed(
+            &self,
+            _: &impl WorkspaceAttentionCommit,
+        ) -> Result<(), AttentionPreferenceEffectFailure> {
+            Ok(())
+        }
     }
     #[tokio::test]
-    async fn committed_write_attempts_both_effects_and_keeps_first_failure() {
+    async fn shared_projection_attempts_both_effects_and_keeps_first_failure() {
         let effects = Effects(Mutex::new(vec![]));
-        let done = set_channel_attention_preference(
-            &Port,
-            &effects,
-            UserId::parse("u").unwrap(),
-            ConversationId::parse("c").unwrap(),
-            Some(ChannelAttentionMode::Mentions),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let committed = ChannelFact {
+            viewer: UserId::parse("u").unwrap(),
+            workspace: WorkspaceId::parse("w").unwrap(),
+            conversation: ConversationId::parse("c").unwrap(),
+        };
+        let first = super::channel_effects(&effects, &committed).await;
         assert_eq!(effects.0.into_inner().unwrap(), ["preference", "badge"]);
-        assert!(done.first_failure().is_some());
-        assert_eq!(done.committed().viewer().as_str(), "u");
+        assert!(first.is_some());
     }
 }

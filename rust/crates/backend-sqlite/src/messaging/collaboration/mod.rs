@@ -1,7 +1,7 @@
 //! SQLite adapters for conversation-collaboration capabilities.
 
 // INTEGRATION SEAM: thin capability registration; no adapter logic belongs here.
-mod attention_preference;
+pub mod attention_preference;
 mod notification;
 mod reaction;
 mod runtime_control;
