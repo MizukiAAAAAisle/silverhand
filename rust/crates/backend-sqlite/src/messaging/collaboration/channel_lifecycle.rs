@@ -140,7 +140,7 @@ impl SqliteChannelLifecycleRead {
     }
 }
 
-async fn load_channel_row(
+pub(crate) async fn load_channel_row(
     tx: &mut Transaction<'_, Sqlite>,
     requested: &ConversationId,
 ) -> Result<Option<ChannelLifecycleRow>, ChannelLifecycleStoreError> {
@@ -281,7 +281,7 @@ fn endpoint(
     }
 }
 
-async fn load_human_members(
+pub(crate) async fn load_human_members(
     tx: &mut Transaction<'_, Sqlite>,
     requested: &ConversationId,
 ) -> Result<Vec<UserId>, ChannelLifecycleStoreError> {
@@ -315,7 +315,7 @@ async fn load_human_members(
     Ok(members)
 }
 
-async fn load_workspace_role(
+pub(crate) async fn load_workspace_role(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
     workspace: &WorkspaceId,
