@@ -9,12 +9,14 @@ use silverhand_backend_core::{
         ResolvedStream, SendCapability, SendClock, SendEntropy, TargetAddress,
         TargetAddressOperatorReason, TargetAddressRefusalPort, TargetAddressRefusalReport,
         ThreadRootId,
+        conversation_title::{
+            fold_name_key, is_space_separator, name_character_is_forbidden, name_is_nfc,
+        },
     },
     persistence::PersistenceFailure,
 };
 use sqlx::Row;
 use thiserror::Error;
-use unicode_normalization::UnicodeNormalization;
 
 use super::{
     ENDPOINT_KIND_AGENT, ENDPOINT_KIND_HUMAN, MessagingStore, MessagingStoreError,
@@ -23,10 +25,6 @@ use super::{
 
 const PLACEMENT_WORKSPACE: &str = "workspace";
 const ADDRESS_ID_LEN: usize = 16;
-
-mod name_charset {
-    include!(concat!(env!("OUT_DIR"), "/name_charset.rs"));
-}
 
 #[derive(Debug, Error)]
 pub enum TargetAddressStoreError<O, R>
@@ -717,8 +715,8 @@ fn parse_target(raw: &str) -> Option<ParsedTarget> {
     let workspace = decode_name_segment(workspace, 64)?;
     let title = decode_name_segment(title, 128)?;
     Some(ParsedTarget::Named {
-        workspace_key: fold_key(&workspace),
-        title_key: fold_key(&title),
+        workspace_key: fold_name_key(&workspace),
+        title_key: fold_name_key(&title),
         thread,
     })
 }
@@ -744,7 +742,7 @@ pub(crate) fn encode_name_segment(raw: &str, max: usize) -> Option<String> {
     if raw.is_empty()
         || raw.chars().count() > max
         || raw.trim() != raw
-        || raw.nfc().collect::<String>() != raw
+        || !name_is_nfc(raw)
         || raw.chars().any(name_character_is_forbidden)
     {
         return None;
@@ -764,20 +762,6 @@ pub(crate) fn encode_name_segment(raw: &str, max: usize) -> Option<String> {
         }
     }
     Some(encoded)
-}
-
-fn fold_key(raw: &str) -> String {
-    let mut folded = String::with_capacity(raw.len());
-    for character in raw.chars() {
-        if let Ok(index) = name_charset::CASE_FOLD.binary_search_by_key(&character, |(key, _)| *key)
-        {
-            let replacement = name_charset::CASE_FOLD[index].1;
-            folded.push_str(replacement);
-        } else {
-            folded.push(character);
-        }
-    }
-    folded.nfc().collect()
 }
 
 fn decode_name_segment(segment: &str, max: usize) -> Option<String> {
@@ -826,7 +810,7 @@ fn decode_name_segment(segment: &str, max: usize) -> Option<String> {
     }
     if decoded.chars().count() > max
         || decoded.trim() != decoded
-        || decoded.nfc().collect::<String>() != decoded
+        || !name_is_nfc(&decoded)
         || decoded.chars().any(name_character_is_forbidden)
     {
         return None;
@@ -834,41 +818,9 @@ fn decode_name_segment(segment: &str, max: usize) -> Option<String> {
     Some(decoded)
 }
 
-fn name_character_is_forbidden(character: char) -> bool {
-    let point = character as u32;
-    !in_ranges(name_charset::NAME_RENDERABLE_RANGES, point)
-        || in_ranges(name_charset::NAME_DEFAULT_IGNORABLE_RANGES, point)
-        || in_ranges(name_charset::NAME_ENCLOSING_MARK_RANGES, point)
-        || in_ranges(name_charset::NAME_EMOJI_MODIFIER_RANGES, point)
-        || in_ranges(name_charset::NAME_REGIONAL_INDICATOR_RANGES, point)
-}
-
-fn in_ranges(ranges: &[(u32, u32)], point: u32) -> bool {
-    ranges
-        .binary_search_by(|(first, last)| {
-            if point < *first {
-                std::cmp::Ordering::Greater
-            } else if point > *last {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Equal
-            }
-        })
-        .is_ok()
-}
-
-fn is_space_separator(ch: char) -> bool {
-    matches!(
-        ch,
-        '\u{20}' | '\u{a0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}'
-    )
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ParsedTarget, fold_key, parse_target};
-    use unicode_normalization::UnicodeNormalization;
+    use super::{ParsedTarget, parse_target};
 
     #[test]
     fn parser_keeps_the_three_published_arms_disjoint() {
@@ -901,30 +853,5 @@ mod tests {
                 ..
             })
         ));
-    }
-
-    #[test]
-    fn pinned_case_fold_matches_the_typescript_authority_fixture() {
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../../packages/shared/tests/fixtures/unicode-case-fold.json"
-        ))
-        .unwrap();
-        assert_eq!(fixture["unicodeVersion"], "16.0.0");
-        for (from, to) in fixture["mappings"].as_object().unwrap() {
-            let input = char::from_u32(u32::from_str_radix(from, 16).unwrap())
-                .unwrap()
-                .to_string();
-            let expected: String = to
-                .as_str()
-                .unwrap()
-                .split_whitespace()
-                .map(|point| char::from_u32(u32::from_str_radix(point, 16).unwrap()).unwrap())
-                .collect();
-            assert_eq!(
-                fold_key(&input),
-                expected.nfc().collect::<String>(),
-                "U+{from}"
-            );
-        }
     }
 }

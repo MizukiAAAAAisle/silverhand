@@ -13,11 +13,7 @@ silverhand-backend-core.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-unicode-normalization.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 tokio.workspace = true
-
-[build-dependencies]
-serde_json.workspace = true

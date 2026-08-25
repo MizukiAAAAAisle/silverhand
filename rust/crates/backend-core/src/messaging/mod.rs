@@ -71,6 +71,7 @@ pub(crate) use crate::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 
 pub mod attachments;
 pub mod collaboration;
+pub mod conversation_title;
 pub mod environment;
 pub mod freshness;
 pub mod mention_cc;

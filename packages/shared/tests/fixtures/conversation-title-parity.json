@@ -1,0 +1,49 @@
+{
+  "cases": [
+    {
+      "name": "ascii case and padding",
+      "input": "  Design Review  ",
+      "expected": { "ok": true, "title": "Design Review", "key": "design review" }
+    },
+    {
+      "name": "ecmascript feff padding",
+      "input": "﻿Straße　",
+      "expected": { "ok": true, "title": "Straße", "key": "strasse" }
+    },
+    {
+      "name": "nfc before keying",
+      "input": "Å",
+      "expected": { "ok": true, "title": "Å", "key": "å" }
+    },
+    {
+      "name": "fold output is normalized",
+      "input": "ǰ",
+      "expected": { "ok": true, "title": "ǰ", "key": "ǰ" }
+    },
+    {
+      "name": "nel is not ecmascript trim whitespace",
+      "input": "title",
+      "expected": { "ok": false, "kind": "forbidden_code_point", "codePoint": 133, "index": 0 }
+    },
+    {
+      "name": "trimmed empty",
+      "input": "﻿　",
+      "expected": { "ok": false, "kind": "empty" }
+    },
+    {
+      "name": "zero width joiner",
+      "input": "👨‍👩",
+      "expected": { "ok": false, "kind": "forbidden_code_point", "codePoint": 8205, "index": 1 }
+    },
+    {
+      "name": "emoji modifier",
+      "input": "👍🏻",
+      "expected": { "ok": false, "kind": "forbidden_code_point", "codePoint": 127995, "index": 1 }
+    },
+    {
+      "name": "regional indicator",
+      "input": "🇨🇳",
+      "expected": { "ok": false, "kind": "forbidden_code_point", "codePoint": 127464, "index": 0 }
+    }
+  ]
+}

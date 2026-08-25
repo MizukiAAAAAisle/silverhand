@@ -1242,9 +1242,11 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "getrandom 0.4.3",
+ "serde_json",
  "sha2 0.11.0",
  "thiserror",
  "tokio",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -1286,7 +1288,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
- "unicode-normalization",
 ]
 
 [[package]]
