@@ -7,6 +7,7 @@
 
 pub mod access;
 pub mod agent_availability_read;
+pub mod agent_detail_read;
 pub mod agent_lifecycle;
 pub mod auth;
 pub mod capability;

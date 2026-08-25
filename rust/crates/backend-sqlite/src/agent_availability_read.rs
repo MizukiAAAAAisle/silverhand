@@ -48,41 +48,14 @@ use sqlx::{
 };
 use thiserror::Error;
 
+use crate::agent_view_acl::{SELECT_DIRECT_PAIR_HUMAN_ENDPOINTS, SELECT_SHARED_WORKSPACE_MEMBERS};
+
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFERRED_READ_BEGIN: &str = "BEGIN DEFERRED";
 
 const SELECT_AGENT_ROW: &str = "SELECT id, host_id, created_by_user_id, materialization_status, \
      deletion_started_at FROM agents WHERE id = ?";
-
-/// Port of `DIRECT_PAIR_HUMAN_ENDPOINT_IDS_FOR_AGENT_SQL`: the human endpoint of
-/// every human↔agent direct pair this agent is in, both slot orders, with the
-/// OTHER endpoint gated on `'human'`. Binds the agent id once per arm.
-const SELECT_DIRECT_PAIR_HUMAN_ENDPOINTS: &str = "SELECT endpoint_b_id AS user_id \
-       FROM conversations \
-      WHERE placement_kind = 'direct_pair' \
-        AND endpoint_a_kind = 'agent' AND endpoint_a_id = ? \
-        AND endpoint_b_kind = 'human' \
-      UNION \
-     SELECT endpoint_a_id AS user_id \
-       FROM conversations \
-      WHERE placement_kind = 'direct_pair' \
-        AND endpoint_b_kind = 'agent' AND endpoint_b_id = ? \
-        AND endpoint_a_kind = 'human'";
-
-/// The workspace arm: the members of every workspace the agent reaches — the
-/// regular workspaces it is a `workspace_members` row of, plus its own agent-home
-/// workspace (`owner_agent_id = agent`). The exact set `agentWorkspaceIds` hands
-/// `workspaceMemberUserIds`. Binds the agent id once per arm of the inner union.
-const SELECT_SHARED_WORKSPACE_MEMBERS: &str = "SELECT DISTINCT wu.user_id \
-       FROM workspace_users wu \
-      WHERE wu.workspace_id IN ( \
-        SELECT w.id FROM workspaces w \
-          JOIN workspace_members wm ON wm.workspace_id = w.id \
-         WHERE wm.agent_id = ? AND w.owner_agent_id IS NULL \
-        UNION \
-        SELECT w.id FROM workspaces w WHERE w.owner_agent_id = ? \
-      )";
 
 const SELECT_HOST_ROW: &str = "SELECT revoked_at FROM hosts WHERE id = ?";
 

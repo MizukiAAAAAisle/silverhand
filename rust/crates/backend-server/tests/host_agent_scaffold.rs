@@ -61,6 +61,7 @@ const CRATE_ROOTS: &[&str] = &[
 /// membership here answers only "did this lane declare it at a root".
 const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_availability_read"),
+    ("backend-core", "agent_detail_read"),
     ("backend-core", "agent_lifecycle"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
@@ -70,6 +71,8 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-sqlite", "agent_availability_read"),
+    ("backend-sqlite", "agent_detail_read"),
+    ("backend-sqlite", "agent_view_acl"),
     ("backend-sqlite", "host_agent"),
     ("backend-sqlite", "user_presence_cold_read"),
 ];
@@ -170,9 +173,12 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// the composition root is the mount this fence refuses in CP1. The
 /// /api/agents/:id/availability vertical adds one: the read port
 /// `agent_availability_read`; its route surface is a submodule of `host_agent`,
-/// already listed. G0 keeps it a subset of the seam ledger.
+/// already listed. The /api/agents/:id agent-detail vertical adds one the same
+/// way: the read port `agent_detail_read`, whose route surface is likewise a
+/// submodule of `host_agent`. G0 keeps it a subset of the seam ledger.
 const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "agent_availability_read"),
+    ("backend-core", "agent_detail_read"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
