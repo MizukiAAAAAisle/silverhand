@@ -200,6 +200,12 @@ impl ChannelDirectoryRow {
     pub fn conversation(&self) -> &ConversationId {
         &self.conversation
     }
+    pub(super) fn source_viewer(&self) -> &UserId {
+        &self.source_viewer
+    }
+    pub(super) fn workspace(&self) -> &WorkspaceId {
+        &self.workspace
+    }
     pub const fn roster(&self) -> DirectoryRoster {
         self.roster
     }
