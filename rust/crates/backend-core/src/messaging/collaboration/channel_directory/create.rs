@@ -1,19 +1,40 @@
 //! Human channel creation: one workspace-keyed durable UoW and commit-only effects.
 //!
-//! Input title parsing and every mutable membership/governance fact remain port
-//! authorities. The application layer owns the order: commit, bind the returned
-//! fact to the request, then attempt both post-commit obligations without ever
-//! compensating the durable channel.
+//! Title admission is complete before the persistence port opens: the request
+//! carries the core-owned canonical display/key pair. Mutable membership and
+//! governance facts remain writer authorities. The application layer owns the
+//! order: commit, bind the returned fact to the retained request values, then
+//! attempt both post-commit obligations without ever compensating the durable
+//! channel.
+//!
+//! The former public address trait must not return: it let any adapter invent a
+//! title/key pair while claiming the pair was opaque.
+//!
+//! ```compile_fail
+//! use silverhand_backend_core::messaging::collaboration::channel_directory::CommittedChannelAddress;
+//! ```
+//! A title/key pair likewise cannot be rebuilt from parts at this boundary:
+//!
+//! ```compile_fail
+//! use silverhand_backend_core::messaging::conversation_title::CanonicalConversationTitle;
+//! let _forged = CanonicalConversationTitle {
+//!     title: "General".to_owned(),
+//!     key: String::new(),
+//! };
+//! ```
 
 use std::{collections::HashSet, error::Error, future::Future};
 
-use crate::identity::{UserId, WorkspaceId};
+use crate::{
+    identity::{UserId, WorkspaceId},
+    messaging::conversation_title::CanonicalConversationTitle,
+};
 
 use super::{ChannelDirectoryRow, ChannelStatus, ChannelVisibility, DirectoryRoster};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HumanChannelCreateRequest {
-    title: String,
+    title: CanonicalConversationTitle,
     member_agent_ids: Vec<String>,
     member_user_ids: Option<Vec<String>>,
     visibility: ChannelVisibility,
@@ -21,7 +42,7 @@ pub struct HumanChannelCreateRequest {
 
 impl HumanChannelCreateRequest {
     pub fn new(
-        title: String,
+        title: CanonicalConversationTitle,
         member_agent_ids: Vec<String>,
         member_user_ids: Option<Vec<String>>,
         visibility: Option<ChannelVisibility>,
@@ -34,7 +55,7 @@ impl HumanChannelCreateRequest {
         }
     }
 
-    pub fn title(&self) -> &str {
+    pub fn title(&self) -> &CanonicalConversationTitle {
         &self.title
     }
     pub fn member_agent_ids(&self) -> &[String] {
@@ -62,8 +83,6 @@ pub enum HumanChannelCreateRefusal {
     WorkspaceNotFound,
     #[error("viewer cannot govern workspace")]
     Forbidden,
-    #[error("channel title is invalid")]
-    InvalidTitle,
     #[error("agent-home DM channels cannot be public")]
     AgentHomePublic,
     #[error("agent-home channels use only the home owner and current user")]
@@ -86,29 +105,20 @@ pub enum CreatedChannelKind {
     AgentHome,
 }
 
-/// The opaque address pair returned by a terminal title authority. Production
-/// implementations keep their pair's fields private, so application callers
-/// cannot split a display title from its canonical key or forge either from
-/// parts.
-pub trait CommittedChannelAddress: Clone + std::fmt::Debug + Eq + Send + Sync {
-    fn title(&self) -> &str;
-    fn key(&self) -> &str;
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CommittedHumanChannelCreation<A: CommittedChannelAddress> {
+pub struct CommittedHumanChannelCreation {
     source_viewer: UserId,
     source_workspace: WorkspaceId,
     kind: CreatedChannelKind,
-    address: A,
+    address: CanonicalConversationTitle,
     channel: ChannelDirectoryRow,
 }
 
-impl<A: CommittedChannelAddress> CommittedHumanChannelCreation<A> {
+impl CommittedHumanChannelCreation {
     pub fn regular(
         source_viewer: UserId,
         source_workspace: WorkspaceId,
-        address: A,
+        address: CanonicalConversationTitle,
         channel: ChannelDirectoryRow,
     ) -> Result<Self, ChannelCreationProjectionError> {
         Self::projected(
@@ -123,7 +133,7 @@ impl<A: CommittedChannelAddress> CommittedHumanChannelCreation<A> {
     pub fn agent_home(
         source_viewer: UserId,
         source_workspace: WorkspaceId,
-        address: A,
+        address: CanonicalConversationTitle,
         channel: ChannelDirectoryRow,
     ) -> Result<Self, ChannelCreationProjectionError> {
         Self::projected(
@@ -139,13 +149,13 @@ impl<A: CommittedChannelAddress> CommittedHumanChannelCreation<A> {
         source_viewer: UserId,
         source_workspace: WorkspaceId,
         kind: CreatedChannelKind,
-        address: A,
+        address: CanonicalConversationTitle,
         channel: ChannelDirectoryRow,
     ) -> Result<Self, ChannelCreationProjectionError> {
         if channel.source_viewer() != &source_viewer || channel.workspace() != &source_workspace {
             return Err(ChannelCreationProjectionError::ForeignChannelCoordinate);
         }
-        if channel.title() != address.title() || address.key().is_empty() {
+        if channel.title() != address.title() {
             return Err(ChannelCreationProjectionError::AddressRowMismatch);
         }
         if channel.status() != ChannelStatus::Idle
@@ -174,7 +184,9 @@ impl<A: CommittedChannelAddress> CommittedHumanChannelCreation<A> {
         self,
         requested_viewer: &UserId,
         requested_workspace: &WorkspaceId,
-    ) -> Result<BoundHumanChannelCreation<A>, ChannelCreationProjectionError> {
+        requested_title: &CanonicalConversationTitle,
+        requested_visibility: ChannelVisibility,
+    ) -> Result<BoundHumanChannelCreation, ChannelCreationProjectionError> {
         if &self.source_viewer != requested_viewer
             || &self.source_workspace != requested_workspace
             || self.channel.source_viewer() != requested_viewer
@@ -182,14 +194,20 @@ impl<A: CommittedChannelAddress> CommittedHumanChannelCreation<A> {
         {
             return Err(ChannelCreationProjectionError::ForeignCommitCoordinate);
         }
+        if &self.address != requested_title {
+            return Err(ChannelCreationProjectionError::RequestedAddressMismatch);
+        }
+        if self.channel.visibility() != requested_visibility {
+            return Err(ChannelCreationProjectionError::RequestedVisibilityMismatch);
+        }
         Ok(BoundHumanChannelCreation(self))
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BoundHumanChannelCreation<A: CommittedChannelAddress>(CommittedHumanChannelCreation<A>);
+pub struct BoundHumanChannelCreation(CommittedHumanChannelCreation);
 
-impl<A: CommittedChannelAddress> BoundHumanChannelCreation<A> {
+impl BoundHumanChannelCreation {
     pub fn viewer(&self) -> &UserId {
         &self.0.source_viewer
     }
@@ -202,7 +220,7 @@ impl<A: CommittedChannelAddress> BoundHumanChannelCreation<A> {
     pub fn channel(&self) -> &ChannelDirectoryRow {
         &self.0.channel
     }
-    pub fn address(&self) -> &A {
+    pub fn address(&self) -> &CanonicalConversationTitle {
         &self.0.address
     }
 }
@@ -219,11 +237,14 @@ pub enum ChannelCreationProjectionError {
     KindRosterVisibilityMismatch,
     #[error("committed channel creation does not belong to the request")]
     ForeignCommitCoordinate,
+    #[error("committed channel address does not equal the admitted request address")]
+    RequestedAddressMismatch,
+    #[error("committed channel visibility does not equal the admitted request visibility")]
+    RequestedVisibilityMismatch,
 }
 
 pub trait HumanChannelCreatePort {
     type Error: Error + Send + Sync + 'static;
-    type Address: CommittedChannelAddress;
 
     fn create_human_channel(
         &self,
@@ -232,32 +253,32 @@ pub trait HumanChannelCreatePort {
         request: HumanChannelCreateRequest,
     ) -> impl Future<
         Output = Result<
-            Result<CommittedHumanChannelCreation<Self::Address>, HumanChannelCreateRefusal>,
+            Result<CommittedHumanChannelCreation, HumanChannelCreateRefusal>,
             Self::Error,
         >,
     > + Send;
 }
 
-pub trait HumanChannelCreateAftermath<A: CommittedChannelAddress> {
+pub trait HumanChannelCreateAftermath {
     fn workspace_channels_changed(
         &self,
-        fact: &BoundHumanChannelCreation<A>,
-    ) -> impl Future<Output = Result<(), ChannelCreationAftermathFailure>> + Send;
+        fact: &BoundHumanChannelCreation,
+    ) -> impl Future<Output = Result<(), ChannelCreationPublicationFailure>> + Send;
 
-    fn title_address_taken(
-        &self,
-        fact: &BoundHumanChannelCreation<A>,
-    ) -> impl Future<Output = Result<(), ChannelCreationAftermathFailure>> + Send;
+    /// Synchronous, infallible audit mirroring the production structured warn.
+    /// It is attempted after the fallible workspace publication even when that
+    /// publication fails.
+    fn title_address_taken(&self, fact: &BoundHumanChannelCreation);
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("a committed channel-creation aftermath failed")]
-pub struct ChannelCreationAftermathFailure {
+#[error("the committed channel creation could not be published")]
+pub struct ChannelCreationPublicationFailure {
     #[source]
     source: Box<dyn Error + Send + Sync + 'static>,
 }
 
-impl ChannelCreationAftermathFailure {
+impl ChannelCreationPublicationFailure {
     pub fn from_source(source: impl Error + Send + Sync + 'static) -> Self {
         Self {
             source: Box::new(source),
@@ -265,30 +286,33 @@ impl ChannelCreationAftermathFailure {
     }
 }
 
-pub struct HumanChannelCreateExecution<A: CommittedChannelAddress> {
-    committed: BoundHumanChannelCreation<A>,
-    first_aftermath_failure: Option<ChannelCreationAftermathFailure>,
+#[derive(Debug)]
+pub struct HumanChannelCreateExecution {
+    committed: BoundHumanChannelCreation,
+    publication_failure: Option<ChannelCreationPublicationFailure>,
 }
 
-impl<A: CommittedChannelAddress> HumanChannelCreateExecution<A> {
-    pub fn committed(&self) -> &BoundHumanChannelCreation<A> {
+impl HumanChannelCreateExecution {
+    pub fn committed(&self) -> &BoundHumanChannelCreation {
         &self.committed
     }
-    pub fn first_aftermath_failure(&self) -> Option<&ChannelCreationAftermathFailure> {
-        self.first_aftermath_failure.as_ref()
+    pub fn publication_failure(&self) -> Option<&ChannelCreationPublicationFailure> {
+        self.publication_failure.as_ref()
     }
 }
 
 pub async fn create_human_channel<P: HumanChannelCreatePort>(
     port: &P,
-    aftermath: &impl HumanChannelCreateAftermath<P::Address>,
+    aftermath: &impl HumanChannelCreateAftermath,
     viewer: UserId,
     workspace: WorkspaceId,
     request: HumanChannelCreateRequest,
 ) -> Result<
-    Result<HumanChannelCreateExecution<P::Address>, HumanChannelCreateRefusal>,
+    Result<HumanChannelCreateExecution, HumanChannelCreateRefusal>,
     HumanChannelCreateExecutionError<P::Error>,
 > {
+    let requested_title = request.title.clone();
+    let requested_visibility = request.visibility;
     let committed = match port
         .create_human_channel(viewer.clone(), workspace.clone(), request)
         .await
@@ -297,18 +321,14 @@ pub async fn create_human_channel<P: HumanChannelCreatePort>(
         Ok(committed) => committed,
         Err(refusal) => return Ok(Err(refusal)),
     };
-    let committed = committed.bind(&viewer, &workspace)?;
+    let committed = committed.bind(&viewer, &workspace, &requested_title, requested_visibility)?;
 
-    let mut first_aftermath_failure = aftermath.workspace_channels_changed(&committed).await.err();
-    if let Err(error) = aftermath.title_address_taken(&committed).await
-        && first_aftermath_failure.is_none()
-    {
-        first_aftermath_failure = Some(error);
-    }
+    let publication_failure = aftermath.workspace_channels_changed(&committed).await.err();
+    aftermath.title_address_taken(&committed);
 
     Ok(Ok(HumanChannelCreateExecution {
         committed,
-        first_aftermath_failure,
+        publication_failure,
     }))
 }
 
@@ -337,14 +357,27 @@ mod tests {
     fn workspace(raw: &str) -> WorkspaceId {
         WorkspaceId::parse(raw).unwrap()
     }
-    fn row(viewer: &str, workspace_id: &str, roster: DirectoryRoster) -> ChannelDirectoryRow {
+    fn title(raw: &str) -> CanonicalConversationTitle {
+        CanonicalConversationTitle::parse(raw).unwrap()
+    }
+    fn request(raw_title: &str, visibility: ChannelVisibility) -> HumanChannelCreateRequest {
+        HumanChannelCreateRequest::new(title(raw_title), vec![], None, Some(visibility))
+    }
+    fn row(
+        viewer: &str,
+        workspace_id: &str,
+        raw_title: &str,
+        roster: DirectoryRoster,
+        visibility: ChannelVisibility,
+        status: ChannelStatus,
+    ) -> ChannelDirectoryRow {
         ChannelDirectoryRow::projected(
             user(viewer),
             workspace(workspace_id),
             ConversationId::parse("created").unwrap(),
             roster,
-            "General".into(),
-            ChannelStatus::Idle,
+            raw_title.into(),
+            status,
             None,
             None,
             None,
@@ -352,35 +385,35 @@ mod tests {
             0,
             10,
             10,
-            ChannelVisibility::Private,
+            visibility,
             true,
         )
         .unwrap()
     }
-    #[derive(Clone, Debug, Eq, PartialEq)]
-    struct Address {
-        title: &'static str,
-        key: &'static str,
-    }
-    impl CommittedChannelAddress for Address {
-        fn title(&self) -> &str {
-            self.title
-        }
-        fn key(&self) -> &str {
-            self.key
-        }
-    }
-    fn address() -> Address {
-        Address {
-            title: "General",
-            key: "general",
-        }
+    fn regular_commit(
+        raw_title: &str,
+        visibility: ChannelVisibility,
+    ) -> CommittedHumanChannelCreation {
+        CommittedHumanChannelCreation::regular(
+            user("u"),
+            workspace("w"),
+            title(raw_title),
+            row(
+                "u",
+                "w",
+                raw_title,
+                DirectoryRoster::Open,
+                visibility,
+                ChannelStatus::Idle,
+            ),
+        )
+        .unwrap()
     }
 
     #[test]
     fn request_dedupes_each_explicit_member_axis_without_inventing_a_snapshot() {
         let request = HumanChannelCreateRequest::new(
-            "General".into(),
+            title("General"),
             vec!["a".into(), "a".into(), "b".into()],
             Some(vec!["u".into(), "u".into()]),
             None,
@@ -389,67 +422,164 @@ mod tests {
         assert_eq!(request.member_user_ids().unwrap(), ["u"]);
         assert_eq!(request.visibility(), ChannelVisibility::Private);
 
-        let omitted = HumanChannelCreateRequest::new("General".into(), vec![], None, None);
+        assert_eq!(request.title().title(), "General");
+        assert_eq!(request.title().key(), "general");
+
+        let omitted = HumanChannelCreateRequest::new(title("General"), vec![], None, None);
         assert!(omitted.member_user_ids().is_none());
     }
 
     #[test]
-    fn committed_creation_seals_kind_freshness_and_all_identity_coordinates() {
+    fn committed_creation_rejects_a_foreign_row_coordinate() {
         assert_eq!(
             CommittedHumanChannelCreation::regular(
                 user("u"),
                 workspace("w"),
-                address(),
-                row("u", "other", DirectoryRoster::Open),
+                title("General"),
+                row(
+                    "u",
+                    "other",
+                    "General",
+                    DirectoryRoster::Open,
+                    ChannelVisibility::Private,
+                    ChannelStatus::Idle,
+                ),
             )
             .unwrap_err(),
             ChannelCreationProjectionError::ForeignChannelCoordinate
         );
+    }
+
+    #[test]
+    fn committed_creation_rejects_a_kind_roster_mismatch() {
         assert_eq!(
             CommittedHumanChannelCreation::agent_home(
                 user("u"),
                 workspace("w"),
-                address(),
-                row("u", "w", DirectoryRoster::Open),
+                title("General"),
+                row(
+                    "u",
+                    "w",
+                    "General",
+                    DirectoryRoster::Open,
+                    ChannelVisibility::Private,
+                    ChannelStatus::Idle,
+                ),
             )
             .unwrap_err(),
             ChannelCreationProjectionError::KindRosterVisibilityMismatch
         );
-        let committed = CommittedHumanChannelCreation::regular(
-            user("u"),
-            workspace("w"),
-            address(),
-            row("u", "w", DirectoryRoster::Open),
-        )
-        .unwrap();
+    }
+
+    #[test]
+    fn committed_creation_rejects_an_address_row_mismatch() {
         assert_eq!(
-            committed.clone().bind(&user("other"), &workspace("w")),
+            CommittedHumanChannelCreation::regular(
+                user("u"),
+                workspace("w"),
+                title("General"),
+                row(
+                    "u",
+                    "w",
+                    "Other",
+                    DirectoryRoster::Open,
+                    ChannelVisibility::Private,
+                    ChannelStatus::Idle,
+                ),
+            )
+            .unwrap_err(),
+            ChannelCreationProjectionError::AddressRowMismatch
+        );
+    }
+
+    #[test]
+    fn committed_creation_rejects_a_non_fresh_row() {
+        assert_eq!(
+            CommittedHumanChannelCreation::regular(
+                user("u"),
+                workspace("w"),
+                title("General"),
+                row(
+                    "u",
+                    "w",
+                    "General",
+                    DirectoryRoster::Open,
+                    ChannelVisibility::Private,
+                    ChannelStatus::Active,
+                ),
+            )
+            .unwrap_err(),
+            ChannelCreationProjectionError::NotFreshHumanCreation
+        );
+    }
+
+    #[test]
+    fn committed_creation_binds_both_request_coordinates() {
+        let committed = regular_commit("General", ChannelVisibility::Private);
+        assert_eq!(
+            committed.clone().bind(
+                &user("other"),
+                &workspace("w"),
+                &title("General"),
+                ChannelVisibility::Private,
+            ),
             Err(ChannelCreationProjectionError::ForeignCommitCoordinate)
         );
         assert_eq!(
-            committed.bind(&user("u"), &workspace("other")),
+            committed.bind(
+                &user("u"),
+                &workspace("other"),
+                &title("General"),
+                ChannelVisibility::Private,
+            ),
             Err(ChannelCreationProjectionError::ForeignCommitCoordinate)
         );
+    }
+
+    #[test]
+    fn canonical_pair_is_minted_by_the_real_parser() {
+        let admitted = title("  Straße  ");
+        assert_eq!(admitted.title(), "Straße");
+        assert_eq!(admitted.key(), "strasse");
     }
 
     #[derive(Debug, thiserror::Error)]
     #[error("store failed")]
     struct StoreFailure;
 
-    struct Store(CommittedHumanChannelCreation<Address>);
+    struct Store(CommittedHumanChannelCreation);
     impl HumanChannelCreatePort for Store {
         type Error = StoreFailure;
-        type Address = Address;
         async fn create_human_channel(
             &self,
             _: UserId,
             _: WorkspaceId,
             _: HumanChannelCreateRequest,
-        ) -> Result<
-            Result<CommittedHumanChannelCreation<Self::Address>, HumanChannelCreateRefusal>,
-            Self::Error,
-        > {
+        ) -> Result<Result<CommittedHumanChannelCreation, HumanChannelCreateRefusal>, Self::Error>
+        {
             Ok(Ok(self.0.clone()))
+        }
+    }
+
+    struct RecordingStore {
+        committed: CommittedHumanChannelCreation,
+        admitted: Arc<Mutex<Vec<(String, String, ChannelVisibility)>>>,
+    }
+    impl HumanChannelCreatePort for RecordingStore {
+        type Error = StoreFailure;
+        async fn create_human_channel(
+            &self,
+            _: UserId,
+            _: WorkspaceId,
+            request: HumanChannelCreateRequest,
+        ) -> Result<Result<CommittedHumanChannelCreation, HumanChannelCreateRefusal>, Self::Error>
+        {
+            self.admitted.lock().unwrap().push((
+                request.title().title().to_owned(),
+                request.title().key().to_owned(),
+                request.visibility(),
+            ));
+            Ok(Ok(self.committed.clone()))
         }
     }
 
@@ -457,56 +587,148 @@ mod tests {
     #[error("{0}")]
     struct EffectFailure(&'static str);
 
-    struct Effects(Arc<Mutex<Vec<&'static str>>>);
-    impl HumanChannelCreateAftermath<Address> for Effects {
+    struct Effects {
+        calls: Arc<Mutex<Vec<&'static str>>>,
+        publication_fails: bool,
+    }
+    impl HumanChannelCreateAftermath for Effects {
         async fn workspace_channels_changed(
             &self,
-            _: &BoundHumanChannelCreation<Address>,
-        ) -> Result<(), ChannelCreationAftermathFailure> {
-            self.0.lock().unwrap().push("workspace");
-            Err(ChannelCreationAftermathFailure::from_source(EffectFailure(
-                "first",
-            )))
+            _: &BoundHumanChannelCreation,
+        ) -> Result<(), ChannelCreationPublicationFailure> {
+            self.calls.lock().unwrap().push("workspace");
+            if self.publication_fails {
+                return Err(ChannelCreationPublicationFailure::from_source(
+                    EffectFailure("publication"),
+                ));
+            }
+            Ok(())
         }
-        async fn title_address_taken(
-            &self,
-            _: &BoundHumanChannelCreation<Address>,
-        ) -> Result<(), ChannelCreationAftermathFailure> {
-            self.0.lock().unwrap().push("title");
-            Err(ChannelCreationAftermathFailure::from_source(EffectFailure(
-                "later",
-            )))
+        fn title_address_taken(&self, _: &BoundHumanChannelCreation) {
+            self.calls.lock().unwrap().push("title-audit");
         }
     }
 
-    #[tokio::test]
-    async fn commit_precedes_both_effects_and_only_the_first_failure_survives() {
-        let calls = Arc::new(Mutex::new(vec![]));
-        let result = create_human_channel(
-            &Store(
-                CommittedHumanChannelCreation::regular(
-                    user("u"),
-                    workspace("w"),
-                    address(),
-                    row("u", "w", DirectoryRoster::Open),
-                )
-                .unwrap(),
-            ),
-            &Effects(calls.clone()),
+    async fn execute(
+        committed: CommittedHumanChannelCreation,
+        request: HumanChannelCreateRequest,
+        effects: &Effects,
+    ) -> Result<
+        Result<HumanChannelCreateExecution, HumanChannelCreateRefusal>,
+        HumanChannelCreateExecutionError<StoreFailure>,
+    > {
+        create_human_channel(
+            &Store(committed),
+            effects,
             user("u"),
             workspace("w"),
-            HumanChannelCreateRequest::new("General".into(), vec![], None, None),
+            request,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn the_same_admitted_title_pair_reaches_the_port_and_commit_bind() {
+        let admitted = Arc::new(Mutex::new(vec![]));
+        let effects = Effects {
+            calls: Arc::new(Mutex::new(vec![])),
+            publication_fails: false,
+        };
+        let result = create_human_channel(
+            &RecordingStore {
+                committed: regular_commit("Straße", ChannelVisibility::Private),
+                admitted: admitted.clone(),
+            },
+            &effects,
+            user("u"),
+            workspace("w"),
+            request("  Straße  ", ChannelVisibility::Private),
         )
         .await
         .unwrap()
         .unwrap();
 
-        assert_eq!(*calls.lock().unwrap(), ["workspace", "title"]);
-        let failure = result.first_aftermath_failure().unwrap();
-        assert_eq!(failure.source().unwrap().to_string(), "first");
+        assert_eq!(
+            *admitted.lock().unwrap(),
+            [(
+                "Straße".into(),
+                "strasse".into(),
+                ChannelVisibility::Private
+            )]
+        );
+        assert_eq!(result.committed().address().title(), "Straße");
+        assert_eq!(result.committed().address().key(), "strasse");
+    }
+
+    #[tokio::test]
+    async fn a_wrong_committed_title_is_rejected_before_any_effect() {
+        let calls = Arc::new(Mutex::new(vec![]));
+        let effects = Effects {
+            calls: calls.clone(),
+            publication_fails: false,
+        };
+        let error = execute(
+            regular_commit("Other", ChannelVisibility::Private),
+            request("General", ChannelVisibility::Private),
+            &effects,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            HumanChannelCreateExecutionError::Identity(
+                ChannelCreationProjectionError::RequestedAddressMismatch
+            )
+        ));
+        assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_wrong_committed_visibility_is_rejected_before_any_effect() {
+        let calls = Arc::new(Mutex::new(vec![]));
+        let effects = Effects {
+            calls: calls.clone(),
+            publication_fails: false,
+        };
+        let error = execute(
+            regular_commit("General", ChannelVisibility::Public),
+            request("General", ChannelVisibility::Private),
+            &effects,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            HumanChannelCreateExecutionError::Identity(
+                ChannelCreationProjectionError::RequestedVisibilityMismatch
+            )
+        ));
+        assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn publication_failure_does_not_skip_the_infallible_title_audit() {
+        let calls = Arc::new(Mutex::new(vec![]));
+        let effects = Effects {
+            calls: calls.clone(),
+            publication_fails: true,
+        };
+        let result = execute(
+            regular_commit("General", ChannelVisibility::Private),
+            request("General", ChannelVisibility::Private),
+            &effects,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(*calls.lock().unwrap(), ["workspace", "title-audit"]);
+        let failure = result.publication_failure().unwrap();
+        assert_eq!(failure.source().unwrap().to_string(), "publication");
         assert_eq!(
             result.committed().channel().conversation().as_str(),
             "created"
         );
+        assert_eq!(result.committed().address().key(), "general");
     }
 }
