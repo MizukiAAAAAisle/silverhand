@@ -48,13 +48,26 @@ pub(crate) const CHANNEL_DEFAULT_MODE: &str = "all";
 // `concat!` into `&'static str`, exactly as the sibling messaging store does.
 // ---------------------------------------------------------------------------
 
-/// A message is worth counting only if its conversation is live, it is not a system
-/// message, and it is not the viewer's own (or an authorless) `user` message.
+/// Message-local unread guards shared by both lifecycle-neutral per-conversation
+/// reads and lifecycle-filtered rollups.
+macro_rules! message_unread_guards {
+    () => {
+        "m.from_kind != 'system' AND NOT (m.from_kind = 'user' \
+         AND (m.from_user_id = (SELECT viewer FROM p) OR m.from_user_id IS NULL))"
+    };
+}
+pub(crate) use message_unread_guards;
+
+/// Global and workspace rollups additionally exclude archived conversations.
+/// The per-conversation face deliberately does not: its caller already admitted
+/// that exact historical conversation.
 macro_rules! unread_guards {
     () => {
-        "NOT EXISTS (SELECT 1 FROM conversations arch WHERE arch.id = m.conversation_id AND \
-         arch.archived_at IS NOT NULL) AND m.from_kind != 'system' AND NOT (m.from_kind = 'user' \
-         AND (m.from_user_id = (SELECT viewer FROM p) OR m.from_user_id IS NULL))"
+        concat!(
+            "NOT EXISTS (SELECT 1 FROM conversations arch WHERE arch.id = m.conversation_id AND \
+             arch.archived_at IS NOT NULL) AND ",
+            $crate::unread_read::message_unread_guards!()
+        )
     };
 }
 pub(crate) use unread_guards;
@@ -79,6 +92,7 @@ macro_rules! followed_thread_branch {
          m.conversation_id AND cr.thread_root_id = m.thread_root_id), 0)"
     };
 }
+pub(crate) use followed_thread_branch;
 
 /// The unread rollup: guards AND (main-line unread OR followed-thread unread).
 macro_rules! rollup_unread {
