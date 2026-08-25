@@ -277,6 +277,48 @@ mod tests {
                 }
             }
         }
+
+        for point in fixture["trimCodePoints"].as_array().unwrap() {
+            let point = point.as_u64().unwrap() as u32;
+            let whitespace = char::from_u32(point).unwrap();
+            for input in [format!("{whitespace}title"), format!("title{whitespace}")] {
+                let actual = CanonicalConversationTitle::parse(&input).unwrap();
+                assert_eq!(actual.title(), "title", "U+{point:04X}");
+                assert_eq!(actual.key(), "title", "U+{point:04X}");
+            }
+        }
+
+        for point in fixture["nonTrimCodePoints"].as_array().unwrap() {
+            let point = point.as_u64().unwrap() as u32;
+            let nonmember = char::from_u32(point).unwrap();
+            for (input, index) in [
+                (format!("{nonmember}title"), 0),
+                (format!("title{nonmember}"), 5),
+            ] {
+                assert_eq!(
+                    CanonicalConversationTitle::parse(&input),
+                    Err(ConversationTitleIssue::ForbiddenCodePoint {
+                        code_point: point,
+                        index,
+                    }),
+                    "U+{point:04X}"
+                );
+            }
+        }
+
+        let astral = &fixture["astralBoundary"];
+        let scalar = char::from_u32(astral["codePoint"].as_u64().unwrap() as u32).unwrap();
+        let accepted = astral["accepted"].as_u64().unwrap() as usize;
+        let refused = astral["refused"].as_u64().unwrap() as usize;
+        let actual =
+            CanonicalConversationTitle::parse(&scalar.to_string().repeat(accepted)).unwrap();
+        assert_eq!(actual.title().chars().count(), accepted);
+        assert_eq!(
+            CanonicalConversationTitle::parse(&scalar.to_string().repeat(refused)),
+            Err(ConversationTitleIssue::TooLong {
+                code_points: refused,
+            })
+        );
     }
 
     #[test]

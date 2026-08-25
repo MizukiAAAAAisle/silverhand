@@ -1,4 +1,33 @@
 {
+  "trimCodePoints": [
+    9,
+    11,
+    12,
+    32,
+    160,
+    5760,
+    8192,
+    8193,
+    8194,
+    8195,
+    8196,
+    8197,
+    8198,
+    8199,
+    8200,
+    8201,
+    8202,
+    8232,
+    8233,
+    8239,
+    8287,
+    12288,
+    65279,
+    10,
+    13
+  ],
+  "nonTrimCodePoints": [133, 8203],
+  "astralBoundary": { "codePoint": 128640, "accepted": 128, "refused": 129 },
   "cases": [
     {
       "name": "ascii case and padding",
