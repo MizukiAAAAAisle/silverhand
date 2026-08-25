@@ -88,7 +88,12 @@ impl AgentTeardownUnitOfWork for SqliteHostAgentStore {
 mod tests {
     use std::{path::PathBuf, time::Duration};
 
-    use silverhand_backend_core::identity::{AgentId, HostId};
+    use silverhand_backend_core::{
+        identity::{AgentId, HostId},
+        runtime_credential::RuntimeScope,
+        runtime_event::RuntimeObservedStatus,
+        teardown::facts::AgentTeardownCapture,
+    };
     use sqlx::Connection;
     use tempfile::TempDir;
 
@@ -235,5 +240,175 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(commit, AgentTeardownCommit::Gone));
+    }
+
+    /// A single agent with all four post-commit authorities populated and mutually
+    /// distinguishable, so each half of its capture can be asserted — and
+    /// independently falsified — from ONE durable committed teardown:
+    ///
+    /// - two raw runtime seats, one idle at generation 0 and one active at
+    ///   generation 1, so a running-only filter or a derived/reset generation shows;
+    /// - three fixed-roster home channels created in the REVERSE of the roster
+    ///   priority, with blobs on the two the ordering puts after the head (the head
+    ///   itself has none), so a head-only sweep or a created_at ordering shows;
+    /// - one regular-workspace membership beside the agent's OWNED home, so a
+    ///   miscount shows — the schema forbids a home from being a membership row, so
+    ///   the count is regular-only by construction.
+    const CAPTURE_FIXTURE: [&str; 14] = [
+        "INSERT INTO users (id, name, display_name, created_at, updated_at) \
+         VALUES ('u1', 'u1', 'U1', 1, 1)",
+        "INSERT INTO hosts (id, name, kind, created_at) VALUES ('h1', 'h1', 'local', 1)",
+        "INSERT INTO agents \
+         (id, name, runtime, host_id, created_by_user_id, created_at, updated_at, \
+          materialization_status, session_scope) \
+         VALUES ('a1', 'a1', 'claude', 'h1', 'u1', 1, 1, 'active', 'conversation')",
+        "INSERT INTO workspaces (id, name, name_key, owner_agent_id, created_at, updated_at) \
+         VALUES ('w-home', 'a1 home', NULL, 'a1', 1, 1)",
+        "INSERT INTO workspaces (id, name, name_key, created_at, updated_at) \
+         VALUES ('w-reg', 'Regular', 'reg', 1, 1)",
+        "INSERT INTO conversations \
+         (id, workspace_id, placement_kind, roster_policy, title, title_key, status, \
+          created_at, updated_at) \
+         VALUES ('ch-general', 'w-home', 'workspace', 'fixed', 'general', 'general', \
+          'active', 100, 100)",
+        "INSERT INTO conversations \
+         (id, workspace_id, placement_kind, roster_policy, title, title_key, status, \
+          created_at, updated_at) \
+         VALUES ('ch-dm', 'w-home', 'workspace', 'fixed', 'dm-a1', 'dma1', \
+          'active', 200, 200)",
+        "INSERT INTO conversations \
+         (id, workspace_id, placement_kind, roster_policy, title, title_key, status, \
+          created_at, updated_at) \
+         VALUES ('ch-onboarding', 'w-home', 'workspace', 'fixed', 'Onboarding', 'onboarding', \
+          'active', 300, 300)",
+        "INSERT INTO attachments \
+         (id, channel_id, filename, size, content_type, storage, storage_key, \
+          created_by_kind, created_by_id, created_at) \
+         VALUES ('att-dm', 'ch-dm', 'f', 1, 'text/plain', 'blobs', 'k-dm', 'user', 'u1', 1)",
+        "INSERT INTO attachments \
+         (id, channel_id, filename, size, content_type, storage, storage_key, \
+          created_by_kind, created_by_id, created_at) \
+         VALUES ('att-general', 'ch-general', 'f', 1, 'text/plain', 'blobs', 'k-general', \
+          'user', 'u1', 1)",
+        // Joining each channel auto-creates an idle, generation-0 slot (a schema
+        // trigger both requires participation and mints the seat), so ch-general is
+        // the not-running seat as created; the UPDATE advances only ch-dm to a
+        // running status and the next generation.
+        "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) \
+         VALUES ('ch-general', 'a1', 1)",
+        "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) \
+         VALUES ('ch-dm', 'a1', 1)",
+        "UPDATE agent_runtime_slots SET observed_status = 'active', generation = 1 \
+         WHERE agent_id = 'a1' AND conversation_id = 'ch-dm'",
+        "INSERT INTO workspace_members (workspace_id, agent_id, joined_at) \
+         VALUES ('w-reg', 'a1', 1)",
+    ];
+
+    /// The one durable committed teardown the capture gates read. `capture_agent`
+    /// (facts.rs) is the single helper all THREE write paths consume — this axis
+    /// (`teardown.rs`), the computer cascade (`cascade.rs`), and the
+    /// deletion-completion path (`intent.rs`) — so pinning its output on this
+    /// single-agent commit locks the capture code every path shares. Hands back the
+    /// owned capture so each gate below asserts exactly one of its four halves; stub
+    /// any half to `Vec::new()`/`None`/`0` and only that half's gate turns RED.
+    async fn capture_from_committed_teardown(dir: &TempDir) -> AgentTeardownCapture {
+        let path = seed_schema(dir, "capture.db", &CAPTURE_FIXTURE).await;
+        let store = SqliteHostAgentStore::open(&path).await.unwrap();
+
+        let commit = store
+            .tear_down_agent(
+                AgentTeardownKey {
+                    agent_id: agent("a1"),
+                },
+                AgentTeardownEligibility::ActiveOn {
+                    host_id: host("h1"),
+                },
+            )
+            .await
+            .expect("an eligible active agent tears down");
+        let AgentTeardownCommit::Committed(torn) = commit else {
+            panic!("an eligible active agent commits its teardown");
+        };
+        torn.capture().clone()
+    }
+
+    /// Half 1 — every RAW seat is captured, running or not, with its exact scope,
+    /// status and generation. Asserting the idle seat as well locks the adapter out
+    /// of a running-only filter; asserting the exact status and generation locks it
+    /// out of deriving a status or resetting the generation the row carried.
+    #[tokio::test]
+    async fn the_committed_capture_carries_every_raw_seat() {
+        let dir = tempfile::tempdir().unwrap();
+        let capture = capture_from_committed_teardown(&dir).await;
+
+        assert_eq!(capture.runtime_sessions.len(), 2);
+
+        let idle = capture
+            .runtime_sessions
+            .iter()
+            .find(|session| session.scope.source().map(|c| c.as_str()) == Some("ch-general"))
+            .expect("the idle seat is captured, not filtered out");
+        assert!(matches!(
+            &idle.scope,
+            RuntimeScope::ConversationSlot { agent, .. } if agent == &self::agent("a1")
+        ));
+        assert_eq!(idle.status, RuntimeObservedStatus::Idle);
+        assert_eq!(idle.generation.as_i64(), 0);
+
+        let active = capture
+            .runtime_sessions
+            .iter()
+            .find(|session| session.scope.source().map(|c| c.as_str()) == Some("ch-dm"))
+            .expect("the active seat is captured");
+        assert!(matches!(
+            &active.scope,
+            RuntimeScope::ConversationSlot { agent, .. } if agent == &self::agent("a1")
+        ));
+        assert_eq!(active.status, RuntimeObservedStatus::Active);
+        assert_eq!(active.generation.as_i64(), 1);
+    }
+
+    /// Half 2 — the blob sweep spans the WHOLE ordered channel set, not just its
+    /// head. Blobs live only on the two channels the ordering puts after the head,
+    /// so a sweep that stopped at the first channel would capture nothing.
+    #[tokio::test]
+    async fn the_committed_capture_sweeps_blobs_across_every_home_channel() {
+        let dir = tempfile::tempdir().unwrap();
+        let capture = capture_from_committed_teardown(&dir).await;
+
+        let mut keys: Vec<&str> = capture
+            .dm_blob_refs
+            .iter()
+            .map(|blob| blob.storage_key.as_str())
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["k-dm", "k-general"]);
+    }
+
+    /// Half 3 — the summary handle is the roster ordering's HEAD, not the
+    /// earliest-created row. The three channels are created in the reverse of the
+    /// priority (onboarding last), so a plain created_at order would surface
+    /// `ch-general` and this turns RED.
+    #[tokio::test]
+    async fn the_committed_capture_picks_the_dm_channel_by_the_roster_ordering() {
+        let dir = tempfile::tempdir().unwrap();
+        let capture = capture_from_committed_teardown(&dir).await;
+
+        assert_eq!(
+            capture.dm_channel_id.as_ref().map(|id| id.as_str()),
+            Some("ch-onboarding")
+        );
+    }
+
+    /// Half 4 — the workspace count is the agent's REGULAR memberships, exact and
+    /// without its owned home. The agent owns a home and is a member of one regular
+    /// workspace; the schema forbids a home from being a membership row, so the
+    /// count is regular-only and the exact 1 shows a miscount.
+    #[tokio::test]
+    async fn the_committed_capture_counts_regular_memberships_without_the_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let capture = capture_from_committed_teardown(&dir).await;
+
+        assert_eq!(capture.regular_workspace_count, 1);
     }
 }
