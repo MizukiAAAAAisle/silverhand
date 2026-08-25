@@ -152,8 +152,8 @@ impl SqliteConversationAgentActivityRead {
         )
         .bind(requested.as_str())
         .bind(target.as_str())
-        .bind(page.before().map(ActivityEventId::get))
-        .bind(page.before().map(ActivityEventId::get))
+        .bind(page.before().and_then(|value| value.persisted_value()))
+        .bind(page.before().and_then(|value| value.persisted_value()))
         .bind(i64::from(page.limit()) + 1)
         .fetch_all(&mut *tx)
         .await?;

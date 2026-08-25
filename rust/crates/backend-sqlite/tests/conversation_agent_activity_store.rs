@@ -60,8 +60,10 @@ async fn read(
     silverhand_backend_core::persistence::PersistenceFailure,
 >{
     let before = before.map(|value| {
-        silverhand_backend_core::messaging::collaboration::conversation_agent_activity::ActivityEventId::new(value)
-            .unwrap()
+        silverhand_backend_core::messaging::collaboration::conversation_agent_activity::ActivityBefore::Persisted(
+            silverhand_backend_core::messaging::collaboration::conversation_agent_activity::ActivityEventId::new(value)
+                .unwrap(),
+        )
     });
     MessagingStore::open(path)
         .await

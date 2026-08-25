@@ -194,11 +194,11 @@ impl ConversationActivityEvent {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActivityPageRequest {
     limit: u16,
-    before: Option<ActivityEventId>,
+    before: Option<ActivityBefore>,
 }
 
 impl ActivityPageRequest {
-    pub fn new(limit: u16, before: Option<ActivityEventId>) -> Result<Self, InvalidActivityLimit> {
+    pub fn new(limit: u16, before: Option<ActivityBefore>) -> Result<Self, InvalidActivityLimit> {
         (1..=200)
             .contains(&limit)
             .then_some(Self { limit, before })
@@ -209,8 +209,26 @@ impl ActivityPageRequest {
         self.limit
     }
 
-    pub const fn before(self) -> Option<ActivityEventId> {
+    pub const fn before(self) -> Option<ActivityBefore> {
         self.before
+    }
+}
+
+/// An admitted ECMAScript integer cursor. Values above SQLite's signed range
+/// are valid JavaScript input and mean "before an id larger than every durable
+/// row", not invalid input or saturation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActivityBefore {
+    Persisted(ActivityEventId),
+    BeyondPersistedRange,
+}
+
+impl ActivityBefore {
+    pub const fn persisted_value(self) -> Option<i64> {
+        match self {
+            Self::Persisted(value) => Some(value.get()),
+            Self::BeyondPersistedRange => None,
+        }
     }
 }
 
