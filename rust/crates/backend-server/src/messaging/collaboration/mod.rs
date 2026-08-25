@@ -10,6 +10,7 @@ pub mod conversation_agent_directory;
 pub mod conversation_ref;
 pub mod conversation_unread;
 pub mod direct_pair_initiation;
+mod json_body;
 pub mod message_unread;
 pub mod notification;
 mod query_number;
