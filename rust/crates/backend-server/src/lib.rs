@@ -8,6 +8,7 @@ pub mod daemon_delivery;
 mod daemon_events;
 pub mod direct_pairs;
 mod error;
+pub mod host_agent;
 pub mod host_agent_background;
 pub mod host_runtime;
 pub mod http;
