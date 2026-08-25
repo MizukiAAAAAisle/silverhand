@@ -2,48 +2,56 @@
   {
     "name": "stream_head_changes",
     "request": {"sources":[{"kind":"stream","conversation_id":"c","thread_root_id":null,"position":{"kind":"stream_head"}}]},
+    "schema_accepted": true,
     "status": 200,
     "body": {"changed":true}
   },
   {
     "name": "unknown_notification_is_idempotent",
     "request": {"sources":[{"kind":"notification","notification_id":"unknown"}]},
+    "schema_accepted": true,
     "status": 200,
     "body": {"changed":false}
   },
   {
     "name": "notification_changes",
     "request": {"sources":[{"kind":"notification","notification_id":"n1"}]},
+    "schema_accepted": true,
     "status": 200,
     "body": {"changed":true}
   },
   {
     "name": "missing_conversation",
     "request": {"sources":[{"kind":"stream","conversation_id":"missing","thread_root_id":null,"position":{"kind":"stream_head"}}]},
+    "schema_accepted": true,
     "status": 404,
     "body": {"error":"conversation not found","code":"conversation_not_found"}
   },
   {
     "name": "position_future",
     "request": {"sources":[{"kind":"stream","conversation_id":"c","thread_root_id":null,"position":{"kind":"at_seq","seq":3}}]},
+    "schema_accepted": true,
     "status": 400,
     "body": {"error":"position seq is beyond the current stream head","code":"position_future"}
   },
   {
     "name": "thread_root_not_found",
     "request": {"sources":[{"kind":"stream","conversation_id":"c","thread_root_id":"missing-root","position":{"kind":"stream_head"}}]},
+    "schema_accepted": true,
     "status": 404,
     "body": {"error":"thread root message not found in this channel","code":"thread_root_not_found"}
   },
   {
     "name": "thread_root_is_reply",
     "request": {"sources":[{"kind":"stream","conversation_id":"c","thread_root_id":"reply","position":{"kind":"stream_head"}}]},
+    "schema_accepted": true,
     "status": 400,
     "body": {"error":"thread_root_id must be a root message, not a reply","code":"thread_root_is_reply"}
   },
   {
     "name": "missing_sources",
     "request": {},
+    "schema_accepted": false,
     "status": 400,
     "body": {"error":"invalid input"},
     "ts_authority": "admission_only"
@@ -51,6 +59,7 @@
   {
     "name": "empty_sources",
     "request": {"sources":[]},
+    "schema_accepted": false,
     "status": 400,
     "body": {"error":"invalid input"},
     "ts_authority": "admission_only"
@@ -58,6 +67,7 @@
   {
     "name": "empty_notification_id",
     "request": {"sources":[{"kind":"notification","notification_id":""}]},
+    "schema_accepted": false,
     "status": 400,
     "body": {"error":"invalid input"},
     "ts_authority": "admission_only"
@@ -65,6 +75,7 @@
   {
     "name": "wrong_sources_type",
     "request": {"sources":"all"},
+    "schema_accepted": false,
     "status": 400,
     "body": {"error":"invalid input"},
     "ts_authority": "admission_only"
@@ -73,6 +84,7 @@
     "name": "fractional_seq_is_rejected",
     "request": null,
     "request_json": "{\"sources\":[{\"kind\":\"stream\",\"conversation_id\":\"c\",\"thread_root_id\":null,\"position\":{\"kind\":\"at_seq\",\"seq\":1.5}}]}",
+    "schema_accepted": false,
     "status": 400,
     "body": {"error":"invalid input"},
     "ts_authority": "admission_only"
@@ -81,6 +93,7 @@
     "name": "integral_decimal_is_a_number",
     "request": null,
     "request_json": "{\"sources\":[{\"kind\":\"stream\",\"conversation_id\":\"c\",\"thread_root_id\":null,\"position\":{\"kind\":\"at_seq\",\"seq\":1.0}}]}",
+    "schema_accepted": true,
     "status": 200,
     "body": {"changed":true}
   },
@@ -88,6 +101,7 @@
     "name": "integral_exponent_reaches_product_authority",
     "request": null,
     "request_json": "{\"sources\":[{\"kind\":\"stream\",\"conversation_id\":\"c\",\"thread_root_id\":null,\"position\":{\"kind\":\"at_seq\",\"seq\":1e3}}]}",
+    "schema_accepted": true,
     "status": 400,
     "body": {"error":"position seq is beyond the current stream head","code":"position_future"}
   },
@@ -95,6 +109,7 @@
     "name": "beyond_i64_reaches_existing_stream_authority",
     "request": null,
     "request_json": "{\"sources\":[{\"kind\":\"stream\",\"conversation_id\":\"c\",\"thread_root_id\":null,\"position\":{\"kind\":\"at_seq\",\"seq\":9223372036854775808}}]}",
+    "schema_accepted": true,
     "status": 400,
     "body": {"error":"position seq is beyond the current stream head","code":"position_future"}
   },
@@ -102,6 +117,7 @@
     "name": "beyond_i64_does_not_precede_missing_conversation",
     "request": null,
     "request_json": "{\"sources\":[{\"kind\":\"stream\",\"conversation_id\":\"missing\",\"thread_root_id\":null,\"position\":{\"kind\":\"at_seq\",\"seq\":1e20}}]}",
+    "schema_accepted": true,
     "status": 404,
     "body": {"error":"conversation not found","code":"conversation_not_found"}
   },
@@ -109,6 +125,7 @@
     "name": "negative_fraction_is_rejected",
     "request": null,
     "request_json": "{\"sources\":[{\"kind\":\"stream\",\"conversation_id\":\"c\",\"thread_root_id\":null,\"position\":{\"kind\":\"at_seq\",\"seq\":-1.5}}]}",
+    "schema_accepted": false,
     "status": 400,
     "body": {"error":"invalid input"},
     "ts_authority": "admission_only"
@@ -117,6 +134,7 @@
     "name": "positive_json_number_overflow_is_rejected",
     "request": null,
     "request_json": "{\"sources\":[{\"kind\":\"stream\",\"conversation_id\":\"c\",\"thread_root_id\":null,\"position\":{\"kind\":\"at_seq\",\"seq\":1e400}}]}",
+    "schema_accepted": false,
     "status": 400,
     "body": {"error":"invalid input"},
     "ts_authority": "admission_only"
@@ -125,6 +143,7 @@
     "name": "negative_json_number_overflow_is_rejected",
     "request": null,
     "request_json": "{\"sources\":[{\"kind\":\"stream\",\"conversation_id\":\"c\",\"thread_root_id\":null,\"position\":{\"kind\":\"at_seq\",\"seq\":-1e400}}]}",
+    "schema_accepted": false,
     "status": 400,
     "body": {"error":"invalid input"},
     "ts_authority": "admission_only"

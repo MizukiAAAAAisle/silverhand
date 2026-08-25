@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { ObserveInputSchema } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import fixture from '../fixtures/activity-observe-wire.json' with { type: 'json' };
 
@@ -41,8 +42,16 @@ describe('Activity observe cutover fixture uses the production TypeScript route'
       (typeof fixture)[number] & {
         request_json?: string;
         ts_authority?: 'admission_only';
+        schema_accepted: boolean;
       }
     >) {
+      const input = entry.request_json === undefined
+        ? entry.request
+        : JSON.parse(entry.request_json);
+      expect(ObserveInputSchema.safeParse(input).success, entry.name)
+        .toBe(entry.schema_accepted);
+      if (entry.ts_authority === 'admission_only') continue;
+
       t = buildTestApp();
       seed(t);
       const response = await http(t).post(
@@ -50,14 +59,12 @@ describe('Activity observe cutover fixture uses the production TypeScript route'
         entry.request,
         entry.request_json === undefined ? undefined : { body: entry.request_json },
       );
-      if (entry.ts_authority === 'admission_only') {
-        expect(response.status < 400, entry.name).toBe(entry.status < 400);
-      } else {
-        expect(response.status, entry.name).toBe(entry.status);
-        expect(await response.json(), entry.name).toEqual(entry.body);
-      }
+      expect(response.status, entry.name).toBe(entry.status);
+      expect(await response.json(), entry.name).toEqual(entry.body);
       t.cleanup(); t = null;
     }
+    expect(fixture.filter((entry) => entry.schema_accepted)).toHaveLength(11);
+    expect(fixture.filter((entry) => !entry.schema_accepted)).toHaveLength(8);
     expect(fixture).toHaveLength(19);
   });
 });
