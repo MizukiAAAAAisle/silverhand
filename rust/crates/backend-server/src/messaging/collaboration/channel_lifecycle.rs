@@ -1,5 +1,8 @@
 //! Authenticated HTTP adapter for channel detail and lifecycle operations.
 
+mod mutation;
+pub use mutation::mutation_router;
+
 use std::sync::Arc;
 
 use axum::{
@@ -14,6 +17,7 @@ use silverhand_backend_core::{
     identity::{ConversationId, UserId},
     messaging::collaboration::channel_lifecycle::{
         BoundChannelDetail, ChannelDetailReadPort, ChannelDetailRefusal, ChannelLifecyclePlacement,
+        ChannelLifecycleRow,
     },
 };
 
@@ -75,35 +79,39 @@ async fn detail<P: ChannelDetailReadPort>(
 
 fn success(value: &BoundChannelDetail) -> Response {
     let row = value.row();
-    let placement_kind = match row.placement() {
-        ChannelLifecyclePlacement::Workspace(_) => "workspace",
-        ChannelLifecyclePlacement::DirectPair(_) => "direct_pair",
-    };
     Json(json!({
-        "channel": {
-            "id": row.conversation().as_str(),
-            "workspace_id": row.workspace().map(|value| value.as_str()),
-            "placement_kind": placement_kind,
-            "roster_policy": row.roster().as_str(),
-            "title": row.title(),
-            "status": row.status().as_str(),
-            "spawned_by_agent_id": row.spawned_by_agent().map(|value| value.as_str()),
-            "closed_at": row.closed_at(),
-            "close_summary": row.close_summary(),
-            "archived_at": row.archived_at(),
-            // Current production mapper exposes this column even though the shared
-            // ConversationDto schema has not yet caught up with the runtime wire.
-            "latest_message_seq": row.latest_message_seq(),
-            "created_at": row.created_at(),
-            "updated_at": row.updated_at(),
-            "visibility": row.visibility().as_str(),
-        },
+        "channel": channel(row),
         "is_member": value.is_member(),
         "can_leave": value.leave().can_leave(),
         "leave_blocked_reason": value.leave().blocked_reason().map(|reason| reason.as_str()),
         "can_update_visibility": value.can_update_visibility(),
     }))
     .into_response()
+}
+
+fn channel(row: &ChannelLifecycleRow) -> serde_json::Value {
+    let placement_kind = match row.placement() {
+        ChannelLifecyclePlacement::Workspace(_) => "workspace",
+        ChannelLifecyclePlacement::DirectPair(_) => "direct_pair",
+    };
+    json!({
+        "id": row.conversation().as_str(),
+        "workspace_id": row.workspace().map(|value| value.as_str()),
+        "placement_kind": placement_kind,
+        "roster_policy": row.roster().as_str(),
+        "title": row.title(),
+        "status": row.status().as_str(),
+        "spawned_by_agent_id": row.spawned_by_agent().map(|value| value.as_str()),
+        "closed_at": row.closed_at(),
+        "close_summary": row.close_summary(),
+        "archived_at": row.archived_at(),
+        // Current production mapper exposes this column even though the shared
+        // ConversationDto schema has not yet caught up with the runtime wire.
+        "latest_message_seq": row.latest_message_seq(),
+        "created_at": row.created_at(),
+        "updated_at": row.updated_at(),
+        "visibility": row.visibility().as_str(),
+    })
 }
 
 fn error(status: StatusCode, message: &'static str) -> Response {
