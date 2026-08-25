@@ -23,6 +23,76 @@ use super::{
     PLACEMENT_DIRECT_PAIR, driver,
 };
 
+const SELECT_DIRECT_PAIR_INITIATION_CANDIDATE: &str = "WITH candidate AS (\
+     SELECT a.id,a.created_by_user_id,a.session_scope FROM agents a WHERE \
+     CASE ? WHEN 'id' THEN a.id = ? WHEN 'name' THEN a.name = ? ELSE 0 END \
+     AND a.materialization_status = 'active' AND a.deletion_started_at IS NULL\
+     ) \
+     SELECT id,created_by_user_id AS viewer_id,session_scope FROM candidate \
+     WHERE created_by_user_id = ? \
+     UNION ALL \
+     SELECT candidate.id,CASE WHEN c.endpoint_a_kind = 'human' THEN c.endpoint_a_id \
+     ELSE c.endpoint_b_id END AS viewer_id,candidate.session_scope \
+     FROM candidate JOIN conversations c ON c.placement_kind = 'direct_pair' \
+     AND c.endpoint_a_deleted_at IS NULL AND c.endpoint_b_deleted_at IS NULL \
+     AND ((c.endpoint_a_kind = 'human' AND c.endpoint_a_id = ? \
+       AND c.endpoint_b_kind = 'agent' AND c.endpoint_b_id = candidate.id) \
+      OR (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = ? \
+       AND c.endpoint_a_kind = 'agent' AND c.endpoint_a_id = candidate.id)) \
+     UNION ALL \
+     SELECT candidate.id,wu.user_id,candidate.session_scope \
+     FROM candidate JOIN workspace_members wm ON wm.agent_id = candidate.id \
+     JOIN workspace_users wu ON wu.workspace_id = wm.workspace_id AND wu.user_id = ? \
+     LIMIT 1";
+
+pub(crate) enum DirectPairInitiationTarget<'value> {
+    Id(&'value str),
+    Name(&'value str),
+}
+
+pub(crate) struct DirectPairInitiationCandidate {
+    pub(crate) viewer: UserId,
+    pub(crate) target: AgentId,
+    pub(crate) scope: silverhand_backend_core::messaging::freshness::RuntimeScope,
+}
+
+pub(crate) async fn direct_pair_initiation_candidate(
+    pool: &sqlx::SqlitePool,
+    viewer: &UserId,
+    target: DirectPairInitiationTarget<'_>,
+) -> Result<Option<DirectPairInitiationCandidate>, PersistenceFailure> {
+    let (selector, raw) = match target {
+        DirectPairInitiationTarget::Id(raw) => ("id", raw),
+        DirectPairInitiationTarget::Name(raw) => ("name", raw),
+    };
+    let row = sqlx::query(SELECT_DIRECT_PAIR_INITIATION_CANDIDATE)
+        .bind(selector)
+        .bind(raw)
+        .bind(raw)
+        .bind(viewer.as_str())
+        .bind(viewer.as_str())
+        .bind(viewer.as_str())
+        .bind(viewer.as_str())
+        .fetch_optional(pool)
+        .await
+        .map_err(driver)?;
+    row.map(|row| {
+        let source_viewer: String = row.try_get("viewer_id").map_err(driver)?;
+        let source_target: String = row.try_get("id").map_err(driver)?;
+        let scope: String = row.try_get("session_scope").map_err(driver)?;
+        Ok(DirectPairInitiationCandidate {
+            viewer: UserId::parse(source_viewer).map_err(|_| corrupt("viewer_id"))?,
+            target: AgentId::parse(source_target).map_err(|_| corrupt("agents.id"))?,
+            scope:
+                silverhand_backend_core::messaging::freshness::RuntimeScope::parse_session_scope(
+                    &scope,
+                )
+                .ok_or_else(|| corrupt("agents.session_scope"))?,
+        })
+    })
+    .transpose()
+}
+
 const PLACEMENT_WORKSPACE: &str = "workspace";
 const ADDRESS_ID_LEN: usize = 16;
 
@@ -296,28 +366,17 @@ where
             .iter()
             .filter(|r| r.kind() == PrincipalKind::Agent)
         {
-            let raw: Option<String> = sqlx::query_scalar(
-                 "SELECT a.id FROM agents a WHERE a.name = ? AND a.materialization_status = 'active' \
-                 AND a.deletion_started_at IS NULL AND a.session_scope = 'agent' \
-                 AND (a.created_by_user_id = ? OR EXISTS (SELECT 1 \
-                 FROM conversations c WHERE c.placement_kind = 'direct_pair' AND \
-                 c.endpoint_a_deleted_at IS NULL AND c.endpoint_b_deleted_at IS NULL AND \
-                 ((c.endpoint_a_kind = 'human' AND c.endpoint_a_id = ? AND c.endpoint_b_kind = 'agent' \
-                 AND c.endpoint_b_id = a.id) OR (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = ? \
-                 AND c.endpoint_a_kind = 'agent' AND c.endpoint_a_id = a.id))) OR EXISTS (SELECT 1 \
-                 FROM workspace_members wm JOIN workspace_users wu ON wu.workspace_id = wm.workspace_id \
-                 WHERE wm.agent_id = a.id AND wu.user_id = ?))",
+            let candidate = direct_pair_initiation_candidate(
+                &self.pool,
+                author,
+                DirectPairInitiationTarget::Name(reference.handle().as_str()),
             )
-            .bind(reference.handle().as_str())
-            .bind(author.as_str())
-            .bind(author.as_str())
-            .bind(author.as_str())
-            .bind(author.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(driver)?;
-            if let Some(raw) = raw {
-                agents.push(AgentId::parse(raw).map_err(|_| corrupt("agents.id"))?);
+            .await?;
+            if let Some(candidate) = candidate.filter(|candidate| {
+                candidate.scope
+                    == silverhand_backend_core::messaging::freshness::RuntimeScope::Agent
+            }) {
+                agents.push(candidate.target);
             }
         }
         Ok(agents)
@@ -496,7 +555,7 @@ where
                 let participants = DirectPairParticipants::between(me, other).map_err(|_| {
                     TargetAddressStoreError::Persistence(corrupt("direct_pair.participants"))
                 })?;
-                let existing: Option<String> = sqlx::query_scalar(super::SELECT_DIRECT_PAIR)
+                let existing: Option<String> = sqlx::query_scalar(super::SELECT_DIRECT_PAIR_ID)
                     .bind(super::principal_kind(participants.first()))
                     .bind(participants.first().as_str())
                     .bind(super::principal_kind(participants.second()))

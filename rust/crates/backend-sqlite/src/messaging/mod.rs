@@ -152,9 +152,15 @@ const OPEN_DIRECT_PAIR: &str = "INSERT INTO conversations (id, workspace_id, pla
      visibility, created_at, updated_at) VALUES (?, NULL, 'direct_pair', 'fixed', ?, ?, ?, ?, '', \
      'idle', 'private', ?, ?) ON CONFLICT (endpoint_a_kind, endpoint_a_id, endpoint_b_kind, \
      endpoint_b_id) WHERE placement_kind = 'direct_pair' DO NOTHING";
-const SELECT_DIRECT_PAIR: &str = "SELECT id, endpoint_a_kind, endpoint_a_id, endpoint_b_kind, \
+const SELECT_DIRECT_PAIR_FACT: &str = "SELECT id, endpoint_a_kind, endpoint_a_id, endpoint_b_kind, \
      endpoint_b_id FROM conversations WHERE placement_kind = 'direct_pair' AND endpoint_a_kind = \
      ? AND endpoint_a_id = ? AND endpoint_b_kind = ? AND endpoint_b_id = ?";
+const SELECT_DIRECT_PAIR_FACT_BY_ID: &str = "SELECT id, endpoint_a_kind, endpoint_a_id, \
+     endpoint_b_kind, endpoint_b_id FROM conversations WHERE id = ? AND placement_kind = \
+     'direct_pair'";
+const SELECT_DIRECT_PAIR_ID: &str = "SELECT id FROM conversations WHERE placement_kind = \
+     'direct_pair' AND endpoint_a_kind = ? AND endpoint_a_id = ? AND endpoint_b_kind = ? AND \
+     endpoint_b_id = ?";
 
 /// The copy is authored by the system: it is not the mentioning person speaking on
 /// the line, and it names the message it came from so the two can never be
@@ -466,45 +472,22 @@ impl<E: SendEntropy + Send + Sync> DirectPairMint for AutocommitDirectPairMint<'
         participants: &DirectPairParticipants,
         now_unix_ms: i64,
     ) -> Result<DirectPairMinted, Self::Error> {
+        // Entropy is host work, not product authority. Sample it before the
+        // writer reservation; the transaction below still derives the winner.
         let minted = mint_conversation_id(&self.store.environment).map_err(|source| {
             PersistenceFailure::from_source(MessagingStoreError::Environment(source))
         })?;
-        let first = participants.first();
-        let second = participants.second();
-        let created = sqlx::query(OPEN_DIRECT_PAIR)
-            .bind(minted.as_str())
-            .bind(principal_kind(first))
-            .bind(first.as_str())
-            .bind(principal_kind(second))
-            .bind(second.as_str())
-            .bind(now_unix_ms)
-            .bind(now_unix_ms)
-            .execute(&self.store.pool)
-            .await
-            .map_err(driver)?
-            .rows_affected()
-            == 1;
-
-        let selected = sqlx::query(SELECT_DIRECT_PAIR)
-            .bind(principal_kind(first))
-            .bind(first.as_str())
-            .bind(principal_kind(second))
-            .bind(second.as_str())
-            .fetch_optional(&self.store.pool)
+        let mut tx = self
+            .store
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(driver)?;
-        let selected = selected.ok_or_else(|| {
-            PersistenceFailure::from_source(MessagingStoreError::MalformedIdentity {
-                field: "conversations.direct_pair",
-            })
-        })?;
-        let (conversation, selected_participants) =
-            decode_selected_direct_pair(&selected).map_err(PersistenceFailure::from_source)?;
-        Ok(DirectPairMinted::committed(
-            conversation,
-            selected_participants,
-            created,
-        ))
+        let committed = mint_direct_pair_on(&mut tx, minted, participants, now_unix_ms)
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        tx.commit().await.map_err(driver)?;
+        Ok(committed)
     }
 }
 
@@ -549,6 +532,58 @@ fn decode_direct_pair_endpoint(
         )),
         _ => Err(MessagingStoreError::MalformedIdentity { field: kind_field }),
     }
+}
+
+async fn mint_direct_pair_on(
+    conn: &mut SqliteConnection,
+    minted: ConversationId,
+    participants: &DirectPairParticipants,
+    now_unix_ms: i64,
+) -> Result<DirectPairMinted, MessagingStoreError> {
+    let first = participants.first();
+    let second = participants.second();
+    let created = sqlx::query(OPEN_DIRECT_PAIR)
+        .bind(minted.as_str())
+        .bind(principal_kind(first))
+        .bind(first.as_str())
+        .bind(principal_kind(second))
+        .bind(second.as_str())
+        .bind(now_unix_ms)
+        .bind(now_unix_ms)
+        .execute(&mut *conn)
+        .await?
+        .rows_affected()
+        == 1;
+
+    // A winner is read back by the minted identity, so an AFTER trigger cannot
+    // silently rewrite endpoints. A loser resolves the row that actually won by
+    // its canonical durable endpoint key. Both branches decode the row itself.
+    let selected = if created {
+        sqlx::query(SELECT_DIRECT_PAIR_FACT_BY_ID)
+            .bind(minted.as_str())
+            .fetch_optional(&mut *conn)
+            .await?
+    } else {
+        sqlx::query(SELECT_DIRECT_PAIR_FACT)
+            .bind(principal_kind(first))
+            .bind(first.as_str())
+            .bind(principal_kind(second))
+            .bind(second.as_str())
+            .fetch_optional(&mut *conn)
+            .await?
+    }
+    .ok_or(MessagingStoreError::MalformedIdentity {
+        field: "conversations.direct_pair",
+    })?;
+    let (conversation, selected_participants) = decode_selected_direct_pair(&selected)?;
+    if &selected_participants != participants {
+        return Err(MessagingStoreError::MalformedPlacement);
+    }
+    Ok(DirectPairMinted::committed(
+        conversation,
+        selected_participants,
+        created,
+    ))
 }
 
 /// Projects the cluster's list entry from the committed rows visible on `conn`.
@@ -839,42 +874,9 @@ impl<E: SendEntropy + Send + Sync> DirectPairMint for TransactionDirectPairMint<
         now_unix_ms: i64,
     ) -> Result<DirectPairMinted, Self::Error> {
         let minted = mint_conversation_id(self.scope.entropy)?;
-        let first = participants.first();
-        let second = participants.second();
-        let created = sqlx::query(OPEN_DIRECT_PAIR)
-            .bind(minted.as_str())
-            .bind(principal_kind(first))
-            .bind(first.as_str())
-            .bind(principal_kind(second))
-            .bind(second.as_str())
-            .bind(now_unix_ms)
-            .bind(now_unix_ms)
-            .execute(&mut *self.scope.tx)
+        mint_direct_pair_on(&mut self.scope.tx, minted, participants, now_unix_ms)
             .await
-            .map_err(driver)?
-            .rows_affected()
-            == 1;
-
-        let selected = sqlx::query(SELECT_DIRECT_PAIR)
-            .bind(principal_kind(first))
-            .bind(first.as_str())
-            .bind(principal_kind(second))
-            .bind(second.as_str())
-            .fetch_optional(&mut *self.scope.tx)
-            .await
-            .map_err(driver)?;
-        let selected = selected.ok_or_else(|| {
-            infrastructure(MessagingStoreError::MalformedIdentity {
-                field: "conversations.direct_pair",
-            })
-        })?;
-        let (conversation, selected_participants) =
-            decode_selected_direct_pair(&selected).map_err(infrastructure)?;
-        Ok(DirectPairMinted::committed(
-            conversation,
-            selected_participants,
-            created,
-        ))
+            .map_err(infrastructure)
     }
 }
 
