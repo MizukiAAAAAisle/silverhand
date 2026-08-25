@@ -10,7 +10,7 @@ use std::{
 use axum::{
     body::{Body, Bytes, to_bytes},
     extract::Extension,
-    http::{Request, StatusCode},
+    http::{Request, StatusCode, header::CONTENT_LENGTH},
 };
 use futures_util::stream;
 use serde_json::{Value, json};
@@ -136,12 +136,24 @@ async fn call(
     body: &str,
     authenticated: bool,
 ) -> (StatusCode, Value) {
-    let mut request = Request::builder()
+    call_body(app, path, Body::from(body.to_owned()), authenticated, None).await
+}
+
+async fn call_body(
+    app: axum::Router,
+    path: &str,
+    body: Body,
+    authenticated: bool,
+    content_length: Option<usize>,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
         .method("POST")
         .uri(path)
-        .header("content-type", "application/json")
-        .body(Body::from(body.to_owned()))
-        .unwrap();
+        .header("content-type", "application/json");
+    if let Some(length) = content_length {
+        builder = builder.header(CONTENT_LENGTH, length);
+    }
+    let mut request = builder.body(body).unwrap();
     if authenticated {
         request.extensions_mut().insert(user("local"));
     }
@@ -152,7 +164,7 @@ async fn call(
     (status, body)
 }
 
-fn app(
+fn fixture_app(
     outcome: Outcome,
     effects: Effects,
 ) -> (axum::Router, Arc<Mutex<Vec<HumanChannelCreateRequest>>>) {
@@ -204,7 +216,7 @@ async fn production_admission_matches_zod_issue_shapes_and_drops_raw_before_port
     ];
 
     for (raw, expected) in cases {
-        let (app, requests) = app(
+        let (app, requests) = fixture_app(
             Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
             Effects::default(),
         );
@@ -214,7 +226,7 @@ async fn production_admission_matches_zod_issue_shapes_and_drops_raw_before_port
         assert!(requests.lock().unwrap().is_empty(), "{raw}");
     }
 
-    let (app, requests) = app(
+    let (app, requests) = fixture_app(
         Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
         Effects::default(),
     );
@@ -282,7 +294,7 @@ async fn refusal_closed_set_renders_the_typescript_route_contract() {
         ),
     ];
     for (reason, expected_status, expected_body) in cases {
-        let (app, _) = app(Outcome::Refuse(reason), Effects::default());
+        let (app, _) = fixture_app(Outcome::Refuse(reason), Effects::default());
         let (status, body) = call(
             app,
             "/api/workspaces/workspace-1/channels",
@@ -302,7 +314,7 @@ async fn success_is_201_and_publication_failure_never_skips_audit_or_changes_wir
             events: Arc::new(Mutex::new(vec![])),
             fail,
         };
-        let (app, _) = app(Outcome::Commit(Box::new(committed())), effects.clone());
+        let (app, _) = fixture_app(Outcome::Commit(Box::new(committed())), effects.clone());
         let (status, body) = call(
             app,
             "/api/workspaces/workspace-1/channels",
@@ -350,6 +362,129 @@ async fn authentication_precedes_body_and_product_work() {
     assert!(requests.lock().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn declared_and_chunked_overflow_are_413_and_the_exact_limit_is_admitted() {
+    const LIMIT: usize = 128 * 1024 * 1024;
+
+    let declared_polled = Arc::new(AtomicBool::new(false));
+    let flag = declared_polled.clone();
+    let declared = Body::from_stream(stream::once(async move {
+        flag.store(true, Ordering::SeqCst);
+        Ok::<Bytes, Infallible>(Bytes::from_static(b"{}"))
+    }));
+    let (app, requests) = fixture_app(
+        Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
+        Effects::default(),
+    );
+    let (status, body) = call_body(
+        app,
+        "/api/workspaces/workspace-1/channels",
+        declared,
+        false,
+        Some(LIMIT + 1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(body, json!({"error":"payload too large"}));
+    assert!(!declared_polled.load(Ordering::SeqCst));
+    assert!(requests.lock().unwrap().is_empty());
+
+    let chunk = Bytes::from(vec![b' '; 1024 * 1024]);
+    let chunked = Body::from_stream(stream::iter(
+        (0..129).map(move |_| Ok::<Bytes, Infallible>(chunk.clone())),
+    ));
+    let (app, requests) = fixture_app(
+        Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
+        Effects::default(),
+    );
+    let (status, body) = call_body(
+        app,
+        "/api/workspaces/workspace-1/channels",
+        chunked,
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(body, json!({"error":"payload too large"}));
+    assert!(requests.lock().unwrap().is_empty());
+
+    let prefix = br#"{"title":"At Limit","padding":""#;
+    let suffix = br#""}"#;
+    let mut exact = Vec::with_capacity(LIMIT);
+    exact.extend_from_slice(prefix);
+    exact.resize(LIMIT - suffix.len(), b' ');
+    exact.extend_from_slice(suffix);
+    assert_eq!(exact.len(), LIMIT);
+    let (app, requests) = fixture_app(
+        Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
+        Effects::default(),
+    );
+    let (status, body) = call_body(
+        app,
+        "/api/workspaces/workspace-1/channels",
+        Body::from(exact),
+        false,
+        Some(LIMIT),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body, json!({"error":"workspace not found"}));
+    assert_eq!(requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn ordinary_body_read_failure_uses_the_typescript_empty_object_catch() {
+    let body = Body::from_stream(stream::once(async {
+        Err::<Bytes, _>(std::io::Error::other("body driver failed"))
+    }));
+    let (app, requests) = fixture_app(
+        Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
+        Effects::default(),
+    );
+    let (status, body) = call_body(
+        app,
+        "/api/workspaces/workspace-1/channels",
+        body,
+        false,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["issues"][0]["path"], json!(["title"]));
+    assert!(requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn all_body_limit_shapes_remain_unpolled_without_authentication() {
+    const LIMIT: usize = 128 * 1024 * 1024;
+    for declared in [None, Some(LIMIT), Some(LIMIT + 1)] {
+        let polled = Arc::new(AtomicBool::new(false));
+        let flag = polled.clone();
+        let body = Body::from_stream(stream::once(async move {
+            flag.store(true, Ordering::SeqCst);
+            Ok::<Bytes, Infallible>(Bytes::from_static(b"{}"))
+        }));
+        let app = create_router(
+            Port {
+                outcome: Outcome::Commit(Box::new(committed())),
+                requests: Arc::new(Mutex::new(vec![])),
+            },
+            Effects::default(),
+        );
+        let (status, _) = call_body(
+            app,
+            "/api/workspaces/workspace-1/channels",
+            body,
+            false,
+            declared,
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!polled.load(Ordering::SeqCst), "declared={declared:?}");
+    }
+}
+
 #[derive(Clone)]
 struct FixedEnvironment;
 
@@ -372,6 +507,35 @@ fn fixture() -> Vec<Value> {
         "/../../../packages/backend/tests/fixtures/channel-directory-create-wire.json"
     )))
     .unwrap()
+}
+
+fn fixture_request(entry: &Value) -> Value {
+    match entry.get("request_case").and_then(Value::as_str) {
+        None => entry["request"].clone(),
+        Some("title_129") => json!({"title":"x".repeat(129)}),
+        Some("malformed_json") => json!({}),
+        Some(other) => panic!("unknown create request case {other}"),
+    }
+}
+
+fn fixture_raw(entry: &Value) -> String {
+    match entry.get("request_case").and_then(Value::as_str) {
+        Some("malformed_json") => "{".into(),
+        _ => serde_json::to_string(&fixture_request(entry)).unwrap(),
+    }
+}
+
+fn fixture_body(entry: &Value, fixture: &[Value]) -> Value {
+    let Some(name) = entry.get("body_case").and_then(Value::as_str) else {
+        return entry["body"].clone();
+    };
+    fixture_body(
+        fixture
+            .iter()
+            .find(|candidate| candidate["name"] == name)
+            .unwrap(),
+        fixture,
+    )
 }
 
 async fn seeded_store() -> (tempfile::TempDir, MessagingStore<FixedEnvironment>) {
@@ -423,12 +587,13 @@ fn normalize_success(mut body: Value) -> Value {
 
 #[tokio::test]
 async fn production_sqlite_router_consumes_every_typescript_signed_create_cell() {
-    for entry in fixture() {
+    let fixture = fixture();
+    for entry in &fixture {
         let (_directory, store) = seeded_store().await;
         let effects = Effects::default();
         let app = create_router(store.channel_directory_create(), effects.clone())
             .layer(Extension(user("local")));
-        let raw = serde_json::to_string(&entry["request"]).unwrap();
+        let raw = fixture_raw(entry);
         let (status, body) = call(app, entry["path"].as_str().unwrap(), &raw, false).await;
         assert_eq!(
             status.as_u16(),
@@ -436,7 +601,12 @@ async fn production_sqlite_router_consumes_every_typescript_signed_create_cell()
             "{}",
             entry["name"]
         );
-        assert_eq!(normalize_success(body), entry["body"], "{}", entry["name"]);
+        assert_eq!(
+            normalize_success(body),
+            fixture_body(entry, &fixture),
+            "{}",
+            entry["name"]
+        );
         let expected_events: &[&str] = if status == StatusCode::CREATED {
             &["publish", "audit"]
         } else {
@@ -492,7 +662,7 @@ async fn committed_publication_failure_is_logged_once_with_its_source_and_still_
         events: Arc::new(Mutex::new(vec![])),
         fail: true,
     };
-    let (app, _) = app(Outcome::Commit(Box::new(committed())), effects.clone());
+    let (app, _) = fixture_app(Outcome::Commit(Box::new(committed())), effects.clone());
     let logs = LogBuffer::default();
     let subscriber = tracing_subscriber::fmt()
         .json()

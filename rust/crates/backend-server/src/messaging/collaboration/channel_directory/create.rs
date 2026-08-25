@@ -8,9 +8,12 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    body::to_bytes,
-    extract::{Extension, Path, Request, State},
-    http::StatusCode,
+    body::Bytes,
+    extract::{
+        DefaultBodyLimit, Extension, FromRequest, Path, Request, State,
+        rejection::{BytesRejection, FailedToBufferBody},
+    },
+    http::{StatusCode, header::CONTENT_LENGTH},
     response::{IntoResponse, Response},
     routing::post,
 };
@@ -28,6 +31,12 @@ use silverhand_backend_core::{
 };
 
 use super::{ACTIVE_PATH, error, identity_channel, internal};
+
+/// Mirrors the ratified app/proxy perimeter. The route also enforces it so a
+/// missing/misconfigured outer layer cannot turn an authenticated chunked body
+/// into unbounded allocation, and so an outer overflow rejection has the same
+/// product classification when composition lands.
+const CREATE_BODY_MAX_BYTES: usize = 128 * 1024 * 1024;
 
 struct Inner<P, A> {
     port: P,
@@ -74,9 +83,13 @@ where
 
     // Hono maps JSON parse failure to `{}` before invoking the production Zod
     // schema. Preserve that distinction from a valid non-object JSON value.
-    let body = to_bytes(request.into_body(), usize::MAX)
-        .await
-        .unwrap_or_default();
+    let body = match read_body(request, CREATE_BODY_MAX_BYTES).await {
+        BodyRead::Within(body) => body,
+        BodyRead::OverLimit => return payload_too_large(),
+        // TS `c.req.json().catch(() => ({}))` sends both malformed JSON and a
+        // transport read failure through the same empty-object schema input.
+        BodyRead::Unreadable => Bytes::new(),
+    };
     let value = serde_json::from_slice(&body).unwrap_or_else(|_| Value::Object(Map::new()));
     drop(body);
     let request = match parse_request(value) {
@@ -112,6 +125,45 @@ where
             internal()
         }
     }
+}
+
+enum BodyRead {
+    Within(Bytes),
+    OverLimit,
+    Unreadable,
+}
+
+async fn read_body(request: Request, limit: usize) -> BodyRead {
+    if request
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|declared| declared > limit as u64)
+    {
+        return BodyRead::OverLimit;
+    }
+
+    let mut request = request;
+    DefaultBodyLimit::max(limit).apply(&mut request);
+    match Bytes::from_request(request, &()).await {
+        Ok(body) => BodyRead::Within(body),
+        Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_))) => {
+            BodyRead::OverLimit
+        }
+        Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::UnknownBodyError(_))) => {
+            BodyRead::Unreadable
+        }
+        Err(_) => BodyRead::Unreadable,
+    }
+}
+
+fn payload_too_large() -> Response {
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        Json(json!({"error":"payload too large"})),
+    )
+        .into_response()
 }
 
 fn parse_request(value: Value) -> Result<HumanChannelCreateRequest, Vec<Value>> {

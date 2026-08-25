@@ -3,6 +3,22 @@ import { CreateConversationChannelInputSchema } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import fixture from '../fixtures/channel-directory-create-wire.json' with { type: 'json' };
 
+function requestInput(entry: any): unknown {
+  switch (entry.request_case) {
+    case 'title_129': return { title: 'x'.repeat(129) };
+    case 'malformed_json': return {};
+    case undefined: return entry.request;
+    default: throw new Error(`unknown create request case ${entry.request_case}`);
+  }
+}
+
+function expectedBody(entry: any): unknown {
+  if (!entry.body_case) return entry.body;
+  const source = fixture.find(candidate => candidate.name === entry.body_case);
+  if (!source) throw new Error(`missing create body case ${entry.body_case}`);
+  return expectedBody(source);
+}
+
 function normalize(value: unknown, homeId: string): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const root = value as Record<string, unknown>;
@@ -53,20 +69,23 @@ describe('channel-directory create wire is signed by the production TypeScript r
     const homeId = await seed(t);
     let accepted = 0;
     let rejected = 0;
-    for (const entry of fixture) {
-      const parsed = CreateConversationChannelInputSchema.safeParse(entry.request);
+    for (const entry of fixture as any[]) {
+      const parsed = CreateConversationChannelInputSchema.safeParse(requestInput(entry));
       expect(parsed.success, `${entry.name}: schema admission`).toBe(entry.schema_accepted);
       if (parsed.success) accepted += 1;
       else rejected += 1;
 
-      const response = await http(t).post(
-        entry.path.replaceAll('workspace-home', homeId),
-        entry.request,
-      );
+      const path = entry.path.replaceAll('workspace-home', homeId);
+      const response = entry.request_case === 'malformed_json'
+        ? await http(t).post(path, undefined, {
+            body: '{',
+            headers: { 'content-type': 'application/json' },
+          })
+        : await http(t).post(path, requestInput(entry));
       expect(response.status, entry.name).toBe(entry.status);
-      expect(normalize(await response.json(), homeId), entry.name).toEqual(entry.body);
+      expect(normalize(await response.json(), homeId), entry.name).toEqual(expectedBody(entry));
     }
-    expect([accepted, rejected]).toEqual([11, 3]);
-    expect(fixture).toHaveLength(14);
+    expect([accepted, rejected]).toEqual([12, 12]);
+    expect(fixture).toHaveLength(24);
   });
 });
