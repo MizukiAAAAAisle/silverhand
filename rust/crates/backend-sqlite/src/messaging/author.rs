@@ -38,6 +38,7 @@ use super::{MessagingStoreError, driver};
 /// (`from_kind` and the two nullable FKs) plus the snapshot columns that outlive a
 /// deleted principal. Storage-shaped, so it is `pub(super)` and never leaves the
 /// adapter — the domain sees only the resolved [`MessageAuthor`].
+#[derive(Clone)]
 pub(super) struct AuthorEvidence {
     pub from_kind: FromKind,
     pub from_agent_id: Option<String>,

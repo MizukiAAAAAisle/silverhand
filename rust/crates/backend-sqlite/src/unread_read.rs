@@ -57,6 +57,7 @@ macro_rules! unread_guards {
          AND (m.from_user_id = (SELECT viewer FROM p) OR m.from_user_id IS NULL))"
     };
 }
+pub(crate) use unread_guards;
 
 /// A main-line message counts when it is past the viewer's main-line read cursor.
 macro_rules! mainline_branch {
@@ -103,6 +104,7 @@ macro_rules! channel_ambient_enters {
          (SELECT viewer FROM p) AND wap.workspace_id = c.workspace_id AND wap.muted = 1))"
     };
 }
+pub(crate) use channel_ambient_enters;
 
 /// A conversation counts positionally (its whole unread contributes to the badge) when
 /// its roster is fixed, or open and ambiently entering.

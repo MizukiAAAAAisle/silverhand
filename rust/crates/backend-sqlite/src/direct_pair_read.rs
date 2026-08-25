@@ -138,7 +138,7 @@ impl DirectPairReadModel for SqliteDirectPairReadModel {
 }
 
 #[derive(Clone)]
-struct PairEvidence {
+pub(crate) struct PairEvidence {
     conversation: ConversationId,
     a: Endpoint,
     b: Endpoint,
@@ -146,7 +146,7 @@ struct PairEvidence {
 }
 
 impl PairEvidence {
-    fn decode(row: &sqlx::sqlite::SqliteRow) -> Result<Self, DirectPairReadError> {
+    pub(crate) fn decode(row: &sqlx::sqlite::SqliteRow) -> Result<Self, DirectPairReadError> {
         Ok(Self {
             conversation: conversation_id(row.try_get("id")?, "conversations.id")?,
             a: Endpoint::decode(
@@ -169,7 +169,7 @@ impl PairEvidence {
         [&self.a, &self.b]
     }
 
-    fn counterpart(&self, viewer: &UserId) -> Result<Endpoint, DirectPairReadError> {
+    pub(crate) fn counterpart(&self, viewer: &UserId) -> Result<Endpoint, DirectPairReadError> {
         let a_is_viewer = matches!(&self.a.identity, PrincipalIdentity::Human(id) if id == viewer);
         let b_is_viewer = matches!(&self.b.identity, PrincipalIdentity::Human(id) if id == viewer);
         match (a_is_viewer, b_is_viewer) {
@@ -183,7 +183,7 @@ impl PairEvidence {
 }
 
 #[derive(Clone)]
-struct Endpoint {
+pub(crate) struct Endpoint {
     identity: PrincipalIdentity,
     deleted_at_ms: Option<i64>,
 }
@@ -212,7 +212,7 @@ impl Endpoint {
 }
 
 #[derive(Default)]
-struct LivePrincipals {
+pub(crate) struct LivePrincipals {
     agents: HashMap<String, LivePrincipal>,
     users: HashMap<String, LivePrincipal>,
 }
@@ -226,7 +226,7 @@ struct LivePrincipal {
 }
 
 impl LivePrincipals {
-    async fn load(
+    pub(crate) async fn load(
         tx: &mut Transaction<'_, Sqlite>,
         pairs: &[PairEvidence],
     ) -> Result<Self, DirectPairReadError> {
@@ -279,7 +279,7 @@ impl LivePrincipals {
         }
     }
 
-    fn counterpart(
+    pub(crate) fn counterpart(
         &self,
         endpoint: &Endpoint,
     ) -> Result<DirectPairCounterpart, DirectPairReadError> {

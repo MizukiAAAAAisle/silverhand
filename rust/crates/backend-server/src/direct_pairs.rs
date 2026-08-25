@@ -8,6 +8,7 @@ use axum::{
     routing::get,
 };
 use serde::Serialize;
+use serde_json::Value;
 use silverhand_backend_core::{
     direct_pair_read::{
         DirectPairCounterpart, DirectPairList, DirectPairListItem, DirectPairReadModel,
@@ -140,6 +141,13 @@ impl From<&DirectPairCounterpart> for DirectPairCounterpartDto {
             },
         }
     }
+}
+
+/// The one counterpart wire authority, shared by the DM list and every other
+/// surface that embeds the same value object.
+pub(crate) fn counterpart_dto_value(counterpart: &DirectPairCounterpart) -> Value {
+    serde_json::to_value(DirectPairCounterpartDto::from(counterpart))
+        .expect("the closed counterpart DTO is always serializable")
 }
 
 fn principal_kind(identity: &PrincipalIdentity) -> &'static str {
