@@ -322,6 +322,16 @@ pub enum ConversationAgentActivityRefusal {
 pub trait ConversationAgentActivityReadPort {
     type Error: Error + Send + Sync + 'static;
 
+    /// Rejection-only preflight used to preserve the TS authority-before-query
+    /// order. Success is never a token: `read` re-evaluates the same authorities
+    /// in its own snapshot before selecting rows.
+    fn admit(
+        &self,
+        viewer: &UserId,
+        conversation: &ConversationId,
+        agent: &AgentId,
+    ) -> impl Future<Output = Result<Result<(), ConversationAgentActivityRefusal>, Self::Error>> + Send;
+
     fn read(
         &self,
         viewer: &UserId,

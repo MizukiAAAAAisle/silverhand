@@ -17,7 +17,7 @@ use silverhand_backend_core::{
     },
     persistence::PersistenceFailure,
 };
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;
 
 use crate::messaging::{MessagingStore, SELECT_AGENT_PARTICIPATES};
@@ -68,6 +68,17 @@ impl From<ConversationAgentActivityStoreError> for PersistenceFailure {
 impl ConversationAgentActivityReadPort for SqliteConversationAgentActivityRead {
     type Error = PersistenceFailure;
 
+    async fn admit(
+        &self,
+        viewer: &UserId,
+        conversation: &ConversationId,
+        agent: &AgentId,
+    ) -> Result<Result<(), ConversationAgentActivityRefusal>, Self::Error> {
+        self.admit_inner(viewer, conversation, agent)
+            .await
+            .map_err(PersistenceFailure::from)
+    }
+
     async fn read(
         &self,
         viewer: &UserId,
@@ -83,6 +94,19 @@ impl ConversationAgentActivityReadPort for SqliteConversationAgentActivityRead {
 }
 
 impl SqliteConversationAgentActivityRead {
+    async fn admit_inner(
+        &self,
+        viewer: &UserId,
+        requested: &ConversationId,
+        target: &AgentId,
+    ) -> Result<Result<(), ConversationAgentActivityRefusal>, ConversationAgentActivityStoreError>
+    {
+        let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
+        let outcome = admit_in_snapshot(&mut tx, viewer, requested, target).await?;
+        tx.commit().await?;
+        Ok(outcome)
+    }
+
     async fn read_inner(
         &self,
         viewer: &UserId,
@@ -94,54 +118,9 @@ impl SqliteConversationAgentActivityRead {
         ConversationAgentActivityStoreError,
     > {
         let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
-        let Some(channel) = load_channel_row(&mut tx, requested).await? else {
+        if let Err(refusal) = admit_in_snapshot(&mut tx, viewer, requested, target).await? {
             tx.commit().await?;
-            return Ok(Err(ConversationAgentActivityRefusal::NotFound));
-        };
-
-        // Reuse the detail face's complete selected membership and role decode.
-        // Public visibility may widen the viewer gate, but never hides a broken
-        // membership row or weakens target-agent participation below.
-        let human_members = load_human_members(&mut tx, requested).await?;
-        let stored_member = human_members.iter().any(|member| member == viewer);
-        let visible = match channel.placement() {
-            ChannelLifecyclePlacement::Workspace(workspace) => {
-                let workspace_exists: bool =
-                    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspaces w WHERE w.id=?)")
-                        .bind(workspace.workspace().as_str())
-                        .fetch_one(&mut *tx)
-                        .await?;
-                let role = if workspace_exists {
-                    load_workspace_role(&mut tx, viewer, workspace.workspace()).await?
-                } else {
-                    None
-                };
-                let is_member = role.is_some() && stored_member;
-                let public_widen = role.is_some()
-                    && workspace.roster() == DirectoryRoster::Open
-                    && channel.visibility() == ChannelVisibility::Public
-                    && channel.archived_at().is_none();
-                is_member || public_widen
-            }
-            ChannelLifecyclePlacement::DirectPair(participants) => participants
-                .both()
-                .contains(&&PrincipalIdentity::Human(viewer.clone())),
-        };
-        if !visible {
-            tx.commit().await?;
-            return Ok(Err(ConversationAgentActivityRefusal::Forbidden));
-        }
-
-        let target_participates: Option<i64> = sqlx::query_scalar(SELECT_AGENT_PARTICIPATES)
-            .bind(requested.as_str())
-            .bind(target.as_str())
-            .bind(target.as_str())
-            .bind(target.as_str())
-            .fetch_optional(&mut *tx)
-            .await?;
-        if target_participates.is_none() {
-            tx.commit().await?;
-            return Ok(Err(ConversationAgentActivityRefusal::TargetNotParticipant));
+            return Ok(Err(refusal));
         }
 
         let selected = sqlx::query(
@@ -207,6 +186,61 @@ impl SqliteConversationAgentActivityRead {
         tx.commit().await?;
         Ok(Ok(page))
     }
+}
+
+async fn admit_in_snapshot(
+    tx: &mut Transaction<'_, Sqlite>,
+    viewer: &UserId,
+    requested: &ConversationId,
+    target: &AgentId,
+) -> Result<Result<(), ConversationAgentActivityRefusal>, ConversationAgentActivityStoreError> {
+    let Some(channel) = load_channel_row(tx, requested).await? else {
+        return Ok(Err(ConversationAgentActivityRefusal::NotFound));
+    };
+
+    // Reuse the detail face's complete selected membership and role decode.
+    // Public visibility may widen the viewer gate, but never hides a broken
+    // membership row or weakens target-agent participation below.
+    let human_members = load_human_members(tx, requested).await?;
+    let stored_member = human_members.iter().any(|member| member == viewer);
+    let visible = match channel.placement() {
+        ChannelLifecyclePlacement::Workspace(workspace) => {
+            let workspace_exists: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspaces w WHERE w.id=?)")
+                    .bind(workspace.workspace().as_str())
+                    .fetch_one(&mut **tx)
+                    .await?;
+            let role = if workspace_exists {
+                load_workspace_role(tx, viewer, workspace.workspace()).await?
+            } else {
+                None
+            };
+            let is_member = role.is_some() && stored_member;
+            let public_widen = role.is_some()
+                && workspace.roster() == DirectoryRoster::Open
+                && channel.visibility() == ChannelVisibility::Public
+                && channel.archived_at().is_none();
+            is_member || public_widen
+        }
+        ChannelLifecyclePlacement::DirectPair(participants) => participants
+            .both()
+            .contains(&&PrincipalIdentity::Human(viewer.clone())),
+    };
+    if !visible {
+        return Ok(Err(ConversationAgentActivityRefusal::Forbidden));
+    }
+
+    let target_participates: Option<i64> = sqlx::query_scalar(SELECT_AGENT_PARTICIPATES)
+        .bind(requested.as_str())
+        .bind(target.as_str())
+        .bind(target.as_str())
+        .bind(target.as_str())
+        .fetch_optional(&mut **tx)
+        .await?;
+    if target_participates.is_none() {
+        return Ok(Err(ConversationAgentActivityRefusal::TargetNotParticipant));
+    }
+    Ok(Ok(()))
 }
 
 fn decode_payload(
