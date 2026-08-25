@@ -1,0 +1,1 @@
+//! SQLite channel-directory adapters.
