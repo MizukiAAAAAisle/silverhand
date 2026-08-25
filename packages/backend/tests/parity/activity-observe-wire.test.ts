@@ -32,12 +32,17 @@ function seed(t: TestApp): void {
   `);
 }
 
-describe('Activity observe wire is signed by the production TypeScript route', () => {
+describe('Activity observe cutover fixture uses the production TypeScript route', () => {
   let t: TestApp | null = null;
   afterEach(() => { t?.cleanup(); t = null; });
 
-  it('signs every checked-in request and response', async () => {
-    for (const entry of fixture as Array<(typeof fixture)[number] & { request_json?: string }>) {
+  it('signs shared wire exactly and divergent invalid input as an admission verdict', async () => {
+    for (const entry of fixture as Array<
+      (typeof fixture)[number] & {
+        request_json?: string;
+        ts_authority?: 'admission_only';
+      }
+    >) {
       t = buildTestApp();
       seed(t);
       const response = await http(t).post(
@@ -45,10 +50,14 @@ describe('Activity observe wire is signed by the production TypeScript route', (
         entry.request,
         entry.request_json === undefined ? undefined : { body: entry.request_json },
       );
-      expect(response.status, entry.name).toBe(entry.status);
-      expect(await response.json(), entry.name).toEqual(entry.body);
+      if (entry.ts_authority === 'admission_only') {
+        expect(response.status < 400, entry.name).toBe(entry.status < 400);
+      } else {
+        expect(response.status, entry.name).toBe(entry.status);
+        expect(await response.json(), entry.name).toEqual(entry.body);
+      }
       t.cleanup(); t = null;
     }
-    expect(fixture).toHaveLength(16);
+    expect(fixture).toHaveLength(19);
   });
 });

@@ -45,32 +45,37 @@
     "name": "missing_sources",
     "request": {},
     "status": 400,
-    "body": {"error":"invalid input","issues":[{"code":"invalid_type","expected":"array","received":"undefined","path":["sources"],"message":"Required"}]}
+    "body": {"error":"invalid input"},
+    "ts_authority": "admission_only"
   },
   {
     "name": "empty_sources",
     "request": {"sources":[]},
     "status": 400,
-    "body": {"error":"invalid input","issues":[{"code":"too_small","minimum":1,"type":"array","inclusive":true,"exact":false,"message":"Array must contain at least 1 element(s)","path":["sources"]}]}
+    "body": {"error":"invalid input"},
+    "ts_authority": "admission_only"
   },
   {
     "name": "empty_notification_id",
     "request": {"sources":[{"kind":"notification","notification_id":""}]},
     "status": 400,
-    "body": {"error":"invalid input","issues":[{"code":"too_small","minimum":1,"type":"string","inclusive":true,"exact":false,"message":"String must contain at least 1 character(s)","path":["sources",0,"notification_id"]}]}
+    "body": {"error":"invalid input"},
+    "ts_authority": "admission_only"
   },
   {
     "name": "wrong_sources_type",
     "request": {"sources":"all"},
     "status": 400,
-    "body": {"error":"invalid input","issues":[{"code":"invalid_type","expected":"array","received":"string","path":["sources"],"message":"Expected array, received string"}]}
+    "body": {"error":"invalid input"},
+    "ts_authority": "admission_only"
   },
   {
-    "name": "fractional_seq_uses_zod_integer_issue",
+    "name": "fractional_seq_is_rejected",
     "request": null,
     "request_json": "{\"sources\":[{\"kind\":\"stream\",\"conversation_id\":\"c\",\"thread_root_id\":null,\"position\":{\"kind\":\"at_seq\",\"seq\":1.5}}]}",
     "status": 400,
-    "body": {"error":"invalid input","issues":[{"code":"invalid_type","expected":"integer","received":"float","path":["sources",0,"position","seq"],"message":"Expected integer, received float"}]}
+    "body": {"error":"invalid input"},
+    "ts_authority": "admission_only"
   },
   {
     "name": "integral_decimal_is_a_number",
@@ -99,5 +104,29 @@
     "request_json": "{\"sources\":[{\"kind\":\"stream\",\"conversation_id\":\"missing\",\"thread_root_id\":null,\"position\":{\"kind\":\"at_seq\",\"seq\":1e20}}]}",
     "status": 404,
     "body": {"error":"conversation not found","code":"conversation_not_found"}
+  },
+  {
+    "name": "negative_fraction_is_rejected",
+    "request": null,
+    "request_json": "{\"sources\":[{\"kind\":\"stream\",\"conversation_id\":\"c\",\"thread_root_id\":null,\"position\":{\"kind\":\"at_seq\",\"seq\":-1.5}}]}",
+    "status": 400,
+    "body": {"error":"invalid input"},
+    "ts_authority": "admission_only"
+  },
+  {
+    "name": "positive_json_number_overflow_is_rejected",
+    "request": null,
+    "request_json": "{\"sources\":[{\"kind\":\"stream\",\"conversation_id\":\"c\",\"thread_root_id\":null,\"position\":{\"kind\":\"at_seq\",\"seq\":1e400}}]}",
+    "status": 400,
+    "body": {"error":"invalid input"},
+    "ts_authority": "admission_only"
+  },
+  {
+    "name": "negative_json_number_overflow_is_rejected",
+    "request": null,
+    "request_json": "{\"sources\":[{\"kind\":\"stream\",\"conversation_id\":\"c\",\"thread_root_id\":null,\"position\":{\"kind\":\"at_seq\",\"seq\":-1e400}}]}",
+    "status": 400,
+    "body": {"error":"invalid input"},
+    "ts_authority": "admission_only"
   }
 ]

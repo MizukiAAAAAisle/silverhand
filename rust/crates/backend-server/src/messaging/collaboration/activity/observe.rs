@@ -286,10 +286,10 @@ fn type_issue(expected: &str, actual: &str, path: Vec<Value>) -> Value {
     json!({"code":"invalid_type","expected":expected,"received":actual,"path":path,"message":message})
 }
 
-fn invalid(issues: Vec<Value>) -> Response {
+fn invalid(_: Vec<Value>) -> Response {
     (
         StatusCode::BAD_REQUEST,
-        Json(json!({"error":"invalid input","issues":issues})),
+        Json(json!({"error":"invalid input"})),
     )
         .into_response()
 }
@@ -665,6 +665,6 @@ mod tests {
             );
             assert_eq!(body, case["body"], "{}", case["name"]);
         }
-        assert_eq!(fixture.as_array().unwrap().len(), 16);
+        assert_eq!(fixture.as_array().unwrap().len(), 19);
     }
 }
