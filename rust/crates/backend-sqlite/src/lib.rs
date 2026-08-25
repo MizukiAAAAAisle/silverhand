@@ -18,6 +18,7 @@ pub mod messaging;
 use std::{path::Path, time::Duration};
 
 pub mod access;
+pub mod agent_availability_read;
 
 use silverhand_backend_core::foundation_message::{
     Message, MessageCreatedFact, MessagePageFact, MessageReadUnitOfWork, MessageUnitOfWork,

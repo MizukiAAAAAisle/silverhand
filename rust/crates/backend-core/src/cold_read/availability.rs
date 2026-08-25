@@ -20,23 +20,29 @@
 //!
 //! ## Two values, total
 //!
-//! There is no success arm for "cannot tell". Facts that cannot be read are the
-//! caller's `Err` upstream of this module, and a renderer's "unknown" is a
-//! projection of a failed request, never a value this layer produces.
+//! The verdict still projects to exactly two values; there is no success arm for
+//! "cannot tell". But this module now DRIVES the host-side reads itself, lazily, so
+//! the rule order decides which are taken at all. A fact that cannot be read
+//! therefore surfaces HERE as [`AvailabilityReadError::Fetch`] — an infrastructure
+//! fault the route renders as a `500`, distinct from a facts mismatch, and never a
+//! renderer's "unknown", which stays a projection of a failed request rather than a
+//! value this layer produces.
 //!
-//! ## Every channel is bound to the coordinate the REQUEST named
+//! ## Each channel is bound to the coordinate the REQUEST named, WHEN it is read
 //!
 //! Three fact channels are composed here, and each is checked against a coordinate
 //! the request itself names — the agent asked about, and the host that agent's row
 //! says it sits on — never against each other. Facts that agree with one another
 //! about a second agent or a third host still do not describe this read.
 //!
-//! The agent channel needs this most, because the answer carries no agent id: a
-//! verdict computed from the wrong row is a well-formed `Online`/`Offline` that no
-//! downstream face can tell from the right one. The checks therefore run BEFORE any
-//! product rule, so a splice cannot hide behind an `Offline` the rules would have
-//! answered anyway, and a mismatch is an internal contract failure rather than a
-//! product refusal: no client can cause it and none can act on it.
+//! The agent channel is checked FIRST, before any rule and before any host-side
+//! read, because the answer carries no agent id: a verdict computed from the wrong
+//! row is a well-formed `Online`/`Offline` no downstream face can tell from the
+//! right one. Each host-side channel is then bound at the point its read is
+//! consulted — and a read the rule order short-circuits is never consulted, so
+//! there is no spliced fact to catch there. A mismatch that IS reached is an
+//! internal contract failure rather than a product refusal: no client can cause it
+//! or act on it.
 //!
 //! ## The cause does not leave this crate
 //!
@@ -65,11 +71,14 @@
 //! from a second projection is well-formed — so it is an obligation on
 //! composition, listed as such.
 
-use std::fmt;
+use std::{fmt, future::Future};
 
 use thiserror::Error;
 
-use crate::identity::{AgentId, HostId};
+use crate::{
+    identity::{AgentId, HostId},
+    persistence::PersistenceFailure,
+};
 
 /// The two-valued fact a client reads.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,21 +114,25 @@ enum Unreachable {
 ///     HostReachabilityFacts,
 /// };
 /// use silverhand_backend_core::identity::{AgentId, HostId};
+/// use silverhand_backend_core::persistence::PersistenceFailure;
 ///
-/// let id = AgentId::parse("a1").unwrap();
-/// let host_id = HostId::parse("h1").unwrap();
-/// let verdict = read_agent_availability(
-///     &id,
-///     &AgentAvailabilityFacts {
-///         id: id.clone(),
-///         host_id: host_id.clone(),
-///         deletion_started_at: None,
-///     },
-///     Some(&HostReachabilityFacts { id: host_id.clone(), revoked_at: None }),
-///     &HostAttachmentFacts { host_id, attached: true },
-/// )
-/// .unwrap();
-/// let _cause = verdict.cause();
+/// async fn demo() {
+///     let id = AgentId::parse("a1").unwrap();
+///     let host_id = HostId::parse("h1").unwrap();
+///     let verdict = read_agent_availability(
+///         &id,
+///         &AgentAvailabilityFacts { id: id.clone(), host_id, deletion_started_at: None },
+///         |host: HostId| std::future::ready(Ok::<_, PersistenceFailure>(Some(
+///             HostReachabilityFacts { id: host, revoked_at: None },
+///         ))),
+///         |host: HostId| std::future::ready(Ok::<_, PersistenceFailure>(
+///             HostAttachmentFacts { host_id: host, attached: true },
+///         )),
+///     )
+///     .await
+///     .unwrap();
+///     let _cause = verdict.cause();
+/// }
 /// ```
 ///
 /// The same code through the projection compiles, so the gate above fails for the
@@ -131,21 +144,26 @@ enum Unreachable {
 ///     HostAttachmentFacts, HostReachabilityFacts,
 /// };
 /// use silverhand_backend_core::identity::{AgentId, HostId};
+/// use silverhand_backend_core::persistence::PersistenceFailure;
 ///
-/// let id = AgentId::parse("a1").unwrap();
-/// let host_id = HostId::parse("h1").unwrap();
-/// let verdict = read_agent_availability(
-///     &id,
-///     &AgentAvailabilityFacts {
-///         id: id.clone(),
-///         host_id: host_id.clone(),
-///         deletion_started_at: None,
-///     },
-///     Some(&HostReachabilityFacts { id: host_id.clone(), revoked_at: None }),
-///     &HostAttachmentFacts { host_id, attached: true },
-/// )
-/// .unwrap();
-/// assert_eq!(verdict.availability(), AgentAvailability::Online);
+/// async fn demo() {
+///     let id = AgentId::parse("a1").unwrap();
+///     let host_id = HostId::parse("h1").unwrap();
+///     let verdict = read_agent_availability(
+///         &id,
+///         &AgentAvailabilityFacts { id: id.clone(), host_id, deletion_started_at: None },
+///         |host: HostId| std::future::ready(Ok::<_, PersistenceFailure>(Some(
+///             HostReachabilityFacts { id: host, revoked_at: None },
+///         ))),
+///         |host: HostId| std::future::ready(Ok::<_, PersistenceFailure>(
+///             HostAttachmentFacts { host_id: host, attached: true },
+///         )),
+///     )
+///     .await
+///     .unwrap();
+///     assert_eq!(verdict.availability(), AgentAvailability::Online);
+/// }
+/// let _ = demo;
 /// ```
 #[derive(Clone, Copy)]
 pub struct AgentReachability(Reachability);
@@ -242,51 +260,88 @@ pub enum AvailabilityFactsMismatch {
     Host { expected: HostId, found: HostId },
 }
 
-/// Read one agent's reachability.
+/// Why an availability read did not produce a verdict.
+///
+/// The rule below drives the host-side reads itself, so the two ways it can fail
+/// are named apart: a [`Fetch`](Self::Fetch) is infrastructure — a fact the rule
+/// asked for could not be read — which the route renders as a `500`; a
+/// [`Mismatch`](Self::Mismatch) is a composition splice, the same class of defect
+/// as before, which also takes a `500` rather than a plausible `offline`. Keeping
+/// them distinct lets a caller assert that a short-circuited read was never taken:
+/// a rule that stopped early cannot report a `Fetch` from a source it never
+/// consulted.
+#[derive(Debug, Error)]
+pub enum AvailabilityReadError {
+    #[error("an availability fact could not be read")]
+    Fetch(#[source] PersistenceFailure),
+    #[error(transparent)]
+    Mismatch(#[from] AvailabilityFactsMismatch),
+}
+
+/// Read one agent's reachability, taking the host-side facts lazily so the rule
+/// order decides which reads happen at all.
 ///
 /// `requested` is the coordinate the read is about — the id a route was asked for —
-/// and the agent facts must describe it. Both host-side channels are then bound to
-/// the AGENT's own host id, and not to each other: a row and an attachment that
-/// agree with each other about a third host would still answer for a host this
-/// agent does not sit on.
+/// and the agent facts must describe it; that seal is checked FIRST, before any
+/// rule and before either lazy read, because a verdict computed from the wrong row
+/// carries no id to give it away.
 ///
-/// Those checks run BEFORE the rules. A splice whose value would have been
-/// `Offline` anyway is still a splice, and letting it answer would make the defect
-/// visible only in the cases where it happens to matter.
+/// Then, first match wins, and each read is taken only if the rules reach it:
 ///
-/// Then, first match wins:
+///  1. a row mid hard-delete cannot accept work — answered without reading either
+///     host-side fact, so a source that is down cannot turn an offline into a `500`;
+///  2. otherwise the host row is read; no row, then a revoked host. Revocation is
+///     checked before the socket because a bare row revoke can race ahead of the
+///     socket teardown, and a revoked host must not read reachable off a lingering
+///     connection. Neither arm reads the attachment;
+///  3. otherwise the attachment is read.
 ///
-///  1. a row mid hard-delete cannot accept work;
-///  2. no host row, then a revoked host. Revocation is checked before the socket
-///     because a bare row revoke can race ahead of the socket teardown, and a
-///     revoked host must not read reachable off a lingering connection;
-///  3. the attachment.
-pub fn read_agent_availability(
+/// Each host-side fact is bound to the AGENT's own host id at the point it is
+/// consulted, and not to the other: a row and an attachment that agree with each
+/// other about a third host would still answer for a host this agent does not sit
+/// on. A read that is never consulted is never sealed — there is nothing to splice.
+///
+/// The lazy reads receive the host id BY VALUE (an owned clone of the agent's own
+/// host id): a closure that borrowed a reference into this frame could not return a
+/// future outliving that borrow under one concrete future type.
+pub async fn read_agent_availability<ReadHost, HostFut, ReadAttachment, AttachFut>(
     requested: &AgentId,
     agent: &AgentAvailabilityFacts,
-    host: Option<&HostReachabilityFacts>,
-    attachment: &HostAttachmentFacts,
-) -> Result<AgentReachability, AvailabilityFactsMismatch> {
+    read_host: ReadHost,
+    read_attachment: ReadAttachment,
+) -> Result<AgentReachability, AvailabilityReadError>
+where
+    ReadHost: FnOnce(HostId) -> HostFut,
+    HostFut: Future<Output = Result<Option<HostReachabilityFacts>, PersistenceFailure>>,
+    ReadAttachment: FnOnce(HostId) -> AttachFut,
+    AttachFut: Future<Output = Result<HostAttachmentFacts, PersistenceFailure>>,
+{
     if requested != &agent.id {
         return Err(AvailabilityFactsMismatch::Agent {
             expected: requested.clone(),
             found: agent.id.clone(),
-        });
+        }
+        .into());
     }
-    if let Some(host) = host {
-        same_host(&agent.host_id, &host.id)?;
-    }
-    same_host(&agent.host_id, &attachment.host_id)?;
-
     if agent.deletion_started_at.is_some() {
         return Ok(AgentReachability::unreachable(Unreachable::BeingDeleted));
     }
+
+    let host = read_host(agent.host_id.clone())
+        .await
+        .map_err(AvailabilityReadError::Fetch)?;
     let Some(host) = host else {
         return Ok(AgentReachability::unreachable(Unreachable::HostGone));
     };
+    same_host(&agent.host_id, &host.id)?;
     if host.revoked_at.is_some() {
         return Ok(AgentReachability::unreachable(Unreachable::HostRevoked));
     }
+
+    let attachment = read_attachment(agent.host_id.clone())
+        .await
+        .map_err(AvailabilityReadError::Fetch)?;
+    same_host(&agent.host_id, &attachment.host_id)?;
     if !attachment.attached {
         return Ok(AgentReachability::unreachable(Unreachable::Detached));
     }
@@ -337,99 +392,147 @@ mod tests {
         }
     }
 
-    /// Asks about the agent the facts describe, which is what every rule case is
-    /// about; the seal itself is exercised by asking about someone else.
-    fn read(
-        agent: &AgentAvailabilityFacts,
-        host: Option<&HostReachabilityFacts>,
-        attachment: &HostAttachmentFacts,
-    ) -> AgentReachability {
-        read_agent_availability(&agent.id.clone(), agent, host, attachment).expect("one row")
+    /// A source fault to hand a read that must NOT be consulted: if the rule reaches
+    /// it, it surfaces as `Fetch` and the case fails, so a short-circuit is proven
+    /// rather than assumed.
+    fn fault() -> PersistenceFailure {
+        PersistenceFailure::from_source(std::io::Error::other("fact source down"))
     }
 
-    #[test]
-    fn an_attached_unrevoked_host_makes_its_agent_reachable() {
-        let reachability = read(&agent(None), Some(&host(None)), &attachment("h1", true));
+    /// A host read that yields one fixed owned outcome. `FnOnce`, so a
+    /// non-`Clone` `PersistenceFailure` can be moved straight through.
+    fn host_read(
+        outcome: Result<Option<HostReachabilityFacts>, PersistenceFailure>,
+    ) -> impl FnOnce(
+        HostId,
+    )
+        -> std::future::Ready<Result<Option<HostReachabilityFacts>, PersistenceFailure>> {
+        move |_| std::future::ready(outcome)
+    }
+
+    /// An attachment read that yields one fixed owned outcome.
+    fn attachment_read(
+        outcome: Result<HostAttachmentFacts, PersistenceFailure>,
+    ) -> impl FnOnce(HostId) -> std::future::Ready<Result<HostAttachmentFacts, PersistenceFailure>>
+    {
+        move |_| std::future::ready(outcome)
+    }
+
+    fn expect_mismatch(error: AvailabilityReadError) -> AvailabilityFactsMismatch {
+        match error {
+            AvailabilityReadError::Mismatch(mismatch) => mismatch,
+            AvailabilityReadError::Fetch(_) => {
+                panic!("expected a facts mismatch, not a fetch failure")
+            }
+        }
+    }
+
+    /// Asks about the agent the facts describe, which is what every rule case is
+    /// about; the seals are exercised by asking about someone else. Takes the facts
+    /// by value and feeds them through ready closures, so a rule case reads the same
+    /// way the route does.
+    async fn read(
+        agent: &AgentAvailabilityFacts,
+        host: Option<HostReachabilityFacts>,
+        attachment: HostAttachmentFacts,
+    ) -> AgentReachability {
+        read_agent_availability(
+            &agent.id,
+            agent,
+            host_read(Ok(host)),
+            attachment_read(Ok(attachment)),
+        )
+        .await
+        .expect("one row")
+    }
+
+    #[tokio::test]
+    async fn an_attached_unrevoked_host_makes_its_agent_reachable() {
+        let reachability = read(&agent(None), Some(host(None)), attachment("h1", true)).await;
         assert_eq!(reachability.cause(), None);
         assert_eq!(reachability.availability(), AgentAvailability::Online);
     }
 
     /// Beats a revoked host and beats a missing row: swapping either rule ahead of
     /// it would report that rule's cause instead.
-    #[test]
-    fn deletion_answers_before_any_host_fact() {
+    #[tokio::test]
+    async fn deletion_answers_before_any_host_fact() {
         assert_eq!(
             read(
                 &agent(Some(10)),
-                Some(&host(Some(20))),
-                &attachment("h1", true)
+                Some(host(Some(20))),
+                attachment("h1", true)
             )
+            .await
             .cause(),
             Some(Unreachable::BeingDeleted)
         );
         assert_eq!(
-            read(&agent(Some(10)), None, &attachment("h1", false)).cause(),
+            read(&agent(Some(10)), None, attachment("h1", false))
+                .await
+                .cause(),
             Some(Unreachable::BeingDeleted)
         );
     }
 
     /// Absence is its own cause, not a revoked host with a missing timestamp.
-    #[test]
-    fn a_missing_host_row_is_not_reported_as_a_revoked_one() {
+    #[tokio::test]
+    async fn a_missing_host_row_is_not_reported_as_a_revoked_one() {
         assert_eq!(
-            read(&agent(None), None, &attachment("h1", true)).cause(),
+            read(&agent(None), None, attachment("h1", true))
+                .await
+                .cause(),
             Some(Unreachable::HostGone)
         );
     }
 
     /// The product claim: revocation wins over a socket the transport still holds,
     /// so a revoke racing ahead of its teardown never reads reachable.
-    #[test]
-    fn a_lingering_attachment_does_not_save_a_revoked_host() {
-        let reachability = read(&agent(None), Some(&host(Some(20))), &attachment("h1", true));
+    #[tokio::test]
+    async fn a_lingering_attachment_does_not_save_a_revoked_host() {
+        let reachability = read(&agent(None), Some(host(Some(20))), attachment("h1", true)).await;
         assert_eq!(reachability.cause(), Some(Unreachable::HostRevoked));
         assert_eq!(reachability.availability(), AgentAvailability::Offline);
     }
 
     /// Both later rules hold: checking the attachment first would report `Detached`
     /// for a host whose authority is gone for good.
-    #[test]
-    fn a_revoked_host_is_revoked_rather_than_merely_detached() {
+    #[tokio::test]
+    async fn a_revoked_host_is_revoked_rather_than_merely_detached() {
         assert_eq!(
-            read(
-                &agent(None),
-                Some(&host(Some(20))),
-                &attachment("h1", false)
-            )
-            .cause(),
+            read(&agent(None), Some(host(Some(20))), attachment("h1", false))
+                .await
+                .cause(),
             Some(Unreachable::HostRevoked)
         );
     }
 
     /// The last rule answers only once every earlier one is satisfied.
-    #[test]
-    fn detachment_answers_only_on_a_live_host() {
+    #[tokio::test]
+    async fn detachment_answers_only_on_a_live_host() {
         assert_eq!(
-            read(&agent(None), Some(&host(None)), &attachment("h1", false)).cause(),
+            read(&agent(None), Some(host(None)), attachment("h1", false))
+                .await
+                .cause(),
             Some(Unreachable::Detached)
         );
     }
 
     /// `Debug` is a projection too, and a derived one would carry the cause into
     /// every log line and assertion message a consumer writes.
-    #[test]
-    fn rendering_a_verdict_shows_the_wire_value_and_nothing_else() {
+    #[tokio::test]
+    async fn rendering_a_verdict_shows_the_wire_value_and_nothing_else() {
         assert_eq!(
             format!(
                 "{:?}",
-                read(&agent(None), Some(&host(Some(20))), &attachment("h1", true))
+                read(&agent(None), Some(host(Some(20))), attachment("h1", true)).await
             ),
             "Offline"
         );
         assert_eq!(
             format!(
                 "{:?}",
-                read(&agent(None), Some(&host(None)), &attachment("h1", true))
+                read(&agent(None), Some(host(None)), attachment("h1", true)).await
             ),
             "Online"
         );
@@ -450,18 +553,92 @@ mod tests {
         }
     }
 
+    /// A deleting row answers before either host-side read: faulting both proves the
+    /// rule never consults them, so a source that is down cannot turn what the wire
+    /// would show as `offline` into a `500`.
+    #[tokio::test]
+    async fn a_deleting_agent_reads_neither_host_nor_attachment() {
+        let deleting = agent(Some(10));
+        let verdict = read_agent_availability(
+            &deleting.id,
+            &deleting,
+            host_read(Err(fault())),
+            attachment_read(Err(fault())),
+        )
+        .await
+        .expect("deletion short-circuits before either read");
+        assert_eq!(verdict.cause(), Some(Unreachable::BeingDeleted));
+    }
+
+    /// A missing or revoked host answers before the attachment is read: faulting the
+    /// attachment proves it is never consulted on either arm.
+    #[tokio::test]
+    async fn a_gone_or_revoked_host_reads_no_attachment() {
+        let live = agent(None);
+
+        let gone = read_agent_availability(
+            &live.id,
+            &live,
+            host_read(Ok(None)),
+            attachment_read(Err(fault())),
+        )
+        .await
+        .expect("a gone host short-circuits before the attachment");
+        assert_eq!(gone.cause(), Some(Unreachable::HostGone));
+
+        let revoked = read_agent_availability(
+            &live.id,
+            &live,
+            host_read(Ok(Some(host(Some(20))))),
+            attachment_read(Err(fault())),
+        )
+        .await
+        .expect("a revoked host short-circuits before the attachment");
+        assert_eq!(revoked.cause(), Some(Unreachable::HostRevoked));
+    }
+
+    /// A read the rules DO reach, whose source is down, is a fetch failure — a `500`
+    /// — never a value invented to fill the gap. Both reachable reads are covered.
+    #[tokio::test]
+    async fn a_consulted_read_that_faults_is_a_fetch_failure() {
+        let live = agent(None);
+
+        let host_down = read_agent_availability(
+            &live.id,
+            &live,
+            host_read(Err(fault())),
+            attachment_read(Ok(attachment("h1", true))),
+        )
+        .await
+        .expect_err("a faulting host read is not a value");
+        assert!(matches!(host_down, AvailabilityReadError::Fetch(_)));
+
+        let attachment_down = read_agent_availability(
+            &live.id,
+            &live,
+            host_read(Ok(Some(host(None)))),
+            attachment_read(Err(fault())),
+        )
+        .await
+        .expect_err("a faulting attachment read is not a value");
+        assert!(matches!(attachment_down, AvailabilityReadError::Fetch(_)));
+    }
+
     /// The answer carries no agent id, so facts read for a second agent would be an
-    /// indistinguishable `Online` downstream.
-    #[test]
-    fn facts_about_another_agent_are_not_this_reads_answer() {
+    /// indistinguishable `Online` downstream. Faulting both reads proves the agent
+    /// seal answers first: were it not, a consulted read would surface as `Fetch`.
+    #[tokio::test]
+    async fn facts_about_another_agent_are_not_this_reads_answer() {
+        let error = read_agent_availability(
+            &agent_id("a2"),
+            &agent(None),
+            host_read(Err(fault())),
+            attachment_read(Err(fault())),
+        )
+        .await
+        .expect_err("a second agent's facts");
         assert_eq!(
-            read_agent_availability(
-                &agent_id("a2"),
-                &agent(None),
-                Some(&host(None)),
-                &attachment("h1", true),
-            )
-            .expect_err("a second agent's facts"),
+            expect_mismatch(error),
             AvailabilityFactsMismatch::Agent {
                 expected: agent_id("a2"),
                 found: agent_id("a1"),
@@ -469,59 +646,66 @@ mod tests {
         );
     }
 
-    /// The agent coordinate is checked before any rule, so a mis-read row cannot be
-    /// excused by an `Offline` the rules would have answered on their own.
-    #[test]
-    fn an_agent_splice_is_refused_before_the_rules_answer() {
+    /// The agent seal is checked before even the first rule, so a mis-read row for a
+    /// DELETING agent cannot be excused by the `offline` deletion would have given.
+    #[tokio::test]
+    async fn an_agent_splice_is_refused_before_the_rules_answer() {
+        let error = read_agent_availability(
+            &agent_id("a2"),
+            &agent(Some(10)),
+            host_read(Err(fault())),
+            attachment_read(Err(fault())),
+        )
+        .await
+        .expect_err("a second agent's deleting row");
         assert!(matches!(
-            read_agent_availability(
-                &agent_id("a2"),
-                &agent(Some(10)),
-                Some(&host(Some(20))),
-                &attachment("h1", false),
-            ),
-            Err(AvailabilityFactsMismatch::Agent { .. })
+            expect_mismatch(error),
+            AvailabilityFactsMismatch::Agent { .. }
         ));
     }
 
-    /// The host channels are bound to the agent row's host, and the row itself is
-    /// bound to the request: internally consistent facts about a second agent are
-    /// still refused.
-    #[test]
-    fn host_facts_agreeing_with_another_agents_row_are_still_refused() {
+    /// The row is bound to the request before any host-side read: internally
+    /// consistent facts about a second agent are refused on the agent seal alone.
+    #[tokio::test]
+    async fn host_facts_agreeing_with_another_agents_row_are_still_refused() {
         let other = AgentAvailabilityFacts {
             id: agent_id("a2"),
             host_id: host_id("h2"),
             deletion_started_at: None,
         };
+        let error = read_agent_availability(
+            &agent_id("a1"),
+            &other,
+            host_read(Err(fault())),
+            attachment_read(Err(fault())),
+        )
+        .await
+        .expect_err("a second agent's row");
         assert!(matches!(
-            read_agent_availability(
-                &agent_id("a1"),
-                &other,
-                Some(&HostReachabilityFacts {
-                    id: host_id("h2"),
-                    revoked_at: None,
-                }),
-                &attachment("h2", true),
-            ),
-            Err(AvailabilityFactsMismatch::Agent { .. })
+            expect_mismatch(error),
+            AvailabilityFactsMismatch::Agent { .. }
         ));
     }
 
-    #[test]
-    fn a_host_row_for_another_host_is_not_this_agents_answer() {
+    /// The host row is bound to the agent's own host when it is read; a row for
+    /// another host is refused there, before the attachment is consulted (which is
+    /// faulted to prove it is not).
+    #[tokio::test]
+    async fn a_host_row_for_another_host_is_not_this_agents_answer() {
         let found = host_id("h2");
+        let error = read_agent_availability(
+            &agent_id("a1"),
+            &agent(None),
+            host_read(Ok(Some(HostReachabilityFacts {
+                id: host_id("h2"),
+                revoked_at: None,
+            }))),
+            attachment_read(Err(fault())),
+        )
+        .await
+        .expect_err("another host's row");
         assert_eq!(
-            read_agent_availability(
-                &agent_id("a1"),
-                &agent(None),
-                Some(&HostReachabilityFacts {
-                    id: found.clone(),
-                    revoked_at: None,
-                }),
-                &attachment("h1", true),
-            )
-            .expect_err("another host's row"),
+            expect_mismatch(error),
             AvailabilityFactsMismatch::Host {
                 expected: host_id("h1"),
                 found,
@@ -529,79 +713,25 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_attachment_observed_for_another_host_is_not_this_agents_answer() {
+    /// The attachment is bound to the agent's own host when it is read, reached only
+    /// on a live unrevoked host: an attachment observed for another host is refused.
+    #[tokio::test]
+    async fn an_attachment_observed_for_another_host_is_not_this_agents_answer() {
         let found = host_id("h2");
+        let error = read_agent_availability(
+            &agent_id("a1"),
+            &agent(None),
+            host_read(Ok(Some(host(None)))),
+            attachment_read(Ok(attachment("h2", true))),
+        )
+        .await
+        .expect_err("another host's attachment");
         assert_eq!(
-            read_agent_availability(
-                &agent_id("a1"),
-                &agent(None),
-                Some(&host(None)),
-                &attachment(found.as_str(), true),
-            )
-            .expect_err("another host's attachment"),
+            expect_mismatch(error),
             AvailabilityFactsMismatch::Host {
                 expected: host_id("h1"),
                 found,
             }
-        );
-    }
-
-    /// Neither host channel is checked against the OTHER: two facts that agree with
-    /// each other about a third host still do not describe this agent.
-    #[test]
-    fn two_channels_agreeing_about_another_host_are_still_not_this_agents_answer() {
-        let found = host_id("h2");
-        assert_eq!(
-            read_agent_availability(
-                &agent_id("a1"),
-                &agent(None),
-                Some(&HostReachabilityFacts {
-                    id: found.clone(),
-                    revoked_at: None,
-                }),
-                &attachment(found.as_str(), true),
-            )
-            .expect_err("two facts about a third host"),
-            AvailabilityFactsMismatch::Host {
-                expected: host_id("h1"),
-                found,
-            }
-        );
-    }
-
-    /// The attachment's coordinate is checked whether or not a host row was found,
-    /// so an absent row cannot become the reason a splice goes unnoticed.
-    #[test]
-    fn an_attachment_for_another_host_is_refused_without_a_host_row_too() {
-        let found = host_id("h2");
-        assert_eq!(
-            read_agent_availability(
-                &agent_id("a1"),
-                &agent(None),
-                None,
-                &attachment(found.as_str(), true)
-            )
-            .expect_err("another host's attachment"),
-            AvailabilityFactsMismatch::Host {
-                expected: host_id("h1"),
-                found,
-            }
-        );
-    }
-
-    /// The splice is refused even where the rules would have answered `Offline`
-    /// on their own, so it cannot hide behind a plausible value.
-    #[test]
-    fn a_spliced_read_is_refused_before_any_rule_answers() {
-        assert!(
-            read_agent_availability(
-                &agent_id("a1"),
-                &agent(Some(10)),
-                Some(&host(Some(20))),
-                &attachment("h2", false),
-            )
-            .is_err()
         );
     }
 }

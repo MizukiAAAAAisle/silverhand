@@ -659,6 +659,15 @@ impl DaemonDeliveryController {
         self.registry.attached_count()
     }
 
+    /// Whether the delivery transport currently holds an attachment for one host.
+    /// This reads the SAME slot the delivery dispatch gate consults — a slot is
+    /// attached exactly when it carries a hydrated `daemon_instance` — so an
+    /// availability read and the delivery path observe one fact rather than two
+    /// projections that can drift.
+    pub fn host_attached(&self, host_id: &str) -> Result<bool, DaemonRegistryError> {
+        Ok(self.registry.attachment(host_id)?.is_some())
+    }
+
     pub async fn close(&self) {
         let senders = {
             let Ok(mut state) = self.registry.state.lock() else {

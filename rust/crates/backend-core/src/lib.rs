@@ -6,6 +6,7 @@
 //! wire adapters live in sibling crates and project from application facts.
 
 pub mod access;
+pub mod agent_availability_read;
 pub mod agent_lifecycle;
 pub mod auth;
 pub mod capability;
