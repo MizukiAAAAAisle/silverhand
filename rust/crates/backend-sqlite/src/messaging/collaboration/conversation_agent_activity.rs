@@ -23,7 +23,7 @@ use thiserror::Error;
 use crate::messaging::{MessagingStore, SELECT_AGENT_PARTICIPATES};
 
 use super::channel_lifecycle::{
-    ChannelLifecycleStoreError, load_channel_row, load_human_members, load_workspace_role,
+    ChannelLifecycleStoreError, load_channel_row, load_human_members, load_workspace_role_fact,
 };
 
 #[derive(Clone)]
@@ -104,7 +104,7 @@ impl SqliteConversationAgentActivityRead {
         let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
         let outcome = admit_in_snapshot(&mut tx, viewer, requested, target).await?;
         tx.commit().await?;
-        Ok(outcome)
+        Ok(outcome.map(|_| ()))
     }
 
     async fn read_inner(
@@ -118,10 +118,13 @@ impl SqliteConversationAgentActivityRead {
         ConversationAgentActivityStoreError,
     > {
         let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
-        if let Err(refusal) = admit_in_snapshot(&mut tx, viewer, requested, target).await? {
-            tx.commit().await?;
-            return Ok(Err(refusal));
-        }
+        let source_viewer = match admit_in_snapshot(&mut tx, viewer, requested, target).await? {
+            Ok(value) => value,
+            Err(refusal) => {
+                tx.commit().await?;
+                return Ok(Err(refusal));
+            }
+        };
 
         let selected = sqlx::query(
             "SELECT id,conversation_id,agent_id,kind,payload,created_at \
@@ -170,17 +173,12 @@ impl SqliteConversationAgentActivityRead {
         let has_more = decoded.len() > limit;
         decoded.truncate(limit);
         decoded.reverse();
-        let next_before = has_more.then(|| {
-            decoded
-                .first()
-                .expect("a positive page limit with a look-ahead row retains one event")
-                .id()
-        });
         let page = ConversationAgentActivityPage::projected(
+            source_viewer,
             requested.clone(),
             target.clone(),
             decoded,
-            next_before,
+            has_more,
         )
         .map_err(|_| ConversationAgentActivityStoreError::Page)?;
         tx.commit().await?;
@@ -193,7 +191,7 @@ async fn admit_in_snapshot(
     viewer: &UserId,
     requested: &ConversationId,
     target: &AgentId,
-) -> Result<Result<(), ConversationAgentActivityRefusal>, ConversationAgentActivityStoreError> {
+) -> Result<Result<UserId, ConversationAgentActivityRefusal>, ConversationAgentActivityStoreError> {
     let Some(channel) = load_channel_row(tx, requested).await? else {
         return Ok(Err(ConversationAgentActivityRefusal::NotFound));
     };
@@ -203,32 +201,47 @@ async fn admit_in_snapshot(
     // membership row or weakens target-agent participation below.
     let human_members = load_human_members(tx, requested).await?;
     let stored_member = human_members.iter().any(|member| member == viewer);
-    let visible = match channel.placement() {
-        ChannelLifecyclePlacement::Workspace(workspace) => {
-            let workspace_exists: bool =
-                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspaces w WHERE w.id=?)")
-                    .bind(workspace.workspace().as_str())
-                    .fetch_one(&mut **tx)
-                    .await?;
-            let role = if workspace_exists {
-                load_workspace_role(tx, viewer, workspace.workspace()).await?
-            } else {
-                None
-            };
-            let is_member = role.is_some() && stored_member;
-            let public_widen = role.is_some()
-                && workspace.roster() == DirectoryRoster::Open
-                && channel.visibility() == ChannelVisibility::Public
-                && channel.archived_at().is_none();
-            is_member || public_widen
-        }
-        ChannelLifecyclePlacement::DirectPair(participants) => participants
-            .both()
-            .contains(&&PrincipalIdentity::Human(viewer.clone())),
-    };
-    if !visible {
+    let source_viewer =
+        match channel.placement() {
+            ChannelLifecyclePlacement::Workspace(workspace) => {
+                let workspace_exists: bool =
+                    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workspaces w WHERE w.id=?)")
+                        .bind(workspace.workspace().as_str())
+                        .fetch_one(&mut **tx)
+                        .await?;
+                let role_fact = if workspace_exists {
+                    load_workspace_role_fact(tx, viewer, workspace.workspace()).await?
+                } else {
+                    None
+                };
+                let stored_conversation_viewer = human_members
+                    .iter()
+                    .find(|member| *member == viewer)
+                    .cloned();
+                let is_member = role_fact.is_some() && stored_member;
+                let public_widen = role_fact.is_some()
+                    && workspace.roster() == DirectoryRoster::Open
+                    && channel.visibility() == ChannelVisibility::Public
+                    && channel.archived_at().is_none();
+                if is_member {
+                    stored_conversation_viewer
+                } else if public_widen {
+                    role_fact.map(|fact| fact.viewer)
+                } else {
+                    None
+                }
+            }
+            ChannelLifecyclePlacement::DirectPair(participants) => participants
+                .both()
+                .iter()
+                .find_map(|principal| match principal {
+                    PrincipalIdentity::Human(source) if source == viewer => Some(source.clone()),
+                    _ => None,
+                }),
+        };
+    let Some(source_viewer) = source_viewer else {
         return Ok(Err(ConversationAgentActivityRefusal::Forbidden));
-    }
+    };
 
     let target_participates: Option<i64> = sqlx::query_scalar(SELECT_AGENT_PARTICIPATES)
         .bind(requested.as_str())
@@ -240,7 +253,7 @@ async fn admit_in_snapshot(
     if target_participates.is_none() {
         return Ok(Err(ConversationAgentActivityRefusal::TargetNotParticipant));
     }
-    Ok(Ok(()))
+    Ok(Ok(source_viewer))
 }
 
 fn decode_payload(

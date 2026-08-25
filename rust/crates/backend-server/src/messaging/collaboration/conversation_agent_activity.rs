@@ -9,6 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, UserId},
@@ -44,7 +45,7 @@ async fn read<P: ConversationAgentActivityReadPort>(
     State(state): State<ActivityState<P>>,
     principal: Option<Extension<UserId>>,
     Path((raw_conversation, raw_agent)): Path<(String, String)>,
-    Query(query): Query<Vec<(String, String)>>,
+    Query(query): Query<ActivityQuery>,
 ) -> Response {
     let Some(Extension(viewer)) = principal else {
         tracing::error!("conversation-agent-activity route reached without human principal");
@@ -99,7 +100,7 @@ async fn read<P: ConversationAgentActivityReadPort>(
     };
 
     match state.0.read(&viewer, &conversation, &agent, page).await {
-        Ok(Ok(value)) => match value.bind(&conversation, &agent) {
+        Ok(Ok(value)) => match value.bind(&viewer, &conversation, &agent) {
             Ok(value) => match success(&value) {
                 Ok(response) => response,
                 Err(error) => {
@@ -135,8 +136,14 @@ enum QueryRefusal {
     Before,
 }
 
-fn page_request(query: &[(String, String)]) -> Result<ActivityPageRequest, QueryRefusal> {
-    let limit = match first_value(query, "limit") {
+#[derive(Debug, Default, Deserialize)]
+struct ActivityQuery {
+    limit: Option<String>,
+    before_id: Option<String>,
+}
+
+fn page_request(query: &ActivityQuery) -> Result<ActivityPageRequest, QueryRefusal> {
+    let limit = match query.limit.as_deref() {
         None => 100,
         Some(raw) => match coerce_integer(raw).map_err(|_| QueryRefusal::Limit)? {
             CoercedInteger::Persisted(value) if value >= 1 => value.min(200) as u16,
@@ -144,7 +151,7 @@ fn page_request(query: &[(String, String)]) -> Result<ActivityPageRequest, Query
             CoercedInteger::Persisted(_) => return Err(QueryRefusal::Limit),
         },
     };
-    let before = match first_value(query, "before_id") {
+    let before = match query.before_id.as_deref() {
         None => None,
         Some(raw) => Some(
             match coerce_integer(raw).map_err(|_| QueryRefusal::Before)? {
@@ -157,12 +164,6 @@ fn page_request(query: &[(String, String)]) -> Result<ActivityPageRequest, Query
         ),
     };
     ActivityPageRequest::new(limit, before).map_err(|_| QueryRefusal::Limit)
-}
-
-fn first_value<'a>(query: &'a [(String, String)], key: &str) -> Option<&'a str> {
-    query
-        .iter()
-        .find_map(|(candidate, value)| (candidate == key).then_some(value.as_str()))
 }
 
 #[derive(Debug)]

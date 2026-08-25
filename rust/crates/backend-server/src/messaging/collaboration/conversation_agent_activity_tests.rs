@@ -18,6 +18,7 @@ use tower::ServiceExt;
 struct FakeRead {
     admission: Result<(), ConversationAgentActivityRefusal>,
     read_refusal: Option<ConversationAgentActivityRefusal>,
+    projected_viewer: &'static str,
     projected_conversation: &'static str,
     projected_agent: &'static str,
     payload: &'static str,
@@ -31,6 +32,7 @@ impl FakeRead {
         Self {
             admission: Ok(()),
             read_refusal: None,
+            projected_viewer: "viewer",
             projected_conversation: "c",
             projected_agent: "a",
             payload: "{\"text\":\"hello\"}",
@@ -72,6 +74,7 @@ impl ConversationAgentActivityReadPort for FakeRead {
         let conversation = ConversationId::parse(self.projected_conversation).unwrap();
         let agent = AgentId::parse(self.projected_agent).unwrap();
         Ok(Ok(ConversationAgentActivityPage::projected(
+            UserId::parse(self.projected_viewer).unwrap(),
             conversation.clone(),
             agent.clone(),
             vec![ConversationActivityEvent::projected(
@@ -82,7 +85,7 @@ impl ConversationAgentActivityReadPort for FakeRead {
                 ActivityPayload::object_json(self.payload.to_owned()),
                 ActivityCreatedAt::new(9).unwrap(),
             )],
-            None,
+            false,
         )
         .unwrap()))
     }
@@ -168,22 +171,30 @@ async fn auth_and_product_authority_precede_query_and_projection() {
 }
 
 #[test]
-fn query_numbers_use_first_occurrence_and_preserve_large_cursor_classification() {
-    let page = page_request(&[
-        ("limit".to_owned(), "2".to_owned()),
-        ("limit".to_owned(), "bad".to_owned()),
-        ("before_id".to_owned(), "1e20".to_owned()),
-        ("before_id".to_owned(), "bad".to_owned()),
-    ])
+fn query_numbers_preserve_defaults_caps_invalids_and_large_cursor_classification() {
+    let default = page_request(&ActivityQuery::default()).unwrap();
+    assert_eq!(default.limit(), 100);
+    assert!(default.before().is_none());
+
+    let page = page_request(&ActivityQuery {
+        limit: Some("1e20".to_owned()),
+        before_id: Some("1e20".to_owned()),
+    })
     .unwrap();
-    assert_eq!(page.limit(), 2);
+    assert_eq!(page.limit(), 200);
     assert_eq!(page.before(), Some(ActivityBefore::BeyondPersistedRange));
     assert_eq!(
-        page_request(&[("limit".to_owned(), "1.5".to_owned())]),
+        page_request(&ActivityQuery {
+            limit: Some("1.5".to_owned()),
+            before_id: None,
+        }),
         Err(QueryRefusal::Limit)
     );
     assert_eq!(
-        page_request(&[("before_id".to_owned(), "0".to_owned())]),
+        page_request(&ActivityQuery {
+            limit: None,
+            before_id: Some("0".to_owned()),
+        }),
         Err(QueryRefusal::Before)
     );
 }
@@ -216,6 +227,19 @@ async fn returned_coordinates_and_payload_bind_before_wire() {
     };
     let (status, body) = call(
         foreign,
+        "/api/conversations/c/agents/a/activity",
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body, json!({"error":"internal error"}));
+
+    let foreign_viewer = FakeRead {
+        projected_viewer: "other",
+        ..FakeRead::successful()
+    };
+    let (status, body) = call(
+        foreign_viewer,
         "/api/conversations/c/agents/a/activity",
         true,
     )

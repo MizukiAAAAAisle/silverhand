@@ -238,6 +238,7 @@ pub struct InvalidActivityLimit;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConversationAgentActivityPage {
+    viewer: UserId,
     conversation: ConversationId,
     agent: AgentId,
     events: Vec<ConversationActivityEvent>,
@@ -246,23 +247,27 @@ pub struct ConversationAgentActivityPage {
 
 impl ConversationAgentActivityPage {
     pub fn projected(
+        viewer: UserId,
         conversation: ConversationId,
         agent: AgentId,
         events: Vec<ConversationActivityEvent>,
-        next_before: Option<ActivityEventId>,
+        has_more: bool,
     ) -> Result<Self, MalformedConversationAgentActivityPage> {
         let ordered = events.windows(2).all(|pair| pair[0].id < pair[1].id);
         let coordinates_match = events.iter().all(|event| {
             event.conversation == conversation && event.agent.as_ref() == Some(&agent)
         });
-        let cursor_matches = next_before.is_none()
-            || events
-                .first()
-                .is_some_and(|event| Some(event.id) == next_before);
-        if !ordered || !coordinates_match || !cursor_matches {
+        if !ordered || !coordinates_match || (has_more && events.is_empty()) {
             return Err(MalformedConversationAgentActivityPage);
         }
+        let next_before = has_more.then(|| {
+            events
+                .first()
+                .expect("a nonempty page was checked before cursor derivation")
+                .id
+        });
         Ok(Self {
+            viewer,
             conversation,
             agent,
             events,
@@ -272,10 +277,12 @@ impl ConversationAgentActivityPage {
 
     pub fn bind(
         self,
+        requested_viewer: &UserId,
         requested_conversation: &ConversationId,
         requested_agent: &AgentId,
     ) -> Result<BoundConversationAgentActivityPage, ConversationAgentActivityIdentityMismatch> {
-        if &self.conversation != requested_conversation
+        if &self.viewer != requested_viewer
+            || &self.conversation != requested_conversation
             || &self.agent != requested_agent
             || self.events.iter().any(|event| {
                 &event.conversation != requested_conversation
@@ -292,6 +299,10 @@ impl ConversationAgentActivityPage {
 pub struct BoundConversationAgentActivityPage(ConversationAgentActivityPage);
 
 impl BoundConversationAgentActivityPage {
+    pub fn viewer(&self) -> &UserId {
+        &self.0.viewer
+    }
+
     pub fn events(&self) -> &[ConversationActivityEvent] {
         &self.0.events
     }
@@ -364,15 +375,17 @@ mod tests {
     #[test]
     fn page_is_ordered_cursor_closed_and_identity_bound() {
         let page = ConversationAgentActivityPage::projected(
+            UserId::parse("viewer").unwrap(),
             ConversationId::parse("c").unwrap(),
             AgentId::parse("a").unwrap(),
             vec![event(2, "c", Some("a")), event(3, "c", Some("a"))],
-            Some(ActivityEventId::new(2).unwrap()),
+            true,
         )
         .unwrap();
         assert!(
             page.clone()
                 .bind(
+                    &UserId::parse("viewer").unwrap(),
                     &ConversationId::parse("other").unwrap(),
                     &AgentId::parse("a").unwrap()
                 )
@@ -381,6 +394,7 @@ mod tests {
         assert!(
             page.clone()
                 .bind(
+                    &UserId::parse("viewer").unwrap(),
                     &ConversationId::parse("c").unwrap(),
                     &AgentId::parse("other").unwrap()
                 )
@@ -388,46 +402,78 @@ mod tests {
         );
         let bound = page
             .bind(
+                &UserId::parse("viewer").unwrap(),
                 &ConversationId::parse("c").unwrap(),
                 &AgentId::parse("a").unwrap(),
             )
             .unwrap();
         assert_eq!(bound.events().len(), 2);
         assert_eq!(bound.next_before().unwrap().get(), 2);
+        assert_eq!(bound.viewer().as_str(), "viewer");
+
+        let page = ConversationAgentActivityPage::projected(
+            UserId::parse("viewer").unwrap(),
+            ConversationId::parse("c").unwrap(),
+            AgentId::parse("a").unwrap(),
+            vec![event(2, "c", Some("a"))],
+            false,
+        )
+        .unwrap();
+        let no_more = page
+            .clone()
+            .bind(
+                &UserId::parse("viewer").unwrap(),
+                &ConversationId::parse("c").unwrap(),
+                &AgentId::parse("a").unwrap(),
+            )
+            .unwrap();
+        assert!(no_more.next_before().is_none());
+        assert!(
+            page.bind(
+                &UserId::parse("foreign").unwrap(),
+                &ConversationId::parse("c").unwrap(),
+                &AgentId::parse("a").unwrap(),
+            )
+            .is_err()
+        );
 
         assert!(
             ConversationAgentActivityPage::projected(
+                UserId::parse("viewer").unwrap(),
                 ConversationId::parse("c").unwrap(),
                 AgentId::parse("a").unwrap(),
                 vec![event(3, "c", Some("a")), event(2, "c", Some("a"))],
-                None,
+                false,
             )
             .is_err()
         );
         assert!(
             ConversationAgentActivityPage::projected(
+                UserId::parse("viewer").unwrap(),
                 ConversationId::parse("c").unwrap(),
                 AgentId::parse("a").unwrap(),
-                vec![event(2, "c", Some("a"))],
-                Some(ActivityEventId::new(3).unwrap()),
+                vec![],
+                true,
             )
             .is_err()
         );
         assert!(
             ConversationAgentActivityPage::projected(
+                UserId::parse("viewer").unwrap(),
                 ConversationId::parse("c").unwrap(),
                 AgentId::parse("a").unwrap(),
                 vec![event(2, "other", Some("a"))],
-                None,
+                false,
             )
             .is_err()
         );
         assert!(
             ConversationAgentActivityPage::projected(
+                UserId::parse("viewer").unwrap(),
                 ConversationId::parse("c").unwrap(),
                 AgentId::parse("a").unwrap(),
                 vec![event(2, "c", None)],
-                None,
+                false,
             )
             .is_err()
         );

@@ -97,6 +97,7 @@ async fn page_order_cursor_visibility_and_target_participation_match_the_product
         .unwrap()
         .unwrap()
         .bind(
+            &UserId::parse("member").unwrap(),
             &ConversationId::parse("private").unwrap(),
             &AgentId::parse("target").unwrap(),
         )
@@ -116,6 +117,7 @@ async fn page_order_cursor_visibility_and_target_participation_match_the_product
         .unwrap()
         .unwrap()
         .bind(
+            &UserId::parse("member").unwrap(),
             &ConversationId::parse("private").unwrap(),
             &AgentId::parse("target").unwrap(),
         )

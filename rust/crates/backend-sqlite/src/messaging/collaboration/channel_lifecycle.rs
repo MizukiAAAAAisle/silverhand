@@ -320,6 +320,21 @@ pub(crate) async fn load_workspace_role(
     viewer: &UserId,
     workspace: &WorkspaceId,
 ) -> Result<Option<WorkspaceRole>, ChannelLifecycleStoreError> {
+    Ok(load_workspace_role_fact(tx, viewer, workspace)
+        .await?
+        .map(|fact| fact.role))
+}
+
+pub(crate) struct WorkspaceRoleFact {
+    pub(crate) viewer: UserId,
+    role: WorkspaceRole,
+}
+
+pub(crate) async fn load_workspace_role_fact(
+    tx: &mut Transaction<'_, Sqlite>,
+    viewer: &UserId,
+    workspace: &WorkspaceId,
+) -> Result<Option<WorkspaceRoleFact>, ChannelLifecycleStoreError> {
     let row = sqlx::query(
         "SELECT workspace_id,user_id,role FROM workspace_users WHERE workspace_id=? AND user_id=?",
     )
@@ -342,8 +357,12 @@ pub(crate) async fn load_workspace_role(
                 field: "workspace_users.coordinate",
             });
         }
-        WorkspaceRole::parse(&row.try_get::<String, _>("role")?)
-            .ok_or(ChannelLifecycleStoreError::WorkspaceRole)
+        let role = WorkspaceRole::parse(&row.try_get::<String, _>("role")?)
+            .ok_or(ChannelLifecycleStoreError::WorkspaceRole)?;
+        Ok(WorkspaceRoleFact {
+            viewer: stored_viewer,
+            role,
+        })
     })
     .transpose()
 }
