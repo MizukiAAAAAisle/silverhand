@@ -6,6 +6,7 @@
 //! committed projection either all commit or all roll back.
 
 use silverhand_backend_core::{
+    access::{WorkspaceRole, role_governs_workspace},
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         SendClock, SendEntropy,
@@ -195,7 +196,7 @@ where
                 field: "conversations:returning_readback",
             });
         }
-        assert_exact_roster(&mut tx, &conversation, &kind, &viewer, &request).await?;
+        assert_exact_roster(&mut tx, &conversation, &kind, &viewer, &request, now).await?;
 
         let committed = match kind {
             WorkspaceKind::Regular => CommittedHumanChannelCreation::regular(
@@ -252,10 +253,12 @@ async fn admit(
     .bind(viewer.as_str())
     .fetch_optional(&mut **tx)
     .await?;
-    match role.as_deref() {
-        Some("owner" | "admin") => {}
-        Some("member") | None => return Ok(Err(HumanChannelCreateRefusal::Forbidden)),
-        Some(_) => return Err(corrupt("workspace_users.role")),
+    let role = role
+        .as_deref()
+        .map(|token| WorkspaceRole::parse(token).ok_or_else(|| corrupt("workspace_users.role")))
+        .transpose()?;
+    if !role_governs_workspace(role) {
+        return Ok(Err(HumanChannelCreateRefusal::Forbidden));
     }
 
     let kind = if let WorkspaceKind::AgentHome(owner) = kind {
@@ -477,28 +480,59 @@ async fn assert_exact_roster(
     kind: &WorkspaceKind,
     viewer: &UserId,
     request: &HumanChannelCreateRequest,
+    now: i64,
 ) -> Result<(), ChannelDirectoryCreateStoreError> {
-    let agents = sqlx::query_scalar::<_, String>(
-        "SELECT agent_id FROM conversation_agents WHERE conversation_id=? ORDER BY agent_id",
+    let agent_rows = sqlx::query(
+        "SELECT conversation_id,agent_id,joined_at FROM conversation_agents \
+         WHERE conversation_id=? ORDER BY agent_id",
     )
     .bind(conversation.as_str())
     .fetch_all(&mut **tx)
     .await?;
+    let mut agents = Vec::with_capacity(agent_rows.len());
+    for row in agent_rows {
+        let source = ConversationId::parse(row.try_get::<String, _>("conversation_id")?)
+            .map_err(|_| corrupt("conversation_agents.conversation_id"))?;
+        if &source != conversation {
+            return Err(corrupt("conversation_agents.conversation_id:created"));
+        }
+        let member = AgentId::parse(row.try_get::<String, _>("agent_id")?)
+            .map_err(|_| corrupt("conversation_agents.agent_id"))?;
+        if row.try_get::<i64, _>("joined_at")? != now {
+            return Err(corrupt("conversation_agents.joined_at"));
+        }
+        agents.push(member.as_str().to_owned());
+    }
     let mut expected_agents = match kind {
         WorkspaceKind::Regular => request.member_agent_ids().to_vec(),
         WorkspaceKind::AgentHome(owner) => vec![owner.as_str().to_owned()],
     };
     expected_agents.sort();
     if agents != expected_agents {
-        return Err(corrupt("conversation_agents:founding_roster"));
+        return Err(corrupt("conversation_agents:founding_set"));
     }
 
-    let users = sqlx::query_scalar::<_, String>(
-        "SELECT user_id FROM conversation_users WHERE conversation_id=? ORDER BY user_id",
+    let user_rows = sqlx::query(
+        "SELECT conversation_id,user_id,joined_at FROM conversation_users \
+         WHERE conversation_id=? ORDER BY user_id",
     )
     .bind(conversation.as_str())
     .fetch_all(&mut **tx)
     .await?;
+    let mut users = Vec::with_capacity(user_rows.len());
+    for row in user_rows {
+        let source = ConversationId::parse(row.try_get::<String, _>("conversation_id")?)
+            .map_err(|_| corrupt("conversation_users.conversation_id"))?;
+        if &source != conversation {
+            return Err(corrupt("conversation_users.conversation_id:created"));
+        }
+        let member = UserId::parse(row.try_get::<String, _>("user_id")?)
+            .map_err(|_| corrupt("conversation_users.user_id"))?;
+        if row.try_get::<i64, _>("joined_at")? != now {
+            return Err(corrupt("conversation_users.joined_at"));
+        }
+        users.push(member.as_str().to_owned());
+    }
     let mut expected_users = vec![viewer.as_str().to_owned()];
     if matches!(kind, WorkspaceKind::Regular)
         && let Some(requested) = request.member_user_ids()
@@ -511,7 +545,7 @@ async fn assert_exact_roster(
     }
     expected_users.sort();
     if users != expected_users {
-        return Err(corrupt("conversation_users:founding_roster"));
+        return Err(corrupt("conversation_users:founding_set"));
     }
     Ok(())
 }

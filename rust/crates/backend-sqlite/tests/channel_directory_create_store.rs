@@ -574,7 +574,7 @@ async fn corrupt_governance_token_is_not_downgraded_to_a_product_refusal() {
         .await
         .unwrap();
     db.execute(
-        "UPDATE workspace_users SET role='admin' WHERE workspace_id='w' AND user_id='u'; \
+        "UPDATE workspace_users SET role='owner' WHERE workspace_id='w' AND user_id='u'; \
          UPDATE workspaces SET name_key=NULL WHERE id='w'",
     )
     .await
@@ -615,6 +615,186 @@ async fn corrupt_governance_token_is_not_downgraded_to_a_product_refusal() {
                 viewer(),
                 workspace("w"),
                 request("Bad Role", &[], None, ChannelVisibility::Private),
+            )
+            .await
+            .unwrap()
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn agent_founding_row_timestamp_corruption_rolls_back_the_complete_create() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir
+        .path()
+        .join("channel-create-agent-roster-corruption.sqlite");
+    seed(&path).await;
+    let mut db = SqliteConnection::connect(path.to_str().unwrap())
+        .await
+        .unwrap();
+    db.execute(
+        "CREATE TRIGGER corrupt_agent_joined_at AFTER INSERT ON conversation_agents BEGIN \
+           UPDATE conversation_agents SET joined_at=-1 \
+           WHERE conversation_id=NEW.conversation_id AND agent_id=NEW.agent_id; \
+         END",
+    )
+    .await
+    .unwrap();
+    db.close().await.unwrap();
+
+    let create = MessagingStore::open_with(&path, FixedEnvironment::new(7))
+        .await
+        .unwrap()
+        .channel_directory_create();
+    let error = create
+        .create_human_channel(
+            viewer(),
+            workspace("w"),
+            request(
+                "Agent Roster Probe",
+                &["a"],
+                None,
+                ChannelVisibility::Private,
+            ),
+        )
+        .await
+        .unwrap_err();
+    let source = error
+        .source()
+        .unwrap()
+        .downcast_ref::<ChannelDirectoryCreateStoreError>()
+        .unwrap();
+    assert!(matches!(
+        source,
+        ChannelDirectoryCreateStoreError::Corrupt {
+            field: "conversation_agents.joined_at"
+        }
+    ));
+
+    let mut db = SqliteConnection::connect(path.to_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM conversations WHERE title='Agent Roster Probe'",
+        )
+        .fetch_one(&mut db)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM conversation_agents WHERE joined_at=-1")
+            .fetch_one(&mut db)
+            .await
+            .unwrap(),
+        0
+    );
+    db.execute("DROP TRIGGER corrupt_agent_joined_at")
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    assert!(
+        create
+            .create_human_channel(
+                viewer(),
+                workspace("w"),
+                request(
+                    "Agent Roster Probe",
+                    &["a"],
+                    None,
+                    ChannelVisibility::Private
+                ),
+            )
+            .await
+            .unwrap()
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn user_founding_row_timestamp_corruption_rolls_back_the_complete_create() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir
+        .path()
+        .join("channel-create-user-roster-corruption.sqlite");
+    seed(&path).await;
+    let mut db = SqliteConnection::connect(path.to_str().unwrap())
+        .await
+        .unwrap();
+    db.execute(
+        "CREATE TRIGGER corrupt_user_joined_at AFTER INSERT ON conversation_users BEGIN \
+           UPDATE conversation_users SET joined_at=-2 \
+           WHERE conversation_id=NEW.conversation_id AND user_id=NEW.user_id; \
+         END",
+    )
+    .await
+    .unwrap();
+    db.close().await.unwrap();
+
+    let create = MessagingStore::open_with(&path, FixedEnvironment::new(8))
+        .await
+        .unwrap()
+        .channel_directory_create();
+    let error = create
+        .create_human_channel(
+            viewer(),
+            workspace("w"),
+            request(
+                "User Roster Probe",
+                &[],
+                Some(&["v"]),
+                ChannelVisibility::Private,
+            ),
+        )
+        .await
+        .unwrap_err();
+    let source = error
+        .source()
+        .unwrap()
+        .downcast_ref::<ChannelDirectoryCreateStoreError>()
+        .unwrap();
+    assert!(matches!(
+        source,
+        ChannelDirectoryCreateStoreError::Corrupt {
+            field: "conversation_users.joined_at"
+        }
+    ));
+
+    let mut db = SqliteConnection::connect(path.to_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM conversations WHERE title='User Roster Probe'",
+        )
+        .fetch_one(&mut db)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM conversation_users WHERE joined_at=-2")
+            .fetch_one(&mut db)
+            .await
+            .unwrap(),
+        0
+    );
+    db.execute("DROP TRIGGER corrupt_user_joined_at")
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    assert!(
+        create
+            .create_human_channel(
+                viewer(),
+                workspace("w"),
+                request(
+                    "User Roster Probe",
+                    &[],
+                    Some(&["v"]),
+                    ChannelVisibility::Private,
+                ),
             )
             .await
             .unwrap()
