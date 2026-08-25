@@ -5,6 +5,7 @@ pub mod activity;
 pub mod attention_preference;
 pub mod attention_projection;
 pub mod conversation_ref;
+pub mod conversation_unread;
 mod notification;
 mod reaction;
 mod runtime_control;
