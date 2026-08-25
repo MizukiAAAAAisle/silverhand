@@ -19,6 +19,8 @@ use std::sync::Arc;
 
 use crate::{direct_pairs::counterpart_dto_value, messaging::author_wire::author_dto};
 
+pub mod observe;
+
 pub const ACTIVITY_PATH: &str = "/api/activity";
 
 struct ActivityState<R>(Arc<R>);

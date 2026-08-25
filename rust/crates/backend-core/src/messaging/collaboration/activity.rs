@@ -14,6 +14,8 @@ use crate::{
     messaging::{MessageAuthor, MessageId, NotificationId, ThreadRootId},
 };
 
+pub mod observe;
+
 const PREVIEW_MAX_UTF16: usize = 140;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

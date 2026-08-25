@@ -31,6 +31,8 @@ use silverhand_backend_core::{
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use thiserror::Error;
 
+pub mod observe;
+
 const DIRECTED: &str = concat!(
     "WITH p(viewer, ws) AS (SELECT ?, ?) SELECT n.id AS notification_id, n.kind, \
      c.id AS conversation_id, n.message_id, m.thread_root_id, root.content AS root_content, \
