@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    body::Bytes,
-    extract::{Extension, Path, State},
+    body::to_bytes,
+    extract::{Extension, Path, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
@@ -58,7 +58,7 @@ async fn create<P, A>(
     State(state): State<CreateState<P, A>>,
     principal: Option<Extension<UserId>>,
     Path(raw_workspace): Path<String>,
-    body: Bytes,
+    request: Request,
 ) -> Response
 where
     P: HumanChannelCreatePort,
@@ -74,6 +74,9 @@ where
 
     // Hono maps JSON parse failure to `{}` before invoking the production Zod
     // schema. Preserve that distinction from a valid non-object JSON value.
+    let body = to_bytes(request.into_body(), usize::MAX)
+        .await
+        .unwrap_or_default();
     let value = serde_json::from_slice(&body).unwrap_or_else(|_| Value::Object(Map::new()));
     drop(body);
     let request = match parse_request(value) {

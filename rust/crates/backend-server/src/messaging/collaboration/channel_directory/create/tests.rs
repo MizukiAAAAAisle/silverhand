@@ -1,14 +1,18 @@
 use std::{
     convert::Infallible,
     io,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use axum::{
-    body::{Body, to_bytes},
+    body::{Body, Bytes, to_bytes},
     extract::Extension,
     http::{Request, StatusCode},
 };
+use futures_util::stream;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
     identity::{ConversationId, UserId, WorkspaceId},
@@ -325,15 +329,24 @@ async fn authentication_precedes_body_and_product_work() {
         },
         Effects::default(),
     );
-    let (status, body) = call(
-        app,
-        "/api/workspaces/workspace-1/channels",
-        "not-json",
-        false,
-    )
-    .await;
+    let polled = Arc::new(AtomicBool::new(false));
+    let stream_flag = polled.clone();
+    let body = Body::from_stream(stream::once(async move {
+        stream_flag.store(true, Ordering::SeqCst);
+        Ok::<Bytes, Infallible>(Bytes::from_static(b"not-json"))
+    }));
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/workspaces/workspace-1/channels")
+        .body(body)
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body, json!({"error":"internal error"}));
+    assert!(!polled.load(Ordering::SeqCst));
     assert!(requests.lock().unwrap().is_empty());
 }
 
