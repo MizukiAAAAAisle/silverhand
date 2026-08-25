@@ -6,6 +6,7 @@
 // INTEGRATION SEAM: thin capability registration; no business logic belongs here.
 pub mod attention_preference;
 pub mod attention_projection;
+pub mod activity;
 pub mod notification;
 pub mod reaction;
 mod runtime_control;

@@ -3,6 +3,7 @@
 // INTEGRATION SEAM: thin capability registration; no adapter logic belongs here.
 pub mod attention_preference;
 pub mod attention_projection;
+pub mod activity;
 mod notification;
 mod reaction;
 mod runtime_control;
