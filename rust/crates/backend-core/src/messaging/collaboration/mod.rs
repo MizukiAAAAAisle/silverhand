@@ -9,6 +9,7 @@ pub mod attention_preference;
 pub mod attention_projection;
 pub mod channel_directory;
 pub mod channel_lifecycle;
+pub mod conversation_agent_activity;
 pub mod conversation_agent_directory;
 pub mod conversation_ref;
 pub mod conversation_unread;
