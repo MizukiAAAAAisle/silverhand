@@ -107,6 +107,7 @@ macro_rules! rollup_unread {
         )
     };
 }
+pub(crate) use rollup_unread;
 
 /// A channel enters the badge ambiently when the viewer's effective channel mode is
 /// 'all' and the workspace is not muted for them. Correlated on the `c` alias.
