@@ -88,7 +88,7 @@ pub struct UnknownDirectoryRoster;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DirectoryWorkspaceKind {
     Regular,
-    AgentHome { owner: AgentId, owner_name: String },
+    AgentHome(AgentHomeWorkspace),
 }
 impl DirectoryWorkspaceKind {
     pub fn agent_home(
@@ -98,7 +98,38 @@ impl DirectoryWorkspaceKind {
         if owner_name.is_empty() {
             return Err(ChannelDirectoryProjectionError::EmptyOwnerName);
         }
-        Ok(Self::AgentHome { owner, owner_name })
+        Ok(Self::AgentHome(AgentHomeWorkspace { owner, owner_name }))
+    }
+
+    pub fn agent_home_fact(&self) -> Option<&AgentHomeWorkspace> {
+        match self {
+            Self::Regular => None,
+            Self::AgentHome(value) => Some(value),
+        }
+    }
+}
+
+/// The payload is intentionally opaque: an empty owner name cannot bypass
+/// `DirectoryWorkspaceKind::agent_home` through the public enum arm.
+///
+/// ```compile_fail
+/// use silverhand_backend_core::{identity::AgentId, messaging::collaboration::channel_directory::{AgentHomeWorkspace, DirectoryWorkspaceKind}};
+/// let forged = DirectoryWorkspaceKind::AgentHome(AgentHomeWorkspace {
+///     owner: AgentId::parse("a").unwrap(), owner_name: String::new()
+/// });
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentHomeWorkspace {
+    owner: AgentId,
+    owner_name: String,
+}
+
+impl AgentHomeWorkspace {
+    pub fn owner(&self) -> &AgentId {
+        &self.owner
+    }
+    pub fn owner_name(&self) -> &str {
+        &self.owner_name
     }
 }
 
@@ -439,7 +470,7 @@ fn validate_rows(
         }
         match (kind, row.roster) {
             (DirectoryWorkspaceKind::Regular, DirectoryRoster::Open)
-            | (DirectoryWorkspaceKind::AgentHome { .. }, DirectoryRoster::Fixed) => {}
+            | (DirectoryWorkspaceKind::AgentHome(_), DirectoryRoster::Fixed) => {}
             _ => return Err(ChannelDirectoryProjectionError::WorkspaceKindRosterMismatch),
         }
         if archived && !row.is_member {
@@ -448,7 +479,7 @@ fn validate_rows(
         if !archived && !row.is_member && row.visibility != ChannelVisibility::Public {
             return Err(ChannelDirectoryProjectionError::PrivateNonMember);
         }
-        if matches!(kind, DirectoryWorkspaceKind::AgentHome { .. }) && !row.is_member {
+        if matches!(kind, DirectoryWorkspaceKind::AgentHome(_)) && !row.is_member {
             return Err(ChannelDirectoryProjectionError::AgentHomeNonMember);
         }
     }
@@ -458,11 +489,9 @@ fn validate_rows(
 fn sort_active(kind: &DirectoryWorkspaceKind, rows: &mut [ChannelDirectoryRow]) {
     rows.sort_by(|a, b| match kind {
         DirectoryWorkspaceKind::Regular => active_tail_order(a, b),
-        DirectoryWorkspaceKind::AgentHome { owner_name, .. } => {
-            agent_home_rank(a.title(), owner_name)
-                .cmp(&agent_home_rank(b.title(), owner_name))
-                .then_with(|| active_tail_order(a, b))
-        }
+        DirectoryWorkspaceKind::AgentHome(home) => agent_home_rank(a.title(), home.owner_name())
+            .cmp(&agent_home_rank(b.title(), home.owner_name()))
+            .then_with(|| active_tail_order(a, b)),
     });
 }
 fn active_tail_order(a: &ChannelDirectoryRow, b: &ChannelDirectoryRow) -> Ordering {
@@ -523,7 +552,7 @@ impl ArchivedChannelRow {
         }
         match (&workspace_kind, channel.roster) {
             (DirectoryWorkspaceKind::Regular, DirectoryRoster::Open)
-            | (DirectoryWorkspaceKind::AgentHome { .. }, DirectoryRoster::Fixed) => {}
+            | (DirectoryWorkspaceKind::AgentHome(_), DirectoryRoster::Fixed) => {}
             _ => return Err(ChannelDirectoryProjectionError::GlobalWorkspaceKindRosterMismatch),
         }
         Ok(Self {
@@ -552,8 +581,18 @@ impl ArchivedChannelRow {
     }
 }
 
+/// Wire classification is opaque so negative and misclassified values cannot
+/// enter persistence by directly constructing an enum variant.
+///
+/// ```compile_fail
+/// use silverhand_backend_core::messaging::collaboration::channel_directory::ArchivedSince;
+/// let forged = ArchivedSince::ExactSafe(-1);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ArchivedSince {
+pub struct ArchivedSince(ArchivedSinceValue);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArchivedSinceValue {
     ExactSafe(i64),
     RoundedPersisted(i64),
     BeyondPersistedRange,
@@ -566,21 +605,27 @@ impl ArchivedSince {
             return Err(InvalidArchivedSince);
         }
         if value >= 9_223_372_036_854_775_808.0 {
-            return Ok(Self::BeyondPersistedRange);
+            return Ok(Self(ArchivedSinceValue::BeyondPersistedRange));
         }
         let persisted = value as i64;
         if persisted <= Self::MAX_SAFE_INTEGER {
-            Ok(Self::ExactSafe(persisted))
+            Ok(Self(ArchivedSinceValue::ExactSafe(persisted)))
         } else {
-            Ok(Self::RoundedPersisted(persisted))
+            Ok(Self(ArchivedSinceValue::RoundedPersisted(persisted)))
         }
     }
 
     pub const fn persisted_value(self) -> Option<i64> {
-        match self {
-            Self::ExactSafe(value) | Self::RoundedPersisted(value) => Some(value),
-            Self::BeyondPersistedRange => None,
+        match self.0 {
+            ArchivedSinceValue::ExactSafe(value) | ArchivedSinceValue::RoundedPersisted(value) => {
+                Some(value)
+            }
+            ArchivedSinceValue::BeyondPersistedRange => None,
         }
+    }
+
+    pub const fn is_beyond_persisted_range(self) -> bool {
+        matches!(self.0, ArchivedSinceValue::BeyondPersistedRange)
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -764,6 +809,7 @@ pub trait GlobalArchivedChannelDirectoryPort {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(clippy::too_many_arguments)]
     fn row(
         viewer: &str,
         workspace: &str,
@@ -1008,6 +1054,9 @@ mod tests {
         let w = WorkspaceId::parse("w").unwrap();
         let kind = DirectoryWorkspaceKind::agent_home(AgentId::parse("a").unwrap(), "alice".into())
             .unwrap();
+        let home = kind.agent_home_fact().unwrap();
+        assert_eq!(home.owner().as_str(), "a");
+        assert_eq!(home.owner_name(), "alice");
         let active = ActiveWorkspaceChannelDirectory::projected(
             u.clone(),
             w.clone(),
@@ -1126,21 +1175,28 @@ mod tests {
     #[test]
     fn archived_since_distinguishes_boundaries() {
         assert_eq!(
-            ArchivedSince::from_ecmascript_number(0.0),
-            Ok(ArchivedSince::ExactSafe(0))
+            ArchivedSince::from_ecmascript_number(0.0)
+                .unwrap()
+                .persisted_value(),
+            Some(0)
         );
         assert_eq!(
-            ArchivedSince::from_ecmascript_number(ArchivedSince::MAX_SAFE_INTEGER as f64),
-            Ok(ArchivedSince::ExactSafe(ArchivedSince::MAX_SAFE_INTEGER))
+            ArchivedSince::from_ecmascript_number(ArchivedSince::MAX_SAFE_INTEGER as f64)
+                .unwrap()
+                .persisted_value(),
+            Some(ArchivedSince::MAX_SAFE_INTEGER)
         );
         assert_eq!(
-            ArchivedSince::from_ecmascript_number(9_007_199_254_740_992.0),
-            Ok(ArchivedSince::RoundedPersisted(9_007_199_254_740_992))
+            ArchivedSince::from_ecmascript_number(9_007_199_254_740_992.0)
+                .unwrap()
+                .persisted_value(),
+            Some(9_007_199_254_740_992)
         );
         assert!(ArchivedSince::from_ecmascript_number(-1.0).is_err());
-        assert_eq!(
-            ArchivedSince::from_ecmascript_number(9_223_372_036_854_775_808.0).unwrap(),
-            ArchivedSince::BeyondPersistedRange
+        assert!(
+            ArchivedSince::from_ecmascript_number(9_223_372_036_854_775_808.0)
+                .unwrap()
+                .is_beyond_persisted_range()
         );
         let absent: Option<ArchivedSince> = None;
         assert!(absent.is_none());
