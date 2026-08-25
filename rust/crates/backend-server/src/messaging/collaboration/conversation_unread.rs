@@ -376,4 +376,21 @@ mod tests {
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(body, json!({"error":"internal error"}));
     }
+
+    #[tokio::test]
+    async fn an_orphan_workspace_is_forbidden_even_when_both_membership_rows_survive() {
+        let (dir, store) = fixture_store("workspace_member").await;
+        // Foreign keys are deliberately disabled only for this falsifier: it
+        // preserves both membership rows while removing the owning workspace,
+        // the exact state that distinguishes the existence leg from the two
+        // seat legs.
+        corrupt(
+            &dir.path().join("conversation-unread-wire.sqlite"),
+            "DELETE FROM workspaces WHERE id='w'",
+        )
+        .await;
+        let (status, body) = call_store(store).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body, json!({"error":"forbidden"}));
+    }
 }

@@ -32,16 +32,53 @@ impl UnreadCount {
 #[error("stored unread count is negative")]
 pub struct InvalidUnreadCount;
 
-/// A single stream's unread fact.  Zero and non-zero states are different
-/// variants, so `count == 0` iff both first-unread coordinates are absent.
+/// A single stream's unread fact.  The non-zero variant carries an opaque
+/// payload, so external ports cannot bypass the factory and fabricate
+/// `count == 0` with non-null first-unread coordinates.
+///
+/// ```compile_fail
+/// use silverhand_backend_core::messaging::collaboration::conversation_unread::{
+///     StreamUnread, UnreadCount,
+/// };
+/// use silverhand_backend_core::messaging::{MessageId, MessageSeq};
+///
+/// let mut payload = match StreamUnread::unread(
+///     UnreadCount::new(1).unwrap(),
+///     MessageId::parse("m").unwrap(),
+///     MessageSeq::try_from(1).unwrap(),
+/// ).unwrap() {
+///     StreamUnread::Unread(payload) => payload,
+///     StreamUnread::CaughtUp => unreachable!(),
+/// };
+/// payload.count = UnreadCount::new(0).unwrap();
+/// ```
+///
+/// The supported construction path remains public:
+///
+/// ```
+/// use silverhand_backend_core::messaging::collaboration::conversation_unread::{
+///     StreamUnread, UnreadCount,
+/// };
+/// use silverhand_backend_core::messaging::{MessageId, MessageSeq};
+///
+/// let unread = StreamUnread::unread(
+///     UnreadCount::new(1).unwrap(),
+///     MessageId::parse("m").unwrap(),
+///     MessageSeq::try_from(1).unwrap(),
+/// ).unwrap();
+/// assert_eq!(unread.count(), 1);
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StreamUnread {
     CaughtUp,
-    Unread {
-        count: UnreadCount,
-        first_message: MessageId,
-        first_seq: MessageSeq,
-    },
+    Unread(NonEmptyStreamUnread),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NonEmptyStreamUnread {
+    count: UnreadCount,
+    first_message: MessageId,
+    first_seq: MessageSeq,
 }
 
 impl StreamUnread {
@@ -57,32 +94,36 @@ impl StreamUnread {
         if count.get() == 0 {
             return Err(EmptyUnreadStream);
         }
-        Ok(Self::Unread {
+        Ok(Self::Unread(NonEmptyStreamUnread {
             count,
             first_message,
             first_seq,
-        })
+        }))
     }
 
     pub const fn count(&self) -> i64 {
         match self {
             Self::CaughtUp => 0,
-            Self::Unread { count, .. } => count.get(),
+            Self::Unread(value) => value.count.get(),
         }
     }
 
     pub fn first_message(&self) -> Option<&MessageId> {
         match self {
             Self::CaughtUp => None,
-            Self::Unread { first_message, .. } => Some(first_message),
+            Self::Unread(value) => Some(&value.first_message),
         }
     }
 
     pub const fn first_seq(&self) -> Option<MessageSeq> {
         match self {
             Self::CaughtUp => None,
-            Self::Unread { first_seq, .. } => Some(*first_seq),
+            Self::Unread(value) => Some(value.first_seq),
         }
+    }
+
+    const fn is_caught_up(&self) -> bool {
+        matches!(self, Self::CaughtUp)
     }
 }
 
@@ -98,7 +139,7 @@ pub struct ThreadUnread {
 
 impl ThreadUnread {
     pub fn projected(root: ThreadRootId, unread: StreamUnread) -> Result<Self, EmptyThreadUnread> {
-        if matches!(unread, StreamUnread::CaughtUp) {
+        if unread.is_caught_up() {
             return Err(EmptyThreadUnread);
         }
         Ok(Self { root, unread })

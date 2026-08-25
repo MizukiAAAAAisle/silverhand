@@ -165,7 +165,7 @@ impl SqliteConversationUnreadRead {
             .map_err(|_| ConversationUnreadStoreError::MalformedUnread)?;
             match row.try_get::<Option<String>, _>("root")? {
                 None => {
-                    if !matches!(mainline, StreamUnread::CaughtUp) {
+                    if mainline.count() != 0 {
                         return Err(ConversationUnreadStoreError::MalformedStreamSet);
                     }
                     mainline = unread;
@@ -340,9 +340,11 @@ async fn participates(
             .any(|endpoint| matches!(endpoint, PrincipalIdentity::Human(id) if id == viewer))),
         Placement::Workspace(workspace) => {
             let admitted: i64 = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM workspace_users WHERE workspace_id=? AND user_id=?) \
+                "SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=?) \
+                 AND EXISTS(SELECT 1 FROM workspace_users WHERE workspace_id=? AND user_id=?) \
                  AND EXISTS(SELECT 1 FROM conversation_users WHERE conversation_id=? AND user_id=?)",
             )
+            .bind(workspace.as_str())
             .bind(workspace.as_str())
             .bind(viewer.as_str())
             .bind(conversation.as_str())
