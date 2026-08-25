@@ -482,7 +482,7 @@ impl RawItem {
 /// Mirrors only the schema's row-local spelling guard. The terminal writer and
 /// boot integrity audit own the stronger `title` ↔ normalized-key relation;
 /// Activity must not create a third canonicalization authority for that pair.
-fn valid_title_key_spelling(value: &str) -> bool {
+pub(super) fn valid_title_key_spelling(value: &str) -> bool {
     !value.is_empty()
         && !value.starts_with(' ')
         && !value.ends_with(' ')

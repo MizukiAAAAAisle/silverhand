@@ -8,8 +8,8 @@ use silverhand_backend_core::{
         MessageSeq, NotificationId, ThreadRootId,
         collaboration::{
             activity::observe::{
-                CommittedObservation, ObservationPort, ObserveBatch, ObserveRefusal, ObserveSource,
-                ObservedConversation, StreamPosition,
+                ObservationChanges, ObservationPort, ObserveBatch, ObserveRefusal, ObserveSource,
+                ObservedConversation, ObservedSeq, StreamPosition,
             },
             notification::NotificationKind,
         },
@@ -19,6 +19,7 @@ use silverhand_backend_core::{
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;
 
+use super::valid_title_key_spelling;
 use crate::messaging::{HostEnvironment, MessagingStore};
 
 #[derive(Clone)]
@@ -81,7 +82,7 @@ where
         &self,
         viewer: UserId,
         batch: ObserveBatch,
-    ) -> Result<Result<CommittedObservation, ObserveRefusal>, Self::Error> {
+    ) -> Result<Result<ObservationChanges, ObserveRefusal>, Self::Error> {
         let mut tx = self.pool.begin().await?;
         let mut resolved = Vec::with_capacity(batch.sources().len());
         for source in batch.sources() {
@@ -149,10 +150,9 @@ where
         tx.commit().await?;
 
         if conversations.is_empty() && dismissed.is_empty() {
-            return Ok(Ok(CommittedObservation::unchanged(viewer)));
+            return Ok(Ok(ObservationChanges::unchanged()));
         }
-        Ok(Ok(CommittedObservation::changed(
-            viewer,
+        Ok(Ok(ObservationChanges::changed(
             conversations.into_values().collect(),
             directed_badges
                 .into_iter()
@@ -241,10 +241,13 @@ async fn resolve_source(
     .unwrap_or(0);
     let head = MessageSeq::try_from(head).map_err(|_| ObservationStoreError::MalformedOrdinal)?;
     let target = match position {
-        StreamPosition::AtSeq(target) if target > &head => {
+        StreamPosition::AtSeq(ObservedSeq::BeyondPersistedRange) => {
             return Ok(Err(ObserveRefusal::PositionFuture));
         }
-        StreamPosition::AtSeq(target) => *target,
+        StreamPosition::AtSeq(ObservedSeq::Persisted(target)) if target > &head => {
+            return Ok(Err(ObserveRefusal::PositionFuture));
+        }
+        StreamPosition::AtSeq(ObservedSeq::Persisted(target)) => *target,
         StreamPosition::StreamHead => head,
     };
     Ok(Ok(ResolvedSource::Stream(ResolvedStream {
@@ -272,7 +275,7 @@ fn decode_placement(
     match kind.as_str() {
         "workspace"
             if workspace.is_some()
-                && title_key.as_deref().is_some_and(valid_title_key)
+                && title_key.as_deref().is_some_and(valid_title_key_spelling)
                 && a_kind.is_none()
                 && a_id.is_none()
                 && a_deleted.is_none()
@@ -312,13 +315,6 @@ fn decode_placement(
         }
         _ => Err(ObservationStoreError::MalformedPlacement),
     }
-}
-
-fn valid_title_key(value: &str) -> bool {
-    !value.is_empty()
-        && !value.bytes().any(|byte| byte.is_ascii_uppercase())
-        && !value.starts_with(' ')
-        && !value.ends_with(' ')
 }
 
 async fn advance_cursor(

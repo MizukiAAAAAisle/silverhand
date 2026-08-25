@@ -3,16 +3,46 @@ use silverhand_backend_core::{
     messaging::{
         MessageSeq, NotificationId,
         collaboration::activity::observe::{
-            ObservationPort, ObserveBatch, ObserveRefusal, ObserveSource, ObservedConversation,
-            StreamPosition,
+            CommittedObservation, ObservationAftermath, ObservationEffectFailure, ObserveBatch,
+            ObserveFailure, ObserveRefusal, ObserveSource, ObservedConversation, ObservedSeq,
+            StreamPosition, observe,
         },
     },
 };
-use silverhand_backend_sqlite::messaging::MessagingStore;
+use silverhand_backend_sqlite::messaging::{
+    MessagingStore, collaboration::activity::observe::ObservationStoreError,
+};
 use sqlx::{Connection, Row};
 
 #[path = "support/current_schema_snapshot.rs"]
 mod current_schema;
+
+struct NoEffects;
+
+impl ObservationAftermath for NoEffects {
+    async fn conversation_changed(
+        &self,
+        _: &CommittedObservation,
+        _: &ObservedConversation,
+    ) -> Result<(), ObservationEffectFailure> {
+        Ok(())
+    }
+
+    async fn badge_changed(
+        &self,
+        _: &CommittedObservation,
+        _: &silverhand_backend_core::identity::WorkspaceId,
+    ) -> Result<(), ObservationEffectFailure> {
+        Ok(())
+    }
+
+    async fn notifications_dismissed(
+        &self,
+        _: &CommittedObservation,
+    ) -> Result<(), ObservationEffectFailure> {
+        Ok(())
+    }
+}
 
 async fn seed(path: &std::path::Path) {
     let mut db = current_schema::create_current_schema(path).await;
@@ -50,7 +80,7 @@ async fn seed(path: &std::path::Path) {
 }
 
 fn at(value: i64) -> StreamPosition {
-    StreamPosition::AtSeq(MessageSeq::try_from(value).unwrap())
+    StreamPosition::AtSeq(ObservedSeq::Persisted(MessageSeq::try_from(value).unwrap()))
 }
 
 #[tokio::test]
@@ -71,11 +101,11 @@ async fn one_batch_is_atomic_monotone_and_returns_only_actual_committed_facts() 
         ObserveSource::Notification(NotificationId::parse("foreign").unwrap()),
     ])
     .unwrap();
-    let committed = store
-        .observe(viewer.clone(), batch.clone())
+    let done = observe(&store, &NoEffects, viewer.clone(), batch.clone())
         .await
         .unwrap()
         .unwrap();
+    let committed = done.committed();
     assert!(committed.changed_anything());
     assert!(matches!(
         committed.conversations().next().unwrap(),
@@ -94,8 +124,11 @@ async fn one_batch_is_atomic_monotone_and_returns_only_actual_committed_facts() 
     // the changed workspace is already covered by the conversation fact.
     assert_eq!(committed.directed_badge_workspaces().count(), 0);
 
-    let second = store.observe(viewer, batch).await.unwrap().unwrap();
-    assert!(!second.changed_anything());
+    let second = observe(&store, &NoEffects, viewer, batch)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!second.committed().changed_anything());
 
     let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
         .await
@@ -133,52 +166,58 @@ async fn every_source_is_resolved_before_writes_and_refusal_order_is_stable() {
     seed(&path).await;
     let store = MessagingStore::open(&path).await.unwrap().observation();
     let viewer = UserId::parse("u").unwrap();
-    let future = store
-        .observe(
-            viewer.clone(),
-            ObserveBatch::new(vec![
-                ObserveSource::Notification(NotificationId::parse("n1").unwrap()),
-                ObserveSource::Stream {
-                    conversation: ConversationId::parse("c").unwrap(),
-                    thread_root: None,
-                    position: at(3),
-                },
-            ])
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(future, Err(ObserveRefusal::PositionFuture));
-
-    let reply_as_root = store
-        .observe(
-            viewer,
-            ObserveBatch::new(vec![ObserveSource::Stream {
+    let future = observe(
+        &store,
+        &NoEffects,
+        viewer.clone(),
+        ObserveBatch::new(vec![
+            ObserveSource::Notification(NotificationId::parse("n1").unwrap()),
+            ObserveSource::Stream {
                 conversation: ConversationId::parse("c").unwrap(),
-                thread_root: Some(
-                    silverhand_backend_core::messaging::ThreadRootId::parse("reply").unwrap(),
-                ),
-                position: StreamPosition::StreamHead,
-            }])
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(reply_as_root, Err(ObserveRefusal::ThreadRootIsReply));
-
-    let forbidden = store
-        .observe(
-            UserId::parse("outsider").unwrap(),
-            ObserveBatch::new(vec![ObserveSource::Stream {
-                conversation: ConversationId::parse("pair").unwrap(),
                 thread_root: None,
-                position: StreamPosition::StreamHead,
-            }])
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(forbidden, Err(ObserveRefusal::Forbidden));
+                position: at(3),
+            },
+        ])
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(future, Err(ObserveRefusal::PositionFuture)));
+
+    let reply_as_root = observe(
+        &store,
+        &NoEffects,
+        viewer,
+        ObserveBatch::new(vec![ObserveSource::Stream {
+            conversation: ConversationId::parse("c").unwrap(),
+            thread_root: Some(
+                silverhand_backend_core::messaging::ThreadRootId::parse("reply").unwrap(),
+            ),
+            position: StreamPosition::StreamHead,
+        }])
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        reply_as_root,
+        Err(ObserveRefusal::ThreadRootIsReply)
+    ));
+
+    let forbidden = observe(
+        &store,
+        &NoEffects,
+        UserId::parse("outsider").unwrap(),
+        ObserveBatch::new(vec![ObserveSource::Stream {
+            conversation: ConversationId::parse("pair").unwrap(),
+            thread_root: None,
+            position: StreamPosition::StreamHead,
+        }])
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(forbidden, Err(ObserveRefusal::Forbidden)));
 
     let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
         .await
@@ -193,19 +232,23 @@ async fn every_source_is_resolved_before_writes_and_refusal_order_is_stable() {
         .execute(&mut db)
         .await
         .unwrap();
-    let error = store
-        .observe(
-            UserId::parse("u").unwrap(),
-            ObserveBatch::new(vec![ObserveSource::Stream {
-                conversation: ConversationId::parse("c").unwrap(),
-                thread_root: None,
-                position: at(1),
-            }])
-            .unwrap(),
-        )
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("coordinate"));
+    let error = observe(
+        &store,
+        &NoEffects,
+        UserId::parse("u").unwrap(),
+        ObserveBatch::new(vec![ObserveSource::Stream {
+            conversation: ConversationId::parse("c").unwrap(),
+            thread_root: None,
+            position: at(1),
+        }])
+        .unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ObserveFailure::Driver(ObservationStoreError::MalformedIdentity(_))
+    ));
     let read: Option<i64> = sqlx::query_scalar("SELECT read_at FROM notifications WHERE id=''")
         .fetch_one(&mut db)
         .await
@@ -223,21 +266,22 @@ async fn direct_pair_uses_endpoint_authority_and_corruption_rolls_back() {
     seed(&path).await;
     let store = MessagingStore::open(&path).await.unwrap().observation();
     let viewer = UserId::parse("u").unwrap();
-    let pair = store
-        .observe(
-            viewer.clone(),
-            ObserveBatch::new(vec![ObserveSource::Stream {
-                conversation: ConversationId::parse("pair").unwrap(),
-                thread_root: None,
-                position: StreamPosition::StreamHead,
-            }])
-            .unwrap(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+    let pair = observe(
+        &store,
+        &NoEffects,
+        viewer.clone(),
+        ObserveBatch::new(vec![ObserveSource::Stream {
+            conversation: ConversationId::parse("pair").unwrap(),
+            thread_root: None,
+            position: StreamPosition::StreamHead,
+        }])
+        .unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert!(matches!(
-        pair.conversations().next().unwrap(),
+        pair.committed().conversations().next().unwrap(),
         ObservedConversation::DirectPair { conversation } if conversation.as_str()=="pair"
     ));
 
@@ -252,17 +296,21 @@ async fn direct_pair_uses_endpoint_authority_and_corruption_rolls_back() {
         .execute(&mut db)
         .await
         .unwrap();
-    let error = store
-        .observe(
-            viewer,
-            ObserveBatch::new(vec![ObserveSource::Notification(
-                NotificationId::parse("n1").unwrap(),
-            )])
-            .unwrap(),
-        )
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("notification kind"));
+    let error = observe(
+        &store,
+        &NoEffects,
+        viewer,
+        ObserveBatch::new(vec![ObserveSource::Notification(
+            NotificationId::parse("n1").unwrap(),
+        )])
+        .unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ObserveFailure::Driver(ObservationStoreError::MalformedNotificationKind)
+    ));
     let read: Option<i64> = sqlx::query_scalar("SELECT read_at FROM notifications WHERE id='n1'")
         .fetch_one(&mut db)
         .await

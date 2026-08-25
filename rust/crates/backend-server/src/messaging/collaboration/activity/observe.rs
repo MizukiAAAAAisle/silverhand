@@ -15,7 +15,7 @@ use silverhand_backend_core::{
         MessageSeq, NotificationId, ThreadRootId,
         collaboration::activity::observe::{
             ObservationAftermath, ObservationPort, ObserveBatch, ObserveRefusal, ObserveSource,
-            StreamPosition, observe,
+            ObservedSeq, StreamPosition, observe,
         },
     },
 };
@@ -207,13 +207,27 @@ fn parse_position(value: Option<&Value>, index: usize) -> Result<StreamPosition,
             let Some(value) = object.get("seq") else {
                 return Err(vec![type_issue("number", "undefined", path)]);
             };
-            let Some(value) = value.as_i64() else {
+            let Some(number) = value.as_f64() else {
                 return Err(vec![type_issue("number", received(value), path)]);
             };
-            let seq = MessageSeq::try_from(value).map_err(|_| {
+            if number.fract() != 0.0 {
+                return Err(vec![type_issue("integer", "float", path)]);
+            }
+            if number < 0.0 {
+                return Err(vec![
+                    json!({"code":"too_small","minimum":0,"type":"number","inclusive":true,"exact":false,
+                    "message":"Number must be greater than or equal to 0","path":path}),
+                ]);
+            }
+            const I64_EXCLUSIVE_CEILING: f64 = 9_223_372_036_854_775_808.0;
+            let seq = if number >= I64_EXCLUSIVE_CEILING {
+                ObservedSeq::BeyondPersistedRange
+            } else {
+                ObservedSeq::Persisted(MessageSeq::try_from(number as i64).map_err(|_| {
                 vec![json!({"code":"too_small","minimum":0,"type":"number","inclusive":true,"exact":false,
                     "message":"Number must be greater than or equal to 0","path":path})]
-            })?;
+                })?)
+            };
             Ok(StreamPosition::AtSeq(seq))
         }
         received_kind => {
@@ -331,8 +345,12 @@ mod tests {
     };
     use silverhand_backend_sqlite::messaging::MessagingStore;
     use sqlx::{Connection, Executor, Row, SqliteConnection, sqlite::SqliteConnectOptions};
-    use std::sync::Mutex;
+    use std::{
+        io::{self, Write},
+        sync::Mutex,
+    };
     use tower::ServiceExt;
+    use tracing_subscriber::fmt::MakeWriter;
 
     #[derive(Clone, Default)]
     struct Effects(Arc<Mutex<Vec<&'static str>>>);
@@ -369,6 +387,80 @@ mod tests {
         }
     }
 
+    #[derive(Debug, thiserror::Error)]
+    #[error("first aftermath cause")]
+    struct FirstAftermathCause;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("later aftermath cause")]
+    struct LaterAftermathCause;
+
+    #[derive(Clone, Default)]
+    struct FailingEffects(Arc<Mutex<Vec<&'static str>>>);
+
+    impl ObservationAftermath for FailingEffects {
+        async fn conversation_changed(
+            &self,
+            _: &CommittedObservation,
+            _: &ObservedConversation,
+        ) -> Result<(), ObservationEffectFailure> {
+            self.0.lock().unwrap().push("conversation");
+            Err(ObservationEffectFailure::from_source(FirstAftermathCause))
+        }
+
+        async fn badge_changed(
+            &self,
+            _: &CommittedObservation,
+            _: &silverhand_backend_core::identity::WorkspaceId,
+        ) -> Result<(), ObservationEffectFailure> {
+            self.0.lock().unwrap().push("badge");
+            Err(ObservationEffectFailure::from_source(LaterAftermathCause))
+        }
+
+        async fn notifications_dismissed(
+            &self,
+            _: &CommittedObservation,
+        ) -> Result<(), ObservationEffectFailure> {
+            self.0.lock().unwrap().push("dismiss");
+            Err(ObservationEffectFailure::from_source(LaterAftermathCause))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl LogBuffer {
+        fn events(&self) -> Vec<Value> {
+            let bytes = self.0.lock().unwrap().clone();
+            String::from_utf8(bytes)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect()
+        }
+    }
+
+    struct LogWriter(LogBuffer);
+
+    impl Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for LogBuffer {
+        type Writer = LogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            LogWriter(self.clone())
+        }
+    }
+
     async fn fixture_store() -> (tempfile::TempDir, std::path::PathBuf, MessagingStore) {
         const SCHEMA: &str = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -401,11 +493,15 @@ mod tests {
     }
 
     async fn call(app: Router, body: Value, authenticated: bool) -> (StatusCode, Value) {
+        call_raw(app, serde_json::to_string(&body).unwrap(), authenticated).await
+    }
+
+    async fn call_raw(app: Router, body: String, authenticated: bool) -> (StatusCode, Value) {
         let mut request = Request::builder()
             .method("POST")
             .uri(OBSERVE_PATH)
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .body(Body::from(body))
             .unwrap();
         if authenticated {
             request
@@ -453,6 +549,58 @@ mod tests {
                 .get::<Option<i64>, _>("read_at")
                 .is_some()
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn aftermath_failures_preserve_commit_and_report_only_the_first_cause() {
+        let (_dir, path, store) = fixture_store().await;
+        let effects = FailingEffects::default();
+        let app = router(store.observation(), effects.clone());
+        let logs = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::ERROR)
+            .with_writer(logs.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let (status, body) = call(
+            app,
+            json!({"sources":[
+                {"kind":"stream","conversation_id":"c","thread_root_id":null,
+                 "position":{"kind":"at_seq","seq":1}},
+                {"kind":"notification","notification_id":"n2"}
+            ]}),
+            true,
+        )
+        .await;
+        assert_eq!((status, &body), (StatusCode::OK, &json!({"changed":true})));
+        assert_eq!(*effects.0.lock().unwrap(), ["conversation", "dismiss"]);
+        assert!(!body.to_string().contains("aftermath cause"));
+
+        let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+            .await
+            .unwrap();
+        let cursor: i64 = sqlx::query_scalar("SELECT last_read_seq FROM conversation_reads WHERE user_id='local' AND conversation_id='c' AND thread_root_id IS NULL")
+            .fetch_one(&mut db).await.unwrap();
+        assert_eq!(cursor, 1);
+        let read_at: Option<i64> =
+            sqlx::query_scalar("SELECT read_at FROM notifications WHERE id='n2'")
+                .fetch_one(&mut db)
+                .await
+                .unwrap();
+        assert!(read_at.is_some());
+
+        let errors = logs.events();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0]["fields"]["message"],
+            "Activity observe effect failed"
+        );
+        let chain = errors[0]["fields"]["error_chain"].as_str().unwrap();
+        assert!(chain.contains("a committed observation effect failed"));
+        assert!(chain.contains("first aftermath cause"));
+        assert!(!chain.contains("later aftermath cause"));
     }
 
     #[tokio::test]
@@ -504,7 +652,11 @@ mod tests {
         for case in fixture.as_array().unwrap() {
             let (_dir, _path, store) = fixture_store().await;
             let app = router(store.observation(), Effects::default());
-            let (status, body) = call(app, case["request"].clone(), true).await;
+            let raw = case["request_json"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| serde_json::to_string(&case["request"]).unwrap());
+            let (status, body) = call_raw(app, raw, true).await;
             assert_eq!(
                 status.as_u16(),
                 case["status"].as_u64().unwrap() as u16,
@@ -513,6 +665,6 @@ mod tests {
             );
             assert_eq!(body, case["body"], "{}", case["name"]);
         }
-        assert_eq!(fixture.as_array().unwrap().len(), 11);
+        assert_eq!(fixture.as_array().unwrap().len(), 16);
     }
 }

@@ -17,8 +17,16 @@ pub const OBSERVE_BATCH_MAX: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StreamPosition {
-    AtSeq(MessageSeq),
+    AtSeq(ObservedSeq),
     StreamHead,
+}
+
+/// A Zod-admitted ECMAScript integer. Values outside SQLite's signed ordinal
+/// range still reach product authority before becoming `position_future`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObservedSeq {
+    Persisted(MessageSeq),
+    BeyondPersistedRange,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -122,27 +130,81 @@ pub struct CommittedObservation {
     change: ObservationChange,
 }
 
+/// Persistence output before the core binds it to the request viewer and seals
+/// duplicate conversation coordinates.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservationChanges {
+    conversations: Vec<ObservedConversation>,
+    directed_badge_workspaces: Vec<WorkspaceId>,
+    dismissed_notifications: Vec<NotificationId>,
+}
+
+impl ObservationChanges {
+    pub fn unchanged() -> Self {
+        Self::changed(Vec::new(), Vec::new(), Vec::new())
+    }
+
+    pub fn changed(
+        conversations: Vec<ObservedConversation>,
+        directed_badge_workspaces: Vec<WorkspaceId>,
+        dismissed_notifications: Vec<NotificationId>,
+    ) -> Self {
+        Self {
+            conversations,
+            directed_badge_workspaces,
+            dismissed_notifications,
+        }
+    }
+
+    fn seal(self, viewer: UserId) -> Result<CommittedObservation, ObservationContractViolation> {
+        let mut conversations = self.conversations;
+        conversations.sort_unstable_by(|left, right| {
+            left.conversation()
+                .as_str()
+                .cmp(right.conversation().as_str())
+        });
+        let mut sealed: Vec<ObservedConversation> = Vec::with_capacity(conversations.len());
+        for conversation in conversations {
+            match sealed.last() {
+                Some(previous)
+                    if previous.conversation() == conversation.conversation()
+                        && previous != &conversation =>
+                {
+                    return Err(ObservationContractViolation::ConflictingConversation);
+                }
+                Some(previous) if previous == &conversation => {}
+                _ => sealed.push(conversation),
+            }
+        }
+        Ok(CommittedObservation::changed(
+            viewer,
+            sealed,
+            self.directed_badge_workspaces,
+            self.dismissed_notifications,
+        ))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ObservationContractViolation {
+    #[error("an observation result assigned conflicting placements to one conversation")]
+    ConflictingConversation,
+}
+
 impl CommittedObservation {
-    pub fn unchanged(viewer: UserId) -> Self {
+    fn unchanged(viewer: UserId) -> Self {
         Self {
             viewer,
             change: ObservationChange::Unchanged,
         }
     }
 
-    pub fn changed(
+    fn changed(
         viewer: UserId,
-        mut conversations: Vec<ObservedConversation>,
+        conversations: Vec<ObservedConversation>,
         mut directed_badge_workspaces: Vec<WorkspaceId>,
         mut dismissed_notifications: Vec<NotificationId>,
     ) -> Self {
-        conversations.sort_unstable_by(|left, right| {
-            left.conversation()
-                .as_str()
-                .cmp(right.conversation().as_str())
-        });
-        conversations.dedup_by(|left, right| left.conversation() == right.conversation());
-
         directed_badge_workspaces.sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
         directed_badge_workspaces.dedup_by(|left, right| left == right);
         directed_badge_workspaces.retain(|workspace| {
@@ -217,7 +279,7 @@ pub trait ObservationPort {
         &self,
         viewer: UserId,
         batch: ObserveBatch,
-    ) -> impl Future<Output = Result<Result<CommittedObservation, ObserveRefusal>, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Result<ObservationChanges, ObserveRefusal>, Self::Error>> + Send;
 }
 
 pub trait ObservationAftermath {
@@ -270,16 +332,32 @@ impl ObserveDone {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ObserveFailure<E: Error + Send + Sync + 'static> {
+    #[error("observation persistence failed")]
+    Driver(#[source] E),
+    #[error("observation persistence violated its result contract")]
+    Contract(#[source] ObservationContractViolation),
+}
+
 pub async fn observe<P: ObservationPort>(
     port: &P,
     aftermath: &impl ObservationAftermath,
     viewer: UserId,
     batch: ObserveBatch,
-) -> Result<Result<ObserveDone, ObserveRefusal>, P::Error> {
-    let committed = match port.observe(viewer, batch).await? {
-        Ok(committed) => committed,
+) -> Result<Result<ObserveDone, ObserveRefusal>, ObserveFailure<P::Error>> {
+    let requested_viewer = viewer.clone();
+    let changes = match port
+        .observe(viewer, batch)
+        .await
+        .map_err(ObserveFailure::Driver)?
+    {
+        Ok(changes) => changes,
         Err(refusal) => return Ok(Err(refusal)),
     };
+    let committed = changes
+        .seal(requested_viewer)
+        .map_err(ObserveFailure::Contract)?;
     let mut first_failure = None;
     for conversation in committed.conversations() {
         if let Err(error) = aftermath
@@ -314,36 +392,25 @@ mod tests {
     use super::*;
     use std::{convert::Infallible, sync::Mutex};
 
-    struct Port;
+    struct Port(ObservationChanges);
     impl ObservationPort for Port {
         type Error = Infallible;
         async fn observe(
             &self,
-            viewer: UserId,
+            _: UserId,
             _: ObserveBatch,
-        ) -> Result<Result<CommittedObservation, ObserveRefusal>, Self::Error> {
-            Ok(Ok(CommittedObservation::changed(
-                viewer,
-                vec![
-                    ObservedConversation::workspace(
-                        ConversationId::parse("c").unwrap(),
-                        WorkspaceId::parse("w").unwrap(),
-                    ),
-                    ObservedConversation::direct_pair(ConversationId::parse("pair").unwrap()),
-                ],
-                vec![
-                    WorkspaceId::parse("w").unwrap(),
-                    WorkspaceId::parse("directed-only").unwrap(),
-                ],
-                vec![NotificationId::parse("n").unwrap()],
-            )))
+        ) -> Result<Result<ObservationChanges, ObserveRefusal>, Self::Error> {
+            Ok(Ok(self.0.clone()))
         }
     }
 
     struct Effects(Mutex<Vec<&'static str>>);
     #[derive(Debug, thiserror::Error)]
-    #[error("boom")]
-    struct Boom;
+    #[error("first cause")]
+    struct First;
+    #[derive(Debug, thiserror::Error)]
+    #[error("later cause")]
+    struct Later;
     impl ObservationAftermath for Effects {
         async fn conversation_changed(
             &self,
@@ -358,7 +425,11 @@ mod tests {
                 } else {
                     "pair"
                 });
-            Err(ObservationEffectFailure::from_source(Boom))
+            if conversation.workspace_id().is_some() {
+                Err(ObservationEffectFailure::from_source(First))
+            } else {
+                Err(ObservationEffectFailure::from_source(Later))
+            }
         }
         async fn badge_changed(
             &self,
@@ -366,14 +437,14 @@ mod tests {
             _: &WorkspaceId,
         ) -> Result<(), ObservationEffectFailure> {
             self.0.lock().unwrap().push("badge");
-            Ok(())
+            Err(ObservationEffectFailure::from_source(Later))
         }
         async fn notifications_dismissed(
             &self,
             _: &CommittedObservation,
         ) -> Result<(), ObservationEffectFailure> {
             self.0.lock().unwrap().push("dismiss");
-            Ok(())
+            Err(ObservationEffectFailure::from_source(Later))
         }
     }
 
@@ -381,7 +452,20 @@ mod tests {
     async fn committed_fact_dedupes_axes_and_attempts_every_effect() {
         let effects = Effects(Mutex::new(vec![]));
         let done = observe(
-            &Port,
+            &Port(ObservationChanges::changed(
+                vec![
+                    ObservedConversation::workspace(
+                        ConversationId::parse("c").unwrap(),
+                        WorkspaceId::parse("w").unwrap(),
+                    ),
+                    ObservedConversation::direct_pair(ConversationId::parse("pair").unwrap()),
+                ],
+                vec![
+                    WorkspaceId::parse("w").unwrap(),
+                    WorkspaceId::parse("directed-only").unwrap(),
+                ],
+                vec![NotificationId::parse("n").unwrap()],
+            )),
             &effects,
             UserId::parse("u").unwrap(),
             ObserveBatch::new(vec![ObserveSource::Notification(
@@ -396,7 +480,13 @@ mod tests {
             effects.0.into_inner().unwrap(),
             ["workspace", "pair", "badge", "dismiss"]
         );
-        assert!(done.first_failure().is_some());
+        assert_eq!(
+            std::error::Error::source(done.first_failure().unwrap())
+                .unwrap()
+                .to_string(),
+            "first cause"
+        );
+        assert_eq!(done.committed().viewer().as_str(), "u");
         assert_eq!(
             done.committed()
                 .directed_badge_workspaces()
@@ -404,5 +494,58 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["directed-only"]
         );
+    }
+
+    #[tokio::test]
+    async fn conflicting_conversation_coordinates_fail_before_any_effect() {
+        for conversations in [
+            vec![
+                ObservedConversation::workspace(
+                    ConversationId::parse("c").unwrap(),
+                    WorkspaceId::parse("w1").unwrap(),
+                ),
+                ObservedConversation::workspace(
+                    ConversationId::parse("c").unwrap(),
+                    WorkspaceId::parse("w2").unwrap(),
+                ),
+            ],
+            vec![
+                ObservedConversation::workspace(
+                    ConversationId::parse("c").unwrap(),
+                    WorkspaceId::parse("w1").unwrap(),
+                ),
+                ObservedConversation::direct_pair(ConversationId::parse("c").unwrap()),
+            ],
+        ] {
+            let effects = Effects(Mutex::new(vec![]));
+            let error = observe(
+                &Port(ObservationChanges::changed(conversations, vec![], vec![])),
+                &effects,
+                UserId::parse("request-viewer").unwrap(),
+                ObserveBatch::new(vec![ObserveSource::Notification(
+                    NotificationId::parse("n").unwrap(),
+                )])
+                .unwrap(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, ObserveFailure::Contract(_)));
+            assert!(effects.0.into_inner().unwrap().is_empty());
+        }
+
+        // Exact duplicates remain benign and the only viewer coordinate is the
+        // one the core retained from the request, not anything persistence returned.
+        let fact = ObservationChanges::changed(
+            vec![
+                ObservedConversation::direct_pair(ConversationId::parse("pair").unwrap()),
+                ObservedConversation::direct_pair(ConversationId::parse("pair").unwrap()),
+            ],
+            vec![],
+            vec![],
+        )
+        .seal(UserId::parse("request-viewer").unwrap())
+        .unwrap();
+        assert_eq!(fact.viewer().as_str(), "request-viewer");
+        assert_eq!(fact.conversations().count(), 1);
     }
 }

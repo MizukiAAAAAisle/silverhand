@@ -37,14 +37,18 @@ describe('Activity observe wire is signed by the production TypeScript route', (
   afterEach(() => { t?.cleanup(); t = null; });
 
   it('signs every checked-in request and response', async () => {
-    for (const entry of fixture) {
+    for (const entry of fixture as Array<(typeof fixture)[number] & { request_json?: string }>) {
       t = buildTestApp();
       seed(t);
-      const response = await http(t).post('/api/attention/observe', entry.request);
+      const response = await http(t).post(
+        '/api/attention/observe',
+        entry.request,
+        entry.request_json === undefined ? undefined : { body: entry.request_json },
+      );
       expect(response.status, entry.name).toBe(entry.status);
       expect(await response.json(), entry.name).toEqual(entry.body);
       t.cleanup(); t = null;
     }
-    expect(fixture).toHaveLength(11);
+    expect(fixture).toHaveLength(16);
   });
 });
