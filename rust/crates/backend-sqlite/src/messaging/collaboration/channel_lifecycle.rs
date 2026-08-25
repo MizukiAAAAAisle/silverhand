@@ -1,5 +1,8 @@
 //! One-snapshot SQLite adapter for channel lifecycle reads.
 
+mod mutation;
+pub use mutation::{ChannelLifecycleMutationStoreError, SqliteChannelLifecycleMutation};
+
 use silverhand_backend_core::{
     access::WorkspaceRole,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
@@ -83,22 +86,10 @@ impl SqliteChannelLifecycleRead {
         requested: &ConversationId,
     ) -> Result<Result<ChannelDetailFact, ChannelDetailRefusal>, ChannelLifecycleStoreError> {
         let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
-        let Some(raw) = sqlx::query(
-            "SELECT c.id,c.workspace_id,c.placement_kind,c.roster_policy,c.title,c.title_key,\
-             c.status,c.spawned_by_agent_id,c.closed_at,c.close_summary,c.archived_at,\
-             c.latest_message_seq,c.created_at,c.updated_at,c.visibility,c.endpoint_a_kind,c.endpoint_a_id,\
-             c.endpoint_a_deleted_at,c.endpoint_b_kind,c.endpoint_b_id,c.endpoint_b_deleted_at,\
-             CASE WHEN c.spawned_by_agent_id IS NULL THEN 1 ELSE EXISTS(SELECT 1 FROM agents a WHERE a.id=c.spawned_by_agent_id) END AS spawned_agent_valid \
-             FROM conversations c WHERE c.id=?",
-        )
-        .bind(requested.as_str())
-        .fetch_optional(&mut *tx)
-        .await?
-        else {
+        let Some(row) = load_channel_row(&mut tx, requested).await? else {
             tx.commit().await?;
             return Ok(Err(ChannelDetailRefusal::NotFound));
         };
-        let row = decode_row(&raw, requested)?;
 
         // Decode the complete human-membership candidate set before admission.
         // A malformed later row cannot disappear behind a nonmember/public filter.
@@ -147,6 +138,24 @@ impl SqliteChannelLifecycleRead {
         tx.commit().await?;
         Ok(Ok(fact))
     }
+}
+
+async fn load_channel_row(
+    tx: &mut Transaction<'_, Sqlite>,
+    requested: &ConversationId,
+) -> Result<Option<ChannelLifecycleRow>, ChannelLifecycleStoreError> {
+    let raw = sqlx::query(
+        "SELECT c.id,c.workspace_id,c.placement_kind,c.roster_policy,c.title,c.title_key,\
+         c.status,c.spawned_by_agent_id,c.closed_at,c.close_summary,c.archived_at,\
+         c.latest_message_seq,c.created_at,c.updated_at,c.visibility,c.endpoint_a_kind,c.endpoint_a_id,\
+         c.endpoint_a_deleted_at,c.endpoint_b_kind,c.endpoint_b_id,c.endpoint_b_deleted_at,\
+         CASE WHEN c.spawned_by_agent_id IS NULL THEN 1 ELSE EXISTS(SELECT 1 FROM agents a WHERE a.id=c.spawned_by_agent_id) END AS spawned_agent_valid \
+         FROM conversations c WHERE c.id=?",
+    )
+    .bind(requested.as_str())
+    .fetch_optional(&mut **tx)
+    .await?;
+    raw.map(|raw| decode_row(&raw, requested)).transpose()
 }
 
 fn decode_row(
