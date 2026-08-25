@@ -80,7 +80,14 @@ async fn public_widen_and_workspace_face_follow_the_production_refusal_order() {
             .await
             .unwrap();
         match expected {
-            Ok(title) => assert_eq!(result.unwrap().title(), title, "{id}"),
+            Ok(title) => {
+                let requested = ConversationId::parse(id).unwrap();
+                assert_eq!(
+                    result.unwrap().bind(&requested).unwrap().title(),
+                    title,
+                    "{id}"
+                )
+            }
             Err(refusal) => assert_eq!(result, Err(refusal), "{id}"),
         }
     }

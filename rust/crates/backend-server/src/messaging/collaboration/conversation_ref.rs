@@ -13,7 +13,7 @@ use serde_json::json;
 use silverhand_backend_core::{
     identity::{ConversationId, UserId},
     messaging::collaboration::conversation_ref::{
-        ConversationRefReadPort, ConversationRefRefusal, WorkspaceConversationRef,
+        BoundWorkspaceConversationRef, ConversationRefReadPort, ConversationRefRefusal,
     },
 };
 
@@ -49,7 +49,13 @@ async fn resolve<P: ConversationRefReadPort>(
         Err(_) => return error(StatusCode::BAD_REQUEST, "conversation id required"),
     };
     match state.0.resolve(&viewer, &conversation).await {
-        Ok(Ok(value)) => success(&conversation, &value),
+        Ok(Ok(value)) => match value.bind(&conversation) {
+            Ok(value) => success(&value),
+            Err(error) => {
+                tracing::error!(error_chain=%crate::error::describe(&error),"conversation-ref identity seal failed");
+                internal()
+            }
+        },
         Ok(Err(ConversationRefRefusal::NotFound)) => {
             error(StatusCode::NOT_FOUND, "conversation not found")
         }
@@ -61,9 +67,9 @@ async fn resolve<P: ConversationRefReadPort>(
     }
 }
 
-fn success(conversation: &ConversationId, value: &WorkspaceConversationRef) -> Response {
+fn success(value: &BoundWorkspaceConversationRef) -> Response {
     Json(json!({"ref": {
-        "id": conversation.as_str(),
+        "id": value.conversation().as_str(),
         "placement_kind": "workspace",
         "roster_policy": value.roster().as_str(),
         "title": value.title(),
@@ -95,9 +101,10 @@ mod tests {
     };
     use serde_json::Value;
     use silverhand_backend_core::{
-        identity::{ConversationId, UserId},
+        identity::{ConversationId, UserId, WorkspaceId},
         messaging::collaboration::conversation_ref::{
-            ConversationRefReadPort, ConversationRefRefusal, WorkspaceConversationRef,
+            ConversationRefReadPort, ConversationRefRefusal, ConversationRosterPolicy,
+            WorkspaceConversationRef,
         },
     };
     use silverhand_backend_sqlite::messaging::MessagingStore;
@@ -122,6 +129,28 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct ProjectedIdentity(&'static str);
+
+    impl ConversationRefReadPort for ProjectedIdentity {
+        type Error = Infallible;
+
+        async fn resolve(
+            &self,
+            _: &UserId,
+            _: &ConversationId,
+        ) -> Result<Result<WorkspaceConversationRef, ConversationRefRefusal>, Self::Error> {
+            Ok(Ok(WorkspaceConversationRef::projected(
+                ConversationId::parse(self.0).unwrap(),
+                ConversationRosterPolicy::Open,
+                format!("Title for {}", self.0),
+                WorkspaceId::parse("w").unwrap(),
+                None,
+                None,
+            )))
+        }
+    }
+
     #[tokio::test]
     async fn missing_principal_fails_before_product_read() {
         let calls = std::sync::Arc::new(AtomicUsize::new(0));
@@ -136,6 +165,34 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    async fn call_identity(port: ProjectedIdentity) -> (StatusCode, Value) {
+        let mut request = Request::builder()
+            .uri("/api/conversations/a/ref")
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(UserId::parse("viewer").unwrap());
+        let response = router(port).oneshot(request).await.unwrap();
+        let status = response.status();
+        let body =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn returned_projection_must_match_the_requested_conversation() {
+        let (status, body) = call_identity(ProjectedIdentity("b")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body, json!({"error":"internal error"}));
+
+        let (status, body) = call_identity(ProjectedIdentity("a")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ref"]["id"], "a");
+        assert_eq!(body["ref"]["title"], "Title for a");
     }
 
     async fn fixture_store(setup: &str) -> (tempfile::TempDir, MessagingStore) {

@@ -167,6 +167,7 @@ impl SqliteConversationRefRead {
         let result = match placement {
             Placement::DirectPair(_) => Err(ConversationRefRefusal::NotFound),
             Placement::Workspace(workspace) => Ok(WorkspaceConversationRef::projected(
+                stored_id,
                 workspace.roster,
                 workspace.title,
                 workspace.workspace,

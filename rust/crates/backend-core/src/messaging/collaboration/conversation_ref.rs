@@ -35,13 +35,11 @@ impl ConversationRosterPolicy {
 #[error("stored conversation roster policy is outside the published closed set")]
 pub struct UnknownConversationRosterPolicy;
 
-/// The workspace-only portion of a conversation reference.
-///
-/// The requested conversation id is intentionally not repeated here.  The
-/// authenticated handler owns that coordinate, so a faulty port cannot answer a
-/// lookup for conversation A with conversation B's identity.
+/// A projected workspace-conversation reference before its identity has been
+/// bound back to the request that selected it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceConversationRef {
+    conversation: ConversationId,
     roster: ConversationRosterPolicy,
     title: String,
     workspace: WorkspaceId,
@@ -51,6 +49,7 @@ pub struct WorkspaceConversationRef {
 
 impl WorkspaceConversationRef {
     pub fn projected(
+        conversation: ConversationId,
         roster: ConversationRosterPolicy,
         title: String,
         workspace: WorkspaceId,
@@ -58,6 +57,7 @@ impl WorkspaceConversationRef {
         archived_at: Option<i64>,
     ) -> Self {
         Self {
+            conversation,
             roster,
             title,
             workspace,
@@ -66,26 +66,53 @@ impl WorkspaceConversationRef {
         }
     }
 
+    /// Seals the returned projection to the request coordinate before any wire
+    /// value can be emitted.  The port fact carries its own identity precisely
+    /// so an A request with B's projection is detectable rather than silently
+    /// rendered as a mixed DTO.
+    pub fn bind(
+        self,
+        requested: &ConversationId,
+    ) -> Result<BoundWorkspaceConversationRef, ConversationRefIdentityMismatch> {
+        if &self.conversation != requested {
+            return Err(ConversationRefIdentityMismatch);
+        }
+        Ok(BoundWorkspaceConversationRef(self))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BoundWorkspaceConversationRef(WorkspaceConversationRef);
+
+impl BoundWorkspaceConversationRef {
+    pub fn conversation(&self) -> &ConversationId {
+        &self.0.conversation
+    }
+
     pub const fn roster(&self) -> ConversationRosterPolicy {
-        self.roster
+        self.0.roster
     }
 
     pub fn title(&self) -> &str {
-        &self.title
+        &self.0.title
     }
 
     pub fn workspace(&self) -> &WorkspaceId {
-        &self.workspace
+        &self.0.workspace
     }
 
     pub const fn closed_at(&self) -> Option<i64> {
-        self.closed_at
+        self.0.closed_at
     }
 
     pub const fn archived_at(&self) -> Option<i64> {
-        self.archived_at
+        self.0.archived_at
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("conversation-reference projection identity differs from the requested conversation")]
+pub struct ConversationRefIdentityMismatch;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ConversationRefRefusal {
@@ -124,16 +151,27 @@ mod tests {
     }
 
     #[test]
-    fn workspace_face_cannot_express_a_direct_pair_or_a_second_conversation_id() {
+    fn returned_identity_must_bind_to_the_request_before_projection() {
         let value = WorkspaceConversationRef::projected(
+            ConversationId::parse("c").unwrap(),
             ConversationRosterPolicy::Open,
             "General".to_owned(),
             WorkspaceId::parse("w").unwrap(),
             None,
             Some(7),
         );
-        assert_eq!(value.workspace().as_str(), "w");
-        assert_eq!(value.roster().as_str(), "open");
-        assert_eq!(value.archived_at(), Some(7));
+        let bound = value
+            .clone()
+            .bind(&ConversationId::parse("c").unwrap())
+            .unwrap();
+        assert_eq!(bound.conversation().as_str(), "c");
+        assert_eq!(bound.workspace().as_str(), "w");
+        assert_eq!(bound.roster().as_str(), "open");
+        assert_eq!(bound.archived_at(), Some(7));
+        assert!(
+            value
+                .bind(&ConversationId::parse("other").unwrap())
+                .is_err()
+        );
     }
 }
