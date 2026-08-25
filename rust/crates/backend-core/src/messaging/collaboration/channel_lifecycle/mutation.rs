@@ -188,10 +188,12 @@ pub trait ChannelArchivePort {
 }
 
 pub trait ChannelArchiveAftermath {
-    fn runtime_cleanup(
-        &self,
-        fact: &BoundChannelArchive,
-    ) -> impl Future<Output = Result<(), ChannelMutationEffectFailure>> + Send;
+    /// Starts the best-effort runtime cleanup and returns immediately.
+    ///
+    /// The production authority resolves runs synchronously, then launches each
+    /// host stop as fire-and-forget work whose failure is logged locally. A slow
+    /// or offline host must never delay either read-face publication below.
+    fn start_runtime_cleanup(&self, fact: &BoundChannelArchive);
     fn workspace_channels_changed(
         &self,
         fact: &BoundChannelArchive,
@@ -223,10 +225,7 @@ pub async fn archive_channel<P: ChannelArchivePort>(
     let committed = committed.bind(&viewer, &conversation, archived)?;
     let mut first_failure = None;
     if archived {
-        retain_first(
-            &mut first_failure,
-            aftermath.runtime_cleanup(&committed).await.err(),
-        );
+        aftermath.start_runtime_cleanup(&committed);
     }
     retain_first(
         &mut first_failure,
@@ -346,7 +345,6 @@ pub trait ChannelVisibilityAftermath {
         &self,
         fact: &BoundChannelVisibility,
     ) -> impl Future<Output = Result<(), ChannelMutationEffectFailure>> + Send;
-    fn visibility_updated(&self, fact: &BoundChannelVisibility);
 }
 
 pub async fn set_channel_visibility<P: ChannelVisibilityPort>(
@@ -369,9 +367,7 @@ pub async fn set_channel_visibility<P: ChannelVisibilityPort>(
     };
     let committed = committed.bind(&viewer, &conversation, visibility)?;
     let first_failure = if committed.changed() {
-        let failure = aftermath.workspace_channels_changed(&committed).await.err();
-        aftermath.visibility_updated(&committed);
-        failure
+        aftermath.workspace_channels_changed(&committed).await.err()
     } else {
         None
     };
@@ -1066,9 +1062,6 @@ mod tests {
                 "visibility-publication",
             )))
         }
-        fn visibility_updated(&self, _: &BoundChannelVisibility) {
-            self.calls.lock().unwrap().push("audit");
-        }
     }
 
     #[derive(Clone)]
@@ -1087,8 +1080,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn visibility_noop_has_no_effect_and_changed_runs_publication_then_audit() {
-        for (changed, expected) in [(false, vec![]), (true, vec!["workspace", "audit"])] {
+    async fn visibility_noop_is_silent_and_changed_has_one_product_effect() {
+        for (changed, expected) in [(false, vec![]), (true, vec!["workspace"])] {
             let committed = if changed {
                 CommittedChannelVisibility::changed(
                     user("u"),
@@ -1149,14 +1142,11 @@ mod tests {
         calls: Arc<Mutex<Vec<&'static str>>>,
     }
     impl ChannelArchiveAftermath for ArchiveEffects {
-        async fn runtime_cleanup(
-            &self,
-            _: &BoundChannelArchive,
-        ) -> Result<(), ChannelMutationEffectFailure> {
+        fn start_runtime_cleanup(&self, _: &BoundChannelArchive) {
             self.calls.lock().unwrap().push("runtime");
-            Err(ChannelMutationEffectFailure::from_source(Boom(
-                "runtime-first",
-            )))
+            // Model a host stop that never resolves. The adapter launches it and
+            // returns; channel publication must not await this task.
+            tokio::spawn(std::future::pending::<()>());
         }
 
         async fn workspace_channels_changed(
@@ -1205,7 +1195,7 @@ mod tests {
             ["runtime", "workspace", "unread"]
         );
         let source = std::error::Error::source(result.first_failure().unwrap()).unwrap();
-        assert_eq!(source.to_string(), "runtime-first");
+        assert_eq!(source.to_string(), "workspace-later");
 
         let unarchived = CommittedChannelArchive::committed(
             user("u"),
