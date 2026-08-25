@@ -7,10 +7,10 @@ use silverhand_backend_core::{
     identity::{ConversationId, UserId, WorkspaceId},
     messaging::collaboration::message_unread::{
         ConversationMessageUnread, ConversationMessageUnreadReadPort,
-        ConversationMessageUnreadRefusal, LatestUnreadPointer, UnreadCount, UnreadRollup,
-        ViewerMessageUnreadSummary, ViewerMessageUnreadSummaryReadPort,
+        ConversationMessageUnreadRefusal, LatestUnreadPointer, NonZeroUnreadCount, UnreadCount,
+        UnreadRollup, ViewerMessageUnreadSummary, ViewerMessageUnreadSummaryReadPort,
         WorkspaceConversationUnread, WorkspaceMessageUnread, WorkspaceMessageUnreadReadPort,
-        WorkspaceMessageUnreadRefusal,
+        WorkspaceMessageUnreadRefusal, WorkspaceUnreadTotal,
     },
     messaging::{MessageId, MessageSeq},
 };
@@ -156,10 +156,13 @@ async fn all_three_surfaces_require_the_human_principal_before_product_work() {
 }
 
 #[derive(Clone)]
-struct SplicedRead;
+struct SplicedRead {
+    summary_viewer: &'static str,
+    summary_row_viewer: Option<&'static str>,
+}
 
 impl WorkspaceMessageUnreadReadPort for SplicedRead {
-    type Error = std::convert::Infallible;
+    type Error = std::io::Error;
 
     async fn read_workspace(
         &self,
@@ -190,15 +193,27 @@ impl WorkspaceMessageUnreadReadPort for SplicedRead {
 }
 
 impl ViewerMessageUnreadSummaryReadPort for SplicedRead {
-    type Error = std::convert::Infallible;
+    type Error = std::io::Error;
 
     async fn read_summary(&self, _: &UserId) -> Result<ViewerMessageUnreadSummary, Self::Error> {
-        Ok(ViewerMessageUnreadSummary::projected(Vec::new()).unwrap())
+        let rows = self
+            .summary_row_viewer
+            .map(|viewer| {
+                WorkspaceUnreadTotal::projected(
+                    UserId::parse(viewer).unwrap(),
+                    WorkspaceId::parse("w").unwrap(),
+                    NonZeroUnreadCount::new(UnreadCount::new(1).unwrap()).unwrap(),
+                )
+            })
+            .into_iter()
+            .collect();
+        ViewerMessageUnreadSummary::projected(UserId::parse(self.summary_viewer).unwrap(), rows)
+            .map_err(std::io::Error::other)
     }
 }
 
 impl ConversationMessageUnreadReadPort for SplicedRead {
-    type Error = std::convert::Infallible;
+    type Error = std::io::Error;
 
     async fn read_conversation(
         &self,
@@ -224,7 +239,13 @@ async fn request_coordinates_bind_before_either_success_envelope() {
         request
             .extensions_mut()
             .insert(UserId::parse("local").unwrap());
-        let response = router(SplicedRead).oneshot(request).await.unwrap();
+        let response = router(SplicedRead {
+            summary_viewer: "local",
+            summary_row_viewer: None,
+        })
+        .oneshot(request)
+        .await
+        .unwrap();
         assert_eq!(
             response.status(),
             axum::http::StatusCode::INTERNAL_SERVER_ERROR
@@ -233,6 +254,54 @@ async fn request_coordinates_bind_before_either_success_envelope() {
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         assert_eq!(body, serde_json::json!({"error":"internal error"}));
+    }
+}
+
+#[tokio::test]
+async fn summary_binds_aggregate_and_every_row_viewer_before_wire() {
+    let cases = [
+        (
+            "other",
+            Some("other"),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "local",
+            Some("other"),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        ("local", Some("local"), axum::http::StatusCode::OK),
+        ("local", None, axum::http::StatusCode::OK),
+    ];
+    for (summary_viewer, summary_row_viewer, expected) in cases {
+        let mut request = Request::builder()
+            .uri("/api/message-unread-summary")
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(UserId::parse("local").unwrap());
+        let response = router(SplicedRead {
+            summary_viewer,
+            summary_row_viewer,
+        })
+        .oneshot(request)
+        .await
+        .unwrap();
+        assert_eq!(response.status(), expected);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        if expected == axum::http::StatusCode::OK {
+            let expected_body = if summary_row_viewer.is_some() {
+                serde_json::json!({"by_workspace":{"w":1}})
+            } else {
+                serde_json::json!({"by_workspace":{}})
+            };
+            assert_eq!(body, expected_body);
+        } else {
+            assert_eq!(body, serde_json::json!({"error":"internal error"}));
+        }
     }
 }
 

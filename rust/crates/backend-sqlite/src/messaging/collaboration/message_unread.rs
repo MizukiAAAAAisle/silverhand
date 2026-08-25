@@ -58,7 +58,7 @@ const WORKSPACE_CANDIDATES: &str = concat!(
 const SUMMARY_CANDIDATES: &str = concat!(
     "WITH p(viewer) AS (SELECT ?) SELECT ",
     conversation_columns!(),
-    ",",
+    ",cu.user_id AS source_viewer,",
     candidate_columns!(),
     " FROM conversations c JOIN conversation_users cu ON cu.conversation_id=c.id AND \
      cu.user_id=(SELECT viewer FROM p) JOIN messages m ON m.conversation_id=c.id AND ",
@@ -207,8 +207,10 @@ impl SqliteMessageUnreadRead {
             .bind(viewer.as_str())
             .fetch_all(&mut *tx)
             .await?;
-        let mut totals = BTreeMap::<String, (WorkspaceId, i64)>::new();
+        let mut totals = BTreeMap::<String, (UserId, WorkspaceId, i64)>::new();
         for row in rows {
+            let source_viewer = UserId::parse(row.try_get::<String, _>("source_viewer")?)
+                .map_err(|_| MessageUnreadStoreError::MalformedIdentity)?;
             let placement = decode_placement(&row)?;
             let Placement::Workspace(workspace) = placement else {
                 return Err(MessageUnreadStoreError::MalformedProjection);
@@ -219,25 +221,34 @@ impl SqliteMessageUnreadRead {
             if candidate.conversation != source_conversation {
                 return Err(MessageUnreadStoreError::MalformedIdentity);
             }
-            let entry = totals
-                .entry(workspace.as_str().to_owned())
-                .or_insert((workspace, 0));
-            entry.1 = entry
-                .1
+            let entry = totals.entry(workspace.as_str().to_owned()).or_insert((
+                source_viewer.clone(),
+                workspace,
+                0,
+            ));
+            if entry.0 != source_viewer {
+                return Err(MessageUnreadStoreError::MalformedProjection);
+            }
+            entry.2 = entry
+                .2
                 .checked_add(1)
                 .ok_or(MessageUnreadStoreError::MalformedUnread)?;
         }
         let projected = totals
             .into_values()
-            .map(|(workspace, count)| {
+            .map(|(source_viewer, workspace, count)| {
                 let count = UnreadCount::new(count)
                     .map_err(|_| MessageUnreadStoreError::MalformedUnread)?;
                 let count = NonZeroUnreadCount::new(count)
                     .map_err(|_| MessageUnreadStoreError::MalformedUnread)?;
-                Ok(WorkspaceUnreadTotal::projected(workspace, count))
+                Ok(WorkspaceUnreadTotal::projected(
+                    source_viewer,
+                    workspace,
+                    count,
+                ))
             })
             .collect::<Result<Vec<_>, MessageUnreadStoreError>>()?;
-        let summary = ViewerMessageUnreadSummary::projected(projected)
+        let summary = ViewerMessageUnreadSummary::projected(viewer.clone(), projected)
             .map_err(|_| MessageUnreadStoreError::MalformedProjection)?;
         tx.commit().await?;
         Ok(summary)
@@ -405,4 +416,15 @@ fn workspace_projection(
     }
     WorkspaceMessageUnread::projected(workspace, rows)
         .map_err(|_| MessageUnreadStoreError::MalformedProjection)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summary_candidate_carries_the_membership_rows_viewer_not_a_rebound_label() {
+        assert!(SUMMARY_CANDIDATES.contains("cu.user_id AS source_viewer"));
+        assert!(!SUMMARY_CANDIDATES.contains("(SELECT viewer FROM p) AS source_viewer"));
+    }
 }

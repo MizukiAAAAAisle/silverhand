@@ -262,13 +262,18 @@ pub struct InvalidWorkspaceUnreadProjection;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceUnreadTotal {
+    viewer: UserId,
     workspace: WorkspaceId,
     count: NonZeroUnreadCount,
 }
 
 impl WorkspaceUnreadTotal {
-    pub fn projected(workspace: WorkspaceId, count: NonZeroUnreadCount) -> Self {
-        Self { workspace, count }
+    pub fn projected(viewer: UserId, workspace: WorkspaceId, count: NonZeroUnreadCount) -> Self {
+        Self {
+            viewer,
+            workspace,
+            count,
+        }
     }
 
     pub fn workspace(&self) -> &WorkspaceId {
@@ -298,31 +303,49 @@ pub struct EmptyUnreadCount;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ViewerMessageUnreadSummary {
+    viewer: UserId,
     rows: Vec<WorkspaceUnreadTotal>,
 }
 
 impl ViewerMessageUnreadSummary {
     pub fn projected(
+        viewer: UserId,
         mut rows: Vec<WorkspaceUnreadTotal>,
-    ) -> Result<Self, DuplicateWorkspaceUnread> {
+    ) -> Result<Self, InvalidViewerUnreadSummary> {
         rows.sort_by(|left, right| left.workspace.as_str().cmp(right.workspace.as_str()));
-        if rows
-            .windows(2)
-            .any(|pair| pair[0].workspace == pair[1].workspace)
+        if rows.iter().any(|row| row.viewer != viewer)
+            || rows
+                .windows(2)
+                .any(|pair| pair[0].workspace == pair[1].workspace)
         {
-            return Err(DuplicateWorkspaceUnread);
+            return Err(InvalidViewerUnreadSummary);
         }
-        Ok(Self { rows })
+        Ok(Self { viewer, rows })
     }
 
+    pub fn bind(
+        self,
+        requested: &UserId,
+    ) -> Result<BoundViewerMessageUnreadSummary, MessageUnreadIdentityMismatch> {
+        if &self.viewer != requested || self.rows.iter().any(|row| &row.viewer != requested) {
+            return Err(MessageUnreadIdentityMismatch);
+        }
+        Ok(BoundViewerMessageUnreadSummary(self))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BoundViewerMessageUnreadSummary(ViewerMessageUnreadSummary);
+
+impl BoundViewerMessageUnreadSummary {
     pub fn rows(&self) -> &[WorkspaceUnreadTotal] {
-        &self.rows
+        &self.0.rows
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-#[error("viewer unread summary contains a workspace more than once")]
-pub struct DuplicateWorkspaceUnread;
+#[error("viewer unread summary contains a foreign viewer or duplicate workspace")]
+pub struct InvalidViewerUnreadSummary;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("unread projection identity differs from the requested coordinate")]
@@ -442,11 +465,26 @@ mod tests {
         assert_eq!(bound.total().unwrap(), 2);
 
         let count = NonZeroUnreadCount::new(UnreadCount::new(1).unwrap()).unwrap();
+        let viewer = UserId::parse("viewer").unwrap();
         assert!(
-            ViewerMessageUnreadSummary::projected(vec![
-                WorkspaceUnreadTotal::projected(workspace.clone(), count),
-                WorkspaceUnreadTotal::projected(workspace, count),
-            ])
+            ViewerMessageUnreadSummary::projected(
+                viewer.clone(),
+                vec![
+                    WorkspaceUnreadTotal::projected(viewer.clone(), workspace.clone(), count,),
+                    WorkspaceUnreadTotal::projected(viewer.clone(), workspace, count),
+                ],
+            )
+            .is_err()
+        );
+        assert!(
+            ViewerMessageUnreadSummary::projected(
+                viewer,
+                vec![WorkspaceUnreadTotal::projected(
+                    UserId::parse("other").unwrap(),
+                    WorkspaceId::parse("other-workspace").unwrap(),
+                    count,
+                )],
+            )
             .is_err()
         );
     }

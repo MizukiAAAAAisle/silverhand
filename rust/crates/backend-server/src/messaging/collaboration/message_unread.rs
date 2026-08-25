@@ -13,9 +13,9 @@ use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
     identity::{ConversationId, UserId, WorkspaceId},
     messaging::collaboration::message_unread::{
-        BoundConversationMessageUnread, BoundWorkspaceMessageUnread,
-        ConversationMessageUnreadReadPort, ConversationMessageUnreadRefusal, LatestUnreadPointer,
-        ViewerMessageUnreadSummary, ViewerMessageUnreadSummaryReadPort,
+        BoundConversationMessageUnread, BoundViewerMessageUnreadSummary,
+        BoundWorkspaceMessageUnread, ConversationMessageUnreadReadPort,
+        ConversationMessageUnreadRefusal, LatestUnreadPointer, ViewerMessageUnreadSummaryReadPort,
         WorkspaceMessageUnreadReadPort, WorkspaceMessageUnreadRefusal,
     },
 };
@@ -97,7 +97,13 @@ where
         return internal();
     };
     match state.0.read_summary(&viewer).await {
-        Ok(value) => summary_success(&value),
+        Ok(value) => match value.bind(&viewer) {
+            Ok(value) => summary_success(&value),
+            Err(error) => {
+                tracing::error!(error_chain=%crate::error::describe(&error),"message-unread-summary identity seal failed");
+                internal()
+            }
+        },
         Err(error) => {
             tracing::error!(error_chain=%crate::error::describe(&error),"message-unread-summary projection failed");
             internal()
@@ -167,7 +173,7 @@ fn workspace_success(value: &BoundWorkspaceMessageUnread) -> Response {
     .into_response()
 }
 
-fn summary_success(value: &ViewerMessageUnreadSummary) -> Response {
+fn summary_success(value: &BoundViewerMessageUnreadSummary) -> Response {
     let by_workspace = value
         .rows()
         .iter()
