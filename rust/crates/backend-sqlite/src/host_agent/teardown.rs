@@ -284,11 +284,11 @@ mod tests {
         "INSERT INTO attachments \
          (id, channel_id, filename, size, content_type, storage, storage_key, \
           created_by_kind, created_by_id, created_at) \
-         VALUES ('att-dm', 'ch-dm', 'f', 1, 'text/plain', 'blobs', 'k-dm', 'user', 'u1', 1)",
+         VALUES ('att-dm', 'ch-dm', 'f', 1, 'text/plain', 's-dm', 'k-dm', 'user', 'u1', 1)",
         "INSERT INTO attachments \
          (id, channel_id, filename, size, content_type, storage, storage_key, \
           created_by_kind, created_by_id, created_at) \
-         VALUES ('att-general', 'ch-general', 'f', 1, 'text/plain', 'blobs', 'k-general', \
+         VALUES ('att-general', 'ch-general', 'f', 1, 'text/plain', 's-general', 'k-general', \
           'user', 'u1', 1)",
         // Joining each channel auto-creates an idle, generation-0 slot (a schema
         // trigger both requires participation and mints the seat), so ch-general is
@@ -369,20 +369,24 @@ mod tests {
     }
 
     /// Half 2 — the blob sweep spans the WHOLE ordered channel set, not just its
-    /// head. Blobs live only on the two channels the ordering puts after the head,
-    /// so a sweep that stopped at the first channel would capture nothing.
+    /// head, and captures each blob's FULL durable coordinate. Blobs live only on
+    /// the two channels the ordering puts after the head, so a sweep that stopped
+    /// at the first channel would capture nothing; the two carry distinct storage
+    /// backends, so dropping or crossing the `storage` half — which the post-commit
+    /// sweeper needs to route to the right backend — turns this RED even though the
+    /// keys still match.
     #[tokio::test]
     async fn the_committed_capture_sweeps_blobs_across_every_home_channel() {
         let dir = tempfile::tempdir().unwrap();
         let capture = capture_from_committed_teardown(&dir).await;
 
-        let mut keys: Vec<&str> = capture
+        let mut pairs: Vec<(&str, &str)> = capture
             .dm_blob_refs
             .iter()
-            .map(|blob| blob.storage_key.as_str())
+            .map(|blob| (blob.storage.as_str(), blob.storage_key.as_str()))
             .collect();
-        keys.sort_unstable();
-        assert_eq!(keys, ["k-dm", "k-general"]);
+        pairs.sort_unstable();
+        assert_eq!(pairs, [("s-dm", "k-dm"), ("s-general", "k-general")]);
     }
 
     /// Half 3 — the summary handle is the roster ordering's HEAD, not the
