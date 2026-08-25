@@ -100,18 +100,26 @@ async fn clear<R: NotificationReadPort, C: NotificationClearPort, A: Notificatio
 ) -> Response {
     let value = match body {
         Ok(Json(v)) => v,
-        Err(_) => return invalid(),
+        Err(_) => return invalid_selector(),
     };
     let Some(o) = value.as_object() else {
-        return invalid();
+        return invalid_root_type(&value);
     };
+    let mut issues = Vec::new();
     for key in ["id", "workspace_id", "conversation_id"] {
-        if o.get(key).is_some_and(|value| !value.is_string()) {
-            return invalid();
+        if let Some(value) = o.get(key)
+            && !value.is_string()
+        {
+            issues.push(type_issue("string", value, key));
         }
     }
-    if o.get("all").is_some_and(|value| !value.is_boolean()) {
-        return invalid();
+    if let Some(value) = o.get("all")
+        && !value.is_boolean()
+    {
+        issues.push(type_issue("boolean", value, "all"));
+    }
+    if !issues.is_empty() {
+        return invalid_issues(issues);
     }
     let selector = if let Some(v) = o
         .get("id")
@@ -141,7 +149,7 @@ async fn clear<R: NotificationReadPort, C: NotificationClearPort, A: Notificatio
         None
     };
     let Some(selector) = selector else {
-        return invalid();
+        return invalid_selector();
     };
     let Some(viewer) = viewer(principal) else {
         return internal();
@@ -161,30 +169,99 @@ async fn clear<R: NotificationReadPort, C: NotificationClearPort, A: Notificatio
 }
 fn parse_limit(raw: Option<&str>) -> u16 {
     let Some(raw) = raw else { return 100 };
-    let raw = raw.trim_start();
+    let raw = raw.trim_start_matches(is_ecmascript_trim_whitespace);
     let (negative, digits) = if let Some(v) = raw.strip_prefix('-') {
         (true, v)
     } else {
         (false, raw.strip_prefix('+').unwrap_or(raw))
     };
-    let prefix: String = digits.chars().take_while(char::is_ascii_digit).collect();
+    let prefix = digits
+        .as_bytes()
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .copied()
+        .collect::<Vec<_>>();
     if negative || prefix.is_empty() {
         return 100;
     }
-    prefix
-        .parse::<u64>()
-        .ok()
-        .filter(|v| *v > 0)
-        .map(|v| v.min(500) as u16)
-        .unwrap_or(100)
+    let significant = prefix
+        .iter()
+        .skip_while(|byte| **byte == b'0')
+        .copied()
+        .collect::<Vec<_>>();
+    if significant.is_empty() {
+        return 100;
+    }
+    if significant.len() > 3 || (significant.len() == 3 && significant.as_slice() > &b"500"[..]) {
+        return 500;
+    }
+    significant
+        .iter()
+        .fold(0_u16, |value, byte| value * 10 + u16::from(*byte - b'0'))
+}
+
+/// ECMA-262 `StringNumericLiteral` trims exactly WhiteSpace plus
+/// LineTerminator before `Number.parseInt` scans the decimal prefix. Rust's
+/// Unicode whitespace set differs at FEFF and U+0085, both reachable in a URL.
+fn is_ecmascript_trim_whitespace(value: char) -> bool {
+    matches!(
+        value,
+        '\u{0009}' | '\u{000B}' | '\u{000C}' | '\u{0020}' | '\u{00A0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200A}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202F}'
+                | '\u{205F}'
+                | '\u{3000}'
+                | '\u{FEFF}'
+                | '\n'
+                | '\r'
+    )
 }
 fn notification_wire(n: &Notification) -> Value {
     json!({"id":n.id.as_str(),"kind":n.kind.as_str(),"user_id":n.user.as_ref().map(|v|v.as_str()),"agent_id":n.agent.as_ref().map(|v|v.as_str()),"workspace_id":n.workspace.as_ref().map(|v|v.as_str()),"conversation_id":n.conversation.as_ref().map(|v|v.as_str()),"message_id":n.message.as_ref().map(|v|v.as_str()),"thread_root_id":n.thread_root.as_ref().map(|v|v.as_str()),"source_workspace_id":n.source_workspace.as_ref().map(|v|v.as_str()),"source_conversation_id":n.source_conversation.as_ref().map(|v|v.as_str()),"source_message_id":n.source_message.as_ref().map(|v|v.as_str()),"payload":n.payload_json.as_deref().and_then(|v|serde_json::from_str::<Value>(v).ok()),"read_at":n.read_at.map(NotificationTimestamp::get),"created_at":n.created_at.get()})
 }
-fn invalid() -> Response {
+fn received_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+fn type_issue(expected: &'static str, value: &Value, key: &'static str) -> Value {
+    let received = received_type(value);
+    json!({
+        "code":"invalid_type",
+        "expected":expected,
+        "received":received,
+        "path":[key],
+        "message":format!("Expected {expected}, received {received}")
+    })
+}
+fn invalid_root_type(value: &Value) -> Response {
+    let received = received_type(value);
+    invalid_issues(vec![json!({
+        "code":"invalid_type",
+        "expected":"object",
+        "received":received,
+        "path":[],
+        "message":format!("Expected object, received {received}")
+    })])
+}
+fn invalid_selector() -> Response {
+    invalid_issues(vec![json!({
+        "code":"custom",
+        "message":"must specify id, workspace_id, conversation_id, or all",
+        "path":[]
+    })])
+}
+fn invalid_issues(issues: Vec<Value>) -> Response {
     (
         StatusCode::BAD_REQUEST,
-        Json(json!({"error":"invalid input"})),
+        Json(json!({"error":"invalid input","issues":issues})),
     )
         .into_response()
 }

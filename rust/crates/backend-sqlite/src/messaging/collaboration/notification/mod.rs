@@ -1,10 +1,14 @@
-use crate::messaging::{HostEnvironment, MessagingStore};
+use crate::{
+    messaging::{HostEnvironment, MessagingStore},
+    unread_read::{UnreadReadModelError, attention_badge_counts},
+};
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{MessageId, SendClock, ThreadRootId, collaboration::notification::*},
     persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
+use std::{collections::BTreeMap, num::NonZeroU64};
 use thiserror::Error;
 
 #[derive(Clone)]
@@ -33,6 +37,8 @@ pub enum NotificationStoreError {
     MalformedTimestamp,
     #[error("stored notification payload is not a JSON object")]
     MalformedPayload,
+    #[error("tiered attention badge projection failed")]
+    Badge(#[source] UnreadReadModelError),
     #[error("clock failed")]
     Clock(#[source] silverhand_backend_core::messaging::EnvironmentUnavailable),
 }
@@ -40,6 +46,27 @@ impl From<NotificationStoreError> for PersistenceFailure {
     fn from(value: NotificationStoreError) -> Self {
         Self::from_source(value)
     }
+}
+
+fn changed_badge_workspaces(
+    before: Vec<(WorkspaceId, i64)>,
+    after: Vec<(WorkspaceId, i64)>,
+) -> BadgeWorkspaceSet {
+    let mut counts = BTreeMap::<String, (WorkspaceId, i64, i64)>::new();
+    for (workspace, count) in before {
+        counts.insert(workspace.as_str().to_owned(), (workspace, count, 0));
+    }
+    for (workspace, count) in after {
+        counts
+            .entry(workspace.as_str().to_owned())
+            .and_modify(|entry| entry.2 = count)
+            .or_insert((workspace, 0, count));
+    }
+    BadgeWorkspaceSet::from_workspaces(
+        counts
+            .into_values()
+            .filter_map(|(workspace, before, after)| (before != after).then_some(workspace)),
+    )
 }
 
 fn opt<T>(
@@ -189,47 +216,43 @@ impl<E: SendClock + Clone + Send + Sync + 'static> NotificationClearPort
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(NotificationStoreError::from)?;
+        let badge_before = attention_badge_counts(&mut tx, &viewer)
+            .await
+            .map_err(NotificationStoreError::Badge)?;
         let rows = match &selector {
-            NotificationClearSelector::Id(v) => sqlx::query("SELECT n.id,COALESCE(n.workspace_id,c.workspace_id) workspace_id FROM notifications n LEFT JOIN conversations c ON c.id=n.conversation_id WHERE n.user_id=? AND n.read_at IS NULL AND n.id=? ORDER BY n.id").bind(viewer.as_str()).bind(v.as_str()).fetch_all(&mut *tx).await,
-            NotificationClearSelector::Workspace(v) => sqlx::query("SELECT n.id,COALESCE(n.workspace_id,c.workspace_id) workspace_id FROM notifications n LEFT JOIN conversations c ON c.id=n.conversation_id WHERE n.user_id=? AND n.read_at IS NULL AND n.workspace_id=? ORDER BY n.id").bind(viewer.as_str()).bind(v.as_str()).fetch_all(&mut *tx).await,
-            NotificationClearSelector::Conversation(v) => sqlx::query("SELECT n.id,COALESCE(n.workspace_id,c.workspace_id) workspace_id FROM notifications n LEFT JOIN conversations c ON c.id=n.conversation_id WHERE n.user_id=? AND n.read_at IS NULL AND n.conversation_id=? ORDER BY n.id").bind(viewer.as_str()).bind(v.as_str()).fetch_all(&mut *tx).await,
-            NotificationClearSelector::All => sqlx::query("SELECT n.id,COALESCE(n.workspace_id,c.workspace_id) workspace_id FROM notifications n LEFT JOIN conversations c ON c.id=n.conversation_id WHERE n.user_id=? AND n.read_at IS NULL ORDER BY n.id").bind(viewer.as_str()).fetch_all(&mut *tx).await,
+            NotificationClearSelector::Id(v) => sqlx::query("SELECT n.id,n.kind,n.user_id,n.agent_id,n.workspace_id,n.conversation_id,n.message_id,m.thread_root_id,n.source_workspace_id,n.source_conversation_id,n.source_message_id,n.payload,n.read_at,n.created_at FROM notifications n LEFT JOIN messages m ON m.id=n.message_id WHERE n.user_id=? AND n.read_at IS NULL AND n.id=? ORDER BY n.id").bind(viewer.as_str()).bind(v.as_str()).fetch_all(&mut *tx).await,
+            NotificationClearSelector::Workspace(v) => sqlx::query("SELECT n.id,n.kind,n.user_id,n.agent_id,n.workspace_id,n.conversation_id,n.message_id,m.thread_root_id,n.source_workspace_id,n.source_conversation_id,n.source_message_id,n.payload,n.read_at,n.created_at FROM notifications n LEFT JOIN messages m ON m.id=n.message_id WHERE n.user_id=? AND n.read_at IS NULL AND n.workspace_id=? ORDER BY n.id").bind(viewer.as_str()).bind(v.as_str()).fetch_all(&mut *tx).await,
+            NotificationClearSelector::Conversation(v) => sqlx::query("SELECT n.id,n.kind,n.user_id,n.agent_id,n.workspace_id,n.conversation_id,n.message_id,m.thread_root_id,n.source_workspace_id,n.source_conversation_id,n.source_message_id,n.payload,n.read_at,n.created_at FROM notifications n LEFT JOIN messages m ON m.id=n.message_id WHERE n.user_id=? AND n.read_at IS NULL AND n.conversation_id=? ORDER BY n.id").bind(viewer.as_str()).bind(v.as_str()).fetch_all(&mut *tx).await,
+            NotificationClearSelector::All => sqlx::query("SELECT n.id,n.kind,n.user_id,n.agent_id,n.workspace_id,n.conversation_id,n.message_id,m.thread_root_id,n.source_workspace_id,n.source_conversation_id,n.source_message_id,n.payload,n.read_at,n.created_at FROM notifications n LEFT JOIN messages m ON m.id=n.message_id WHERE n.user_id=? AND n.read_at IS NULL ORDER BY n.id").bind(viewer.as_str()).fetch_all(&mut *tx).await,
         }.map_err(NotificationStoreError::from)?;
-        let ids: Vec<String> = rows
-            .iter()
-            .map(|r| r.try_get("id"))
-            .collect::<Result<_, _>>()
-            .map_err(NotificationStoreError::from)?;
-        let mut workspaces = std::collections::BTreeSet::new();
-        for row in &rows {
-            if let Some(raw) = row
-                .try_get::<Option<String>, _>("workspace_id")
-                .map_err(NotificationStoreError::from)?
-            {
-                workspaces.insert(raw);
-            }
-        }
-        for id in &ids {
+        // Decode every selected row before the first mutation. A malformed id,
+        // scope, kind, timestamp or payload is corruption, not a partially
+        // committed clear followed by an error.
+        let selected = rows
+            .into_iter()
+            .map(decode)
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut marked = 0_u64;
+        for notification in &selected {
             sqlx::query(
                 "UPDATE notifications SET read_at=? WHERE id=? AND user_id=? AND read_at IS NULL",
             )
             .bind(now)
-            .bind(id)
+            .bind(notification.id.as_str())
             .bind(viewer.as_str())
             .execute(&mut *tx)
             .await
-            .map_err(NotificationStoreError::from)?;
+            .map_err(NotificationStoreError::from)
+            .map(|done| marked += done.rows_affected())?;
         }
+        let badge_after = attention_badge_counts(&mut tx, &viewer)
+            .await
+            .map_err(NotificationStoreError::Badge)?;
+        let badge_workspaces = changed_badge_workspaces(badge_before, badge_after);
         tx.commit().await.map_err(NotificationStoreError::from)?;
-        Ok(CommittedNotificationClear::committed(
-            viewer,
-            ids.len() as u64,
-            workspaces
-                .into_iter()
-                .map(|raw| {
-                    WorkspaceId::parse(raw).map_err(|_| NotificationStoreError::MalformedIdentity)
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-        ))
+        Ok(match NonZeroU64::new(marked) {
+            Some(marked) => CommittedNotificationClear::changed(viewer, marked, badge_workspaces),
+            None => CommittedNotificationClear::unchanged(viewer),
+        })
     }
 }

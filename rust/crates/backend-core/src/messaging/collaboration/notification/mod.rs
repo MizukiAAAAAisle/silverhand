@@ -5,7 +5,7 @@ mod model;
 mod read;
 
 pub use clear::{
-    ClearNotifications, CommittedNotificationClear, NotificationAftermath,
+    BadgeWorkspaceSet, ClearNotifications, CommittedNotificationClear, NotificationAftermath,
     NotificationClearFailure, NotificationClearPort, NotificationClearSelector,
     clear_notifications,
 };

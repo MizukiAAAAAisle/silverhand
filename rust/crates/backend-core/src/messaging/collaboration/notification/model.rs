@@ -63,7 +63,8 @@ pub struct Notification {
     pub source_workspace: Option<WorkspaceId>,
     pub source_conversation: Option<ConversationId>,
     pub source_message: Option<MessageId>,
-    /// Canonical JSON object text, validated by the persistence adapter.
+    /// JSON object text, validated by the persistence adapter and otherwise
+    /// preserved as stored.
     pub payload_json: Option<String>,
     pub read_at: Option<NotificationTimestamp>,
     pub created_at: NotificationTimestamp,

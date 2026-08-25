@@ -1,0 +1,204 @@
+[
+  {
+    "name": "list_default",
+    "surface": "list",
+    "method": "GET",
+    "path": "/api/notifications",
+    "status": 200,
+    "call": "list:false:100",
+    "body": {
+      "notifications": [
+        {
+          "id": "notification-1",
+          "kind": "agent_start_failed",
+          "user_id": "user-1",
+          "agent_id": null,
+          "workspace_id": null,
+          "conversation_id": null,
+          "message_id": null,
+          "thread_root_id": null,
+          "source_workspace_id": null,
+          "source_conversation_id": null,
+          "source_message_id": null,
+          "payload": { "code": "missing-runtime" },
+          "read_at": null,
+          "created_at": 100
+        }
+      ]
+    }
+  },
+  {
+    "name": "list_unread",
+    "surface": "list",
+    "method": "GET",
+    "path": "/api/notifications?unread=1",
+    "status": 200,
+    "call": "list:true:100",
+    "body_case": "list_default"
+  },
+  {
+    "name": "list_huge_decimal_prefix",
+    "surface": "list",
+    "method": "GET",
+    "path": "/api/notifications?limit=999999999999999999999999999999999tail",
+    "status": 200,
+    "call": "list:false:500",
+    "body_case": "list_default"
+  },
+  {
+    "name": "list_feff_prefix",
+    "surface": "list",
+    "method": "GET",
+    "path": "/api/notifications?limit=%EF%BB%BF501tail",
+    "status": 200,
+    "call": "list:false:500",
+    "body_case": "list_default"
+  },
+  {
+    "name": "list_nel_prefix",
+    "surface": "list",
+    "method": "GET",
+    "path": "/api/notifications?limit=%C2%85501tail",
+    "status": 200,
+    "call": "list:false:100",
+    "body_case": "list_default"
+  },
+  {
+    "name": "list_unknown_member",
+    "surface": "list",
+    "method": "GET",
+    "path": "/api/notifications?unknown=kept-out",
+    "status": 200,
+    "call": "list:false:100",
+    "body_case": "list_default"
+  },
+  {
+    "name": "unread_summary",
+    "surface": "unread",
+    "method": "GET",
+    "path": "/api/notifications/unread",
+    "status": 200,
+    "call": "summary",
+    "body": {
+      "total": 3,
+      "by_workspace": { "workspace-1": 2 },
+      "latest_by_workspace": {
+        "workspace-1": {
+          "conversation_id": "conversation-1",
+          "message_id": "message-1",
+          "thread_root_id": null
+        }
+      }
+    }
+  },
+  {
+    "name": "clear_id",
+    "surface": "clear",
+    "method": "POST",
+    "path": "/api/notifications/read",
+    "request": { "id": "notification-1" },
+    "status": 200,
+    "call": "id",
+    "body": { "marked": 1 }
+  },
+  {
+    "name": "clear_workspace",
+    "surface": "clear",
+    "method": "POST",
+    "path": "/api/notifications/read",
+    "request": { "workspace_id": "workspace-1" },
+    "status": 200,
+    "call": "workspace",
+    "body": { "marked": 2 }
+  },
+  {
+    "name": "clear_conversation",
+    "surface": "clear",
+    "method": "POST",
+    "path": "/api/notifications/read",
+    "request": { "conversation_id": "conversation-1" },
+    "status": 200,
+    "call": "conversation",
+    "body": { "marked": 3 }
+  },
+  {
+    "name": "clear_all",
+    "surface": "clear",
+    "method": "POST",
+    "path": "/api/notifications/read",
+    "request": { "all": true },
+    "status": 200,
+    "call": "all",
+    "body": { "marked": 4 }
+  },
+  {
+    "name": "clear_empty_high_priority_falls_through",
+    "surface": "clear",
+    "method": "POST",
+    "path": "/api/notifications/read",
+    "request": { "id": "", "all": true },
+    "status": 200,
+    "call": "all",
+    "body": { "marked": 4 }
+  },
+  {
+    "name": "clear_unknown_member",
+    "surface": "clear",
+    "method": "POST",
+    "path": "/api/notifications/read",
+    "request": { "all": true, "unknown": "stripped" },
+    "status": 200,
+    "call": "all",
+    "body": { "marked": 4 }
+  },
+  {
+    "name": "clear_wrong_typed_high_priority",
+    "surface": "clear",
+    "method": "POST",
+    "path": "/api/notifications/read",
+    "request": { "id": 7, "all": true },
+    "status": 400,
+    "call": null,
+    "body": {
+      "error": "invalid input",
+      "issues": [
+        {
+          "code": "invalid_type",
+          "expected": "string",
+          "received": "number",
+          "path": ["id"],
+          "message": "Expected string, received number"
+        }
+      ]
+    }
+  },
+  {
+    "name": "clear_empty_body",
+    "surface": "clear",
+    "method": "POST",
+    "path": "/api/notifications/read",
+    "request": {},
+    "status": 400,
+    "call": null,
+    "body": {
+      "error": "invalid input",
+      "issues": [
+        {
+          "code": "custom",
+          "message": "must specify id, workspace_id, conversation_id, or all",
+          "path": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "clear_malformed_json",
+    "surface": "clear",
+    "method": "POST",
+    "path": "/api/notifications/read",
+    "raw_request": "{",
+    "status": 400,
+    "call": null,
+    "body_case": "clear_empty_body"
+  }
+]

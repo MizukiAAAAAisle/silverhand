@@ -227,6 +227,27 @@ const BADGE_COUNT: &str = concat!(
     ")"
 );
 
+/// The same tiered badge authority across all viewer workspaces. This is the
+/// cross-workspace face of `BADGE_COUNT`, matching the TypeScript
+/// `badgeCountsByWorkspace` roll-up rather than issuing one query per workspace.
+const BADGE_COUNTS_BY_WORKSPACE: &str = concat!(
+    "WITH p(viewer, cdm) AS (SELECT ?, ?) SELECT workspace_id, SUM(c) AS c FROM (SELECT \
+     c.workspace_id AS workspace_id, COUNT(m.id) AS c FROM conversations c JOIN \
+     conversation_users cu ON cu.conversation_id=c.id AND cu.user_id=(SELECT viewer FROM p) \
+     JOIN messages m ON m.conversation_id=c.id AND ",
+    rollup_unread!(),
+    " WHERE ",
+    loud_positional!(),
+    " GROUP BY c.workspace_id UNION ALL SELECT c.workspace_id AS workspace_id, COUNT(DISTINCT \
+     n.message_id) AS c FROM notifications n JOIN conversations c ON c.id=n.conversation_id JOIN \
+     conversation_users cu ON cu.conversation_id=c.id AND cu.user_id=(SELECT viewer FROM p) WHERE \
+     n.user_id=(SELECT viewer FROM p) AND ",
+    effective_directed_mention!(),
+    " AND (c.id IS NOT NULL AND c.archived_at IS NULL) AND NOT ",
+    loud_positional!(),
+    " GROUP BY c.workspace_id) GROUP BY workspace_id ORDER BY workspace_id"
+);
+
 /// The conversation's live human participants.
 const LIVE_PARTICIPANT_USER_IDS: &str = concat!(
     "WITH p(conv) AS (SELECT ?) SELECT u.id AS user_id FROM (",
@@ -291,6 +312,34 @@ pub(crate) async fn conversation_unread_counts(
             .map_err(|_| UnreadReadModelError::MalformedIdentity("conversations.id"))?;
         let unread_count: i64 = row.try_get("unread_count")?;
         counts.insert(conversation, unread_count);
+    }
+    Ok(counts)
+}
+
+/// The canonical tiered badge projection for every workspace the viewer can
+/// participate in, evaluated inside the caller's transaction. Notification
+/// clearing uses this before and after its write so its effect audience comes
+/// from the same authority as live unread publication, never from notification
+/// row coordinates.
+pub(crate) async fn attention_badge_counts(
+    tx: &mut Transaction<'_, Sqlite>,
+    viewer: &UserId,
+) -> Result<Vec<(WorkspaceId, i64)>, UnreadReadModelError> {
+    let rows = sqlx::query(BADGE_COUNTS_BY_WORKSPACE)
+        .bind(viewer.as_str())
+        .bind(CHANNEL_DEFAULT_MODE)
+        .fetch_all(&mut **tx)
+        .await?;
+
+    let mut counts = Vec::with_capacity(rows.len());
+    for row in rows {
+        let raw: String = row.try_get("workspace_id")?;
+        let workspace = WorkspaceId::parse(raw)
+            .map_err(|_| UnreadReadModelError::MalformedIdentity("conversations.workspace_id"))?;
+        let count: i64 = row.try_get("c")?;
+        if count > 0 {
+            counts.push((workspace, count));
+        }
     }
     Ok(counts)
 }

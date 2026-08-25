@@ -1,6 +1,6 @@
 use super::NotificationId;
 use crate::identity::{ConversationId, UserId, WorkspaceId};
-use std::{error::Error, future::Future};
+use std::{error::Error, future::Future, num::NonZeroU64};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NotificationClearSelector {
@@ -22,13 +22,14 @@ mod tests {
             viewer: UserId,
             _: NotificationClearSelector,
         ) -> Result<CommittedNotificationClear, Self::Error> {
-            Ok(CommittedNotificationClear::committed(
+            Ok(CommittedNotificationClear::changed(
                 viewer,
-                2,
-                vec![
+                NonZeroU64::new(2).unwrap(),
+                BadgeWorkspaceSet::from_workspaces([
+                    WorkspaceId::parse("w1").unwrap(),
                     WorkspaceId::parse("w1").unwrap(),
                     WorkspaceId::parse("w2").unwrap(),
-                ],
+                ]),
             ))
         }
     }
@@ -76,25 +77,75 @@ mod tests {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommittedNotificationClear {
     viewer: UserId,
-    marked: u64,
-    changed_workspaces: Vec<WorkspaceId>,
+    change: NotificationClearChange,
 }
+
+/// A canonical, duplicate-free set of workspaces whose absolute tiered badge
+/// changed across the committed clear.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BadgeWorkspaceSet(Vec<WorkspaceId>);
+
+impl BadgeWorkspaceSet {
+    pub fn from_workspaces(workspaces: impl IntoIterator<Item = WorkspaceId>) -> Self {
+        let mut workspaces = workspaces.into_iter().collect::<Vec<_>>();
+        workspaces.sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
+        workspaces.dedup_by(|left, right| left.as_str() == right.as_str());
+        Self(workspaces)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &WorkspaceId> {
+        self.0.iter()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum NotificationClearChange {
+    Unchanged,
+    Changed {
+        marked: NonZeroU64,
+        badge_workspaces: BadgeWorkspaceSet,
+    },
+}
+
 impl CommittedNotificationClear {
-    pub fn committed(viewer: UserId, marked: u64, changed_workspaces: Vec<WorkspaceId>) -> Self {
+    pub fn unchanged(viewer: UserId) -> Self {
         Self {
             viewer,
-            marked,
-            changed_workspaces,
+            change: NotificationClearChange::Unchanged,
+        }
+    }
+
+    pub fn changed(
+        viewer: UserId,
+        marked: NonZeroU64,
+        badge_workspaces: BadgeWorkspaceSet,
+    ) -> Self {
+        Self {
+            viewer,
+            change: NotificationClearChange::Changed {
+                marked,
+                badge_workspaces,
+            },
         }
     }
     pub fn viewer(&self) -> &UserId {
         &self.viewer
     }
     pub fn marked(&self) -> u64 {
-        self.marked
+        match &self.change {
+            NotificationClearChange::Unchanged => 0,
+            NotificationClearChange::Changed { marked, .. } => marked.get(),
+        }
     }
-    pub fn changed_workspaces(&self) -> &[WorkspaceId] {
-        &self.changed_workspaces
+    pub fn badge_workspaces(&self) -> impl Iterator<Item = &WorkspaceId> {
+        match &self.change {
+            NotificationClearChange::Unchanged => None,
+            NotificationClearChange::Changed {
+                badge_workspaces, ..
+            } => Some(badge_workspaces.iter()),
+        }
+        .into_iter()
+        .flatten()
     }
 }
 
@@ -159,7 +210,7 @@ pub async fn clear_notifications<P: NotificationClearPort>(
         if let Err(error) = aftermath.unread_changed(&committed).await {
             first_failure = Some(error);
         }
-        for workspace in committed.changed_workspaces() {
+        for workspace in committed.badge_workspaces() {
             if let Err(error) = aftermath.badge_changed(&committed, workspace).await
                 && first_failure.is_none()
             {
