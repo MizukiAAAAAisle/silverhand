@@ -1,4 +1,8 @@
-//! Human-session HTTP adapters for the three channel-directory reads.
+//! Human-session HTTP adapters for the channel-directory capability.
+
+mod create;
+
+pub use create::create_router;
 
 use std::sync::Arc;
 

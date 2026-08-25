@@ -1,0 +1,114 @@
+[
+  {
+    "name": "missing_title",
+    "path": "/api/workspaces/workspace-1/channels",
+    "request": {},
+    "schema_accepted": false,
+    "status": 400,
+    "body": {"error":"invalid input","issues":[{"code":"invalid_type","expected":"string","received":"undefined","path":["title"],"message":"Required"}]}
+  },
+  {
+    "name": "empty_title",
+    "path": "/api/workspaces/workspace-1/channels",
+    "request": {"title":""},
+    "schema_accepted": false,
+    "status": 400,
+    "body": {"error":"invalid input","issues":[{"code":"too_small","minimum":1,"type":"string","inclusive":true,"message":"title must not be empty","path":["title"]}]}
+  },
+  {
+    "name": "invalid_members_and_visibility",
+    "path": "/api/workspaces/workspace-1/channels",
+    "request": {"title":"X","member_agent_ids":[1],"visibility":"loud"},
+    "schema_accepted": false,
+    "status": 400,
+    "body": {"error":"invalid input","issues":[{"code":"invalid_type","expected":"string","received":"number","path":["member_agent_ids",0],"message":"Expected string, received number"},{"received":"loud","code":"invalid_enum_value","options":["private","public"],"path":["visibility"],"message":"Invalid enum value. Expected 'private' | 'public', received 'loud'"}]}
+  },
+  {
+    "name": "workspace_missing",
+    "path": "/api/workspaces/missing/channels",
+    "request": {"title":"Missing"},
+    "schema_accepted": true,
+    "status": 404,
+    "body": {"error":"workspace not found"}
+  },
+  {
+    "name": "workspace_forbidden",
+    "path": "/api/workspaces/workspace-2/channels",
+    "request": {"title":"Forbidden"},
+    "schema_accepted": true,
+    "status": 403,
+    "body": {"error":"forbidden"}
+  },
+  {
+    "name": "agent_missing",
+    "path": "/api/workspaces/workspace-1/channels",
+    "request": {"title":"Agent Missing","member_agent_ids":["missing-agent"]},
+    "schema_accepted": true,
+    "status": 400,
+    "body": {"error":"agent missing-agent not found","code":"agent_not_found"}
+  },
+  {
+    "name": "agent_not_workspace_member",
+    "path": "/api/workspaces/workspace-1/channels",
+    "request": {"title":"Agent Outsider","member_agent_ids":["agent-outsider"]},
+    "schema_accepted": true,
+    "status": 400,
+    "body": {"error":"agent agent-outsider is not a member of this workspace","code":"agent_not_workspace_member"}
+  },
+  {
+    "name": "user_not_workspace_member",
+    "path": "/api/workspaces/workspace-1/channels",
+    "request": {"title":"User Outsider","member_user_ids":["user-outsider"]},
+    "schema_accepted": true,
+    "status": 400,
+    "body": {"error":"user user-outsider is not a human member of this workspace","code":"user_not_workspace_member"}
+  },
+  {
+    "name": "title_taken",
+    "path": "/api/workspaces/workspace-1/channels",
+    "request": {"title":"Taken"},
+    "schema_accepted": true,
+    "status": 409,
+    "body": {"error":"a channel titled Taken already exists in this workspace","code":"conversation_title_taken"}
+  },
+  {
+    "name": "regular_private_created",
+    "path": "/api/workspaces/workspace-1/channels",
+    "request": {"title":"  General  ","member_agent_ids":["agent-member","agent-member"],"member_user_ids":["user-member","local"],"visibility":"private"},
+    "schema_accepted": true,
+    "status": 201,
+    "body": {"channel":{"id":"created","workspace_id":"workspace-1","placement_kind":"workspace","roster_policy":"open","title":"General","status":"idle","spawned_by_agent_id":null,"closed_at":null,"close_summary":null,"created_at":77,"updated_at":77,"archived_at":null,"latest_message_seq":0,"visibility":"private"}}
+  },
+  {
+    "name": "regular_public_created",
+    "path": "/api/workspaces/workspace-1/channels",
+    "request": {"title":"Public","visibility":"public"},
+    "schema_accepted": true,
+    "status": 201,
+    "body": {"channel":{"id":"created","workspace_id":"workspace-1","placement_kind":"workspace","roster_policy":"open","title":"Public","status":"idle","spawned_by_agent_id":null,"closed_at":null,"close_summary":null,"created_at":77,"updated_at":77,"archived_at":null,"latest_message_seq":0,"visibility":"public"}}
+  },
+  {
+    "name": "agent_home_public",
+    "path": "/api/workspaces/workspace-home/channels",
+    "request": {"title":"Public Home","visibility":"public"},
+    "schema_accepted": true,
+    "status": 400,
+    "body": {"error":"agent_home DM channels cannot be public"}
+  },
+  {
+    "name": "agent_home_explicit_members",
+    "path": "/api/workspaces/workspace-home/channels",
+    "request": {"title":"Members Home","member_user_ids":["local"]},
+    "schema_accepted": true,
+    "status": 400,
+    "body": {"error":"agent_home channels always use the home owner/current user as members"}
+  },
+  {
+    "name": "agent_home_created",
+    "path": "/api/workspaces/workspace-home/channels",
+    "request": {"title":"Private Home","visibility":"private"},
+    "schema_accepted": true,
+    "status": 201,
+    "body": {"channel":{"id":"created","workspace_id":"workspace-home","placement_kind":"workspace","roster_policy":"fixed","title":"Private Home","status":"idle","spawned_by_agent_id":null,"closed_at":null,"close_summary":null,"created_at":77,"updated_at":77,"archived_at":null,"latest_message_seq":0,"visibility":"private"}}
+  }
+]
