@@ -11,6 +11,7 @@ pub mod channel_directory;
 pub mod channel_lifecycle;
 pub mod conversation_agent_activity;
 pub mod conversation_agent_directory;
+pub mod conversation_agent_runtime;
 pub mod conversation_ref;
 pub mod conversation_unread;
 pub mod direct_pair_initiation;
