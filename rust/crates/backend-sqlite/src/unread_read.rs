@@ -80,6 +80,7 @@ macro_rules! mainline_branch {
          m.conversation_id AND cr.thread_root_id IS NULL), 0)"
     };
 }
+pub(crate) use mainline_branch;
 
 /// A threaded message counts only for a viewer who follows that thread, and only past
 /// their per-thread read cursor.
@@ -98,11 +99,11 @@ pub(crate) use followed_thread_branch;
 macro_rules! rollup_unread {
     () => {
         concat!(
-            unread_guards!(),
+            $crate::unread_read::unread_guards!(),
             " AND ((",
-            mainline_branch!(),
+            $crate::unread_read::mainline_branch!(),
             ") OR (",
-            followed_thread_branch!(),
+            $crate::unread_read::followed_thread_branch!(),
             "))"
         )
     };
