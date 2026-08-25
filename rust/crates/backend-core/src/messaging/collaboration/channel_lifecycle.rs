@@ -17,6 +17,9 @@ use crate::{
     },
 };
 
+mod mutation;
+pub use mutation::*;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ChannelLifecyclePlacement {
     Workspace(WorkspaceChannelPlacement),
