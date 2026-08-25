@@ -123,7 +123,11 @@ impl SqliteConversationAgentDirectoryRead {
             }
             let joined_at = JoinedAt::new(row.try_get("joined_at")?)
                 .map_err(|_| ConversationAgentDirectoryStoreError::MalformedJoinedAt)?;
-            members.push(ConversationAgentMember::projected(agent, joined_at));
+            members.push(ConversationAgentMember::projected(
+                row_conversation,
+                agent,
+                joined_at,
+            ));
         }
         let directory = ConversationAgentDirectory::projected(stored, members)
             .map_err(|_| ConversationAgentDirectoryStoreError::MalformedDirectory)?;

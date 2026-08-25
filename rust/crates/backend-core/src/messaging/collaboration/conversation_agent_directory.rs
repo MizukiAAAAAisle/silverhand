@@ -32,13 +32,18 @@ pub struct InvalidJoinedAt;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConversationAgentMember {
+    conversation: ConversationId,
     agent: AgentId,
     joined_at: JoinedAt,
 }
 
 impl ConversationAgentMember {
-    pub fn projected(agent: AgentId, joined_at: JoinedAt) -> Self {
-        Self { agent, joined_at }
+    pub fn projected(conversation: ConversationId, agent: AgentId, joined_at: JoinedAt) -> Self {
+        Self {
+            conversation,
+            agent,
+            joined_at,
+        }
     }
 
     pub fn agent(&self) -> &AgentId {
@@ -82,7 +87,12 @@ impl ConversationAgentDirectory {
         self,
         requested: &ConversationId,
     ) -> Result<BoundConversationAgentDirectory, ConversationAgentDirectoryIdentityMismatch> {
-        if &self.conversation != requested {
+        if &self.conversation != requested
+            || self
+                .members
+                .iter()
+                .any(|member| &member.conversation != requested)
+        {
             return Err(ConversationAgentDirectoryIdentityMismatch);
         }
         Ok(BoundConversationAgentDirectory(self))
@@ -143,6 +153,7 @@ mod tests {
 
     fn member(agent: &str, joined_at: i64) -> ConversationAgentMember {
         ConversationAgentMember::projected(
+            ConversationId::parse("c").unwrap(),
             AgentId::parse(agent).unwrap(),
             JoinedAt::new(joined_at).unwrap(),
         )
@@ -171,6 +182,17 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["a", "b", "c"]
         );
+
+        let spliced = ConversationAgentDirectory::projected(
+            ConversationId::parse("c").unwrap(),
+            vec![ConversationAgentMember::projected(
+                ConversationId::parse("other").unwrap(),
+                AgentId::parse("a").unwrap(),
+                JoinedAt::new(1).unwrap(),
+            )],
+        )
+        .unwrap();
+        assert!(spliced.bind(&ConversationId::parse("c").unwrap()).is_err());
 
         assert!(
             ConversationAgentDirectory::projected(

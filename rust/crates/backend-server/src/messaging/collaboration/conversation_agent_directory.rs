@@ -148,7 +148,10 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct ProjectedIdentity(&'static str);
+    struct ProjectedIdentity {
+        directory_conversation: &'static str,
+        member_conversation: &'static str,
+    }
 
     impl ConversationAgentDirectoryReadPort for ProjectedIdentity {
         type Error = Infallible;
@@ -162,8 +165,9 @@ mod tests {
             Self::Error,
         > {
             Ok(Ok(ConversationAgentDirectory::projected(
-                ConversationId::parse(self.0).unwrap(),
+                ConversationId::parse(self.directory_conversation).unwrap(),
                 vec![ConversationAgentMember::projected(
+                    ConversationId::parse(self.member_conversation).unwrap(),
                     AgentId::parse("agent-a").unwrap(),
                     JoinedAt::new(1).unwrap(),
                 )],
@@ -203,10 +207,25 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
-        let (status, body) = call(ProjectedIdentity("b")).await;
+        let (status, body) = call(ProjectedIdentity {
+            directory_conversation: "b",
+            member_conversation: "b",
+        })
+        .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(body, json!({"error":"internal error"}));
-        let (status, body) = call(ProjectedIdentity("a")).await;
+        let (status, body) = call(ProjectedIdentity {
+            directory_conversation: "a",
+            member_conversation: "b",
+        })
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body, json!({"error":"internal error"}));
+        let (status, body) = call(ProjectedIdentity {
+            directory_conversation: "a",
+            member_conversation: "a",
+        })
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["agents"][0]["conversation_id"], "a");
     }
