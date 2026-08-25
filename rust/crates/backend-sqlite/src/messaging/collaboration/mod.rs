@@ -12,6 +12,7 @@ mod notification;
 mod reaction;
 mod runtime_control;
 mod saved;
+pub mod thread_follow;
 
 pub use attention_preference::{AttentionPreferenceStoreError, SqliteAttentionPreferenceStore};
 pub use notification::{NotificationStoreError, SqliteNotificationStore};

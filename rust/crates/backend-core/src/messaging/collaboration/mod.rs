@@ -15,6 +15,7 @@ pub mod notification;
 pub mod reaction;
 mod runtime_control;
 pub mod saved;
+pub mod thread_follow;
 
 pub use runtime_control::{
     ClearSessionOutcome, ClearSessionProviderRefusal, ClearSessionRefusal, CliSessionId,
