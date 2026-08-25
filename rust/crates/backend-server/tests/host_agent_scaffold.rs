@@ -46,8 +46,15 @@ const CRATE_ROOTS: &[&str] = &[
 ];
 
 /// Every module this lane DECLARES at a crate root — the seam ledger. Shaping
-/// owes one labeled integration-seam line per entry, and G4 holds each to a single
-/// declaration with no second owner anywhere.
+/// owes one labeled integration-seam line per entry. G4 holds each entry to one
+/// declaration in its own root and forbids any UNREGISTERED second owner.
+///
+/// A name the lane deliberately distributes across roles lists each owning root as
+/// its own entry: a core port and its SQLite adapter (`user_presence_cold_read`), or
+/// a SQLite persistence lane and the server route surface that mounts it
+/// (`host_agent`). This mirrors the base crates, where `workspace_cold_read`,
+/// `direct_pair_read`, `access` and `auth` each name their own module in several
+/// roots; only an owner in a root NOT listed here is the accidental fork G4 refuses.
 ///
 /// Flat modules belong here too. One table serving every gate is what let a flat
 /// module sit in no inventory at all, guarded by nothing and with no signal, so
@@ -58,8 +65,11 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
+    ("backend-core", "user_presence_cold_read"),
+    ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-sqlite", "host_agent"),
+    ("backend-sqlite", "user_presence_cold_read"),
 ];
 
 /// The declarations this lane did NOT add, across EVERY root in `CRATE_ROOTS`.
@@ -140,23 +150,30 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
+    ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-sqlite", "host_agent"),
 ];
 
 /// The modules a composition must name to ACTIVATE this lane: rules that decide, a
-/// read that answers a route, the write that commits, the timers that fire.
+/// read that answers a route, the HTTP surface that mounts that read, the write that
+/// commits, the timers that fire.
 ///
 /// Membership is that question and not "is it ours". `agent_lifecycle` is a
 /// materialization vocabulary the base crates already share; converting a stored
 /// token into that enum starts no rule, opens no port and fires no timer, so it is
-/// deliberately absent, while every deciding, reading, writing and timing module is
-/// present. G0 keeps it a subset of the seam ledger.
+/// deliberately absent, while every deciding, reading, mounting, writing and timing
+/// module is present. The /api/presence vertical adds two: the read port
+/// `user_presence_cold_read`, and the route surface `host_agent` whose appearance in
+/// the composition root is the mount this fence refuses in CP1. G0 keeps it a subset
+/// of the seam ledger.
 const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
+    ("backend-core", "user_presence_cold_read"),
+    ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
 ];
 
@@ -903,13 +920,20 @@ fn g4_the_seam_touches_only_crate_roots_and_only_as_declarations() {
             if other_dir == crate_dir {
                 continue;
             }
+            // A co-owner the lane registered is not a fork: a name distributed across
+            // roles (a core port and its SQLite adapter, a SQLite lane and its route
+            // surface) lists each owning root as its own seam entry. Only an owner in a
+            // root NOT in the ledger is the accidental second declaration this refuses.
+            if SEAM_ROOT_MODULES.contains(&(*other_dir, *namespace)) {
+                continue;
+            }
             let other = rust_root()
                 .join("crates")
                 .join(other_dir)
                 .join("src/lib.rs");
             assert!(
                 !declares_or_reexports(&read(&other), namespace),
-                "{} declares or re-exports {namespace}: one namespace, one owner",
+                "{} declares or re-exports {namespace} without a seam entry: an unregistered second owner",
                 other.display()
             );
         }
