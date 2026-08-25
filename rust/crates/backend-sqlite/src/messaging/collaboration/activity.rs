@@ -354,7 +354,9 @@ impl RawItem {
         let placement = match placement_kind.as_str() {
             "workspace" => {
                 if !matches!(roster.as_str(), "open" | "fixed")
-                    || title_key.as_deref().is_none_or(|key| !valid_title_key(key))
+                    || title_key
+                        .as_deref()
+                        .is_none_or(|key| !valid_title_key_spelling(key))
                     || endpoint_a_kind.is_some()
                     || endpoint_a_id.is_some()
                     || endpoint_b_kind.is_some()
@@ -475,7 +477,10 @@ impl RawItem {
     }
 }
 
-fn valid_title_key(value: &str) -> bool {
+/// Mirrors only the schema's row-local spelling guard. The terminal writer and
+/// boot integrity audit own the stronger `title` ↔ normalized-key relation;
+/// Activity must not create a third canonicalization authority for that pair.
+fn valid_title_key_spelling(value: &str) -> bool {
     !value.is_empty()
         && !value.starts_with(' ')
         && !value.ends_with(' ')
