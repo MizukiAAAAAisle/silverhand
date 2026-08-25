@@ -4,9 +4,9 @@
 //! these boundaries in their crates; this module is only a stable naming facade.
 
 // INTEGRATION SEAM: thin capability registration; no business logic belongs here.
+pub mod activity;
 pub mod attention_preference;
 pub mod attention_projection;
-pub mod activity;
 pub mod notification;
 pub mod reaction;
 mod runtime_control;
