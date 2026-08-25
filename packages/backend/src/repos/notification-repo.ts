@@ -108,7 +108,7 @@ export class NotificationRepo {
            LEFT JOIN messages m ON m.id = n.message_id
            LEFT JOIN conversations conv ON conv.id = n.conversation_id
          WHERE ${whereParts.join(' AND ')}
-         ORDER BY n.created_at DESC
+         ORDER BY n.created_at DESC, n.id DESC
          LIMIT ?`,
       )
       .all(...args);
