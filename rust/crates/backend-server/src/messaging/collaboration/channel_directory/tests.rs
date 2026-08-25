@@ -49,19 +49,28 @@ async fn seeded() -> (tempfile::TempDir, MessagingStore) {
     db.execute(sqlx::raw_sql(
         "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES \
            ('local','channel-directory-local','Local',1,1); \
+         INSERT INTO hosts(id,name,kind,created_at) VALUES \
+           ('directory-host','Directory Host','local',1); \
+         INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,created_by_user_id) VALUES \
+           ('directory-agent','directory-agent','claude','directory-host',1,1,'local'); \
          INSERT INTO workspaces(id,name,name_key,created_at,updated_at) VALUES \
            ('workspace-1','Workspace','channel-directory-wire',1,1), \
            ('workspace-2','Forbidden','channel-directory-forbidden',1,1); \
+         INSERT INTO workspaces(id,name,name_key,owner_agent_id,created_at,updated_at) VALUES \
+           ('workspace-home','Agent Home',NULL,'directory-agent',1,1); \
          INSERT INTO workspace_users(workspace_id,user_id,joined_at) VALUES \
-           ('workspace-1','local',1); \
+           ('workspace-1','local',1),('workspace-home','local',1); \
          INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status, \
            visibility,archived_at,created_at,updated_at) VALUES \
            ('conversation-public','workspace-1','workspace','open','Public','directory-public','active','public',NULL,1,1), \
            ('conversation-member','workspace-1','workspace','open','Member','directory-member','idle','private',NULL,2,2), \
            ('conversation-hidden','workspace-1','workspace','open','Hidden','directory-hidden','idle','private',NULL,4,4), \
-           ('conversation-archived','workspace-1','workspace','open','Archived','directory-archived','archived','private',10,3,10); \
+           ('conversation-archived','workspace-1','workspace','open','Archived','directory-archived','archived','private',10,3,10), \
+           ('home-active','workspace-home','workspace','fixed','Onboarding','directory-home-active','active','private',NULL,5,5), \
+           ('home-archived','workspace-home','workspace','fixed','Home Archived','directory-home-archived','archived','private',20,6,20); \
          INSERT INTO conversation_users(conversation_id,user_id,joined_at) VALUES \
-           ('conversation-member','local',1),('conversation-archived','local',1); \
+           ('conversation-member','local',1),('conversation-archived','local',1), \
+           ('home-active','local',1),('home-archived','local',1); \
          INSERT INTO user_list_sort_mode(user_id,list_key,scope,mode,updated_at) VALUES \
            ('local','channels:workspace-1','','manual',1); \
          INSERT INTO user_sort_entry(user_id,list_key,entity_id,rank,last_accessed_at,starred_at) VALUES \
@@ -105,11 +114,15 @@ async fn production_router_consumes_every_ts_signed_cell() {
         );
         assert_eq!(body, expected_body(entry, &fixture), "{}", entry["name"]);
     }
-    assert_eq!(fixture.len(), 20);
+    assert_eq!(fixture.len(), 27);
 }
 
 #[derive(Clone)]
-struct Spliced;
+struct Spliced {
+    viewer: UserId,
+    workspace: WorkspaceId,
+    global_filter: Option<WorkspaceId>,
+}
 
 fn other() -> UserId {
     UserId::parse("other").unwrap()
@@ -127,11 +140,12 @@ impl ActiveChannelDirectoryPort for Spliced {
     ) -> Result<Result<ActiveWorkspaceChannelDirectory, WorkspaceDirectoryRefusal>, Self::Error>
     {
         Ok(Ok(ActiveWorkspaceChannelDirectory::projected(
-            other(),
-            other_workspace(),
+            self.viewer.clone(),
+            self.workspace.clone(),
             DirectoryWorkspaceKind::Regular,
             vec![],
-            ChannelSortState::projected(other(), other_workspace(), None, vec![]).unwrap(),
+            ChannelSortState::projected(self.viewer.clone(), self.workspace.clone(), None, vec![])
+                .unwrap(),
         )
         .unwrap()))
     }
@@ -146,8 +160,8 @@ impl ArchivedWorkspaceChannelDirectoryPort for Spliced {
     ) -> Result<Result<ArchivedWorkspaceChannelDirectory, WorkspaceDirectoryRefusal>, Self::Error>
     {
         Ok(Ok(ArchivedWorkspaceChannelDirectory::projected(
-            other(),
-            other_workspace(),
+            self.viewer.clone(),
+            self.workspace.clone(),
             DirectoryWorkspaceKind::Regular,
             vec![],
         )
@@ -165,8 +179,8 @@ impl GlobalArchivedChannelDirectoryPort for Spliced {
     ) -> Result<Result<GlobalArchivedChannelDirectory, GlobalArchivedDirectoryRefusal>, Self::Error>
     {
         Ok(Ok(GlobalArchivedChannelDirectory::projected(
-            other(),
-            None,
+            self.viewer.clone(),
+            self.global_filter.clone(),
             vec![],
         )
         .unwrap()))
@@ -174,16 +188,95 @@ impl GlobalArchivedChannelDirectoryPort for Spliced {
 }
 
 #[tokio::test]
-async fn all_three_success_facts_bind_before_wire_projection() {
-    let app = router(Spliced).layer(Extension(UserId::parse("local").unwrap()));
-    for path in [
-        "/api/workspaces/workspace-1/channels",
-        "/api/workspaces/workspace-1/channels/archived",
-        "/api/archived-channels",
+async fn success_fact_viewer_and_workspace_axes_bind_independently() {
+    let local = UserId::parse("local").unwrap();
+    let workspace = WorkspaceId::parse("workspace-1").unwrap();
+
+    for (port, path) in [
+        (
+            Spliced {
+                viewer: other(),
+                workspace: workspace.clone(),
+                global_filter: None,
+            },
+            "/api/workspaces/workspace-1/channels",
+        ),
+        (
+            Spliced {
+                viewer: local.clone(),
+                workspace: other_workspace(),
+                global_filter: None,
+            },
+            "/api/workspaces/workspace-1/channels",
+        ),
+        (
+            Spliced {
+                viewer: other(),
+                workspace: workspace.clone(),
+                global_filter: None,
+            },
+            "/api/workspaces/workspace-1/channels/archived",
+        ),
+        (
+            Spliced {
+                viewer: local.clone(),
+                workspace: other_workspace(),
+                global_filter: None,
+            },
+            "/api/workspaces/workspace-1/channels/archived",
+        ),
+        (
+            Spliced {
+                viewer: other(),
+                workspace: workspace.clone(),
+                global_filter: None,
+            },
+            "/api/archived-channels",
+        ),
+        (
+            Spliced {
+                viewer: local.clone(),
+                workspace: workspace.clone(),
+                global_filter: Some(other_workspace()),
+            },
+            "/api/archived-channels?workspace_id=workspace-1",
+        ),
     ] {
-        let (status, body) = call(app.clone(), path, false).await;
+        let app = router(port).layer(Extension(local.clone()));
+        let (status, body) = call(app, path, false).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}");
         assert_eq!(body, json!({"error":"internal error"}), "{path}");
+    }
+
+    for (port, path) in [
+        (
+            Spliced {
+                viewer: local.clone(),
+                workspace: workspace.clone(),
+                global_filter: None,
+            },
+            "/api/workspaces/workspace-1/channels",
+        ),
+        (
+            Spliced {
+                viewer: local.clone(),
+                workspace: workspace.clone(),
+                global_filter: None,
+            },
+            "/api/workspaces/workspace-1/channels/archived",
+        ),
+        (
+            Spliced {
+                viewer: local.clone(),
+                workspace: workspace.clone(),
+                global_filter: Some(workspace.clone()),
+            },
+            "/api/archived-channels?workspace_id=workspace-1",
+        ),
+    ] {
+        let app = router(port).layer(Extension(local.clone()));
+        let (status, _) = call(app, path, false).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
     }
 }
 

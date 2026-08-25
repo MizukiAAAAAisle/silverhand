@@ -10,7 +10,7 @@ function expectedBody(entry: any): unknown {
   return expectedBody(source);
 }
 
-function seed(t: TestApp): void {
+async function seed(t: TestApp): Promise<string> {
   t.ctx.db.exec(`
     INSERT INTO workspaces(id,name,name_key,created_at,updated_at) VALUES
       ('workspace-1','Workspace','channel-directory-wire',1,1),
@@ -32,6 +32,41 @@ function seed(t: TestApp): void {
       ('local','channels:workspace-1','conversation-public',2,3,NULL),
       ('local','channels:workspace-1','conversation-hidden',0,9,NULL);
   `);
+  const created = await http(t).post('/api/agents', { name: 'directory-agent', runtime: 'claude' });
+  expect(created.status).toBe(201);
+  const agentId = ((await created.json()) as any).agent.id as string;
+  const home = t.ctx.db.prepare(
+    'SELECT id FROM workspaces WHERE owner_agent_id = ?',
+  ).get(agentId) as { id: string };
+  t.ctx.db.prepare('DELETE FROM conversations WHERE workspace_id = ?').run(home.id);
+  t.ctx.db.prepare(
+    'INSERT OR IGNORE INTO workspace_users(workspace_id,user_id,joined_at) VALUES (?,\'local\',1)',
+  ).run(home.id);
+  t.ctx.db.prepare(
+    `INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,
+       visibility,archived_at,created_at,updated_at) VALUES
+       ('home-active',?,'workspace','fixed','Onboarding','directory-home-active','active','private',NULL,5,5),
+       ('home-archived',?,'workspace','fixed','Home Archived','directory-home-archived','archived','private',20,6,20)`,
+  ).run(home.id, home.id);
+  t.ctx.db.prepare(
+    `INSERT INTO conversation_users(conversation_id,user_id,joined_at) VALUES
+       ('home-active','local',1),('home-archived','local',1)`,
+  ).run();
+  return home.id;
+}
+
+function normalizeHome(value: unknown, homeId: string): unknown {
+  if (typeof value === 'string') return value.split(homeId).join('workspace-home');
+  if (Array.isArray(value)) return value.map(entry => normalizeHome(entry, homeId));
+  if (value && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const normalized = Object.fromEntries(
+      Object.entries(source).map(([key, entry]) => [key, normalizeHome(entry, homeId)]),
+    );
+    if (source.id === homeId && typeof source.name === 'string') normalized.name = 'Agent Home';
+    return normalized;
+  }
+  return value;
 }
 
 describe('channel-directory wire is signed by the production TypeScript routes and schema', () => {
@@ -40,13 +75,14 @@ describe('channel-directory wire is signed by the production TypeScript routes a
 
   it('locks the three read surfaces and gives query admission its real authority', async () => {
     t = buildTestApp({ seedAllFixtureMemberships: false });
-    seed(t);
+    const homeId = await seed(t);
 
     let schemaAccepted = 0;
     let schemaRejected = 0;
     for (const entry of fixture) {
+      const path = entry.path.replaceAll('workspace-home', homeId);
       if (entry.surface === 'global_archived') {
-        const url = new URL(entry.path, 'http://silverhand.test');
+        const url = new URL(path, 'http://silverhand.test');
         const parsed = ArchivedChannelsQueryInputSchema.safeParse({
           workspace_id: url.searchParams.get('workspace_id') ?? undefined,
           since: url.searchParams.get('since') ?? undefined,
@@ -57,15 +93,15 @@ describe('channel-directory wire is signed by the production TypeScript routes a
         if (!entry.schema_accepted) continue;
       }
 
-      const response = await http(t).get(entry.path);
+      const response = await http(t).get(path);
       expect(response.status, entry.name).toBe(entry.status);
-      expect(await response.json(), entry.name).toEqual(expectedBody(entry));
+      expect(normalizeHome(await response.json(), homeId), entry.name).toEqual(expectedBody(entry));
     }
 
-    expect([schemaAccepted, schemaRejected]).toEqual([11, 3]);
+    expect([schemaAccepted, schemaRejected]).toEqual([15, 4]);
     expect([...new Set(fixture.map(entry => entry.surface))].sort()).toEqual([
       'active', 'global_archived', 'workspace_archived',
     ]);
-    expect(fixture).toHaveLength(20);
+    expect(fixture).toHaveLength(27);
   });
 });

@@ -9,7 +9,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
     identity::{UserId, WorkspaceId},
@@ -113,16 +112,10 @@ where
     }
 }
 
-#[derive(Default, Deserialize)]
-struct ArchivedQueryWire {
-    workspace_id: Option<String>,
-    since: Option<String>,
-}
-
 async fn global_archived<P>(
     State(state): State<DirectoryState<P>>,
     principal: Option<Extension<UserId>>,
-    query: Result<Query<ArchivedQueryWire>, QueryRejection>,
+    query: Result<Query<Vec<(String, String)>>, QueryRejection>,
 ) -> Response
 where
     P: GlobalArchivedChannelDirectoryPort,
@@ -131,10 +124,10 @@ where
         tracing::error!("global archived-channel route reached without human principal");
         return internal();
     };
-    let Ok(Query(raw)) = query else {
+    let Ok(Query(pairs)) = query else {
         return invalid();
     };
-    let Ok((workspace, since)) = parse_archived_query(raw) else {
+    let Ok((workspace, since)) = parse_archived_query(pairs) else {
         return invalid();
     };
     match state
@@ -163,15 +156,23 @@ where
 }
 
 fn parse_archived_query(
-    raw: ArchivedQueryWire,
+    pairs: Vec<(String, String)>,
 ) -> Result<(Option<WorkspaceId>, Option<ArchivedSince>), ()> {
-    let workspace = raw
-        .workspace_id
+    // Hono's `c.req.query(name)` publishes first-occurrence semantics. A map or
+    // struct extractor would reject a duplicate and turn a later value into a
+    // new 400 contract.
+    let workspace = pairs
+        .iter()
+        .find_map(|(key, value)| (key == "workspace_id").then(|| value.clone()))
         .filter(|value| !crate::messaging::admission::ecmascript_trim(value).is_empty())
         .map(WorkspaceId::parse)
         .transpose()
         .map_err(|_| ())?;
-    let since = match raw.since.filter(|value| !value.is_empty()) {
+    let since = match pairs
+        .into_iter()
+        .find_map(|(key, value)| (key == "since").then_some(value))
+        .filter(|value| !value.is_empty())
+    {
         None => None,
         Some(raw) => Some(match coerce_integer(&raw).map_err(|_| ())? {
             CoercedInteger::Persisted(value) if value >= 0 => {
