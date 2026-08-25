@@ -6,10 +6,12 @@
 //! batch's `router()` lands with that batch's own checksum and E2E.
 //!
 //! Landed so far: the public `user_presence` cold read ([`presence`]), the
-//! authenticated `agent availability` cold read ([`availability`]), and the
-//! authenticated `agent detail` cold read ([`agent_detail`]).
+//! authenticated `agent availability` cold read ([`availability`]), the
+//! authenticated `agent detail` cold read ([`agent_detail`]), and the
+//! authenticated `agent presence` cold read ([`agent_presence`]).
 
 pub mod agent_detail;
+pub mod agent_presence;
 pub mod availability;
 pub mod host_attachment;
 mod online_viewers;

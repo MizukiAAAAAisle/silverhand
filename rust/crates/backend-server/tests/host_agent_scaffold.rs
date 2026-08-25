@@ -63,6 +63,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_availability_read"),
     ("backend-core", "agent_detail_read"),
     ("backend-core", "agent_lifecycle"),
+    ("backend-core", "agent_presence_read"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
@@ -72,6 +73,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "host_agent_background"),
     ("backend-sqlite", "agent_availability_read"),
     ("backend-sqlite", "agent_detail_read"),
+    ("backend-sqlite", "agent_presence_read"),
     ("backend-sqlite", "agent_view_acl"),
     ("backend-sqlite", "host_agent"),
     ("backend-sqlite", "user_presence_cold_read"),
@@ -175,10 +177,13 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// `agent_availability_read`; its route surface is a submodule of `host_agent`,
 /// already listed. The /api/agents/:id agent-detail vertical adds one the same
 /// way: the read port `agent_detail_read`, whose route surface is likewise a
+/// submodule of `host_agent`. The /api/agents/:id/presence vertical adds one the
+/// same way again: the read port `agent_presence_read`, whose route surface is a
 /// submodule of `host_agent`. G0 keeps it a subset of the seam ledger.
 const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "agent_availability_read"),
     ("backend-core", "agent_detail_read"),
+    ("backend-core", "agent_presence_read"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),

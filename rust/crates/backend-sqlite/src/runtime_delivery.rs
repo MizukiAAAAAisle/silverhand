@@ -7,6 +7,7 @@ use silverhand_backend_core::{
     identity::{AgentId, ConversationId, DaemonInstanceId, UserId, WorkspaceId},
     messaging::{FromKind, MessageContent, ReferencePositions},
     persistence::PersistenceFailure,
+    policy::agent_presence,
     runtime_credential::{RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     runtime_delivery::{
         ClaimPendingInbox, ClaimedInboxBatch, ClaimedInboxDelivery, DeliveryInstruction,
@@ -1226,7 +1227,13 @@ async fn stamp_agent_presence(
     agent: &AgentId,
     observed_at: i64,
 ) -> Result<Vec<UserId>, PersistenceFailure> {
-    const PRESENCE_AWAY_TTL_MS: i64 = 30 * 60_000;
+    // The observation about to be written must itself be a usable instant: a stamp
+    // whose away deadline could leave the wire-safe range must never enter the DB,
+    // or a later presence read would inherit a value it is bound to reject.
+    // Validated BEFORE the UPDATE, so a bad observation aborts the whole transaction
+    // and fires no presence viewers.
+    let observed = agent_presence::ActivityInstant::new(observed_at)
+        .map_err(PersistenceFailure::from_source)?;
     let previous =
         sqlx::query_scalar::<_, Option<i64>>("SELECT last_activity_at FROM agents WHERE id = ?")
             .bind(agent.as_str())
@@ -1234,6 +1241,13 @@ async fn stamp_agent_presence(
             .await
             .map_err(persistence)?
             .ok_or_else(|| PersistenceFailure::from_source(RuntimeActivityInvariant))?;
+    // A corrupt previous stamp must NOT be silently judged "still online": decode it
+    // through the SAME authority the read uses, so a committed value out of domain is
+    // a fault, not a washed-away boundary that suppresses the viewers.
+    let previous = previous
+        .map(agent_presence::ActivityInstant::new)
+        .transpose()
+        .map_err(PersistenceFailure::from_source)?;
     let changed = sqlx::query(
         "UPDATE agents
             SET last_activity_at = CASE
@@ -1241,8 +1255,8 @@ async fn stamp_agent_presence(
                 ELSE last_activity_at END
           WHERE id = ?",
     )
-    .bind(observed_at)
-    .bind(observed_at)
+    .bind(observed.get())
+    .bind(observed.get())
     .bind(agent.as_str())
     .execute(&mut **tx)
     .await
@@ -1251,8 +1265,7 @@ async fn stamp_agent_presence(
     if changed != 1 {
         return Err(PersistenceFailure::from_source(RuntimeActivityInvariant));
     }
-    let was_online = previous
-        .is_some_and(|previous| observed_at < previous.saturating_add(PRESENCE_AWAY_TTL_MS));
+    let was_online = previous.is_some_and(|previous| observed.get() < previous.away_at());
     if was_online {
         return Ok(Vec::new());
     }
