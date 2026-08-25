@@ -1,5 +1,7 @@
 //! HTTP adapters for conversation-collaboration capabilities.
 
+// INTEGRATION SEAM: thin capability registration; no route logic belongs here.
+pub mod attention_preference;
 pub mod notification;
 pub mod reaction;
 pub mod runtime_control;
