@@ -196,3 +196,147 @@ async fn malformed_placement_fails_the_whole_snapshot_with_a_source_chain() {
     assert!(error.source().is_some());
     assert!(format!("{error:?}").contains("UnknownEndpointKind"));
 }
+
+#[tokio::test]
+async fn duplicate_winner_and_timestamp_ties_use_persistent_coordinates() {
+    for ids in [["n-b", "n-a"], ["n-a", "n-b"]] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("activity-order.sqlite");
+        seed(&path).await;
+        let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM notifications WHERE kind='mention_self'")
+            .execute(&mut db)
+            .await
+            .unwrap();
+        for id in ids {
+            sqlx::query("INSERT INTO notifications(id,kind,user_id,workspace_id,conversation_id,message_id,payload,created_at) VALUES(?,'mention_self','u','w','c','m-mention','{}',2)")
+                .bind(id)
+                .execute(&mut db)
+                .await
+                .unwrap();
+        }
+
+        sqlx::query("INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('other-b','other-b-activity','Other B',1,2)")
+            .execute(&mut db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,created_at,updated_at,latest_message_seq,endpoint_a_kind,endpoint_a_id,endpoint_b_kind,endpoint_b_id) VALUES('pair-b',NULL,'direct_pair','fixed','',NULL,'open',2,2,1,'human','other-b','human','u')")
+            .execute(&mut db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at,author_id,author_name,author_display_name) VALUES('m-pair-b','pair-b','user','other-b','pair b unread',1,2,'other-b','other-b-activity','Other B')")
+            .execute(&mut db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO conversation_stream_heads(conversation_id,thread_root_id,latest_seq) VALUES('pair-b',NULL,1)")
+            .execute(&mut db)
+            .await
+            .unwrap();
+        db.close().await.unwrap();
+
+        let list = MessagingStore::open(&path)
+            .await
+            .unwrap()
+            .activity_read_model()
+            .list_activity(&UserId::parse("u").unwrap(), None)
+            .await
+            .unwrap();
+        let tied = list
+            .items()
+            .iter()
+            .filter(|item| {
+                item.salience() == ActivitySalience::Directed && item.timestamp_ms() == 2
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(tied.len(), 3);
+        assert!(matches!(
+            tied[0].source(),
+            ActivitySource::Mention { notification, .. } if notification.as_str() == "n-a"
+        ));
+        assert!(matches!(tied[1].source(), ActivitySource::Unread { .. }));
+        assert_eq!(tied[1].conversation().as_str(), "pair");
+        assert!(matches!(tied[2].source(), ActivitySource::Unread { .. }));
+        assert_eq!(tied[2].conversation().as_str(), "pair-b");
+    }
+}
+
+#[tokio::test]
+async fn every_selected_candidate_is_strictly_decoded_before_dedupe() {
+    #[derive(Clone, Copy)]
+    enum Corruption {
+        PairOpen,
+        WorkspaceEndpoint,
+        DuplicateLoserIdentity,
+    }
+
+    for (name, corruption) in [
+        ("pair-open", Corruption::PairOpen),
+        ("workspace-endpoint", Corruption::WorkspaceEndpoint),
+        ("duplicate-loser", Corruption::DuplicateLoserIdentity),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("activity-corrupt-{name}.sqlite"));
+        seed(&path).await;
+        let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA ignore_check_constraints=ON")
+            .execute(&mut db)
+            .await
+            .unwrap();
+        sqlx::query("DROP TRIGGER trg_conversations_endpoints_immutable")
+            .execute(&mut db)
+            .await
+            .unwrap();
+        sqlx::query("DROP TRIGGER conversations_placement_immutable")
+            .execute(&mut db)
+            .await
+            .unwrap();
+        match corruption {
+            Corruption::PairOpen => {
+                sqlx::query("UPDATE conversations SET roster_policy='open' WHERE id='pair'")
+                    .execute(&mut db)
+                    .await
+                    .unwrap();
+            }
+            Corruption::WorkspaceEndpoint => {
+                sqlx::query("UPDATE conversations SET endpoint_a_kind='human',endpoint_a_id='other' WHERE id='c'")
+                    .execute(&mut db)
+                    .await
+                    .unwrap();
+            }
+            Corruption::DuplicateLoserIdentity => {
+                // The valid newer notification wins product de-duplication. The
+                // older empty-id row is nevertheless a selected persisted
+                // candidate and must fail before that de-duplication can hide it.
+                sqlx::query("INSERT INTO notifications(id,kind,user_id,workspace_id,conversation_id,message_id,payload,created_at) VALUES('','mention_self','u','w','c','m-mention','{}',1)")
+                    .execute(&mut db)
+                    .await
+                    .unwrap();
+            }
+        }
+        db.close().await.unwrap();
+
+        let error = MessagingStore::open(&path)
+            .await
+            .unwrap()
+            .activity_read_model()
+            .list_activity(&UserId::parse("u").unwrap(), None)
+            .await
+            .unwrap_err();
+        assert!(error.source().is_some(), "{name}");
+        match corruption {
+            Corruption::PairOpen | Corruption::WorkspaceEndpoint => {
+                assert!(
+                    format!("{error:?}").contains("MalformedPlacement"),
+                    "{name}"
+                );
+            }
+            Corruption::DuplicateLoserIdentity => {
+                assert!(format!("{error:?}").contains("notifications.id"), "{name}");
+            }
+        }
+    }
+}

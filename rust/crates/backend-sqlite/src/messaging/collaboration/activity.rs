@@ -5,7 +5,7 @@
 //! Existing unread, attention-tier, author, and direct-pair authorities are
 //! composed rather than transcribed.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::{
     direct_pair_read::{DirectPairReadError, LivePrincipals, PairEvidence},
@@ -36,7 +36,8 @@ const DIRECTED: &str = concat!(
      c.id AS conversation_id, n.message_id, m.thread_root_id, root.content AS root_content, \
      m.content AS message_content, n.payload, n.created_at AS item_created_at, ",
     "c.id AS id, c.created_at AS created_at, c.placement_kind, c.workspace_id, \
-     c.title AS conversation_title, c.endpoint_a_kind, c.endpoint_a_id, \
+     c.roster_policy, c.title AS conversation_title, c.title_key AS conversation_title_key, \
+     c.endpoint_a_kind, c.endpoint_a_id, \
      c.endpoint_a_deleted_at, c.endpoint_b_kind, c.endpoint_b_id, \
      c.endpoint_b_deleted_at, ",
     "m.from_kind, m.from_user_id, m.from_agent_id, m.author_id, m.author_name, \
@@ -50,7 +51,7 @@ const DIRECTED: &str = concat!(
      (c.placement_kind='direct_pair' AND ((c.endpoint_a_kind='human' AND \
      c.endpoint_a_id=(SELECT viewer FROM p)) OR (c.endpoint_b_kind='human' AND \
      c.endpoint_b_id=(SELECT viewer FROM p))))) AND ((SELECT ws FROM p) IS NULL OR \
-     c.workspace_id=(SELECT ws FROM p)) ORDER BY n.created_at DESC"
+     c.workspace_id=(SELECT ws FROM p)) ORDER BY n.created_at DESC, n.id ASC"
 );
 
 const POSITIONAL: &str = concat!(
@@ -89,13 +90,15 @@ const POSITIONAL: &str = concat!(
        c.roster_policy, m.id AS message_id, m.content AS message_content, \
        m.created_at AS item_created_at, ps.unread_count, ",
     "c.id AS id, c.created_at AS created_at, c.placement_kind, c.workspace_id, \
-       c.title AS conversation_title, c.endpoint_a_kind, c.endpoint_a_id, \
+       c.title AS conversation_title, c.title_key AS conversation_title_key, \
+       c.endpoint_a_kind, c.endpoint_a_id, \
        c.endpoint_a_deleted_at, c.endpoint_b_kind, c.endpoint_b_id, \
        c.endpoint_b_deleted_at, ",
     "m.from_kind, m.from_user_id, m.from_agent_id, m.author_id, m.author_name, \
        m.author_display_name FROM per_stream ps JOIN messages m ON \
        m.conversation_id=ps.conversation_id AND m.seq=ps.first_unread_seq JOIN conversations c ON \
-       c.id=ps.conversation_id LEFT JOIN messages root ON root.id=ps.root"
+       c.id=ps.conversation_id LEFT JOIN messages root ON root.id=ps.root \
+       ORDER BY ps.conversation_id ASC, ps.root IS NOT NULL ASC, ps.root ASC"
 );
 
 #[derive(Clone)]
@@ -176,8 +179,13 @@ impl SqliteActivityReadModel {
                             "notifications.message_id",
                         ));
                     };
-                    if directed_message_ids.insert(message.clone()) {
-                        directed_mentions.push(RawItem::directed_mention(&row, message)?);
+                    // Decode every selected row before product de-duplication.
+                    // A malformed duplicate is still a malformed persisted
+                    // candidate and must fail the whole snapshot rather than
+                    // hiding behind a valid winner.
+                    let item = RawItem::directed_mention(&row, message.clone())?;
+                    if directed_message_ids.insert(message) {
+                        directed_mentions.push(item);
                     }
                 }
                 "agent_start_failed" => agent_failures.push(RawItem::agent_failed(&row)?),
@@ -207,22 +215,20 @@ impl SqliteActivityReadModel {
             .await
             .map_err(ActivityStoreError::Author)?;
 
-        let mut pairs = HashMap::<String, PairEvidence>::new();
-        for item in &projected {
-            if let Some(pair) = &item.pair {
-                pairs
-                    .entry(item.conversation.as_str().to_owned())
-                    .or_insert_with(|| pair.clone());
-            }
-        }
-        let pair_values = pairs.values().cloned().collect::<Vec<_>>();
+        let pair_values = projected
+            .iter()
+            .filter_map(|item| match &item.placement {
+                RawPlacement::DirectPair(pair) => Some(pair.clone()),
+                RawPlacement::Workspace { .. } => None,
+            })
+            .collect::<Vec<_>>();
         let principals = LivePrincipals::load(&mut tx, &pair_values)
             .await
             .map_err(ActivityStoreError::DirectPair)?;
 
         let mut items = Vec::with_capacity(projected.len());
         for (raw, author) in projected.into_iter().zip(authors) {
-            items.push(raw.finish(viewer, &pairs, &principals, author)?);
+            items.push(raw.finish(viewer, &principals, author)?);
         }
         tx.commit().await?;
         Ok(ActivityList::projected(items))
@@ -250,14 +256,20 @@ struct RawItem {
     source: RawSource,
     conversation: ConversationId,
     thread_root: Option<ThreadRootId>,
-    placement: String,
-    workspace: Option<String>,
-    title: String,
-    pair: Option<PairEvidence>,
+    placement: RawPlacement,
     root_preview: Option<ActivityPreview>,
     preview: Option<ActivityPreview>,
     author: AuthorEvidence,
     timestamp_ms: i64,
+}
+
+#[derive(Clone)]
+enum RawPlacement {
+    Workspace {
+        workspace: WorkspaceId,
+        title: String,
+    },
+    DirectPair(PairEvidence),
 }
 
 impl RawItem {
@@ -328,12 +340,60 @@ impl RawItem {
 
     fn common(row: &SqliteRow) -> Result<Self, ActivityStoreError> {
         let conversation = conversation_id(row.try_get("conversation_id")?, "conversations.id")?;
-        let placement: String = row.try_get("placement_kind")?;
-        let pair = match placement.as_str() {
-            "direct_pair" => {
-                Some(PairEvidence::decode(row).map_err(ActivityStoreError::DirectPair)?)
+        let placement_kind: String = row.try_get("placement_kind")?;
+        let roster: String = row.try_get("roster_policy")?;
+        let workspace: Option<String> = row.try_get("workspace_id")?;
+        let title: String = row.try_get("conversation_title")?;
+        let title_key: Option<String> = row.try_get("conversation_title_key")?;
+        let endpoint_a_kind: Option<String> = row.try_get("endpoint_a_kind")?;
+        let endpoint_a_id: Option<String> = row.try_get("endpoint_a_id")?;
+        let endpoint_b_kind: Option<String> = row.try_get("endpoint_b_kind")?;
+        let endpoint_b_id: Option<String> = row.try_get("endpoint_b_id")?;
+        let endpoint_a_deleted_at: Option<i64> = row.try_get("endpoint_a_deleted_at")?;
+        let endpoint_b_deleted_at: Option<i64> = row.try_get("endpoint_b_deleted_at")?;
+        let placement = match placement_kind.as_str() {
+            "workspace" => {
+                if !matches!(roster.as_str(), "open" | "fixed")
+                    || title_key.as_deref().is_none_or(|key| !valid_title_key(key))
+                    || endpoint_a_kind.is_some()
+                    || endpoint_a_id.is_some()
+                    || endpoint_b_kind.is_some()
+                    || endpoint_b_id.is_some()
+                    || endpoint_a_deleted_at.is_some()
+                    || endpoint_b_deleted_at.is_some()
+                {
+                    return Err(ActivityStoreError::MalformedPlacement);
+                }
+                let workspace =
+                    WorkspaceId::parse(workspace.ok_or(ActivityStoreError::MalformedPlacement)?)
+                        .map_err(|_| {
+                            ActivityStoreError::MalformedIdentity("conversations.workspace_id")
+                        })?;
+                RawPlacement::Workspace { workspace, title }
             }
-            "workspace" => None,
+            "direct_pair" => {
+                let endpoints = match (
+                    endpoint_a_kind.as_deref(),
+                    endpoint_a_id.as_deref(),
+                    endpoint_b_kind.as_deref(),
+                    endpoint_b_id.as_deref(),
+                ) {
+                    (Some(a_kind), Some(a_id), Some(b_kind), Some(b_id)) => {
+                        ((a_kind, a_id), (b_kind, b_id))
+                    }
+                    _ => return Err(ActivityStoreError::MalformedPlacement),
+                };
+                if workspace.is_some()
+                    || roster != "fixed"
+                    || title_key.is_some()
+                    || endpoints.0 >= endpoints.1
+                {
+                    return Err(ActivityStoreError::MalformedPlacement);
+                }
+                RawPlacement::DirectPair(
+                    PairEvidence::decode(row).map_err(ActivityStoreError::DirectPair)?,
+                )
+            }
             _ => return Err(ActivityStoreError::MalformedPlacement),
         };
         Ok(Self {
@@ -344,9 +404,6 @@ impl RawItem {
             conversation,
             thread_root: optional_thread_root(row.try_get("thread_root_id")?)?,
             placement,
-            workspace: row.try_get("workspace_id")?,
-            title: row.try_get("conversation_title")?,
-            pair,
             root_preview: ActivityPreview::from_source(
                 row.try_get::<Option<String>, _>("root_content")?.as_deref(),
             ),
@@ -359,25 +416,14 @@ impl RawItem {
     fn finish(
         self,
         viewer: &UserId,
-        pairs: &HashMap<String, PairEvidence>,
         principals: &LivePrincipals,
         author: Option<silverhand_backend_core::messaging::MessageAuthor>,
     ) -> Result<ActivityItem, ActivityStoreError> {
-        let location = match self.placement.as_str() {
-            "workspace" => ActivityLocation::workspace_channel(
-                WorkspaceId::parse(self.workspace.ok_or(ActivityStoreError::MalformedIdentity(
-                    "conversations.workspace_id",
-                ))?)
-                .map_err(|_| ActivityStoreError::MalformedIdentity("conversations.workspace_id"))?,
-                self.title,
-            ),
-            "direct_pair" => {
-                if self.workspace.is_some() {
-                    return Err(ActivityStoreError::MalformedPlacement);
-                }
-                let pair = pairs
-                    .get(self.conversation.as_str())
-                    .ok_or(ActivityStoreError::MalformedPlacement)?;
+        let location = match self.placement {
+            RawPlacement::Workspace { workspace, title } => {
+                ActivityLocation::workspace_channel(workspace, title)
+            }
+            RawPlacement::DirectPair(pair) => {
                 let endpoint = pair
                     .counterpart(viewer)
                     .map_err(ActivityStoreError::DirectPair)?;
@@ -386,7 +432,6 @@ impl RawItem {
                     .map_err(ActivityStoreError::DirectPair)?;
                 ActivityLocation::direct_pair(counterpart)
             }
-            _ => return Err(ActivityStoreError::MalformedPlacement),
         };
         Ok(match self.source {
             RawSource::Mention {
@@ -428,6 +473,13 @@ impl RawItem {
             ),
         })
     }
+}
+
+fn valid_title_key(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with(' ')
+        && !value.ends_with(' ')
+        && !value.bytes().any(|byte| byte.is_ascii_uppercase())
 }
 
 fn author_evidence(row: &SqliteRow) -> Result<AuthorEvidence, ActivityStoreError> {

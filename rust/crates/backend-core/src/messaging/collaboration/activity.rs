@@ -6,7 +6,7 @@
 //! owns the closed projected values and the consumer-language read port; SQL and
 //! HTTP remain in their adapter crates.
 
-use std::{error::Error, future::Future};
+use std::{cmp::Ordering, error::Error, future::Future};
 
 use crate::{
     direct_pair_read::DirectPairCounterpart,
@@ -281,19 +281,64 @@ pub struct ActivityList {
 }
 
 impl ActivityList {
-    /// Stable sort matches production JS: source order breaks exact timestamp
-    /// ties; only salience and timestamp participate in the comparison.
+    /// The Rust cutover closes the legacy projection's undefined timestamp ties
+    /// with persistent coordinates. Source family order preserves the registry
+    /// order (mention, agent failure, positional unread); identities then make
+    /// every visible item total without consulting rowid or query-plan order.
     pub fn projected(mut items: Vec<ActivityItem>) -> Self {
         items.sort_by(|left, right| {
             left.salience()
                 .cmp(&right.salience())
                 .then_with(|| right.timestamp_ms().cmp(&left.timestamp_ms()))
+                .then_with(|| source_coordinate(left, right))
         });
         Self { items }
     }
 
     pub fn items(&self) -> &[ActivityItem] {
         &self.items
+    }
+}
+
+fn source_coordinate(left: &ActivityItem, right: &ActivityItem) -> Ordering {
+    let left_rank = source_rank(left.source());
+    let right_rank = source_rank(right.source());
+    left_rank
+        .cmp(&right_rank)
+        .then_with(|| match (left.source(), right.source()) {
+            (
+                ActivitySource::Mention {
+                    notification: left, ..
+                },
+                ActivitySource::Mention {
+                    notification: right,
+                    ..
+                },
+            )
+            | (
+                ActivitySource::AgentFailed { notification: left },
+                ActivitySource::AgentFailed {
+                    notification: right,
+                },
+            ) => left.as_str().cmp(right.as_str()),
+            (ActivitySource::Unread { .. }, ActivitySource::Unread { .. }) => left
+                .conversation()
+                .as_str()
+                .cmp(right.conversation().as_str())
+                .then_with(|| {
+                    left.thread_root()
+                        .map(ThreadRootId::as_str)
+                        .cmp(&right.thread_root().map(ThreadRootId::as_str))
+                }),
+            _ => Ordering::Equal,
+        })
+}
+
+fn source_rank(source: &ActivitySource) -> u8 {
+    match source {
+        ActivitySource::Mention { .. } => 0,
+        ActivitySource::AgentFailed { .. } => 1,
+        ActivitySource::Unread { .. } => 2,
     }
 }
 
@@ -330,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn source_sum_closes_nullable_wire_combinations_and_sort_is_stable() {
+    fn source_sum_closes_nullable_wire_combinations_and_registry_ties() {
         let conversation = ConversationId::parse("c-1").unwrap();
         let location = ActivityLocation::workspace_channel(
             WorkspaceId::parse("w-1").unwrap(),
@@ -355,10 +400,64 @@ mod tests {
             10,
         );
         let list = ActivityList::projected(vec![first.clone(), second.clone()]);
-        assert_eq!(list.items(), &[first, second]);
+        assert_eq!(list.items(), &[second, first]);
         assert!(matches!(
             list.items()[0].source(),
-            ActivitySource::AgentFailed { .. }
+            ActivitySource::Mention { .. }
         ));
+    }
+
+    #[test]
+    fn persistent_coordinates_total_order_timestamp_ties() {
+        let location = ActivityLocation::workspace_channel(
+            WorkspaceId::parse("w-1").unwrap(),
+            "General".to_owned(),
+        );
+        let mention = ActivityItem::mention(
+            NotificationId::parse("n-b").unwrap(),
+            MessageId::parse("m-directed").unwrap(),
+            ConversationId::parse("c-z").unwrap(),
+            None,
+            location.clone(),
+            None,
+            None,
+            None,
+            10,
+        );
+        let unread_z = ActivityItem::unread(
+            MessageId::parse("m-z").unwrap(),
+            ActivityUnreadCount::new(1).unwrap(),
+            ActivitySalience::Directed,
+            ConversationId::parse("c-z").unwrap(),
+            None,
+            location.clone(),
+            None,
+            None,
+            None,
+            10,
+        );
+        let unread_a = ActivityItem::unread(
+            MessageId::parse("m-a").unwrap(),
+            ActivityUnreadCount::new(1).unwrap(),
+            ActivitySalience::Directed,
+            ConversationId::parse("c-a").unwrap(),
+            None,
+            location,
+            None,
+            None,
+            None,
+            10,
+        );
+
+        let expected = vec![mention.clone(), unread_a.clone(), unread_z.clone()];
+        assert_eq!(
+            ActivityList::projected(vec![unread_z.clone(), mention.clone(), unread_a.clone()])
+                .items(),
+            expected
+        );
+        assert_eq!(
+            ActivityList::projected(vec![unread_a, unread_z, mention]).items(),
+            expected
+        );
     }
 }
