@@ -59,6 +59,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
     ("backend-server", "host_agent_background"),
+    ("backend-sqlite", "host_agent"),
 ];
 
 /// The declarations this lane did NOT add, across EVERY root in `CRATE_ROOTS`.
@@ -140,6 +141,7 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
     ("backend-server", "host_agent_background"),
+    ("backend-sqlite", "host_agent"),
 ];
 
 /// The modules a composition must name to ACTIVATE this lane: rules that decide, a
