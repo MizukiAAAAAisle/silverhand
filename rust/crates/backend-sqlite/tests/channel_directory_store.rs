@@ -42,7 +42,9 @@ async fn seed(path: &std::path::Path) {
          VALUES('u','channels:w','','manual',1)",
         "INSERT INTO user_sort_entry(user_id,list_key,entity_id,rank,last_accessed_at,starred_at) VALUES \
          ('u','channels:w','public',2,3,NULL),('u','channels:w','member',1,4,5),\
-         ('u','channels:w','hidden',0,9,NULL)",
+         ('u','channels:w','hidden',0,9,NULL),\
+         ('u','channels:w','stale-access',NULL,NULL,NULL),\
+         ('u','channels:w','stale-star',NULL,NULL,NULL)",
     ] {
         db.execute(sql).await.unwrap();
     }
@@ -216,6 +218,78 @@ async fn selected_candidates_and_sort_state_decode_before_product_filtering() {
         .unwrap();
     db.close().await.unwrap();
     assert!(read.active(&viewer, &workspace).await.is_err());
+
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE user_sort_entry SET entity_id='hidden' WHERE entity_id=''")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    assert!(read.active(&viewer, &workspace).await.unwrap().is_ok());
+
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE user_sort_entry SET rank='smuggled' WHERE entity_id='hidden'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    assert!(read.active(&viewer, &workspace).await.is_err());
+
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE user_sort_entry SET rank=0 WHERE entity_id='hidden'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    assert!(read.active(&viewer, &workspace).await.unwrap().is_ok());
+
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE user_sort_entry SET last_accessed_at='smuggled' WHERE entity_id='stale-access'",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    db.close().await.unwrap();
+    assert!(read.active(&viewer, &workspace).await.is_err());
+
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE user_sort_entry SET last_accessed_at=NULL WHERE entity_id='stale-access'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    assert!(read.active(&viewer, &workspace).await.unwrap().is_ok());
+
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE user_sort_entry SET starred_at='smuggled' WHERE entity_id='stale-star'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    assert!(read.active(&viewer, &workspace).await.is_err());
+
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE user_sort_entry SET starred_at=NULL WHERE entity_id='stale-star'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    assert!(read.active(&viewer, &workspace).await.unwrap().is_ok());
 }
 
 #[tokio::test]

@@ -425,15 +425,16 @@ async fn load_sort(
         }
         let entity = ConversationId::parse(row.try_get::<String, _>("entity_id")?)
             .map_err(|_| ChannelDirectoryStoreError::SortState)?;
-        if visible.contains(entity.as_str()) {
-            entries.push(ChannelSortEntry::projected(
-                viewer.clone(),
-                workspace.clone(),
-                entity,
-                row.try_get("rank")?,
-                row.try_get("last_accessed_at")?,
-                row.try_get("starred_at")?,
-            ));
+        let entry = ChannelSortEntry::projected(
+            viewer.clone(),
+            workspace.clone(),
+            entity,
+            row.try_get("rank")?,
+            row.try_get("last_accessed_at")?,
+            row.try_get("starred_at")?,
+        );
+        if visible.contains(entry.conversation().as_str()) {
+            entries.push(entry);
         }
     }
     ChannelSortState::projected(viewer.clone(), workspace.clone(), mode, entries)
