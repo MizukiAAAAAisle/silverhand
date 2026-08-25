@@ -202,6 +202,32 @@ where
     .map_err(DirectPairFirstSendError::Send)
 }
 
+/// Consumer-facing composition of the canonical initiation authority and its
+/// get-or-create operation.
+///
+/// The server owns body admission and the existing message-send unit; the
+/// persistence adapter owns pair allocation and the winner-only publication.
+/// Keeping the callback in this port preserves that ordering without teaching
+/// the HTTP crate how a pair is minted or giving the adapter a second message
+/// persistence path.
+pub trait DirectPairInitiationPort: DirectPairInitiationAuthority {
+    type MintError: Error + Send + Sync + 'static;
+    type OpenedError: Error + Send + Sync + 'static;
+
+    fn open_and_send<F, Fut, T, S>(
+        &self,
+        authorized: AuthorizedDirectPairInitiation,
+        send: F,
+    ) -> impl Future<
+        Output = Result<T, DirectPairFirstSendError<Self::MintError, Self::OpenedError, S>>,
+    > + Send
+    where
+        F: FnOnce(OpenedDirectPairFirstMessage) -> Fut + Send,
+        Fut: Future<Output = Result<T, S>> + Send,
+        T: Send,
+        S: Error + Send + Sync + 'static;
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DirectPairFirstSendError<M, O, S>
 where

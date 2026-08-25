@@ -13,7 +13,8 @@ use silverhand_backend_core::{
         collaboration::direct_pair_initiation::{
             AuthorizedDirectPairInitiation, DirectPairFirstSendError,
             DirectPairInitiationAuthority, DirectPairInitiationDecision,
-            DirectPairInitiationGrantFact, OpenedDirectPairFirstMessage, open_and_send_direct_pair,
+            DirectPairInitiationGrantFact, DirectPairInitiationPort, OpenedDirectPairFirstMessage,
+            open_and_send_direct_pair,
         },
         freshness::RuntimeScope,
     },
@@ -95,6 +96,29 @@ where
             send,
         )
         .await
+    }
+}
+
+impl<E, O> DirectPairInitiationPort for SqliteDirectPairInitiation<E, O>
+where
+    E: SendClock + SendEntropy + Send + Sync,
+    O: DirectPairOpenedPort,
+{
+    type MintError = PersistenceFailure;
+    type OpenedError = O::Error;
+
+    async fn open_and_send<F, Fut, T, S>(
+        &self,
+        authorized: AuthorizedDirectPairInitiation,
+        send: F,
+    ) -> Result<T, DirectPairFirstSendError<Self::MintError, Self::OpenedError, S>>
+    where
+        F: FnOnce(OpenedDirectPairFirstMessage) -> Fut + Send,
+        Fut: Future<Output = Result<T, S>> + Send,
+        T: Send,
+        S: Error + Send + Sync + 'static,
+    {
+        SqliteDirectPairInitiation::open_and_send(self, authorized, send).await
     }
 }
 

@@ -45,7 +45,7 @@ use crate::error;
 
 /// What reading a request body can come to. Three outcomes, because two of the
 /// refusals belong to different parties.
-enum BodyRead {
+pub(crate) enum BodyRead {
     /// Within the cap, and here are its bytes.
     Within(Bytes),
     /// The data frames accumulated past the cap. The caller's, and the only thing
@@ -81,6 +81,27 @@ async fn read_within_cap(mut body: Body, cap: usize) -> BodyRead {
             }
         }
     }
+}
+
+/// Reads one message-send body after a route has completed any authority gates
+/// that must precede body polling.
+///
+/// The ordinary send routes install [`fence_message_send_body`] as outer
+/// middleware because their contract fences ingress first. Direct-pair
+/// initiation intentionally asks its anti-enumeration/initiation authority
+/// first, then calls this helper. Both paths still consume the same size and
+/// frame-counting authority.
+pub(crate) async fn read_message_send_body(request: Request) -> BodyRead {
+    let declared_over_cap = request
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|declared| declared > MESSAGE_SEND_MAX_BODY_BYTES as u64);
+    if declared_over_cap {
+        return BodyRead::OverCap;
+    }
+    read_within_cap(request.into_body(), MESSAGE_SEND_MAX_BODY_BYTES).await
 }
 
 /// Rejects an oversized body, then hands the request on with its bytes intact.
