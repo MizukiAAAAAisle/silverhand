@@ -79,13 +79,22 @@ impl DirectPairOpenedFact {
 
 pub struct DirectPairMinted {
     conversation: ConversationId,
+    participants: DirectPairParticipants,
     created: bool,
 }
 
 impl DirectPairMinted {
-    pub fn committed(conversation: ConversationId, created: bool) -> Self {
+    /// Project the row selected by the get-or-create operation. `participants`
+    /// must come from that selected durable row, never from the request echoed
+    /// back by an adapter; [`open_direct_pair`] binds the two before publishing.
+    pub fn committed(
+        conversation: ConversationId,
+        participants: DirectPairParticipants,
+        created: bool,
+    ) -> Self {
         Self {
             conversation,
+            participants,
             created,
         }
     }
@@ -124,6 +133,11 @@ where
         .mint_direct_pair(&participants, now_unix_ms)
         .await
         .map_err(OpenDirectPairError::Mint)?;
+    if minted.participants != participants {
+        return Err(OpenDirectPairError::Identity(
+            DirectPairMintIdentityMismatch,
+        ));
+    }
     if minted.created {
         opened
             .direct_pair_opened(&DirectPairOpenedFact::committed(
@@ -146,7 +160,13 @@ where
     Mint(#[source] M),
     #[error("direct-pair opened announcement failed")]
     Announcement(#[source] O),
+    #[error(transparent)]
+    Identity(#[from] DirectPairMintIdentityMismatch),
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("selected direct-pair endpoints differ from the requested participants")]
+pub struct DirectPairMintIdentityMismatch;
 
 #[cfg(test)]
 mod tests {
@@ -158,6 +178,7 @@ mod tests {
 
     struct Mint {
         created: bool,
+        returned_participants: DirectPairParticipants,
     }
 
     impl DirectPairMint for Mint {
@@ -170,6 +191,7 @@ mod tests {
         ) -> Result<DirectPairMinted, Self::Error> {
             Ok(DirectPairMinted::committed(
                 ConversationId::parse("pair-1").unwrap(),
+                self.returned_participants.clone(),
                 self.created,
             ))
         }
@@ -198,8 +220,14 @@ mod tests {
     #[tokio::test]
     async fn only_the_insert_winner_announces_the_opened_fact() {
         let opened = Opened::default();
-        let mut winner = Mint { created: true };
-        let mut existing = Mint { created: false };
+        let mut winner = Mint {
+            created: true,
+            returned_participants: participants(),
+        };
+        let mut existing = Mint {
+            created: false,
+            returned_participants: participants(),
+        };
         open_direct_pair(&mut winner, &opened, participants(), 1)
             .await
             .unwrap();
@@ -210,5 +238,41 @@ mod tests {
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0].conversation().as_str(), "pair-1");
         assert_eq!(facts[0].participants(), &participants());
+    }
+
+    fn foreign_participants() -> DirectPairParticipants {
+        DirectPairParticipants::between(
+            PrincipalIdentity::Human(UserId::parse("user-2").unwrap()),
+            PrincipalIdentity::Agent(AgentId::parse("agent-2").unwrap()),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn winner_foreign_row_is_rejected_before_publication() {
+        let opened = Opened::default();
+        let mut mint = Mint {
+            created: true,
+            returned_participants: foreign_participants(),
+        };
+        let error = open_direct_pair(&mut mint, &opened, participants(), 1)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, OpenDirectPairError::Identity(_)));
+        assert!(opened.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn loser_foreign_row_is_rejected_without_relying_on_publication() {
+        let opened = Opened::default();
+        let mut mint = Mint {
+            created: false,
+            returned_participants: foreign_participants(),
+        };
+        let error = open_direct_pair(&mut mint, &opened, participants(), 1)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, OpenDirectPairError::Identity(_)));
+        assert!(opened.0.lock().unwrap().is_empty());
     }
 }

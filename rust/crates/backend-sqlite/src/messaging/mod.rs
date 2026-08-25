@@ -40,7 +40,9 @@ use silverhand_backend_core::messaging::{
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
     Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+    sqlite::{
+        SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous,
+    },
 };
 use thiserror::Error;
 
@@ -150,9 +152,9 @@ const OPEN_DIRECT_PAIR: &str = "INSERT INTO conversations (id, workspace_id, pla
      visibility, created_at, updated_at) VALUES (?, NULL, 'direct_pair', 'fixed', ?, ?, ?, ?, '', \
      'idle', 'private', ?, ?) ON CONFLICT (endpoint_a_kind, endpoint_a_id, endpoint_b_kind, \
      endpoint_b_id) WHERE placement_kind = 'direct_pair' DO NOTHING";
-const SELECT_DIRECT_PAIR: &str = "SELECT id FROM conversations WHERE placement_kind = \
-     'direct_pair' AND endpoint_a_kind = ? AND endpoint_a_id = ? AND endpoint_b_kind = ? AND \
-     endpoint_b_id = ?";
+const SELECT_DIRECT_PAIR: &str = "SELECT id, endpoint_a_kind, endpoint_a_id, endpoint_b_kind, \
+     endpoint_b_id FROM conversations WHERE placement_kind = 'direct_pair' AND endpoint_a_kind = \
+     ? AND endpoint_a_id = ? AND endpoint_b_kind = ? AND endpoint_b_id = ?";
 
 /// The copy is authored by the system: it is not the mentioning person speaking on
 /// the line, and it names the message it came from so the two can never be
@@ -483,7 +485,7 @@ impl<E: SendEntropy + Send + Sync> DirectPairMint for AutocommitDirectPairMint<'
             .rows_affected()
             == 1;
 
-        let conversation: Option<String> = sqlx::query_scalar(SELECT_DIRECT_PAIR)
+        let selected = sqlx::query(SELECT_DIRECT_PAIR)
             .bind(principal_kind(first))
             .bind(first.as_str())
             .bind(principal_kind(second))
@@ -491,17 +493,18 @@ impl<E: SendEntropy + Send + Sync> DirectPairMint for AutocommitDirectPairMint<'
             .fetch_optional(&self.store.pool)
             .await
             .map_err(driver)?;
-        let conversation = conversation.ok_or_else(|| {
+        let selected = selected.ok_or_else(|| {
             PersistenceFailure::from_source(MessagingStoreError::MalformedIdentity {
                 field: "conversations.direct_pair",
             })
         })?;
-        let conversation = ConversationId::parse(conversation).map_err(|_| {
-            PersistenceFailure::from_source(MessagingStoreError::MalformedIdentity {
-                field: "conversations.id",
-            })
-        })?;
-        Ok(DirectPairMinted::committed(conversation, created))
+        let (conversation, selected_participants) =
+            decode_selected_direct_pair(&selected).map_err(PersistenceFailure::from_source)?;
+        Ok(DirectPairMinted::committed(
+            conversation,
+            selected_participants,
+            created,
+        ))
     }
 }
 
@@ -509,6 +512,42 @@ fn principal_kind(principal: &PrincipalIdentity) -> &'static str {
     match principal.kind() {
         PrincipalKind::Agent => ENDPOINT_KIND_AGENT,
         PrincipalKind::Human => ENDPOINT_KIND_HUMAN,
+    }
+}
+
+fn decode_selected_direct_pair(
+    row: &SqliteRow,
+) -> Result<(ConversationId, DirectPairParticipants), MessagingStoreError> {
+    let conversation: String = row.try_get("id")?;
+    let conversation = ConversationId::parse(conversation).map_err(|_| {
+        MessagingStoreError::MalformedIdentity {
+            field: "conversations.id",
+        }
+    })?;
+    let first = decode_direct_pair_endpoint(row, "endpoint_a_kind", "endpoint_a_id")?;
+    let second = decode_direct_pair_endpoint(row, "endpoint_b_kind", "endpoint_b_id")?;
+    let participants = DirectPairParticipants::between(first, second)
+        .map_err(|_| MessagingStoreError::MalformedPlacement)?;
+    Ok((conversation, participants))
+}
+
+fn decode_direct_pair_endpoint(
+    row: &SqliteRow,
+    kind_field: &'static str,
+    id_field: &'static str,
+) -> Result<PrincipalIdentity, MessagingStoreError> {
+    let kind: Option<String> = row.try_get(kind_field)?;
+    let id: Option<String> = row.try_get(id_field)?;
+    match (kind.as_deref(), id) {
+        (Some(ENDPOINT_KIND_AGENT), Some(raw)) => Ok(PrincipalIdentity::Agent(
+            AgentId::parse(raw)
+                .map_err(|_| MessagingStoreError::MalformedIdentity { field: id_field })?,
+        )),
+        (Some(ENDPOINT_KIND_HUMAN), Some(raw)) => Ok(PrincipalIdentity::Human(
+            UserId::parse(raw)
+                .map_err(|_| MessagingStoreError::MalformedIdentity { field: id_field })?,
+        )),
+        _ => Err(MessagingStoreError::MalformedIdentity { field: kind_field }),
     }
 }
 
@@ -816,7 +855,7 @@ impl<E: SendEntropy + Send + Sync> DirectPairMint for TransactionDirectPairMint<
             .rows_affected()
             == 1;
 
-        let conversation: Option<String> = sqlx::query_scalar(SELECT_DIRECT_PAIR)
+        let selected = sqlx::query(SELECT_DIRECT_PAIR)
             .bind(principal_kind(first))
             .bind(first.as_str())
             .bind(principal_kind(second))
@@ -824,17 +863,18 @@ impl<E: SendEntropy + Send + Sync> DirectPairMint for TransactionDirectPairMint<
             .fetch_optional(&mut *self.scope.tx)
             .await
             .map_err(driver)?;
-        let conversation = conversation.ok_or_else(|| {
+        let selected = selected.ok_or_else(|| {
             infrastructure(MessagingStoreError::MalformedIdentity {
                 field: "conversations.direct_pair",
             })
         })?;
-        let conversation = ConversationId::parse(conversation).map_err(|_| {
-            infrastructure(MessagingStoreError::MalformedIdentity {
-                field: "conversations.id",
-            })
-        })?;
-        Ok(DirectPairMinted::committed(conversation, created))
+        let (conversation, selected_participants) =
+            decode_selected_direct_pair(&selected).map_err(infrastructure)?;
+        Ok(DirectPairMinted::committed(
+            conversation,
+            selected_participants,
+            created,
+        ))
     }
 }
 
@@ -1615,6 +1655,9 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             }
             Err(OpenDirectPairError::Mint(error)) => Err(error),
             Err(OpenDirectPairError::Announcement(never)) => match never {},
+            Err(OpenDirectPairError::Identity(error)) => {
+                Err(PersistenceFailure::from_source(error).into())
+            }
         }
     }
 

@@ -334,6 +334,7 @@ mod tests {
 
     struct Mint {
         created: bool,
+        returned_participants: Option<DirectPairParticipants>,
         log: Arc<Mutex<Vec<&'static str>>>,
     }
 
@@ -342,13 +343,16 @@ mod tests {
 
         async fn mint_direct_pair(
             &mut self,
-            _participants: &DirectPairParticipants,
+            participants: &DirectPairParticipants,
             now_unix_ms: i64,
         ) -> Result<DirectPairMinted, Self::Error> {
             assert_eq!(now_unix_ms, 42);
             self.log.lock().unwrap().push("mint");
             Ok(DirectPairMinted::committed(
                 ConversationId::parse("pair-1").unwrap(),
+                self.returned_participants
+                    .clone()
+                    .unwrap_or_else(|| participants.clone()),
                 self.created,
             ))
         }
@@ -397,6 +401,7 @@ mod tests {
             let log = Arc::new(Mutex::new(Vec::new()));
             let mut mint = Mint {
                 created,
+                returned_participants: None,
                 log: log.clone(),
             };
             let opened = Opened {
@@ -429,6 +434,7 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut mint = Mint {
             created: true,
+            returned_participants: None,
             log: log.clone(),
         };
         let opened = Opened {
@@ -457,10 +463,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn foreign_winner_and_loser_rows_neither_publish_nor_send() {
+        let foreign = DirectPairParticipants::between(
+            PrincipalIdentity::Human(user("user-2")),
+            PrincipalIdentity::Agent(agent("agent-2")),
+        )
+        .unwrap();
+        for created in [true, false] {
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let mut mint = Mint {
+                created,
+                returned_participants: Some(foreign.clone()),
+                log: log.clone(),
+            };
+            let opened = Opened {
+                fail: false,
+                log: log.clone(),
+            };
+            let send_log = log.clone();
+            let error = open_and_send_direct_pair(
+                authorized(),
+                &mut mint,
+                &opened,
+                &FixedClock,
+                move |_| async move {
+                    send_log.lock().unwrap().push("send");
+                    Ok::<(), SendBoom>(())
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                DirectPairFirstSendError::Open(OpenDirectPairError::Identity(_))
+            ));
+            assert_eq!(*log.lock().unwrap(), vec!["mint"]);
+        }
+    }
+
+    #[tokio::test]
     async fn send_failure_does_not_compensate_the_committed_announced_pair() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut mint = Mint {
             created: true,
+            returned_participants: None,
             log: log.clone(),
         };
         let opened = Opened {
@@ -490,6 +536,7 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut mint = Mint {
             created: true,
+            returned_participants: None,
             log: log.clone(),
         };
         let opened = Opened {

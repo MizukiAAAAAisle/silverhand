@@ -95,8 +95,9 @@ pub use command::{
     SendMessageUnitOfWork,
 };
 pub use direct_pair::{
-    DirectPairMint, DirectPairMinted, DirectPairOpenedFact, DirectPairOpenedPort,
-    DirectPairParticipants, OpenDirectPairError, SameDirectPairParticipant, open_direct_pair,
+    DirectPairMint, DirectPairMintIdentityMismatch, DirectPairMinted, DirectPairOpenedFact,
+    DirectPairOpenedPort, DirectPairParticipants, OpenDirectPairError, SameDirectPairParticipant,
+    open_direct_pair,
 };
 pub use environment::{EnvironmentUnavailable, SendClock, SendEntropy};
 pub use fact::{
