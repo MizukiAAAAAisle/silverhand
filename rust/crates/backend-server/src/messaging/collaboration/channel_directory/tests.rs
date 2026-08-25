@@ -57,7 +57,7 @@ async fn seeded() -> (tempfile::TempDir, MessagingStore) {
            ('workspace-1','Workspace','channel-directory-wire',1,1), \
            ('workspace-2','Forbidden','channel-directory-forbidden',1,1); \
          INSERT INTO workspaces(id,name,name_key,owner_agent_id,created_at,updated_at) VALUES \
-           ('workspace-home','Agent Home',NULL,'directory-agent',1,1); \
+           ('workspace-home','directory-agent',NULL,'directory-agent',1,1); \
          INSERT INTO workspace_users(workspace_id,user_id,joined_at) VALUES \
            ('workspace-1','local',1),('workspace-home','local',1); \
          INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status, \

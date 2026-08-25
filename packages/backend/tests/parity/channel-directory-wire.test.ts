@@ -55,15 +55,20 @@ async function seed(t: TestApp): Promise<string> {
   return home.id;
 }
 
-function normalizeHome(value: unknown, homeId: string): unknown {
-  if (typeof value === 'string') return value.split(homeId).join('workspace-home');
-  if (Array.isArray(value)) return value.map(entry => normalizeHome(entry, homeId));
+function normalizeHome(value: unknown, homeId: string, parentKey?: string): unknown {
+  if (Array.isArray(value)) return value.map(entry => normalizeHome(entry, homeId, parentKey));
   if (value && typeof value === 'object') {
     const source = value as Record<string, unknown>;
-    const normalized = Object.fromEntries(
-      Object.entries(source).map(([key, entry]) => [key, normalizeHome(entry, homeId)]),
-    );
-    if (source.id === homeId && typeof source.name === 'string') normalized.name = 'Agent Home';
+    const normalized = Object.fromEntries(Object.entries(source).map(([key, entry]) => {
+      if (key === 'workspace_id' && entry === homeId) return [key, 'workspace-home'];
+      if (parentKey === 'workspace' && key === 'id' && entry === homeId) {
+        return [key, 'workspace-home'];
+      }
+      if (key === 'list_key' && entry === `channels:${homeId}`) {
+        return [key, 'channels:workspace-home'];
+      }
+      return [key, normalizeHome(entry, homeId, key)];
+    }));
     return normalized;
   }
   return value;
