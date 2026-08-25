@@ -5,7 +5,7 @@
 //! successful value keeps every source coordinate until the authenticated
 //! consumer binds it.
 
-use std::{error::Error, future::Future};
+use std::{collections::HashSet, error::Error, future::Future};
 
 use crate::{
     identity::{AgentId, ConversationId, UserId},
@@ -81,9 +81,16 @@ impl ThreadFollowerState {
         viewer_following: bool,
         agents: Vec<ThreadFollowerAgent>,
     ) -> Result<Self, MalformedThreadFollowerSet> {
-        if !agents
-            .windows(2)
-            .all(|pair| agent_key(&pair[0]) < agent_key(&pair[1]))
+        let identities_are_unique = agents
+            .iter()
+            .map(|agent| agent.agent.as_str())
+            .collect::<HashSet<_>>()
+            .len()
+            == agents.len();
+        if !identities_are_unique
+            || !agents
+                .windows(2)
+                .all(|pair| agent_key(&pair[0]) < agent_key(&pair[1]))
         {
             return Err(MalformedThreadFollowerSet);
         }
@@ -493,6 +500,17 @@ mod tests {
                 ThreadRootId::parse("r").unwrap(),
                 false,
                 vec![agent("c", "r", "b", 1), agent("c", "r", "a", 1)],
+            )
+            .is_err()
+        );
+        assert!(
+            ThreadFollowerState::projected(
+                viewer.clone(),
+                conversation.clone(),
+                ThreadRootId::parse("r").unwrap(),
+                ThreadRootId::parse("r").unwrap(),
+                false,
+                vec![agent("c", "r", "a", 1), agent("c", "r", "a", 2)],
             )
             .is_err()
         );

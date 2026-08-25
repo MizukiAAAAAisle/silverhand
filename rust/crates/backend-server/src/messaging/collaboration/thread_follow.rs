@@ -253,7 +253,9 @@ fn internal() -> Response {
 mod tests {
     use std::{
         convert::Infallible,
+        io::{self, Write},
         sync::{Arc, Mutex},
+        time::Duration,
     };
 
     use axum::{
@@ -271,6 +273,7 @@ mod tests {
     use silverhand_backend_sqlite::messaging::MessagingStore;
     use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
     use tower::ServiceExt;
+    use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
 
@@ -282,7 +285,10 @@ mod tests {
 
     #[derive(Debug, thiserror::Error)]
     #[error("event hub unavailable")]
-    struct HubDown;
+    struct HubDown {
+        #[source]
+        source: io::Error,
+    }
 
     impl ThreadFollowAftermath for RecordingAftermath {
         async fn unread_changed(
@@ -294,10 +300,42 @@ mod tests {
                 fact.conversation().as_str().to_owned(),
             ));
             if self.fail {
-                Err(ThreadFollowPublicationFailure::from_source(HubDown))
+                Err(ThreadFollowPublicationFailure::from_source(HubDown {
+                    source: io::Error::other("scope event socket closed"),
+                }))
             } else {
                 Ok(())
             }
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    struct LogWriter(LogBuffer);
+
+    impl Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for LogBuffer {
+        type Writer = LogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            LogWriter(self.clone())
+        }
+    }
+
+    impl LogBuffer {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
         }
     }
 
@@ -492,7 +530,30 @@ mod tests {
             .foreign_keys(true);
         let mut db = SqliteConnection::connect_with(&options).await.unwrap();
         db.execute(sqlx::raw_sql(SCHEMA)).await.unwrap();
-        if setup != "missing_conversation" {
+        if setup == "stale_direct_pair" {
+            // The authenticated endpoint coordinate survives while its user row
+            // does not.  Direct-pair participation alone must not turn this
+            // broken post-validation identity into an idempotent success.
+            db.execute(sqlx::raw_sql(
+                "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES
+                 ('local','local-thread-follow','Local',1,1),
+                 ('other','other-thread-follow','Other',1,1);
+                 INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,
+                    endpoint_a_kind,endpoint_a_id,endpoint_b_kind,endpoint_b_id,
+                    title,title_key,status,visibility,created_at,updated_at)
+                 VALUES('c',NULL,'direct_pair','fixed','human','local','human','other',
+                    '',NULL,'idle','private',1,1);
+                 INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at,thread_root_id)
+                 VALUES('root','c','user','other','root',1,1,NULL);",
+            ))
+            .await
+            .unwrap();
+            db.execute("PRAGMA foreign_keys=OFF").await.unwrap();
+            sqlx::query("DELETE FROM users WHERE id='local'")
+                .execute(&mut db)
+                .await
+                .unwrap();
+        } else if setup != "missing_conversation" {
             db.execute(sqlx::raw_sql(
             "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES
              ('local','local-thread-follow','Local',1,1),('other','other-thread-follow','Other',1,1);
@@ -543,6 +604,80 @@ mod tests {
         db.close().await.unwrap();
         let store = MessagingStore::open(path).await.unwrap();
         (dir, store)
+    }
+
+    #[tokio::test]
+    async fn idempotent_follow_acquires_the_writer_reservation_before_authority_reads() {
+        let (dir, store) = fixture_store("following").await;
+        let options = SqliteConnectOptions::new()
+            .filename(dir.path().join("thread-follow.sqlite"))
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_secs(5));
+        let mut blocker = SqliteConnection::connect_with(&options).await.unwrap();
+        let blocker_tx = blocker.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        let port = store.thread_follow();
+        let pending = tokio::spawn(async move {
+            port.follow(
+                UserId::parse("local").unwrap(),
+                ConversationId::parse("c").unwrap(),
+                ThreadRootId::parse("root").unwrap(),
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(75)).await;
+        assert!(
+            !pending.is_finished(),
+            "idempotent follow read before acquiring the writer reservation"
+        );
+        blocker_tx.rollback().await.unwrap();
+        let committed = pending.await.unwrap().unwrap().unwrap();
+        assert!(
+            !committed
+                .bind(
+                    &UserId::parse("local").unwrap(),
+                    &ConversationId::parse("c").unwrap(),
+                    &ThreadRootId::parse("root").unwrap(),
+                )
+                .unwrap()
+                .changed()
+        );
+    }
+
+    #[tokio::test]
+    async fn absent_unfollow_acquires_the_writer_reservation_before_authority_reads() {
+        let (dir, store) = fixture_store("normal").await;
+        let options = SqliteConnectOptions::new()
+            .filename(dir.path().join("thread-follow.sqlite"))
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_secs(5));
+        let mut blocker = SqliteConnection::connect_with(&options).await.unwrap();
+        let blocker_tx = blocker.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        let port = store.thread_follow();
+        let pending = tokio::spawn(async move {
+            port.unfollow(
+                UserId::parse("local").unwrap(),
+                ConversationId::parse("c").unwrap(),
+                ThreadRootId::parse("root").unwrap(),
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(75)).await;
+        assert!(
+            !pending.is_finished(),
+            "absent unfollow read before acquiring the writer reservation"
+        );
+        blocker_tx.rollback().await.unwrap();
+        let committed = pending.await.unwrap().unwrap().unwrap();
+        assert!(
+            !committed
+                .bind(
+                    &UserId::parse("local").unwrap(),
+                    &ConversationId::parse("c").unwrap(),
+                    &ThreadRootId::parse("root").unwrap(),
+                )
+                .unwrap()
+                .changed()
+        );
     }
 
     #[tokio::test]
@@ -631,13 +766,100 @@ mod tests {
         assert_eq!(aftermath.calls.lock().unwrap().len(), 2);
     }
 
+    async fn assert_corrupt_existing_human_is_safe(method: Method) {
+        let (dir, store) = fixture_store("following").await;
+        let options = SqliteConnectOptions::new()
+            .filename(dir.path().join("thread-follow.sqlite"))
+            .foreign_keys(false);
+        let mut db = SqliteConnection::connect_with(&options).await.unwrap();
+        db.execute("PRAGMA ignore_check_constraints=ON")
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE thread_followers SET source='corrupt' \
+             WHERE thread_root_id='root' AND principal_kind='human' AND principal_id='local'",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        db.close().await.unwrap();
+
+        let aftermath = RecordingAftermath::default();
+        let (status, body) = response(
+            router(store.thread_follow(), aftermath.clone()),
+            method,
+            "/api/channels/c/threads/root/follow",
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body, json!({"error":"internal error"}));
+        assert!(aftermath.calls.lock().unwrap().is_empty());
+
+        let options = SqliteConnectOptions::new()
+            .filename(dir.path().join("thread-follow.sqlite"))
+            .foreign_keys(false);
+        let mut db = SqliteConnection::connect_with(&options).await.unwrap();
+        let source: String = sqlx::query_scalar(
+            "SELECT source FROM thread_followers \
+             WHERE thread_root_id='root' AND principal_kind='human' AND principal_id='local'",
+        )
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+        assert_eq!(source, "corrupt");
+    }
+
     #[tokio::test]
-    async fn refusal_order_and_post_commit_publication_failure_are_fail_closed() {
+    async fn idempotent_follow_strictly_decodes_the_existing_human_row() {
+        assert_corrupt_existing_human_is_safe(Method::POST).await;
+    }
+
+    #[tokio::test]
+    async fn idempotent_unfollow_strictly_decodes_the_existing_human_row() {
+        assert_corrupt_existing_human_is_safe(Method::DELETE).await;
+    }
+
+    async fn assert_stale_direct_pair_endpoint_is_corruption(method: Method) {
+        let (_dir, store) = fixture_store("stale_direct_pair").await;
+        let aftermath = RecordingAftermath::default();
+        let (status, body) = response(
+            router(store.thread_follow(), aftermath.clone()),
+            method,
+            "/api/channels/c/threads/root/follow",
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body, json!({"error":"internal error"}));
+        assert!(aftermath.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn stale_direct_pair_human_endpoint_is_corruption_for_follow() {
+        assert_stale_direct_pair_endpoint_is_corruption(Method::POST).await;
+    }
+
+    #[tokio::test]
+    async fn stale_direct_pair_human_endpoint_is_corruption_for_unfollow() {
+        assert_stale_direct_pair_endpoint_is_corruption(Method::DELETE).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn refusal_order_and_post_commit_publication_failure_are_fail_closed_and_audited() {
         let (_dir, store) = fixture_store("normal").await;
         let failing = RecordingAftermath {
             calls: Arc::default(),
             fail: true,
         };
+        let logs = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .without_time()
+            .with_target(false)
+            .with_writer(logs.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
         let (status, body) = response(
             router(store.thread_follow(), failing.clone()),
             Method::POST,
@@ -660,6 +882,16 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["viewer_following"], true);
+        let output = logs.text();
+        let publication_errors = output
+            .lines()
+            .filter(|line| line.contains("committed thread-follow unread publication failed"))
+            .collect::<Vec<_>>();
+        assert_eq!(publication_errors.len(), 1);
+        assert!(publication_errors[0].contains("event hub unavailable"));
+        assert!(publication_errors[0].contains("scope event socket closed"));
+        assert!(!body.to_string().contains("event hub unavailable"));
+        assert!(!body.to_string().contains("scope event socket closed"));
         let (status, body) = response(
             router(store.thread_follow(), RecordingAftermath::default()),
             Method::GET,
@@ -683,6 +915,56 @@ mod tests {
         assert_eq!(body, json!({"error":"channel not found"}));
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn committed_unfollow_publication_failure_is_audited_without_compensation() {
+        let (_dir, store) = fixture_store("following").await;
+        let failing = RecordingAftermath {
+            calls: Arc::default(),
+            fail: true,
+        };
+        let logs = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .without_time()
+            .with_target(false)
+            .with_writer(logs.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let (status, body) = response(
+            router(store.thread_follow(), failing.clone()),
+            Method::DELETE,
+            "/api/channels/c/threads/root/follow",
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            json!({"thread_root_id":"root","changed":true,"viewer_following":false})
+        );
+        assert_eq!(failing.calls.lock().unwrap().len(), 1);
+
+        let (status, state) = response(
+            router(store.thread_follow(), RecordingAftermath::default()),
+            Method::GET,
+            "/api/channels/c/threads/root/followers",
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(state["viewer_following"], false);
+        let output = logs.text();
+        let publication_errors = output
+            .lines()
+            .filter(|line| line.contains("committed thread-unfollow unread publication failed"))
+            .collect::<Vec<_>>();
+        assert_eq!(publication_errors.len(), 1);
+        assert!(publication_errors[0].contains("event hub unavailable"));
+        assert!(publication_errors[0].contains("scope event socket closed"));
+        assert!(!body.to_string().contains("event hub unavailable"));
+        assert!(!body.to_string().contains("scope event socket closed"));
+    }
+
     #[tokio::test]
     async fn every_selected_follower_is_strictly_decoded_before_filtering() {
         let (dir, store) = fixture_store("normal").await;
@@ -692,7 +974,7 @@ mod tests {
         let mut db = SqliteConnection::connect_with(&options).await.unwrap();
         sqlx::query(
             "INSERT INTO thread_followers(thread_root_id,conversation_id,principal_kind,principal_id,followed_at,source) \
-             VALUES('root','c','agent','',1,'manual')",
+             VALUES('root','c','agent','agent-a',1,'manual'),('root','c','agent','',2,'manual')",
         )
         .execute(&mut db)
         .await
