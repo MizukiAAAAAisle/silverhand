@@ -368,8 +368,31 @@ fn agent_send(content: &str) -> Request<Body> {
     authenticated_agent(content, format!("#conv:{CHANNEL_ID}"))
 }
 
-fn agent_reply(content: &str, root: &str) -> Request<Body> {
-    authenticated_agent(content, format!("#conv:{CHANNEL_ID}/thread:{root}"))
+/// A reply that skips the freshness guard. The agent is a channel participant, so
+/// the human root and reply that precede it now leave it undelivered `turn` input;
+/// a test about a later fact — replier ordering — rather than the guard itself
+/// legitimately sends anyway.
+fn agent_reply_bypassing_freshness(content: &str, root: &str) -> Request<Body> {
+    let mut request = Request::post(format!("/internal/agents/{AGENT_ID}/send-message"))
+        .body(Body::from(
+            serde_json::json!({
+                "content": content,
+                "target": format!("#conv:{CHANNEL_ID}/thread:{root}"),
+                "freshness_bypass": true,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(RuntimePrincipal::AgentSlot {
+            agent: AgentId::parse(AGENT_ID).unwrap(),
+            custody: RuntimeCustody::new(
+                RuntimeGeneration::new(1).unwrap(),
+                DaemonInstanceId::parse("daemon-1").unwrap(),
+            ),
+        });
+    request
 }
 
 fn authenticated_agent(content: &str, target: String) -> Request<Body> {
@@ -1174,7 +1197,11 @@ async fn the_cluster_orders_its_repliers_most_recent_first() {
     )
     .await;
 
-    let (status, output) = answered(router, agent_reply("the agent answers last", &root_id)).await;
+    let (status, output) = answered(
+        router,
+        agent_reply_bypassing_freshness("the agent answers last", &root_id),
+    )
+    .await;
 
     // The agent's own contract: its stream, reported as the coordinate it is.
     assert_eq!(status, StatusCode::OK, "{output}");

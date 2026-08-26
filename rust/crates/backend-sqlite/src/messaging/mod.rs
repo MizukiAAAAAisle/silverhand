@@ -990,6 +990,43 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .plan_post_commit(command.source_conversation(), &facts.id, &command, &message)
             .await?;
 
+        // The current message's durable delivery witness rides THIS transaction. The
+        // recipients are read back from the plan the aftermath will consume — never
+        // recomputed — so the queued set and the dispatched set are the same fact by
+        // construction. A recipient owed this message therefore holds a `turn` row
+        // before the send is committed: a crash between commit and dispatch cannot
+        // lose it, and the daemon's claim finds it rather than the empty `NoPending`
+        // it would otherwise swallow. Historical catch-up (`observe`) is queued by the
+        // cluster-follow effects above; this writes only the message this send made,
+        // and the main-line and reply arms stay separate so each path's witness has
+        // its own producer.
+        match post_commit.delivery() {
+            DeliveryPlan::MainLine(plan) => {
+                for recipient in plan.recipients() {
+                    self.ensure_delivery(
+                        &facts.id,
+                        recipient,
+                        message.id.as_str(),
+                        DELIVERY_KIND_TURN,
+                        created_at_ms,
+                    )
+                    .await?;
+                }
+            }
+            DeliveryPlan::ReplyCluster(audience) => {
+                for recipient in audience.recipients() {
+                    self.ensure_delivery(
+                        &facts.id,
+                        recipient,
+                        message.id.as_str(),
+                        DELIVERY_KIND_TURN,
+                        created_at_ms,
+                    )
+                    .await?;
+                }
+            }
+        }
+
         // Last, so it sees the copies this send actually made and the roster as of this unit.
         let unresolved = self
             .unresolved_references(&command, &facts.id, &mention_copies)

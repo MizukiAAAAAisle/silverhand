@@ -13,7 +13,9 @@ use silverhand_backend_core::{
     auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
     messaging::{
-        CreatedMessage, FromKind, MessageContent, MessageId, MessageSeq, ReferencePositions,
+        AddressedPrincipals, CreatedMessage, DirectLineAuthority, FromKind, MessageContent,
+        MessageId, MessageSeq, PrincipalKind, ReferencePositions, SendActor, SendDestination,
+        SendMessage, SendMessageDraft, SendMessageUnitOfWork,
         post_commit::{IdleStart, MainDelivery},
     },
     persistence::PersistenceFailure,
@@ -55,7 +57,7 @@ use silverhand_backend_server::{
     },
 };
 use silverhand_backend_sqlite::{
-    auth::SqliteSessionStore, host_runtime::SqliteHostRuntimeStore,
+    auth::SqliteSessionStore, host_runtime::SqliteHostRuntimeStore, messaging::MessagingStore,
     runtime_credential::SqliteRuntimeCustodyStore, runtime_delivery::SqliteRuntimeDeliveryStore,
     scope_event::SqliteEventScopeAuthority,
 };
@@ -124,10 +126,24 @@ impl SessionClock for FixedSessionClock {
 }
 
 async fn fixture(name: &str) -> Fixture {
+    build_fixture(name, true).await
+}
+
+/// A fixture whose conversation exists but holds no inbox row, so the gate that
+/// drives the real send door starts from an empty inbox.
+async fn fixture_without_seeded_inbox(name: &str) -> Fixture {
+    build_fixture(name, false).await
+}
+
+async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join(name);
     let mut db = current_schema::create_current_schema(&path).await;
-    seed(&mut db).await;
+    if seed_inbox {
+        seed(&mut db).await;
+    } else {
+        seed_participants(&mut db).await;
+    }
     db.close().await.unwrap();
     let custody = SqliteRuntimeCustodyStore::open(&path).await.unwrap();
     let settlement_calls = Arc::new(AtomicUsize::new(0));
@@ -349,6 +365,15 @@ impl DaemonEventDurablePort for CountingRuntimeDeliveryStore {
 }
 
 async fn seed(db: &mut SqliteConnection) {
+    seed_participants(db).await;
+    add_inbox(db, "message-1", 1).await;
+}
+
+/// Everything the delivery fixture needs *except* a pre-seeded inbox row. The
+/// gate that closes the production seam sends through the real door and asserts
+/// the witness was born of that send's transaction, so it must start from a
+/// conversation whose inbox is empty — no hand-planted row to claim.
+async fn seed_participants(db: &mut SqliteConnection) {
     sqlx::query(
         "INSERT INTO users (id, name, display_name, created_at, updated_at)
          VALUES ('user-1', 'user-1', 'User One', 1, 1)",
@@ -444,7 +469,6 @@ async fn seed(db: &mut SqliteConnection) {
     .execute(&mut *db)
     .await
     .unwrap();
-    add_inbox(db, "message-1", 1).await;
 }
 
 async fn add_inbox(db: &mut SqliteConnection, message_id: &str, seq: i64) {
@@ -748,6 +772,147 @@ fn created_message() -> CreatedMessage {
         created_at_ms: 1,
         thread_root_id: None,
     }
+}
+
+/// A body with no autolinks addresses nobody, so the real send door needs a
+/// position rule and a direct-line authority that both answer "empty". They exist
+/// only so the gate can drive the genuine `SendMessage::prepare` path.
+struct NoReferences;
+
+impl ReferencePositions for NoReferences {
+    fn autolink_spans(&self, _content: &MessageContent) -> Vec<std::ops::Range<usize>> {
+        Vec::new()
+    }
+}
+
+struct GrantsNothing;
+
+impl DirectLineAuthority for GrantsNothing {
+    async fn direct_lines(
+        &self,
+        _author: &UserId,
+        addressed: &AddressedPrincipals,
+    ) -> Result<Vec<AgentId>, PersistenceFailure> {
+        assert!(
+            addressed
+                .iter()
+                .all(|reference| reference.kind() != PrincipalKind::Agent),
+            "the gate's body addresses no agent, so no direct line is asked for"
+        );
+        Ok(Vec::new())
+    }
+}
+
+/// P0 gate B — the production seam, end to end. No inbox row is planted: a real
+/// user send travels the real `MessagingStore` door, which must commit the
+/// recipient's `turn` witness inside its own send transaction. The daemon then
+/// claims that exact just-committed row and delivers it. Move the witness write
+/// out of the send transaction and the daemon's claim finds `NoPending` — there
+/// is nothing to deliver and this gate goes red.
+#[tokio::test]
+async fn a_real_send_commits_the_witness_the_daemon_then_claims() {
+    let fixture = fixture_without_seeded_inbox("real-send-claim.sqlite").await;
+
+    // The real send door. user-1 addresses the channel; agent-delivery is the one
+    // participant owed the message. No inbox row is seeded first.
+    let store = MessagingStore::open(&fixture.path).await.unwrap();
+    let draft = SendMessageDraft {
+        source_conversation: ConversationId::parse(CONVERSATION).unwrap(),
+        target_conversation: ConversationId::parse(CONVERSATION).unwrap(),
+        actor: SendActor::User(UserId::parse("user-1").unwrap()),
+        content: MessageContent::parse("a real send").unwrap(),
+        destination: SendDestination::MainLine,
+        attachment_refs: Vec::new(),
+        freshness_bypass: false,
+    };
+    let command = SendMessage::prepare(draft, &NoReferences, &GrantsNothing)
+        .await
+        .unwrap();
+    let fact = store
+        .send_message(command)
+        .await
+        .unwrap()
+        .committed()
+        .clone();
+    let sent = fact.message().clone();
+
+    // The witness rode the send transaction: exactly one `turn` row for the
+    // recipient, its three settlement columns still empty. Nothing was pre-planted.
+    let mut db = open(&fixture.path).await;
+    let rows = sqlx::query(
+        "SELECT id, agent_id, message_id, delivery_kind, delivered_at, failed_at, in_flight_owner
+         FROM conversation_inboxes",
+    )
+    .fetch_all(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1, "the send owes exactly one recipient a turn");
+    let row = &rows[0];
+    let delivery_id: i64 = row.get("id");
+    assert_eq!(row.get::<String, _>("agent_id"), AGENT);
+    assert_eq!(row.get::<String, _>("message_id"), sent.id.as_str());
+    assert_eq!(row.get::<String, _>("delivery_kind"), "turn");
+    assert!(row.get::<Option<i64>, _>("delivered_at").is_none());
+    assert!(row.get::<Option<i64>, _>("failed_at").is_none());
+    assert!(row.get::<Option<String>, _>("in_flight_owner").is_none());
+
+    // The daemon attaches, starts the runtime, and claims that exact row.
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+    let effects = fixture.effects.clone();
+    let start = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let start_command = next_json(&mut socket).await;
+    assert_eq!(start_command["kind"], "runtime_start");
+    respond(
+        &mut socket,
+        &start_command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    start.await.unwrap().unwrap();
+
+    let effects = fixture.effects.clone();
+    let sent_for_delivery = sent.clone();
+    let deliver = tokio::spawn(async move {
+        MainDelivery::deliver_to(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &sent_for_delivery,
+        )
+        .await
+    });
+    let delivery_command = next_json(&mut socket).await;
+    assert_eq!(delivery_command["kind"], "runtime_deliver");
+    // The claim resolved to the row the send committed — same delivery id, and the
+    // rendered header names that exact message id.
+    assert_eq!(
+        delivery_command["params"]["delivery_ids"],
+        json!([delivery_id])
+    );
+    let text = delivery_command["params"]["text"].as_str().unwrap();
+    assert!(
+        text.contains(&format!("[msg_id={} sender=@user-1", sent.id.as_str())),
+        "delivered header must name the just-committed message: {text}"
+    );
+    assert!(text.contains("a real send"));
+    respond(
+        &mut socket,
+        &delivery_command,
+        json!({ "disposition": "admitted", "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    deliver.await.unwrap().unwrap();
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
 }
 
 async fn open(path: &std::path::Path) -> SqliteConnection {

@@ -153,25 +153,40 @@ impl Fixture {
         .collect()
     }
 
-    async fn enqueue_inbox_row(
-        &mut self,
-        agent: &str,
-        conversation: &str,
-        message_id: &str,
-        delivered_at: Option<i64>,
-    ) {
+    /// The full delivery witness for an agent, settlement columns included, so a
+    /// test can assert the exact row a send produced rather than only its message id.
+    async fn witness_rows(&mut self, agent: &str) -> Vec<InboxWitness> {
         sqlx::query(
-            "INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id, \
-             delivered_at, delivery_kind, created_at) VALUES (?, ?, ?, ?, 'turn', 0)",
+            "SELECT conversation_id, message_id, delivery_kind, delivered_at, failed_at, \
+             in_flight_owner FROM conversation_inboxes WHERE agent_id = ? ORDER BY id ASC",
         )
-        .bind(conversation)
         .bind(agent)
-        .bind(message_id)
-        .bind(delivered_at)
-        .execute(&mut self.db)
+        .fetch_all(&mut self.db)
         .await
-        .unwrap();
+        .unwrap()
+        .into_iter()
+        .map(|row| InboxWitness {
+            conversation_id: row.get::<String, _>("conversation_id"),
+            message_id: row.get::<String, _>("message_id"),
+            delivery_kind: row.get::<String, _>("delivery_kind"),
+            delivered_at: row.get::<Option<i64>, _>("delivered_at"),
+            failed_at: row.get::<Option<i64>, _>("failed_at"),
+            in_flight_owner: row.get::<Option<String>, _>("in_flight_owner"),
+        })
+        .collect()
     }
+}
+
+/// A `conversation_inboxes` row read whole, so the settlement columns a pending
+/// `turn` must leave empty are part of the assertion, not assumed.
+#[derive(Debug, PartialEq, Eq)]
+struct InboxWitness {
+    conversation_id: String,
+    message_id: String,
+    delivery_kind: String,
+    delivered_at: Option<i64>,
+    failed_at: Option<i64>,
+    in_flight_owner: Option<String>,
 }
 
 /// The Messaging seed: the smallest set of rows the send path reads, expressed
@@ -437,6 +452,16 @@ fn send(actor: SendActor, conversation: &str, content: &str) -> SendMessage {
     prepared(draft(actor, conversation, content))
 }
 
+/// A main-line send that skips the freshness guard, for when the sender legitimately
+/// still holds an undelivered `turn` and the test is about a later fact — ordinals,
+/// heads — rather than the guard itself.
+fn send_bypassing_freshness(actor: SendActor, conversation: &str, content: &str) -> SendMessage {
+    prepared(SendMessageDraft {
+        freshness_bypass: true,
+        ..draft(actor, conversation, content)
+    })
+}
+
 /// The body a reply carries when it addresses the second agent by name.
 fn addressing_broad(body: &str) -> String {
     format!("<silverhand://agent/broad> {body}")
@@ -457,6 +482,22 @@ fn reply_to(actor: SendActor, conversation: &str, content: &str, target: &str) -
     })
 }
 
+/// A reply that skips the freshness guard, for when the sender legitimately still
+/// holds an undelivered `turn` from an earlier reply in the same cluster and the
+/// test is about a later fact rather than the guard.
+fn reply_bypassing_freshness(
+    actor: SendActor,
+    conversation: &str,
+    content: &str,
+    target: &str,
+) -> SendMessage {
+    prepared(SendMessageDraft {
+        destination: SendDestination::Reply(MessageId::parse(target).unwrap()),
+        freshness_bypass: true,
+        ..draft(actor, conversation, content)
+    })
+}
+
 fn into_thread(actor: SendActor, conversation: &str, content: &str, root: &str) -> SendMessage {
     prepared(SendMessageDraft {
         destination: SendDestination::Thread(ThreadRootId::parse(root).unwrap()),
@@ -472,11 +513,12 @@ fn root_cause(error: &(dyn Error + 'static)) -> String {
     current.to_string()
 }
 
-/// The main line writes exactly three rows: the reserved ordinal, the message, the
-/// stream head. Delivery is a consequence of the commit, so no inbox row and no
-/// durable event may exist yet.
+/// The main line writes the reserved ordinal, the message, the stream head, and —
+/// in the same transaction — the durable delivery witness each recipient is owed: a
+/// `turn` row for every participant except the sender. The durable *event* is still
+/// a post-commit consequence, so `conversation_events` stays empty.
 #[tokio::test]
-async fn a_main_line_send_writes_the_ordinal_the_message_and_the_head_only() {
+async fn a_main_line_send_writes_the_ordinal_the_message_the_head_and_the_recipients_turn() {
     let mut fixture = Fixture::new().await;
 
     let fact = fixture
@@ -494,6 +536,57 @@ async fn a_main_line_send_writes_the_ordinal_the_message_and_the_head_only() {
     assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
     assert_eq!(fixture.stream_head(CHANNEL_ID, None).await, Some(1));
     assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 1);
+    // The one other participant is owed this message as a turn; the row rides this
+    // send's transaction, not a later aftermath pass.
+    assert_eq!(
+        fixture.queued_for(BROAD_AGENT_ID).await,
+        vec![(fact.message().id.as_str().to_owned(), "turn".to_owned())]
+    );
+    // The sender is never queued its own message.
+    assert!(fixture.queued_for(AGENT_ID).await.is_empty());
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM conversation_inboxes")
+            .await,
+        1
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM conversation_events")
+            .await,
+        0
+    );
+}
+
+/// P0 — the current message's delivery witness rides the send's own transaction. A
+/// deterministic failure on the `turn` INSERT (a plain main-line send's only inbox
+/// write) must roll the WHOLE unit back: no message, no reserved ordinal, no stream
+/// head, no witness, no sidecar. If the witness insert were moved after the commit,
+/// the message would survive the trigger and this gate would go red — which is
+/// exactly what it is here to catch.
+#[tokio::test]
+async fn a_failed_current_message_witness_rolls_back_the_whole_send() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    // Reject the current-message witness specifically: a main-line send queues its
+    // recipients a `turn` and nothing else, so this fires on exactly that INSERT.
+    fixture
+        .execute(
+            "CREATE TRIGGER reject_current_turn BEFORE INSERT ON conversation_inboxes WHEN \
+             NEW.delivery_kind = 'turn' BEGIN SELECT RAISE(ABORT, 'forced witness failure'); END",
+        )
+        .await;
+
+    let error = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "never lands"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, SendMessageError::Persistence(_)));
+    // Every fact this send would have written is gone with the transaction.
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 0);
+    assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 0);
+    assert_eq!(fixture.stream_head(CHANNEL_ID, None).await, None);
     assert_eq!(
         fixture
             .count("SELECT count(*) FROM conversation_inboxes")
@@ -504,6 +597,10 @@ async fn a_main_line_send_writes_the_ordinal_the_message_and_the_head_only() {
         fixture
             .count("SELECT count(*) FROM conversation_events")
             .await,
+        0
+    );
+    assert_eq!(
+        fixture.count("SELECT count(*) FROM thread_followers").await,
         0
     );
 }
@@ -663,8 +760,14 @@ async fn ordinals_are_conversation_global_and_a_thread_keeps_its_own_head() {
         .unwrap()
         .committed()
         .clone();
+    // The reply queued lio a `turn`, so its own next main-line send would trip the
+    // freshness guard; this test is about ordinals, so it bypasses.
     let after = store
-        .send_message(send(agent_actor(), CHANNEL_ID, "main line again"))
+        .send_message(send_bypassing_freshness(
+            agent_actor(),
+            CHANNEL_ID,
+            "main line again",
+        ))
         .await
         .unwrap()
         .committed()
@@ -1093,15 +1196,28 @@ async fn an_accepted_attachment_is_stored_as_a_snapshot_in_the_message_metadata(
 async fn an_agent_holding_undelivered_input_is_refused_as_stale() {
     let mut fixture = Fixture::new().await;
     let store = fixture.store().await;
-    let existing = store
+    // The user's send now writes the agent's pending `turn` row in the same
+    // transaction, so the undelivered input the guard trips on is the real witness
+    // this send produced — not a hand-seeded stand-in.
+    let read_me = store
         .send_message(send(user_actor(), CHANNEL_ID, "read me first"))
         .await
         .unwrap()
         .committed()
         .clone();
-    fixture
-        .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message().id.as_str(), None)
-        .await;
+    // The exact witness: one pending `turn` for this conversation and message, with
+    // every settlement column still empty — the row the stale guard reads next.
+    assert_eq!(
+        fixture.witness_rows(AGENT_ID).await,
+        vec![InboxWitness {
+            conversation_id: CHANNEL_ID.to_owned(),
+            message_id: read_me.message().id.as_str().to_owned(),
+            delivery_kind: "turn".to_owned(),
+            delivered_at: None,
+            failed_at: None,
+            in_flight_owner: None,
+        }]
+    );
 
     let error = store
         .send_message(send(agent_actor(), CHANNEL_ID, "talking over it"))
@@ -1122,17 +1238,17 @@ async fn an_agent_holding_undelivered_input_is_refused_as_stale() {
 async fn an_in_flight_delivery_still_counts_as_undelivered() {
     let mut fixture = Fixture::new().await;
     let store = fixture.store().await;
-    let existing = store
+    // The send itself queues the agent's pending `turn` row; leasing it in flight
+    // must still read as undelivered.
+    store
         .send_message(send(user_actor(), CHANNEL_ID, "leased"))
         .await
-        .unwrap()
-        .committed()
-        .clone();
+        .unwrap();
     fixture
-        .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message().id.as_str(), None)
-        .await;
-    fixture
-        .execute("UPDATE conversation_inboxes SET in_flight_owner = 'runtime-1', in_flight_at = 1")
+        .execute(
+            "UPDATE conversation_inboxes SET in_flight_owner = 'runtime-1', in_flight_at = 1 WHERE \
+             agent_id = 'agent-1'",
+        )
         .await;
 
     let error = store
@@ -1147,19 +1263,14 @@ async fn an_in_flight_delivery_still_counts_as_undelivered() {
 async fn a_delivered_row_leaves_the_runtime_fresh() {
     let mut fixture = Fixture::new().await;
     let store = fixture.store().await;
-    let existing = store
+    // The send queues the agent's pending `turn`; draining it (delivered_at set)
+    // must leave the runtime free to answer.
+    store
         .send_message(send(user_actor(), CHANNEL_ID, "consumed"))
         .await
-        .unwrap()
-        .committed()
-        .clone();
+        .unwrap();
     fixture
-        .enqueue_inbox_row(
-            AGENT_ID,
-            CHANNEL_ID,
-            existing.message().id.as_str(),
-            Some(1),
-        )
+        .execute("UPDATE conversation_inboxes SET delivered_at = 1 WHERE agent_id = 'agent-1'")
         .await;
 
     let after_drain = store
@@ -1175,17 +1286,13 @@ async fn a_delivered_row_leaves_the_runtime_fresh() {
 
 #[tokio::test]
 async fn sending_anyway_lands_and_records_that_the_guard_was_skipped() {
-    let mut fixture = Fixture::new().await;
+    let fixture = Fixture::new().await;
     let store = fixture.store().await;
-    let existing = store
+    // The send queues the agent's pending `turn`; the bypass lands over it.
+    store
         .send_message(send(user_actor(), CHANNEL_ID, "unread"))
         .await
-        .unwrap()
-        .committed()
-        .clone();
-    fixture
-        .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message().id.as_str(), None)
-        .await;
+        .unwrap();
 
     let command = prepared(SendMessageDraft {
         freshness_bypass: true,
@@ -1206,17 +1313,14 @@ async fn sending_anyway_lands_and_records_that_the_guard_was_skipped() {
 /// stale.
 #[tokio::test]
 async fn a_human_send_is_never_stale() {
-    let mut fixture = Fixture::new().await;
+    let fixture = Fixture::new().await;
     let store = fixture.store().await;
-    let existing = store
+    // The first send leaves the agent an undelivered `turn`; a person has no
+    // runtime, so that cannot gag the human's next send.
+    store
         .send_message(send(user_actor(), CHANNEL_ID, "unread by the agent"))
         .await
-        .unwrap()
-        .committed()
-        .clone();
-    fixture
-        .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message().id.as_str(), None)
-        .await;
+        .unwrap();
 
     let fact = store
         .send_message(send(user_actor(), CHANNEL_ID, "people keep talking"))
@@ -1232,22 +1336,14 @@ async fn a_human_send_is_never_stale() {
 /// in one conversation does not gag a runtime bound to another.
 #[tokio::test]
 async fn the_conversation_arm_keys_on_the_runtimes_binding() {
-    let mut fixture = Fixture::new().await;
+    let fixture = Fixture::new().await;
     let store = fixture.store().await;
-    let existing = store
+    // The send queues the agent an undelivered `turn` in the other channel; a
+    // conversation-bound runtime does not see it.
+    store
         .send_message(send(user_actor(), OTHER_CHANNEL_ID, "elsewhere"))
         .await
-        .unwrap()
-        .committed()
-        .clone();
-    fixture
-        .enqueue_inbox_row(
-            AGENT_ID,
-            OTHER_CHANNEL_ID,
-            existing.message().id.as_str(),
-            None,
-        )
-        .await;
+        .unwrap();
 
     let fact = store
         .send_message(send(agent_actor(), CHANNEL_ID, "unrelated stream"))
@@ -1263,22 +1359,14 @@ async fn the_conversation_arm_keys_on_the_runtimes_binding() {
 /// anywhere makes it stale.
 #[tokio::test]
 async fn the_agent_arm_spans_every_conversation() {
-    let mut fixture = Fixture::new().await;
+    let fixture = Fixture::new().await;
     let store = fixture.store().await;
-    let existing = store
+    // The send queues broad an undelivered `turn` in the other channel; an
+    // agent-scoped runtime sees it everywhere.
+    store
         .send_message(send(user_actor(), OTHER_CHANNEL_ID, "elsewhere"))
         .await
-        .unwrap()
-        .committed()
-        .clone();
-    fixture
-        .enqueue_inbox_row(
-            BROAD_AGENT_ID,
-            OTHER_CHANNEL_ID,
-            existing.message().id.as_str(),
-            None,
-        )
-        .await;
+        .unwrap();
 
     let broad = SendActor::Agent(AgentId::parse(BROAD_AGENT_ID).unwrap());
     let error = store
@@ -1482,15 +1570,12 @@ impl SendEntropy for EntropyExhaustedAfter {
 async fn entropy_withdrawn_inside_the_unit_rolls_back_with_nothing_written() {
     let mut fixture = Fixture::new().await;
     let seeded = fixture.store().await;
-    let existing = seeded
+    // The user's send queues the agent a pending `turn`, so the agent's own send is
+    // stale and must mint a fresh stale-event identity.
+    seeded
         .send_message(send(user_actor(), CHANNEL_ID, "read me first"))
         .await
-        .unwrap()
-        .committed()
-        .clone();
-    fixture
-        .enqueue_inbox_row(AGENT_ID, CHANNEL_ID, existing.message().id.as_str(), None)
-        .await;
+        .unwrap();
     let store = fixture
         .store_with(EntropyExhaustedAfter {
             allowance: 1,
@@ -1552,6 +1637,12 @@ async fn a_reply_records_its_author_and_the_root_author_as_followers() {
 /// A newly followed agent is caught up on the cluster as it stood before this
 /// reply — the root plus every earlier message — and not on the reply that
 /// followed it, which is delivered separately.
+/// A newly followed agent's catch-up covers the cluster it had not seen — but only
+/// the messages it had not seen. A channel participant already holds the root as a
+/// live `turn`, so catch-up cannot re-queue it as `observe` (the stronger `turn`
+/// wins the conflict); the reply it genuinely missed arrives as `observe`; and the
+/// reply that named it is delivered in the same transaction as a `turn`. Catch-up
+/// `observe` and current-turn coexist without duplicating a row.
 #[tokio::test]
 async fn a_mentioned_participant_is_followed_and_caught_up_on_the_cluster() {
     let mut fixture = Fixture::new().await;
@@ -1575,8 +1666,10 @@ async fn a_mentioned_participant_is_followed_and_caught_up_on_the_cluster() {
         .committed()
         .clone();
 
+    // The earlier reply queued lio a `turn`, so its own mentioning reply would trip
+    // the freshness guard; the guard is not what this test is about, so it bypasses.
     let mentioning = store
-        .send_message(reply_to(
+        .send_message(reply_bypassing_freshness(
             agent_actor(),
             CHANNEL_ID,
             &addressing_broad("look"),
@@ -1595,26 +1688,26 @@ async fn a_mentioned_participant_is_followed_and_caught_up_on_the_cluster() {
     assert_eq!(
         fixture.queued_for(BROAD_AGENT_ID).await,
         vec![
-            (root_id.clone(), "observe".to_owned()),
+            // Already held as a live participant turn — catch-up cannot downgrade it.
+            (root_id.clone(), "turn".to_owned()),
+            // Genuinely missed while not following — queued as history.
             (
                 earlier.message().id.as_str().to_owned(),
                 "observe".to_owned()
             ),
+            // The reply that named it, delivered in the same transaction as a turn.
+            (
+                mentioning.message().id.as_str().to_owned(),
+                "turn".to_owned()
+            ),
         ],
-        "the catch-up did not cover exactly the cluster before this reply"
-    );
-    assert!(
-        !fixture
-            .queued_for(BROAD_AGENT_ID)
-            .await
-            .iter()
-            .any(|(id, _)| id == mentioning.message().id.as_str()),
-        "the reply that created the follower was queued as history too"
+        "catch-up must add only the unseen reply and never duplicate the root row"
     );
 }
 
-/// Following is idempotent, so a cluster's history is queued once however many
-/// times a follower is named again.
+/// Following is idempotent, so the `observe` history a catch-up queues is written
+/// once however many times a follower is named again — even as each naming reply
+/// still delivers its own `turn`.
 #[tokio::test]
 async fn following_a_cluster_twice_queues_its_history_once() {
     let mut fixture = Fixture::new().await;
@@ -1627,6 +1720,16 @@ async fn following_a_cluster_twice_queues_its_history_once() {
         .clone();
     let root_id = root.message().id.as_str().to_owned();
 
+    // A reply broad does not receive: it is not yet a follower, so this becomes the
+    // one piece of genuine catch-up history when it is named later.
+    let missed = store
+        .send_message(reply_to(user_actor(), CHANNEL_ID, "before broad", &root_id))
+        .await
+        .unwrap()
+        .committed()
+        .clone();
+    let missed_id = missed.message().id.as_str().to_owned();
+
     store
         .send_message(reply_to(
             user_actor(),
@@ -1636,7 +1739,13 @@ async fn following_a_cluster_twice_queues_its_history_once() {
         ))
         .await
         .unwrap();
-    let after_first = fixture.queued_for(BROAD_AGENT_ID).await;
+    let observe_after_first: Vec<(String, String)> = fixture
+        .queued_for(BROAD_AGENT_ID)
+        .await
+        .into_iter()
+        .filter(|(_, kind)| kind == "observe")
+        .collect();
+
     store
         .send_message(reply_to(
             user_actor(),
@@ -1646,9 +1755,17 @@ async fn following_a_cluster_twice_queues_its_history_once() {
         ))
         .await
         .unwrap();
+    let observe_after_second: Vec<(String, String)> = fixture
+        .queued_for(BROAD_AGENT_ID)
+        .await
+        .into_iter()
+        .filter(|(_, kind)| kind == "observe")
+        .collect();
 
-    assert_eq!(after_first.len(), 1);
-    assert_eq!(fixture.queued_for(BROAD_AGENT_ID).await, after_first);
+    // The catch-up covered exactly the one reply broad missed — the root is not here
+    // (it is held as a live `turn`), and the second naming added no second copy.
+    assert_eq!(observe_after_first, vec![(missed_id, "observe".to_owned())]);
+    assert_eq!(observe_after_second, observe_after_first);
 }
 
 /// Following is not a way into a conversation: a reference to someone who does not
@@ -1735,8 +1852,8 @@ async fn the_catch_up_skips_the_new_followers_own_messages() {
     let root_id = root.message().id.as_str().to_owned();
 
     // The reply makes the root's author a follower, and the only history there is
-    // belongs to that author.
-    store
+    // belongs to that author — so the catch-up has nothing to queue.
+    let reply = store
         .send_message(reply_to(
             user_actor(),
             CHANNEL_ID,
@@ -1744,16 +1861,28 @@ async fn the_catch_up_skips_the_new_followers_own_messages() {
             &root_id,
         ))
         .await
-        .unwrap();
+        .unwrap()
+        .committed()
+        .clone();
 
     assert!(fixture.followers(&root_id).await.contains(&(
         "agent".to_owned(),
         BROAD_AGENT_ID.to_owned(),
         "target_author".to_owned()
     )));
+    // Its own root is never queued back to it as catch-up...
     assert!(
-        fixture.queued_for(BROAD_AGENT_ID).await.is_empty(),
+        !fixture
+            .queued_for(BROAD_AGENT_ID)
+            .await
+            .iter()
+            .any(|(id, _)| id == root_id.as_str()),
         "an agent was queued its own message as catch-up"
+    );
+    // ...but the reply into the cluster it now follows is delivered as a turn.
+    assert_eq!(
+        fixture.queued_for(BROAD_AGENT_ID).await,
+        vec![(reply.message().id.as_str().to_owned(), "turn".to_owned())]
     );
 }
 
@@ -1782,8 +1911,15 @@ async fn the_audience_is_the_cluster_followers_minus_the_sender() {
         .unwrap()
         .committed()
         .clone();
+    // The human's reply queued lio a `turn`, so lio's own reply would trip the
+    // freshness guard; the guard is not what this test is about, so it bypasses.
     let by_agent = store
-        .send_message(reply_to(agent_actor(), CHANNEL_ID, "here", &root_id))
+        .send_message(reply_bypassing_freshness(
+            agent_actor(),
+            CHANNEL_ID,
+            "here",
+            &root_id,
+        ))
         .await
         .unwrap()
         .committed()
@@ -1837,7 +1973,12 @@ async fn a_failed_reply_leaves_no_follower_and_no_queued_history() {
         vec![],
         "a follower survived a reply that never committed"
     );
-    assert!(fixture.queued_for(BROAD_AGENT_ID).await.is_empty());
+    // Only the root's own witness survives — the committed send that ran before the
+    // trigger. The failed reply queued broad nothing: no catch-up, no turn.
+    assert_eq!(
+        fixture.queued_for(BROAD_AGENT_ID).await,
+        vec![(root_id.clone(), "turn".to_owned())]
+    );
     // The reply itself is gone with them, and so is the ordinal it took.
     assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 1);
     assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
@@ -2659,10 +2800,12 @@ async fn a_mention_intent_says_who_wrote_it_so_the_writer_can_exclude_them() {
     fixture
         .execute("DELETE FROM conversation_users WHERE conversation_id = 'conv-1'")
         .await;
+    // The first send queued lio a `turn`, so its own next send would be stale; this
+    // test is about the mention intent's author, not the guard.
     let after_removal = fixture
         .store()
         .await
-        .send_message(send(
+        .send_message(send_bypassing_freshness(
             agent_actor(),
             CHANNEL_ID,
             "<silverhand://human/human> are you there",
@@ -3959,10 +4102,12 @@ async fn repliers_are_distinct_most_recent_first_and_capped_while_the_total_is_n
         .clone();
     let root_id = root.message().id.as_str().to_owned();
 
-    // seq 2..=5 through the real path: agent-1, user-1, agent-1 again, agent-2.
+    // seq 2..=5 through the real path: agent-1, user-1, agent-1 again, agent-2. Each
+    // send queues the others a `turn`, so the repeat senders would be stale; this
+    // test is about replier identity, not the guard, so the replies bypass it.
     for actor in [agent_actor(), user_actor(), agent_actor(), broad_actor()] {
         store
-            .send_message(reply_to(actor, CHANNEL_ID, "r", &root_id))
+            .send_message(reply_bypassing_freshness(actor, CHANNEL_ID, "r", &root_id))
             .await
             .unwrap();
     }
@@ -4016,8 +4161,15 @@ async fn a_deleted_replier_keeps_its_snapshot_and_still_counts() {
         .committed()
         .clone();
     let root_id = root.message().id.as_str().to_owned();
+    // broad holds a `turn` from the root send, so its reply would be stale; this
+    // test is about the deleted replier's snapshot, not the guard.
     store
-        .send_message(reply_to(broad_actor(), CHANNEL_ID, "from broad", &root_id))
+        .send_message(reply_bypassing_freshness(
+            broad_actor(),
+            CHANNEL_ID,
+            "from broad",
+            &root_id,
+        ))
         .await
         .unwrap();
 
