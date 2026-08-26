@@ -39,11 +39,11 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    agents::runtime::RuntimeKind,
     capability::computer_access::{
         ComputerAccess, ComputerAccessRefused, ComputerOwnershipFacts, can_access_computer,
     },
     identity::{AgentId, HostId, UserId},
-    messaging::RuntimeKind,
     persistence::PersistenceFailure,
 };
 

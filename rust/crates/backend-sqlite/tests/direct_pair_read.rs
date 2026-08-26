@@ -1,9 +1,10 @@
 use std::error::Error;
 
 use silverhand_backend_core::{
+    agents::runtime::RuntimeKind,
     direct_pair_read::{DirectPairCounterpart, DirectPairReadModel},
     identity::UserId,
-    messaging::{ActiveAuthor, PrincipalIdentity, RuntimeKind},
+    messaging::{ActiveAuthor, PrincipalIdentity},
 };
 use silverhand_backend_sqlite::direct_pair_read::{DirectPairReadError, SqliteDirectPairReadModel};
 use sqlx::Connection;
@@ -306,4 +307,46 @@ async fn malformed_endpoint_and_driver_failures_preserve_their_distinct_sources(
     let read_error = source.downcast_ref::<DirectPairReadError>().unwrap();
     assert!(matches!(read_error, DirectPairReadError::Sql(_)));
     assert!(Error::source(read_error).is_some());
+}
+
+/// `agents.runtime` carries no CHECK, so a token outside the closed set is storable,
+/// and this face renders the counterpart's runtime straight onto the wire. Passing an
+/// unknown token through would answer `200` with a value the wire enum cannot name,
+/// so the whole read fails; the repair afterwards is projected as ITSELF, which is
+/// what rules out a coerced default hiding behind the same green.
+#[tokio::test]
+async fn an_unknown_stored_runtime_fails_the_read_until_it_is_repaired() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("direct-pair-runtime.sqlite");
+    seeded(&path).await;
+    let model = SqliteDirectPairReadModel::open(&path).await.unwrap();
+
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE agents SET runtime = 'aider' WHERE id = 'agent-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    let error = model.list_direct_pairs(&viewer()).await.unwrap_err();
+    assert!(matches!(
+        Error::source(&error).and_then(|source| source.downcast_ref()),
+        Some(DirectPairReadError::UnknownRuntime)
+    ));
+
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE agents SET runtime = 'cursor' WHERE id = 'agent-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    let list = model.list_direct_pairs(&viewer()).await.unwrap();
+    let DirectPairCounterpart::Active(ActiveAuthor::Agent(agent)) = list.items()[0].counterpart()
+    else {
+        panic!("the repaired row must project an active agent counterpart")
+    };
+    assert_eq!(agent.runtime(), RuntimeKind::Cursor);
 }

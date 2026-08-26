@@ -183,10 +183,10 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        agents::runtime::RuntimeKind,
         capability::computer_access::ComputerOwnershipFacts,
         host_resources_read::{HostAgentResourceFact, HostResourcesFacts},
         identity::AgentId,
-        messaging::RuntimeKind,
         persistence::PersistenceFailure,
     };
     use tower::ServiceExt;

@@ -1344,3 +1344,103 @@ async fn an_invalid_observed_stamp_faults_before_it_can_be_written() {
         "the repaired observation must advance the committed stamp"
     );
 }
+
+/// Whether any link of the failure chain is the adapter's unsupported-runtime fault.
+/// The fault type is private to the adapter, so its rendering is what a consumer can
+/// observe; a bare `is_err()` would be satisfied by any unrelated driver error.
+fn unsupported_runtime(error: &PersistenceFailure) -> bool {
+    let mut current = std::error::Error::source(error);
+    while let Some(link) = current {
+        if link.to_string() == "persisted runtime kind is unsupported" {
+            return true;
+        }
+        current = link.source();
+    }
+    false
+}
+
+async fn resolve_target(
+    fixture: &Fixture,
+) -> Result<
+    Option<silverhand_backend_core::runtime_delivery::RuntimeDispatchTarget>,
+    PersistenceFailure,
+> {
+    fixture
+        .delivery
+        .resolve_dispatch_target(
+            ConversationId::parse(CONVERSATION).unwrap(),
+            AgentId::parse(AGENT).unwrap(),
+        )
+        .await
+}
+
+/// `agents.runtime` carries no CHECK, so a token outside the closed set is storable,
+/// and it reaches this adapter at TWO independent decode sites: the dispatch agent's
+/// own spec, and every agent in the session roster. The spec decodes first, so one
+/// corrupt row cannot tell them apart — a corrupt DISPATCH row proves the first site,
+/// and a corrupt ROSTER PEER behind a legal dispatch row proves the second, where
+/// only the member decode can be the fault. The repair in between is what rules out
+/// an unconditional failure.
+#[tokio::test]
+async fn a_stored_runtime_outside_the_closed_set_fails_both_decode_sites() {
+    let fixture = fixture().await;
+
+    let mut db = open(&fixture.path).await;
+    sqlx::query("UPDATE agents SET runtime = 'aider' WHERE id = ?")
+        .bind(AGENT)
+        .execute(&mut db)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    let error = resolve_target(&fixture)
+        .await
+        .expect_err("a dispatch agent whose stored runtime is outside the set is corruption");
+    assert!(
+        unsupported_runtime(&error),
+        "the spec decode must fault through the named unsupported-runtime cause"
+    );
+
+    let mut db = open(&fixture.path).await;
+    sqlx::query("UPDATE agents SET runtime = 'codex' WHERE id = ?")
+        .bind(AGENT)
+        .execute(&mut db)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    assert!(
+        resolve_target(&fixture)
+            .await
+            .expect("the repaired row decodes")
+            .is_some(),
+        "the fault must be the stored value, not the read itself"
+    );
+
+    let mut db = open(&fixture.path).await;
+    sqlx::query(
+        "INSERT INTO agents (
+            id, name, runtime, host_id, created_at, updated_at,
+            display_name, created_by_user_id, session_scope
+         ) VALUES ('agent-peer', 'agent-peer', 'aider', 'host-1', 1, 1,
+             'Peer Agent', 'user-1', 'conversation')",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+         VALUES (?, 'agent-peer', 1)",
+    )
+    .bind(CONVERSATION)
+    .execute(&mut db)
+    .await
+    .unwrap();
+    db.close().await.unwrap();
+    let error = resolve_target(&fixture)
+        .await
+        .expect_err("a roster peer outside the set is corruption too");
+    assert!(
+        unsupported_runtime(&error),
+        "the member decode must fault through the same named cause, with the dispatch \
+         agent's own runtime legal"
+    );
+}

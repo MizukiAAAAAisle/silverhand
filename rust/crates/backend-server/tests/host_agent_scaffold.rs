@@ -177,6 +177,23 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-sqlite", "workspace_cold_read"),
 ];
 
+/// TRANSITIONAL — the root modules the vocabulary-ownership lanes declare.
+///
+/// It exists for one reason: G0 below closes every root declaration over an
+/// inventory, so a new root module has to be classified somewhere or the gate goes
+/// red with no way to record that the module is legitimate. This is that record and
+/// nothing more.
+///
+/// It carries NO seam and NO activation semantics. An entry here owes no labeled
+/// integration-seam line, is not fenced against composition, and is not held to
+/// G4's single-owner accounting; those obligations belong to `SEAM_ROOT_MODULES`
+/// and are not claimed for these modules.
+///
+/// This whole file is CP1 history that #task:2209 deletes, so this table has no
+/// future: do not extend it into a durable inventory, do not build a union
+/// abstraction over the three lists, and do not carry it through convergence.
+const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[("backend-core", "agents")];
+
 /// The seam modules that are DIRECTORY modules, owning a `<name>/mod.rs`. G5 reads
 /// that file, so a flat module must not appear here — the gate would then fail on a
 /// missing path instead of on a violation. G0 holds this list to exactly the
@@ -609,6 +626,7 @@ fn registered_modules(crate_dir: &str) -> BTreeSet<String> {
     SEAM_ROOT_MODULES
         .iter()
         .chain(ROOT_MODULES_WE_DID_NOT_ADD)
+        .chain(ORGANIZATION_ROOT_MODULES)
         .filter(|(owner, _)| *owner == crate_dir)
         .map(|(_, module)| (*module).to_owned())
         .collect()
@@ -688,25 +706,33 @@ fn g0_every_lane_module_sits_in_the_inventory_that_guards_it() {
     );
     assert_eq!(trailing_export("}\n\nuse crate::cold_read"), None);
 
-    // Each classification is a claim about one module, and a set union of the two
+    // Each classification is a claim about one module, and a set union of the
     // tables would silently absorb a repeated or doubled one.
-    let seam: BTreeSet<(&str, &str)> = SEAM_ROOT_MODULES.iter().copied().collect();
-    assert_eq!(
-        seam.len(),
-        SEAM_ROOT_MODULES.len(),
-        "the seam ledger repeats an entry"
-    );
-    let inherited: BTreeSet<(&str, &str)> = ROOT_MODULES_WE_DID_NOT_ADD.iter().copied().collect();
-    assert_eq!(
-        inherited.len(),
-        ROOT_MODULES_WE_DID_NOT_ADD.len(),
-        "the inherited list repeats an entry"
-    );
-    let both: Vec<&(&str, &str)> = seam.intersection(&inherited).collect();
-    assert!(
-        both.is_empty(),
-        "{both:?} is claimed as this lane's seam and as already present"
-    );
+    let inventories: [(&str, &[(&str, &str)]); 3] = [
+        ("the seam ledger", SEAM_ROOT_MODULES),
+        ("the inherited list", ROOT_MODULES_WE_DID_NOT_ADD),
+        (
+            "the transitional organization list",
+            ORGANIZATION_ROOT_MODULES,
+        ),
+    ];
+    let classified: Vec<(&str, BTreeSet<(&str, &str)>)> = inventories
+        .iter()
+        .map(|(label, table)| {
+            let entries: BTreeSet<(&str, &str)> = table.iter().copied().collect();
+            assert_eq!(entries.len(), table.len(), "{label} repeats an entry");
+            (*label, entries)
+        })
+        .collect();
+    for (position, (label, entries)) in classified.iter().enumerate() {
+        for (other_label, other) in &classified[position + 1..] {
+            let both: Vec<&(&str, &str)> = entries.intersection(other).collect();
+            assert!(
+                both.is_empty(),
+                "{both:?} is claimed by {label} and by {other_label}"
+            );
+        }
+    }
 
     for crate_dir in CRATE_ROOTS {
         let (unclassified, absent) = classification_gaps(

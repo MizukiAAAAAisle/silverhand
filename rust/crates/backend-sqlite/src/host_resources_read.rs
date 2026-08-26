@@ -46,10 +46,10 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    agents::runtime::RuntimeKind,
     capability::computer_access::ComputerOwnershipFacts,
     host_resources_read::{HostAgentResourceFact, HostResourcesFacts, HostResourcesReadModel},
     identity::{AgentId, HostId, UserId},
-    messaging::RuntimeKind,
     persistence::PersistenceFailure,
 };
 use sqlx::{

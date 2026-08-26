@@ -2637,7 +2637,7 @@ mod tests {
     /// touches the loader or the discriminator directly, only `resolve_authors`.
     #[tokio::test]
     async fn a_mixed_page_resolves_every_arm_through_one_batch_authority() {
-        use silverhand_backend_core::messaging::{PrincipalIdentity, RuntimeKind};
+        use silverhand_backend_core::{agents::runtime::RuntimeKind, messaging::PrincipalIdentity};
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("mixed-batch.sqlite");

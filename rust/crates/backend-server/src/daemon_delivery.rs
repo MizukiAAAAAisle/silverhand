@@ -2815,7 +2815,7 @@ fn spawn_options(plan: &RuntimeSpawnPlan, token: &str) -> Value {
     let common = json!({
         "agent": { "id": plan.agent.id.as_str(), "name": plan.agent.name },
         "driver": {
-            "kind": plan.agent.runtime,
+            "kind": plan.agent.runtime.as_str(),
             "cli_session_id": plan.agent.cli_session_id,
             "model": plan.agent.model,
             "reasoning_effort": plan.agent.reasoning_effort,
@@ -2871,7 +2871,7 @@ fn session_wire(session: &silverhand_backend_core::runtime_delivery::RuntimeSess
                 runtime,
             } => json!({
                 "kind": "agent", "agent_id": id.as_str(), "name": name,
-                "display_name": display_name, "runtime": runtime,
+                "display_name": display_name, "runtime": runtime.as_str(),
             }),
             RuntimeMember::Human {
                 id,

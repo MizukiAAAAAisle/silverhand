@@ -85,7 +85,7 @@ pub use addressing::{AddressedPrincipals, MessageReference, ReferencePositions};
 pub use attachments::AttachmentRefusal;
 pub use author::{
     ActiveAgent, ActiveAuthor, ActiveHuman, AvatarRevision, DeletedAuthor, MessageAuthor,
-    PrincipalIdentity, RuntimeKind, UnresolvedAuthor,
+    PrincipalIdentity, UnresolvedAuthor,
 };
 pub use authority::{
     ActorRefusal, ConversationEndpoint, ConversationFacts, ConversationRefusal,

@@ -5,6 +5,7 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    agents::runtime::RuntimeKind,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{AddressedPrincipals, FromKind, MessageContent, PrincipalKind, ReferencePositions},
     persistence::PersistenceFailure,
@@ -198,7 +199,7 @@ pub enum RuntimeMember {
         id: AgentId,
         name: String,
         display_name: String,
-        runtime: String,
+        runtime: RuntimeKind,
     },
     Human {
         id: UserId,
@@ -243,7 +244,7 @@ impl RuntimeWorkspaceRef {
 pub struct RuntimeAgentSpec {
     pub id: AgentId,
     pub name: String,
-    pub runtime: String,
+    pub runtime: RuntimeKind,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub fast_mode: Option<bool>,

@@ -22,52 +22,7 @@
 //! has been returned cannot afterwards be altered or have a field forged onto it.
 
 use super::{AgentId, PrincipalKind, UserId};
-
-/// The exact runtimes an active agent may report.
-///
-/// The set is closed and lives here because "which runtimes exist" is a domain
-/// fact, not a wire detail. A stored value outside it is a broken database, so
-/// [`RuntimeKind::parse`] answers `None` and leaves it to the adapter to fail
-/// closed with the offending value attached — this type never invents a default.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum RuntimeKind {
-    Claude,
-    Codex,
-    Cursor,
-    Gemini,
-    Qoder,
-    Opencode,
-}
-
-impl RuntimeKind {
-    /// The stored spelling this runtime is written and read as. The single source
-    /// of the accepted set, so a reader and a writer cannot drift apart.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            RuntimeKind::Claude => "claude",
-            RuntimeKind::Codex => "codex",
-            RuntimeKind::Cursor => "cursor",
-            RuntimeKind::Gemini => "gemini",
-            RuntimeKind::Qoder => "qoder",
-            RuntimeKind::Opencode => "opencode",
-        }
-    }
-
-    /// `None` for anything outside the closed set. Deliberately not a fallback to a
-    /// default runtime: an unknown stored value is a data-invariant fault the
-    /// adapter must surface, not a caller's problem to paper over.
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw {
-            "claude" => Some(RuntimeKind::Claude),
-            "codex" => Some(RuntimeKind::Codex),
-            "cursor" => Some(RuntimeKind::Cursor),
-            "gemini" => Some(RuntimeKind::Gemini),
-            "qoder" => Some(RuntimeKind::Qoder),
-            "opencode" => Some(RuntimeKind::Opencode),
-            _ => None,
-        }
-    }
-}
+use crate::agents::runtime::RuntimeKind;
 
 /// A principal named together with the identity that proves which one. Binding the
 /// kind to the id in one type is what makes an agent-kind value carrying a user id
@@ -240,7 +195,7 @@ impl UnresolvedAuthor {
 /// construction:
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::messaging::{ActiveAgent, RuntimeKind};
+/// use silverhand_backend_core::{agents::runtime::RuntimeKind, messaging::ActiveAgent};
 ///
 /// // No public fields: an active agent cannot be assembled around the runtime
 /// // invariant by hand.
@@ -353,24 +308,6 @@ mod tests {
 
     fn user_id() -> UserId {
         UserId::parse("user-1").unwrap()
-    }
-
-    #[test]
-    fn the_runtime_set_round_trips_and_rejects_anything_outside_it() {
-        for runtime in [
-            RuntimeKind::Claude,
-            RuntimeKind::Codex,
-            RuntimeKind::Cursor,
-            RuntimeKind::Gemini,
-            RuntimeKind::Qoder,
-            RuntimeKind::Opencode,
-        ] {
-            assert_eq!(RuntimeKind::parse(runtime.as_str()), Some(runtime));
-        }
-        // Fails closed rather than defaulting: an unknown spelling is not a runtime.
-        assert_eq!(RuntimeKind::parse("claude "), None);
-        assert_eq!(RuntimeKind::parse(""), None);
-        assert_eq!(RuntimeKind::parse("aider"), None);
     }
 
     #[test]

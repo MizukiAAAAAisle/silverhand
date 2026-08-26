@@ -3381,7 +3381,18 @@ async fn stale_resume_fatal_clears_cli_session_before_successor_start() {
     });
     let successor_command = next_json(&mut daemon).await;
     assert_eq!(successor_command["kind"], "runtime_start");
-    assert!(successor_command["params"]["spawn_options"]["driver"]["cli_session_id"].is_null());
+    // `runtime_start` nests the spawn options under `options`; the `spawn_options` key
+    // belongs to `runtime_deliver`. Asserting the runtime word FIRST keeps the
+    // cli-session assertion below honest — a path that does not resolve reads as JSON
+    // null, which `is_null()` accepts without having read anything.
+    //
+    // The plan carries the TYPED runtime now, so this word is the domain's `as_str()`
+    // rather than the stored column: it must still be the seeded token, byte for byte.
+    assert_eq!(
+        successor_command["params"]["options"]["driver"]["kind"],
+        "codex"
+    );
+    assert!(successor_command["params"]["options"]["driver"]["cli_session_id"].is_null());
     respond(
         &mut daemon,
         &successor_command,
