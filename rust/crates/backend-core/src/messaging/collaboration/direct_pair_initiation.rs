@@ -228,6 +228,22 @@ pub trait DirectPairInitiationPort: DirectPairInitiationAuthority {
         S: Error + Send + Sync + 'static;
 }
 
+/// A persistence handle that can be bound to one already-owned winner-only publication
+/// authority, yielding the initiation port.
+///
+/// The pair-open announcement has to leave on the SAME transport the pair's first
+/// committed message publishes on, which makes the binding the business of whoever owns
+/// that transport rather than of whoever mounts the door: the owner calls
+/// [`bind_initiation`](DirectPairInitiationSource::bind_initiation) with itself, and a
+/// composition root supplies only the handle. So there is no argument in which a mount
+/// could name a second transport, and nothing asks the authority for a `Clone` — a shared
+/// owner hands over a shared handle by construction.
+pub trait DirectPairInitiationSource<A> {
+    type Port: DirectPairInitiationPort + Send + Sync + 'static;
+
+    fn bind_initiation(self, opened: A) -> Self::Port;
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DirectPairFirstSendError<M, O, S>
 where

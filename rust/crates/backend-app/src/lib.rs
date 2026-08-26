@@ -482,43 +482,29 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         messaging_store.clone(),
         unread_read_model,
     );
-    // Wave 3A checkpoint A6 (#2203): the human direct-pair initiation door — the sole
-    // write checkpoint of this wave — rides the SAME `MessagingStore` the ordinary send
-    // door holds, in three roles: the get-or-create initiation authority (which publishes
-    // the winner-only pair-opened fact through the SAME `ScopeEventHub`), the direct-line
-    // authority, and the send unit-of-work. All three handles are captured here, before the
-    // send doors move the store, so the door opens no second authority or write unit. The
-    // aftermath and the transport its pair-open announcement rides are not captured at all:
-    // the door seam supplies both from the one aftermath below.
-    let direct_pair_initiation_store = messaging_store.clone();
-    let direct_pair_direct_lines = messaging_store.clone();
-    let direct_pair_unit_of_work = messaging_store.clone();
-    let (human_send, agent_send) = aftermath.send_doors(
-        messaging_store.clone(),
-        target_address,
-        messaging_store.clone(),
-        messaging_store.clone(),
-        messaging_store,
-    );
+    // Wave 3A checkpoint A6 (#2203) + #2205: every authenticated write door — the two
+    // ordinary sends and the human direct-pair initiation — rides the SAME
+    // `MessagingStore`, in every write role it needs: channel access, send capability,
+    // direct-line authority, send unit-of-work, and the get-or-create initiation source.
+    // One statement, one store, and no argument for the transport the winner-only
+    // pair-opened fact leaves on: the seam binds the initiation port to the one aftermath
+    // above, which is itself that transport. So this mount cannot announce a pair-open on
+    // one hub while the pair's first message publishes on another — there is no parameter
+    // to say it in.
+    let (human_writes, agent_writes) = aftermath.write_doors(messaging_store, target_address);
 
     let host = host_runtime::router(
         CreateHostInvite::new(host_store, OsEntropy, SystemClock),
         config.daemon_npm_spec.clone(),
     );
     let human_products = require_human_session(
-        host.merge(human_send)
+        host.merge(human_writes)
+            // Wave 3A checkpoint A6 (#2203): `POST /api/agents/{id}/direct-messages`, the
+            // human direct-pair initiation write door, is not merged here — it arrives
+            // inside `human_writes`, bound to the aftermath by the seam above. Its
+            // method/path is distinct from the direct-pair read door merged next, so
+            // neither shadows the other.
             .merge(direct_pairs::router(direct_pair_read_model))
-            // Wave 3A checkpoint A6 (#2203): the human direct-pair initiation write door.
-            // `POST /api/agents/{id}/direct-messages` — get-or-create the pair, then send
-            // its first message through the same send use-case. Distinct method/path from
-            // the direct-pair read door merged just above, so neither shadows the other.
-            // The builder is handed the aftermath's own publication authority, so the
-            // winner-only pair-open cannot be announced anywhere else.
-            .merge(aftermath.direct_pair_initiation_door(
-                |opened| direct_pair_initiation_store.direct_pair_initiation(opened),
-                direct_pair_direct_lines,
-                direct_pair_unit_of_work,
-            ))
             .merge(workspaces::router(workspace_cold_read))
             .merge(availability::router(
                 agent_availability_cold_read,
@@ -549,7 +535,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             .merge(conversation_ref::router(conversation_ref_read))
             .merge(conversation_unread::router(conversation_unread_read))
             .merge(conversation_threads::router(conversation_threads_read))
-            // Same path as the send POST already merged via `human_send`. axum
+            // Same path as the send POST already merged via `human_writes`. axum
             // accumulates the GET and the POST into one method router on the
             // shared path node, so neither shadows the other; only a repeated
             // *method* would panic, and GET vs POST is disjoint.
@@ -577,7 +563,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         PublicJsonUnauthorized,
     );
     let agent_products = require_runtime_credential(
-        agent_send
+        agent_writes
             .merge(task_list_router(TaskListState {
                 boards: task_list_boards,
                 fetch: task_store,

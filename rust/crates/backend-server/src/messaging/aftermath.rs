@@ -14,9 +14,9 @@ use std::{future::Future, sync::Arc};
 
 use axum::Router;
 use silverhand_backend_core::messaging::{
-    ChannelAccess, DirectLineAuthority, SendCapability, SendMessageOutcome, SendMessageUnitOfWork,
-    TargetAddress,
-    collaboration::direct_pair_initiation::DirectPairInitiationPort,
+    ChannelAccess, DirectLineAuthority, DirectPairOpenedFact, DirectPairOpenedPort, SendCapability,
+    SendMessageOutcome, SendMessageUnitOfWork, TargetAddress,
+    collaboration::direct_pair_initiation::DirectPairInitiationSource,
     mention_cc::MentionCopySkip,
     post_commit::{
         CommittedMessagePublication, CopyNotification, DirectLineInvalidation, EffectReport,
@@ -57,8 +57,9 @@ pub trait SendAftermath {
 /// duplicate whatever answered, so "both send doors run the SAME aftermath" would hold
 /// only while every concrete component happened to be a shared handle; a by-value
 /// component would give each door private state with no compile error. Bound-free `Clone`
-/// cannot be satisfied by a by-value component set, so it states the sharing itself
-/// rather than describing today's components.
+/// is satisfiable for ANY component set, and what it does is bump the shared `Arc` instead
+/// of copying components — it states the sharing itself rather than describing today's
+/// components.
 ///
 /// The constructor is crate-private and [`crate::scope_events::ScopeEventHub::messaging_aftermath`]
 /// is the only public source, so a composition crate cannot mint a second aftermath at all:
@@ -124,64 +125,78 @@ impl<E, D, M, U> MessagingAftermath<E, D, M, U>
 where
     Self: SendAftermath + Send + Sync + 'static,
 {
-    /// The two authenticated send doors, bound to THIS aftermath by construction.
+    /// The two authenticated write door sets — human and agent — bound to THIS aftermath,
+    /// and to the transport it publishes on, by construction.
     ///
     /// A `&self` seam rather than an aftermath parameter, following
     /// `DaemonDeliveryRuntime::agent_run_states_router`: the composition statement that
     /// mounts the doors has no fan-out argument, so forking one door onto a different
     /// aftermath would take constructing a whole second one — a review-visible act rather
-    /// than a silently swapped argument. [`send_routers`] stays public as the
-    /// component/spy substrate.
-    pub fn send_doors<C, T, K, A, W>(
-        &self,
-        channel_access: C,
-        target_address: T,
-        capability: K,
-        authority: A,
-        unit_of_work: W,
-    ) -> (Router, Router)
-    where
-        C: ChannelAccess + Send + Sync + 'static,
-        T: TargetAddress + Send + Sync + 'static,
-        K: SendCapability + Send + Sync + 'static,
-        A: DirectLineAuthority + Send + Sync + 'static,
-        W: SendMessageUnitOfWork + Send + Sync + 'static,
-    {
-        send_routers(SendState {
-            channel_access,
-            target_address,
-            capability,
-            authority,
-            unit_of_work,
-            aftermath: self.clone(),
-        })
-    }
-
-    /// The direct-pair initiation door, bound to THIS aftermath — and to the authority it
-    /// publishes on — by construction.
+    /// than a silently swapped argument.
     ///
-    /// `initiation` is a builder rather than a ready port because the winner-only pair-open
-    /// announcement has to ride the SAME authority the committed sends publish on. The
-    /// closure is handed this aftermath's own publication component, so the mount cannot
-    /// announce the pair-open on one transport while its first message publishes on another.
-    pub fn direct_pair_initiation_door<I, L, W>(
-        &self,
-        initiation: impl FnOnce(E) -> I,
-        direct_lines: L,
-        unit_of_work: W,
-    ) -> Router
+    /// One `store` in every write role, and NO parameter for the winner-only pair-open
+    /// publication authority. That authority is this aftermath: `Self` is the
+    /// [`DirectPairOpenedPort`] (forwarding through the shared `Arc`), and
+    /// `DirectPairInitiationSource<Self>` is what makes the store able to produce an
+    /// initiation port bound to nothing else. So "announce the pair-open on a second hub
+    /// while the first message publishes on the first" has no argument position at a
+    /// mount, and the carrier is shared structurally instead of by asking `E` for a copy
+    /// of itself — a by-value `E` would hand the pair-open door its own private authority.
+    ///
+    /// The initiation door is merged into the human set here because it IS a human write
+    /// door; the caller cannot receive it unbound. [`send_routers`] and
+    /// [`direct_pair_initiation::router`] stay public as the component/spy substrate.
+    pub fn write_doors<S, T>(&self, store: S, target_address: T) -> (Router, Router)
     where
-        E: Clone,
-        I: DirectPairInitiationPort + Send + Sync + 'static,
-        L: DirectLineAuthority + Send + Sync + 'static,
-        W: SendMessageUnitOfWork + Send + Sync + 'static,
+        S: ChannelAccess
+            + SendCapability
+            + DirectLineAuthority
+            + SendMessageUnitOfWork
+            + DirectPairInitiationSource<Self>
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+        T: TargetAddress + Send + Sync + 'static,
     {
-        direct_pair_initiation::router(
-            initiation(self.inner.events.clone()),
-            direct_lines,
-            unit_of_work,
+        let (human_sends, agent_sends) = send_routers(SendState {
+            channel_access: store.clone(),
+            target_address,
+            capability: store.clone(),
+            authority: store.clone(),
+            unit_of_work: store.clone(),
+            aftermath: self.clone(),
+        });
+        let initiation = direct_pair_initiation::router(
+            store.clone().bind_initiation(self.clone()),
+            store.clone(),
+            store,
             self.clone(),
-        )
+        );
+        (human_sends.merge(initiation), agent_sends)
+    }
+}
+
+/// The aftermath IS the winner-only pair-open publication authority.
+///
+/// The pair-open announcement and the pair's first committed message have to leave on one
+/// transport, and this is how the write-door seam hands that transport to the initiation
+/// adapter: through the shared `Arc`, asking `E` for nothing. Handing over
+/// `self.inner.events.clone()` instead would need `E: Clone`, and for a by-value `E` the
+/// pair-open door would get a private duplicate of the publication authority while
+/// committed sends kept using the shared original — the delegated guarantee this module
+/// exists to remove, moved one component along.
+impl<E, D, M, U> DirectPairOpenedPort for MessagingAftermath<E, D, M, U>
+where
+    E: DirectPairOpenedPort,
+    D: Send + Sync,
+    M: Send + Sync,
+    U: Send + Sync,
+{
+    type Error = E::Error;
+
+    async fn direct_pair_opened(&self, fact: &DirectPairOpenedFact) -> Result<(), Self::Error> {
+        self.inner.events.direct_pair_opened(fact).await
     }
 }
 
@@ -320,6 +335,41 @@ mod tests {
     use tracing_subscriber::fmt::MakeWriter;
 
     use super::*;
+
+    /// The exact shape `write_doors` is allowed to have: the aftermath, the store, the
+    /// address. No fourth argument, so no publication authority a mount could name.
+    type WriteDoorSeam<E, D, M, U, S, T> =
+        fn(&MessagingAftermath<E, D, M, U>, S, T) -> (Router, Router);
+
+    /// The seam's ARGUMENT LIST is the guarantee, so pin it mechanically. This coercion
+    /// only compiles while `write_doors` has [`WriteDoorSeam`]'s shape, and while the
+    /// initiation port it binds is bound to the aftermath itself.
+    ///
+    /// It restates the signature on purpose: no type can stop a later edit from adding a
+    /// parameter back, and both rejected shapes are ordinary compiling code. Adding an
+    /// `opened`/`hub` parameter, or restoring the `impl FnOnce(E) -> I` builder, reddens on
+    /// arity; re-binding the carrier to `E` (`S: DirectPairInitiationSource<E>`, fed
+    /// `self.inner.events.clone()`) reddens because the bound below is no longer the one
+    /// the method needs. The real effects stay with the composition root's own two-axis
+    /// gate, which this does not replace.
+    #[allow(dead_code)]
+    fn the_write_door_seam_takes_only_the_store_and_the_address<E, D, M, U, S, T>()
+    -> WriteDoorSeam<E, D, M, U, S, T>
+    where
+        MessagingAftermath<E, D, M, U>: SendAftermath + Send + Sync + 'static,
+        S: ChannelAccess
+            + SendCapability
+            + DirectLineAuthority
+            + SendMessageUnitOfWork
+            + DirectPairInitiationSource<MessagingAftermath<E, D, M, U>>
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+        T: TargetAddress + Send + Sync + 'static,
+    {
+        MessagingAftermath::write_doors
+    }
 
     #[derive(Clone, Default)]
     struct LogBuffer(Arc<Mutex<Vec<u8>>>);

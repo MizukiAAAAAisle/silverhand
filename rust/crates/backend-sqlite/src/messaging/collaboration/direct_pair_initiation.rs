@@ -13,8 +13,8 @@ use silverhand_backend_core::{
         collaboration::direct_pair_initiation::{
             AuthorizedDirectPairInitiation, DirectPairFirstSendError,
             DirectPairInitiationAuthority, DirectPairInitiationDecision,
-            DirectPairInitiationGrantFact, DirectPairInitiationPort, OpenedDirectPairFirstMessage,
-            open_and_send_direct_pair,
+            DirectPairInitiationGrantFact, DirectPairInitiationPort, DirectPairInitiationSource,
+            OpenedDirectPairFirstMessage, open_and_send_direct_pair,
         },
         freshness::RuntimeScope,
     },
@@ -30,10 +30,16 @@ pub struct SqliteDirectPairInitiation<E, O> {
     opened: O,
 }
 
-impl<E: Clone> MessagingStore<E> {
-    pub fn direct_pair_initiation<O>(&self, opened: O) -> SqliteDirectPairInitiation<E, O> {
+impl<E, O> DirectPairInitiationSource<O> for MessagingStore<E>
+where
+    E: SendClock + SendEntropy + Send + Sync + 'static,
+    O: DirectPairOpenedPort + 'static,
+{
+    type Port = SqliteDirectPairInitiation<E, O>;
+
+    fn bind_initiation(self, opened: O) -> Self::Port {
         SqliteDirectPairInitiation {
-            store: self.clone(),
+            store: self,
             opened,
         }
     }
@@ -198,7 +204,7 @@ mod tests {
         }
 
         fn adapter(&self) -> SqliteDirectPairInitiation<HostEnvironment, Opened> {
-            self.store.direct_pair_initiation(self.opened.clone())
+            self.store.clone().bind_initiation(self.opened.clone())
         }
     }
 
