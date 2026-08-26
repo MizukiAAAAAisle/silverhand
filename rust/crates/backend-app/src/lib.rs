@@ -26,7 +26,7 @@ use silverhand_backend_server::{
     direct_pairs,
     host_agent::{agent_detail, agent_list, agent_presence, availability},
     host_agent_background::presence_grace_timer::PresenceGraceTimers,
-    host_runtime,
+    host_resources, host_runtime,
     messaging::{
         TargetAddressRefusalLog,
         aftermath::MessagingAftermath,
@@ -61,6 +61,7 @@ use silverhand_backend_sqlite::{
     agent_presence_read::SqliteAgentPresenceColdRead,
     auth::SqliteSessionStore,
     direct_pair_read::SqliteDirectPairReadModel,
+    host_resources_read::SqliteHostResourcesColdRead,
     host_runtime::SqliteHostRuntimeStore,
     messaging::{
         MessagingStore,
@@ -384,6 +385,15 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         SqliteLastSeenSink::open(&config.database_path),
     )
     .await?;
+    // Wave 3A checkpoint A5: the host-resources read door opens its OWN cold-read pool
+    // by path, the sanctioned pattern every sibling `*ColdRead` above uses — a read-only
+    // snapshot handle on the same database file, NOT the teardown resource authority
+    // (`AgentTeardownReadPort`) and never sharing its projection.
+    let host_resources_cold_read = open(
+        "host resources cold read",
+        SqliteHostResourcesColdRead::open(&config.database_path),
+    )
+    .await?;
 
     let hub = ScopeEventHub::production().map_err(|source| StartupError::Composition {
         name: "scope event hub",
@@ -531,6 +541,10 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             // the two tiered-attention doors.
             .merge(message_unread::router(message_unread_read))
             .merge(attention_projection::router(attention_projection_read))
+            // Host-resources read lane, Wave 3A checkpoint A5 (#2198). Rides its own
+            // by-path cold-read pool captured above, kept distinct from the teardown
+            // resource authority.
+            .merge(host_resources::router(host_resources_cold_read))
             .merge(presence_router)
             .merge(access::router(
                 access_store.clone(),
@@ -2159,15 +2173,15 @@ mod tests {
 
     /// Gate 1 of the CP2 convergence closure — the composed root's COMPLETE positive
     /// mounted table. It enumerates every `(method, path)` `prepare()` mounts across
-    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195) as twenty-nine entries —
-    /// twenty-four behind the human session perimeter, three behind the runtime credential
-    /// perimeter, the two authenticated WebSockets — and asserts each is PRESENT
+    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195 + #2198) as thirty-five
+    /// entries — thirty behind the human session perimeter, three behind the runtime
+    /// credential perimeter, the two authenticated WebSockets — and asserts each is PRESENT
     /// (anon → its perimeter's `401`, or the WS upgrade surface, never the `404`
     /// fallback). Removing any mounted route's `.merge(...)` from `prepare()` flips its
     /// entry to `404` and reddens this gate.
     ///
     /// This is a PRESENCE ledger, not a closed universe: black-box probing cannot
-    /// prove "no twenty-fifth route was silently added" (axum exposes no route
+    /// prove "no thirty-sixth route was silently added" (axum exposes no route
     /// introspection), so this gate makes no such claim. A new registrar mounted into
     /// `prepare()` MUST add its route here (and, if in the #2195 lane, move it from
     /// residual to landed in gate 2). Each door's per-path method surface and adapter
@@ -2181,7 +2195,7 @@ mod tests {
         let router = app.router;
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // The twenty-nine human-perimeter product doors. Anonymous (no bearer) → the human
+        // The thirty human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
         for (method, path) in [
@@ -2224,6 +2238,8 @@ mod tests {
             ("GET", "/api/channels/conv000000000001/message-unread"),
             ("GET", "/api/attention/badges"),
             ("GET", "/api/attention/modes"),
+            // Host-resources read lane, Wave 3A checkpoint A5 (#2198).
+            ("GET", "/api/hosts/host-1/resources"),
         ] {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -2269,19 +2285,19 @@ mod tests {
     }
 
     /// Gate 2 of the CP2 convergence closure — the #2195 host-agent control-plane lane
-    /// as a bidirectionally CLOSED universe of 54 = 5 landed + 49 residual, every entry
+    /// as a bidirectionally CLOSED universe of 54 = 6 landed + 48 residual, every entry
     /// itemized `(method, path)` in a named table that is mechanically checksummed: the
-    /// three tables' lengths are pinned (`5`/`44`/`5`), every `(method, path)` across the
+    /// three tables' lengths are pinned (`6`/`43`/`5`), every `(method, path)` across the
     /// union is unique, landed is disjoint from residual, and the union is exactly `54`.
     /// This is the lane's ORIGINAL owned total (it still counts the three dynamic host
     /// reads since handed to #2198). Deleting a row, or copying one between tables, breaks
-    /// the checksum — `5 + 49 == 54` is an assertion, not prose.
+    /// the checksum — `6 + 48 == 54` is an assertion, not prose.
     ///
-    /// Every one of the 49 residual routes is FALSIFIABLE — none rests on an
+    /// Every one of the 48 residual routes is FALSIFIABLE — none rests on an
     /// unfalsifiable anon `401`:
-    /// * The 5 LANDED routes are mounted in `prepare()` → anon `401`. Deleting any one's
+    /// * The 6 LANDED routes are mounted in `prepare()` → anon `401`. Deleting any one's
     ///   `.merge(...)` flips it to `404` and reddens this gate (delete-landed RED).
-    /// * 44 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
+    /// * 43 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
     ///   Mounting any one flips it to its perimeter's `401`/`405` and reddens this gate
     ///   (mount-residual RED).
     /// * 4 METHOD-SHADOW residuals share a concrete path with a mounted sibling that
@@ -2302,15 +2318,17 @@ mod tests {
     /// `prepare()` at any of these paths MUST move its row from residual to landed here.
     #[tokio::test]
     async fn the_host_agent_lane_stays_a_closed_universe_of_fifty_four() {
-        // The 5 LANDED routes, mounted in `prepare()` behind the human perimeter.
+        // The 6 LANDED routes, mounted in `prepare()` behind the human perimeter.
         const LANDED: &[(&str, &str)] = &[
             ("GET", "/api/agents"),
             ("GET", "/api/agents/agent-1"),
             ("GET", "/api/agents/agent-1/presence"),
             ("GET", "/api/agents/agent-1/availability"),
             ("GET", "/api/presence"),
+            // Host-resources read, Wave 3A checkpoint A5 (#2198).
+            ("GET", "/api/hosts/host-1/resources"),
         ];
-        // 44 RESIDUAL routes whose path matches no mounted route → anon 404.
+        // 43 RESIDUAL routes whose path matches no mounted route → anon 404.
         const CLEAN_RESIDUAL: &[(&str, &str)] = &[
             // routes.ts remaining (5)
             ("GET", "/api/server/info"),
@@ -2318,10 +2336,9 @@ mod tests {
             ("GET", "/api/health"),
             ("GET", "/readyz"),
             ("GET", "/api/runtimes"),
-            // hosts remaining (14 of 15; `GET /api/hosts` is method-shadowed, below)
+            // hosts remaining (13 of 15; `GET /api/hosts` is method-shadowed, below)
             ("GET", "/api/hosts/connect-token/resolve"),
             ("GET", "/api/hosts/host-1"),
-            ("GET", "/api/hosts/host-1/resources"),
             ("DELETE", "/api/hosts/host-1"),
             ("POST", "/api/hosts/claim-or-create"),
             ("POST", "/api/hosts/host-1/revoke"),
@@ -2377,9 +2394,9 @@ mod tests {
         // answer (asserted below), not a static handler.
         const STATIC_SHADOW_RESIDUAL: &[(&str, &str)] = &[("GET", "/api/agents/name-availability")];
 
-        // ── Mechanical checksum: 5 + 44 + 4 + 1 == 54, all unique, landed ∩ residual = ∅ ──
-        assert_eq!(LANDED.len(), 5);
-        assert_eq!(CLEAN_RESIDUAL.len(), 44);
+        // ── Mechanical checksum: 6 + 43 + 4 + 1 == 54, all unique, landed ∩ residual = ∅ ──
+        assert_eq!(LANDED.len(), 6);
+        assert_eq!(CLEAN_RESIDUAL.len(), 43);
         assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 4);
         assert_eq!(STATIC_SHADOW_RESIDUAL.len(), 1);
         let landed: std::collections::HashSet<(&str, &str)> = LANDED.iter().copied().collect();
@@ -2389,8 +2406,8 @@ mod tests {
             .chain(STATIC_SHADOW_RESIDUAL)
             .copied()
             .collect();
-        assert_eq!(landed.len(), 5, "landed rows are unique");
-        assert_eq!(residual.len(), 49, "residual rows are unique");
+        assert_eq!(landed.len(), 6, "landed rows are unique");
+        assert_eq!(residual.len(), 48, "residual rows are unique");
         assert!(
             landed.is_disjoint(&residual),
             "landed and residual are disjoint"
@@ -2408,7 +2425,7 @@ mod tests {
         let bearer = format!("Bearer {TOKEN}");
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // ── 5 LANDED → anon 401 (delete-landed RED) ──
+        // ── 6 LANDED → anon 401 (delete-landed RED) ──
         for (method, path) in LANDED {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(
@@ -2419,7 +2436,7 @@ mod tests {
             assert_eq!(body, unauthorized, "landed {method} {path}");
         }
 
-        // ── 44 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
+        // ── 43 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
         for (method, path) in CLEAN_RESIDUAL {
             let (status, _) = request(&router, method, path, None).await;
             assert_eq!(
@@ -3583,6 +3600,178 @@ mod tests {
                 calls.load(Ordering::SeqCst),
                 0,
                 "the perimeter must refuse every anonymous read before the product port is touched"
+            );
+        }
+    }
+
+    /// Wave 3A checkpoint A5: the host-resources read door (`GET /api/hosts/{id}/resources`,
+    /// #2198), mounted in `prepare()` behind the SAME human perimeter and wired to its own
+    /// by-path `SqliteHostResourcesColdRead` cold-read pool — the sanctioned cold-read
+    /// pattern every sibling `*ColdRead` uses, kept distinct from the teardown resource
+    /// authority. Two composition obligations the leaf/contract tests cannot prove:
+    ///
+    /// * `the_composition_serves_host_resources_behind_the_perimeter` drives the door
+    ///   through the real composed root: anonymous → the perimeter's `401`; an admitted
+    ///   OWNER reads the real seeded agents off the live SQLite adapter in the port's
+    ///   `created_at ASC` order with the full `{id,name,display_name,runtime}` projection;
+    ///   a REAL other-owned host and an ABSENT host id BOTH collapse to the byte-identical
+    ///   owner-scoped `404` (no existence oracle); plus a one-method route checksum.
+    /// * `the_host_resources_perimeter_refuses_before_touching_the_product_port` is the
+    ///   load-bearing refusal gate: it mounts the SAME factory behind the SAME
+    ///   `require_human_session` over a counting spy, and proves an anonymous read is
+    ///   refused `401` with the product port invoked ZERO times.
+    mod host_resources_activation {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use silverhand_backend_core::{
+            auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
+            host_resources_read::{HostResourcesFacts, HostResourcesReadModel},
+            identity::HostId,
+            persistence::PersistenceFailure,
+        };
+        use silverhand_backend_server::{
+            auth::{PublicJsonUnauthorized, require_human_session},
+            host_resources,
+        };
+        use silverhand_backend_sqlite::auth::SqliteSessionStore;
+
+        use super::*;
+
+        /// One host owned by the admitted viewer (`user-1`, seeded by `seed_human`) with
+        /// two agents whose insertion order is the REVERSE of their `created_at`, plus a
+        /// SECOND host owned by a different registered user. The reversed stamps let the
+        /// composed read prove the adapter's `created_at ASC` order; the foreign host lets
+        /// it prove owner-scoping is not an existence oracle.
+        async fn seed_host_resources(path: &Path) {
+            let pool = SqlitePoolOptions::new()
+                .connect(path.to_str().unwrap())
+                .await
+                .unwrap();
+            for statement in [
+                "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-other', 'other', 'Other', 1, 1)",
+                "INSERT INTO hosts (id, name, kind, created_at, user_id) VALUES ('h-res', 'host-res', 'desktop', 1, 'user-1')",
+                "INSERT INTO hosts (id, name, kind, created_at, user_id) VALUES ('h-other', 'host-other', 'desktop', 1, 'user-other')",
+                "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, created_by_user_id, materialization_status) \
+                 VALUES ('res-late', 'late', 'codex', 'h-res', 3000, 3000, 'Late One', 'user-1', 'failed')",
+                "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, created_by_user_id, materialization_status) \
+                 VALUES ('res-early', 'early', 'qoder', 'h-res', 1000, 1000, 'Early One', 'user-1', 'active')",
+            ] {
+                sqlx::query(statement).execute(&pool).await.unwrap();
+            }
+            pool.close().await;
+        }
+
+        #[tokio::test]
+        async fn the_composition_serves_host_resources_behind_the_perimeter() {
+            let fixture = fixture(true).await;
+            seed_human(&fixture.path).await;
+            seed_host_resources(&fixture.path).await;
+            let app = prepare(&config(fixture.path.clone())).await.unwrap();
+            let router = app.router;
+            let bearer = format!("Bearer {TOKEN}");
+            let owned = "/api/hosts/h-res/resources";
+            let foreign = "/api/hosts/h-other/resources";
+            let absent = "/api/hosts/h-absent/resources";
+
+            // Anonymous → the perimeter's refusal envelope, never a resource answer.
+            let (status, body) = request(&router, "GET", owned, None).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "anon: {body}");
+            assert_eq!(body, r#"{"error":"unauthorized"}"#);
+
+            // Admitted owner → the real adapter's `created_at ASC` set off live SQLite,
+            // each agent carrying its full `{id,name,display_name,runtime}` projection.
+            let (status, body) = request(&router, "GET", owned, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "owner: {body}");
+            let value = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+            let agents = value["agents"].as_array().unwrap();
+            let ids = agents
+                .iter()
+                .map(|agent| agent["id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                ids,
+                ["res-early", "res-late"],
+                "adapter orders by created_at ASC"
+            );
+            assert_eq!(
+                agents[0],
+                serde_json::json!({
+                    "id": "res-early",
+                    "name": "early",
+                    "display_name": "Early One",
+                    "runtime": "qoder"
+                }),
+                "the real projection carries every declared field: {body}"
+            );
+
+            // Admitted, REAL other-owned host → the owner-scoped 404. A registered user who
+            // simply does not own this computer is indistinguishable from asking about one
+            // that does not exist, so the surface is never an existence oracle for host ids.
+            let (status, foreign_body) = request(&router, "GET", foreign, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "foreign: {foreign_body}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&foreign_body).unwrap(),
+                serde_json::json!({ "error": "host not found", "error_code": "host_not_found" })
+            );
+
+            // Admitted, ABSENT host id → the SAME 404 bytes as the other-owned host.
+            let (status, absent_body) = request(&router, "GET", absent, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "absent: {absent_body}");
+            assert_eq!(
+                absent_body, foreign_body,
+                "an absent host and someone else's collapse to byte-identical refusals"
+            );
+
+            // One-method checksum: the mounted path serves GET only.
+            let (status, body) = request(&router, "POST", owned, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
+        }
+
+        /// A spy satisfying the host-resources cold-read port; the single read bumps a
+        /// counter then diverges. Reaching it past the perimeter is a bug, so the body
+        /// never fabricates a success value.
+        #[derive(Clone, Default)]
+        struct HostResourcesCountingPort {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl HostResourcesReadModel for HostResourcesCountingPort {
+            async fn read_host_resources(
+                &self,
+                _: &HostId,
+            ) -> Result<Option<HostResourcesFacts>, PersistenceFailure> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+
+        #[tokio::test]
+        async fn the_host_resources_perimeter_refuses_before_touching_the_product_port() {
+            let fixture = fixture(false).await;
+            let session_store = SqliteSessionStore::open(&fixture.path).await.unwrap();
+            let sessions = HumanSessionAuthenticator::new(
+                session_store,
+                SystemSessionClock,
+                SessionTtl::default(),
+            );
+            let spy = HostResourcesCountingPort::default();
+            let calls = spy.calls.clone();
+            // The SAME factory `prepare()` mounts, behind the SAME perimeter.
+            let router = require_human_session(
+                host_resources::router(spy),
+                sessions,
+                PublicJsonUnauthorized,
+            );
+
+            let (status, body) = request(&router, "GET", "/api/hosts/host-1/resources", None).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+            assert_eq!(body, r#"{"error":"unauthorized"}"#);
+
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "the perimeter must refuse the anonymous read before the product port is touched"
             );
         }
     }
