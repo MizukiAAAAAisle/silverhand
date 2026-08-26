@@ -3,28 +3,18 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    future::Future,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
 use silverhand_backend_core::{
     identity::UserId,
-    persistence::PersistenceFailure,
     policy::presence_grace::{GraceWindow, PresenceFact, is_online, on_connect, on_disconnect},
+    user_presence_last_seen::LastSeenSink,
 };
 use tokio::task::JoinHandle;
 
 use crate::error;
-
-/// Last-seen persistence. Takes the decided value; it never reads state back.
-pub trait LastSeenSink: Clone + Send + Sync + 'static {
-    fn touch_last_seen(
-        &self,
-        user_id: UserId,
-        last_seen_at: i64,
-    ) -> impl Future<Output = Result<(), PersistenceFailure>> + Send;
-}
 
 /// Publication of a decided presence fact on the app scope. Publishing is
 /// fallible because the live transport is, and it runs while the presence state
@@ -125,10 +115,32 @@ where
         };
         let removed = connections.remove(connection_id);
         let remaining = connections.len();
-        let Some(schedule) = on_disconnect(user_id, removed, remaining, now) else {
-            return;
+        // The map never holds an empty connection set. A user whose last
+        // connection just dropped is evicted HERE — before the fallible clock is
+        // consulted — so every later arm (unknown id, remaining connection,
+        // scheduled window, AND unwire-able instant) inherits a consistent map.
+        // Without this, the `Err` arm's early return would strand an empty set,
+        // and `is_online`'s `contains_key` would report a ghost-online viewer
+        // whose physical connection is already gone.
+        if remaining == 0 {
+            tracked.connections.remove(user_id);
+        }
+        let schedule = match on_disconnect(user_id, removed, remaining, now) {
+            Ok(Some(schedule)) => schedule,
+            Ok(None) => return,
+            Err(out_of_range) => {
+                // The disconnect clock produced an instant the wire cannot carry:
+                // a named fault, never a scheduled window — no offline is persisted
+                // or published, so an illegal stamp reaches neither side. The
+                // dropped connection is already evicted above, so no ghost remains.
+                tracing::error!(
+                    user_id = %user_id.as_str(),
+                    error_chain = %error::describe(&out_of_range),
+                    "presence: disconnect clock is not a wire-safe last_seen_at; no offline scheduled"
+                );
+                return;
+            }
         };
-        tracked.connections.remove(user_id);
         tracked.cancel_pending(user_id);
         tracked.epochs += 1;
         let epoch = tracked.epochs;
@@ -166,7 +178,7 @@ where
             if let Err(error) = persisted {
                 tracing::warn!(
                     user_id = %owner.as_str(),
-                    last_seen_at = schedule.disconnected_at(),
+                    last_seen_at = schedule.disconnected_at().get(),
                     error_chain = %error::describe(&error),
                     "presence: failed to persist last_seen_at"
                 );
@@ -178,6 +190,25 @@ where
         tracked
             .pending
             .insert(user_id.clone(), PendingOffline { epoch, handle });
+    }
+
+    /// Removes a single connection with no offline decision whatsoever: no clock
+    /// is read, no window is scheduled, and nothing is persisted or published. The
+    /// presence feed calls this — never `on_disconnect` — when its wall clock
+    /// cannot seal a last-seen instant: the gone connection must still leave the
+    /// live set so the viewer is not stranded online, but a clock fault is not a
+    /// last-seen fact and the audit belongs to the feed, so this path is silent.
+    /// A pending window from an earlier disconnect is untouched — it owns its own
+    /// offline decision.
+    pub fn evict(&self, user_id: &UserId, connection_id: &str) {
+        let mut tracked = self.tracked.lock().expect("presence state");
+        let Some(connections) = tracked.connections.get_mut(user_id) else {
+            return;
+        };
+        connections.remove(connection_id);
+        if connections.is_empty() {
+            tracked.connections.remove(user_id);
+        }
     }
 
     pub fn is_online(&self, user_id: &UserId) -> bool {
@@ -218,6 +249,8 @@ mod tests {
         io::{self, Write},
     };
 
+    use silverhand_backend_core::cold_read::presence::LastSeenAt;
+    use silverhand_backend_core::persistence::PersistenceFailure;
     use thiserror::Error;
     use tokio::sync::{
         Semaphore,
@@ -253,9 +286,9 @@ mod tests {
         async fn touch_last_seen(
             &self,
             user_id: UserId,
-            last_seen_at: i64,
+            last_seen_at: LastSeenAt,
         ) -> Result<(), PersistenceFailure> {
-            self.touched.send((user_id, last_seen_at)).unwrap();
+            self.touched.send((user_id, last_seen_at.get())).unwrap();
             if let Some(hold) = &self.hold {
                 let _permit = hold.acquire().await.expect("write barrier");
             }
@@ -362,7 +395,7 @@ mod tests {
     fn offline(id: &str, last_seen_at: i64) -> PresenceFact {
         PresenceFact::Offline {
             user_id: user(id),
-            last_seen_at,
+            last_seen_at: LastSeenAt::from_stored(last_seen_at).unwrap(),
         }
     }
 
@@ -550,6 +583,40 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn an_invalid_disconnect_clock_clears_the_connection_and_never_ghosts_online() {
+        use silverhand_backend_core::cold_read::presence::MAX_SAFE_INTEGER;
+
+        let mut h = harness();
+        // Both wire-unsafe boundaries: below range and above MAX_SAFE_INTEGER.
+        for (id, bad_clock) in [("user-neg", -1), ("user-max", MAX_SAFE_INTEGER + 1)] {
+            h.timers.on_connect(&user(id), "c1");
+            assert_eq!(h.facts.try_recv().unwrap(), online(id));
+            assert!(h.timers.is_online(&user(id)));
+
+            // The last connection drops with an unwire-able instant: a named
+            // fault, so nothing is scheduled, persisted, or published...
+            h.timers.on_disconnect(&user(id), "c1", bad_clock);
+            reach_the_deadline().await;
+            assert!(h.facts.try_recv().is_err());
+            assert!(h.touched.try_recv().is_err());
+            // ...but the gone connection must leave NO ghost-online empty entry.
+            assert!(
+                !h.timers.is_online(&user(id)),
+                "an invalid disconnect clock stranded {id} ghost-online"
+            );
+
+            // A legal reconnect is therefore a genuine transition again, and must
+            // announce Online exactly once — impossible if the stale empty entry
+            // had made it look `already_online`.
+            h.timers.on_connect(&user(id), "c2");
+            settle().await;
+            assert_eq!(h.facts.try_recv().unwrap(), online(id));
+            assert!(h.facts.try_recv().is_err());
+            assert!(h.timers.is_online(&user(id)));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn an_infallible_sink_needs_no_error_type_of_its_own() {
         #[derive(Clone)]
         struct NoEffects;
@@ -558,7 +625,7 @@ mod tests {
             async fn touch_last_seen(
                 &self,
                 _user_id: UserId,
-                _last_seen_at: i64,
+                _last_seen_at: LastSeenAt,
             ) -> Result<(), PersistenceFailure> {
                 Ok(())
             }

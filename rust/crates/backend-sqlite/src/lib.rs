@@ -20,6 +20,7 @@ use std::{path::Path, time::Duration};
 pub mod access;
 pub mod agent_availability_read;
 pub mod agent_detail_read;
+pub mod agent_list_read;
 pub mod agent_presence_read;
 pub mod agent_view_acl;
 
@@ -36,12 +37,14 @@ use thiserror::Error;
 pub mod auth;
 pub mod direct_pair_read;
 pub mod host_agent;
+pub mod host_resources_read;
 pub mod host_runtime;
 pub mod runtime_credential;
 pub mod runtime_delivery;
 pub mod scope_event;
 pub mod unread_read;
 pub mod user_presence_cold_read;
+pub mod user_presence_last_seen;
 pub mod workspace_cold_read;
 
 #[cfg(test)]

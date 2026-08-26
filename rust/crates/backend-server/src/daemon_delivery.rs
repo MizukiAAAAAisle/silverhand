@@ -4,6 +4,8 @@ use std::{
     collections::HashMap,
     error::Error,
     fmt,
+    future::Future,
+    pin::Pin,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
@@ -23,7 +25,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
     host_runtime::{HostCredentialLookup, VerifyHostTokenFact, verify_host_token},
-    identity::{AgentId, ConversationId, DaemonInstanceId},
+    identity::{AgentId, ConversationId, DaemonInstanceId, HostId},
     messaging::{
         CreatedMessage,
         mention_cc::CommittedMentionCopy,
@@ -53,6 +55,11 @@ use crate::{
         RuntimeProductEvent, decode_product_event,
     },
     error,
+    host_control::admission::{
+        AdmissionUnavailable, DialerId, HostAdmission, ProtocolMismatch, RefusalNews, SlotOccupancy,
+    },
+    host_control::status_seed::{CustodyUnavailable, DaemonCustody, HostStatusSeeds},
+    host_control::status_snapshot::{self, StatusSnapshotOutcome, StatusSnapshotRequest},
     messaging::references::MarkdownReferencePositions,
     runtime_credential::{
         RuntimeCredentialAuthority, RuntimeDispatchFailure, RuntimeStartFailure,
@@ -64,6 +71,11 @@ use crate::{
 include!(concat!(env!("OUT_DIR"), "/daemon_admission.rs"));
 
 const MAX_DAEMON_FRAME_BYTES: usize = 1024 * 1024;
+/// The highest `protocol_version` this server will read out of a `ready` envelope
+/// before knowing the schema, mirroring the deployed bound. Above it the number is
+/// not treated as a version at all: an unbounded integer from an unauthenticated
+/// schema is a corrupt-dialer signal, not an actionable "upgrade this daemon" fact.
+const MAX_READABLE_PROTOCOL_VERSION: u32 = 100;
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_LEASE_TTL: Duration = Duration::from_secs(60);
 const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(30);
@@ -120,8 +132,22 @@ pub struct DaemonDeliveryRuntime<C, D, H> {
     data: D,
     host_credentials: H,
     registry: DaemonRegistry,
+    admission: HostAdmission,
+    seeds: HostStatusSeeds,
     config: DaemonDeliveryConfig,
     events: DaemonRuntimeEventOwner<D>,
+}
+
+impl<C, D, H> DaemonDeliveryRuntime<C, D, H> {
+    pub(crate) fn conversation_agent_run_states(
+        &self,
+        conversation: &ConversationId,
+    ) -> Result<
+        Vec<crate::daemon_events::ConversationAgentRunStateSnapshot>,
+        crate::daemon_events::DaemonRuntimeEventError,
+    > {
+        self.events.conversation_run_states(conversation)
+    }
 }
 
 impl<C, D, H> DaemonDeliveryRuntime<C, D, H>
@@ -152,12 +178,23 @@ where
         config: DaemonDeliveryConfig,
         event_hub: ScopeEventHub,
     ) -> Result<Self, DaemonDeliveryBuildError> {
+        let registry = DaemonRegistry::new()?;
         Ok(Self {
             credentials,
             events: DaemonRuntimeEventOwner::new(data.clone(), event_hub),
             data,
             host_credentials,
-            registry: DaemonRegistry::new()?,
+            // One ledger per runtime, reading occupancy from the very registry the
+            // connection tasks reserve in. Building it here rather than in `router`
+            // is what makes "the writer and every reader are the same state" a
+            // property of construction: there is no second place to build one.
+            admission: HostAdmission::new(Arc::new(registry.clone())),
+            // One seed store per runtime, for the same reason: a second one would
+            // answer a host from an emptier set of facts than the one that seeded it.
+            seeds: HostStatusSeeds::new(Arc::new(HostCommandDispatch {
+                registry: registry.clone(),
+            })),
+            registry,
             config,
         })
     }
@@ -165,6 +202,8 @@ where
     pub fn router(&self) -> (Router, DaemonDeliveryController) {
         let controller = DaemonDeliveryController {
             registry: self.registry.clone(),
+            admission: self.admission.clone(),
+            seeds: self.seeds.clone(),
             shutdown_grace: self.config.shutdown_grace,
         };
         let router = Router::new()
@@ -621,6 +660,65 @@ impl DaemonRegistry {
                 .count()
         })
     }
+
+    /// Who holds this host's slot right now, reserved or attached.
+    ///
+    /// Deliberately narrower than [`Self::attachment`]: it answers only the
+    /// question the admission rule asks, and carries neither the command sender nor
+    /// the daemon instance, so no caller can grow a second use out of it.
+    fn slot_connection_id(&self, host_id: &str) -> Result<Option<String>, DaemonRegistryError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| DaemonRegistryError::Poisoned)?;
+        Ok(state
+            .slots
+            .get(host_id)
+            .map(|slot| slot.connection_id.clone()))
+    }
+}
+
+/// The registry is the connection authority, so it is the only implementer of the
+/// admission leaf's occupancy port. The direction is load-bearing at compile time:
+/// the port is declared where it is consumed, so the rule cannot reach back into
+/// this module for the attached-custody fact it must not decide on.
+impl SlotOccupancy for DaemonRegistry {
+    fn slot_dialer(&self, host_id: &str) -> Result<Option<DialerId>, AdmissionUnavailable> {
+        Ok(self
+            .slot_connection_id(host_id)
+            .map_err(|_| AdmissionUnavailable)?
+            .as_deref()
+            .map(DialerId::from_connection))
+    }
+}
+
+/// The seed layer's port, implemented here for the same reason and answered from the
+/// same registry — but from the ATTACHED custody, not the reserved slot the admission
+/// rule reads. Two questions, two ports, one authority: a reserved socket has no
+/// facts to be asked for, and a seed filed against one would be filed against
+/// nothing.
+///
+/// What the status answer means is not decided here either: this forwards to the
+/// snapshot leaf, so the seed layer gets a probe whose contract it does not own and
+/// cannot restate.
+impl DaemonCustody for HostCommandDispatch {
+    fn attached_instance(
+        &self,
+        host: &HostId,
+    ) -> Result<Option<DaemonInstanceId>, CustodyUnavailable> {
+        Ok(self
+            .registry
+            .attachment(host.as_str())
+            .map_err(|_| CustodyUnavailable)?
+            .map(|attachment| attachment.daemon_instance))
+    }
+
+    fn probe_status<'a>(
+        &'a self,
+        request: StatusSnapshotRequest,
+    ) -> Pin<Box<dyn Future<Output = StatusSnapshotOutcome> + Send + 'a>> {
+        Box::pin(status_snapshot::probe(self, request))
+    }
 }
 
 #[derive(Debug)]
@@ -647,10 +745,36 @@ impl Error for DaemonRegistryError {}
 #[derive(Clone)]
 pub struct DaemonDeliveryController {
     registry: DaemonRegistry,
+    admission: HostAdmission,
+    seeds: HostStatusSeeds,
     shutdown_grace: Duration,
 }
 
 impl DaemonDeliveryController {
+    pub fn host_commands(&self) -> HostCommandDispatch {
+        HostCommandDispatch {
+            registry: self.registry.clone(),
+        }
+    }
+
+    /// The admission ledger the connection tasks of this runtime write through.
+    ///
+    /// A clone of one ledger, never a new one: [`HostAdmission`] has no public
+    /// constructor and cloning shares the record set, so a composition cannot end up
+    /// answering a host from an emptier copy than the one that recorded the refusal.
+    pub fn host_admission(&self) -> HostAdmission {
+        self.admission.clone()
+    }
+
+    /// The status seed store this runtime's attachments seed into.
+    ///
+    /// A clone of one store, never a new one, for the same reason: cloning shares the
+    /// sealed facts, so a read surface cannot answer a host from a store that never
+    /// saw its seed — and, having no public constructor, cannot build one either.
+    pub fn host_status_seeds(&self) -> HostStatusSeeds {
+        self.seeds.clone()
+    }
+
     pub fn active_connection_count(&self) -> usize {
         self.registry.active_count()
     }
@@ -719,7 +843,7 @@ enum CommandDispatchError {
     ProvenNotDispatched,
     Ambiguous,
     TimedOut,
-    DaemonRefused,
+    DaemonRefused(CommandRefusal),
     InvalidResponse,
 }
 
@@ -729,13 +853,93 @@ impl fmt::Display for CommandDispatchError {
             Self::ProvenNotDispatched => "daemon command was proven not dispatched",
             Self::Ambiguous => "daemon command outcome is ambiguous",
             Self::TimedOut => "daemon command timed out",
-            Self::DaemonRefused => "daemon refused the command",
+            Self::DaemonRefused(_) => "daemon refused the command",
             Self::InvalidResponse => "daemon returned an invalid command response",
         })
     }
 }
 
 impl Error for CommandDispatchError {}
+
+/// The `ResponseError.code` union every command kind may be refused with. Closed
+/// as a type so a token outside it can never reach a caller as a reportable
+/// refusal: an unknown code is a corrupt frame, and the decode site fails the
+/// connection over it instead of inventing a refusal the caller has no arm for.
+/// Private to this module because that admission is all it is for — no caller,
+/// here or in the TS contract, acts on which of the five arrived.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DaemonRefusalCode {
+    UnknownIntent,
+    InvalidParams,
+    InternalError,
+    ShuttingDown,
+    RequestTooLarge,
+}
+
+impl DaemonRefusalCode {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "unknown_intent" => Some(Self::UnknownIntent),
+            "invalid_params" => Some(Self::InvalidParams),
+            "internal_error" => Some(Self::InternalError),
+            "shutting_down" => Some(Self::ShuttingDown),
+            "request_too_large" => Some(Self::RequestTooLarge),
+            _ => None,
+        }
+    }
+}
+
+/// Codes only `runtime_start` and `runtime_deliver` may be refused with. Kept in
+/// their own type because they are the runtime operation's vocabulary, not the
+/// transport's: admitting them for another kind would let a daemon answer a
+/// host-control command in a language that command has no arm for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeRefusalCode {
+    AgentDeleting,
+    WorkspaceNotProvisioned,
+    WorkspaceBundleMissing,
+    RegistryUnavailable,
+}
+
+impl RuntimeRefusalCode {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "agent_deleting" => Some(Self::AgentDeleting),
+            "workspace_not_provisioned" => Some(Self::WorkspaceNotProvisioned),
+            "workspace_bundle_missing" => Some(Self::WorkspaceBundleMissing),
+            "registry_unavailable" => Some(Self::RegistryUnavailable),
+            _ => None,
+        }
+    }
+}
+
+/// Which refusal vocabulary the daemon answered a command in. The codes themselves
+/// stay closed sets and each `parse` is still what admits a token for a kind, but
+/// the admitted value is not carried: nothing reads which code arrived, while the
+/// vocabulary decides everything — a response-level code is a refusal, and a
+/// runtime-scoped code on a host-control kind is a frame in the wrong language.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommandRefusal {
+    Response,
+    RuntimeScoped,
+}
+
+impl CommandRefusal {
+    fn decode(kind: &str, value: &Value) -> Option<Self> {
+        let object = value.as_object()?;
+        if object.len() != 2 || object.get("message").and_then(Value::as_str).is_none() {
+            return None;
+        }
+        let code = object.get("code").and_then(Value::as_str)?;
+        if DaemonRefusalCode::parse(code).is_some() {
+            return Some(Self::Response);
+        }
+        if !matches!(kind, "runtime_start" | "runtime_deliver") {
+            return None;
+        }
+        RuntimeRefusalCode::parse(code).map(|_| Self::RuntimeScoped)
+    }
+}
 
 impl DaemonAttachment {
     async fn command(
@@ -754,6 +958,221 @@ impl DaemonAttachment {
             }))
             .map_err(|_| CommandDispatchError::ProvenNotDispatched)?;
         receive.await.map_err(|_| CommandDispatchError::Ambiguous)?
+    }
+}
+
+/// The command kinds a host-control face may send. Closed here because the wire
+/// vocabulary belongs to the transport: a module reaching this face cannot name
+/// `runtime_start` or any other custody command through it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HostCommandKind {
+    HostStatus,
+    RuntimeCatalog,
+}
+
+impl HostCommandKind {
+    /// Every variant, so the response envelope admits exactly the kinds this face can
+    /// send. A variant missing here is not silently tolerated: nothing could answer it.
+    const ALL: [Self; 2] = [Self::HostStatus, Self::RuntimeCatalog];
+
+    fn as_wire(self) -> &'static str {
+        match self {
+            Self::HostStatus => "host_status",
+            Self::RuntimeCatalog => "host_runtime_catalog",
+        }
+    }
+
+    fn sends_wire(kind: &str) -> bool {
+        Self::ALL
+            .iter()
+            .any(|candidate| candidate.as_wire() == kind)
+    }
+}
+
+/// One host-control round trip. Crate-private on purpose: a raw command pairs a
+/// kind with a free-form payload and a budget, so anything able to build one could
+/// send a legal kind with a payload that kind has no contract for. Only the typed
+/// operations in [`crate::host_control`] may state that pairing.
+pub(crate) struct HostCommand {
+    pub(crate) host: HostId,
+    pub(crate) expected_instance: DaemonInstanceId,
+    pub(crate) kind: HostCommandKind,
+    pub(crate) params: Value,
+    pub(crate) timeout: Duration,
+}
+
+/// A daemon answer together with the coordinate it was answered on. The pair is
+/// the transport's own — the host is the registry key whose slot served the
+/// command, the instance the custody that slot was attached with — and the fields
+/// are private with no way to build one from parts.
+///
+/// The only opening is [`Self::into_result_for`], so a consumer cannot take a
+/// value out without naming the coordinate it awaited: one host's legal answer can
+/// never be filed under another host's key, not even when both machines happen to
+/// spell their daemon instance the same way.
+pub(crate) struct HostCommandAnswer {
+    host: HostId,
+    instance: DaemonInstanceId,
+    result: Value,
+}
+
+impl HostCommandAnswer {
+    pub(crate) fn into_result_for(
+        self,
+        host: &HostId,
+        instance: &DaemonInstanceId,
+    ) -> Result<Value, HostAnswerMismatch> {
+        if &self.host != host {
+            return Err(HostAnswerMismatch::Host);
+        }
+        if &self.instance != instance {
+            return Err(HostAnswerMismatch::DaemonInstance);
+        }
+        Ok(self.result)
+    }
+}
+
+/// Which coordinate of an answer failed to match the request that awaited it.
+/// Never a refusal an operation may report: an operation asked about one machine's
+/// custody and was handed another's, which no caller can act on and no daemon
+/// caused. It is this crate's own contract failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HostAnswerMismatch {
+    Host,
+    DaemonInstance,
+}
+
+#[derive(Debug)]
+pub(crate) enum HostCommandFailure {
+    NoCurrentDaemon,
+    DaemonInstanceMismatch,
+    NotDispatched,
+    Ambiguous,
+    TimedOut,
+    /// The daemon answered with a code the closed set admits for this kind. Which
+    /// code it was is deliberately not carried: no reader in this crate — and no
+    /// mapper in the TS contract for either host-control operation — distinguishes
+    /// them. What the closed set is load-bearing for is the arm itself: a refusal
+    /// leaves the connection alive, and anything outside the set does not.
+    Refused,
+    ProtocolCorruption,
+    RegistryUnavailable,
+}
+
+impl HostCommandFailure {
+    fn from_dispatch(error: CommandDispatchError) -> Self {
+        match error {
+            CommandDispatchError::ProvenNotDispatched => Self::NotDispatched,
+            CommandDispatchError::Ambiguous => Self::Ambiguous,
+            CommandDispatchError::TimedOut => Self::TimedOut,
+            CommandDispatchError::DaemonRefused(CommandRefusal::Response) => Self::Refused,
+            // A runtime-scoped code is not admitted for a host-control kind, so
+            // reaching this arm means the frame decoded as something no
+            // host-control command can be refused with.
+            CommandDispatchError::DaemonRefused(CommandRefusal::RuntimeScoped)
+            | CommandDispatchError::InvalidResponse => Self::ProtocolCorruption,
+        }
+    }
+}
+
+impl fmt::Display for HostCommandFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NoCurrentDaemon => "host has no attached daemon",
+            Self::DaemonInstanceMismatch => "host daemon custody changed before dispatch",
+            Self::NotDispatched => "host command was proven not dispatched",
+            Self::Ambiguous => "host command outcome is ambiguous",
+            Self::TimedOut => "host command timed out",
+            Self::Refused => "daemon refused the host command",
+            Self::ProtocolCorruption => "daemon answered the host command with a corrupt frame",
+            Self::RegistryUnavailable => "daemon attachment registry is unavailable",
+        })
+    }
+}
+
+impl Error for HostCommandFailure {}
+
+/// The handle composition may hand to a host-control operation. Public as an
+/// opaque value only: it carries no readable state, and the raw round trip behind
+/// it is crate-private, so the only way to send a host command from outside this
+/// crate is a typed operation in [`crate::host_control`].
+///
+/// ```compile_fail
+/// use silverhand_backend_server::daemon_delivery::{HostCommand, HostCommandKind};
+///
+/// fn forge() -> HostCommand {
+///     HostCommand {
+///         host: silverhand_backend_core::identity::HostId::parse("host-1").unwrap(),
+///         expected_instance: silverhand_backend_core::identity::DaemonInstanceId::parse("i").unwrap(),
+///         kind: HostCommandKind::RuntimeCatalog,
+///         params: serde_json::json!({ "force": true }),
+///         timeout: std::time::Duration::from_secs(1),
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use silverhand_backend_server::daemon_delivery::HostCommandDispatch;
+///
+/// // Names no crate-private type, so nothing here fails for a naming reason. The
+/// // round trip stays unreachable while ANY part of it — the parameter, the answer,
+/// // the failure, or the method — is crate-private: publishing the whole face is
+/// // what turns this green.
+/// async fn send(dispatch: &HostCommandDispatch) {
+///     let _ = dispatch.dispatch(unreachable!()).await;
+/// }
+/// ```
+///
+/// ```
+/// use silverhand_backend_core::identity::{DaemonInstanceId, HostId};
+/// use silverhand_backend_server::{
+///     daemon_delivery::{DaemonDeliveryController, HostCommandDispatch},
+///     host_control::runtime_catalog::{self, RuntimeCatalogOutcome, RuntimeCatalogRequest},
+/// };
+///
+/// async fn probe(dispatch: &HostCommandDispatch) -> RuntimeCatalogOutcome {
+///     let _ = DaemonDeliveryController::host_commands;
+///     runtime_catalog::probe(
+///         dispatch,
+///         RuntimeCatalogRequest {
+///             host: HostId::parse("host-1").unwrap(),
+///             daemon_instance: DaemonInstanceId::parse("instance-1").unwrap(),
+///             force: true,
+///         },
+///     )
+///     .await
+/// }
+/// ```
+#[derive(Clone)]
+pub struct HostCommandDispatch {
+    registry: DaemonRegistry,
+}
+
+impl HostCommandDispatch {
+    pub(crate) async fn dispatch(
+        &self,
+        command: HostCommand,
+    ) -> Result<HostCommandAnswer, HostCommandFailure> {
+        let attachment = self
+            .registry
+            .attachment(command.host.as_str())
+            .map_err(|_| HostCommandFailure::RegistryUnavailable)?
+            .ok_or(HostCommandFailure::NoCurrentDaemon)?;
+        if attachment.daemon_instance != command.expected_instance {
+            return Err(HostCommandFailure::DaemonInstanceMismatch);
+        }
+        let result = attachment
+            .command(command.kind.as_wire(), command.params, command.timeout)
+            .await
+            .map_err(HostCommandFailure::from_dispatch)?;
+        Ok(HostCommandAnswer {
+            // The lookup either matched this key's slot or there was no attachment
+            // at all, so this is the host that served the command, not a coordinate
+            // a consumer may restate later.
+            host: command.host,
+            instance: attachment.daemon_instance,
+            result,
+        })
     }
 }
 
@@ -948,7 +1367,7 @@ where
                     DeliveryTransportError::Transport,
                 ))
             }
-            Err(CommandDispatchError::DaemonRefused) => {
+            Err(CommandDispatchError::DaemonRefused(_)) => {
                 rollback_batch(&self.data, &self.attachment.host_id, &batch).await?;
                 Err(RuntimeDispatchFailure::ProvenNotDispatched(
                     DeliveryTransportError::DaemonRefused,
@@ -1158,7 +1577,19 @@ async fn connection<C, D, H>(
                         break;
                     }
                     match runtime.registry.attach(&host_id, &connection_id, instance.clone()) {
-                        Ok(true) => attached = Some(instance),
+                        Ok(true) => {
+                            attached = Some(instance);
+                            // The only edge that resolves a refusal, and only now: strict
+                            // ready passed AND the registry promoted THIS connection. A
+                            // parse that never became custody leaves the record standing.
+                            if let Err(cause) = runtime.admission.clear(&host_id) {
+                                tracing::error!(
+                                    error_chain = %error::describe(&cause),
+                                    host_id = %host_id,
+                                    "host admission refusal could not be cleared after attachment"
+                                );
+                            }
+                        }
                         Ok(false) => break,
                         Err(cause) => {
                             tracing::error!(
@@ -1194,9 +1625,55 @@ async fn connection<C, D, H>(
             },
             inbound = socket.recv() => match inbound {
                 Some(Ok(Message::Text(text))) => {
+                    // Before the schema, because the schema is the current one. The host
+                    // is this connection's verified host and the dialer is its own
+                    // connection id: a frame never names the host it is refused for.
+                    if let Some(offered) = offered_ready_protocol_version(&text)
+                        && offered != OUTBOUND_PROTOCOL_VERSION
+                    {
+                        let recorded = runtime.admission.record(&host_id, ProtocolMismatch {
+                            dialer: DialerId::from_connection(&connection_id),
+                            offered_protocol_version: offered,
+                            expected_protocol_version: OUTBOUND_PROTOCOL_VERSION,
+                            observed_at: signed_unix_millis(SystemTime::now()),
+                        });
+                        match recorded {
+                            // A reconnect loop re-observing the same incompatibility is
+                            // not news; the record is replaced either way.
+                            Ok(RefusalNews::SameUnresolvedFact) => tracing::debug!(
+                                host_id = %host_id,
+                                connection_id = %connection_id,
+                                offered_protocol_version = offered,
+                                "refused daemon on the same incompatible wire protocol"
+                            ),
+                            Ok(RefusalNews::Changed) => tracing::warn!(
+                                host_id = %host_id,
+                                connection_id = %connection_id,
+                                offered_protocol_version = offered,
+                                expected_protocol_version = OUTBOUND_PROTOCOL_VERSION,
+                                "refused daemon on incompatible wire protocol"
+                            ),
+                            Err(cause) => tracing::error!(
+                                error_chain = %error::describe(&cause),
+                                host_id = %host_id,
+                                "host admission refusal could not be recorded"
+                            ),
+                        }
+                        // A version we can read but do not speak is terminal: no retry
+                        // against this server can succeed until the daemon binary
+                        // changes, so the reason has to say so.
+                        let _ = socket.send(Message::Close(Some(CloseFrame {
+                            code: 1002,
+                            reason: UPDATE_REQUIRED_CLOSE_REASON.into(),
+                        }))).await;
+                        break;
+                    }
                     let parsed = parse_daemon_frame(&text);
                     match parsed {
                         Ok(DaemonFrame::Ready(ReadyFrame { protocol_version, instance_id })) => {
+                            // Reachable only for a version the envelope probe declined to
+                            // read: a strictly valid frame whose number is out of the
+                            // readable range. Refused, and deliberately not recorded.
                             if protocol_version != OUTBOUND_PROTOCOL_VERSION {
                                 let _ = socket.send(Message::Close(Some(CloseFrame {
                                     code: 1002,
@@ -1242,22 +1719,23 @@ async fn connection<C, D, H>(
                                 }))).await;
                                 break;
                             }
-                            match (result, error) {
-                                (Some(result), None) => {
-                                    let _ = response.send(Ok(result));
-                                }
-                                (None, Some(error)) if valid_command_error(expected, &error) => {
-                                    let _ = response.send(Err(CommandDispatchError::DaemonRefused));
-                                }
-                                _ => {
-                                    let _ = response.send(Err(CommandDispatchError::InvalidResponse));
-                                    let _ = socket.send(Message::Close(Some(CloseFrame {
-                                        code: 1002,
-                                        reason: "invalid_command_response".into(),
-                                    }))).await;
-                                    break;
-                                }
-                            }
+                            let settled = match (result, error) {
+                                (Some(result), None) => Some(Ok(result)),
+                                (None, Some(error)) => CommandRefusal::decode(expected, &error)
+                                    .map(|refusal| {
+                                        Err(CommandDispatchError::DaemonRefused(refusal))
+                                    }),
+                                _ => None,
+                            };
+                            let Some(settled) = settled else {
+                                let _ = response.send(Err(CommandDispatchError::InvalidResponse));
+                                let _ = socket.send(Message::Close(Some(CloseFrame {
+                                    code: 1002,
+                                    reason: "invalid_command_response".into(),
+                                }))).await;
+                                break;
+                            };
+                            let _ = response.send(settled);
                         }
                         Ok(DaemonFrame::DeliveryConsumed(event)) => {
                             let Some(instance) = attached.as_ref() else {
@@ -1724,6 +2202,36 @@ struct CommandResponseFrame {
     error: Option<Value>,
 }
 
+/// The `protocol_version` a `ready` frame OFFERS, read at the envelope level.
+///
+/// This has to exist separately from [`parse_daemon_frame`] because the only daemon
+/// population it describes is the one whose `ready` frame this server's current
+/// schema rejects: an older daemon does not merely carry a different number, it
+/// carries a different frame (no `instance_id`, for one). Deciding the mismatch
+/// after the strict parse would mean the refusal is never recorded for exactly the
+/// build the human needs to be told to upgrade.
+///
+/// The vocabulary is closed on purpose:
+///
+///  - a readable version that is not ours is an actionable refusal, recorded;
+///  - our own version is not this function's business — the strict schema decides,
+///    and a frame that fails it records nothing;
+///  - anything else (not an envelope, not an integer, negative, out of range)
+///    yields `None` and falls through to the strict parse, because a version we
+///    cannot read is a corrupt dialer that may retry successfully.
+fn offered_ready_protocol_version(raw: &str) -> Option<u32> {
+    let value = serde_json::from_str::<Value>(raw).ok()?;
+    if value.get("direction").and_then(Value::as_str) != Some("daemon_to_server")
+        || value.get("type").and_then(Value::as_str) != Some("event")
+        || value.get("kind").and_then(Value::as_str) != Some("ready")
+    {
+        return None;
+    }
+    u32::try_from(value.get("protocol_version")?.as_u64()?)
+        .ok()
+        .filter(|version| *version <= MAX_READABLE_PROTOCOL_VERSION)
+}
+
 fn parse_daemon_frame(raw: &str) -> Result<DaemonFrame, DaemonFrameError> {
     let value = serde_json::from_str::<Value>(raw).map_err(DaemonFrameError::Json)?;
     if value.get("direction").and_then(Value::as_str) != Some("daemon_to_server") {
@@ -1964,10 +2472,15 @@ fn valid_command_response_envelope(value: &Value) -> bool {
         .get("id")
         .and_then(Value::as_str)
         .is_some_and(|id| !id.is_empty())
-        && matches!(
-            value.get("kind").and_then(Value::as_str),
-            Some("runtime_start" | "runtime_stop" | "runtime_deliver" | "runtime_status")
-        )
+        && value
+            .get("kind")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| {
+                matches!(
+                    kind,
+                    "runtime_start" | "runtime_stop" | "runtime_deliver" | "runtime_status"
+                ) || HostCommandKind::sends_wire(kind)
+            })
 }
 
 #[derive(Debug)]
@@ -2420,35 +2933,6 @@ fn valid_runtime_start_success(value: &Value) -> bool {
         && value.get("started_at").and_then(Value::as_i64).is_some()
 }
 
-fn valid_command_error(kind: &str, value: &Value) -> bool {
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    if object.len() != 2 || object.get("message").and_then(Value::as_str).is_none() {
-        return false;
-    }
-    let Some(code) = object.get("code").and_then(Value::as_str) else {
-        return false;
-    };
-    let generic = matches!(
-        code,
-        "unknown_intent"
-            | "invalid_params"
-            | "internal_error"
-            | "shutting_down"
-            | "request_too_large"
-    );
-    generic
-        || matches!(kind, "runtime_start" | "runtime_deliver")
-            && matches!(
-                code,
-                "agent_deleting"
-                    | "workspace_not_provisioned"
-                    | "workspace_bundle_missing"
-                    | "registry_unavailable"
-            )
-}
-
 fn valid_runtime_start_refusal(value: &Value) -> bool {
     exact_keys(value, &["started", "reason", "cooldown_until"])
         && value.get("started").and_then(Value::as_bool) == Some(false)
@@ -2556,6 +3040,161 @@ mod tests {
             "error": { "code": "internal_error", "message": "hidden" },
         });
         assert!(parse_daemon_frame(&ambiguous_response.to_string()).is_err());
+    }
+
+    #[test]
+    fn the_offered_version_is_read_from_the_envelope_the_strict_schema_rejects() {
+        // The population this probe exists for: a daemon old enough that its `ready`
+        // frame predates `instance_id`. The strict schema refuses it, so a mismatch
+        // decided after the parse would never see the build a human must upgrade.
+        let mut old_schema = ready();
+        old_schema["protocol_version"] = json!(OUTBOUND_PROTOCOL_VERSION - 1);
+        old_schema
+            .as_object_mut()
+            .unwrap()
+            .remove("instance_id")
+            .unwrap();
+        let old_schema = old_schema.to_string();
+        assert!(parse_daemon_frame(&old_schema).is_err());
+        assert_eq!(
+            offered_ready_protocol_version(&old_schema),
+            Some(OUTBOUND_PROTOCOL_VERSION - 1)
+        );
+
+        // Our own version is the strict schema's business, not this probe's.
+        assert_eq!(
+            offered_ready_protocol_version(&ready().to_string()),
+            Some(OUTBOUND_PROTOCOL_VERSION)
+        );
+
+        // Out of range: not treated as a version, so nothing is recorded — and the
+        // strict arm stays reachable for it, which is where it is refused.
+        let mut unreadable = ready();
+        unreadable["protocol_version"] = json!(MAX_READABLE_PROTOCOL_VERSION + 1);
+        assert_eq!(
+            offered_ready_protocol_version(&unreadable.to_string()),
+            None
+        );
+        assert!(matches!(
+            parse_daemon_frame(&unreadable.to_string()),
+            Ok(DaemonFrame::Ready(_))
+        ));
+
+        for unreadable_version in [json!(-1), json!(10.5), json!("10"), json!(null)] {
+            let mut frame = ready();
+            frame["protocol_version"] = unreadable_version.clone();
+            assert_eq!(
+                offered_ready_protocol_version(&frame.to_string()),
+                None,
+                "{unreadable_version} is not a readable protocol version"
+            );
+        }
+
+        let mut absent = ready();
+        absent.as_object_mut().unwrap().remove("protocol_version");
+        assert_eq!(offered_ready_protocol_version(&absent.to_string()), None);
+
+        // Not a `ready` envelope at all, and not JSON at all.
+        let mut other_kind = ready();
+        other_kind["kind"] = json!("shutting_down");
+        assert_eq!(
+            offered_ready_protocol_version(&other_kind.to_string()),
+            None
+        );
+        let mut other_direction = ready();
+        other_direction["direction"] = json!("server_to_daemon");
+        assert_eq!(
+            offered_ready_protocol_version(&other_direction.to_string()),
+            None
+        );
+        assert_eq!(offered_ready_protocol_version("not json"), None);
+    }
+
+    #[test]
+    fn refusal_codes_are_admitted_per_kind_and_never_invented() {
+        let error = |code: &str| json!({ "code": code, "message": "why" });
+        for kind in ["runtime_start", "runtime_deliver", "host_runtime_catalog"] {
+            assert_eq!(
+                CommandRefusal::decode(kind, &error("shutting_down")),
+                Some(CommandRefusal::Response)
+            );
+            assert_eq!(CommandRefusal::decode(kind, &error("banana")), None);
+        }
+        assert_eq!(
+            [
+                "unknown_intent",
+                "invalid_params",
+                "internal_error",
+                "shutting_down",
+                "request_too_large",
+            ]
+            .into_iter()
+            .filter_map(|code| CommandRefusal::decode("host_runtime_catalog", &error(code)))
+            .count(),
+            5
+        );
+        for code in [
+            "agent_deleting",
+            "workspace_not_provisioned",
+            "workspace_bundle_missing",
+            "registry_unavailable",
+        ] {
+            assert!(CommandRefusal::decode("runtime_start", &error(code)).is_some());
+            assert!(CommandRefusal::decode("runtime_deliver", &error(code)).is_some());
+            assert_eq!(
+                CommandRefusal::decode("host_runtime_catalog", &error(code)),
+                None
+            );
+        }
+        assert_eq!(
+            CommandRefusal::decode("runtime_start", &json!({ "code": "internal_error" })),
+            None
+        );
+        assert_eq!(
+            CommandRefusal::decode(
+                "runtime_start",
+                &json!({ "code": "internal_error", "message": 7 })
+            ),
+            None
+        );
+        assert_eq!(
+            CommandRefusal::decode(
+                "runtime_start",
+                &json!({ "code": "internal_error", "message": "why", "extra": true })
+            ),
+            None
+        );
+        assert_eq!(CommandRefusal::decode("runtime_start", &json!("why")), None);
+    }
+
+    #[test]
+    fn an_answer_opens_only_for_the_coordinate_that_awaited_it() {
+        let answer = || HostCommandAnswer {
+            host: HostId::parse("host-1").unwrap(),
+            instance: DaemonInstanceId::parse("instance-shared").unwrap(),
+            result: json!({ "runtimes": [] }),
+        };
+        let host = |raw: &str| HostId::parse(raw).unwrap();
+        let instance = |raw: &str| DaemonInstanceId::parse(raw).unwrap();
+
+        assert_eq!(
+            answer().into_result_for(&host("host-1"), &instance("instance-shared")),
+            Ok(json!({ "runtimes": [] }))
+        );
+        // Both machines spell the custody the same way, so an instance-only bind
+        // would file this answer under the wrong host.
+        assert_eq!(
+            answer().into_result_for(&host("host-2"), &instance("instance-shared")),
+            Err(HostAnswerMismatch::Host)
+        );
+        assert_eq!(
+            answer().into_result_for(&host("host-1"), &instance("instance-old")),
+            Err(HostAnswerMismatch::DaemonInstance)
+        );
+        assert_eq!(
+            answer().into_result_for(&host("host-2"), &instance("instance-old")),
+            Err(HostAnswerMismatch::Host)
+        );
     }
 
     #[test]

@@ -1,23 +1,25 @@
 //! One-snapshot SQLite projection for `GET /api/conversations/:id/unread`.
 
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    identity::{ConversationId, UserId},
     messaging::collaboration::conversation_unread::{
         ConversationUnread, ConversationUnreadReadPort, ConversationUnreadRefusal, StreamUnread,
         ThreadUnread, UnreadCount,
     },
-    messaging::{MessageId, MessageSeq, PrincipalIdentity, ThreadRootId},
+    messaging::{MessageId, MessageSeq, ThreadRootId},
     persistence::PersistenceFailure,
 };
-use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};
+use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;
 
 use crate::{
     messaging::MessagingStore,
-    unread_read::{followed_thread_branch, message_unread_guards, unread_guards},
+    unread_read::{followed_thread_unread, message_unread_guards},
 };
 
-use super::activity::valid_title_key_spelling;
+use super::conversation_participation::{
+    ConversationParticipationStoreError, decode_conversation, participates,
+};
 
 const STREAM_UNREAD: &str = concat!(
     "WITH p(viewer,conv) AS (SELECT ?,?), stream_cursor AS (\
@@ -47,10 +49,8 @@ const STREAM_UNREAD: &str = concat!(
 const FOLLOWED_THREAD_UNREAD: &str = concat!(
     "WITH p(viewer,conv) AS (SELECT ?,?) SELECT EXISTS(SELECT 1 FROM messages m WHERE \
      m.conversation_id=(SELECT conv FROM p) AND ",
-    unread_guards!(),
-    " AND (",
-    followed_thread_branch!(),
-    "))"
+    followed_thread_unread!(),
+    ")"
 );
 
 #[derive(Clone)]
@@ -70,12 +70,10 @@ impl<E> MessagingStore<E> {
 pub enum ConversationUnreadStoreError {
     #[error("database operation failed")]
     Sql(#[from] sqlx::Error),
+    #[error("conversation participation snapshot is malformed")]
+    Access(#[from] ConversationParticipationStoreError),
     #[error("stored identity in the conversation-unread snapshot is malformed")]
     MalformedIdentity,
-    #[error("stored conversation placement contradicts the current schema")]
-    MalformedPlacement,
-    #[error("stored conversation status is outside the published closed set")]
-    MalformedStatus,
     #[error("stored unread ordinal or count is outside its domain")]
     MalformedUnread,
     #[error("stored stream-unread rows do not form a sparse set")]
@@ -86,12 +84,6 @@ impl From<ConversationUnreadStoreError> for PersistenceFailure {
     fn from(value: ConversationUnreadStoreError) -> Self {
         Self::from_source(value)
     }
-}
-
-#[derive(Debug)]
-pub(super) enum Placement {
-    Workspace(WorkspaceId),
-    DirectPair(PrincipalIdentity, PrincipalIdentity),
 }
 
 impl ConversationUnreadReadPort for SqliteConversationUnreadRead {
@@ -129,12 +121,7 @@ impl SqliteConversationUnreadRead {
             tx.commit().await?;
             return Ok(Err(ConversationUnreadRefusal::NotFound));
         };
-        let stored = ConversationId::parse(row.try_get::<String, _>("id")?)
-            .map_err(|_| ConversationUnreadStoreError::MalformedIdentity)?;
-        if &stored != conversation {
-            return Err(ConversationUnreadStoreError::MalformedIdentity);
-        }
-        let placement = decode_placement(&row)?;
+        let (stored, placement) = decode_conversation(&row, conversation)?;
         if !participates(&mut tx, viewer, conversation, &placement).await? {
             tx.commit().await?;
             return Ok(Err(ConversationUnreadRefusal::Forbidden));
@@ -238,120 +225,4 @@ async fn validate_streams(
         }
     }
     Ok(())
-}
-
-pub(super) fn decode_placement(row: &SqliteRow) -> Result<Placement, ConversationUnreadStoreError> {
-    let status: String = row.try_get("status")?;
-    if !matches!(
-        status.as_str(),
-        "starting" | "active" | "idle" | "archived" | "crashed"
-    ) {
-        return Err(ConversationUnreadStoreError::MalformedStatus);
-    }
-    let placement: String = row.try_get("placement_kind")?;
-    let roster: String = row.try_get("roster_policy")?;
-    let visibility: String = row.try_get("visibility")?;
-    let workspace: Option<String> = row.try_get("workspace_id")?;
-    let title: String = row.try_get("title")?;
-    let title_key: Option<String> = row.try_get("title_key")?;
-    let a_kind: Option<String> = row.try_get("endpoint_a_kind")?;
-    let a_id: Option<String> = row.try_get("endpoint_a_id")?;
-    let a_deleted: Option<i64> = row.try_get("endpoint_a_deleted_at")?;
-    let b_kind: Option<String> = row.try_get("endpoint_b_kind")?;
-    let b_id: Option<String> = row.try_get("endpoint_b_id")?;
-    let b_deleted: Option<i64> = row.try_get("endpoint_b_deleted_at")?;
-    match placement.as_str() {
-        "workspace" => {
-            if !matches!(roster.as_str(), "open" | "fixed")
-                || !matches!(visibility.as_str(), "private" | "public")
-                || (visibility == "public" && roster != "open")
-                || title.is_empty()
-                || !title_key.as_deref().is_some_and(valid_title_key_spelling)
-                || a_kind.is_some()
-                || a_id.is_some()
-                || a_deleted.is_some()
-                || b_kind.is_some()
-                || b_id.is_some()
-                || b_deleted.is_some()
-            {
-                return Err(ConversationUnreadStoreError::MalformedPlacement);
-            }
-            let workspace = WorkspaceId::parse(
-                workspace.ok_or(ConversationUnreadStoreError::MalformedPlacement)?,
-            )
-            .map_err(|_| ConversationUnreadStoreError::MalformedIdentity)?;
-            Ok(Placement::Workspace(workspace))
-        }
-        "direct_pair" => {
-            if workspace.is_some()
-                || title_key.is_some()
-                || roster != "fixed"
-                || visibility != "private"
-            {
-                return Err(ConversationUnreadStoreError::MalformedPlacement);
-            }
-            let a_coordinate = a_kind
-                .as_ref()
-                .zip(a_id.as_ref())
-                .ok_or(ConversationUnreadStoreError::MalformedPlacement)?;
-            let b_coordinate = b_kind
-                .as_ref()
-                .zip(b_id.as_ref())
-                .ok_or(ConversationUnreadStoreError::MalformedPlacement)?;
-            if a_coordinate >= b_coordinate {
-                return Err(ConversationUnreadStoreError::MalformedPlacement);
-            }
-            Ok(Placement::DirectPair(
-                decode_endpoint(a_kind, a_id)?,
-                decode_endpoint(b_kind, b_id)?,
-            ))
-        }
-        _ => Err(ConversationUnreadStoreError::MalformedPlacement),
-    }
-}
-
-fn decode_endpoint(
-    kind: Option<String>,
-    id: Option<String>,
-) -> Result<PrincipalIdentity, ConversationUnreadStoreError> {
-    let id = id
-        .filter(|value| !value.is_empty())
-        .ok_or(ConversationUnreadStoreError::MalformedIdentity)?;
-    match kind.as_deref() {
-        Some("human") => UserId::parse(id)
-            .map(PrincipalIdentity::Human)
-            .map_err(|_| ConversationUnreadStoreError::MalformedIdentity),
-        Some("agent") => AgentId::parse(id)
-            .map(PrincipalIdentity::Agent)
-            .map_err(|_| ConversationUnreadStoreError::MalformedIdentity),
-        _ => Err(ConversationUnreadStoreError::MalformedPlacement),
-    }
-}
-
-pub(super) async fn participates(
-    tx: &mut Transaction<'_, Sqlite>,
-    viewer: &UserId,
-    conversation: &ConversationId,
-    placement: &Placement,
-) -> Result<bool, ConversationUnreadStoreError> {
-    match placement {
-        Placement::DirectPair(a, b) => Ok([a, b]
-            .into_iter()
-            .any(|endpoint| matches!(endpoint, PrincipalIdentity::Human(id) if id == viewer))),
-        Placement::Workspace(workspace) => {
-            let admitted: i64 = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=?) \
-                 AND EXISTS(SELECT 1 FROM workspace_users WHERE workspace_id=? AND user_id=?) \
-                 AND EXISTS(SELECT 1 FROM conversation_users WHERE conversation_id=? AND user_id=?)",
-            )
-            .bind(workspace.as_str())
-            .bind(workspace.as_str())
-            .bind(viewer.as_str())
-            .bind(conversation.as_str())
-            .bind(viewer.as_str())
-            .fetch_one(&mut **tx)
-            .await?;
-            Ok(admitted == 1)
-        }
-    }
 }

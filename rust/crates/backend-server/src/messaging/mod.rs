@@ -38,6 +38,7 @@ pub(crate) mod references;
 pub mod router;
 pub(crate) mod send_request;
 mod target_observer;
+pub mod task;
 pub(crate) mod unresolved_wire;
 
 /// The pre-parse body bound. Public because it is part of the contract rather than an

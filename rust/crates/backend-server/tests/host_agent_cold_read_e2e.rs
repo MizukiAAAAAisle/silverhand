@@ -39,17 +39,16 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    cold_read::presence::UserPresenceFacts,
+    cold_read::presence::{LastSeenAt, UserPresenceFacts},
     identity::UserId,
     persistence::PersistenceFailure,
     policy::presence_grace::{GraceWindow, PresenceFact},
     user_presence_cold_read::UserPresenceReadModel,
+    user_presence_last_seen::LastSeenSink,
 };
 use silverhand_backend_server::{
     host_agent::presence::{PRESENCE_PATH, router},
-    host_agent_background::presence_grace_timer::{
-        LastSeenSink, PresenceFactSink, PresenceGraceTimers,
-    },
+    host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers},
 };
 use silverhand_backend_sqlite::user_presence_cold_read::SqliteUserPresenceColdRead;
 use sqlx::{Connection, Executor, SqliteConnection};
@@ -72,7 +71,7 @@ impl LastSeenSink for NoOpSinks {
     async fn touch_last_seen(
         &self,
         _user_id: UserId,
-        _last_seen_at: i64,
+        _last_seen_at: LastSeenAt,
     ) -> Result<(), PersistenceFailure> {
         Ok(())
     }

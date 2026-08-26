@@ -278,8 +278,11 @@ export class ScheduleRepo {
     return rows.length > 0;
   }
 
-  /** Terminal one-shot fire OR repeat that hit max_occurrences/until_at.
-   *  Status becomes `done`; no further ticks act on this row.
+  /** Terminal *successful* fire: a one-shot that delivered, or a repeat
+   *  whose delivered fire hit max_occurrences/until_at. Status becomes
+   *  `done`, the fire is counted (`fired_count++`, `last_fired_at`), and the
+   *  failure streak resets. A fire that FAILED past its plan window is a
+   *  different fact — see `markPlanEndedAfterFailure`, which never lands here.
    *  Predicated on `status='firing'` (see markFiredAndRearm rationale). */
   markDone(id: string, actualFireAt: number): boolean {
     const now = Date.now();
@@ -295,6 +298,32 @@ export class ScheduleRepo {
           RETURNING id`,
       )
       .all(actualFireAt, now, id);
+    return rows.length > 0;
+  }
+
+  /** A `cron|interval` fire FAILED and its natural next tick lies past the
+   *  plan window (`until_at`): the plan has genuinely ended, so the terminal
+   *  state is `done` — but the last fire did NOT succeed. Unlike `markDone`
+   *  this records the failure honestly: `fired_count` is NOT incremented (no
+   *  occurrence was delivered), `last_fired_at` is left untouched, and the
+   *  fire-level failure is preserved (`last_failure_*`,
+   *  `consecutive_failure_count++`) exactly as `markFireFailed` does — the only
+   *  difference is the plan is over, so we terminate instead of re-arming.
+   *  Predicated on `status='firing'`: a racing cancel still wins. */
+  markPlanEndedAfterFailure(id: string, reason: string): boolean {
+    const now = Date.now();
+    const rows = this.db
+      .prepare<[string, number, number, string], { id: string }>(
+        `UPDATE schedules
+            SET status = 'done',
+                last_failure_reason = ?,
+                last_failure_at = ?,
+                consecutive_failure_count = consecutive_failure_count + 1,
+                updated_at = ?
+          WHERE id = ? AND status = 'firing'
+          RETURNING id`,
+      )
+      .all(reason, now, now, id);
     return rows.length > 0;
   }
 

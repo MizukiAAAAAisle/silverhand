@@ -23,8 +23,8 @@ use thiserror::Error;
 
 use crate::messaging::MessagingStore;
 
-use super::conversation_unread::{
-    ConversationUnreadStoreError, Placement, decode_placement, participates,
+use super::conversation_participation::{
+    ConversationParticipationStoreError, Placement, decode_conversation, participates,
 };
 
 #[cfg(test)]
@@ -52,7 +52,7 @@ pub enum ThreadFollowStoreError {
     #[error("agent follower candidate set could not be encoded")]
     Serialization(#[from] serde_json::Error),
     #[error("conversation access snapshot is malformed")]
-    Access(#[from] ConversationUnreadStoreError),
+    Access(#[from] ConversationParticipationStoreError),
     #[error("stored thread-follow identity is malformed")]
     MalformedIdentity,
     #[error("stored thread follower row has an unknown principal kind or source")]
@@ -323,12 +323,7 @@ async fn access(
     else {
         return Ok(Access::NotFound);
     };
-    let stored = ConversationId::parse(row.try_get::<String, _>("id")?)
-        .map_err(|_| ThreadFollowStoreError::MalformedIdentity)?;
-    if &stored != conversation {
-        return Err(ThreadFollowStoreError::MalformedIdentity);
-    }
-    let placement = decode_placement(&row)?;
+    let (_, placement) = decode_conversation(&row, conversation)?;
     if !participates(tx, viewer, conversation, &placement).await? {
         return Ok(Access::Forbidden);
     }

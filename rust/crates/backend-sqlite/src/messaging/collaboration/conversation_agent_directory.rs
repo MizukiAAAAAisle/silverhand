@@ -13,7 +13,9 @@ use thiserror::Error;
 
 use crate::messaging::MessagingStore;
 
-use super::conversation_unread::{ConversationUnreadStoreError, decode_placement, participates};
+use super::conversation_participation::{
+    ConversationParticipationStoreError, decode_conversation, participates,
+};
 
 #[derive(Clone)]
 pub struct SqliteConversationAgentDirectoryRead {
@@ -33,7 +35,7 @@ pub enum ConversationAgentDirectoryStoreError {
     #[error("database operation failed")]
     Sql(#[from] sqlx::Error),
     #[error("conversation access snapshot is malformed")]
-    Access(#[from] ConversationUnreadStoreError),
+    Access(#[from] ConversationParticipationStoreError),
     #[error("stored conversation-agent identity is malformed")]
     MalformedIdentity,
     #[error("stored conversation-agent joined_at is outside its domain")]
@@ -88,12 +90,7 @@ impl SqliteConversationAgentDirectoryRead {
             tx.commit().await?;
             return Ok(Err(ConversationAgentDirectoryRefusal::NotFound));
         };
-        let stored = ConversationId::parse(row.try_get::<String, _>("id")?)
-            .map_err(|_| ConversationAgentDirectoryStoreError::MalformedIdentity)?;
-        if &stored != conversation {
-            return Err(ConversationAgentDirectoryStoreError::MalformedIdentity);
-        }
-        let placement = decode_placement(&row)?;
+        let (stored, placement) = decode_conversation(&row, conversation)?;
         if !participates(&mut tx, viewer, conversation, &placement).await? {
             tx.commit().await?;
             return Ok(Err(ConversationAgentDirectoryRefusal::Forbidden));

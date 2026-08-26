@@ -8,6 +8,7 @@
 pub(super) enum NumberIssue {
     Nan,
     Float,
+    NonFinite,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,7 +22,7 @@ pub(super) fn coerce_integer(raw: &str) -> Result<CoercedInteger, NumberIssue> {
     let number = if trimmed.is_empty() {
         0.0
     } else if matches!(trimmed, "Infinity" | "+Infinity" | "-Infinity") {
-        return Err(NumberIssue::Float);
+        return Err(NumberIssue::NonFinite);
     } else if let Some((digits, radix)) = prefixed_integer(trimmed) {
         return coerce_prefixed(digits, radix);
     } else {
@@ -33,7 +34,10 @@ pub(super) fn coerce_integer(raw: &str) -> Result<CoercedInteger, NumberIssue> {
     if number.is_nan() {
         return Err(NumberIssue::Nan);
     }
-    if !number.is_finite() || number.fract() != 0.0 {
+    if !number.is_finite() {
+        return Err(NumberIssue::NonFinite);
+    }
+    if number.fract() != 0.0 {
         return Err(NumberIssue::Float);
     }
     if number < 0.0 {
@@ -122,13 +126,13 @@ fn coerce_prefixed(digits: &str, radix: u32) -> Result<CoercedInteger, NumberIss
     let bit_length = (significant_digits - 1)
         .checked_mul(bits_per_digit)
         .and_then(|tail| tail.checked_add(first_bits as usize))
-        .ok_or(NumberIssue::Float)?;
+        .ok_or(NumberIssue::NonFinite)?;
     match bit_length.cmp(&1024) {
         std::cmp::Ordering::Less => Ok(CoercedInteger::BeyondPersistedRange),
-        std::cmp::Ordering::Greater => Err(NumberIssue::Float),
+        std::cmp::Ordering::Greater => Err(NumberIssue::NonFinite),
         std::cmp::Ordering::Equal => {
             if leading_significant_bits_are_ones(digits, radix, 54) {
-                Err(NumberIssue::Float)
+                Err(NumberIssue::NonFinite)
             } else {
                 Ok(CoercedInteger::BeyondPersistedRange)
             }
@@ -205,4 +209,18 @@ fn prefixed_integer(raw: &str) -> Option<(&str, u32)> {
                 .or_else(|| raw.strip_prefix("0O"))
                 .map(|digits| (digits, 8))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finite_fraction_and_nonfinite_number_are_distinct_without_a_second_parser() {
+        assert_eq!(coerce_integer("1.5"), Err(NumberIssue::Float));
+        assert_eq!(coerce_integer("Infinity"), Err(NumberIssue::NonFinite));
+        assert_eq!(coerce_integer("1e400"), Err(NumberIssue::NonFinite));
+        assert_eq!(coerce_integer("not-a-number"), Err(NumberIssue::Nan));
+        assert_eq!(coerce_integer("1e3"), Ok(CoercedInteger::Persisted(1_000)));
+    }
 }

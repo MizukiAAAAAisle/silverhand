@@ -8,12 +8,14 @@ publish.workspace = true
 [dependencies]
 axum.workspace = true
 base64.workspace = true
+form_urlencoded.workspace = true
 getrandom.workspace = true
 pulldown-cmark.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 silverhand-backend-core.workspace = true
+silverhand-backend-filesystem.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true

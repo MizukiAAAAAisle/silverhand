@@ -19,8 +19,9 @@ use thiserror::Error;
 
 use crate::{messaging::MessagingStore, unread_read::rollup_unread};
 
-use super::conversation_unread::{
-    ConversationUnreadStoreError, Placement, decode_placement, participates,
+use super::conversation_participation::{
+    ConversationParticipationStoreError, Placement, decode_conversation, decode_placement,
+    participates,
 };
 
 macro_rules! conversation_columns {
@@ -92,7 +93,7 @@ pub enum MessageUnreadStoreError {
     #[error("database operation failed")]
     Sql(#[from] sqlx::Error),
     #[error("conversation access snapshot is malformed")]
-    Access(#[from] ConversationUnreadStoreError),
+    Access(#[from] ConversationParticipationStoreError),
     #[error("stored message-unread identity is malformed")]
     MalformedIdentity,
     #[error("stored message-unread ordinal or count is malformed")]
@@ -275,12 +276,7 @@ impl SqliteMessageUnreadRead {
             tx.commit().await?;
             return Ok(Err(ConversationMessageUnreadRefusal::NotFound));
         };
-        let stored = ConversationId::parse(row.try_get::<String, _>("id")?)
-            .map_err(|_| MessageUnreadStoreError::MalformedIdentity)?;
-        if &stored != requested {
-            return Err(MessageUnreadStoreError::MalformedIdentity);
-        }
-        let placement = decode_placement(&row)?;
+        let (stored, placement) = decode_conversation(&row, requested)?;
         if !participates(&mut tx, viewer, requested, &placement).await? {
             tx.commit().await?;
             return Ok(Err(ConversationMessageUnreadRefusal::Forbidden));

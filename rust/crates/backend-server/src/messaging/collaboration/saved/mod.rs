@@ -133,7 +133,7 @@ fn list_query(raw: ListQueryWire) -> Result<SavedListQuery, Vec<serde_json::Valu
                         "nan",
                         "since",
                     ),
-                    NumberIssue::Float => json_issue(
+                    NumberIssue::Float | NumberIssue::NonFinite => json_issue(
                         "invalid_type",
                         "Expected integer, received float",
                         "float",

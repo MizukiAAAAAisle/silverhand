@@ -1,0 +1,176 @@
+[
+  {
+    "name": "delivered_once_marks_done",
+    "spec": {
+      "kind": "once",
+      "fire_at": 1000
+    },
+    "cronStep": null,
+    "firedCount": 0,
+    "maxOccurrences": null,
+    "untilAt": null,
+    "scheduledFireAt": 1000,
+    "actualFireAt": 5000,
+    "delivered": true,
+    "reason": "",
+    "expAction": {
+      "kind": "mark_done"
+    }
+  },
+  {
+    "name": "delivered_interval_rearms",
+    "spec": {
+      "kind": "interval",
+      "every_seconds": 60
+    },
+    "cronStep": null,
+    "firedCount": 0,
+    "maxOccurrences": null,
+    "untilAt": null,
+    "scheduledFireAt": 100000,
+    "actualFireAt": 100000,
+    "delivered": true,
+    "reason": "",
+    "expAction": {
+      "kind": "rearm",
+      "nextFireAt": 160000
+    }
+  },
+  {
+    "name": "delivered_interval_max_reached_marks_done",
+    "spec": {
+      "kind": "interval",
+      "every_seconds": 60
+    },
+    "cronStep": null,
+    "firedCount": 4,
+    "maxOccurrences": 5,
+    "untilAt": null,
+    "scheduledFireAt": 0,
+    "actualFireAt": 0,
+    "delivered": true,
+    "reason": "",
+    "expAction": {
+      "kind": "mark_done"
+    }
+  },
+  {
+    "name": "delivered_cron_rearms",
+    "spec": {
+      "kind": "cron",
+      "expression": "*/5 * * * *",
+      "timezone": "UTC"
+    },
+    "cronStep": 300000,
+    "firedCount": 0,
+    "maxOccurrences": null,
+    "untilAt": null,
+    "scheduledFireAt": 0,
+    "actualFireAt": 10000,
+    "delivered": true,
+    "reason": "",
+    "expAction": {
+      "kind": "rearm",
+      "nextFireAt": 300000
+    }
+  },
+  {
+    "name": "failed_once_marks_failed",
+    "spec": {
+      "kind": "once",
+      "fire_at": 1000
+    },
+    "cronStep": null,
+    "firedCount": 0,
+    "maxOccurrences": null,
+    "untilAt": null,
+    "scheduledFireAt": 1000,
+    "actualFireAt": 5000,
+    "delivered": false,
+    "reason": "wake delivery failed",
+    "expAction": {
+      "kind": "mark_failed",
+      "reason": "wake delivery failed"
+    }
+  },
+  {
+    "name": "failed_interval_rearms_fire_failed",
+    "spec": {
+      "kind": "interval",
+      "every_seconds": 60
+    },
+    "cronStep": null,
+    "firedCount": 2,
+    "maxOccurrences": null,
+    "untilAt": null,
+    "scheduledFireAt": 100000,
+    "actualFireAt": 100000,
+    "delivered": false,
+    "reason": "wake delivery failed",
+    "expAction": {
+      "kind": "mark_fire_failed",
+      "reason": "wake delivery failed",
+      "nextFireAt": 160000
+    }
+  },
+  {
+    "name": "failed_interval_until_exhausted_marks_plan_ended",
+    "spec": {
+      "kind": "interval",
+      "every_seconds": 60
+    },
+    "cronStep": null,
+    "firedCount": 0,
+    "maxOccurrences": null,
+    "untilAt": 120000,
+    "scheduledFireAt": 100000,
+    "actualFireAt": 100000,
+    "delivered": false,
+    "reason": "wake delivery failed",
+    "expAction": {
+      "kind": "mark_plan_ended_after_failure",
+      "reason": "wake delivery failed"
+    }
+  },
+  {
+    "name": "failed_cron_rearms_fire_failed",
+    "spec": {
+      "kind": "cron",
+      "expression": "*/5 * * * *",
+      "timezone": "UTC"
+    },
+    "cronStep": 300000,
+    "firedCount": 0,
+    "maxOccurrences": null,
+    "untilAt": null,
+    "scheduledFireAt": 0,
+    "actualFireAt": 10000,
+    "delivered": false,
+    "reason": "wake delivery failed",
+    "expAction": {
+      "kind": "mark_fire_failed",
+      "reason": "wake delivery failed",
+      "nextFireAt": 300000
+    }
+  },
+  {
+    "name": "failed_cron_until_exhausted_marks_plan_ended",
+    "spec": {
+      "kind": "cron",
+      "expression": "*/5 * * * *",
+      "timezone": "UTC"
+    },
+    "cronStep": 300000,
+    "firedCount": 0,
+    "maxOccurrences": null,
+    "untilAt": 120000,
+    "scheduledFireAt": 0,
+    "actualFireAt": 10000,
+    "delivered": false,
+    "reason": "wake delivery failed",
+    "expAction": {
+      "kind": "mark_plan_ended_after_failure",
+      "reason": "wake delivery failed"
+    }
+  }
+]

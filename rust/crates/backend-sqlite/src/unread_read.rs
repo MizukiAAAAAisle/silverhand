@@ -95,6 +95,21 @@ macro_rules! followed_thread_branch {
 }
 pub(crate) use followed_thread_branch;
 
+/// The complete followed-thread unread predicate shared by the unread badge and
+/// the filtered conversation thread list. Consumers add only their correlated
+/// message/root coordinate around this one authority.
+macro_rules! followed_thread_unread {
+    () => {
+        concat!(
+            $crate::unread_read::unread_guards!(),
+            " AND (",
+            $crate::unread_read::followed_thread_branch!(),
+            ")"
+        )
+    };
+}
+pub(crate) use followed_thread_unread;
+
 /// The unread rollup: guards AND (main-line unread OR followed-thread unread).
 macro_rules! rollup_unread {
     () => {

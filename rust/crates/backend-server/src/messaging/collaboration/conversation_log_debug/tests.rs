@@ -1,0 +1,557 @@
+use std::{
+    convert::Infallible,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+};
+
+use axum::{
+    body::{Body, Bytes, to_bytes},
+    http::{Request, StatusCode, header::CONTENT_LENGTH},
+};
+use futures_util::stream;
+use serde_json::{Value, json};
+use silverhand_backend_core::{
+    identity::{ConversationId, UserId},
+    persistence::PersistenceFailure,
+};
+use silverhand_backend_sqlite::messaging::{
+    MessagingStore,
+    collaboration::conversation_participation::{
+        ConversationParticipationRefusal, SqliteConversationParticipationRead,
+    },
+};
+use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
+use tower::ServiceExt;
+
+use super::*;
+
+#[derive(Clone, Copy)]
+enum AdmissionMode {
+    Granted,
+    NotFound,
+    Forbidden,
+    ForeignViewer,
+    ForeignConversation,
+}
+
+#[derive(Clone)]
+struct Admission {
+    mode: AdmissionMode,
+    calls: Arc<AtomicUsize>,
+}
+
+impl ConversationLogDebugAdmissionPort for Admission {
+    type Error = Infallible;
+
+    async fn admit(
+        &self,
+        viewer: &UserId,
+        conversation: &ConversationId,
+    ) -> Result<
+        Result<ConversationLogDebugAdmissionFact, ConversationLogDebugAdmissionRefusal>,
+        Self::Error,
+    > {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(match self.mode {
+            AdmissionMode::Granted => Ok(ConversationLogDebugAdmissionFact::selected(
+                viewer.clone(),
+                conversation.clone(),
+            )),
+            AdmissionMode::NotFound => Err(ConversationLogDebugAdmissionRefusal::NotFound),
+            AdmissionMode::Forbidden => Err(ConversationLogDebugAdmissionRefusal::Forbidden),
+            AdmissionMode::ForeignViewer => Ok(ConversationLogDebugAdmissionFact::selected(
+                UserId::parse("foreign").unwrap(),
+                conversation.clone(),
+            )),
+            AdmissionMode::ForeignConversation => Ok(ConversationLogDebugAdmissionFact::selected(
+                viewer.clone(),
+                ConversationId::parse("foreign").unwrap(),
+            )),
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ControlMode {
+    Matching,
+    ForeignConversation,
+    WrongEnableExpiration,
+    WrongDisableState,
+}
+
+#[derive(Clone)]
+struct Control {
+    mode: ControlMode,
+    status: Arc<Mutex<ConversationLogDebugStatus>>,
+    reads: Arc<AtomicUsize>,
+    enables: Arc<AtomicUsize>,
+    disables: Arc<AtomicUsize>,
+}
+
+impl Default for Control {
+    fn default() -> Self {
+        Self {
+            mode: ControlMode::Matching,
+            status: Arc::new(Mutex::new(ConversationLogDebugStatus::disabled())),
+            reads: Arc::new(AtomicUsize::new(0)),
+            enables: Arc::new(AtomicUsize::new(0)),
+            disables: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+impl Control {
+    fn with_mode(mode: ControlMode) -> Self {
+        Self {
+            mode,
+            ..Self::default()
+        }
+    }
+
+    fn reported_conversation(&self, requested: &ConversationId) -> ConversationId {
+        match self.mode {
+            ControlMode::ForeignConversation => ConversationId::parse("foreign").unwrap(),
+            _ => requested.clone(),
+        }
+    }
+}
+
+impl ConversationLogDebugControl for Control {
+    fn status(&self, conversation: &ConversationId) -> ConversationLogDebugControlFact {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        ConversationLogDebugControlFact::observed(
+            self.reported_conversation(conversation),
+            *self.status.lock().unwrap(),
+        )
+    }
+
+    fn enable(
+        &self,
+        conversation: &ConversationId,
+        expires_at: i64,
+    ) -> ConversationLogDebugControlFact {
+        self.enables.fetch_add(1, Ordering::SeqCst);
+        *self.status.lock().unwrap() = ConversationLogDebugStatus::enabled(expires_at).unwrap();
+        let reported_expiration = match self.mode {
+            ControlMode::WrongEnableExpiration => expires_at + 1,
+            _ => expires_at,
+        };
+        ConversationLogDebugControlFact::observed(
+            self.reported_conversation(conversation),
+            ConversationLogDebugStatus::enabled(reported_expiration).unwrap(),
+        )
+    }
+
+    fn disable(&self, conversation: &ConversationId) -> ConversationLogDebugControlFact {
+        self.disables.fetch_add(1, Ordering::SeqCst);
+        *self.status.lock().unwrap() = ConversationLogDebugStatus::disabled();
+        let reported = match self.mode {
+            ControlMode::WrongDisableState => ConversationLogDebugStatus::enabled(1).unwrap(),
+            _ => ConversationLogDebugStatus::disabled(),
+        };
+        ConversationLogDebugControlFact::observed(
+            self.reported_conversation(conversation),
+            reported,
+        )
+    }
+}
+
+#[derive(Clone)]
+struct Clock {
+    now: i64,
+    calls: Arc<AtomicUsize>,
+}
+
+impl ConversationLogDebugClock for Clock {
+    type Error = Infallible;
+
+    fn now_unix_ms(&self) -> Result<i64, Self::Error> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.now)
+    }
+}
+
+struct Fixture {
+    app: Router,
+    admission: Arc<AtomicUsize>,
+    control: Control,
+    clock: Arc<AtomicUsize>,
+}
+
+fn fixture(mode: AdmissionMode) -> Fixture {
+    fixture_with_control(mode, Control::default())
+}
+
+fn fixture_with_control(mode: AdmissionMode, control: Control) -> Fixture {
+    let admission = Arc::new(AtomicUsize::new(0));
+    let clock = Arc::new(AtomicUsize::new(0));
+    let app = router(
+        Admission {
+            mode,
+            calls: admission.clone(),
+        },
+        control.clone(),
+        Clock {
+            now: 1_000,
+            calls: clock.clone(),
+        },
+    );
+    Fixture {
+        app,
+        admission,
+        control,
+        clock,
+    }
+}
+
+async fn call(
+    app: Router,
+    method: &str,
+    body: Body,
+    principal: bool,
+    declared: Option<usize>,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri("/api/conversations/c/log-debug");
+    if let Some(length) = declared {
+        builder = builder.header(CONTENT_LENGTH, length);
+    }
+    let mut request = builder.body(body).unwrap();
+    if principal {
+        request
+            .extensions_mut()
+            .insert(UserId::parse("viewer").unwrap());
+    }
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let body =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    (status, body)
+}
+
+#[tokio::test]
+async fn get_binds_both_source_coordinates_and_never_reads_the_mutation_clock() {
+    for (mode, expected) in [
+        (AdmissionMode::Granted, StatusCode::OK),
+        (
+            AdmissionMode::ForeignViewer,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            AdmissionMode::ForeignConversation,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    ] {
+        let fixture = fixture(mode);
+        let (status, body) = call(fixture.app, "GET", Body::empty(), true, None).await;
+        assert_eq!(status, expected);
+        if expected == StatusCode::OK {
+            assert_eq!(
+                body,
+                json!({"conversationId":"c","enabled":false,"expiresAt":null})
+            );
+            assert_eq!(fixture.control.reads.load(Ordering::SeqCst), 1);
+        } else {
+            assert_eq!(fixture.control.reads.load(Ordering::SeqCst), 0);
+        }
+        assert_eq!(fixture.clock.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn every_local_control_fact_binds_its_conversation_and_requested_state_before_wire() {
+    let read = fixture_with_control(
+        AdmissionMode::Granted,
+        Control::with_mode(ControlMode::ForeignConversation),
+    );
+    let (status, _) = call(read.app, "GET", Body::empty(), true, None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(read.control.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(read.clock.load(Ordering::SeqCst), 0);
+
+    for mode in [
+        ControlMode::ForeignConversation,
+        ControlMode::WrongEnableExpiration,
+    ] {
+        let enabled = fixture_with_control(AdmissionMode::Granted, Control::with_mode(mode));
+        let (status, _) = call(
+            enabled.app,
+            "POST",
+            Body::from(r#"{"enabled":true}"#),
+            true,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(enabled.clock.load(Ordering::SeqCst), 1);
+        assert_eq!(enabled.control.enables.load(Ordering::SeqCst), 1);
+        assert_eq!(enabled.control.disables.load(Ordering::SeqCst), 0);
+    }
+
+    for mode in [
+        ControlMode::ForeignConversation,
+        ControlMode::WrongDisableState,
+    ] {
+        let disabled = fixture_with_control(AdmissionMode::Granted, Control::with_mode(mode));
+        let (status, _) = call(
+            disabled.app,
+            "POST",
+            Body::from(r#"{"enabled":false}"#),
+            true,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(disabled.clock.load(Ordering::SeqCst), 0);
+        assert_eq!(disabled.control.enables.load(Ordering::SeqCst), 0);
+        assert_eq!(disabled.control.disables.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn authentication_and_strict_participation_precede_body_polling() {
+    for (principal, mode, expected, admission_calls) in [
+        (
+            false,
+            AdmissionMode::Granted,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            0,
+        ),
+        (true, AdmissionMode::NotFound, StatusCode::NOT_FOUND, 1),
+        (true, AdmissionMode::Forbidden, StatusCode::FORBIDDEN, 1),
+        (
+            true,
+            AdmissionMode::ForeignViewer,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            1,
+        ),
+        (
+            true,
+            AdmissionMode::ForeignConversation,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            1,
+        ),
+    ] {
+        let polled = Arc::new(AtomicBool::new(false));
+        let flag = polled.clone();
+        let body = Body::from_stream(stream::once(async move {
+            flag.store(true, Ordering::SeqCst);
+            Ok::<Bytes, Infallible>(Bytes::from_static(b"{\"enabled\":true}"))
+        }));
+        let fixture = fixture(mode);
+        let (status, _) = call(fixture.app, "POST", body, principal, None).await;
+        assert_eq!(status, expected);
+        assert_eq!(fixture.admission.load(Ordering::SeqCst), admission_calls);
+        assert!(!polled.load(Ordering::SeqCst));
+        assert_eq!(fixture.control.enables.load(Ordering::SeqCst), 0);
+        assert_eq!(fixture.control.disables.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn enable_reads_one_local_clock_and_disable_reads_none() {
+    let enabled = fixture(AdmissionMode::Granted);
+    let (status, body) = call(
+        enabled.app,
+        "POST",
+        Body::from(r#"{"enabled":true}"#),
+        true,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({
+            "conversationId":"c", "enabled":true, "expiresAt":601_000,
+            "daemonSynced":true
+        })
+    );
+    assert_eq!(enabled.clock.load(Ordering::SeqCst), 1);
+    assert_eq!(enabled.control.enables.load(Ordering::SeqCst), 1);
+    assert_eq!(enabled.control.disables.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        *enabled.control.status.lock().unwrap(),
+        ConversationLogDebugStatus::enabled(601_000).unwrap()
+    );
+
+    let disabled = fixture(AdmissionMode::Granted);
+    let (status, body) = call(
+        disabled.app,
+        "POST",
+        Body::from(r#"{"enabled":false}"#),
+        true,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({
+            "conversationId":"c", "enabled":false, "expiresAt":null,
+            "daemonSynced":true
+        })
+    );
+    assert_eq!(disabled.clock.load(Ordering::SeqCst), 0);
+    assert_eq!(disabled.control.enables.load(Ordering::SeqCst), 0);
+    assert_eq!(disabled.control.disables.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *disabled.control.status.lock().unwrap(),
+        ConversationLogDebugStatus::disabled()
+    );
+}
+
+#[tokio::test]
+async fn strict_boolean_admission_and_the_shared_body_bound_precede_local_control() {
+    for (raw, issue_code) in [
+        ("{}", "invalid_type"),
+        (r#"{"enabled":"yes"}"#, "invalid_type"),
+        (r#"{"enabled":true,"future":1}"#, "unrecognized_keys"),
+        ("not-json", "invalid_type"),
+    ] {
+        let fixture = fixture(AdmissionMode::Granted);
+        let (status, body) = call(fixture.app, "POST", Body::from(raw), true, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{raw}");
+        assert_eq!(body["issues"][0]["code"], issue_code, "{raw}");
+        assert_eq!(fixture.clock.load(Ordering::SeqCst), 0, "{raw}");
+        assert_eq!(fixture.control.enables.load(Ordering::SeqCst), 0, "{raw}");
+        assert_eq!(fixture.control.disables.load(Ordering::SeqCst), 0, "{raw}");
+    }
+
+    let polled = Arc::new(AtomicBool::new(false));
+    let flag = polled.clone();
+    let body = Body::from_stream(stream::once(async move {
+        flag.store(true, Ordering::SeqCst);
+        Ok::<Bytes, Infallible>(Bytes::from_static(b"{}"))
+    }));
+    let fixture = fixture(AdmissionMode::Granted);
+    let (status, body) = call(
+        fixture.app,
+        "POST",
+        body,
+        true,
+        Some(super::super::json_body::JSON_BODY_MAX_BYTES + 1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(body, json!({"error":"payload too large"}));
+    assert!(!polled.load(Ordering::SeqCst));
+    assert_eq!(fixture.control.enables.load(Ordering::SeqCst), 0);
+}
+
+#[derive(Clone)]
+struct SqliteAdmission(SqliteConversationParticipationRead);
+
+impl ConversationLogDebugAdmissionPort for SqliteAdmission {
+    type Error = PersistenceFailure;
+
+    async fn admit(
+        &self,
+        viewer: &UserId,
+        conversation: &ConversationId,
+    ) -> Result<
+        Result<ConversationLogDebugAdmissionFact, ConversationLogDebugAdmissionRefusal>,
+        Self::Error,
+    > {
+        Ok(match self.0.read(viewer, conversation).await? {
+            Ok(source) => Ok(ConversationLogDebugAdmissionFact::selected(
+                source.viewer().clone(),
+                source.conversation().clone(),
+            )),
+            Err(ConversationParticipationRefusal::NotFound) => {
+                Err(ConversationLogDebugAdmissionRefusal::NotFound)
+            }
+            Err(ConversationParticipationRefusal::Forbidden) => {
+                Err(ConversationLogDebugAdmissionRefusal::Forbidden)
+            }
+        })
+    }
+}
+
+async fn sqlite_fixture(setup: &str) -> (tempfile::TempDir, SqliteAdmission) {
+    const SCHEMA: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+    ));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("conversation-log-debug.sqlite");
+    let options = SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let mut db = SqliteConnection::connect_with(&options).await.unwrap();
+    db.execute(sqlx::raw_sql(SCHEMA)).await.unwrap();
+    db.execute(
+        "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES \
+         ('viewer','log-debug-viewer','Viewer',1,1),('peer','log-debug-peer','Peer',1,1)",
+    )
+    .await
+    .unwrap();
+    if setup.starts_with("workspace") {
+        db.execute(
+            "INSERT INTO workspaces(id,name,name_key,created_at,updated_at) VALUES \
+             ('w','Workspace','log-debug-workspace',1,1)",
+        )
+        .await
+        .unwrap();
+        db.execute(
+            "INSERT INTO workspace_users(workspace_id,user_id,joined_at) VALUES('w','viewer',1)",
+        )
+        .await
+        .unwrap();
+        db.execute(
+            "INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,\
+             status,visibility,created_at,updated_at) VALUES \
+             ('c','w','workspace','open','General','general-log-debug','idle','public',1,1)",
+        )
+        .await
+        .unwrap();
+        if setup == "workspace-member" {
+            db.execute(
+                "INSERT INTO conversation_users(conversation_id,user_id,joined_at) VALUES('c','viewer',1)",
+            )
+            .await
+            .unwrap();
+        }
+    } else if setup == "direct-pair-endpoint" {
+        db.execute(
+            "INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,endpoint_a_kind,\
+             endpoint_a_id,endpoint_b_kind,endpoint_b_id,title,title_key,status,visibility,created_at,updated_at) \
+             VALUES('c',NULL,'direct_pair','fixed','human','peer','human','viewer','',NULL,'idle','private',1,1)",
+        )
+        .await
+        .unwrap();
+    }
+    db.close().await.unwrap();
+    let store = MessagingStore::open(&path).await.unwrap();
+    (dir, SqliteAdmission(store.conversation_participation()))
+}
+
+#[tokio::test]
+async fn production_sqlite_source_preserves_strict_workspace_and_direct_pair_participation() {
+    for (setup, expected) in [
+        ("workspace-member", StatusCode::OK),
+        ("workspace-public-nonmember", StatusCode::FORBIDDEN),
+        ("direct-pair-endpoint", StatusCode::OK),
+        ("missing", StatusCode::NOT_FOUND),
+    ] {
+        let (_dir, admission) = sqlite_fixture(setup).await;
+        let control = Control::default();
+        let app = router(
+            admission,
+            control,
+            Clock {
+                now: 1_000,
+                calls: Arc::new(AtomicUsize::new(0)),
+            },
+        );
+        let (status, body) = call(app, "GET", Body::empty(), true, None).await;
+        assert_eq!(status, expected, "{setup}");
+        if expected == StatusCode::OK {
+            assert_eq!(body["conversationId"], "c", "{setup}");
+        }
+    }
+}

@@ -39,9 +39,13 @@ use silverhand_backend_core::{
         },
         unread::{LatestUnread as CoreLatestUnread, UnreadAudience, UnreadReadModel, ViewerUnread},
     },
+    policy::presence_grace::{GraceWindow, PresenceFact},
     scope_event::{AuthorizeEventScope, EventScope},
+    user_presence_cold_read::UserPresenceReadModel,
+    user_presence_last_seen::LastSeenSink,
 };
 
+use crate::host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers};
 use crate::messaging::message_wire::{copy_dto, message_event_payload};
 use tokio::{
     sync::{Notify, broadcast, mpsc, oneshot, watch},
@@ -228,6 +232,19 @@ enum ProductEvent {
     ConversationActivity(Value),
     AgentPresenceChanged {
         agent_id: String,
+    },
+    /// A human viewer's presence transitioned. The USER-presence axis, distinct
+    /// from [`AgentPresenceChanged`](ProductEvent::AgentPresenceChanged): it rides
+    /// the global `app` scope (every viewer sees every viewer's presence, mirroring
+    /// the TypeScript `publishToScope('app', 'user_presence', dto)`), and its payload
+    /// is the SAME `{user_id, presence, last_seen_at}` wire row `GET /api/presence`
+    /// emits — the online arm always carries `last_seen_at: null`, so a present
+    /// viewer's stored stamp is never leaked here either. Projected once, at the
+    /// producer, from the committed [`PresenceFact`] the grace registry publishes.
+    UserPresence {
+        user_id: String,
+        presence: &'static str,
+        last_seen_at: Option<i64>,
     },
     /// The one committed-message frame every reader of a conversation receives, the
     /// SAME `{message, projections?}` value the sender's ACK projects — built by the
@@ -471,6 +488,36 @@ impl ScopeEventHub {
                 agent_id: agent.as_str().to_owned(),
             },
         )
+    }
+
+    /// Publish a human viewer's presence transition on the global `app` scope. The
+    /// SOLE projector of a [`PresenceFact`] onto the wire: the `Online` arm carries
+    /// `last_seen_at: null` (a present viewer's stored stamp is never leaked), the
+    /// `Offline` arm carries the decided stamp. Mirrors the TypeScript
+    /// `PresenceRegistry.publish` → `publishToScope('app', 'user_presence', dto)`.
+    pub(crate) fn publish_user_presence(
+        &self,
+        fact: &PresenceFact,
+    ) -> Result<(), ScopeEventHubError> {
+        let event = match fact {
+            PresenceFact::Online { user_id } => ProductEvent::UserPresence {
+                user_id: user_id.as_str().to_owned(),
+                presence: "online",
+                last_seen_at: None,
+            },
+            PresenceFact::Offline {
+                user_id,
+                last_seen_at,
+            } => ProductEvent::UserPresence {
+                user_id: user_id.as_str().to_owned(),
+                presence: "offline",
+                // The stamp is a sealed `LastSeenAt`, wire-safe by construction:
+                // the raw integer is unwrapped only here, at the wire, exactly as
+                // the GET presence route does — no range check is possible here.
+                last_seen_at: Some(last_seen_at.get()),
+            },
+        };
+        self.publish(EventScope::App, event)
     }
 
     pub(crate) fn publish_daemon_side(
@@ -865,6 +912,31 @@ impl<R: UnreadReadModel + Send + Sync> UnreadPublication for HubUnreadPublisher<
     }
 }
 
+/// The production [`PresenceFactSink`]: the committed presence transition the grace
+/// registry decides is projected straight onto the `user_presence` wire. It carries
+/// no policy — [`ScopeEventHub::publish_user_presence`] is the sole projector — so a
+/// transition can never be dropped or reshaped between the registry and the wire.
+/// Clone is a cheap handle clone (the hub is an `Arc`-backed handle); the sink runs
+/// while the presence state lock is held, so `publish` neither blocks nor calls back.
+#[derive(Clone)]
+pub struct HubPresenceSink {
+    hub: ScopeEventHub,
+}
+
+impl HubPresenceSink {
+    pub fn new(hub: ScopeEventHub) -> Self {
+        Self { hub }
+    }
+}
+
+impl PresenceFactSink for HubPresenceSink {
+    type Error = ScopeEventHubError;
+
+    fn publish(&self, fact: PresenceFact) -> Result<(), Self::Error> {
+        self.hub.publish_user_presence(&fact)
+    }
+}
+
 struct Subscription {
     current_seq: TransportSeq,
     receiver: broadcast::Receiver<ScopedEvent>,
@@ -890,6 +962,7 @@ struct EventServerState<A, S> {
     scope_authority: S,
     config: EventWebSocketConfig,
     registry: ConnectionRegistry,
+    lifecycle: Arc<dyn ConnectionLifecycle>,
 }
 
 #[derive(Clone, Default)]
@@ -944,6 +1017,240 @@ impl ConnectionRegistry {
     }
 }
 
+/// The transport's required hook into a viewer's connection lifetime — the
+/// anti-corruption boundary between this event transport and presence. The
+/// transport reports admission (`on_connect`) and termination (`on_disconnect`)
+/// and nothing else: it never learns how, or whether, those become presence
+/// facts, and it carries no clock or timestamp of its own. A presence adapter
+/// behind this port samples the disconnect clock and seals the last-seen instant;
+/// the transport stays oblivious.
+pub trait ConnectionLifecycle: Send + Sync {
+    fn on_connect(&self, viewer: &UserId, connection_id: &str);
+    fn on_disconnect(&self, viewer: &UserId, connection_id: &str);
+}
+
+/// Null lifecycle for transports composed without presence — in-crate tests, and
+/// (as a locally-defined twin) the integration test crates. It is an explicit,
+/// named "observe nothing", not a silent default; it is `#[cfg(test)]` so no
+/// production composition can name it, and the compiler — not a lint — is what
+/// forbids shipping a transport that silently observes no presence. Production
+/// composes [`PresenceConnectionFeed`] instead.
+#[cfg(test)]
+pub struct NoopConnectionLifecycle;
+
+#[cfg(test)]
+impl ConnectionLifecycle for NoopConnectionLifecycle {
+    fn on_connect(&self, _viewer: &UserId, _connection_id: &str) {}
+    fn on_disconnect(&self, _viewer: &UserId, _connection_id: &str) {}
+}
+
+/// RAII bracket guaranteeing `on_disconnect` fires exactly once for a connection
+/// that was admitted with `on_connect`. It is constructed only after the
+/// `Authenticated` frame is sent, so a socket that never authenticated is never
+/// counted online; and its `Drop` runs on every way [`connection`] can end —
+/// normal close, server shutdown, protocol error, or task abort — so the pairing
+/// holds without enumerating the loop's exit points.
+struct ConnectionLifetime {
+    lifecycle: Arc<dyn ConnectionLifecycle>,
+    viewer: UserId,
+    connection_id: String,
+}
+
+impl ConnectionLifetime {
+    fn begin(
+        lifecycle: Arc<dyn ConnectionLifecycle>,
+        viewer: UserId,
+        connection_id: String,
+    ) -> Self {
+        lifecycle.on_connect(&viewer, &connection_id);
+        Self {
+            lifecycle,
+            viewer,
+            connection_id,
+        }
+    }
+}
+
+impl Drop for ConnectionLifetime {
+    fn drop(&mut self) {
+        self.lifecycle
+            .on_disconnect(&self.viewer, &self.connection_id);
+    }
+}
+
+/// The presence adapter's own wall-clock capability: the single environment
+/// authority [`PresenceConnectionFeed`] samples to seal a disconnect instant.
+/// Presence owns this port rather than borrowing the transport's generic host
+/// `Clock`, so a clock fault is a presence-domain fact — audited once by the feed
+/// and turned into a plain connection eviction — not a foreign error type
+/// threaded through an unrelated bounded context, and not a magic sentinel.
+pub trait DisconnectClock: Send + Sync {
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    fn read_unix_ms(&self) -> Result<i64, Self::Error>;
+}
+
+/// The production disconnect clock: the system wall clock. Its only failure is a
+/// host clock set before the Unix epoch, which `SystemTime::duration_since`
+/// reports; the feed then evicts the connection without sealing an instant.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemDisconnectClock;
+
+#[derive(Debug)]
+pub enum SystemClockFault {
+    /// The host wall clock is set before the Unix epoch.
+    BeforeEpoch(std::time::SystemTimeError),
+    /// The elapsed-since-epoch milliseconds exceed the `i64` an instant is stored in.
+    /// Casting `u128` millis straight to `i64` would wrap — and could land back on a
+    /// small positive value that masquerades as a genuine stamp — so the out-of-range
+    /// reading is a named fault, not a silently narrowed instant. (This guards only the
+    /// `u128`→`i64` narrowing; the tighter `MAX_SAFE_INTEGER` wire ceiling is a separate
+    /// concern sealed downstream by `LastSeenAt`.)
+    MillisOverflow(u128),
+}
+
+impl std::fmt::Display for SystemClockFault {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BeforeEpoch(_) => {
+                formatter.write_str("system wall clock is set before the unix epoch")
+            }
+            Self::MillisOverflow(millis) => write!(
+                formatter,
+                "system wall clock elapsed {millis} ms exceeds the i64 instant range"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SystemClockFault {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::BeforeEpoch(error) => Some(error),
+            Self::MillisOverflow(_) => None,
+        }
+    }
+}
+
+/// Narrows an elapsed-since-epoch duration to an `i64` millisecond instant.
+///
+/// `Duration::as_millis` is a `u128`; casting it straight to `i64` would wrap on an
+/// absurd clock reading and could even land back on a small positive value the store
+/// would accept as a genuine stamp. The conversion is therefore checked: anything
+/// past `i64::MAX` is a [`SystemClockFault::MillisOverflow`] routed through the feed's
+/// evict / no-persist / no-publish arm, never a narrowed instant. This guards ONLY the
+/// `u128`→`i64` narrowing — the tighter `MAX_SAFE_INTEGER` wire ceiling is sealed
+/// downstream by `LastSeenAt`. Taking the duration as input lets a test drive the
+/// `i64::MAX + 1` boundary the real system clock will not reach in practice.
+fn duration_to_unix_ms(elapsed: std::time::Duration) -> Result<i64, SystemClockFault> {
+    let millis = elapsed.as_millis();
+    i64::try_from(millis).map_err(|_| SystemClockFault::MillisOverflow(millis))
+}
+
+impl DisconnectClock for SystemDisconnectClock {
+    type Error = SystemClockFault;
+
+    fn read_unix_ms(&self) -> Result<i64, Self::Error> {
+        let elapsed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(SystemClockFault::BeforeEpoch)?;
+        duration_to_unix_ms(elapsed)
+    }
+}
+
+/// The production [`ConnectionLifecycle`]: it turns the transport's clock-free
+/// connect/disconnect reports into presence transitions on the grace registry.
+///
+/// This adapter is the ONE place the disconnect wall clock is sampled — the
+/// transport stays oblivious to time (see [`ConnectionLifecycle`]) — and it holds
+/// a clone of the SAME [`PresenceGraceTimers`] the `GET /api/presence` route reads
+/// its live half from. Because a clone shares the one registry, the connection a
+/// socket opens here and the liveness that route reports observe a single fact;
+/// composing the feed and the route over two separate `PresenceGraceTimers::new`
+/// registries would silently sever that, which the composition root's
+/// split-registry counterexample proves RED.
+///
+/// A clock that cannot produce an instant is never a reason to strand the gone
+/// connection online: the feed audits the fault exactly once — it owns the clock,
+/// so this is the sole source chain — and then [`PresenceGraceTimers::evict`]s the
+/// connection. Eviction schedules no window and persists and publishes no offline;
+/// no sentinel instant is fabricated and the timer logs nothing, so the failure is
+/// audited once and only here.
+pub struct PresenceConnectionFeed<C, L, S> {
+    timers: PresenceGraceTimers<L, S>,
+    clock: C,
+}
+
+impl<C, L, S> PresenceConnectionFeed<C, L, S> {
+    pub fn new(timers: PresenceGraceTimers<L, S>, clock: C) -> Self {
+        Self { timers, clock }
+    }
+}
+
+impl<C, L, S> ConnectionLifecycle for PresenceConnectionFeed<C, L, S>
+where
+    C: DisconnectClock,
+    L: LastSeenSink,
+    S: PresenceFactSink,
+{
+    fn on_connect(&self, viewer: &UserId, connection_id: &str) {
+        self.timers.on_connect(viewer, connection_id);
+    }
+
+    fn on_disconnect(&self, viewer: &UserId, connection_id: &str) {
+        match self.clock.read_unix_ms() {
+            Ok(now) => self.timers.on_disconnect(viewer, connection_id, now),
+            Err(error) => {
+                tracing::error!(
+                    user_id = %viewer.as_str(),
+                    error_chain = %crate::error::describe(&error),
+                    "presence: disconnect wall clock unavailable; evicting the connection without an offline instant"
+                );
+                self.timers.evict(viewer, connection_id);
+            }
+        }
+    }
+}
+
+/// Composes the presence vertical from injected adapters: ONE
+/// [`PresenceGraceTimers`] is both the `OnlineViewers` the `GET /api/presence`
+/// route reads and — wrapped in a [`PresenceConnectionFeed`] over the disconnect
+/// clock — the transport's connect/disconnect sink. The returned router is
+/// unmounted (the composition root guards it behind the human perimeter), the feed
+/// is handed to the event transport, and the timers handle is retained so shutdown
+/// can dispose the live windows.
+///
+/// The composition root and the offline vertical E2E build the vertical through
+/// this ONE constructor, so the test drives the exact production wiring — real
+/// last-seen sink, real [`HubPresenceSink`], real timers and feed — and only the
+/// injected disconnect clock and grace window differ. The adapters are injected by
+/// the caller: this factory names no concrete storage, only the presence machinery
+/// it owns.
+pub fn compose_presence_vertical<U, L, K>(
+    presence_cold_read: U,
+    last_seen_sink: L,
+    hub: ScopeEventHub,
+    disconnect_clock: K,
+    grace: GraceWindow,
+) -> (
+    Router,
+    Arc<dyn ConnectionLifecycle>,
+    PresenceGraceTimers<L, HubPresenceSink>,
+)
+where
+    U: UserPresenceReadModel + Clone + Send + Sync + 'static,
+    L: LastSeenSink + Clone + Send + Sync + 'static,
+    K: DisconnectClock + 'static,
+{
+    let timers = PresenceGraceTimers::new(last_seen_sink, HubPresenceSink::new(hub), grace);
+    let router = crate::host_agent::presence::router(presence_cold_read, timers.clone());
+    let feed: Arc<dyn ConnectionLifecycle> = Arc::new(PresenceConnectionFeed::new(
+        timers.clone(),
+        disconnect_clock,
+    ));
+    (router, feed, timers)
+}
+
 #[derive(Clone)]
 pub struct EventWebSocketController {
     registry: ConnectionRegistry,
@@ -995,6 +1302,7 @@ pub fn router<A, S>(
     hub: ScopeEventHub,
     sessions: A,
     scope_authority: S,
+    lifecycle: Arc<dyn ConnectionLifecycle>,
     config: EventWebSocketConfig,
 ) -> (Router, EventWebSocketController)
 where
@@ -1012,6 +1320,7 @@ where
         scope_authority,
         config,
         registry,
+        lifecycle,
     };
     let router = Router::new()
         .route(EVENT_WEBSOCKET_PATH, get(event_websocket::<A, S>))
@@ -1086,7 +1395,7 @@ where
     let worker_state = state.clone();
     let worker = tokio::spawn(async move {
         if started.await.is_ok() {
-            connection(socket, worker_state, viewer, shutdown_rx).await;
+            connection(socket, worker_state, viewer, id, shutdown_rx).await;
         }
     });
     let abort = worker.abort_handle();
@@ -1194,6 +1503,7 @@ async fn connection<A, S>(
     mut socket: WebSocket,
     state: EventServerState<A, S>,
     viewer: UserId,
+    connection_id: u64,
     mut shutdown: watch::Receiver<bool>,
 ) where
     A: AuthenticateHumanSession,
@@ -1211,6 +1521,13 @@ async fn connection<A, S>(
     {
         return;
     }
+    // Admission succeeded: from here the connection counts as online, and the
+    // bracket's Drop guarantees the matching disconnect on every exit below.
+    let _lifetime = ConnectionLifetime::begin(
+        state.lifecycle.clone(),
+        viewer.clone(),
+        connection_id.to_string(),
+    );
     let (events_tx, mut events_rx) = mpsc::channel(CONNECTION_QUEUE_CAPACITY);
     let mut subscriptions: HashMap<EventScope, ActiveSubscription> = HashMap::new();
     let mut heartbeat = Heartbeat::default();
@@ -1743,6 +2060,7 @@ mod tests {
     };
 
     use futures_util::{SinkExt, StreamExt};
+    use silverhand_backend_core::cold_read::presence::LastSeenAt;
     use silverhand_backend_core::{
         auth::{AuthenticateHumanSession, SessionBearer},
         direct_pair_read::DirectPairReadModel,
@@ -1770,6 +2088,8 @@ mod tests {
         messaging::MessagingStore,
         runtime_delivery::SqliteRuntimeDeliveryStore,
         unread_read::{SqliteUnreadReadModel, UnreadReadModelError},
+        user_presence_cold_read::SqliteUserPresenceColdRead,
+        user_presence_last_seen::SqliteLastSeenSink,
     };
     use sqlx::{Connection, SqliteConnection};
     use tokio::sync::Barrier;
@@ -2425,6 +2745,459 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn user_presence_wire_parity_matches_the_typescript_signed_rows() {
+        // TS-first: these fixtures are signed by the REAL `PresenceRegistry`
+        // (packages/backend/tests/presence-event-parity.test.ts) before this
+        // replay is asked to match them, so the two impls cannot drift on scope,
+        // discriminant, the online arm's suppressed `null`, or the offline stamp.
+        const ONLINE: &str =
+            include_str!("../../../../packages/backend/tests/fixtures/presence-event/online.json");
+        const OFFLINE: &str =
+            include_str!("../../../../packages/backend/tests/fixtures/presence-event/offline.json");
+
+        let hub = ScopeEventHub::test("epoch-1");
+        // Drive the fixture replay through the PRODUCTION sink, not the hub helper:
+        // a no-op `PresenceFactSink` that swallowed the fact would then fail this
+        // gate, which is the fake-wiring this phase exists to forbid.
+        let sink = HubPresenceSink::new(hub.clone());
+        let viewer = UserId::parse("viewer-1").unwrap();
+        PresenceFactSink::publish(
+            &sink,
+            PresenceFact::Online {
+                user_id: viewer.clone(),
+            },
+        )
+        .unwrap();
+        PresenceFactSink::publish(
+            &sink,
+            PresenceFact::Offline {
+                user_id: viewer.clone(),
+                last_seen_at: LastSeenAt::from_stored(1_234_000).unwrap(),
+            },
+        )
+        .unwrap();
+
+        // Both transitions ride the global `app` scope, in emit order.
+        let resumed = hub
+            .resume(
+                &EventScope::App,
+                &TransportEpoch::parse("epoch-1").unwrap(),
+                TransportSeq::ZERO,
+            )
+            .unwrap();
+        let Replay::Events(events) = resumed.replay else {
+            panic!("same epoch must replay the app-scope presence events")
+        };
+        assert_eq!(events.len(), 2);
+
+        for (index, (event, fixture_json)) in events.iter().zip([ONLINE, OFFLINE]).enumerate() {
+            let fixture: serde_json::Value = serde_json::from_str(fixture_json).unwrap();
+            // The EXACT app-scope frame: the transport envelope plus the TS-signed
+            // scope/kind/payload the cross-language fixture pins.
+            assert_eq!(
+                serde_json::to_value(event).unwrap(),
+                serde_json::json!({
+                    "type": "event",
+                    "scope": fixture["scope"],
+                    "seq": index + 1,
+                    "epoch": "epoch-1",
+                    "kind": fixture["kind"],
+                    "payload": fixture["payload"],
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn the_production_presence_sink_surfaces_the_hub_error_and_emits_no_frame() {
+        // Failure-preservation through the SAME production path: a transport fault
+        // must reach the caller as the exact `ScopeEventHubError` and leave nothing
+        // on the scope. Swallowing the error, remapping its cause, or bypassing the
+        // sink would each break this gate.
+        let hub = ScopeEventHub::test("epoch-1");
+        let sink = HubPresenceSink::new(hub.clone());
+        let epoch = TransportEpoch::parse("epoch-1").unwrap();
+
+        // Materialize the app scope, then drive it to the sequence ceiling so the
+        // next publish must fail.
+        hub.resume(&EventScope::App, &epoch, TransportSeq::ZERO)
+            .unwrap();
+        {
+            let mut scopes = hub.scopes.lock().unwrap();
+            scopes.get_mut(&EventScope::App).unwrap().seq = TransportSeq(MAX_TRANSPORT_SEQ);
+        }
+
+        let error = PresenceFactSink::publish(
+            &sink,
+            PresenceFact::Online {
+                user_id: UserId::parse("viewer-1").unwrap(),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, ScopeEventHubError::SequenceExhausted));
+
+        // Zero frames buffered: the reservation failed before the ring was touched.
+        let scopes = hub.scopes.lock().unwrap();
+        assert!(scopes.get(&EventScope::App).unwrap().replay.is_empty());
+    }
+
+    // ---- The composed presence vertical, end to end -------------------------
+    //
+    // These build the vertical through the ONE constructor the composition root
+    // builds it with (`compose_presence_vertical`), over the REAL adapters: the
+    // sqlite last-seen sink writes `users.last_seen_at`, the sqlite cold read loads
+    // it back for the read face, and the real `HubPresenceSink` projects the
+    // transition onto the global `app` scope. Only the disconnect clock (frozen, so
+    // the sealed instant is a value these tests name) and the grace window (short,
+    // so a window can expire inside a test) differ from production. A fake sink, a
+    // second registry behind the read face, or a window that never reached the
+    // database would each fail here.
+    //
+    // Timing is REAL, not virtual. The durable half is genuine I/O, and under a
+    // paused clock tokio auto-advances whenever the runtime waits on that I/O —
+    // which would fire the pending window early and make "still online inside the
+    // window" untestable. Determinism comes from the runtime shape instead: these
+    // run on the current-thread runtime, so a window's task cannot be polled while
+    // the test body executes synchronous statements. A disconnect followed with NO
+    // intervening `await` by a reconnect or a dispose is therefore guaranteed to be
+    // observed before the window can fire, and every positive effect is awaited by
+    // polling the authority that records it rather than by guessing a delay.
+
+    /// Long enough that a read inside the window cannot race the expiry, short
+    /// enough that crossing it costs a test a fraction of a second.
+    const VERTICAL_GRACE_MS: i64 = 500;
+
+    /// The instant the frozen disconnect clock seals. The database, the read face
+    /// and the wire must all carry THIS value; a stamp re-derived at expiry, or
+    /// fabricated, fails.
+    const SEALED_DISCONNECT_MS: i64 = 1_700_000_000_123;
+
+    /// A disconnect clock frozen at one instant, so the offline stamp under test is
+    /// a value named here rather than whatever the wall clock happened to read.
+    struct FrozenDisconnectClock(i64);
+
+    impl DisconnectClock for FrozenDisconnectClock {
+        type Error = Infallible;
+
+        fn read_unix_ms(&self) -> Result<i64, Self::Error> {
+            Ok(self.0)
+        }
+    }
+
+    #[test]
+    fn a_clock_reading_past_the_i64_instant_range_is_a_named_fault_not_a_wrapped_instant() {
+        use std::time::Duration;
+
+        // `i64::MAX` ms is the largest instant the `i64` store can hold; it narrows
+        // exactly. (The tighter MAX_SAFE_INTEGER wire ceiling is a downstream concern.)
+        let boundary = Duration::from_millis(i64::MAX as u64);
+        assert_eq!(super::duration_to_unix_ms(boundary).unwrap(), i64::MAX);
+
+        // One millisecond past it must be refused as a named overflow, NOT wrapped
+        // (an unchecked `as i64` here yields `i64::MIN`, a plausible-looking stamp).
+        let over = boundary + Duration::from_millis(1);
+        match super::duration_to_unix_ms(over) {
+            Err(SystemClockFault::MillisOverflow(millis)) => {
+                assert_eq!(millis, i64::MAX as u128 + 1);
+            }
+            other => panic!("expected MillisOverflow at i64::MAX + 1, got {other:?}"),
+        }
+    }
+
+    struct Vertical {
+        router: Router,
+        feed: Arc<dyn ConnectionLifecycle>,
+        timers: PresenceGraceTimers<SqliteLastSeenSink, HubPresenceSink>,
+        hub: ScopeEventHub,
+        path: std::path::PathBuf,
+        _directory: tempfile::TempDir,
+    }
+
+    /// The vertical the composition root composes, over one seeded viewer whose
+    /// stored stamp starts NULL so every durable write is observable.
+    async fn presence_vertical() -> Vertical {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("presence.sqlite");
+        let mut db = current_schema::create_current_schema(&path).await;
+        sqlx::query(
+            "INSERT INTO users (id, name, display_name, created_at, updated_at, last_seen_at) \
+             VALUES ('viewer-1', 'viewer', 'Viewer', 1, 1, NULL)",
+        )
+        .execute(&mut db)
+        .await
+        .unwrap();
+        db.close().await.unwrap();
+
+        let hub = ScopeEventHub::test("epoch-1");
+        let (router, feed, timers) = compose_presence_vertical(
+            SqliteUserPresenceColdRead::open(&path).await.unwrap(),
+            SqliteLastSeenSink::open(&path).await.unwrap(),
+            hub.clone(),
+            FrozenDisconnectClock(SEALED_DISCONNECT_MS),
+            GraceWindow::from_millis_or_default(Some(VERTICAL_GRACE_MS)),
+        );
+        Vertical {
+            router,
+            feed,
+            timers,
+            hub,
+            path,
+            _directory: directory,
+        }
+    }
+
+    fn viewer() -> UserId {
+        UserId::parse("viewer-1").unwrap()
+    }
+
+    /// The read face, through the composed router — the cold last-seen facts joined
+    /// with the live registry the same composition handed the route.
+    async fn presence_read(router: &Router) -> Value {
+        let response = router
+            .clone()
+            .oneshot(
+                axum::http::Request::get(crate::host_agent::presence::PRESENCE_PATH)
+                    .extension(viewer())
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// The durable half, read straight from the column the production sink writes.
+    async fn stored_last_seen(path: &std::path::Path) -> Option<i64> {
+        let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+            .await
+            .unwrap();
+        let stored: Option<i64> =
+            sqlx::query_scalar("SELECT last_seen_at FROM users WHERE id = 'viewer-1'")
+                .fetch_one(&mut db)
+                .await
+                .unwrap();
+        db.close().await.unwrap();
+        stored
+    }
+
+    /// Every frame the global `app` scope holds, in emit order — the wire the real
+    /// `HubPresenceSink` published to.
+    fn app_scope_frames(hub: &ScopeEventHub) -> Vec<Value> {
+        let resumed = hub
+            .resume(
+                &EventScope::App,
+                &TransportEpoch::parse("epoch-1").unwrap(),
+                TransportSeq::ZERO,
+            )
+            .unwrap();
+        let Replay::Events(events) = resumed.replay else {
+            panic!("same epoch must replay the app-scope presence frames")
+        };
+        events
+            .iter()
+            .map(|event| serde_json::to_value(event).unwrap())
+            .collect()
+    }
+
+    fn presence_frame(seq: u64, presence: &str, last_seen_at: Value) -> Value {
+        json!({
+            "type": "event",
+            "scope": "app",
+            "seq": seq,
+            "epoch": "epoch-1",
+            "kind": "user_presence",
+            "payload": {
+                "user_id": "viewer-1",
+                "presence": presence,
+                "last_seen_at": last_seen_at,
+            },
+        })
+    }
+
+    fn presence_body(presence: &str, last_seen_at: Value) -> Value {
+        json!({
+            "users": [{
+                "user_id": "viewer-1",
+                "presence": presence,
+                "last_seen_at": last_seen_at,
+            }],
+        })
+    }
+
+    /// The expiry is real elapsed time and the write it triggers is real I/O, so the
+    /// durable effect is AWAITED: the column the production sink writes is polled
+    /// until it holds the sealed instant.
+    async fn await_sealed_last_seen(path: &std::path::Path) {
+        for _ in 0..200 {
+            if stored_last_seen(path).await == Some(SEALED_DISCONNECT_MS) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("the expiring window never persisted the sealed disconnect instant");
+    }
+
+    /// The wire half is awaited the same way. The publish follows the durable write,
+    /// so an assertion on the frame list would otherwise race it.
+    async fn await_frames(hub: &ScopeEventHub, expected: usize) -> Vec<Value> {
+        for _ in 0..200 {
+            let frames = app_scope_frames(hub);
+            if frames.len() >= expected {
+                return frames;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("the app scope never carried the expected presence frames");
+    }
+
+    /// Passes the pending window's whole deadline, so a negative assertion states
+    /// "the deadline came and went with no effect" rather than "the test did not
+    /// wait long enough".
+    async fn outlast_the_window() {
+        tokio::time::sleep(Duration::from_millis(2 * VERTICAL_GRACE_MS as u64)).await;
+    }
+
+    #[tokio::test]
+    async fn the_composed_vertical_seals_one_disconnect_instant_into_the_database_the_read_face_and_the_wire()
+     {
+        let v = presence_vertical().await;
+
+        // Connecting announces Online through the SAME sink the wire reads, and the
+        // read face joins the live registry the composition handed the route.
+        v.feed.on_connect(&viewer(), "c1");
+        assert_eq!(
+            presence_read(&v.router).await,
+            presence_body("online", Value::Null)
+        );
+        assert_eq!(
+            app_scope_frames(&v.hub),
+            vec![presence_frame(1, "online", Value::Null)]
+        );
+
+        // Inside the window the viewer is STILL online and nothing is durable yet:
+        // the offline instant is decided at disconnect but not effected until the
+        // window expires.
+        v.feed.on_disconnect(&viewer(), "c1");
+        assert_eq!(
+            presence_read(&v.router).await,
+            presence_body("online", Value::Null)
+        );
+        assert_eq!(stored_last_seen(&v.path).await, None);
+        assert_eq!(
+            app_scope_frames(&v.hub),
+            vec![presence_frame(1, "online", Value::Null)]
+        );
+
+        // The window expires: ONE instant — the one the frozen clock sealed at
+        // disconnect, not the expiry — lands in the database, the read face and the
+        // wire.
+        await_sealed_last_seen(&v.path).await;
+        let frames = await_frames(&v.hub, 2).await;
+        assert_eq!(
+            frames,
+            vec![
+                presence_frame(1, "online", Value::Null),
+                presence_frame(2, "offline", json!(SEALED_DISCONNECT_MS)),
+            ]
+        );
+        assert_eq!(
+            presence_read(&v.router).await,
+            presence_body("offline", json!(SEALED_DISCONNECT_MS))
+        );
+        assert!(!v.timers.is_online(&viewer()));
+
+        // Exactly once: another whole window passes with no second offline frame and
+        // no further write.
+        outlast_the_window().await;
+        assert_eq!(app_scope_frames(&v.hub).len(), 2);
+        assert_eq!(stored_last_seen(&v.path).await, Some(SEALED_DISCONNECT_MS));
+
+        // A later connection transitions back to Online through the same sink.
+        v.feed.on_connect(&viewer(), "c2");
+        assert_eq!(
+            app_scope_frames(&v.hub),
+            vec![
+                presence_frame(1, "online", Value::Null),
+                presence_frame(2, "offline", json!(SEALED_DISCONNECT_MS)),
+                presence_frame(3, "online", Value::Null),
+            ]
+        );
+        // Coming back does not clear the stored stamp — the live half suppresses it,
+        // which is what makes the read face the joined answer rather than either
+        // authority alone.
+        assert_eq!(
+            presence_read(&v.router).await,
+            presence_body("online", Value::Null)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reconnect_inside_the_composed_window_cancels_every_effect_and_a_later_disconnect_seals_once()
+     {
+        let v = presence_vertical().await;
+
+        // Disconnect then reconnect with NO await between them: on the current-thread
+        // runtime the window's task cannot be polled until this body yields, so the
+        // reconnect provably lands inside the window.
+        v.feed.on_connect(&viewer(), "c1");
+        v.feed.on_disconnect(&viewer(), "c1");
+        v.feed.on_connect(&viewer(), "c2");
+
+        // The original deadline comes and goes: the superseded window stays silent,
+        // so no stale offline crosses it — nothing durable, nothing on the wire — and
+        // the reconnect does not re-announce the Online it never left.
+        outlast_the_window().await;
+        assert_eq!(stored_last_seen(&v.path).await, None);
+        assert_eq!(
+            app_scope_frames(&v.hub),
+            vec![presence_frame(1, "online", Value::Null)]
+        );
+        assert_eq!(
+            presence_read(&v.router).await,
+            presence_body("online", Value::Null)
+        );
+
+        // The real disconnect that follows still seals exactly once.
+        v.feed.on_disconnect(&viewer(), "c2");
+        await_sealed_last_seen(&v.path).await;
+        let frames = await_frames(&v.hub, 2).await;
+        assert_eq!(
+            frames,
+            vec![
+                presence_frame(1, "online", Value::Null),
+                presence_frame(2, "offline", json!(SEALED_DISCONNECT_MS)),
+            ]
+        );
+        outlast_the_window().await;
+        assert_eq!(app_scope_frames(&v.hub).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn disposing_the_composed_vertical_drops_the_pending_window_with_no_effect() {
+        let v = presence_vertical().await;
+
+        // `dispose` is called on the handle the composition root retains and, at
+        // shutdown, disposes AFTER the connections are closed. Disposing while a
+        // window is still pending IS that shutdown, and it must not leave an offline
+        // transition to fire against a torn-down process.
+        v.feed.on_connect(&viewer(), "c1");
+        v.feed.on_disconnect(&viewer(), "c1");
+        v.timers.dispose();
+        assert!(!v.timers.is_online(&viewer()));
+
+        outlast_the_window().await;
+        assert_eq!(stored_last_seen(&v.path).await, None);
+        assert_eq!(
+            app_scope_frames(&v.hub),
+            vec![presence_frame(1, "online", Value::Null)]
+        );
+    }
+
     #[tokio::test]
     async fn concurrent_pair_mints_publish_only_the_insert_winner() {
         let (_directory, path) = direct_pair_database().await;
@@ -2772,6 +3545,217 @@ mod tests {
         }
     }
 
+    /// One recorded lifecycle call: (kind, viewer id, connection id).
+    type LifecycleEntry = (&'static str, String, String);
+
+    /// Records every lifecycle call so a test can prove the connect/disconnect
+    /// pairing. Cloning shares the underlying log, so the copy handed to `router`
+    /// and the copy the test inspects are the same ledger.
+    #[derive(Clone, Default)]
+    struct LifecycleLog {
+        entries: Arc<Mutex<Vec<LifecycleEntry>>>,
+    }
+
+    impl LifecycleLog {
+        fn of_kind(&self, kind: &str) -> Vec<(String, String)> {
+            self.entries
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(entry_kind, _, _)| *entry_kind == kind)
+                .map(|(_, viewer, id)| (viewer.clone(), id.clone()))
+                .collect()
+        }
+    }
+
+    impl ConnectionLifecycle for LifecycleLog {
+        fn on_connect(&self, viewer: &UserId, connection_id: &str) {
+            self.entries.lock().unwrap().push((
+                "connect",
+                viewer.as_str().to_owned(),
+                connection_id.to_owned(),
+            ));
+        }
+
+        fn on_disconnect(&self, viewer: &UserId, connection_id: &str) {
+            self.entries.lock().unwrap().push((
+                "disconnect",
+                viewer.as_str().to_owned(),
+                connection_id.to_owned(),
+            ));
+        }
+    }
+
+    async fn wait_until_drained(controller: &EventWebSocketController) {
+        for _ in 0..200 {
+            if controller.active_connection_count() == 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the connection never drained after termination");
+    }
+
+    #[test]
+    fn the_lifetime_bracket_pairs_one_connect_with_exactly_one_drop_disconnect() {
+        let log = LifecycleLog::default();
+        let viewer = user().as_str().to_owned();
+        {
+            let _lifetime =
+                ConnectionLifetime::begin(Arc::new(log.clone()), user(), "42".to_owned());
+            assert_eq!(
+                log.of_kind("connect"),
+                vec![(viewer.clone(), "42".to_owned())],
+                "on_connect fires once, at admission"
+            );
+            assert!(
+                log.of_kind("disconnect").is_empty(),
+                "no disconnect while the bracket is live"
+            );
+        }
+        // The bracket left scope: Drop fired the matching disconnect.
+        assert_eq!(
+            log.of_kind("disconnect"),
+            vec![(viewer, "42".to_owned())],
+            "Drop fires the matching disconnect exactly once"
+        );
+        assert_eq!(log.of_kind("connect").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_client_close_fires_exactly_one_disconnect_for_the_admitted_connection() {
+        let hub = ScopeEventHub::test("epoch-1");
+        let origin = "http://127.0.0.1";
+        let log = LifecycleLog::default();
+        let (app, controller) = router(
+            hub,
+            Sessions,
+            Allows,
+            Arc::new(log.clone()),
+            EventWebSocketConfig::test(origin),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut socket = connect(address, origin).await;
+        assert_eq!(next_json(&mut socket).await["type"], "authenticated");
+        socket.close(None).await.unwrap();
+        wait_until_drained(&controller).await;
+
+        let connects = log.of_kind("connect");
+        let disconnects = log.of_kind("disconnect");
+        assert_eq!(connects.len(), 1, "admission connects exactly once");
+        assert_eq!(
+            disconnects.len(),
+            1,
+            "the sole termination disconnects exactly once — never zero, never twice"
+        );
+        assert_eq!(
+            connects, disconnects,
+            "connect and disconnect name the same admitted viewer and connection id"
+        );
+        assert_eq!(connects[0].0, user().as_str());
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_server_shutdown_fires_exactly_one_disconnect_for_a_live_connection() {
+        let hub = ScopeEventHub::test("epoch-1");
+        let origin = "http://127.0.0.1";
+        let log = LifecycleLog::default();
+        let (app, controller) = router(
+            hub,
+            Sessions,
+            Allows,
+            Arc::new(log.clone()),
+            EventWebSocketConfig::test(origin),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut socket = connect(address, origin).await;
+        assert_eq!(next_json(&mut socket).await["type"], "authenticated");
+        assert_eq!(controller.active_connection_count(), 1);
+
+        // Server-driven teardown: the shutdown signal (or, past the grace window,
+        // a task abort) must still run the bracket's Drop exactly once.
+        controller.close().await;
+        wait_until_drained(&controller).await;
+
+        assert_eq!(log.of_kind("connect").len(), 1);
+        assert_eq!(
+            log.of_kind("disconnect").len(),
+            1,
+            "a server shutdown disconnects the live connection exactly once"
+        );
+
+        server.abort();
+        let _ = socket.close(None).await;
+    }
+
+    #[derive(Clone)]
+    struct RejectsSession;
+
+    impl AuthenticateHumanSession for RejectsSession {
+        async fn authenticate_session(
+            &self,
+            _bearer: SessionBearer,
+        ) -> Result<Option<UserId>, PersistenceFailure> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rejected_handshake_never_connects_and_never_ghosts_online() {
+        let hub = ScopeEventHub::test("epoch-1");
+        let origin = "http://127.0.0.1";
+        let log = LifecycleLog::default();
+        let (app, controller) = router(
+            hub,
+            RejectsSession,
+            Allows,
+            Arc::new(log.clone()),
+            EventWebSocketConfig::test(origin),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        // The upgrade is refused (401) before any connection is accepted, so the
+        // client handshake fails outright.
+        let mut request = format!("ws://{address}{EVENT_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert(ORIGIN, origin.parse().unwrap());
+        request.headers_mut().insert(
+            COOKIE,
+            format!("{EVENT_WS_SESSION_COOKIE}=token").parse().unwrap(),
+        );
+        request
+            .headers_mut()
+            .insert(DESKTOP_API_EPOCH_HEADER, MINIMUM_CLIENT_API_EPOCH.into());
+        connect_async(request)
+            .await
+            .expect_err("an unauthenticated upgrade must be refused, not accepted");
+
+        assert_eq!(controller.active_connection_count(), 0);
+        assert!(
+            log.of_kind("connect").is_empty(),
+            "a rejected handshake must never admit a connection"
+        );
+        assert!(
+            log.of_kind("disconnect").is_empty(),
+            "no admission means no disconnect — a refused handshake never ghosts online"
+        );
+
+        server.abort();
+    }
+
     #[tokio::test]
     async fn subscriptions_are_independent_for_the_complete_scope_key() {
         let hub = ScopeEventHub::test("epoch-1");
@@ -2853,6 +3837,7 @@ mod tests {
             hub.clone(),
             Sessions,
             Allows,
+            Arc::new(NoopConnectionLifecycle),
             EventWebSocketConfig::test(origin),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2954,7 +3939,13 @@ mod tests {
         let mut config = EventWebSocketConfig::test(origin);
         config.ping_interval = Duration::from_millis(20);
         config.pong_timeout = Duration::from_millis(20);
-        let (app, controller) = router(hub, Sessions, Allows, config);
+        let (app, controller) = router(
+            hub,
+            Sessions,
+            Allows,
+            Arc::new(NoopConnectionLifecycle),
+            config,
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -2982,7 +3973,13 @@ mod tests {
         let mut config = EventWebSocketConfig::test(origin);
         config.ping_interval = Duration::from_millis(20);
         config.pong_timeout = Duration::from_millis(20);
-        let (app, controller) = router(hub, Sessions, Allows, config);
+        let (app, controller) = router(
+            hub,
+            Sessions,
+            Allows,
+            Arc::new(NoopConnectionLifecycle),
+            config,
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -3014,7 +4011,13 @@ mod tests {
         let mut config = EventWebSocketConfig::test(origin);
         config.ping_interval = Duration::from_millis(20);
         config.pong_timeout = Duration::from_millis(20);
-        let (app, controller) = router(hub, Sessions, Allows, config);
+        let (app, controller) = router(
+            hub,
+            Sessions,
+            Allows,
+            Arc::new(NoopConnectionLifecycle),
+            config,
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -3052,7 +4055,13 @@ mod tests {
     async fn payload_over_sixty_four_kib_is_closed_before_json_dispatch() {
         let hub = ScopeEventHub::test("epoch-1");
         let origin = "http://127.0.0.1";
-        let (app, controller) = router(hub, Sessions, Allows, EventWebSocketConfig::test(origin));
+        let (app, controller) = router(
+            hub,
+            Sessions,
+            Allows,
+            Arc::new(NoopConnectionLifecycle),
+            EventWebSocketConfig::test(origin),
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -4515,6 +5524,7 @@ mod tests {
         "agent_event",
         "conversation_activity",
         "agent_presence_changed",
+        "user_presence",
         "message",
         "notification",
         "unread_updated",
@@ -4535,6 +5545,7 @@ mod tests {
             ProductEvent::AgentEvent(_) => "agent_event",
             ProductEvent::ConversationActivity(_) => "conversation_activity",
             ProductEvent::AgentPresenceChanged { .. } => "agent_presence_changed",
+            ProductEvent::UserPresence { .. } => "user_presence",
             ProductEvent::Message(_) => "message",
             ProductEvent::Notification(_) => "notification",
             ProductEvent::UnreadUpdated(_) => "unread_updated",
@@ -4564,6 +5575,11 @@ mod tests {
             ProductEvent::ConversationActivity(json!({ "message_id": "m-1" })),
             ProductEvent::AgentPresenceChanged {
                 agent_id: "agent-1".to_owned(),
+            },
+            ProductEvent::UserPresence {
+                user_id: "user-1".to_owned(),
+                presence: "offline",
+                last_seen_at: Some(1_234),
             },
             ProductEvent::Message(json!({ "message": { "id": "m-1" } })),
             ProductEvent::Notification(NotificationEvent {
@@ -4632,6 +5648,7 @@ mod tests {
             hub.clone(),
             Sessions,
             Allows,
+            Arc::new(NoopConnectionLifecycle),
             EventWebSocketConfig::test(origin),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4818,6 +5835,7 @@ mod tests {
             hub.clone(),
             Sessions,
             Allows,
+            Arc::new(NoopConnectionLifecycle),
             EventWebSocketConfig::test(origin),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5124,6 +6142,7 @@ mod tests {
             hub.clone(),
             authenticator(),
             scope_authority,
+            Arc::new(NoopConnectionLifecycle),
             EventWebSocketConfig::test(origin),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

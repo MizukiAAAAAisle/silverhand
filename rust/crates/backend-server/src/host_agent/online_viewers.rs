@@ -8,11 +8,11 @@
 //! nothing else — so binding the trait to it is what lets the presence route be
 //! composed over the real liveness authority rather than a second projection.
 
-use silverhand_backend_core::{cold_read::presence::OnlineViewers, identity::UserId};
-
-use crate::host_agent_background::presence_grace_timer::{
-    LastSeenSink, PresenceFactSink, PresenceGraceTimers,
+use silverhand_backend_core::{
+    cold_read::presence::OnlineViewers, identity::UserId, user_presence_last_seen::LastSeenSink,
 };
+
+use crate::host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers};
 
 impl<L, S> OnlineViewers for PresenceGraceTimers<L, S>
 where

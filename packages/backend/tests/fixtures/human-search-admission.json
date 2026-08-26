@@ -1,0 +1,68 @@
+[
+  {
+    "name": "defaults_and_trim",
+    "query": "?q=%20needle%20",
+    "schema_accepted": true,
+    "parsed": { "q": "needle", "stream": "all", "order": "recency_desc", "limit": 80 }
+  },
+  {
+    "name": "blank_optional_and_number_coercion",
+    "query": "?q=needle&workspace_id=%20%20&from=&to=42&limit=2",
+    "schema_accepted": true,
+    "parsed": { "q": "needle", "stream": "all", "to": 42, "order": "recency_desc", "limit": 2 }
+  },
+  {
+    "name": "thread_sequence_and_sender",
+    "query": "?q=x&stream=thread&conversation_id=c&thread_root_id=root&user_id=u&from=0&order=seq_asc&limit=1",
+    "schema_accepted": true,
+    "parsed": { "q": "x", "stream": "thread", "conversation_id": "c", "thread_root_id": "root", "user_id": "u", "from": 0, "order": "seq_asc", "limit": 1 }
+  },
+  {
+    "name": "nonempty_whitespace_millis_coerces_to_zero",
+    "query": "?q=x&from=%C2%A0",
+    "schema_accepted": true,
+    "parsed": { "q": "x", "stream": "all", "from": 0, "order": "recency_desc", "limit": 80 }
+  },
+  {
+    "name": "sender_is_single_select",
+    "query": "?q=x&user_id=u&agent_id=a",
+    "schema_accepted": false,
+    "body": { "error": { "formErrors": [], "fieldErrors": { "user_id": ["user_id and agent_id cannot both be set"] } } }
+  },
+  {
+    "name": "stream_requires_conversation",
+    "query": "?q=x&stream=mainline",
+    "schema_accepted": false,
+    "body": { "error": { "formErrors": [], "fieldErrors": { "stream": ["stream filter requires conversation_id"] } } }
+  },
+  {
+    "name": "thread_requires_root",
+    "query": "?q=x&stream=thread&conversation_id=c",
+    "schema_accepted": false,
+    "body": { "error": { "formErrors": [], "fieldErrors": { "thread_root_id": ["stream=thread requires thread_root_id"] } } }
+  },
+  {
+    "name": "sequence_requires_conversation",
+    "query": "?q=x&order=seq_asc",
+    "schema_accepted": false,
+    "body": { "error": { "formErrors": [], "fieldErrors": { "order": ["order=seq_asc requires conversation_id"] } } }
+  },
+  {
+    "name": "negative_millis",
+    "query": "?q=x&from=-1",
+    "schema_accepted": false,
+    "body": { "error": { "formErrors": [], "fieldErrors": { "from": ["Number must be greater than or equal to 0"] } } }
+  },
+  {
+    "name": "fractional_millis",
+    "query": "?q=x&to=1.5",
+    "schema_accepted": false,
+    "body": { "error": { "formErrors": [], "fieldErrors": { "to": ["Expected integer, received float"] } } }
+  },
+  {
+    "name": "limit_cap",
+    "query": "?q=x&limit=501",
+    "schema_accepted": false,
+    "body": { "error": { "formErrors": [], "fieldErrors": { "limit": ["Number must be less than or equal to 500"] } } }
+  }
+]

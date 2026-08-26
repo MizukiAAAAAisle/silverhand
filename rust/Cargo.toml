@@ -2,6 +2,7 @@
 members = [
   "crates/backend-app",
   "crates/backend-core",
+  "crates/backend-filesystem",
   "crates/backend-server",
   "crates/backend-sqlite",
 ]
@@ -14,8 +15,9 @@ rust-version = "1.94"
 publish = false
 
 [workspace.dependencies]
-axum = { version = "=0.8.9", features = ["json", "tokio", "ws"] }
+axum = { version = "=0.8.9", features = ["json", "multipart", "tokio", "ws"] }
 base64 = "=0.22.1"
+form_urlencoded = "=1.2.2"
 futures-util = "=0.3.34"
 getrandom = "=0.4.3"
 pulldown-cmark = { version = "=0.13.4", default-features = false }
@@ -23,12 +25,13 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 sha2 = { version = "=0.11.0", default-features = false }
 silverhand-backend-core = { path = "crates/backend-core" }
+silverhand-backend-filesystem = { path = "crates/backend-filesystem" }
 silverhand-backend-server = { path = "crates/backend-server" }
 silverhand-backend-sqlite = { path = "crates/backend-sqlite" }
 sqlx = { version = "=0.9.0", default-features = false, features = ["derive", "macros", "migrate", "runtime-tokio", "sqlite"] }
 tempfile = "=3.27.0"
 thiserror = "=2.0.20"
-tokio = { version = "=1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-tungstenite = "=0.29.0"
 tower = { version = "=0.5.3", features = ["util"] }
 tower-http = { version = "=0.7.0", features = ["trace"] }

@@ -8,9 +8,10 @@ use futures_util::{SinkExt, StreamExt};
 use log_capture::LogBuffer;
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl};
+use silverhand_backend_core::identity::UserId;
 use silverhand_backend_server::scope_events::{
-    AllowedOrigin, DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH, EVENT_WS_SESSION_COOKIE,
-    EventWebSocketConfig, ScopeEventHub, router,
+    AllowedOrigin, ConnectionLifecycle, DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH,
+    EVENT_WS_SESSION_COOKIE, EventWebSocketConfig, ScopeEventHub, router,
 };
 use silverhand_backend_sqlite::{auth::SqliteSessionStore, scope_event::SqliteEventScopeAuthority};
 use sqlx::{Connection, SqliteConnection};
@@ -38,6 +39,16 @@ impl SessionClock for FixedClock {
     fn now_unix_millis(&self) -> i64 {
         10_000
     }
+}
+
+/// A do-nothing lifecycle for tests that exercise the WS transport alone and do
+/// not assert on presence. Production wiring lives in `backend-app`; the crate's
+/// only null implementation is test-scoped by design.
+struct NullLifecycle;
+
+impl ConnectionLifecycle for NullLifecycle {
+    fn on_connect(&self, _viewer: &UserId, _connection_id: &str) {}
+    fn on_disconnect(&self, _viewer: &UserId, _connection_id: &str) {}
 }
 
 async fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -113,6 +124,7 @@ async fn running(
         ScopeEventHub::production().unwrap(),
         sessions,
         scopes,
+        std::sync::Arc::new(NullLifecycle),
         config,
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

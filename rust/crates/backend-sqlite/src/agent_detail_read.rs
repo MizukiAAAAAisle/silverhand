@@ -32,25 +32,44 @@ use silverhand_backend_core::{
 };
 use sqlx::{
     Row, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+    sqlite::{
+        SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous,
+    },
 };
 use thiserror::Error;
 
-use crate::agent_view_acl::{SELECT_DIRECT_PAIR_HUMAN_ENDPOINTS, SELECT_SHARED_WORKSPACE_MEMBERS};
+use crate::agent_view_acl::{AgentViewAclError, read_agent_audience};
 
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFERRED_READ_BEGIN: &str = "BEGIN DEFERRED";
 
 /// The agent row plus its host `LEFT JOIN` — every column the detail DTO projects,
-/// in one bounded read. `idempotency_key`, the runtime-transition columns and
-/// `last_activity_at` are deliberately unselected: they are not on the DTO.
-const SELECT_AGENT_DETAIL_ROW: &str = "SELECT a.id, a.name, a.display_name, a.runtime, a.model, \
-       a.reasoning_effort, a.fast_mode, a.host_id, a.description, a.session_scope, \
-       a.created_by_user_id, a.avatar_storage_key, a.materialization_status, \
-       a.materialization_failed_code, a.materialization_failed_at, a.deletion_started_at, \
-       a.created_at, a.updated_at, h.display_label AS host_display_label, h.name AS host_name \
-       FROM agents a LEFT JOIN hosts h ON h.id = a.host_id WHERE a.id = ?";
+/// with NO predicate of its own. The detail read appends `WHERE a.id = ?`; the list
+/// read appends its candidate predicate and `ORDER BY`. Sharing the column list and
+/// join here is what keeps the two reads on ONE row shape: a column added for detail
+/// cannot miss the list, and [`decode_agent_row`] decodes either identically.
+/// `idempotency_key`, the runtime-transition columns and `last_activity_at` are
+/// deliberately unselected: they are not on the DTO.
+///
+/// It is a `macro_rules!` fragment, not a `const`, because sqlx accepts only a
+/// `&'static str`: each face composes this literal with its own predicate through
+/// `concat!` to get one at compile time, never a runtime `format!`.
+macro_rules! agent_detail_select_from {
+    () => {
+        "SELECT a.id, a.name, a.display_name, a.runtime, a.model, \
+           a.reasoning_effort, a.fast_mode, a.host_id, a.description, a.session_scope, \
+           a.created_by_user_id, a.avatar_storage_key, a.materialization_status, \
+           a.materialization_failed_code, a.materialization_failed_at, a.deletion_started_at, \
+           a.created_at, a.updated_at, h.display_label AS host_display_label, h.name AS host_name \
+           FROM agents a LEFT JOIN hosts h ON h.id = a.host_id"
+    };
+}
+pub(crate) use agent_detail_select_from;
+
+/// The single-agent detail read: the shared projection narrowed to ONE id, composed
+/// at compile time so sqlx sees a `&'static str`.
+const SELECT_AGENT_DETAIL_ROW: &str = concat!(agent_detail_select_from!(), " WHERE a.id = ?");
 
 #[derive(Clone)]
 pub struct SqliteAgentDetailColdRead {
@@ -102,91 +121,100 @@ impl SqliteAgentDetailColdRead {
             return Ok(None);
         };
 
-        let source: String = row.try_get("id")?;
-        let source =
-            AgentId::parse(source).map_err(|_| AgentDetailColdReadError::MalformedIdentity {
-                column: "agents.id",
-            })?;
-        let created_by: String = row.try_get("created_by_user_id")?;
-        let created_by =
-            UserId::parse(created_by).map_err(|_| AgentDetailColdReadError::MalformedIdentity {
-                column: "agents.created_by_user_id",
-            })?;
-        let status_raw: String = row.try_get("materialization_status")?;
-        let materialization_status = MaterializationStatus::parse(&status_raw)
-            .map_err(|_| AgentDetailColdReadError::MalformedStatus { value: status_raw })?;
-
-        // SQLite stores the boolean as 0/1; a non-numeric text in the affinity-only
-        // column is a decode error above, never a silent `false`. `agentRowToDto`
-        // maps null → null and any value → Boolean(fast), which for the stored 0/1 is
-        // exactly this `!= 0`.
-        let fast_mode: Option<i64> = row.try_get("fast_mode")?;
-        let fast_mode = fast_mode.map(|value| value != 0);
-
-        let projection = AgentDetailProjection {
-            name: row.try_get("name")?,
-            display_name: row.try_get("display_name")?,
-            runtime: row.try_get("runtime")?,
-            model: row.try_get("model")?,
-            reasoning_effort: row.try_get("reasoning_effort")?,
-            fast_mode,
-            host_id: row.try_get("host_id")?,
-            host_display_label: row.try_get("host_display_label")?,
-            host_name: row.try_get("host_name")?,
-            description: row.try_get("description")?,
-            session_scope: row.try_get("session_scope")?,
-            avatar_storage_key: row.try_get("avatar_storage_key")?,
-            materialization_failed_code: row.try_get("materialization_failed_code")?,
-            materialization_failed_at: row.try_get("materialization_failed_at")?,
-            deletion_started_at: row.try_get("deletion_started_at")?,
-            created_at: row.try_get("created_at")?,
-            updated_at: row.try_get("updated_at")?,
-        };
-
-        let pair_human_rows = sqlx::query(SELECT_DIRECT_PAIR_HUMAN_ENDPOINTS)
-            .bind(agent.as_str())
-            .bind(agent.as_str())
-            .fetch_all(&mut *tx)
-            .await?;
-        let workspace_member_rows = sqlx::query(SELECT_SHARED_WORKSPACE_MEMBERS)
-            .bind(agent.as_str())
-            .bind(agent.as_str())
-            .fetch_all(&mut *tx)
-            .await?;
+        let decoded = decode_agent_row(&row)?;
+        let audience = read_agent_audience(&mut tx, agent).await?;
 
         tx.commit().await?;
-
-        let direct_pair_human_endpoints =
-            decode_user_ids(&pair_human_rows, "conversations.direct_pair human endpoint")?;
-        let shared_workspace_members =
-            decode_user_ids(&workspace_member_rows, "workspace_users.user_id")?;
 
         // The creator is passed ONCE: `from_source` seeds the ACL creator arm from it
         // and the wire's `created_by_user_id` reads the same field, so the adapter
         // cannot admit one human and render another.
         Ok(Some(AgentDetailFacts::from_source(
-            source,
-            created_by,
-            direct_pair_human_endpoints,
-            shared_workspace_members,
-            materialization_status,
-            projection,
+            decoded.source,
+            decoded.creator,
+            audience.direct_pair_human_endpoints,
+            audience.shared_workspace_members,
+            decoded.materialization_status,
+            decoded.projection,
         )))
     }
 }
 
-fn decode_user_ids(
-    rows: &[sqlx::sqlite::SqliteRow],
-    column: &'static str,
-) -> Result<Vec<UserId>, AgentDetailColdReadError> {
-    let mut ids = Vec::with_capacity(rows.len());
-    for row in rows {
-        let raw: String = row.try_get("user_id")?;
-        let id = UserId::parse(raw)
-            .map_err(|_| AgentDetailColdReadError::MalformedIdentity { column })?;
-        ids.push(id);
+/// One decoded agent row, split into the coordinates the ACL binds (`source`,
+/// `creator`), the stage the gate reads, and the wire-facing projection. Shared so
+/// the list read decodes each candidate row byte-identically to the detail read.
+pub(crate) struct DecodedAgentRow {
+    pub(crate) source: AgentId,
+    pub(crate) creator: UserId,
+    pub(crate) materialization_status: MaterializationStatus,
+    pub(crate) projection: AgentDetailProjection,
+}
+
+/// Decode one row of [`AGENT_DETAIL_SELECT_FROM`] strictly: ids through the domain's
+/// fallible parsers, the stage through [`MaterializationStatus::parse`], and the
+/// reachable integer columns through an `i64` decode. A stored value that cannot be
+/// a legal identity, a known stage, or a number is corruption of a committed row and
+/// surfaces as an error (a safe `500`), never coerced to a default. The wire-shaped
+/// strings the DTO passes through verbatim carry no decode of their own.
+pub(crate) fn decode_agent_row(
+    row: &SqliteRow,
+) -> Result<DecodedAgentRow, AgentDetailColdReadError> {
+    let source: String = row.try_get("id")?;
+    let source =
+        AgentId::parse(source).map_err(|_| AgentDetailColdReadError::MalformedIdentity {
+            column: "agents.id",
+        })?;
+    let created_by: String = row.try_get("created_by_user_id")?;
+    let creator =
+        UserId::parse(created_by).map_err(|_| AgentDetailColdReadError::MalformedIdentity {
+            column: "agents.created_by_user_id",
+        })?;
+    let status_raw: String = row.try_get("materialization_status")?;
+    let materialization_status = MaterializationStatus::parse(&status_raw)
+        .map_err(|_| AgentDetailColdReadError::MalformedStatus { value: status_raw })?;
+
+    // SQLite stores the boolean as 0/1; a non-numeric text in the affinity-only
+    // column is a decode error above, never a silent `false`. `agentRowToDto` maps
+    // null → null and any value → Boolean(fast), which for the stored 0/1 is exactly
+    // this `!= 0`.
+    let fast_mode: Option<i64> = row.try_get("fast_mode")?;
+    let fast_mode = fast_mode.map(|value| value != 0);
+
+    let projection = AgentDetailProjection {
+        name: row.try_get("name")?,
+        display_name: row.try_get("display_name")?,
+        runtime: row.try_get("runtime")?,
+        model: row.try_get("model")?,
+        reasoning_effort: row.try_get("reasoning_effort")?,
+        fast_mode,
+        host_id: row.try_get("host_id")?,
+        host_display_label: row.try_get("host_display_label")?,
+        host_name: row.try_get("host_name")?,
+        description: row.try_get("description")?,
+        session_scope: row.try_get("session_scope")?,
+        avatar_storage_key: row.try_get("avatar_storage_key")?,
+        materialization_failed_code: row.try_get("materialization_failed_code")?,
+        materialization_failed_at: row.try_get("materialization_failed_at")?,
+        deletion_started_at: row.try_get("deletion_started_at")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    };
+
+    Ok(DecodedAgentRow {
+        source,
+        creator,
+        materialization_status,
+        projection,
+    })
+}
+
+impl From<AgentViewAclError> for AgentDetailColdReadError {
+    fn from(error: AgentViewAclError) -> Self {
+        match error {
+            AgentViewAclError::Sql(error) => Self::Sql(error),
+            AgentViewAclError::MalformedIdentity { column } => Self::MalformedIdentity { column },
+        }
     }
-    Ok(ids)
 }
 
 impl AgentDetailReadModel for SqliteAgentDetailColdRead {

@@ -1,4 +1,4 @@
-//! Scaffold gates for the #2195 host-agent lane.
+//! Scaffold gates for the #2195 host-agent lane and the #2201 host-control seam.
 //!
 //! They lock invariants, not the current shape: a new pure library in
 //! `backend-core` or a new leaf in a lane namespace must stay green, while the
@@ -59,6 +59,7 @@ const RUNTIME_AND_DRIVER: &[&str] = &[
 const CRATE_ROOTS: &[&str] = &[
     "backend-app",
     "backend-core",
+    "backend-filesystem",
     "backend-server",
     "backend-sqlite",
 ];
@@ -81,20 +82,28 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_availability_read"),
     ("backend-core", "agent_detail_read"),
     ("backend-core", "agent_lifecycle"),
+    ("backend-core", "agent_list_read"),
     ("backend-core", "agent_presence_read"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
+    ("backend-core", "host_resources_read"),
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
     ("backend-core", "user_presence_cold_read"),
+    ("backend-core", "user_presence_last_seen"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
+    ("backend-server", "host_control"),
+    ("backend-server", "host_resources"),
     ("backend-sqlite", "agent_availability_read"),
     ("backend-sqlite", "agent_detail_read"),
+    ("backend-sqlite", "agent_list_read"),
     ("backend-sqlite", "agent_presence_read"),
     ("backend-sqlite", "agent_view_acl"),
     ("backend-sqlite", "host_agent"),
+    ("backend-sqlite", "host_resources_read"),
     ("backend-sqlite", "user_presence_cold_read"),
+    ("backend-sqlite", "user_presence_last_seen"),
 ];
 
 /// The declarations this lane did NOT add, across EVERY root in `CRATE_ROOTS`.
@@ -125,6 +134,7 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-app", "current_schema"),
     ("backend-core", "access"),
     ("backend-core", "auth"),
+    ("backend-core", "blob_store"),
     ("backend-core", "direct_pair_read"),
     ("backend-core", "foundation_message"),
     ("backend-core", "host_runtime"),
@@ -138,6 +148,7 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-core", "viewer_workspace_sort"),
     ("backend-core", "workspace_cold_read"),
     ("backend-core", "workspace_face"),
+    ("backend-filesystem", "blob_store"),
     ("backend-server", "access"),
     ("backend-server", "auth"),
     ("backend-server", "bearer"),
@@ -177,6 +188,7 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "teardown"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
+    ("backend-server", "host_control"),
     ("backend-sqlite", "host_agent"),
 ];
 
@@ -197,18 +209,28 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// way: the read port `agent_detail_read`, whose route surface is likewise a
 /// submodule of `host_agent`. The /api/agents/:id/presence vertical adds one the
 /// same way again: the read port `agent_presence_read`, whose route surface is a
-/// submodule of `host_agent`. G0 keeps it a subset of the seam ledger.
+/// submodule of `host_agent`. The /api/hosts/:id/resources vertical (#task:2198)
+/// adds two, because its route surface is a crate-root SIBLING rather than a
+/// `host_agent` leaf: the read port `host_resources_read` and the surface
+/// `host_resources`. The `/api/agents` list vertical adds one on the same
+/// grounds once more: the read port `agent_list_read`; its route surface and the DTO
+/// projector it shares with detail are both submodules of `host_agent`. G0 keeps it
+/// a subset of the seam ledger.
 const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "agent_availability_read"),
     ("backend-core", "agent_detail_read"),
+    ("backend-core", "agent_list_read"),
     ("backend-core", "agent_presence_read"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
+    ("backend-core", "host_resources_read"),
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
     ("backend-core", "user_presence_cold_read"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
+    ("backend-server", "host_control"),
+    ("backend-server", "host_resources"),
 ];
 
 fn rust_root() -> PathBuf {
@@ -421,8 +443,8 @@ fn lane_source_paths(crate_dir: &str, namespace: &str) -> Vec<PathBuf> {
 ///
 /// A bare substring cannot be used for a namespace name that is a suffix of an
 /// unrelated one — `workspace_cold_read` is a different module, not a second
-/// declaration of `cold_read` — and [`names_path_segment`] cannot either, because
-/// a declaration or re-export of a namespace need not carry a `::`.
+/// declaration of `cold_read` — and matching a `::`-delimited path segment cannot
+/// either, because a declaration or re-export of a namespace need not carry a `::`.
 fn names_identifier(source: &str, identifier: &str) -> bool {
     let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
     source.match_indices(identifier).any(|(start, matched)| {
@@ -607,39 +629,6 @@ fn classification_gaps(
     )
 }
 
-/// Whether the source reaches `namespace` as a path segment. Bare substring
-/// matching is not usable here: `roster_policy` is a column, not a module.
-fn names_path_segment(source: &str, namespace: &str) -> bool {
-    let bytes = source.as_bytes();
-    let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
-    let mut index = 0;
-    while index < bytes.len() {
-        if !is_ident(bytes[index]) {
-            index += 1;
-            continue;
-        }
-        let start = index;
-        while index < bytes.len() && is_ident(bytes[index]) {
-            index += 1;
-        }
-        if &source[start..index] != namespace {
-            continue;
-        }
-        let follows_path = source[..start].ends_with("::");
-        let leads_path = source[index..].starts_with("::");
-        if follows_path || leads_path {
-            return true;
-        }
-    }
-    source
-        .lines()
-        .filter(|line| line.trim_start().starts_with("use "))
-        .any(|line| {
-            line.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
-                .any(|token| token == namespace)
-        })
-}
-
 /// G0 — every module in every crate root sits in the inventory that guards it.
 ///
 /// The gates below are driven by tables, and a module missing from a table is not
@@ -750,6 +739,22 @@ fn g0_every_lane_module_sits_in_the_inventory_that_guards_it() {
         "a declaration in a root with no seam entry must still be reported"
     );
 
+    // The fifth workspace crate `backend-filesystem` is now in `CRATE_ROOTS`, so the
+    // loop above scans its one declaration. Prove that classification is load-bearing
+    // rather than trusting a reader: driven against the REAL filesystem root with its
+    // entry removed, `blob_store` is reported — so deleting the classification turns
+    // G0 red. Without filesystem in the scan range, that entry would be dead and its
+    // deletion silent, which is the second-layer false-green this closes.
+    assert_eq!(
+        classification_gaps(
+            &root_module_declarations("backend-filesystem"),
+            &BTreeSet::new(),
+        )
+        .0,
+        vec!["blob_store".to_owned()],
+        "deleting backend-filesystem's root classification must turn G0 red"
+    );
+
     let mut directory_shaped: BTreeSet<(&str, &str)> = BTreeSet::new();
     for (crate_dir, module) in SEAM_ROOT_MODULES {
         let module_dir = rust_root()
@@ -835,6 +840,25 @@ fn g1_the_persistence_and_wire_crates_keep_their_direction() {
             .contains("silverhand-backend-sqlite"),
         "the SQLite adapter is a backend-server test-only dependency"
     );
+
+    // The filesystem adapter is a leaf: its linked closure reaches only backend-core
+    // (+ tokio), so it can name neither the wire crate nor the SQLite adapter. This
+    // pins the new adapter's acyclicity.
+    //
+    // Honest scope: the reverse edge — backend-server naming backend-filesystem — DOES
+    // exist as #task:2200's approved typed local-alias capability, and is deliberately
+    // NOT fenced here. So this gate pins adapter acyclicity, not the full
+    // "persistence/wire direction" its title claims; that one approved server→filesystem
+    // edge is a bounded exception, not a hole.
+    let filesystem = graph.linked_closure("silverhand-backend-filesystem");
+    assert!(
+        !filesystem.contains("silverhand-backend-server"),
+        "backend-filesystem must not depend on the wire crate"
+    );
+    assert!(
+        !filesystem.contains("silverhand-backend-sqlite"),
+        "backend-filesystem must not depend on the SQLite adapter"
+    );
 }
 
 #[test]
@@ -875,37 +899,6 @@ fn g2_background_timers_carry_no_http_surface() {
             assert!(
                 !source.contains(forbidden),
                 "{} names {forbidden}: timers are not an HTTP surface",
-                path.display()
-            );
-        }
-    }
-}
-
-#[test]
-fn g3_cp1_activation_fence_keeps_the_lane_unmounted() {
-    // CP1-temporary. The reviewed integration mount invalidates this gate on
-    // purpose and deletes it in the same change; owner: the review gate.
-    assert!(names_path_segment(
-        "silverhand_backend_core::policy::presence_grace::is_online(a, b)",
-        "policy"
-    ));
-    assert!(names_path_segment(
-        "use silverhand_backend_core::policy;\n",
-        "policy"
-    ));
-    assert!(!names_path_segment(
-        "\"INSERT INTO conversations (roster_policy) VALUES ('open')\"",
-        "policy"
-    ));
-
-    let app = rust_sources(&rust_root().join("crates/backend-app/src"));
-    assert!(!app.is_empty());
-    for path in app {
-        let source = strip_comments(&read(&path));
-        for (_, namespace) in ACTIVATION_NAMESPACES {
-            assert!(
-                !names_path_segment(&source, namespace),
-                "{} references {namespace}: CP1 ships no composition edge",
                 path.display()
             );
         }

@@ -7,11 +7,18 @@
 //!
 //! Landed so far: the public `user_presence` cold read ([`presence`]), the
 //! authenticated `agent availability` cold read ([`availability`]), the
-//! authenticated `agent detail` cold read ([`agent_detail`]), and the
-//! authenticated `agent presence` cold read ([`agent_presence`]).
+//! authenticated `agent detail` cold read ([`agent_detail`]), the authenticated
+//! `agent presence` cold read ([`agent_presence`]), and the authenticated
+//! `GET /api/agents` list cold read ([`agent_list`]).
+//!
+//! `agent_wire` is a private module on purpose: the DTO projector shared between
+//! the sibling [`agent_detail`] and [`agent_list`] route modules is internal reuse,
+//! not a route surface.
 
 pub mod agent_detail;
+pub mod agent_list;
 pub mod agent_presence;
+mod agent_wire;
 pub mod availability;
 pub mod host_attachment;
 mod online_viewers;

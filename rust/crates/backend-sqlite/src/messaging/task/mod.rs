@@ -1,0 +1,94 @@
+//! SQLite adapter for the task board.
+//!
+//! This store CONSUMES the product database. It creates no table, runs no
+//! migrator, claims no schema version, and refuses to open a database that does
+//! not exist: the `tasks` table has an owner, and a second migration authority
+//! would be one too many.
+//!
+//! This module is the ASSEMBLY: it owns the store handle ([`SqliteTaskStore`]),
+//! its connection setup, and the store-level failure vocabulary
+//! ([`TaskStoreError`] and the two erasing helpers that route a driver error and
+//! a decode corruption to their distinct safe-500 sources). Everything else lives
+//! in a leaf with a single reason to change:
+//!
+//!  - [`row`] — the committed-row decode and the cross-row board seal every read
+//!    shares (what a trustworthy `tasks` row IS), and the shared row projection;
+//!  - [`point_read`] — the single-task fact keyed by `tasks.id`;
+//!  - [`board_list`] — the [`TaskCandidateFetch`](silverhand_backend_core::messaging::task::TaskCandidateFetch)
+//!    adapter: the plural candidate fetch a board list trims (coordinate filters
+//!    only; participation, ordering, and limit are the core's).
+//!
+//! The detail read model and the write unit-of-work each land as their own leaf; the
+//! consumer-defined ports and the wire adapters are separate slices too.
+
+mod board_list;
+mod point_read;
+mod row;
+
+use std::{path::Path, time::Duration};
+
+use silverhand_backend_core::persistence::PersistenceFailure;
+use sqlx::{
+    SqlitePool,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+};
+use thiserror::Error;
+
+const POOL_CONNECTIONS: u32 = 4;
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Startup and driver failures, surfaced only to the composition root that opens
+/// the store, plus the decode-corruption reasons a broken persisted row carries to
+/// a safe-500. The port returns `PersistenceFailure`, so none of these spellings
+/// reach the application or the wire.
+#[derive(Debug, Error)]
+pub enum TaskStoreError {
+    #[error("database operation failed")]
+    Sql(#[from] sqlx::Error),
+    /// A stored `tasks` row (or its board's agreement with the conversation
+    /// placement) is outside a contract a correct writer upholds. Reported with the
+    /// offending column so an operator can find it; it is corruption, never a
+    /// caller's mistake.
+    #[error("stored task column {field} is outside the domain contract")]
+    Corrupt { field: &'static str },
+}
+
+/// Erase a driver read error into the port's safe-500. Private to the module, so
+/// each read leaf routes its `sqlx` failures through the same source.
+fn driver(error: sqlx::Error) -> PersistenceFailure {
+    PersistenceFailure::from_source(TaskStoreError::Sql(error))
+}
+
+/// Erase a named corruption reason into the port's safe-500, preserving the
+/// offending column so an operator can find it.
+fn corrupt(field: &'static str) -> PersistenceFailure {
+    PersistenceFailure::from_source(TaskStoreError::Corrupt { field })
+}
+
+/// The SQLite task store. A read has no clock and no bookkeeping writes, so unlike
+/// the schedule store it carries no injected clock.
+#[derive(Clone)]
+pub struct SqliteTaskStore {
+    pool: SqlitePool,
+}
+
+impl SqliteTaskStore {
+    /// Opens an existing product database. A missing file is a failure rather than
+    /// an empty database: the schema has an owner, and this store is not it.
+    pub async fn open(path: impl AsRef<Path>) -> Result<Self, TaskStoreError> {
+        let options = SqliteConnectOptions::new()
+            .filename(path.as_ref())
+            .create_if_missing(false)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Full)
+            .busy_timeout(BUSY_TIMEOUT);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(POOL_CONNECTIONS)
+            .connect_with(options)
+            .await?;
+
+        Ok(Self { pool })
+    }
+}

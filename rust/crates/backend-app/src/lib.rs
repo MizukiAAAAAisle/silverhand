@@ -15,30 +15,62 @@ use silverhand_backend_core::{
     access::{EnrollmentClock, unix_millis},
     auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     host_runtime::{CreateHostInvite, OsEntropy, SystemClock},
+    identity::{AgentId, ConversationId},
+    persistence::PersistenceFailure,
+    policy::presence_grace::GraceWindow,
 };
 use silverhand_backend_server::{
     access,
     auth::{PublicJsonUnauthorized, require_human_session},
     daemon_delivery::{DaemonDeliveryController, DaemonDeliveryRuntime},
-    direct_pairs, host_runtime,
+    direct_pairs,
+    host_agent::{agent_detail, agent_list, agent_presence, availability},
+    host_agent_background::presence_grace_timer::PresenceGraceTimers,
+    host_runtime,
     messaging::{
         TargetAddressRefusalLog,
         aftermath::MessagingAftermath,
+        collaboration::stale_message_resolution::{
+            StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
+            StaleMessageResolutionAdmissionRefusal, TracingStaleMessageResolutionObserver,
+            router as stale_message_resolution_router,
+        },
         router::{SendState, send_routers},
+        task::{TaskListState, task_list_router},
     },
-    runtime_credential::{RuntimeCredentialAuthority, require_runtime_credential},
+    runtime_credential::{
+        RuntimeCredentialAuthority, SystemRuntimeClock, require_runtime_credential,
+    },
     scope_events::{
-        AllowedOrigin, EventWebSocketConfig, EventWebSocketController, HubUnreadPublisher,
-        ScopeEventHub,
+        AllowedOrigin, EventWebSocketConfig, EventWebSocketController, HubPresenceSink,
+        HubUnreadPublisher, ScopeEventHub, SystemDisconnectClock, compose_presence_vertical,
     },
     workspaces,
 };
 use silverhand_backend_sqlite::{
-    access::SqliteAccessStore, auth::SqliteSessionStore,
-    direct_pair_read::SqliteDirectPairReadModel, host_runtime::SqliteHostRuntimeStore,
-    messaging::MessagingStore, runtime_credential::SqliteRuntimeCustodyStore,
-    runtime_delivery::SqliteRuntimeDeliveryStore, scope_event::SqliteEventScopeAuthority,
-    unread_read::SqliteUnreadReadModel, workspace_cold_read::SqliteWorkspaceColdRead,
+    access::SqliteAccessStore,
+    agent_availability_read::SqliteAgentAvailabilityColdRead,
+    agent_detail_read::SqliteAgentDetailColdRead,
+    agent_list_read::SqliteAgentListColdRead,
+    agent_presence_read::SqliteAgentPresenceColdRead,
+    auth::SqliteSessionStore,
+    direct_pair_read::SqliteDirectPairReadModel,
+    host_runtime::SqliteHostRuntimeStore,
+    messaging::{
+        MessagingStore,
+        collaboration::stale_message_resolution::{
+            SqliteStaleMessageResolutionAdmission,
+            StaleMessageResolutionAdmissionRefusal as SqliteStaleMessageResolutionRefusal,
+        },
+        task::SqliteTaskStore,
+    },
+    runtime_credential::SqliteRuntimeCustodyStore,
+    runtime_delivery::SqliteRuntimeDeliveryStore,
+    scope_event::SqliteEventScopeAuthority,
+    unread_read::SqliteUnreadReadModel,
+    user_presence_cold_read::SqliteUserPresenceColdRead,
+    user_presence_last_seen::SqliteLastSeenSink,
+    workspace_cold_read::SqliteWorkspaceColdRead,
 };
 use sqlx::{Row, sqlite::SqlitePoolOptions};
 use thiserror::Error;
@@ -188,14 +220,76 @@ pub struct PreparedApp {
     pub router: Router,
     event_controller: EventWebSocketController,
     daemon_controller: DaemonDeliveryController,
+    presence_timers: PresenceGraceTimers<SqliteLastSeenSink, HubPresenceSink>,
 }
 
 impl PreparedApp {
     pub async fn close_connections(&self) {
-        tokio::join!(
-            self.event_controller.close(),
-            self.daemon_controller.close()
-        );
+        shut_down_transports(
+            &self.event_controller,
+            &self.daemon_controller,
+            &self.presence_timers,
+        )
+        .await;
+    }
+}
+
+/// The one shutdown order shared by [`PreparedApp::close_connections`] and
+/// [`serve`], so the two can never drift. The event transport closes and the INSTANT
+/// it does the presence authority disposes its live grace windows — mirroring the TS
+/// `eventWs.close()` → `ctx.presence.dispose()` sequence. A pending grace window is a
+/// live intention, never a durable one, so shutdown drops it without emitting an
+/// offline.
+///
+/// The daemon transport is unrelated to user presence, so its close runs CONCURRENTLY
+/// with the whole event→dispose chain; it must never sit BETWEEN the event close and
+/// the dispose. Sequencing `join!(event.close(), daemon.close())` before a bare
+/// dispose only guarantees "after both", which lets the unrelated daemon close delay
+/// the dispose — under a config where daemon shutdown outlasts the grace window, a
+/// disconnect that already started its window could seal and publish an offline
+/// mid-shutdown. The order is a contract, not a coincidence of today's 1.5s < 20s
+/// constants.
+async fn shut_down_transports(
+    event_controller: &EventWebSocketController,
+    daemon_controller: &DaemonDeliveryController,
+    presence_timers: &PresenceGraceTimers<SqliteLastSeenSink, HubPresenceSink>,
+) {
+    tokio::join!(
+        async {
+            event_controller.close().await;
+            presence_timers.dispose();
+        },
+        daemon_controller.close(),
+    );
+}
+
+/// App-private adapter binding the committed sqlite stale-resolution admission to
+/// the server port. It lives in the composition root, not in backend-server, so the
+/// production server keeps `silverhand-backend-sqlite` a dev-dependency only — the
+/// one place allowed to name a concrete authority. The mapping is mechanical: the
+/// admitted source becomes the port fact, `Forbidden` stays `Forbidden`.
+struct StaleMessageResolutionAdmissionBridge(SqliteStaleMessageResolutionAdmission);
+
+impl StaleMessageResolutionAdmissionPort for StaleMessageResolutionAdmissionBridge {
+    type Error = PersistenceFailure;
+
+    async fn admit(
+        &self,
+        agent: &AgentId,
+        conversation: &ConversationId,
+    ) -> Result<
+        Result<StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionRefusal>,
+        Self::Error,
+    > {
+        match self.0.admit(agent, conversation).await? {
+            Ok(source) => Ok(Ok(StaleMessageResolutionAdmissionFact::selected(
+                source.agent().clone(),
+                source.conversation().clone(),
+            ))),
+            Err(SqliteStaleMessageResolutionRefusal::Forbidden) => {
+                Ok(Err(StaleMessageResolutionAdmissionRefusal::Forbidden))
+            }
+        }
     }
 }
 
@@ -215,6 +309,10 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     )
     .await?;
     let messaging_store = open("messaging", MessagingStore::open(&config.database_path)).await?;
+    // The board-list candidate fetch. A SECOND handle on the same product database, not a
+    // second authority: `MessagingStore` settles which boards and rows this viewer may see,
+    // this store only reads the joined `tasks` candidates that decision narrows.
+    let task_store = open("task board", SqliteTaskStore::open(&config.database_path)).await?;
     let custody_store = open(
         "runtime custody",
         SqliteRuntimeCustodyStore::open(&config.database_path),
@@ -250,11 +348,57 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         SqliteWorkspaceColdRead::open(&config.database_path),
     )
     .await?;
+    let agent_availability_cold_read = open(
+        "agent availability cold read",
+        SqliteAgentAvailabilityColdRead::open(&config.database_path),
+    )
+    .await?;
+    let agent_detail_cold_read = open(
+        "agent detail cold read",
+        SqliteAgentDetailColdRead::open(&config.database_path),
+    )
+    .await?;
+    let agent_list_cold_read = open(
+        "agent list cold read",
+        SqliteAgentListColdRead::open(&config.database_path),
+    )
+    .await?;
+    let agent_presence_cold_read = open(
+        "agent presence cold read",
+        SqliteAgentPresenceColdRead::open(&config.database_path),
+    )
+    .await?;
+    let presence_cold_read = open(
+        "presence cold read",
+        SqliteUserPresenceColdRead::open(&config.database_path),
+    )
+    .await?;
+    let last_seen_sink = open(
+        "presence last-seen sink",
+        SqliteLastSeenSink::open(&config.database_path),
+    )
+    .await?;
 
     let hub = ScopeEventHub::production().map_err(|source| StartupError::Composition {
         name: "scope event hub",
         source: Box::new(source),
     })?;
+    // The presence axis is one authority with two faces, built through the ONE
+    // `compose_presence_vertical` factory so production and the composed E2E share
+    // the identical construction. The `PresenceGraceTimers` inside is the
+    // `OnlineViewers` the presence GET route reads AND, wrapped in a
+    // `PresenceConnectionFeed`, the transport's connect/disconnect sink; a decided
+    // offline fact projects once through the `HubPresenceSink` into
+    // `EventScope::App`; it is never re-injected downstream. Production seals the
+    // disconnect instant with the system wall clock and takes the 20s grace TS
+    // parity fixes (`index.ts` passes no override).
+    let (presence_router, presence_feed, presence_timers) = compose_presence_vertical(
+        presence_cold_read,
+        last_seen_sink,
+        hub.clone(),
+        SystemDisconnectClock,
+        GraceWindow::from_millis_or_default(None),
+    );
     let sessions =
         HumanSessionAuthenticator::new(session_store, SystemSessionClock, SessionTtl::default());
     let runtime_credentials = RuntimeCredentialAuthority::production(custody_store);
@@ -271,6 +415,17 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     let (daemon_router, daemon_controller) = daemon_runtime.router();
 
     let target_address = messaging_store.target_address(hub.clone(), TargetAddressRefusalLog);
+    // The task board list reads its board/capability/participation authority from the SAME
+    // `MessagingStore` the send door holds; captured before `send_routers` consumes it as the
+    // send unit-of-work.
+    let task_list_boards = messaging_store.clone();
+    // The stale-message resolution route rides the SAME post authority (agent
+    // participation + placement + half-dead narrowing) and the independent
+    // `send_messages` capability the send door holds; both captured before
+    // `send_routers` consumes the store as the send unit-of-work.
+    let stale_admission =
+        StaleMessageResolutionAdmissionBridge(messaging_store.stale_message_resolution_admission());
+    let stale_capability = messaging_store.clone();
     let aftermath = MessagingAftermath::new(
         hub.clone(),
         daemon_runtime.effects(),
@@ -294,6 +449,17 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         host.merge(human_send)
             .merge(direct_pairs::router(direct_pair_read_model))
             .merge(workspaces::router(workspace_cold_read))
+            .merge(availability::router(
+                agent_availability_cold_read,
+                daemon_controller.clone(),
+            ))
+            .merge(agent_detail::router(agent_detail_cold_read))
+            .merge(agent_list::router(agent_list_cold_read))
+            .merge(agent_presence::router(
+                agent_presence_cold_read,
+                SystemRuntimeClock,
+            ))
+            .merge(presence_router)
             .merge(access::router(
                 access_store.clone(),
                 access_store,
@@ -303,7 +469,19 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         sessions.clone(),
         PublicJsonUnauthorized,
     );
-    let agent_products = require_runtime_credential(agent_send, runtime_credentials);
+    let agent_products = require_runtime_credential(
+        agent_send
+            .merge(task_list_router(TaskListState {
+                boards: task_list_boards,
+                fetch: task_store,
+            }))
+            .merge(stale_message_resolution_router(
+                stale_admission,
+                stale_capability,
+                TracingStaleMessageResolutionObserver,
+            )),
+        runtime_credentials,
+    );
 
     let event_config =
         EventWebSocketConfig::production(config.allowed_origins.clone()).map_err(|source| {
@@ -316,6 +494,10 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         hub,
         sessions,
         scope_authority,
+        // The transport's connect/disconnect sink is the presence feed sharing the
+        // single `PresenceGraceTimers` above with the presence GET route. A live WS
+        // connection marks the viewer online in the very set that route reads.
+        presence_feed,
         event_config,
     );
 
@@ -327,6 +509,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             .merge(daemon_router),
         event_controller,
         daemon_controller,
+        presence_timers,
     })
 }
 
@@ -403,6 +586,7 @@ where
         router,
         event_controller,
         daemon_controller,
+        presence_timers,
     } = app;
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let server = axum::serve(listener, router)
@@ -416,7 +600,10 @@ where
         result = &mut server => result.map_err(StartupError::Serve),
         signal = &mut shutdown => {
             let _ = shutdown_tx.send(());
-            tokio::join!(event_controller.close(), daemon_controller.close());
+            // The one shared shutdown order (see `shut_down_transports`): event close
+            // then an immediate presence dispose, daemon close concurrent but never
+            // wedged between the two.
+            shut_down_transports(&event_controller, &daemon_controller, &presence_timers).await;
             server.await.map_err(StartupError::Serve)?;
             signal.map_err(|source| StartupError::ShutdownSignal(Box::new(source)))
         }
@@ -452,6 +639,7 @@ mod tests {
     };
     use futures_util::{SinkExt, StreamExt};
     use silverhand_backend_server::{
+        daemon_delivery::{HOST_WEBSOCKET_PATH, OUTBOUND_PROTOCOL_VERSION},
         messaging::MESSAGE_SEND_MAX_BODY_BYTES,
         scope_events::{
             DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH, EVENT_WS_SESSION_COOKIE,
@@ -482,6 +670,11 @@ mod tests {
     const ADMIN_HASH: &str = "EKTHyfxSBtbzbcaUSoG7b0o8sOJQFK47EubD5ScSKSo";
     const CONVERSATION_ID: &str = "conv000000000001";
     const WORKSPACE_ID: &str = "workspace0000001";
+    // A long-lived host credential: its bearer (`HOST_TOKEN`) hashes to
+    // `HOST_TOKEN_HASH`, the value seeded into `host_credentials` so a daemon can
+    // authenticate the mounted host WebSocket and attach `h-online`.
+    const HOST_TOKEN: &str = "host-token-cp2";
+    const HOST_TOKEN_HASH: &str = "3fQKxe8pqexFp6vP8YxtFscumzfMzrDjOG4Jz-e7j1E";
 
     /// The same shared cold-read fixture the #2190 parity gate replays: it makes
     /// `user-1` a member of `ws-archived`/`ws-regular`/`ws-agent` and NOT of
@@ -593,6 +786,97 @@ mod tests {
             "INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES (?, 'user-1', 1)",
         )
         .bind(CONVERSATION_ID)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    /// Seed two agents `user-1` can view through the creator arm, each on its own
+    /// live, unrevoked host. `a-online` sits on `h-online`, whose long-lived
+    /// credential lets a daemon attach over the mounted host WebSocket; `a-offline`
+    /// sits on `h-offline`, which no daemon ever attaches. The two are equally
+    /// visible and equally reachable — their ONLY difference is the live attachment,
+    /// so a difference in the availability answer can come only from the route
+    /// reading the real transport registry the WebSocket mutates.
+    async fn seed_reachable_agents(path: &Path) {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id) VALUES ('h-online', 'host-online', 'remote', 1, 'user-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id) VALUES ('h-offline', 'host-offline', 'remote', 1, 'user-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO host_credentials (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at) VALUES ('cred-online', 'h-online', ?, 'long_lived', NULL, NULL, NULL)",
+        )
+        .bind(HOST_TOKEN_HASH)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, created_by_user_id) VALUES ('a-online', 'agent-online', 'qoder', 'h-online', 1, 1, 'user-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, created_by_user_id) VALUES ('a-offline', 'agent-offline', 'qoder', 'h-offline', 1, 1, 'user-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    /// Seed the agent-presence ACL fixture behind the perimeter: a creator-visible
+    /// agent carrying a committed `last_activity_at` (so a real away deadline
+    /// projects), and a registered agent owned by a DIFFERENT human that the viewer
+    /// (`user-1`) is in no arm of (not creator, no direct pair, no shared workspace)
+    /// — its presence must collapse to the same anti-enumeration 404 as an absent id.
+    /// Both rows carry `materialization_status = 'active'`, which the presence adapter
+    /// strict-decodes; `seed_reachable_agents` omits it, so this leaf seeds its own.
+    async fn seed_presence_agents(path: &Path) {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('u-other', 'other', 'Other', 1, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id) VALUES ('h-presence', 'host-presence', 'remote', 1, 'user-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id) VALUES ('h-other', 'host-other', 'remote', 1, 'u-other')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, created_by_user_id, materialization_status, last_activity_at) VALUES ('a-presence', 'agent-presence', 'qoder', 'h-presence', 1, 1, 'user-1', 'active', 1000)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, created_by_user_id, materialization_status, last_activity_at) VALUES ('a-stranger', 'agent-stranger', 'qoder', 'h-other', 1, 1, 'u-other', 'active', 1000)",
+        )
         .execute(&pool)
         .await
         .unwrap();
@@ -1439,6 +1723,794 @@ mod tests {
         running.await.unwrap().unwrap();
     }
 
+    /// The composition mounts `GET /api/agents/{id}/availability` behind the SAME
+    /// human bearer/session perimeter that fronts the other human products, wired to
+    /// the real SQLite availability cold read and the real daemon attachment
+    /// controller. This proves the composition-only obligation — routed to the leaf,
+    /// behind the perimeter, over a real adapter — and not the leaf's
+    /// ACL/reachability behavior, which its own component and parity tests own.
+    #[tokio::test]
+    async fn the_composition_serves_agent_availability_behind_the_perimeter() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bearer = format!("Bearer {TOKEN}");
+        // `AVAILABILITY_PATH` is a `{id}` template; drive a concrete, unseeded id.
+        let path = "/api/agents/agent-absent/availability";
+
+        // Anonymous → the shared perimeter's exact refusal envelope, reading nothing:
+        // the 401 belongs to the perimeter the root mounts, so it is byte-identical to
+        // the envelope every human product behind it answers with.
+        let (status, body) = request(&router, "GET", path, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body, r#"{"error":"unauthorized"}"#);
+
+        // Authenticated → the request clears the perimeter, reaches the mounted leaf,
+        // and the real cold read finds no such agent: the route's OWN anti-enumeration
+        // 404 JSON. An UNMOUNTED path would give a bare framework 404; a leaf reached
+        // without its injected principal would give a 500. Neither is this.
+        let (status, body) = request(&router, "GET", path, Some(&bearer)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({ "error": "agent not found" })
+        );
+
+        // Route checksum: the availability path carries exactly one method. An
+        // authenticated POST clears the perimeter and then meets 405 — one route, one
+        // handler entry, no second mount.
+        let (status, body) = request(&router, "POST", path, Some(&bearer)).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
+    }
+
+    /// The composition's availability route consumes the SAME live attachment the
+    /// production daemon WebSocket populates. `a-online` and `a-offline` are equally
+    /// visible (creator arm) and equally reachable (live, unrevoked hosts); they
+    /// differ ONLY in that a real daemon attaches `h-online` over the mounted
+    /// `HOST_WEBSOCKET_PATH` through the production admission→attachment path — no
+    /// test-only attach hook or fake registry. The route reads `online` for the
+    /// attached agent and `offline` for the other through the one
+    /// `DaemonDeliveryController` the composition root shares between the daemon
+    /// runtime and the availability leaf. The leaf's own fake-attachment component
+    /// tests prove the reachability RULE; only this proves the MOUNT reaches the real
+    /// registry the transport mutates — swapping the mounted arg for an
+    /// always-detached adapter, or a SECOND controller registry that the WebSocket
+    /// never touches, turns the `online` assertion RED.
+    #[tokio::test]
+    async fn the_composition_availability_reads_the_live_daemon_attachment() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_reachable_agents(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        // A clone shares the served router's Arc-backed daemon registry, so a GET on
+        // this handle observes the live attachment made against the TCP server below.
+        let router = app.router.clone();
+        let bearer = format!("Bearer {TOKEN}");
+
+        // Baseline: before any daemon attaches, BOTH visible/reachable agents read
+        // offline — the shared controller holds no attachment for either host. This
+        // is the state the live attach must move, so a later `online` cannot be a
+        // fixture that was online all along.
+        for agent in ["a-online", "a-offline"] {
+            let uri = format!("/api/agents/{agent}/availability");
+            let (status, body) = request(&router, "GET", &uri, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap()["availability"],
+                "offline",
+                "{agent} must be offline before any daemon attaches"
+            );
+        }
+
+        // Serve over real TCP so a daemon can dial the mounted host WebSocket.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+
+        // Drive the REAL admission→attachment path: a daemon authenticates with the
+        // seeded host credential, announces `ready`, and answers the runtime-status
+        // command the server issues — the same handshake a production daemon runs.
+        let mut ws_request = format!("ws://{address}{HOST_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        ws_request.headers_mut().insert(
+            tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+            format!("Bearer {HOST_TOKEN}").parse().unwrap(),
+        );
+        let (mut socket, _) = connect_async(ws_request).await.unwrap();
+        socket
+            .send(ClientMessage::Text(
+                serde_json::json!({
+                    "direction": "daemon_to_server",
+                    "type": "event",
+                    "kind": "ready",
+                    "protocol_version": OUTBOUND_PROTOCOL_VERSION,
+                    "daemon_version": "test",
+                    "daemon_id": "daemon-cp2",
+                    "instance_id": "instance-cp2",
+                    "host_descriptor": { "name": "CP2 host", "kind": "remote" },
+                    "capabilities": [],
+                    "daemon_pid": 7,
+                    "started_at": 100,
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let command = next_daemon_json(&mut socket).await;
+        assert_eq!(command["kind"], "runtime_status", "{command}");
+        socket
+            .send(ClientMessage::Text(
+                serde_json::json!({
+                    "direction": "daemon_to_server",
+                    "type": "command_response",
+                    "id": command["id"],
+                    "kind": command["kind"],
+                    "result": { "runtimes": [] },
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+        // The attach + hydrate lands asynchronously; poll the SHARED availability GET
+        // until it observes the live attachment (bounded, so broken wiring fails
+        // instead of hanging).
+        let mut online = false;
+        for _ in 0..200 {
+            let (status, body) = request(
+                &router,
+                "GET",
+                "/api/agents/a-online/availability",
+                Some(&bearer),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            if serde_json::from_str::<serde_json::Value>(&body).unwrap()["availability"] == "online"
+            {
+                online = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            online,
+            "an agent whose host attached over the mounted daemon WebSocket must read online — \
+             proving the availability route's port IS the composition's live DaemonDeliveryController"
+        );
+
+        // Positive control through the SAME controller instance: the equally visible,
+        // equally reachable agent whose host never attached stays offline. An
+        // always-detached adapter would (wrongly) return this for BOTH; here only the
+        // unattached host reads it.
+        let (status, body) = request(
+            &router,
+            "GET",
+            "/api/agents/a-offline/availability",
+            Some(&bearer),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()["availability"],
+            "offline",
+            "an agent on a live host with no attachment must read offline through the same controller"
+        );
+
+        socket.close(None).await.unwrap();
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+    }
+
+    /// The composition mounts `GET /api/agents/{id}` (agent-detail) behind the same
+    /// perimeter, wired to the real SQLite agent-detail cold read. Proves the
+    /// composition obligation: the anonymous perimeter refusal, an authenticated
+    /// anti-enumeration 404 for an absent agent, a one-method route checksum, AND — an
+    /// admitted creator reading a real seeded row projected off the live SQLite
+    /// adapter (id/name/runtime/host, plus the `host_label` derivation off the host
+    /// LEFT JOIN). The projection and stage-flag matrix stay with the leaf's own
+    /// tests; this proves the mounted leaf reads the composition's real adapter.
+    #[tokio::test]
+    async fn the_composition_serves_agent_detail_behind_the_perimeter() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_reachable_agents(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bearer = format!("Bearer {TOKEN}");
+        // `AGENT_DETAIL_PATH` is a `{id}` template; drive a concrete, unseeded id.
+        let path = "/api/agents/agent-absent";
+
+        let (status, body) = request(&router, "GET", path, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body, r#"{"error":"unauthorized"}"#);
+
+        let (status, body) = request(&router, "GET", path, Some(&bearer)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({ "error": "agent not found" })
+        );
+
+        let (status, body) = request(&router, "POST", path, Some(&bearer)).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
+
+        // Admitted creator (`user-1` created `a-online`): the mounted leaf projects the
+        // real seeded row off the live SQLite adapter, including the `host_label`
+        // derivation off the host LEFT JOIN (`host-online`, the host's name).
+        let (status, body) = request(&router, "GET", "/api/agents/a-online", Some(&bearer)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let agent = &serde_json::from_str::<serde_json::Value>(&body).unwrap()["agent"];
+        assert_eq!(agent["id"], "a-online");
+        assert_eq!(agent["name"], "agent-online");
+        assert_eq!(agent["runtime"], "qoder");
+        assert_eq!(agent["host_id"], "h-online");
+        assert_eq!(agent["host_label"], "host-online");
+        assert_eq!(agent["created_by_user_id"], "user-1");
+    }
+
+    /// The composition mounts `GET /internal/agents/{aid}/tasks` (the agent task-LIST)
+    /// behind the runtime-credential perimeter, NOT the human session one. The route's
+    /// full vertical — real minted credential resolving to the agent, the union board
+    /// scope, the candidate fetch and the wire projection, and the port-untouched
+    /// anonymous refusal — is proven over the real perimeter seam by the backend-server
+    /// `task_list_mount` gate; minting a runtime credential is internal to `prepare`, so
+    /// what THIS composition test owns is the remaining, composition-only obligation:
+    /// that `prepare` actually placed the route in the served `agent_products` chain.
+    ///
+    /// The discriminator is `route_layer`: the runtime-credential middleware is attached
+    /// with `route_layer`, so it runs ONLY for a request that matches a mounted route. A
+    /// bad bearer on the tasks path therefore reaches the perimeter and is refused `401`
+    /// — while the SAME bad bearer on a sibling path that is NOT a route falls straight
+    /// through to the `404` fallback, the perimeter never consulted. The `401`/`404`
+    /// split is the exact mounted-versus-absent signal: were the route left unmounted,
+    /// the tasks path would `404` like its unrouted sibling.
+    #[tokio::test]
+    async fn the_composition_mounts_the_agent_task_list_behind_the_runtime_perimeter() {
+        let fixture = fixture(true).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bad_bearer = "Bearer unknown-runtime-token";
+
+        // The tasks path IS a route: the runtime perimeter runs and refuses the bad
+        // bearer `401`, never a `404` — the route is mounted behind the agent perimeter.
+        let (status, body) = request(
+            &router,
+            "GET",
+            "/internal/agents/agent-1/tasks",
+            Some(bad_bearer),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body, r#"{"error":"unauthorized"}"#);
+
+        // A sibling path under `/internal/agents/{aid}` that is NOT a route: the
+        // `route_layer` perimeter is skipped and the request falls to the `404`
+        // fallback, proving the `401` above is the task route's presence, not the
+        // perimeter blanket-refusing every internal path.
+        let (status, _) = request(
+            &router,
+            "GET",
+            "/internal/agents/agent-1/not-a-mounted-route",
+            Some(bad_bearer),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// The composition mounts `POST /internal/agents/{aid}/stale-message-resolution` behind
+    /// the runtime-credential perimeter, in the SAME `agent_products` chain as the agent
+    /// task-list. The route's full vertical — real minted credential resolving to the agent,
+    /// the real one-snapshot admission, the real `send_messages` capability, the port-
+    /// untouched refusals, and the production observer's single record — is proven over the
+    /// real perimeter seam by the backend-server `stale_message_resolution_mount` gate; what
+    /// THIS composition test owns is that `prepare` actually placed the route in the served
+    /// chain, wired to the app-private admission bridge and the production observer.
+    ///
+    /// The discriminator is the same `route_layer`: a bad bearer on the stale path reaches
+    /// the perimeter and is refused `401` (the route is mounted), while the SAME bad bearer on
+    /// a sibling path that is NOT a route falls straight through to the `404` fallback. The
+    /// `401`/`404` split is the exact mounted-versus-absent signal.
+    #[tokio::test]
+    async fn the_composition_mounts_stale_message_resolution_behind_the_runtime_perimeter() {
+        let fixture = fixture(true).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bad_bearer = "Bearer unknown-runtime-token";
+
+        // The stale-resolution path IS a route: the runtime perimeter runs and refuses the
+        // bad bearer `401`, never a `404` — the route is mounted behind the agent perimeter.
+        let (status, body) = request(
+            &router,
+            "POST",
+            "/internal/agents/agent-1/stale-message-resolution",
+            Some(bad_bearer),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body, r#"{"error":"unauthorized"}"#);
+
+        // A sibling path under `/internal/agents/{aid}` that is NOT a route: the `route_layer`
+        // perimeter is skipped and the request falls to the `404` fallback, proving the `401`
+        // above is the stale route's presence, not the perimeter blanket-refusing.
+        let (status, _) = request(
+            &router,
+            "POST",
+            "/internal/agents/agent-1/not-a-mounted-route",
+            Some(bad_bearer),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// Gate 1 of the CP2 convergence closure — the composed root's COMPLETE positive
+    /// mounted table. It enumerates every `(method, path)` `prepare()` mounts across
+    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195) as fifteen entries —
+    /// ten behind the human session perimeter, three behind the runtime credential
+    /// perimeter, the two authenticated WebSockets — and asserts each is PRESENT
+    /// (anon → its perimeter's `401`, or the WS upgrade surface, never the `404`
+    /// fallback). Removing any mounted route's `.merge(...)` from `prepare()` flips its
+    /// entry to `404` and reddens this gate.
+    ///
+    /// This is a PRESENCE ledger, not a closed universe: black-box probing cannot
+    /// prove "no sixteenth route was silently added" (axum exposes no route
+    /// introspection), so this gate makes no such claim. A new registrar mounted into
+    /// `prepare()` MUST add its route here (and, if in the #2195 lane, move it from
+    /// residual to landed in gate 2). Each door's per-path method surface and adapter
+    /// wiring stays pinned by that route's own mount/unit test — the composed `.layer`
+    /// perimeter answers `401` before method dispatch, so per-method surface is not
+    /// observable here.
+    #[tokio::test]
+    async fn the_composition_mounts_every_declared_route() {
+        let fixture = fixture(true).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let unauthorized = r#"{"error":"unauthorized"}"#;
+
+        // The ten human-perimeter product doors. Anonymous (no bearer) → the human
+        // session perimeter's `401` envelope, never a `404`: each path IS mounted and
+        // guarded. (`.layer` runs the perimeter for any matched human route.)
+        for (method, path) in [
+            ("POST", "/api/hosts"),
+            ("POST", "/api/channels/conv000000000001/messages"),
+            ("GET", "/api/direct-pairs"),
+            ("GET", "/api/workspaces"),
+            ("POST", "/api/workspaces/workspace0000001/members"),
+            ("GET", "/api/agents"),
+            ("GET", "/api/agents/agent-1"),
+            ("GET", "/api/agents/agent-1/presence"),
+            ("GET", "/api/agents/agent-1/availability"),
+            ("GET", "/api/presence"),
+        ] {
+            let (status, body) = request(&router, method, path, None).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
+            assert_eq!(body, unauthorized, "{method} {path}");
+        }
+
+        // The three runtime-perimeter internal doors. Anonymous → the runtime
+        // credential perimeter's `401` on the matched route, never `404`.
+        for (method, path) in [
+            ("POST", "/internal/agents/agent-1/send-message"),
+            ("GET", "/internal/agents/agent-1/tasks"),
+            ("POST", "/internal/agents/agent-1/stale-message-resolution"),
+        ] {
+            let (status, body) = request(&router, method, path, None).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
+            assert_eq!(body, unauthorized, "{method} {path}");
+        }
+
+        // The two authenticated WebSockets are mounted: a plain (non-upgrade) GET is
+        // refused by the upgrade/auth surface, never falling to the `404` fallback.
+        for path in [EVENT_WEBSOCKET_PATH, HOST_WEBSOCKET_PATH] {
+            let (status, _) = request(&router, "GET", path, None).await;
+            assert_ne!(status, StatusCode::NOT_FOUND, "{path} must be mounted");
+        }
+
+        // Mounted-vs-absent discriminator: sibling paths that are NOT routes fall to
+        // the top `404` fallback (no perimeter blanket-refusing), proving the `401`s
+        // above are route presence and not a catch-all.
+        for (method, path) in [
+            ("GET", "/api/nonexistent"),
+            ("GET", "/api/agents/agent-1/not-a-route"),
+            ("GET", "/api/workspaces/workspace0000001/not-a-route"),
+            ("POST", "/internal/agents/agent-1/not-a-route"),
+            ("GET", "/internal/nonexistent"),
+        ] {
+            let (status, _) = request(&router, method, path, None).await;
+            assert_eq!(
+                status,
+                StatusCode::NOT_FOUND,
+                "{method} {path} must be absent"
+            );
+        }
+    }
+
+    /// Gate 2 of the CP2 convergence closure — the #2195 host-agent control-plane lane
+    /// as a bidirectionally CLOSED universe of 54 = 5 landed + 49 residual, every entry
+    /// itemized `(method, path)` in a named table that is mechanically checksummed: the
+    /// three tables' lengths are pinned (`5`/`44`/`5`), every `(method, path)` across the
+    /// union is unique, landed is disjoint from residual, and the union is exactly `54`.
+    /// This is the lane's ORIGINAL owned total (it still counts the three dynamic host
+    /// reads since handed to #2198). Deleting a row, or copying one between tables, breaks
+    /// the checksum — `5 + 49 == 54` is an assertion, not prose.
+    ///
+    /// Every one of the 49 residual routes is FALSIFIABLE — none rests on an
+    /// unfalsifiable anon `401`:
+    /// * The 5 LANDED routes are mounted in `prepare()` → anon `401`. Deleting any one's
+    ///   `.merge(...)` flips it to `404` and reddens this gate (delete-landed RED).
+    /// * 44 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
+    ///   Mounting any one flips it to its perimeter's `401`/`405` and reddens this gate
+    ///   (mount-residual RED).
+    /// * 4 METHOD-SHADOW residuals share a concrete path with a mounted sibling that
+    ///   answers a DIFFERENT method. Probed anonymously the perimeter's `.layer` answers
+    ///   `401` before method dispatch (indistinguishable from mounted), so this gate
+    ///   probes them AUTHENTICATED (real seeded bearer): the perimeter passes and the
+    ///   path's `MethodRouter` bears the truth → `405 METHOD_NOT_ALLOWED`. Mis-mounting
+    ///   the residual method flips its answer to a handler status and reddens this gate.
+    /// * 1 STATIC-SHADOW residual (`GET /api/agents/name-availability`) collides with the
+    ///   mounted dynamic `GET /api/agents/{id}`. Probed AUTHENTICATED with a valid query,
+    ///   it falls through to that detail route's byte-exact absent answer
+    ///   (`404 {"error":"agent not found"}`). A real static `name-availability` registrar
+    ///   would take axum's static-segment priority over `{id}` and answer with its own
+    ///   payload, reddening this exact-body assert.
+    ///
+    /// RESIDUAL routes are NEVER implemented in this lane — they are disproved (404, 405,
+    /// or the detail-route fallthrough), not built. A new registrar mounted into
+    /// `prepare()` at any of these paths MUST move its row from residual to landed here.
+    #[tokio::test]
+    async fn the_host_agent_lane_stays_a_closed_universe_of_fifty_four() {
+        // The 5 LANDED routes, mounted in `prepare()` behind the human perimeter.
+        const LANDED: &[(&str, &str)] = &[
+            ("GET", "/api/agents"),
+            ("GET", "/api/agents/agent-1"),
+            ("GET", "/api/agents/agent-1/presence"),
+            ("GET", "/api/agents/agent-1/availability"),
+            ("GET", "/api/presence"),
+        ];
+        // 44 RESIDUAL routes whose path matches no mounted route → anon 404.
+        const CLEAN_RESIDUAL: &[(&str, &str)] = &[
+            // routes.ts remaining (5)
+            ("GET", "/api/server/info"),
+            ("POST", "/auth/embedded-bootstrap"),
+            ("GET", "/api/health"),
+            ("GET", "/readyz"),
+            ("GET", "/api/runtimes"),
+            // hosts remaining (14 of 15; `GET /api/hosts` is method-shadowed, below)
+            ("GET", "/api/hosts/connect-token/resolve"),
+            ("GET", "/api/hosts/host-1"),
+            ("GET", "/api/hosts/host-1/resources"),
+            ("DELETE", "/api/hosts/host-1"),
+            ("POST", "/api/hosts/claim-or-create"),
+            ("POST", "/api/hosts/host-1/revoke"),
+            ("POST", "/api/hosts/host-1/rotate-token"),
+            ("POST", "/api/hosts/host-1/connect-token/rotate"),
+            ("POST", "/api/hosts/host-1/disconnect"),
+            ("GET", "/api/hosts/host-1/proxy-config"),
+            ("PUT", "/api/hosts/host-1/proxy-config"),
+            ("GET", "/api/hosts/host-1/runtime-catalog"),
+            ("PATCH", "/api/hosts/host-1"),
+            ("GET", "/api/hosts/host-1/status"),
+            // agents residual (16 of 20; name-availability, POST /api/agents,
+            // PATCH/DELETE /api/agents/{id} are shadowed, below)
+            ("PUT", "/api/agents/agent-1/runtime"),
+            ("POST", "/api/agents/agent-1/clear-session"),
+            ("POST", "/api/agents/agent-1/avatar"),
+            ("DELETE", "/api/agents/agent-1/avatar"),
+            ("GET", "/api/agents/agent-1/avatar"),
+            ("GET", "/api/agents/agent-1/workspace/tree"),
+            ("GET", "/api/agents/agent-1/workspace/file"),
+            ("GET", "/api/agents/agent-1/profile/mcp"),
+            ("POST", "/api/agents/agent-1/profile/mcp/probe"),
+            ("GET", "/api/agents/agent-1/runtime-state"),
+            ("GET", "/api/agents/agent-1/chats"),
+            ("GET", "/api/agents/agent-1/chats/conv-1/messages"),
+            ("GET", "/api/agents/agent-1/chats/conv-1/attachments/att-1"),
+            ("GET", "/api/agents/agent-1/schedules"),
+            ("POST", "/api/agents/agent-1/schedules/sched-1/cancel"),
+            ("POST", "/api/agents/agent-1/stop"),
+            // internal profile-MCP (3)
+            ("GET", "/internal/agents/agent-1/profile/mcp"),
+            ("POST", "/internal/agents/agent-1/profile/mcp"),
+            ("POST", "/internal/agents/agent-1/profile/mcp/probe"),
+            // internal profile (5)
+            ("POST", "/internal/agents/agent-1/avatar"),
+            ("DELETE", "/internal/agents/agent-1/avatar"),
+            ("GET", "/internal/agents/agent-1/profile"),
+            ("POST", "/internal/agents/agent-1/profile"),
+            ("GET", "/internal/agents/agent-1/peer-profile"),
+            // diagnostic (1)
+            ("POST", "/internal/agents/agent-1/cli-trace"),
+        ];
+        // 4 METHOD-SHADOW residuals: the path is mounted for a DIFFERENT method, so an
+        // authenticated probe of the residual method hits the `MethodRouter` → 405.
+        const METHOD_SHADOW_RESIDUAL: &[(&str, &str)] = &[
+            ("GET", "/api/hosts"),             // ← POST /api/hosts (mounted)
+            ("POST", "/api/agents"),           // ← GET /api/agents (mounted)
+            ("PATCH", "/api/agents/agent-1"),  // ← GET /api/agents/{id} (mounted)
+            ("DELETE", "/api/agents/agent-1"), // ← GET /api/agents/{id} (mounted)
+        ];
+        // 1 STATIC-SHADOW residual: collides with the mounted dynamic `GET
+        // /api/agents/{id}`; an authenticated probe falls through to that route's absent
+        // answer (asserted below), not a static handler.
+        const STATIC_SHADOW_RESIDUAL: &[(&str, &str)] = &[("GET", "/api/agents/name-availability")];
+
+        // ── Mechanical checksum: 5 + 44 + 4 + 1 == 54, all unique, landed ∩ residual = ∅ ──
+        assert_eq!(LANDED.len(), 5);
+        assert_eq!(CLEAN_RESIDUAL.len(), 44);
+        assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 4);
+        assert_eq!(STATIC_SHADOW_RESIDUAL.len(), 1);
+        let landed: std::collections::HashSet<(&str, &str)> = LANDED.iter().copied().collect();
+        let residual: std::collections::HashSet<(&str, &str)> = CLEAN_RESIDUAL
+            .iter()
+            .chain(METHOD_SHADOW_RESIDUAL)
+            .chain(STATIC_SHADOW_RESIDUAL)
+            .copied()
+            .collect();
+        assert_eq!(landed.len(), 5, "landed rows are unique");
+        assert_eq!(residual.len(), 49, "residual rows are unique");
+        assert!(
+            landed.is_disjoint(&residual),
+            "landed and residual are disjoint"
+        );
+        assert_eq!(
+            landed.len() + residual.len(),
+            54,
+            "the closed universe is 54"
+        );
+
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bearer = format!("Bearer {TOKEN}");
+        let unauthorized = r#"{"error":"unauthorized"}"#;
+
+        // ── 5 LANDED → anon 401 (delete-landed RED) ──
+        for (method, path) in LANDED {
+            let (status, body) = request(&router, method, path, None).await;
+            assert_eq!(
+                status,
+                StatusCode::UNAUTHORIZED,
+                "landed {method} {path}: {body}"
+            );
+            assert_eq!(body, unauthorized, "landed {method} {path}");
+        }
+
+        // ── 44 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
+        for (method, path) in CLEAN_RESIDUAL {
+            let (status, _) = request(&router, method, path, None).await;
+            assert_eq!(
+                status,
+                StatusCode::NOT_FOUND,
+                "clean residual {method} {path} must be unmounted (404)"
+            );
+        }
+
+        // ── 4 METHOD-SHADOW RESIDUAL → AUTHENTICATED 405 (perimeter passes, the path's
+        // MethodRouter bears the truth). Mis-mounting the residual method reddens this. ──
+        for (method, path) in METHOD_SHADOW_RESIDUAL {
+            let (status, body) = request(&router, method, path, Some(&bearer)).await;
+            assert_eq!(
+                status,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "method-shadow residual {method} {path} must be method-unmounted (405): {body}"
+            );
+        }
+
+        // ── 1 STATIC-SHADOW RESIDUAL → AUTHENTICATED, valid query, falls through to the
+        // dynamic `GET /api/agents/{id}` detail route's byte-exact absent answer. A static
+        // `name-availability` registrar would win axum's static priority and answer
+        // otherwise, reddening this exact-body assert (static-mount RED). ──
+        let (status, body) = request(
+            &router,
+            "GET",
+            "/api/agents/name-availability?name=fresh-name",
+            Some(&bearer),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "static-shadow: {body}");
+        assert_eq!(
+            body, r#"{"error":"agent not found"}"#,
+            "static-shadow falls through to GET /api/agents/{{id}}, not a static route"
+        );
+    }
+    /// one host with DISTINCT `created_at`, so the list's `created_at ASC` order is
+    /// defined, plus a registered STRANGER (`user-stranger`, its own seeded session over
+    /// `ADMIN_HASH`) who is in no arm of either agent — so the list face collapses that
+    /// caller to an empty array with no existence oracle.
+    async fn seed_list_agents(path: &Path) {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        for statement in [
+            "INSERT INTO hosts (id, name, kind, created_at, user_id) VALUES ('h-list', 'host-list', 'remote', 1, 'user-1')",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, created_by_user_id, materialization_status) \
+             VALUES ('al-1', 'agent-list-one', 'qoder', 'h-list', 100, 100, 'user-1', 'active')",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, created_by_user_id, materialization_status) \
+             VALUES ('al-2', 'agent-list-two', 'qoder', 'h-list', 200, 200, 'user-1', 'active')",
+            "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-stranger', 'stranger', 'Stranger', 1, 1)",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        let now = i64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO auth_sessions (id, user_id, token_hash, created_at, last_used_at, revoked_at, user_agent, ip_first_seen) VALUES ('session-stranger', 'user-stranger', ?, ?, ?, NULL, NULL, NULL)",
+        )
+        .bind(ADMIN_HASH)
+        .bind(now)
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    /// The composition mounts `GET /api/agents` (agent-LIST) behind the SAME human
+    /// perimeter, wired to the real SQLite agent-list cold read. Proves the composition
+    /// obligation the leaf's own tests cannot: the anonymous perimeter refusal; an
+    /// admitted creator reading the real seeded set off the live SQLite adapter in the
+    /// port's `created_at ASC` order; a registered STRANGER collapsing to the empty
+    /// array with no existence oracle; and a one-method route checksum. The per-branch
+    /// matrix (stage flags, `?scope=owned`, projection) stays with the leaf's own tests;
+    /// this proves the route is MOUNTED and reads the composition's real adapter.
+    #[tokio::test]
+    async fn the_composition_serves_agent_list_behind_the_perimeter() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_list_agents(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bearer = format!("Bearer {TOKEN}");
+        let stranger = format!("Bearer {ADMIN_TOKEN}");
+        let path = "/api/agents";
+
+        // Anonymous → the perimeter's refusal envelope, never a list answer.
+        let (status, body) = request(&router, "GET", path, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body, r#"{"error":"unauthorized"}"#);
+
+        // Admitted creator → the real adapter's `created_at ASC` set off live SQLite.
+        let (status, body) = request(&router, "GET", path, Some(&bearer)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let ids = serde_json::from_str::<serde_json::Value>(&body).unwrap()["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|agent| agent["id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["al-1", "al-2"]);
+
+        // Registered stranger → the empty array; a list face has no 404, a hidden agent
+        // is simply ABSENT, so the mounted surface is never an enumeration oracle.
+        let (status, body) = request(&router, "GET", path, Some(&stranger)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({ "agents": [] })
+        );
+
+        // One-method route checksum: the mounted path serves GET only.
+        let (status, body) = request(&router, "POST", path, Some(&bearer)).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
+    }
+
+    /// The composition mounts `GET /api/agents/{id}/presence` behind the SAME human
+    /// perimeter, wired to the real SQLite agent-presence cold read and the production
+    /// `SystemRuntimeClock`. Proves the composition obligation the leaf's own tests
+    /// cannot: the anonymous perimeter refusal; the anti-enumeration 404 a registered
+    /// stranger and an absent id share BYTE-for-byte; a one-method route checksum; AND
+    /// an admitted creator reading a real seeded stamp projected off the live SQLite
+    /// adapter to the shared away deadline, alongside a live `server_now` bracketed by
+    /// the wall clock — proving the mount injected the real production clock, not a
+    /// fixture. The per-arm/stage matrix stays with the leaf's own tests.
+    #[tokio::test]
+    async fn the_composition_serves_agent_presence_behind_the_perimeter() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_presence_agents(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bearer = format!("Bearer {TOKEN}");
+        let absent = "/api/agents/agent-absent/presence";
+
+        // Anonymous → the perimeter's refusal envelope, never a presence answer.
+        let (status, body) = request(&router, "GET", absent, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body, r#"{"error":"unauthorized"}"#);
+
+        // Admitted, absent id → the anti-enumeration 404.
+        let (status, absent_body) = request(&router, "GET", absent, Some(&bearer)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{absent_body}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&absent_body).unwrap(),
+            serde_json::json!({ "error": "agent not found" })
+        );
+
+        // Admitted stranger: a REAL row the viewer is in no arm of collapses to the
+        // SAME 404 bytes as an absent id, so the mounted surface is never an oracle.
+        let (status, stranger_body) = request(
+            &router,
+            "GET",
+            "/api/agents/a-stranger/presence",
+            Some(&bearer),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{stranger_body}");
+        assert_eq!(stranger_body, absent_body);
+
+        // One-method route checksum: the mounted path serves GET only.
+        let (status, body) = request(&router, "POST", absent, Some(&bearer)).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
+
+        // Admitted creator: the mounted leaf projects the real seeded stamp off the live
+        // SQLite adapter to the shared away deadline (`away_at` is the shared TTL policy
+        // applied to 1000, not a literal — drift in adapter or policy fails here), and
+        // `server_now` is a live wall-clock stamp from the injected production clock.
+        let before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let (status, body) = request(
+            &router,
+            "GET",
+            "/api/agents/a-presence/presence",
+            Some(&bearer),
+        )
+        .await;
+        let after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let presence = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+        assert_eq!(
+            presence["away_at"],
+            serde_json::json!(1_000 + silverhand_backend_core::policy::agent_presence::AWAY_TTL_MS)
+        );
+        let server_now = presence["server_now"]
+            .as_i64()
+            .expect("server_now must be an integer stamp from the injected clock");
+        assert!(
+            before <= server_now && server_now <= after,
+            "server_now {server_now} not bracketed by wall clock [{before}, {after}]"
+        );
+    }
+
+    /// Read the next JSON frame from a daemon socket, answering server pings so the
+    /// connection stays live across the attach handshake (the daemon side of the WS
+    /// must keep-alive; a text frame is the command/event the test asserts on).
+    async fn next_daemon_json<S>(
+        socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    ) -> serde_json::Value
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        use futures_util::{SinkExt, StreamExt};
+        loop {
+            match socket.next().await.unwrap().unwrap() {
+                ClientMessage::Text(frame) => return serde_json::from_str(&frame).unwrap(),
+                ClientMessage::Ping(payload) => {
+                    socket.send(ClientMessage::Pong(payload)).await.unwrap()
+                }
+                other => panic!("unexpected daemon frame: {other:?}"),
+            }
+        }
+    }
+
     async fn next_socket_json<S>(
         socket: &mut tokio_tungstenite::WebSocketStream<S>,
     ) -> serde_json::Value
@@ -1452,5 +2524,254 @@ mod tests {
             panic!("expected a text frame");
         };
         serde_json::from_str(&frame).unwrap()
+    }
+
+    /// The presence vertical mounted through the composition root: the `GET
+    /// /api/presence` route behind the human perimeter, the event-WS lifecycle feed,
+    /// and the single `PresenceGraceTimers` both share. Kept in its own module so it
+    /// reuses the parent harness (`fixture`, `seed_human`, `config`, `request`,
+    /// `next_socket_json`) without touching its import surface.
+    mod presence_composition {
+        use silverhand_backend_core::{
+            cold_read::presence::{LastSeenAt, UserPresenceFacts},
+            identity::UserId,
+            persistence::PersistenceFailure,
+            policy::presence_grace::PresenceFact,
+            user_presence_cold_read::UserPresenceReadModel,
+            user_presence_last_seen::LastSeenSink,
+        };
+        use silverhand_backend_server::{
+            host_agent::presence::{self, PRESENCE_PATH},
+            host_agent_background::presence_grace_timer::PresenceFactSink,
+            scope_events::{ConnectionLifecycle, PresenceConnectionFeed},
+        };
+
+        use super::*;
+
+        /// A silent last-seen sink for wiring tests: `on_connect` never touches it, so
+        /// the online proof needs no working persistence behind the timers.
+        #[derive(Clone)]
+        struct SilentLastSeen;
+
+        impl LastSeenSink for SilentLastSeen {
+            async fn touch_last_seen(
+                &self,
+                _user_id: UserId,
+                _last_seen_at: LastSeenAt,
+            ) -> Result<(), PersistenceFailure> {
+                Ok(())
+            }
+        }
+
+        /// A silent presence-fact sink: the offline wire is exercised by the timer's own
+        /// already-PASS'd unit tests, not re-driven here.
+        #[derive(Clone)]
+        struct SilentFacts;
+
+        impl PresenceFactSink for SilentFacts {
+            type Error = std::convert::Infallible;
+
+            fn publish(&self, _fact: PresenceFact) -> Result<(), Self::Error> {
+                Ok(())
+            }
+        }
+
+        /// A cold read that serves a fixed fact set, so a wiring test can assert the
+        /// live-liveness join without a real database.
+        #[derive(Clone)]
+        struct FactsFixture(Vec<UserPresenceFacts>);
+
+        impl UserPresenceReadModel for FactsFixture {
+            async fn list_user_presence_facts(
+                &self,
+            ) -> Result<Vec<UserPresenceFacts>, PersistenceFailure> {
+                Ok(self.0.clone())
+            }
+        }
+
+        /// The `GET /api/presence` auth refusal, signed by the REAL TypeScript
+        /// perimeter over the REAL presence route
+        /// (packages/backend/tests/presence-auth-refusal-parity.test.ts) and checked in
+        /// as the sole artifact both implementations answer to. The refusal belongs to
+        /// the perimeter the composition root mounts, not to the presence leaf, which is
+        /// why the leaf's whole-wire gate deliberately excludes it — and why this
+        /// composition consumes the value rather than self-signing it.
+        const PRESENCE_REFUSAL: &str = include_str!(
+            "../../../../packages/backend/tests/fixtures/presence/unauthorized/refusal.json"
+        );
+
+        /// The refusal fixture's two fields: an exact status and the raw body TEXT, so
+        /// the differential is over bytes rather than a re-serialized tree. Both are
+        /// required — a fixture missing either would silently weaken the gate, so this
+        /// panics rather than defaulting.
+        fn presence_refusal() -> (u16, String) {
+            let refusal: serde_json::Value = serde_json::from_str(PRESENCE_REFUSAL).unwrap();
+            let status = u16::try_from(refusal["status"].as_u64().expect("signed status")).unwrap();
+            let body = refusal["body"]
+                .as_str()
+                .expect("signed body text")
+                .to_owned();
+            (status, body)
+        }
+
+        /// The composition mounts `GET /api/presence` behind the human bearer/session
+        /// perimeter (exact anonymous 401, authenticated 200, one route), and a live
+        /// event-WS connection flips the viewer to online in the very read the GET
+        /// serves — the object-identity singleton observed end to end through the real
+        /// composed router, not a leaf handler.
+        #[tokio::test]
+        async fn the_composition_serves_presence_behind_the_perimeter_and_a_live_connection_reads_online()
+         {
+            let fixture = fixture(true).await;
+            seed_human(&fixture.path).await;
+            let app = prepare(&config(fixture.path.clone())).await.unwrap();
+            // A clone shares the same Arc-backed presence timers with the served router,
+            // so a GET on this handle observes the live connection made against the TCP
+            // server below.
+            let router = app.router.clone();
+            let bearer = format!("Bearer {TOKEN}");
+
+            // Anonymous → the perimeter's exact refusal envelope, never the viewer set.
+            // The expected status and body BYTES are not this test's to invent: they are
+            // the artifact the real TypeScript perimeter signed
+            // (packages/backend/tests/presence-auth-refusal-parity.test.ts), consumed
+            // here verbatim. Comparison is over the raw body text, so the two
+            // implementations cannot drift on separators or key order.
+            let (status, body) = request(&router, "GET", PRESENCE_PATH, None).await;
+            let (refused_status, refused_body) = presence_refusal();
+            assert_eq!(status.as_u16(), refused_status, "{body}");
+            assert_eq!(body, refused_body);
+
+            // Authenticated → 200 with the closed wire shape; no live connection yet, so
+            // the viewer is offline with a null stamp (never seen).
+            let (status, body) = request(&router, "GET", PRESENCE_PATH, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+                serde_json::json!({
+                    "users": [
+                        { "user_id": "user-1", "presence": "offline", "last_seen_at": null },
+                    ]
+                })
+            );
+
+            // Route checksum = 1: the path carries exactly one method. An AUTHENTICATED
+            // POST clears the perimeter and then meets 405 — one route, one handler
+            // entry, no second mount.
+            let (status, body) = request(&router, "POST", PRESENCE_PATH, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
+
+            // A live event-WS connection as user-1. Its lifecycle feeds the single
+            // presence timers the GET reads.
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            let running = tokio::spawn(serve(listener, app, async move {
+                let _ = shutdown_rx.await;
+                Ok::<(), std::io::Error>(())
+            }));
+
+            let mut websocket_request = format!("ws://{address}{EVENT_WEBSOCKET_PATH}")
+                .into_client_request()
+                .unwrap();
+            websocket_request
+                .headers_mut()
+                .insert(ORIGIN, "http://localhost:5173".parse().unwrap());
+            websocket_request.headers_mut().insert(
+                COOKIE,
+                format!("{EVENT_WS_SESSION_COOKIE}={TOKEN}")
+                    .parse()
+                    .unwrap(),
+            );
+            websocket_request
+                .headers_mut()
+                .insert(DESKTOP_API_EPOCH_HEADER, MINIMUM_CLIENT_API_EPOCH.into());
+            let (mut socket, _) = connect_async(websocket_request).await.unwrap();
+            assert_eq!(next_socket_json(&mut socket).await["type"], "authenticated");
+
+            // The connect mark lands around the authenticated handshake; poll the shared
+            // GET until it observes online (bounded, so a broken singleton fails instead
+            // of hanging).
+            let mut online = false;
+            for _ in 0..200 {
+                let (status, body) = request(&router, "GET", PRESENCE_PATH, Some(&bearer)).await;
+                assert_eq!(status, StatusCode::OK, "{body}");
+                let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+                if json["users"][0]["presence"] == "online" {
+                    assert_eq!(json["users"][0]["last_seen_at"], serde_json::Value::Null);
+                    online = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert!(
+                online,
+                "a live event-WS connection must mark the viewer online in the GET the composition shares with it"
+            );
+
+            socket.close(None).await.unwrap();
+            shutdown_tx.send(()).unwrap();
+            running.await.unwrap().unwrap();
+        }
+
+        /// The singleton wiring is load-bearing: online only appears when the connect
+        /// feed and the presence route read ONE timers instance. The counterexample —
+        /// two separate `new()` — stays RED (offline), proving the positive control is
+        /// not an accident of two registries agreeing.
+        #[tokio::test]
+        async fn presence_online_requires_the_feed_and_the_route_to_share_one_timers_instance() {
+            let viewer = UserId::parse("user-1").unwrap();
+            let cold = FactsFixture(vec![UserPresenceFacts {
+                id: viewer.clone(),
+                last_seen_at: None,
+                created_at: 1,
+            }]);
+
+            async fn presence_of(router: &Router, viewer: &UserId) -> String {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::get(PRESENCE_PATH)
+                            .extension(viewer.clone())
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                json["users"][0]["presence"].as_str().unwrap().to_owned()
+            }
+
+            // Positive control: ONE instance. Its clone feeds the connect lifecycle; the
+            // instance itself is the route's OnlineViewers.
+            let shared = PresenceGraceTimers::new(
+                SilentLastSeen,
+                SilentFacts,
+                GraceWindow::from_millis_or_default(None),
+            );
+            let feed = PresenceConnectionFeed::new(shared.clone(), SystemDisconnectClock);
+            feed.on_connect(&viewer, "conn-1");
+            let shared_router = presence::router(cold.clone(), shared);
+            assert_eq!(presence_of(&shared_router, &viewer).await, "online");
+
+            // Counterexample: TWO separate `new()`. The feed marks online in registry A;
+            // the route reads registry B, which never saw the connection.
+            let feed_registry = PresenceGraceTimers::new(
+                SilentLastSeen,
+                SilentFacts,
+                GraceWindow::from_millis_or_default(None),
+            );
+            let route_registry = PresenceGraceTimers::new(
+                SilentLastSeen,
+                SilentFacts,
+                GraceWindow::from_millis_or_default(None),
+            );
+            let split_feed = PresenceConnectionFeed::new(feed_registry, SystemDisconnectClock);
+            split_feed.on_connect(&viewer, "conn-1");
+            let split_router = presence::router(cold, route_registry);
+            assert_eq!(presence_of(&split_router, &viewer).await, "offline");
+        }
     }
 }

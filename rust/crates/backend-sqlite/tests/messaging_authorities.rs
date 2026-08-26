@@ -9,8 +9,12 @@ use std::{
     },
 };
 
+use silverhand_backend_core::messaging::task::{
+    AgentBoardResolver, AgentReadableBoards, BoardKey, BoardResolution, BoardScopeRequest,
+    BoardScopeSource, PairKey, ResolvedBoard, TaskParticipationReads, TaskReadCapability,
+};
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, UserId},
+    identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         AddressRefusal, ChannelAccess, ChannelAccessRefusal, DeliveryIntent, DirectPairAllocation,
         DirectPairOpenedFact, DirectPairOpenedPort, EnvironmentUnavailable, MessageContent,
@@ -759,4 +763,608 @@ async fn a_shaping_read_never_survives_revocation_into_the_write_unit() {
             .await
             .unwrap();
     assert_eq!(count, 0);
+}
+
+// --- Task-read authorities --------------------------------------------------
+//
+// The three consumer ports the task read composes (`may_read_tasks`,
+// `is_{agent,user}_participant`, `resolve_board`) are answered from the same
+// roster/workspace tables this fixture already seeds for the send gate. The
+// fixture is deliberately reused: AGENT holds `send_messages` but NOT
+// `read_tasks`, PEER is a workspace member absent from the channel roster, and
+// workspace-1 is user-owned (not an agent-home) — exactly the shapes that pin
+// token specificity, participation-vs-membership, and the owner arm.
+
+fn an_agent(id: &str) -> AgentId {
+    AgentId::parse(id).unwrap()
+}
+
+fn a_workspace(id: &str) -> WorkspaceId {
+    WorkspaceId::parse(id).unwrap()
+}
+
+fn a_conversation(id: &str) -> ConversationId {
+    ConversationId::parse(id).unwrap()
+}
+
+fn a_user(id: &str) -> UserId {
+    UserId::parse(id).unwrap()
+}
+
+/// The capability is `read_tasks`, not merely "some capability". AGENT holds
+/// `send_messages` in this workspace and nothing else, so a gate that asked the
+/// wrong token — or any token — would wrongly admit it. Granting `read_tasks`
+/// (AGENT is already a member, which the capability FK requires) flips it.
+#[tokio::test]
+async fn may_read_tasks_is_specific_to_the_read_tasks_token() {
+    let mut fixture = Fixture::new().await;
+    let mut store = fixture.store().await;
+
+    assert!(
+        !store
+            .may_read_tasks(&an_agent(AGENT), &a_workspace(WORKSPACE))
+            .await
+            .unwrap(),
+        "send_messages must not satisfy read_tasks"
+    );
+
+    sqlx::query(
+        "INSERT INTO workspace_agent_capabilities (workspace_id, agent_id, capability) \
+         VALUES (?, ?, 'read_tasks')",
+    )
+    .bind(WORKSPACE)
+    .bind(AGENT)
+    .execute(&mut fixture.db)
+    .await
+    .unwrap();
+
+    assert!(
+        store
+            .may_read_tasks(&an_agent(AGENT), &a_workspace(WORKSPACE))
+            .await
+            .unwrap(),
+        "read_tasks capability must satisfy read_tasks"
+    );
+}
+
+/// An agent-home workspace admits its owner through the `owner_agent_id` arm with
+/// no capability row at all; a non-owner is not admitted by that arm and — since
+/// an agent-home workspace's membership is owner-only — has no members-table
+/// fallback either. This is the capability's owner arm, distinct from membership.
+#[tokio::test]
+async fn may_read_tasks_owner_arm_admits_the_agent_home_owner_only() {
+    let mut fixture = Fixture::new().await;
+    sqlx::query(
+        "INSERT INTO workspaces (id, name, owner_agent_id, created_at, updated_at) \
+         VALUES ('ws-home', 'Home', ?, 0, 0)",
+    )
+    .bind(PEER)
+    .execute(&mut fixture.db)
+    .await
+    .unwrap();
+    let mut store = fixture.store().await;
+
+    assert!(
+        store
+            .may_read_tasks(&an_agent(PEER), &a_workspace("ws-home"))
+            .await
+            .unwrap(),
+        "the agent-home owner reads through the owner arm without a capability row"
+    );
+    assert!(
+        !store
+            .may_read_tasks(&an_agent(AGENT), &a_workspace("ws-home"))
+            .await
+            .unwrap(),
+        "a non-owner is not admitted to an agent-home workspace"
+    );
+}
+
+/// Participation is the placement roster, NOT workspace membership: PEER is a
+/// member of workspace-1 but is not in the channel's `conversation_agents`, so it
+/// does not participate; AGENT, which is in the roster, does. HIDDEN is neither.
+#[tokio::test]
+async fn agent_participation_is_the_roster_not_workspace_membership() {
+    let fixture = Fixture::new().await;
+    let mut store = fixture.store().await;
+    let channel = a_conversation(CHANNEL);
+
+    assert!(
+        store
+            .is_agent_participant(&channel, &an_agent(AGENT))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .is_agent_participant(&channel, &an_agent(PEER))
+            .await
+            .unwrap(),
+        "a workspace member absent from the channel roster does not participate"
+    );
+    assert!(
+        !store
+            .is_agent_participant(&channel, &an_agent(HIDDEN))
+            .await
+            .unwrap()
+    );
+}
+
+/// The set-shaped capability read folds a MIXED set in one call: it admits the
+/// workspaces the agent may read, drops a member workspace with no `read_tasks`, and
+/// drops an id that names no workspace — all in a single `json_each`-driven read. Proves
+/// the fan-out is a real set fold, not the singular method behind a per-item loop.
+#[tokio::test]
+async fn readable_task_workspaces_folds_a_mixed_set_in_one_read() {
+    let mut fixture = Fixture::new().await;
+    // AGENT gains read_tasks on workspace-1; it is a member of ws-2 but holds no
+    // capability there; "ws-missing" is not a workspace at all.
+    sqlx::query("INSERT INTO workspace_agent_capabilities (workspace_id, agent_id, capability) VALUES (?, ?, 'read_tasks')")
+        .bind(WORKSPACE).bind(AGENT).execute(&mut fixture.db).await.unwrap();
+    sqlx::query("INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at) VALUES ('ws-2', 'Second', 'second', ?, 0, 0)")
+        .bind(USER).execute(&mut fixture.db).await.unwrap();
+    sqlx::query(
+        "INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES ('ws-2', ?, 0)",
+    )
+    .bind(AGENT)
+    .execute(&mut fixture.db)
+    .await
+    .unwrap();
+    let mut store = fixture.store().await;
+
+    let readable = store
+        .readable_task_workspaces(
+            &an_agent(AGENT),
+            &[
+                a_workspace(WORKSPACE),
+                a_workspace("ws-2"),
+                a_workspace("ws-missing"),
+            ],
+        )
+        .await
+        .unwrap();
+    assert!(readable.contains(&a_workspace(WORKSPACE)));
+    assert!(
+        !readable.contains(&a_workspace("ws-2")),
+        "a member workspace with no read_tasks is not admitted"
+    );
+    assert!(
+        !readable.contains(&a_workspace("ws-missing")),
+        "an id that names no workspace is not admitted"
+    );
+    assert_eq!(readable.len(), 1);
+}
+
+/// The set-shaped participation read folds a MIXED set in one call: the roster channel
+/// is admitted, a workspace channel the agent is absent from is dropped, and an id that
+/// names no conversation is dropped — a single `json_each`-driven read, not a per-row loop.
+#[tokio::test]
+async fn agent_participating_conversations_folds_a_mixed_set_in_one_read() {
+    let mut fixture = Fixture::new().await;
+    // A second workspace channel AGENT is NOT rostered into.
+    sqlx::query("INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, visibility, created_at, updated_at, latest_message_seq) VALUES ('chan-2', ?, 'workspace', 'open', 'Other', 'other', 'open', 'private', 0, 0, 1)")
+        .bind(WORKSPACE).execute(&mut fixture.db).await.unwrap();
+    let mut store = fixture.store().await;
+
+    let participating = store
+        .agent_participating_conversations(
+            &an_agent(AGENT),
+            &[
+                a_conversation(CHANNEL),
+                a_conversation("chan-2"),
+                a_conversation("conv-missing"),
+            ],
+        )
+        .await
+        .unwrap();
+    assert!(participating.contains(&a_conversation(CHANNEL)));
+    assert!(
+        !participating.contains(&a_conversation("chan-2")),
+        "a workspace channel the agent is absent from is not a participation"
+    );
+    assert!(
+        !participating.contains(&a_conversation("conv-missing")),
+        "an id that names no conversation is not a participation"
+    );
+    assert_eq!(participating.len(), 1);
+}
+
+/// The human arm requires BOTH facts — a conversation seat AND workspace
+/// membership. USER has both. A seat granted to OTHER_USER without workspace
+/// membership is not a participant: a seat that outlived (or preceded) membership
+/// admits nobody.
+#[tokio::test]
+async fn user_participation_requires_both_the_seat_and_workspace_membership() {
+    let mut fixture = Fixture::new().await;
+    let channel = a_conversation(CHANNEL);
+
+    // A bare seat, no workspace membership.
+    sqlx::query(
+        "INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES (?, ?, 0)",
+    )
+    .bind(CHANNEL)
+    .bind(OTHER_USER)
+    .execute(&mut fixture.db)
+    .await
+    .unwrap();
+    let mut store = fixture.store().await;
+
+    assert!(
+        store
+            .is_user_participant(&channel, &a_user(USER))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .is_user_participant(&channel, &a_user(OTHER_USER))
+            .await
+            .unwrap(),
+        "a seat without workspace membership is not a participant"
+    );
+}
+
+/// The board a resolution carries, or `None` for either refusal — for tests that
+/// only assert the resolved board and treat both refusals alike.
+fn resolved_board(resolution: BoardResolution) -> Option<BoardKey> {
+    match resolution {
+        BoardResolution::Resolved(resolved) => Some(resolved.board),
+        BoardResolution::NoSuchWorkspace | BoardResolution::Unauthorized => None,
+    }
+}
+
+/// A `--workspace` selector resolves to that workspace's board only for a member,
+/// and the resolved fact echoes the exact subject (agent + source) so the core
+/// minter can bind it to the request. A non-member of an EXISTING workspace resolves
+/// to `Unauthorized` (a 403); a selector naming NO SUCH workspace to `NoSuchWorkspace`
+/// (a 404) — the two are distinguished at the resolver, not collapsed.
+#[tokio::test]
+async fn selected_workspace_resolves_for_a_member_and_echoes_the_subject() {
+    let fixture = Fixture::new().await;
+    let mut store = fixture.store().await;
+    let source = BoardScopeSource::SelectedWorkspace(a_workspace(WORKSPACE));
+
+    let resolved = store
+        .resolve_board(&BoardScopeRequest {
+            agent: an_agent(AGENT),
+            source: source.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        resolved,
+        BoardResolution::Resolved(ResolvedBoard {
+            agent: an_agent(AGENT),
+            source,
+            board: BoardKey::Workspace(a_workspace(WORKSPACE)),
+        })
+    );
+
+    let stranger = store
+        .resolve_board(&BoardScopeRequest {
+            agent: an_agent(HIDDEN),
+            source: BoardScopeSource::SelectedWorkspace(a_workspace(WORKSPACE)),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        stranger,
+        BoardResolution::Unauthorized,
+        "a non-member of an existing workspace is 403, not 404"
+    );
+
+    let unknown = store
+        .resolve_board(&BoardScopeRequest {
+            agent: an_agent(AGENT),
+            source: BoardScopeSource::SelectedWorkspace(a_workspace("ws-does-not-exist")),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        unknown,
+        BoardResolution::NoSuchWorkspace,
+        "a selector naming no such workspace is 404"
+    );
+}
+
+/// An agent-home workspace's membership is owner-only, so the selector resolves
+/// for its owner and denies a non-owner — the members table is never consulted.
+#[tokio::test]
+async fn selected_agent_home_workspace_resolves_for_its_owner_only() {
+    let mut fixture = Fixture::new().await;
+    sqlx::query(
+        "INSERT INTO workspaces (id, name, owner_agent_id, created_at, updated_at) \
+         VALUES ('ws-home', 'Home', ?, 0, 0)",
+    )
+    .bind(PEER)
+    .execute(&mut fixture.db)
+    .await
+    .unwrap();
+    let mut store = fixture.store().await;
+
+    let owner = store
+        .resolve_board(&BoardScopeRequest {
+            agent: an_agent(PEER),
+            source: BoardScopeSource::SelectedWorkspace(a_workspace("ws-home")),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        resolved_board(owner),
+        Some(BoardKey::Workspace(a_workspace("ws-home")))
+    );
+
+    let non_owner = store
+        .resolve_board(&BoardScopeRequest {
+            agent: an_agent(AGENT),
+            source: BoardScopeSource::SelectedWorkspace(a_workspace("ws-home")),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        non_owner,
+        BoardResolution::Unauthorized,
+        "the home workspace exists, so a non-owner is 403 not 404"
+    );
+}
+
+/// A conversation frame resolves to the frame's OWN board, derived from its
+/// placement: a workspace channel yields its workspace board.
+#[tokio::test]
+async fn frame_conversation_resolves_a_workspace_board_from_its_placement() {
+    let fixture = Fixture::new().await;
+    let mut store = fixture.store().await;
+
+    let resolved = store
+        .resolve_board(&BoardScopeRequest {
+            agent: an_agent(AGENT),
+            source: BoardScopeSource::FrameConversation(a_conversation(CHANNEL)),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        resolved_board(resolved),
+        Some(BoardKey::Workspace(a_workspace(WORKSPACE)))
+    );
+}
+
+/// A direct-pair frame yields its pair board, derived from the stored (generated)
+/// `pair_key` — never synthesized. An ABSENT conversation derives no board and
+/// honestly denies (`None`); a PRESENT-but-corrupt row is a safe-500, proved by
+/// the two repair tests below.
+#[tokio::test]
+async fn frame_conversation_resolves_a_pair_board_and_denies_the_unknown() {
+    let mut fixture = Fixture::new().await;
+    const PAIR: &str = "pair000000000009";
+    sqlx::query(
+        "INSERT INTO conversations (id, placement_kind, roster_policy, endpoint_a_kind, \
+         endpoint_a_id, endpoint_b_kind, endpoint_b_id, title, status, visibility, created_at, \
+         updated_at) VALUES (?, 'direct_pair', 'fixed', 'agent', ?, 'human', ?, '', 'idle', \
+         'private', 0, 0)",
+    )
+    .bind(PAIR)
+    .bind(AGENT)
+    .bind(USER)
+    .execute(&mut fixture.db)
+    .await
+    .unwrap();
+    let pair_key: String = sqlx::query_scalar("SELECT pair_key FROM conversations WHERE id = ?")
+        .bind(PAIR)
+        .fetch_one(&mut fixture.db)
+        .await
+        .unwrap();
+    let mut store = fixture.store().await;
+
+    let resolved = store
+        .resolve_board(&BoardScopeRequest {
+            agent: an_agent(AGENT),
+            source: BoardScopeSource::FrameConversation(a_conversation(PAIR)),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        resolved_board(resolved),
+        Some(BoardKey::Pair(PairKey::parse(pair_key).unwrap()))
+    );
+
+    let unknown = store
+        .resolve_board(&BoardScopeRequest {
+            agent: an_agent(AGENT),
+            source: BoardScopeSource::FrameConversation(a_conversation("conv000000000404")),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        unknown,
+        BoardResolution::Unauthorized,
+        "an unknown frame conversation derives no board — a 403, never a workspace 404"
+    );
+}
+
+/// A PRESENT workspace-placed frame whose own `workspace_id` coordinate is NULL is
+/// schema corruption, not a scope denial: the placement shape obliges the
+/// coordinate, so its absence is a source-bearing safe-500 naming the offending
+/// column. Restoring only that column makes the SAME frame resolve cleanly through
+/// the SAME open store, attributing the failure to the coordinate, not to a missing
+/// row (which stays `None`).
+#[tokio::test]
+async fn frame_workspace_coordinate_corruption_is_a_safe_500_repaired_in_place() {
+    let mut fixture = Fixture::new().await;
+    // The placement is trigger-immutable and the coordinate is CHECK-guarded, so
+    // drop the trigger and suspend the check to inject the below-the-write-path
+    // corruption this gate exists to catch.
+    sqlx::query("DROP TRIGGER conversations_placement_immutable")
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    sqlx::query("PRAGMA ignore_check_constraints = ON")
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE conversations SET workspace_id = NULL WHERE id = ?")
+        .bind(CHANNEL)
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    let mut store = fixture.store().await;
+
+    let error = store
+        .resolve_board(&BoardScopeRequest {
+            agent: an_agent(AGENT),
+            source: BoardScopeSource::FrameConversation(a_conversation(CHANNEL)),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        format_source_chain(&error).contains("conversations.workspace_id"),
+        "a NULL workspace coordinate names its own column: {}",
+        format_source_chain(&error)
+    );
+
+    sqlx::query("UPDATE conversations SET workspace_id = ? WHERE id = ?")
+        .bind(WORKSPACE)
+        .bind(CHANNEL)
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    let repaired = store
+        .resolve_board(&BoardScopeRequest {
+            agent: an_agent(AGENT),
+            source: BoardScopeSource::FrameConversation(a_conversation(CHANNEL)),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        resolved_board(repaired),
+        Some(BoardKey::Workspace(a_workspace(WORKSPACE)))
+    );
+}
+
+/// A PRESENT frame whose `placement_kind` is outside the v76 closed set
+/// (`workspace|direct_pair`) is schema corruption, not a scope denial: the unknown
+/// arm is a source-bearing safe-500 naming the placement column. Restoring the
+/// placement to a known shape makes the SAME frame resolve cleanly through the SAME
+/// open store.
+#[tokio::test]
+async fn frame_unknown_placement_is_a_safe_500_repaired_in_place() {
+    let mut fixture = Fixture::new().await;
+    sqlx::query("DROP TRIGGER conversations_placement_immutable")
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    sqlx::query("PRAGMA ignore_check_constraints = ON")
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE conversations SET placement_kind = 'broken' WHERE id = ?")
+        .bind(CHANNEL)
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    let mut store = fixture.store().await;
+
+    let error = store
+        .resolve_board(&BoardScopeRequest {
+            agent: an_agent(AGENT),
+            source: BoardScopeSource::FrameConversation(a_conversation(CHANNEL)),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        format_source_chain(&error).contains("conversations.placement_kind"),
+        "an unknown placement names the placement column: {}",
+        format_source_chain(&error)
+    );
+
+    sqlx::query("UPDATE conversations SET placement_kind = 'workspace' WHERE id = ?")
+        .bind(CHANNEL)
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    let repaired = store
+        .resolve_board(&BoardScopeRequest {
+            agent: an_agent(AGENT),
+            source: BoardScopeSource::FrameConversation(a_conversation(CHANNEL)),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        resolved_board(repaired),
+        Some(BoardKey::Workspace(a_workspace(WORKSPACE)))
+    );
+}
+
+/// The union list arm's enumeration: an agent's readable boards are its member and
+/// owner-home workspace boards UNIONED with the direct-pair boards it is an endpoint
+/// of — never a pair it is not in. Each entry is bound to the enumerated agent, the
+/// subject the core minter checks. `read_tasks` is NOT applied here (the minter folds
+/// it downstream), so a member workspace enters on membership alone.
+#[tokio::test]
+async fn readable_boards_unions_member_workspaces_owner_home_and_endpoint_pairs() {
+    let mut fixture = Fixture::new().await;
+    // An agent-home workspace AGENT owns (the owner arm of the workspace union) and a
+    // member workspace PEER owns that AGENT is NOT in (must be excluded).
+    sqlx::query(
+        "INSERT INTO workspaces (id, name, owner_agent_id, created_at, updated_at) \
+         VALUES ('ws-home', 'Home', ?, 0, 0)",
+    )
+    .bind(AGENT)
+    .execute(&mut fixture.db)
+    .await
+    .unwrap();
+    // A direct pair AGENT is an endpoint of, and one it is NOT (PEER↔USER) — the second
+    // proves the endpoint predicate, not "every pair".
+    for (id, a_kind, a_id) in [("conv-pair", "agent", AGENT), ("conv-other", "agent", PEER)] {
+        sqlx::query(
+            "INSERT INTO conversations (id, placement_kind, roster_policy, title, status, \
+             endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, created_at, \
+             updated_at) VALUES (?, 'direct_pair', 'fixed', '', 'open', ?, ?, 'human', ?, 0, 0)",
+        )
+        .bind(id)
+        .bind(a_kind)
+        .bind(a_id)
+        .bind(USER)
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    }
+    let my_pair: String =
+        sqlx::query_scalar("SELECT pair_key FROM conversations WHERE id = 'conv-pair'")
+            .fetch_one(&mut fixture.db)
+            .await
+            .unwrap();
+    let other_pair: String =
+        sqlx::query_scalar("SELECT pair_key FROM conversations WHERE id = 'conv-other'")
+            .fetch_one(&mut fixture.db)
+            .await
+            .unwrap();
+    let mut store = fixture.store().await;
+
+    let readable = store.readable_boards(&an_agent(AGENT)).await.unwrap();
+    assert!(
+        readable.iter().all(|entry| entry.agent == an_agent(AGENT)),
+        "every enumerated entry is bound to the requested agent"
+    );
+    let boards: Vec<BoardKey> = readable.into_iter().map(|entry| entry.board).collect();
+    assert!(
+        boards.contains(&BoardKey::Workspace(a_workspace(WORKSPACE))),
+        "the member workspace board is readable"
+    );
+    assert!(
+        boards.contains(&BoardKey::Workspace(a_workspace("ws-home"))),
+        "the owned agent-home workspace board is readable via the owner arm"
+    );
+    assert!(
+        boards.contains(&BoardKey::Pair(PairKey::parse(&my_pair).unwrap())),
+        "the pair the agent is an endpoint of is readable"
+    );
+    assert!(
+        !boards.contains(&BoardKey::Pair(PairKey::parse(&other_pair).unwrap())),
+        "a pair the agent is NOT an endpoint of is excluded"
+    );
+    assert_eq!(
+        boards.len(),
+        3,
+        "exactly the two workspaces and the one pair"
+    );
 }

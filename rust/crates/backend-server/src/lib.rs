@@ -10,6 +10,8 @@ pub mod direct_pairs;
 mod error;
 pub mod host_agent;
 pub mod host_agent_background;
+pub mod host_control;
+pub mod host_resources;
 pub mod host_runtime;
 pub mod http;
 pub mod messaging;

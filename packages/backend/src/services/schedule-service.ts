@@ -14,6 +14,12 @@ import {
   type AgentCapability,
   systemSubtype,
 } from '@silverhand/shared';
+import {
+  type Advancement,
+  type CronNext,
+  planAdvancement,
+} from './schedule-recurrence.js';
+import { type SettlementAction, planSettlement } from './schedule-settlement.js';
 import type { BackendLogger } from '../context.js';
 import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
@@ -151,6 +157,10 @@ export class ScheduleService {
   private readonly canUseCapability: ScheduleCapabilityChecker;
   private readonly now: () => number;
   private readonly disableAutoTick: boolean;
+  /** The recurrence policy's injected cron evaluator, bound to this service's
+   *  production `computeCronNext` (cron-parser + IANA timezone). */
+  private readonly cronNext: CronNext = (expression, timezone, after) =>
+    this.computeCronNext(expression, timezone, after);
   private sweepTimer: NodeJS.Timeout | null = null;
   private nearTimer: NodeJS.Timeout | null = null;
   private nearTimerFireAt: number | null = null;
@@ -533,210 +543,98 @@ export class ScheduleService {
     // Pre-compute the post-fire transition (terminal vs re-arm + the
     // next fire time) BEFORE delivering the wake — the wake body needs
     // both `next_fire_at` and `missed_count` to be useful to the agent.
-    const advancement = this.planAdvancement(dto, actualFireAt);
+    const advancement = planAdvancement(dto, actualFireAt, this.cronNext);
     try {
       await this.deliverWake(dto, actualFireAt, advancement);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      // Branch on plan kind. `once` has no future fire to retry — its
-      // single attempt is over either way, so it's correctly terminal.
-      // `cron|interval` must NOT terminate on a single bad tick (e.g.
-      // transient daemon transport detach, target temporarily closed):
-      // we record fire-level failure metrics and re-arm to the natural
-      // next cadence tick. See ADR / design doc for the "no auto-
-      // terminate after N" rationale.
-      if (dto.spec.kind === 'once') {
-        this.logger.error(
-          { scheduleId: dto.id, ownerAgentId: dto.owner_agent_id, err },
-          'schedule-service: wake delivery failed; marking failed (once)',
-        );
-        this.schedules.markFailed(dto.id, reason);
-        return;
-      }
-      const failureRearm = this.planFailureRearm(dto, actualFireAt);
-      if (failureRearm.terminal) {
-        // Cron/interval whose natural-next-tick would be past `until_at`
-        // — the plan window is over and there is no future attempt
-        // possible. Treat as natural plan-end (`done`); UI surfaces
-        // `consecutive_failure_count > 0` so the operator can tell the
-        // tail fires failed.
-        this.logger.error(
-          { scheduleId: dto.id, ownerAgentId: dto.owner_agent_id, err },
-          'schedule-service: wake delivery failed and until_at exhausted; marking done',
-        );
-        this.schedules.markDone(dto.id, actualFireAt);
-        return;
-      }
-      this.logger.warn(
-        {
-          scheduleId: dto.id,
-          ownerAgentId: dto.owner_agent_id,
-          nextFireAt: failureRearm.nextFireAt,
-          err,
-        },
-        'schedule-service: wake delivery failed; re-arming for next cadence tick',
+      // The settlement decision (once→failed; cron|interval→re-arm unless
+      // `until_at` is exhausted) is the pure `planSettlement`; here we only
+      // log per outcome and apply the chosen write. See planSettlement /
+      // planFailureRearm for the "no auto-terminate after N" rationale.
+      const action = planSettlement(
+        dto,
+        actualFireAt,
+        advancement,
+        { kind: 'failed', reason },
+        this.cronNext,
       );
-      this.schedules.markFireFailed(
-        dto.id,
-        reason,
-        failureRearm.nextFireAt,
-      );
-      this.armNearTimer();
+      switch (action.kind) {
+        case 'mark_failed':
+          // `once`: its single attempt is over, so it is correctly terminal.
+          this.logger.error(
+            { scheduleId: dto.id, ownerAgentId: dto.owner_agent_id, err },
+            'schedule-service: wake delivery failed; marking failed (once)',
+          );
+          break;
+        case 'mark_plan_ended_after_failure':
+          // Cron/interval whose natural next tick would be past `until_at`
+          // — the plan window is over, so the terminal state is `done`. The
+          // fire itself FAILED, and that is recorded honestly (the row keeps
+          // `last_failure_*` and a bumped `consecutive_failure_count`; it is
+          // NOT counted as a delivered occurrence). See
+          // `schedule-repo.markPlanEndedAfterFailure`.
+          this.logger.error(
+            { scheduleId: dto.id, ownerAgentId: dto.owner_agent_id, err },
+            'schedule-service: wake delivery failed and until_at exhausted; marking plan-ended (done)',
+          );
+          break;
+        case 'mark_fire_failed':
+          this.logger.warn(
+            {
+              scheduleId: dto.id,
+              ownerAgentId: dto.owner_agent_id,
+              nextFireAt: action.nextFireAt,
+              err,
+            },
+            'schedule-service: wake delivery failed; re-arming for next cadence tick',
+          );
+          break;
+      }
+      this.applySettlement(dto, actualFireAt, action);
+      if (action.kind === 'mark_fire_failed') {
+        this.armNearTimer();
+      }
       return;
     }
-    // Apply the planned transition. Each predicate is `status='firing'`,
-    // so a `cancel()` that raced in after CAS but before this update
-    // makes the row terminal-`cancelled` — we silently accept that
-    // outcome (the wake itself was already delivered; cancel only
-    // promises "no future fires", which is honored).
-    if (advancement.terminal) {
-      this.schedules.markDone(dto.id, actualFireAt);
-    } else {
-      // advancement.terminal === false guarantees nextFireAt is set
-      // (planAdvancement only returns terminal:false with a number).
-      this.schedules.markFiredAndRearm(
-        dto.id,
-        actualFireAt,
-        advancement.nextFireAt as number,
-      );
-    }
+    // Apply the planned transition. Each store predicate is `status='firing'`,
+    // so a `cancel()` that raced in after CAS but before this update makes the
+    // row terminal-`cancelled` — we silently accept that outcome (the wake was
+    // already delivered; cancel only promises "no future fires", honored).
+    const action = planSettlement(
+      dto,
+      actualFireAt,
+      advancement,
+      { kind: 'delivered' },
+      this.cronNext,
+    );
+    this.applySettlement(dto, actualFireAt, action);
   }
 
-  /** Compute what should happen after this fire — terminal `done` vs
-   *  pending-with-rearm — plus the next fire time. Pure: no DB writes. */
-  private planAdvancement(
+  /** Apply the pure `planSettlement` decision as the single durable CAS write.
+   *  Each write is predicated on `status='firing'` in the repo, so a racing
+   *  `cancel()` (firing→cancelled) makes the write a no-op. */
+  private applySettlement(
     dto: ScheduleDto,
     actualFireAt: number,
-  ): Advancement {
-    if (dto.spec.kind === 'once') {
-      return { terminal: true, nextFireAt: null, missedCount: 0 };
-    }
-    const newCount = dto.fired_count + 1;
-    if (dto.max_occurrences !== null && newCount >= dto.max_occurrences) {
-      return {
-        terminal: true,
-        nextFireAt: null,
-        missedCount: this.estimateMissedCount(dto, actualFireAt),
-      };
-    }
-    let nextFireAt: number;
-    if (dto.spec.kind === 'interval') {
-      nextFireAt = this.computeIntervalNext(
-        dto.spec.every_seconds,
-        actualFireAt,
-      );
-    } else {
-      nextFireAt = this.computeCronNext(
-        dto.spec.expression,
-        dto.spec.timezone,
-        actualFireAt,
-      );
-    }
-    if (dto.until_at !== null && nextFireAt > dto.until_at) {
-      return {
-        terminal: true,
-        nextFireAt: null,
-        missedCount: this.estimateMissedCount(dto, actualFireAt),
-      };
-    }
-    return {
-      terminal: false,
-      nextFireAt,
-      missedCount: this.estimateMissedCount(dto, actualFireAt),
-    };
-  }
-
-  /**
-   * Compute the next-fire transition for a `cron|interval` schedule
-   * whose current fire FAILED. Mirrors `planAdvancement` for the success
-   * path, with two differences:
-   *
-   *   - `max_occurrences` is intentionally NOT consulted. The failed
-   *     fire didn't increment `fired_count`, so the plan still owes
-   *     that occurrence; we should retry on the natural next cadence
-   *     tick rather than terminate. (If the next successful fire then
-   *     hits `max_occurrences`, `planAdvancement` will route through
-   *     `markDone` as usual.)
-   *   - `until_at` IS consulted. It's a wall-clock deadline; once past,
-   *     no future tick is possible regardless of failure history, so
-   *     the schedule terminates as `done` (UI surfaces
-   *     `consecutive_failure_count > 0` to indicate the tail fires
-   *     never landed).
-   *
-   * Returns `terminal:false` with the natural next fire-at for the
-   * caller to pass into `markFireFailed`. The caller never invokes
-   * this for `kind:'once'` (those terminate via `markFailed`); the
-   * branch is asserted with an Error rather than silently returning a
-   * default.
-   */
-  private planFailureRearm(
-    dto: ScheduleDto,
-    actualFireAt: number,
-  ): { terminal: true; nextFireAt: null } | { terminal: false; nextFireAt: number } {
-    if (dto.spec.kind === 'once') {
-      throw new Error(
-        'planFailureRearm: caller must route kind:once through markFailed, not here',
-      );
-    }
-    let nextFireAt: number;
-    if (dto.spec.kind === 'interval') {
-      nextFireAt = this.computeIntervalNext(
-        dto.spec.every_seconds,
-        actualFireAt,
-      );
-    } else {
-      nextFireAt = this.computeCronNext(
-        dto.spec.expression,
-        dto.spec.timezone,
-        actualFireAt,
-      );
-    }
-    if (dto.until_at !== null && nextFireAt > dto.until_at) {
-      return { terminal: true, nextFireAt: null };
-    }
-    return { terminal: false, nextFireAt };
-  }
-
-  /**
-   * How many planned occurrences we skipped while late, NOT counting
-   * the current catch-up fire. For interval this is exact; for cron it
-   * counts via the parser; for `once` it's always 0 (a missed one-shot
-   * is just "late", not "missed multiple"). This is a hint for the
-   * agent and bounded to keep cron iteration cheap.
-   */
-  private estimateMissedCount(
-    dto: ScheduleDto,
-    actualFireAt: number,
-  ): number {
-    if (dto.spec.kind === 'once') return 0;
-    const delta = actualFireAt - dto.next_fire_at;
-    if (delta <= 0) return 0;
-    if (dto.spec.kind === 'interval') {
-      // floor(delta/every) full intervals elapsed; the current fire
-      // covers the original `dto.next_fire_at`, so the EXTRA misses
-      // are floor(delta/every).
-      const everyMs = dto.spec.every_seconds * 1000;
-      return Math.floor(delta / everyMs);
-    }
-    // cron: iterate occurrences strictly between (next_fire_at, actualFireAt).
-    // Hard-cap iterations to avoid runaway when delta is huge.
-    try {
-      const interval = parseExpression(dto.spec.expression, {
-        currentDate: new Date(dto.next_fire_at),
-        tz: dto.spec.timezone,
-      });
-      let count = 0;
-      const cap = 1000;
-      while (count < cap) {
-        const occ = interval.next();
-        if (occ.getTime() >= actualFireAt) break;
-        count++;
-      }
-      return count;
-    } catch {
-      // If the expression somehow stopped parsing between create and
-      // fire (shouldn't happen), don't crash the wake.
-      return 0;
+    action: SettlementAction,
+  ): void {
+    switch (action.kind) {
+      case 'mark_done':
+        this.schedules.markDone(dto.id, actualFireAt);
+        return;
+      case 'rearm':
+        this.schedules.markFiredAndRearm(dto.id, actualFireAt, action.nextFireAt);
+        return;
+      case 'mark_failed':
+        this.schedules.markFailed(dto.id, action.reason);
+        return;
+      case 'mark_fire_failed':
+        this.schedules.markFireFailed(dto.id, action.reason, action.nextFireAt);
+        return;
+      case 'mark_plan_ended_after_failure':
+        this.schedules.markPlanEndedAfterFailure(dto.id, action.reason);
+        return;
     }
   }
 
@@ -1002,13 +900,6 @@ export class ScheduleService {
     }
   }
 
-  private computeIntervalNext(
-    everySeconds: number,
-    fromTime: number,
-  ): number {
-    return fromTime + everySeconds * 1000;
-  }
-
   private expandStatusFilter(
     filter: ScheduleListStatusFilter,
   ): readonly ScheduleStatus[] | null {
@@ -1114,17 +1005,6 @@ function renderWakeBody(
     'If nothing to do, reply briefly with "noted, no action" and stop.',
   );
   return lines.join('\n');
-}
-
-interface Advancement {
-  /** True when this fire ends the schedule (one-shot; or repeat that
-   *  hit `max_occurrences` / would cross `until_at`). */
-  terminal: boolean;
-  /** When the next fire will land. Null for terminal fires. */
-  nextFireAt: number | null;
-  /** Planned occurrences skipped while late, NOT counting the current
-   *  catch-up fire. 0 for on-time fires and one-shots. */
-  missedCount: number;
 }
 
 /**

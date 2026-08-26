@@ -74,8 +74,11 @@ pub mod collaboration;
 pub mod conversation_title;
 pub mod environment;
 pub mod freshness;
+pub mod markdown;
 pub mod mention_cc;
 pub mod post_commit;
+pub mod schedule;
+pub mod task;
 pub mod unread;
 
 pub use addressing::{AddressedPrincipals, MessageReference, ReferencePositions};

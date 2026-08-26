@@ -136,8 +136,8 @@ pub struct MentionCopySource<'facts> {
 /// can answer on is the direct line with whoever mentioned them.
 pub fn render_copy_body(source: &MentionCopySource<'_>) -> String {
     let recipient = format_reference_token(PrincipalKind::Agent, source.recipient_handle);
-    let workspace = inline_code(source.source_workspace_name);
-    let title = inline_code(source.source_conversation_title);
+    let workspace = super::markdown::inline_code(source.source_workspace_name);
+    let title = super::markdown::inline_code(source.source_conversation_title);
 
     format!(
         "A user mentioned you ({recipient}) in {workspace} · {title}.\nYou are not a member of \
@@ -158,31 +158,6 @@ pub fn mention_excerpt(content: &str) -> String {
     }
     let kept: String = flattened.chars().take(MENTION_EXCERPT_LIMIT - 1).collect();
     format!("{kept}…")
-}
-
-/// Renders a value as a single-line code span it cannot escape from.
-///
-/// Two properties carry the weight. The value becomes one line: every break
-/// character collapses to a space, including the Unicode separators that survive
-/// naive JSON handling, so a label cannot end the line it was quoted into. And the
-/// delimiter is always longer than the longest backtick run inside the value, with
-/// the padding CommonMark requires when the content itself starts or ends with a
-/// backtick — without it a value ending in a backtick merges with the closing
-/// fence and the whole span degrades into live prose. Inside a code span a handle
-/// is not a mention and a destination is not a reference.
-fn inline_code(value: &str) -> String {
-    let single_line = collapse_line_breaks(value);
-    let longest_run = single_line
-        .split(|character| character != '`')
-        .map(str::len)
-        .max()
-        .unwrap_or(0);
-
-    if longest_run == 0 {
-        return format!("`{single_line}`");
-    }
-    let delimiter = "`".repeat(longest_run + 1);
-    format!("{delimiter} {single_line} {delimiter}")
 }
 
 /// Quotes a value line by line, so a multi-line original stays inside the quote
@@ -216,30 +191,6 @@ fn logical_lines(text: &str) -> Vec<&str> {
             }
         }
     }
-}
-
-fn is_line_break(character: char) -> bool {
-    matches!(
-        character,
-        '\r' | '\n' | '\u{2028}' | '\u{2029}' | '\u{0085}'
-    )
-}
-
-fn collapse_line_breaks(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    let mut in_break = false;
-    for character in value.chars() {
-        if is_line_break(character) {
-            if !in_break {
-                out.push(' ');
-            }
-            in_break = true;
-            continue;
-        }
-        in_break = false;
-        out.push(character);
-    }
-    out
 }
 
 /// The whitespace an excerpt collapses, listed rather than delegated to a Unicode

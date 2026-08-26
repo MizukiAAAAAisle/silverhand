@@ -1,0 +1,184 @@
+[
+  {
+    "name": "all_first_page_closes_authors_repliers_and_tie_cursor",
+    "query": "?limit=2&filter=all",
+    "status": 200,
+    "body": {
+      "threads": [
+        {
+          "root_message_id": "root-3",
+          "root_author": {
+            "status": "active",
+            "kind": "agent",
+            "id": "root-agent",
+            "name": "root-agent",
+            "display_name": "Root Agent",
+            "avatar_url": null,
+            "runtime": "codex"
+          },
+          "root_preview": "root three",
+          "root_created_at": 12,
+          "root_seq": 5,
+          "reply_count": 4,
+          "last_reply_at": 30,
+          "last_reply_message_id": "r3-b",
+          "repliers": [
+            {
+              "status": "active",
+              "kind": "user",
+              "id": "reply-b",
+              "name": "reply-b",
+              "display_name": "Reply B",
+              "avatar_url": null,
+              "runtime": null
+            },
+            {
+              "status": "active",
+              "kind": "user",
+              "id": "reply-a",
+              "name": "reply-a",
+              "display_name": "Reply A",
+              "avatar_url": null,
+              "runtime": null
+            },
+            {
+              "status": "active",
+              "kind": "user",
+              "id": "reply-d",
+              "name": "reply-d",
+              "display_name": "Reply D",
+              "avatar_url": null,
+              "runtime": null
+            }
+          ],
+          "replier_total": 4,
+          "viewer_following": true
+        },
+        {
+          "root_message_id": "root-2",
+          "root_author": null,
+          "root_preview": "system root",
+          "root_created_at": 11,
+          "root_seq": 3,
+          "reply_count": 1,
+          "last_reply_at": 20,
+          "last_reply_message_id": "r2-b",
+          "repliers": [
+            {
+              "status": "active",
+              "kind": "user",
+              "id": "reply-b",
+              "name": "reply-b",
+              "display_name": "Reply B",
+              "avatar_url": null,
+              "runtime": null
+            }
+          ],
+          "replier_total": 1,
+          "viewer_following": false
+        }
+      ],
+      "next_cursor": "WzIwLDNd"
+    }
+  },
+  {
+    "name": "all_second_page_closes_user_author_and_tail",
+    "query": "?limit=2&filter=all&cursor=WzIwLDNd",
+    "status": 200,
+    "body": {
+      "threads": [
+        {
+          "root_message_id": "root-1",
+          "root_author": {
+            "status": "active",
+            "kind": "user",
+            "id": "root-user",
+            "name": "root-user",
+            "display_name": "Root User",
+            "avatar_url": null,
+            "runtime": null
+          },
+          "root_preview": "root one",
+          "root_created_at": 10,
+          "root_seq": 1,
+          "reply_count": 1,
+          "last_reply_at": 20,
+          "last_reply_message_id": "r1-a",
+          "repliers": [
+            {
+              "status": "active",
+              "kind": "user",
+              "id": "reply-a",
+              "name": "reply-a",
+              "display_name": "Reply A",
+              "avatar_url": null,
+              "runtime": null
+            }
+          ],
+          "replier_total": 1,
+          "viewer_following": true
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  {
+    "name": "followed_unread_uses_the_shared_predicate",
+    "query": "?filter=followed-unread",
+    "status": 200,
+    "body": {
+      "threads": [
+        {
+          "root_message_id": "root-3",
+          "root_author": {
+            "status": "active",
+            "kind": "agent",
+            "id": "root-agent",
+            "name": "root-agent",
+            "display_name": "Root Agent",
+            "avatar_url": null,
+            "runtime": "codex"
+          },
+          "root_preview": "root three",
+          "root_created_at": 12,
+          "root_seq": 5,
+          "reply_count": 4,
+          "last_reply_at": 30,
+          "last_reply_message_id": "r3-b",
+          "repliers": [
+            {
+              "status": "active",
+              "kind": "user",
+              "id": "reply-b",
+              "name": "reply-b",
+              "display_name": "Reply B",
+              "avatar_url": null,
+              "runtime": null
+            },
+            {
+              "status": "active",
+              "kind": "user",
+              "id": "reply-a",
+              "name": "reply-a",
+              "display_name": "Reply A",
+              "avatar_url": null,
+              "runtime": null
+            },
+            {
+              "status": "active",
+              "kind": "user",
+              "id": "reply-d",
+              "name": "reply-d",
+              "display_name": "Reply D",
+              "avatar_url": null,
+              "runtime": null
+            }
+          ],
+          "replier_total": 4,
+          "viewer_following": true
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+]

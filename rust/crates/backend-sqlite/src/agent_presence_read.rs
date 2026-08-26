@@ -45,7 +45,7 @@ use sqlx::{
 };
 use thiserror::Error;
 
-use crate::agent_view_acl::{SELECT_DIRECT_PAIR_HUMAN_ENDPOINTS, SELECT_SHARED_WORKSPACE_MEMBERS};
+use crate::agent_view_acl::{AgentViewAclError, read_agent_audience};
 
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -134,28 +134,14 @@ impl SqliteAgentPresenceColdRead {
                 },
             )?;
 
-        let pair_human_rows = sqlx::query(SELECT_DIRECT_PAIR_HUMAN_ENDPOINTS)
-            .bind(agent.as_str())
-            .bind(agent.as_str())
-            .fetch_all(&mut *tx)
-            .await?;
-        let workspace_member_rows = sqlx::query(SELECT_SHARED_WORKSPACE_MEMBERS)
-            .bind(agent.as_str())
-            .bind(agent.as_str())
-            .fetch_all(&mut *tx)
-            .await?;
+        let audience = read_agent_audience(&mut tx, agent).await?;
 
         tx.commit().await?;
 
-        let direct_pair_human_endpoints =
-            decode_user_ids(&pair_human_rows, "conversations.direct_pair human endpoint")?;
-        let shared_workspace_members =
-            decode_user_ids(&workspace_member_rows, "workspace_users.user_id")?;
-
         let viewers = AgentViewerArms::new(
             Some(creator),
-            direct_pair_human_endpoints,
-            shared_workspace_members,
+            audience.direct_pair_human_endpoints,
+            audience.shared_workspace_members,
         );
         Ok(Some(AgentPresenceFacts::from_source(
             source,
@@ -168,18 +154,13 @@ impl SqliteAgentPresenceColdRead {
     }
 }
 
-fn decode_user_ids(
-    rows: &[sqlx::sqlite::SqliteRow],
-    column: &'static str,
-) -> Result<Vec<UserId>, AgentPresenceColdReadError> {
-    let mut ids = Vec::with_capacity(rows.len());
-    for row in rows {
-        let raw: String = row.try_get("user_id")?;
-        let id = UserId::parse(raw)
-            .map_err(|_| AgentPresenceColdReadError::MalformedIdentity { column })?;
-        ids.push(id);
+impl From<AgentViewAclError> for AgentPresenceColdReadError {
+    fn from(error: AgentViewAclError) -> Self {
+        match error {
+            AgentViewAclError::Sql(error) => Self::Sql(error),
+            AgentViewAclError::MalformedIdentity { column } => Self::MalformedIdentity { column },
+        }
     }
-    Ok(ids)
 }
 
 impl AgentPresenceReadModel for SqliteAgentPresenceColdRead {

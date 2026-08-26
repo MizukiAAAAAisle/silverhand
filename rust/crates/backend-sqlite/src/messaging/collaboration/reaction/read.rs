@@ -8,7 +8,7 @@ use silverhand_backend_core::{
     },
     messaging::{MessageId, PrincipalIdentity},
 };
-use sqlx::{QueryBuilder, Row, Sqlite, Transaction};
+use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection, Transaction};
 
 use super::{
     ConversationFacts, ReactionStoreError, SqliteReactionStore, conversation_facts, message_facts,
@@ -71,49 +71,79 @@ impl ReactionReadPort for SqliteReactionStore {
         if messages.is_empty() {
             return Ok(Vec::new());
         }
-        let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT message_id, emoji, COUNT(*) AS count, MAX(CASE WHEN reactor_kind = ",
-        );
-        builder
-            .push_bind(viewer.kind())
-            .push(" AND reactor_id = ")
-            .push_bind(viewer.id())
-            .push(" THEN 1 ELSE 0 END) AS viewer_reacted FROM message_reactions WHERE message_id IN (");
-        let mut separated = builder.separated(", ");
-        for message in messages {
-            separated.push_bind(message.as_str());
-        }
-        separated.push_unseparated(
-            ") GROUP BY message_id, emoji ORDER BY message_id, MIN(created_at), emoji",
-        );
-        let rows = builder.build().fetch_all(&self.pool).await?;
+        let mut connection = self.pool.acquire().await?;
+        let facts = aggregate_facts_in_snapshot(&mut connection, Some(viewer), messages).await?;
         let mut out: Vec<(MessageId, Vec<ReactionAggregate>)> = Vec::new();
-        for row in rows {
-            let message = MessageId::parse(row.try_get::<String, _>("message_id")?)
-                .map_err(|_| ReactionStoreError::MalformedIdentity)?;
-            let emoji = ReactionEmoji::parse(&row.try_get::<String, _>("emoji")?)
-                .map_err(|_| ReactionStoreError::MalformedEmoji)?;
-            let count =
-                silverhand_backend_core::messaging::collaboration::reaction::ReactionCount::new(
-                    row.try_get("count")?,
-                )
-                .map_err(|_| ReactionStoreError::InvalidCount)?;
-            if count.value() == 0 {
-                return Err(ReactionStoreError::InvalidCount);
-            }
-            let aggregate = ReactionAggregate::projected(
-                emoji,
-                count,
-                row.try_get::<i64, _>("viewer_reacted")? == 1,
-            );
-            if let Some((_, list)) = out.last_mut().filter(|(id, _)| id == &message) {
-                list.push(aggregate);
+        for fact in facts {
+            if let Some((_, list)) = out.last_mut().filter(|(id, _)| id == &fact.message) {
+                list.push(fact.aggregate);
             } else {
-                out.push((message, vec![aggregate]));
+                out.push((fact.message, vec![fact.aggregate]));
             }
         }
         Ok(out)
     }
+}
+
+/// One row from the single reaction-aggregate authority. Message-window reads
+/// also need the first-reaction timestamp for their stable wire order, so the
+/// adapter retains it here rather than reconstructing a second aggregate SQL.
+pub(in crate::messaging::collaboration) struct ReactionAggregateFact {
+    pub(in crate::messaging::collaboration) message: MessageId,
+    pub(in crate::messaging::collaboration) aggregate: ReactionAggregate,
+    pub(in crate::messaging::collaboration) first_created_at: i64,
+}
+
+pub(in crate::messaging::collaboration) async fn aggregate_facts_in_snapshot(
+    connection: &mut SqliteConnection,
+    viewer: Option<&Reactor>,
+    messages: &[MessageId],
+) -> Result<Vec<ReactionAggregateFact>, ReactionStoreError> {
+    if messages.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        "SELECT message_id, emoji, COUNT(*) AS count, MAX(CASE WHEN reactor_kind = ",
+    );
+    builder
+            .push_bind(viewer.map_or("", Reactor::kind))
+            .push(" AND reactor_id = ")
+            .push_bind(viewer.map_or("", Reactor::id))
+            .push(" THEN 1 ELSE 0 END) AS viewer_reacted, MIN(created_at) AS first_created_at FROM message_reactions WHERE message_id IN (");
+    let mut separated = builder.separated(", ");
+    for message in messages {
+        separated.push_bind(message.as_str());
+    }
+    separated.push_unseparated(
+        ") GROUP BY message_id, emoji ORDER BY message_id, MIN(created_at), emoji",
+    );
+    let rows = builder.build().fetch_all(&mut *connection).await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let message = MessageId::parse(row.try_get::<String, _>("message_id")?)
+            .map_err(|_| ReactionStoreError::MalformedIdentity)?;
+        let emoji = ReactionEmoji::parse(&row.try_get::<String, _>("emoji")?)
+            .map_err(|_| ReactionStoreError::MalformedEmoji)?;
+        let count =
+            silverhand_backend_core::messaging::collaboration::reaction::ReactionCount::new(
+                row.try_get("count")?,
+            )
+            .map_err(|_| ReactionStoreError::InvalidCount)?;
+        if count.value() == 0 {
+            return Err(ReactionStoreError::InvalidCount);
+        }
+        let aggregate = ReactionAggregate::projected(
+            emoji,
+            count,
+            row.try_get::<i64, _>("viewer_reacted")? == 1,
+        );
+        out.push(ReactionAggregateFact {
+            message,
+            aggregate,
+            first_created_at: row.try_get("first_created_at")?,
+        });
+    }
+    Ok(out)
 }
 
 async fn may_view_human(

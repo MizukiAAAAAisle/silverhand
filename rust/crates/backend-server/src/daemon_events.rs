@@ -72,6 +72,86 @@ pub(crate) struct DaemonRuntimeEventOwner<P> {
     state: Arc<Mutex<RuntimeOwnerState>>,
 }
 
+impl<P> DaemonRuntimeEventOwner<P> {
+    /// Copy the complete live owner map under its single mutex, then release
+    /// the lock before conversation filtering, verification and ordering. This
+    /// gives callers one atomic owner snapshot without lengthening the daemon
+    /// event writer's critical section.
+    pub(crate) fn conversation_run_states(
+        &self,
+        conversation: &ConversationId,
+    ) -> Result<Vec<ConversationAgentRunStateSnapshot>, DaemonRuntimeEventError> {
+        let snapshot = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| DaemonRuntimeEventError::StatePoisoned)?;
+            state
+                .runs
+                .iter()
+                .map(|(admission, run_state)| (admission.clone(), run_state.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut selected = Vec::new();
+        for (admission, run_state) in snapshot {
+            let principal = admission.principal();
+            let source_agent = principal.agent().clone();
+            let source_conversation = match principal.source() {
+                Some(source) => source.clone(),
+                None => ConversationId::parse(run_state.conversation_id.clone())
+                    .map_err(DaemonRuntimeEventError::source)?,
+            };
+            if run_state.agent_id != source_agent.as_str()
+                || run_state.conversation_id != source_conversation.as_str()
+            {
+                return Err(DaemonRuntimeEventError::InvalidPayload);
+            }
+            if &source_conversation != conversation {
+                continue;
+            }
+            selected.push((
+                admission,
+                ConversationAgentRunStateSnapshot {
+                    source_agent,
+                    source_conversation,
+                    state: run_state,
+                },
+            ));
+        }
+        // TS exposes no ordering contract.  Rust refines this to a stable total
+        // order without adding product meaning: visible identity first, then
+        // hidden custody coordinates solely as collision tiebreakers.
+        selected.sort_by(|(left_admission, left), (right_admission, right)| {
+            (
+                left.state.agent_id.as_str(),
+                left.state.run_id.as_str(),
+                left_admission.host_id(),
+                left_admission.principal().custody().generation().as_i64(),
+                left_admission
+                    .principal()
+                    .custody()
+                    .daemon_instance()
+                    .as_str(),
+            )
+                .cmp(&(
+                    right.state.agent_id.as_str(),
+                    right.state.run_id.as_str(),
+                    right_admission.host_id(),
+                    right_admission.principal().custody().generation().as_i64(),
+                    right_admission
+                        .principal()
+                        .custody()
+                        .daemon_instance()
+                        .as_str(),
+                ))
+        });
+        Ok(selected
+            .into_iter()
+            .map(|(_, run_state)| run_state)
+            .collect())
+    }
+}
+
 #[derive(Default)]
 struct RuntimeOwnerState {
     runs: HashMap<RuntimeEventAdmission, AgentRunStateWire>,
@@ -1266,6 +1346,13 @@ pub(crate) struct AgentRunStateWire {
     pub detail: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ConversationAgentRunStateSnapshot {
+    pub source_agent: AgentId,
+    pub source_conversation: ConversationId,
+    pub state: AgentRunStateWire,
+}
+
 impl AgentRunStateWire {
     pub(crate) fn matches_coordinate(&self, agent: &str, conversation: &str) -> bool {
         self.agent_id == agent && self.conversation_id == conversation
@@ -1709,12 +1796,70 @@ fn sanitize_json_value(value: &Value, depth: usize) -> Value {
 mod tests {
     use std::cell::Cell;
 
-    use silverhand_backend_core::runtime_event::RuntimeObservedStatus;
+    use serde_json::Number;
+    use silverhand_backend_core::{
+        identity::{AgentId, ConversationId, DaemonInstanceId},
+        runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},
+        runtime_event::{RuntimeEventAdmission, RuntimeObservedStatus},
+    };
 
     use super::{
-        DaemonRuntimeEventError, finish_live_effects, runtime_exit_should_respawn,
-        runtime_exit_status,
+        AgentRunStateWire, AgentRunStatus, DaemonRuntimeEventError, DaemonRuntimeEventOwner,
+        RuntimeOwnerState, finish_live_effects, runtime_exit_should_respawn, runtime_exit_status,
     };
+
+    fn admission(
+        host: &str,
+        agent: &str,
+        conversation: &str,
+        generation: i64,
+    ) -> RuntimeEventAdmission {
+        RuntimeEventAdmission::new(
+            host.to_owned(),
+            RuntimePrincipal::for_scope(
+                RuntimeScope::ConversationSlot {
+                    agent: AgentId::parse(agent).unwrap(),
+                    source: ConversationId::parse(conversation).unwrap(),
+                },
+                RuntimeCustody::new(
+                    RuntimeGeneration::new(generation).unwrap(),
+                    DaemonInstanceId::parse(format!("daemon-{host}")).unwrap(),
+                ),
+            ),
+        )
+    }
+
+    fn run_state(agent: &str, conversation: &str, run: &str) -> AgentRunStateWire {
+        AgentRunStateWire {
+            run_id: run.to_owned(),
+            agent_id: agent.to_owned(),
+            conversation_id: conversation.to_owned(),
+            status: AgentRunStatus::Thinking,
+            started_at: Number::from(1),
+            updated_at: Number::from(2),
+            last_activity_at: Number::from(2),
+            terminal_reason: None,
+            activity_snippet: None,
+            activity_snippet_kind: None,
+            tool_call_counts: None,
+            compacting: None,
+            compacting_since: None,
+            compaction_stale: None,
+            detail: None,
+        }
+    }
+
+    fn owner(
+        entries: impl IntoIterator<Item = (RuntimeEventAdmission, AgentRunStateWire)>,
+    ) -> DaemonRuntimeEventOwner<()> {
+        let owner = DaemonRuntimeEventOwner {
+            durable: (),
+            hub: crate::scope_events::ScopeEventHub::production().unwrap(),
+            state: std::sync::Arc::new(std::sync::Mutex::new(RuntimeOwnerState::default())),
+        };
+        owner.state.lock().unwrap().runs.extend(entries);
+        owner
+    }
 
     #[test]
     fn a_failed_post_commit_projection_does_not_short_circuit_the_next_effect() {
@@ -1757,6 +1902,55 @@ mod tests {
             RuntimeObservedStatus::Idle
         );
         assert!(!runtime_exit_should_respawn(false, false, true));
+    }
+
+    #[test]
+    fn owner_snapshot_filters_honest_foreign_entries_and_orders_one_atomic_map_copy() {
+        let owner = owner([
+            (
+                admission("host-b", "agent-b", "c", 1),
+                run_state("agent-b", "c", "run-b"),
+            ),
+            (
+                admission("host-a", "agent-a", "other", 1),
+                run_state("agent-a", "other", "run-other"),
+            ),
+            (
+                admission("host-a", "agent-a", "c", 2),
+                run_state("agent-a", "c", "run-a"),
+            ),
+        ]);
+
+        let snapshot = owner
+            .conversation_run_states(&ConversationId::parse("c").unwrap())
+            .unwrap();
+        assert_eq!(
+            snapshot
+                .iter()
+                .map(|snapshot| {
+                    (
+                        snapshot.state.agent_id.as_str(),
+                        snapshot.state.run_id.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            [("agent-a", "run-a"), ("agent-b", "run-b")]
+        );
+    }
+
+    #[test]
+    fn owner_snapshot_rejects_both_outer_inner_conversation_splice_directions() {
+        for (outer_conversation, inner_conversation) in [("foreign", "c"), ("c", "foreign")] {
+            let owner = owner([(
+                admission("host-a", "agent-a", outer_conversation, 1),
+                run_state("agent-a", inner_conversation, "run-a"),
+            )]);
+
+            assert!(matches!(
+                owner.conversation_run_states(&ConversationId::parse("c").unwrap()),
+                Err(DaemonRuntimeEventError::InvalidPayload)
+            ));
+        }
     }
 }
 

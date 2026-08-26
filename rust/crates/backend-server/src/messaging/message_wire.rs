@@ -167,7 +167,7 @@ pub(crate) fn copy_dto(copy: &CommittedMentionCopy) -> Value {
     })
 }
 
-fn from_kind_word(kind: FromKind) -> &'static str {
+pub(crate) fn from_kind_word(kind: FromKind) -> &'static str {
     match kind {
         FromKind::User => "user",
         FromKind::Agent => "agent",
@@ -194,7 +194,7 @@ fn wrapped_metadata(attachments: &Value) -> Value {
     json!({ "attachments": attachments })
 }
 
-fn attachment_list(attachments: &[AttachmentSnapshot]) -> Value {
+pub(crate) fn attachment_list(attachments: &[AttachmentSnapshot]) -> Value {
     if attachments.is_empty() {
         return Value::Null;
     }

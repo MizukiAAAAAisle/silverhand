@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
     auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
-    identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
+    identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
     messaging::{
         CreatedMessage, FromKind, MessageContent, MessageId, MessageSeq, ReferencePositions,
         post_commit::{IdleStart, MainDelivery},
@@ -36,13 +36,21 @@ use silverhand_backend_core::{
 use silverhand_backend_server::{
     daemon_delivery::{
         DaemonDeliveryController, DaemonDeliveryEffects, DaemonDeliveryRuntime,
-        HOST_PROTOCOL_VERSION, HOST_WEBSOCKET_PATH, OUTBOUND_PROTOCOL_VERSION,
+        HOST_PROTOCOL_VERSION, HOST_WEBSOCKET_PATH, HostCommandDispatch, OUTBOUND_PROTOCOL_VERSION,
         UPDATE_REQUIRED_CLOSE_REASON,
+    },
+    host_control::admission::ProtocolMismatchRefusal,
+    host_control::runtime_catalog::{
+        self, CatalogCoordinateMismatch, RuntimeCatalogOutcome, RuntimeCatalogRequest,
+    },
+    host_control::status_seed::{HostStatusSeeds, SeedAttempt, SeedFailure, SeedRead},
+    host_control::status_snapshot::{
+        self, SnapshotCoordinateMismatch, StatusSnapshotOutcome, StatusSnapshotRequest,
     },
     runtime_credential::RuntimeCredentialAuthority,
     scope_events::{
-        AllowedOrigin, DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH, EVENT_WS_SESSION_COOKIE,
-        EventWebSocketConfig, EventWebSocketController, ScopeEventHub,
+        AllowedOrigin, ConnectionLifecycle, DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH,
+        EVENT_WS_SESSION_COOKIE, EventWebSocketConfig, EventWebSocketController, ScopeEventHub,
         router as scope_event_router,
     },
 };
@@ -65,6 +73,16 @@ use tokio_tungstenite::{
         protocol::frame::coding::CloseCode,
     },
 };
+
+/// A do-nothing lifecycle for tests that exercise the WS transport alone and do
+/// not assert on presence. Production wiring lives in `backend-app`; the crate's
+/// only null implementation is test-scoped by design.
+struct NullLifecycle;
+
+impl ConnectionLifecycle for NullLifecycle {
+    fn on_connect(&self, _viewer: &UserId, _connection_id: &str) {}
+    fn on_disconnect(&self, _viewer: &UserId, _connection_id: &str) {}
+}
 
 const TOKEN: &str = "host-token";
 const TOKEN_2: &str = "host-token-2";
@@ -136,8 +154,13 @@ async fn fixture(name: &str) -> Fixture {
     let scope_authority = SqliteEventScopeAuthority::open(&path).await.unwrap();
     let event_config =
         EventWebSocketConfig::production([AllowedOrigin::parse(EVENT_ORIGIN).unwrap()]).unwrap();
-    let (event_router, event_controller) =
-        scope_event_router(event_hub, sessions, scope_authority, event_config);
+    let (event_router, event_controller) = scope_event_router(
+        event_hub,
+        sessions,
+        scope_authority,
+        Arc::new(NullLifecycle),
+        event_config,
+    );
     let router = daemon_router.merge(event_router);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -535,6 +558,55 @@ async fn send_ready(socket: &mut Socket, protocol_version: u32) {
     send_ready_with_instance(socket, protocol_version, "instance-test").await;
 }
 
+/// A daemon old enough that its `ready` frame predates `instance_id` — the only
+/// population the refusal record exists to describe, and one the current strict
+/// schema rejects outright. A current frame with the number swapped would pass that
+/// schema and never exercise the envelope path at all.
+async fn send_old_schema_ready(socket: &mut Socket, protocol_version: u32) {
+    socket
+        .send(Message::Text(
+            json!({
+                "direction": "daemon_to_server",
+                "type": "event",
+                "kind": "ready",
+                "protocol_version": protocol_version,
+                "daemon_version": "old",
+                "daemon_id": "daemon-old",
+                "host_descriptor": { "name": "Test host", "kind": "remote" },
+                "capabilities": [],
+                "daemon_pid": 42,
+                "started_at": 100,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+}
+
+async fn expect_close(socket: &mut Socket, code: CloseCode, reason: &str) {
+    let Some(Ok(Message::Close(Some(close)))) = socket.next().await else {
+        panic!("expected the transport to be closed with {reason}")
+    };
+    assert_eq!(close.code, code);
+    assert_eq!(close.reason, reason);
+}
+
+/// This host's refusal as a composition reads it.
+///
+/// Every read asks the controller for the ledger again on purpose: the writer is the
+/// connection task's own handle, so if the accessor ever built a ledger instead of
+/// sharing one, every assertion below would read an empty one.
+fn admission_refusal(
+    controller: &DaemonDeliveryController,
+    host_id: &str,
+) -> Option<ProtocolMismatchRefusal> {
+    controller
+        .host_admission()
+        .refusal(&HostId::parse(host_id).unwrap())
+        .unwrap()
+}
+
 async fn send_ready_with_instance(socket: &mut Socket, protocol_version: u32, instance_id: &str) {
     socket
         .send(Message::Text(
@@ -559,16 +631,47 @@ async fn send_ready_with_instance(socket: &mut Socket, protocol_version: u32, in
 }
 
 async fn complete_attachment(socket: &mut Socket, controller: &DaemonDeliveryController) {
-    send_ready(socket, OUTBOUND_PROTOCOL_VERSION).await;
+    complete_attachment_with_instance(socket, controller, "instance-test").await;
+}
+
+async fn complete_attachment_with_instance(
+    socket: &mut Socket,
+    controller: &DaemonDeliveryController,
+    instance_id: &str,
+) {
+    complete_attachment_until(socket, controller, instance_id, 1).await;
+}
+
+async fn complete_attachment_until(
+    socket: &mut Socket,
+    controller: &DaemonDeliveryController,
+    instance_id: &str,
+    attached: usize,
+) {
+    send_ready_with_instance(socket, OUTBOUND_PROTOCOL_VERSION, instance_id).await;
     let status = next_json(socket).await;
     assert_eq!(status["kind"], "runtime_status");
     respond(socket, &status, json!({ "runtimes": [] })).await;
-    wait_for_attachment(controller).await;
+    wait_for_attached_count(controller, attached).await;
 }
 
 async fn wait_for_attachment(controller: &DaemonDeliveryController) {
+    wait_for_attached_count(controller, 1).await;
+}
+
+async fn wait_for_attached_count(controller: &DaemonDeliveryController, expected: usize) {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while controller.attached_connection_count() != 1 {
+        while controller.attached_connection_count() != expected {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn wait_for_free_host_slot(controller: &DaemonDeliveryController) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while controller.active_connection_count() != 0 {
             tokio::task::yield_now().await;
         }
     })
@@ -606,6 +709,23 @@ async fn respond(socket: &mut Socket, command: &Value, result: Value) {
                 "id": command["id"],
                 "kind": command["kind"],
                 "result": result,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+}
+
+async fn respond_error(socket: &mut Socket, command: &Value, error: Value) {
+    socket
+        .send(Message::Text(
+            json!({
+                "direction": "daemon_to_server",
+                "type": "command_response",
+                "id": command["id"],
+                "kind": command["kind"],
+                "error": error,
             })
             .to_string()
             .into(),
@@ -816,6 +936,203 @@ async fn host_axis_is_rejected_by_the_outbound_axis_before_attachment_or_claim()
     .await
     .unwrap();
     assert_eq!(generation, 0);
+    // A version this server can read but does not speak, so the refusal is recorded:
+    // the offline Computer can say WHY it will stay offline, whichever axis the
+    // number came from.
+    let recorded = admission_refusal(&fixture.controller, "host-1")
+        .expect("a readable incompatible version is an actionable refusal");
+    assert_eq!(recorded.offered_protocol_version, HOST_PROTOCOL_VERSION);
+    assert_eq!(
+        recorded.expected_protocol_version,
+        OUTBOUND_PROTOCOL_VERSION
+    );
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn an_old_schema_daemon_is_refused_with_a_reason_the_offline_computer_can_read() {
+    let fixture = fixture("old-schema-refusal.sqlite").await;
+    assert_eq!(admission_refusal(&fixture.controller, "host-1"), None);
+
+    let mut socket = connect(fixture.address).await;
+    send_old_schema_ready(&mut socket, OUTBOUND_PROTOCOL_VERSION - 1).await;
+    expect_close(
+        &mut socket,
+        CloseCode::Protocol,
+        UPDATE_REQUIRED_CLOSE_REASON,
+    )
+    .await;
+    wait_for_free_host_slot(&fixture.controller).await;
+
+    // The frame this daemon sent does not satisfy the current strict schema at all,
+    // which is the whole point: read at the envelope, the refusal survives the
+    // connection and does not have to be timed by a reader.
+    let recorded = admission_refusal(&fixture.controller, "host-1")
+        .expect("the refusal outlives the connection that caused it");
+    assert_eq!(
+        recorded.offered_protocol_version,
+        OUTBOUND_PROTOCOL_VERSION - 1
+    );
+    assert_eq!(
+        recorded.expected_protocol_version,
+        OUTBOUND_PROTOCOL_VERSION
+    );
+    assert!(recorded.observed_at > 0);
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn a_refusal_is_attributed_to_the_verified_host_and_never_to_the_frame() {
+    let fixture = fixture("refusal-attribution.sqlite").await;
+    let mut db = open(&fixture.path).await;
+    sqlx::query(
+        "INSERT INTO hosts (id, name, kind, created_at, user_id)
+         VALUES ('host-2', 'host-2', 'remote', 1, 'user-1')",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO host_credentials (
+            id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at
+         ) VALUES ('credential-2', 'host-2', ?, 'long_lived', NULL, NULL, NULL)",
+    )
+    .bind(token_hash(TOKEN_2))
+    .execute(&mut db)
+    .await
+    .unwrap();
+
+    // A dial that never authenticated: no host has been determined, so there is
+    // nothing a frame of its could be attributed to. It never gets to send one.
+    assert!(
+        connect_with_token(fixture.address, "not-a-token")
+            .await
+            .is_err()
+    );
+    assert_eq!(admission_refusal(&fixture.controller, "host-1"), None);
+    assert_eq!(admission_refusal(&fixture.controller, "host-2"), None);
+
+    let mut socket = connect_with_token(fixture.address, TOKEN_2).await.unwrap();
+    send_old_schema_ready(&mut socket, OUTBOUND_PROTOCOL_VERSION - 1).await;
+    expect_close(
+        &mut socket,
+        CloseCode::Protocol,
+        UPDATE_REQUIRED_CLOSE_REASON,
+    )
+    .await;
+    wait_for_free_host_slot(&fixture.controller).await;
+
+    // The host comes from the verified credential, so only that host's status changed.
+    assert!(admission_refusal(&fixture.controller, "host-2").is_some());
+    assert_eq!(admission_refusal(&fixture.controller, "host-1"), None);
+
+    // And an unauthenticated dial resolves nothing either.
+    assert!(
+        connect_with_token(fixture.address, "not-a-token")
+            .await
+            .is_err()
+    );
+    assert!(admission_refusal(&fixture.controller, "host-2").is_some());
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn a_version_this_server_cannot_read_is_refused_without_recording_a_reason() {
+    let fixture = fixture("unreadable-version.sqlite").await;
+
+    // Above the envelope's readable bound (100). Still refused — by the strict schema,
+    // as before — but not recorded: an unbounded integer from a dialer we have agreed
+    // no schema with is a corrupt dialer, not a daemon a human should go upgrade.
+    let mut socket = connect(fixture.address).await;
+    send_ready(&mut socket, 101).await;
+    expect_close(
+        &mut socket,
+        CloseCode::Protocol,
+        UPDATE_REQUIRED_CLOSE_REASON,
+    )
+    .await;
+    wait_for_free_host_slot(&fixture.controller).await;
+    assert_eq!(admission_refusal(&fixture.controller, "host-1"), None);
+
+    // Unreadable number AND a schema this server does not know: the pre-existing
+    // strict refusal is what answers, and there is still nothing to record.
+    let mut socket = connect(fixture.address).await;
+    send_old_schema_ready(&mut socket, 101).await;
+    expect_close(&mut socket, CloseCode::Protocol, "invalid_daemon_frame").await;
+    wait_for_free_host_slot(&fixture.controller).await;
+    assert_eq!(admission_refusal(&fixture.controller, "host-1"), None);
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn a_refusal_is_withheld_by_a_live_dialer_resurfaces_on_its_close_and_only_custody_clears_it()
+{
+    let fixture = fixture("refusal-sequence.sqlite").await;
+    let mut old = connect(fixture.address).await;
+    send_old_schema_ready(&mut old, OUTBOUND_PROTOCOL_VERSION - 1).await;
+    expect_close(&mut old, CloseCode::Protocol, UPDATE_REQUIRED_CLOSE_REASON).await;
+    wait_for_free_host_slot(&fixture.controller).await;
+    let recorded = admission_refusal(&fixture.controller, "host-1").unwrap();
+
+    // A new dialer has reserved the slot but has not handshaken. The record describes
+    // a socket that is already gone and this one may be the fixed daemon, so it must
+    // not be reported as this host's current state.
+    let mut replacement = connect(fixture.address).await;
+    assert_eq!(fixture.controller.active_connection_count(), 1);
+    assert_eq!(fixture.controller.attached_connection_count(), 0);
+    assert_eq!(admission_refusal(&fixture.controller, "host-1"), None);
+
+    // A third dialer is refused because the slot is occupied. Being refused is all
+    // that happens to it: it neither records nor resolves anything.
+    assert!(connect_with_token(fixture.address, TOKEN).await.is_err());
+    assert_eq!(admission_refusal(&fixture.controller, "host-1"), None);
+
+    // It closed before proving anything and the registry removed its slot, so the
+    // older refusal is the last word again — unchanged, because reading resolved
+    // nothing and a close resolves nothing.
+    replacement.close(None).await.unwrap();
+    wait_for_free_host_slot(&fixture.controller).await;
+    assert_eq!(
+        admission_refusal(&fixture.controller, "host-1"),
+        Some(recorded)
+    );
+
+    // Only a daemon that speaks the version AND is promoted to custody clears it.
+    let mut current = connect(fixture.address).await;
+    complete_attachment(&mut current, &fixture.controller).await;
+    assert_eq!(admission_refusal(&fixture.controller, "host-1"), None);
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn a_strict_ready_that_never_becomes_custody_leaves_the_refusal_standing() {
+    let fixture = fixture("refusal-unattached.sqlite").await;
+    let mut old = connect(fixture.address).await;
+    send_old_schema_ready(&mut old, OUTBOUND_PROTOCOL_VERSION - 1).await;
+    expect_close(&mut old, CloseCode::Protocol, UPDATE_REQUIRED_CLOSE_REASON).await;
+    wait_for_free_host_slot(&fixture.controller).await;
+    let recorded = admission_refusal(&fixture.controller, "host-1").unwrap();
+
+    // A current daemon whose strict `ready` passes, but whose hydration fails: it
+    // never reaches attached custody, so it has proved nothing about this host and
+    // the reason the host is offline is still the one already recorded.
+    let mut current = connect(fixture.address).await;
+    send_ready(&mut current, OUTBOUND_PROTOCOL_VERSION).await;
+    let status = next_json(&mut current).await;
+    assert_eq!(status["kind"], "runtime_status");
+    respond(&mut current, &status, json!({ "runtimes": "not-an-array" })).await;
+    expect_close(&mut current, CloseCode::Error, "runtime_hydration_failed").await;
+    wait_for_free_host_slot(&fixture.controller).await;
+    assert_eq!(fixture.controller.attached_connection_count(), 0);
+    assert_eq!(
+        admission_refusal(&fixture.controller, "host-1"),
+        Some(recorded)
+    );
     fixture.controller.close().await;
     fixture.server.abort();
 }
@@ -1157,6 +1474,728 @@ async fn restart_hydration_stops_the_new_process_and_finalizes_old_daemon_custod
     );
 
     socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+fn host_id(raw: &str) -> HostId {
+    HostId::parse(raw).unwrap()
+}
+
+fn daemon_instance(raw: &str) -> DaemonInstanceId {
+    DaemonInstanceId::parse(raw).unwrap()
+}
+
+fn catalog_request(host: &str, instance: &str, force: bool) -> RuntimeCatalogRequest {
+    RuntimeCatalogRequest {
+        host: host_id(host),
+        daemon_instance: daemon_instance(instance),
+        force,
+    }
+}
+
+fn probe_in_background(
+    dispatch: &HostCommandDispatch,
+    request: RuntimeCatalogRequest,
+) -> tokio::task::JoinHandle<RuntimeCatalogOutcome> {
+    let dispatch = dispatch.clone();
+    tokio::spawn(async move { runtime_catalog::probe(&dispatch, request).await })
+}
+
+fn status_request(host: &str, instance: &str) -> StatusSnapshotRequest {
+    StatusSnapshotRequest {
+        host: host_id(host),
+        daemon_instance: daemon_instance(instance),
+    }
+}
+
+fn status_probe_in_background(
+    dispatch: &HostCommandDispatch,
+    request: StatusSnapshotRequest,
+) -> tokio::task::JoinHandle<StatusSnapshotOutcome> {
+    let dispatch = dispatch.clone();
+    tokio::spawn(async move { status_snapshot::probe(&dispatch, request).await })
+}
+
+async fn assert_no_daemon_frame(socket: &mut Socket) {
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), socket.next())
+            .await
+            .is_err(),
+        "the transport must not have put a frame on the wire"
+    );
+}
+
+#[tokio::test]
+async fn a_stale_custody_or_unknown_host_is_refused_before_anything_reaches_the_wire() {
+    let fixture = fixture("host-command-instance-gate.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+    let dispatch = fixture.controller.host_commands();
+
+    // The custody this caller observed is not the one serving the host now; and a
+    // host with no attachment at all is the same answer, because in both cases
+    // there is nobody this request may be asked of.
+    for absent in [
+        catalog_request("host-1", "instance-stale", true),
+        catalog_request("host-2", "instance-test", true),
+    ] {
+        assert!(matches!(
+            runtime_catalog::probe(&dispatch, absent).await,
+            RuntimeCatalogOutcome::AttachPending
+        ));
+        assert_no_daemon_frame(&mut socket).await;
+    }
+
+    let probing = probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+    let command = next_json(&mut socket).await;
+    assert_eq!(command["kind"], "host_runtime_catalog");
+    assert_eq!(command["params"], json!({ "force": true }));
+    respond(
+        &mut socket,
+        &command,
+        json!({ "runtimes": [], "detected_at": 5 }),
+    )
+    .await;
+    let RuntimeCatalogOutcome::Detected(catalog) = probing.await.unwrap() else {
+        panic!("the custody that is actually attached must answer")
+    };
+    let view = catalog
+        .rows_for(&host_id("host-1"), &daemon_instance("instance-test"))
+        .expect("the fact opens for the coordinate that asked for it");
+    assert!(view.runtimes.is_empty());
+    assert_eq!(view.detected_at, 5);
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn a_status_snapshot_rides_the_wire_the_deployed_daemon_answers_and_binds_its_facts() {
+    let fixture = fixture("host-command-status-snapshot.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+    let dispatch = fixture.controller.host_commands();
+
+    // Same transport as the catalog, different report: a custody nobody is serving
+    // is this operation's own no-reason arm, and nothing is asked of the machine.
+    assert!(matches!(
+        status_snapshot::probe(&dispatch, status_request("host-1", "instance-stale")).await,
+        StatusSnapshotOutcome::Disconnected
+    ));
+    assert_no_daemon_frame(&mut socket).await;
+
+    let probing = status_probe_in_background(&dispatch, status_request("host-1", "instance-test"));
+    let command = next_json(&mut socket).await;
+    // The literal pair the deployed daemon dispatches on. A rename on either side is
+    // an unknown intent, not a decode failure.
+    assert_eq!(command["kind"], "host_status");
+    assert_eq!(command["params"], json!({}));
+    respond(
+        &mut socket,
+        &command,
+        json!({
+            "os": "macOS 14.5",
+            "os_arch": "arm64",
+            "daemon_pid": 4_242,
+            "daemon_version": "1.2.3",
+            "started_at": 1_700_000_000_000_i64,
+            "uptime_ms": 90_000,
+            "active_agent_ids": ["agent-1", "agent-2"],
+        }),
+    )
+    .await;
+    let StatusSnapshotOutcome::Answered(snapshot) = probing.await.unwrap() else {
+        panic!("the custody that is actually attached must answer")
+    };
+    let view = snapshot
+        .facts_for(&host_id("host-1"), &daemon_instance("instance-test"))
+        .expect("the fact opens for the coordinate that asked for it");
+    assert_eq!(view.os, "macOS 14.5");
+    assert_eq!(view.os_arch, Some("arm64"));
+    assert_eq!(view.daemon_pid, 4_242);
+    assert_eq!(view.daemon_version, "1.2.3");
+    assert_eq!(view.started_at, 1_700_000_000_000);
+    assert_eq!(view.uptime_ms_at_answer, 90_000);
+    let mut active = view
+        .active_agents
+        .iter()
+        .map(|agent| agent.as_str())
+        .collect::<Vec<_>>();
+    active.sort_unstable();
+    assert_eq!(active, vec!["agent-1", "agent-2"]);
+
+    // The facts this machine answered stay unreadable under any other machine's key.
+    assert!(matches!(
+        snapshot.facts_for(&host_id("host-2"), &daemon_instance("instance-test")),
+        Err(SnapshotCoordinateMismatch::Host)
+    ));
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+fn seed_in_background(
+    seeds: &HostStatusSeeds,
+    host: &str,
+    instance: &str,
+) -> tokio::task::JoinHandle<Result<SeedAttempt, SeedFailure>> {
+    let seeds = seeds.clone();
+    let host = host_id(host);
+    let instance = daemon_instance(instance);
+    tokio::spawn(async move { seeds.seed_on_attach(&host, &instance).await })
+}
+
+#[tokio::test]
+async fn the_seed_store_asks_the_attached_custody_and_every_handle_reads_what_it_kept() {
+    let fixture = fixture("host-status-seed.sqlite").await;
+    // Two handles from the one runtime. Everything below seeds through the first and
+    // reads through the second: a store built a second time would answer this host
+    // from facts it never saw.
+    let seeds = fixture.controller.host_status_seeds();
+    let reader = fixture.controller.host_status_seeds();
+    let mut socket = connect(fixture.address).await;
+
+    // The socket has reserved this host's slot and proven nothing. The admission
+    // ledger's occupancy port would already name it; this store reads the ATTACHED
+    // custody, so the host is absent and no frame is worth sending to it.
+    assert_eq!(
+        reader.read(&host_id("host-1")).unwrap(),
+        SeedRead::Disconnected
+    );
+    assert_eq!(
+        seeds
+            .seed_on_attach(&host_id("host-1"), &daemon_instance("instance-test"))
+            .await,
+        Ok(SeedAttempt::Superseded)
+    );
+    assert_no_daemon_frame(&mut socket).await;
+
+    complete_attachment(&mut socket, &fixture.controller).await;
+    // Attached, and its facts have not landed: not a fault, and not a value.
+    assert_eq!(
+        reader.read(&host_id("host-1")).unwrap(),
+        SeedRead::NotSeeded
+    );
+
+    let seeding = seed_in_background(&seeds, "host-1", "instance-test");
+    let command = next_json(&mut socket).await;
+    assert_eq!(command["kind"], "host_status");
+    respond(
+        &mut socket,
+        &command,
+        json!({
+            "os": "macOS 14.5",
+            "os_arch": "arm64",
+            "daemon_pid": 4_242,
+            "daemon_version": "1.2.3",
+            "started_at": 1_700_000_000_000_i64,
+            "uptime_ms": 90_000,
+            "active_agent_ids": ["agent-1"],
+        }),
+    )
+    .await;
+    assert_eq!(seeding.await.unwrap(), Ok(SeedAttempt::Sealed));
+
+    let SeedRead::Seeded(status) = reader.read(&host_id("host-1")).unwrap() else {
+        panic!("the handle that did not seed must read what the store kept")
+    };
+    assert_eq!(status.daemon_instance, daemon_instance("instance-test"));
+    assert_eq!(status.os, "macOS 14.5");
+    assert_eq!(status.os_arch.as_deref(), Some("arm64"));
+    assert_eq!(status.daemon_pid, 4_242);
+    assert_eq!(status.daemon_version, "1.2.3");
+    assert_eq!(status.started_at, 1_700_000_000_000);
+    assert!(status.uptime_ms >= 90_000);
+    assert_eq!(
+        status.active_agents,
+        std::collections::HashSet::from([AgentId::parse("agent-1").unwrap()])
+    );
+
+    // Its process did not restart, so it is not asked again — and the read surface
+    // never asks at all.
+    assert_eq!(
+        seeds
+            .seed_on_attach(&host_id("host-1"), &daemon_instance("instance-test"))
+            .await,
+        Ok(SeedAttempt::AlreadySealed)
+    );
+    assert_no_daemon_frame(&mut socket).await;
+
+    // The daemon leaves. The registry is the authority for that, so the read that
+    // observes it reports an absent machine and keeps nothing to serve.
+    socket.close(None).await.unwrap();
+    wait_for_attached_count(&fixture.controller, 0).await;
+    assert_eq!(
+        reader.read(&host_id("host-1")).unwrap(),
+        SeedRead::Disconnected
+    );
+
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn a_replacement_daemon_moves_the_expected_custody_and_strands_the_old_command() {
+    let fixture = fixture("host-command-replacement.sqlite").await;
+    let mut first = connect(fixture.address).await;
+    complete_attachment_with_instance(&mut first, &fixture.controller, "instance-a").await;
+    let dispatch = fixture.controller.host_commands();
+
+    // The connection dies with the command on it, so whether the machine ran it is
+    // unknowable: this operation may only report that the machine did not answer.
+    let in_flight = probe_in_background(&dispatch, catalog_request("host-1", "instance-a", true));
+    let command = next_json(&mut first).await;
+    assert_eq!(command["kind"], "host_runtime_catalog");
+    first.close(None).await.unwrap();
+    assert!(matches!(
+        in_flight.await.unwrap(),
+        RuntimeCatalogOutcome::DaemonInternalError
+    ));
+    wait_for_free_host_slot(&fixture.controller).await;
+
+    assert!(matches!(
+        runtime_catalog::probe(&dispatch, catalog_request("host-1", "instance-a", true)).await,
+        RuntimeCatalogOutcome::AttachPending
+    ));
+
+    let mut second = connect(fixture.address).await;
+    complete_attachment_with_instance(&mut second, &fixture.controller, "instance-b").await;
+    assert!(matches!(
+        runtime_catalog::probe(&dispatch, catalog_request("host-1", "instance-a", true)).await,
+        RuntimeCatalogOutcome::AttachPending
+    ));
+    assert_no_daemon_frame(&mut second).await;
+
+    let answered = probe_in_background(&dispatch, catalog_request("host-1", "instance-b", true));
+    let command = next_json(&mut second).await;
+    respond(
+        &mut second,
+        &command,
+        json!({ "runtimes": [], "detected_at": 9 }),
+    )
+    .await;
+    let RuntimeCatalogOutcome::Detected(catalog) = answered.await.unwrap() else {
+        panic!("the replacement custody must answer for itself")
+    };
+    assert_eq!(
+        catalog
+            .rows_for(&host_id("host-1"), &daemon_instance("instance-b"))
+            .expect("the fact opens for the custody that produced it")
+            .detected_at,
+        9
+    );
+    // The stranded custody never produced these rows, so it cannot read them either.
+    assert!(matches!(
+        catalog.rows_for(&host_id("host-1"), &daemon_instance("instance-a")),
+        Err(CatalogCoordinateMismatch::DaemonInstance)
+    ));
+
+    second.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn an_answer_for_an_unknown_id_cannot_settle_the_command_in_flight() {
+    let fixture = fixture("host-command-stray-answer.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+    let dispatch = fixture.controller.host_commands();
+
+    let answered = probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+    let live = next_json(&mut socket).await;
+
+    // Nothing is waiting for this id, so the frame is dropped: it may not settle the
+    // command that is genuinely in flight, and it may not fail the connection
+    // either. The live answer arriving behind it on the same wire proves both.
+    let mut stray = live.clone();
+    stray["id"] = json!("rust-daemon-4242");
+    respond(
+        &mut socket,
+        &stray,
+        json!({ "runtimes": [], "detected_at": 1 }),
+    )
+    .await;
+    respond(
+        &mut socket,
+        &live,
+        json!({ "runtimes": [], "detected_at": 2 }),
+    )
+    .await;
+
+    let RuntimeCatalogOutcome::Detected(catalog) = answered.await.unwrap() else {
+        panic!("the live command must be settled by its own answer")
+    };
+    assert_eq!(
+        catalog
+            .rows_for(&host_id("host-1"), &daemon_instance("instance-test"))
+            .expect("the fact opens for the coordinate that asked for it")
+            .detected_at,
+        2
+    );
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+/// Every frame the daemon side received, in order, so the assertions below read a
+/// record instead of guessing when something should have arrived. Heartbeats are
+/// answered here because nothing in these tests is about liveness checking, and a
+/// close is recorded rather than swallowed: it is the shape a mis-settlement takes.
+async fn next_daemon_command(socket: &mut Socket, observed: &mut Vec<Value>) -> Value {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match socket.next().await.unwrap().unwrap() {
+                Message::Text(text) => {
+                    let frame: Value = serde_json::from_str(&text).unwrap();
+                    observed.push(frame.clone());
+                    if frame["type"] == "heartbeat" {
+                        socket
+                            .send(Message::Text(
+                                json!({
+                                    "direction": "daemon_to_server",
+                                    "type": "heartbeat",
+                                    "kind": "pong",
+                                    "ts": frame["ts"],
+                                    "echo_ts": frame["ts"],
+                                })
+                                .to_string()
+                                .into(),
+                            ))
+                            .await
+                            .unwrap();
+                        continue;
+                    }
+                    return frame;
+                }
+                Message::Ping(payload) => socket.send(Message::Pong(payload)).await.unwrap(),
+                Message::Close(frame) => {
+                    observed.push(json!({ "type": "close", "close": format!("{frame:?}") }));
+                    panic!(
+                        "the connection was closed instead of carrying a command: {observed:#?}"
+                    );
+                }
+                other => panic!("unexpected daemon frame {other:?} after {observed:#?}"),
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("expected a command frame after {observed:#?}"))
+}
+
+#[tokio::test]
+async fn a_timed_out_host_command_is_deregistered_before_its_late_answer_arrives() {
+    let fixture = fixture("host-command-timeout-cleanup.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+    let dispatch = fixture.controller.host_commands();
+    let mut observed = Vec::new();
+
+    let abandoned =
+        probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+    let stale = next_daemon_command(&mut socket, &mut observed).await;
+    assert_eq!(stale["kind"], "host_runtime_catalog");
+
+    // The clock is paused around the jump and nothing else: with a real socket a
+    // paused clock auto-advances whenever the runtime parks on I/O, so awaiting a
+    // frame while paused could cross the pong deadline this jump arms and close the
+    // connection for a reason this test is not about. The budget elapsed inside the
+    // paused window, so the timeout fires on the next park either way.
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(46)).await;
+    tokio::time::resume();
+    assert!(
+        matches!(abandoned.await.unwrap(), RuntimeCatalogOutcome::Timeout),
+        "the budget elapsed, so this operation may only report that nobody answered"
+    );
+
+    let answered = probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+    let live = next_daemon_command(&mut socket, &mut observed).await;
+    assert_ne!(live["id"], stale["id"]);
+
+    // A code outside the closed refusal set is envelope-valid and fatal at settlement
+    // (`only_the_closed_refusal_set_settles_a_host_command_at_all`), which makes it a
+    // tripwire for "is anything still registered under this id". Nothing may be: the
+    // timeout had to remove its own entry, so the frame is dropped. An entry the
+    // timeout settled but left behind, or another command's entry reached because this
+    // id was not found, would both close the connection instead.
+    respond_error(
+        &mut socket,
+        &stale,
+        json!({ "code": "banana", "message": "late" }),
+    )
+    .await;
+    respond(
+        &mut socket,
+        &live,
+        json!({ "runtimes": [], "detected_at": 7 }),
+    )
+    .await;
+
+    let RuntimeCatalogOutcome::Detected(catalog) = answered.await.unwrap() else {
+        panic!("the command still in flight must be settled by its own answer: {observed:#?}")
+    };
+    assert_eq!(
+        catalog
+            .rows_for(&host_id("host-1"), &daemon_instance("instance-test"))
+            .expect("the fact opens for the coordinate that asked for it")
+            .detected_at,
+        7
+    );
+
+    // The connection is still usable, proven by another round trip on it rather than
+    // by the absence of something within some window.
+    let after = probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+    let next = next_daemon_command(&mut socket, &mut observed).await;
+    respond(
+        &mut socket,
+        &next,
+        json!({ "runtimes": [], "detected_at": 11 }),
+    )
+    .await;
+    let RuntimeCatalogOutcome::Detected(catalog) = after.await.unwrap() else {
+        panic!("the connection outlived the late answer: {observed:#?}")
+    };
+    assert_eq!(
+        catalog
+            .rows_for(&host_id("host-1"), &daemon_instance("instance-test"))
+            .expect("the fact opens for the coordinate that asked for it")
+            .detected_at,
+        11
+    );
+
+    let types: Vec<&str> = observed
+        .iter()
+        .filter_map(|frame| frame["type"].as_str())
+        .collect();
+    assert!(!types.contains(&"close"), "{observed:#?}");
+    assert_eq!(
+        types.iter().filter(|frame| **frame == "command").count(),
+        3,
+        "{observed:#?}"
+    );
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn only_the_closed_refusal_set_settles_a_host_command_at_all() {
+    let fixture = fixture("host-command-refusals.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+    let dispatch = fixture.controller.host_commands();
+
+    // Every admitted code means one thing to this operation — the machine cannot say
+    // what it has installed — so what a socket can still prove is that each one
+    // settles the caller and leaves the connection usable. Which code arrived stays
+    // visible at the transport, and the admission table itself is asserted per kind
+    // by `refusal_codes_are_admitted_per_kind_and_never_invented`.
+    for code in [
+        "unknown_intent",
+        "invalid_params",
+        "internal_error",
+        "shutting_down",
+        "request_too_large",
+    ] {
+        let refused =
+            probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+        let command = next_json(&mut socket).await;
+        respond_error(
+            &mut socket,
+            &command,
+            json!({ "code": code, "message": "refused" }),
+        )
+        .await;
+        assert!(
+            matches!(
+                refused.await.unwrap(),
+                RuntimeCatalogOutcome::DaemonInternalError
+            ),
+            "{code} is a refusal every command kind may be answered with"
+        );
+    }
+
+    let surviving =
+        probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+    let command = next_json(&mut socket).await;
+    respond(
+        &mut socket,
+        &command,
+        json!({ "runtimes": [], "detected_at": 3 }),
+    )
+    .await;
+    assert!(matches!(
+        surviving.await.unwrap(),
+        RuntimeCatalogOutcome::Detected(_)
+    ));
+
+    // A code outside the closed set, and a code only a runtime command may be refused
+    // with, are the same thing to a host-control command: an answer it has no arm for.
+    // Neither may surface as a refusal, and each fails the connection it arrived on.
+    for error in [
+        json!({ "code": "banana", "message": "invented" }),
+        json!({ "code": "agent_deleting", "message": "wrong vocabulary" }),
+    ] {
+        let corrupt =
+            probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+        let command = next_json(&mut socket).await;
+        respond_error(&mut socket, &command, error).await;
+        assert!(matches!(
+            corrupt.await.unwrap(),
+            RuntimeCatalogOutcome::DaemonInternalError
+        ));
+        let Message::Close(Some(close)) = socket.next().await.unwrap().unwrap() else {
+            panic!("a corrupt command response must close the transport")
+        };
+        assert_eq!(close.code, CloseCode::Protocol);
+        assert_eq!(close.reason, "invalid_command_response");
+        wait_for_free_host_slot(&fixture.controller).await;
+        socket = connect(fixture.address).await;
+        complete_attachment(&mut socket, &fixture.controller).await;
+    }
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn the_runtime_catalog_probe_binds_its_answer_to_the_custody_that_produced_it() {
+    let fixture = fixture("runtime-catalog-probe.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+    let dispatch = fixture.controller.host_commands();
+
+    let probing = probe_in_background(&dispatch, catalog_request("host-1", "instance-test", false));
+    let command = next_json(&mut socket).await;
+    assert_eq!(command["kind"], "host_runtime_catalog");
+    assert_eq!(command["params"], json!({ "force": false }));
+    respond(
+        &mut socket,
+        &command,
+        json!({
+            "runtimes": [{
+                "kind": "codex",
+                "state": "present",
+                "reason": "resolved",
+                "installed": true,
+                "binary": "/opt/codex",
+                "version": "2.0.0",
+            }],
+            "detected_at": 1_700_000_000_000_i64,
+        }),
+    )
+    .await;
+    let RuntimeCatalogOutcome::Detected(catalog) = probing.await.unwrap() else {
+        panic!("a well-formed answer must be reported as a catalog")
+    };
+    let view = catalog
+        .rows_for(&host_id("host-1"), &daemon_instance("instance-test"))
+        .expect("the fact opens for the coordinate that asked for it");
+    assert_eq!(view.detected_at, 1_700_000_000_000);
+    assert_eq!(view.runtimes.len(), 1);
+    assert_eq!(view.runtimes[0].kind.as_str(), "codex");
+    assert_eq!(view.runtimes[0].binary.as_deref(), Some("/opt/codex"));
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn two_hosts_spelling_one_daemon_instance_cannot_read_each_others_catalog() {
+    let fixture = fixture("host-command-instance-collision.sqlite").await;
+    let mut db = open(&fixture.path).await;
+    sqlx::query(
+        "INSERT INTO hosts (id, name, kind, created_at, user_id)
+         VALUES ('host-2', 'host-2', 'remote', 1, 'user-1')",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO host_credentials (
+            id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at
+         ) VALUES ('credential-2', 'host-2', ?, 'long_lived', NULL, NULL, NULL)",
+    )
+    .bind(token_hash(TOKEN_2))
+    .execute(&mut db)
+    .await
+    .unwrap();
+
+    // Both machines are genuinely attached and both spell their custody the same way,
+    // so the daemon instance alone cannot tell one host's answer from the other's.
+    let mut owner = connect(fixture.address).await;
+    complete_attachment_with_instance(&mut owner, &fixture.controller, "instance-shared").await;
+    let mut other = connect_with_token(fixture.address, TOKEN_2).await.unwrap();
+    complete_attachment_until(&mut other, &fixture.controller, "instance-shared", 2).await;
+    let dispatch = fixture.controller.host_commands();
+
+    let owner_probe = probe_in_background(
+        &dispatch,
+        catalog_request("host-1", "instance-shared", true),
+    );
+    let owner_command = next_json(&mut owner).await;
+    respond(
+        &mut owner,
+        &owner_command,
+        json!({ "runtimes": [], "detected_at": 1 }),
+    )
+    .await;
+    let RuntimeCatalogOutcome::Detected(owner_catalog) = owner_probe.await.unwrap() else {
+        panic!("the owner's machine answered on its own wire")
+    };
+
+    let other_probe = probe_in_background(
+        &dispatch,
+        catalog_request("host-2", "instance-shared", true),
+    );
+    let other_command = next_json(&mut other).await;
+    respond(
+        &mut other,
+        &other_command,
+        json!({ "runtimes": [], "detected_at": 2 }),
+    )
+    .await;
+    let RuntimeCatalogOutcome::Detected(other_catalog) = other_probe.await.unwrap() else {
+        panic!("the other machine answered on its own wire")
+    };
+
+    let shared = daemon_instance("instance-shared");
+    assert_eq!(
+        owner_catalog
+            .rows_for(&host_id("host-1"), &shared)
+            .expect("each fact opens for the machine that produced it")
+            .detected_at,
+        1
+    );
+    assert_eq!(
+        other_catalog
+            .rows_for(&host_id("host-2"), &shared)
+            .expect("each fact opens for the machine that produced it")
+            .detected_at,
+        2
+    );
+    // A bind on the custody alone would let either machine's answer be filed under
+    // the other's key, which is exactly what a seed keyed by (host, instance) would
+    // then serve to the wrong host.
+    assert!(matches!(
+        owner_catalog.rows_for(&host_id("host-2"), &shared),
+        Err(CatalogCoordinateMismatch::Host)
+    ));
+    assert!(matches!(
+        other_catalog.rows_for(&host_id("host-1"), &shared),
+        Err(CatalogCoordinateMismatch::Host)
+    ));
+
+    owner.close(None).await.unwrap();
+    other.close(None).await.unwrap();
     fixture.controller.close().await;
     fixture.server.abort();
 }

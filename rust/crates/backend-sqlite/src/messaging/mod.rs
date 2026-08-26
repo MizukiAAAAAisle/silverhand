@@ -49,6 +49,14 @@ use thiserror::Error;
 mod author;
 pub(crate) mod authorities;
 pub mod collaboration;
+/// INTEGRATION SEAM, not owned canonical: the schedule fire-path adapter is a
+/// bounded context of its own, owned under `messaging/schedule/**`. This
+/// declaration only wires that subtree into the crate — it defines nothing.
+pub mod schedule;
+/// INTEGRATION SEAM, not owned canonical: the task board adapter is a bounded
+/// context of its own, owned under `messaging/task/**`. This declaration only
+/// wires that subtree into the crate — it defines nothing.
+pub mod task;
 use author::{AuthorEvidence, resolve_authors};
 pub use authorities::{SqliteTargetAddress, TargetAddressStoreError};
 
@@ -66,11 +74,36 @@ const SELECT_USER_EXISTS: &str = "SELECT 1 FROM users WHERE id = ?";
 /// channel names its participants by roster row, a direct pair by its endpoints.
 /// Splitting the arms would let a rosterless placement answer "not a participant"
 /// to the principals the placement itself names.
-const SELECT_AGENT_PARTICIPATES: &str = "SELECT 1 FROM conversations c WHERE c.id = ? AND \
-     ((c.placement_kind = 'workspace' AND EXISTS (SELECT 1 FROM conversation_agents ca WHERE \
-     ca.conversation_id = c.id AND ca.agent_id = ?)) OR (c.placement_kind = 'direct_pair' AND \
-     ((c.endpoint_a_kind = 'agent' AND c.endpoint_a_id = ?) OR (c.endpoint_b_kind = 'agent' AND \
-     c.endpoint_b_id = ?))))";
+/// The placement-participation predicate an agent satisfies for a conversation `c`
+/// (a workspace roster row OR a direct-pair endpoint), as an `AND (...)` tail with the
+/// three agent binds unfilled. ONE fragment behind two coordinates: the send gate's
+/// point check [`SELECT_AGENT_PARTICIPATES`] (`c.id = ?`) and the task-read set port
+/// [`SELECT_AGENT_PARTICIPATING_SET`] (`json_each` over a candidate set). Composing both
+/// from this macro makes drift structurally impossible — an edit reaches both statements
+/// or neither.
+macro_rules! agent_participation_predicate {
+    () => {
+        "((c.placement_kind = 'workspace' AND EXISTS (SELECT 1 FROM conversation_agents ca \
+         WHERE ca.conversation_id = c.id AND ca.agent_id = ?)) OR (c.placement_kind = \
+         'direct_pair' AND ((c.endpoint_a_kind = 'agent' AND c.endpoint_a_id = ?) OR \
+         (c.endpoint_b_kind = 'agent' AND c.endpoint_b_id = ?))))"
+    };
+}
+
+const SELECT_AGENT_PARTICIPATES: &str = concat!(
+    "SELECT 1 FROM conversations c WHERE c.id = ? AND ",
+    agent_participation_predicate!()
+);
+/// The set-shaped form of the participation read: `json_each(?)` drives the candidate
+/// conversation set (one bound JSON array, no dynamic SQL), each id joined to its
+/// conversation and probed against the SAME participation tail. Returns the participating
+/// SUBSET's ids; the task-read core re-binds each candidate against it, so the `json_each`
+/// set is a coordinate narrowing, never a witness.
+pub(crate) const SELECT_AGENT_PARTICIPATING_SET: &str = concat!(
+    "SELECT c.id FROM json_each(?) requested JOIN conversations c ON c.id = requested.value \
+     WHERE ",
+    agent_participation_predicate!()
+);
 /// The human arm carries two facts for a channel — the seat AND workspace
 /// membership — so a seat that outlived a workspace removal admits nobody.
 const SELECT_USER_PARTICIPATES: &str = "SELECT 1 FROM conversations c WHERE c.id = ? AND \

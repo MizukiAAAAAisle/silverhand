@@ -1,0 +1,5 @@
+{
+  "scope": "app",
+  "kind": "user_presence",
+  "payload": { "user_id": "viewer-1", "presence": "offline", "last_seen_at": 1234000 }
+}

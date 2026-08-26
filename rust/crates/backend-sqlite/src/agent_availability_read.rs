@@ -14,16 +14,18 @@
 //! ONE view of the database. A write landing between the arm reads cannot make an
 //! agent pass the ACL as it stood and then be answered from a later row.
 //!
-//! ## The three ACL arms are the SAME SQL the TypeScript authority runs
+//! ## The set-shaped arms come from the shared relation, not a private SQL
 //!
-//! The creator arm is the agent row's `created_by_user_id`; the direct-pair arm
-//! is `DIRECT_PAIR_HUMAN_ENDPOINT_IDS_FOR_AGENT_SQL`, gating the OTHER endpoint on
-//! `= 'human'` in both slot orders so an agent↔agent pair contributes nobody; the
-//! workspace arm unions `workspace_users` over every workspace the agent is a
-//! member of PLUS the agent's own agent-home workspace, exactly the set
-//! `agentWorkspaceIds` (`workspaces.listForAgent`) feeds `workspaceMemberUserIds`.
-//! Dropping any one arm hides a viewer admitted only by it — the differential the
-//! route tests pin.
+//! The creator arm is the agent row's `created_by_user_id`, read once off the
+//! agent row. The two set-shaped arms are read by
+//! [`read_agent_audience`](crate::agent_view_acl::read_agent_audience), the single
+//! authority in [`crate::agent_view_acl`] that both this availability read and the
+//! agent-list read share so the ACL cannot drift between them: the direct-pair arm
+//! gates the OTHER endpoint on `= 'human'` in both slot orders so an agent↔agent
+//! pair contributes nobody, and the workspace arm unions the members of every
+//! workspace the agent reaches PLUS the agent's own agent-home workspace. Dropping
+//! any one arm hides a viewer admitted only by it — the differential the route
+//! tests pin.
 //!
 //! ## Every committed value is decoded strictly
 //!
@@ -48,7 +50,7 @@ use sqlx::{
 };
 use thiserror::Error;
 
-use crate::agent_view_acl::{SELECT_DIRECT_PAIR_HUMAN_ENDPOINTS, SELECT_SHARED_WORKSPACE_MEMBERS};
+use crate::agent_view_acl::{AgentViewAclError, read_agent_audience};
 
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -132,28 +134,14 @@ impl SqliteAgentAvailabilityColdRead {
             .map_err(|_| AgentAvailabilityColdReadError::MalformedStatus { value: status_raw })?;
         let deletion_started_at: Option<i64> = row.try_get("deletion_started_at")?;
 
-        let pair_human_rows = sqlx::query(SELECT_DIRECT_PAIR_HUMAN_ENDPOINTS)
-            .bind(agent.as_str())
-            .bind(agent.as_str())
-            .fetch_all(&mut *tx)
-            .await?;
-        let workspace_member_rows = sqlx::query(SELECT_SHARED_WORKSPACE_MEMBERS)
-            .bind(agent.as_str())
-            .bind(agent.as_str())
-            .fetch_all(&mut *tx)
-            .await?;
+        let audience = read_agent_audience(&mut tx, agent).await?;
 
         tx.commit().await?;
 
-        let direct_pair_human_endpoints =
-            decode_user_ids(&pair_human_rows, "conversations.direct_pair human endpoint")?;
-        let shared_workspace_members =
-            decode_user_ids(&workspace_member_rows, "workspace_users.user_id")?;
-
         let viewers = AgentViewerArms::new(
             Some(creator),
-            direct_pair_human_endpoints,
-            shared_workspace_members,
+            audience.direct_pair_human_endpoints,
+            audience.shared_workspace_members,
         );
         Ok(Some(AgentViewFacts::from_source(
             source,
@@ -185,18 +173,13 @@ impl SqliteAgentAvailabilityColdRead {
     }
 }
 
-fn decode_user_ids(
-    rows: &[sqlx::sqlite::SqliteRow],
-    column: &'static str,
-) -> Result<Vec<UserId>, AgentAvailabilityColdReadError> {
-    let mut ids = Vec::with_capacity(rows.len());
-    for row in rows {
-        let raw: String = row.try_get("user_id")?;
-        let id = UserId::parse(raw)
-            .map_err(|_| AgentAvailabilityColdReadError::MalformedIdentity { column })?;
-        ids.push(id);
+impl From<AgentViewAclError> for AgentAvailabilityColdReadError {
+    fn from(error: AgentViewAclError) -> Self {
+        match error {
+            AgentViewAclError::Sql(error) => Self::Sql(error),
+            AgentViewAclError::MalformedIdentity { column } => Self::MalformedIdentity { column },
+        }
     }
-    Ok(ids)
 }
 
 impl AgentAvailabilityReadModel for SqliteAgentAvailabilityColdRead {
