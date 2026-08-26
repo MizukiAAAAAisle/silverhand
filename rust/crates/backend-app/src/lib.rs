@@ -32,7 +32,8 @@ use silverhand_backend_server::{
         aftermath::MessagingAftermath,
         collaboration::{
             activity, channel_directory, channel_lifecycle, conversation_agent_activity,
-            conversation_agent_directory, conversation_agent_runtime,
+            conversation_agent_directory, conversation_agent_runtime, conversation_message_window,
+            conversation_ref, conversation_threads, conversation_unread, human_search,
             stale_message_resolution::{
                 StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
                 StaleMessageResolutionAdmissionRefusal, TracingStaleMessageResolutionObserver,
@@ -448,6 +449,15 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     let conversation_agent_activity_read = messaging_store.conversation_agent_activity();
     let activity_read_model = messaging_store.activity_read_model();
     let agent_run_states_admission = messaging_store.channel_lifecycle();
+    // Wave 3A checkpoint A3: the five message navigation/search read doors ride the SAME
+    // `MessagingStore` (each `&self` builder clones only the shared pool, no second
+    // authority), captured before `send_routers` moves the store as the send UoW. The
+    // message-window GET shares its path with the send POST — see the merge below.
+    let conversation_ref_read = messaging_store.conversation_refs();
+    let conversation_unread_read = messaging_store.conversation_unread();
+    let conversation_threads_read = messaging_store.conversation_threads();
+    let conversation_message_window_read = messaging_store.conversation_message_window();
+    let human_search_read = messaging_store.human_search();
     let aftermath = MessagingAftermath::new(
         hub.clone(),
         daemon_runtime.effects(),
@@ -497,6 +507,17 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
                 conversation_agent_activity_read,
             ))
             .merge(activity::router(activity_read_model))
+            .merge(conversation_ref::router(conversation_ref_read))
+            .merge(conversation_unread::router(conversation_unread_read))
+            .merge(conversation_threads::router(conversation_threads_read))
+            // Same path as the send POST already merged via `human_send`. axum
+            // accumulates the GET and the POST into one method router on the
+            // shared path node, so neither shadows the other; only a repeated
+            // *method* would panic, and GET vs POST is disjoint.
+            .merge(conversation_message_window::router(
+                conversation_message_window_read,
+            ))
+            .merge(human_search::router(human_search_read))
             .merge(presence_router)
             .merge(access::router(
                 access_store.clone(),
@@ -2125,8 +2146,8 @@ mod tests {
 
     /// Gate 1 of the CP2 convergence closure — the composed root's COMPLETE positive
     /// mounted table. It enumerates every `(method, path)` `prepare()` mounts across
-    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195) as twenty-four entries —
-    /// nineteen behind the human session perimeter, three behind the runtime credential
+    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195) as twenty-nine entries —
+    /// twenty-four behind the human session perimeter, three behind the runtime credential
     /// perimeter, the two authenticated WebSockets — and asserts each is PRESENT
     /// (anon → its perimeter's `401`, or the WS upgrade surface, never the `404`
     /// fallback). Removing any mounted route's `.merge(...)` from `prepare()` flips its
@@ -2147,7 +2168,7 @@ mod tests {
         let router = app.router;
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // The nineteen human-perimeter product doors. Anonymous (no bearer) → the human
+        // The twenty-four human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
         for (method, path) in [
@@ -2175,6 +2196,15 @@ mod tests {
                 "/api/conversations/conv000000000001/agents/agent-1/activity",
             ),
             ("GET", "/api/activity"),
+            // Message navigation/search lane, Wave 3A checkpoint A3. The messages GET
+            // shares its path with the send POST above; anon → 401 here proves only that
+            // the path is guarded, not which method entered — the authenticated
+            // double-method gate below distinguishes GET-window from POST-send.
+            ("GET", "/api/conversations/conv000000000001/ref"),
+            ("GET", "/api/conversations/conv000000000001/unread"),
+            ("GET", "/api/conversations/conv000000000001/threads"),
+            ("GET", "/api/channels/conv000000000001/messages"),
+            ("GET", "/api/search"),
         ] {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -2992,6 +3022,305 @@ mod tests {
                 format!("/api/channels/{CONVERSATION_ID}/agent-run-states"),
                 format!("/api/conversations/{CONVERSATION_ID}/agents/{AGENT_ID}/activity"),
                 "/api/activity".to_owned(),
+            ] {
+                let (status, body) = request(&router, "GET", &path, None).await;
+                assert_eq!(status, StatusCode::UNAUTHORIZED, "anon {path}: {body}");
+                assert_eq!(body, r#"{"error":"unauthorized"}"#, "anon {path}");
+            }
+
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "the perimeter must refuse every anonymous read before the product port is touched"
+            );
+        }
+    }
+
+    /// The five Wave 3A message-navigation and search reads, mounted behind the SAME
+    /// `require_human_session` perimeter in the real composed root. Two composition
+    /// obligations the leaf factories' own tests cannot prove:
+    ///
+    /// * `the_composition_serves_message_nav_and_search_behind_the_perimeter` drives all
+    ///   five through the real `prepare()`: anonymous → the perimeter's `401`; an admitted
+    ///   member → a real `200` off each door's live SQLite adapter, asserted by each door's
+    ///   OWN success envelope (`ref`/`mainline`/`threads`/`messages`/`results`). It also
+    ///   proves the load-bearing A3 coexistence gate: `GET /api/channels/{id}/messages` and
+    ///   the already-mounted `POST` on the SAME path each reach their OWN handler — the POST
+    ///   commits a send (201 + its own ACK echoing the content) and the GET then reads that
+    ///   live write back through the window projection (200 + a `messages` row carrying the
+    ///   just-committed content). Neither shadows nor replaces the other, and neither answer
+    ///   could come from a shared fallback: a send ACK has no `messages` array and a window
+    ///   read never returns 201.
+    /// * `the_message_nav_and_search_perimeter_refuses_before_touching_the_product_port`
+    ///   mounts the SAME five factories behind the SAME perimeter over a counting spy and
+    ///   proves an anonymous read is refused `401` with every product port invoked ZERO
+    ///   times — the `.layer` runs before routing, so no handler (and no port call) executes.
+    ///   A `401` status alone cannot prove this; the call counter can.
+    mod message_nav_search_activation {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use silverhand_backend_core::{
+            auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
+            identity::{ConversationId, UserId},
+            messaging::collaboration::{
+                conversation_message_window::{
+                    ConversationMessageWindow, ConversationMessageWindowReadPort,
+                    ConversationMessageWindowRequest, MessageWindowRefusal,
+                },
+                conversation_ref::{
+                    ConversationRefReadPort, ConversationRefRefusal, WorkspaceConversationRef,
+                },
+                conversation_threads::{
+                    ConversationThreadsPage, ConversationThreadsReadPort,
+                    ConversationThreadsRefusal, ThreadListQuery,
+                },
+                conversation_unread::{
+                    ConversationUnread, ConversationUnreadReadPort, ConversationUnreadRefusal,
+                },
+                human_search::{
+                    HumanSearchPage, HumanSearchQuery, HumanSearchReadPort, HumanSearchRefusal,
+                },
+            },
+        };
+        use silverhand_backend_server::{
+            auth::{PublicJsonUnauthorized, require_human_session},
+            messaging::collaboration::{
+                conversation_message_window, conversation_ref, conversation_threads,
+                conversation_unread, human_search,
+            },
+        };
+        use silverhand_backend_sqlite::auth::SqliteSessionStore;
+
+        use super::*;
+
+        #[tokio::test]
+        async fn the_composition_serves_message_nav_and_search_behind_the_perimeter() {
+            let fixture = fixture(true).await;
+            seed_human(&fixture.path).await;
+            seed_channel_directory(&fixture.path).await;
+            let app = prepare(&config(fixture.path.clone())).await.unwrap();
+            let router = app.router;
+            let bearer = format!("Bearer {TOKEN}");
+
+            let conversation_ref = format!("/api/conversations/{CONVERSATION_ID}/ref");
+            let unread = format!("/api/conversations/{CONVERSATION_ID}/unread");
+            let threads = format!("/api/conversations/{CONVERSATION_ID}/threads");
+            let messages = format!("/api/channels/{CONVERSATION_ID}/messages");
+            let search = "/api/search?q=General".to_owned();
+
+            // Anonymous → the perimeter's refusal envelope on every door, never a read.
+            for path in [&conversation_ref, &unread, &threads, &messages, &search] {
+                let (status, body) = request(&router, "GET", path, None).await;
+                assert_eq!(status, StatusCode::UNAUTHORIZED, "anon GET {path}: {body}");
+                assert_eq!(body, r#"{"error":"unauthorized"}"#, "anon GET {path}");
+            }
+            // The POST on the shared messages path is guarded by the SAME perimeter: an
+            // anonymous send is refused before method dispatch, so the coexistence is real
+            // on both methods rather than a GET-only mount.
+            let (status, body) = request_with_body(
+                &router,
+                "POST",
+                &messages,
+                None,
+                Body::from(r#"{"content":"anon"}"#),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::UNAUTHORIZED,
+                "anon POST messages: {body}"
+            );
+
+            // ref → its own `{"ref":{...}}` envelope off the real SQLite adapter.
+            let (status, body) = request(&router, "GET", &conversation_ref, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "ref: {body}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap()["ref"]["id"].as_str(),
+                Some(CONVERSATION_ID),
+                "ref resolves the seeded conversation off the real adapter: {body}"
+            );
+
+            // unread → its own `{"mainline":...}` envelope.
+            let (status, body) = request(&router, "GET", &unread, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "unread: {body}");
+            assert!(
+                serde_json::from_str::<serde_json::Value>(&body)
+                    .unwrap()
+                    .get("mainline")
+                    .is_some(),
+                "unread projects its mainline stream off the real adapter: {body}"
+            );
+
+            // threads → its own `{"threads":[...]}` envelope (empty page, honestly read).
+            let (status, body) = request(&router, "GET", &threads, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "threads: {body}");
+            assert!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap()["threads"].is_array(),
+                "threads projects its page off the real adapter: {body}"
+            );
+
+            // search → its own `{"results":[...]}` envelope.
+            let (status, body) = request(&router, "GET", &search, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "search: {body}");
+            assert!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap()["results"].is_array(),
+                "search projects its result list off the real adapter: {body}"
+            );
+
+            // THE COEXISTENCE GATE. Same path, two methods, two handlers, two observables.
+            // POST commits a send: 201 and the send ACK, whose `message.content` echoes the
+            // request — an answer only the send handler produces.
+            let (status, body) = request_with_body(
+                &router,
+                "POST",
+                &messages,
+                Some(&bearer),
+                Body::from(r#"{"content":"hello A3"}"#),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CREATED, "POST messages: {body}");
+            let ack = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+            assert_eq!(
+                ack["message"]["content"].as_str(),
+                Some("hello A3"),
+                "the POST entered the send handler and committed the content: {body}"
+            );
+            assert!(
+                ack.get("messages").is_none(),
+                "the send ACK is NOT the window envelope — no shared fallback: {body}"
+            );
+
+            // GET on the SAME path reads that live write back: 200 and a `messages` array
+            // containing the just-committed content — an answer only the window handler
+            // produces, and one that proves it read the real committed row, not a stub.
+            let (status, body) = request(&router, "GET", &messages, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "GET messages: {body}");
+            let window = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+            let rows = window["messages"]
+                .as_array()
+                .expect("the window handler answers with a messages array");
+            assert!(
+                rows.iter()
+                    .any(|row| row["content"].as_str() == Some("hello A3")),
+                "the GET entered the window handler and read the committed send back: {body}"
+            );
+        }
+
+        /// A spy satisfying the five A3 doors' read ports; every method bumps a shared
+        /// counter then diverges. Reaching any past the perimeter is a bug, so the bodies
+        /// never fabricate a success value.
+        #[derive(Clone, Default)]
+        struct MessageNavSearchCountingPort {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl ConversationRefReadPort for MessageNavSearchCountingPort {
+            type Error = std::convert::Infallible;
+            async fn resolve(
+                &self,
+                _: &UserId,
+                _: &ConversationId,
+            ) -> Result<Result<WorkspaceConversationRef, ConversationRefRefusal>, Self::Error>
+            {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl ConversationUnreadReadPort for MessageNavSearchCountingPort {
+            type Error = std::convert::Infallible;
+            async fn read(
+                &self,
+                _: &UserId,
+                _: &ConversationId,
+            ) -> Result<Result<ConversationUnread, ConversationUnreadRefusal>, Self::Error>
+            {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl ConversationThreadsReadPort for MessageNavSearchCountingPort {
+            type Error = std::convert::Infallible;
+            async fn admit(
+                &self,
+                _: &UserId,
+                _: &ConversationId,
+            ) -> Result<Result<(), ConversationThreadsRefusal>, Self::Error> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+            async fn read(
+                &self,
+                _: &UserId,
+                _: &ConversationId,
+                _: ThreadListQuery,
+            ) -> Result<Result<ConversationThreadsPage, ConversationThreadsRefusal>, Self::Error>
+            {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl ConversationMessageWindowReadPort for MessageNavSearchCountingPort {
+            type Error = std::convert::Infallible;
+            async fn admit(
+                &self,
+                _: &UserId,
+                _: &ConversationId,
+            ) -> Result<Result<(), MessageWindowRefusal>, Self::Error> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+            async fn read(
+                &self,
+                _: &UserId,
+                _: &ConversationId,
+                _: ConversationMessageWindowRequest,
+            ) -> Result<Result<ConversationMessageWindow, MessageWindowRefusal>, Self::Error>
+            {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl HumanSearchReadPort for MessageNavSearchCountingPort {
+            type Error = std::convert::Infallible;
+            async fn search(
+                &self,
+                _: &UserId,
+                _: HumanSearchQuery,
+            ) -> Result<Result<HumanSearchPage, HumanSearchRefusal>, Self::Error> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+
+        #[tokio::test]
+        async fn the_message_nav_and_search_perimeter_refuses_before_touching_the_product_port() {
+            let fixture = fixture(false).await;
+            let session_store = SqliteSessionStore::open(&fixture.path).await.unwrap();
+            let sessions = HumanSessionAuthenticator::new(
+                session_store,
+                SystemSessionClock,
+                SessionTtl::default(),
+            );
+            let spy = MessageNavSearchCountingPort::default();
+            let calls = spy.calls.clone();
+            // The SAME five factories `prepare()` mounts, behind the SAME perimeter.
+            let router = require_human_session(
+                conversation_ref::router(spy.clone())
+                    .merge(conversation_unread::router(spy.clone()))
+                    .merge(conversation_threads::router(spy.clone()))
+                    .merge(conversation_message_window::router(spy.clone()))
+                    .merge(human_search::router(spy)),
+                sessions,
+                PublicJsonUnauthorized,
+            );
+
+            for path in [
+                format!("/api/conversations/{CONVERSATION_ID}/ref"),
+                format!("/api/conversations/{CONVERSATION_ID}/unread"),
+                format!("/api/conversations/{CONVERSATION_ID}/threads"),
+                format!("/api/channels/{CONVERSATION_ID}/messages"),
+                "/api/search?q=General".to_owned(),
             ] {
                 let (status, body) = request(&router, "GET", &path, None).await;
                 assert_eq!(status, StatusCode::UNAUTHORIZED, "anon {path}: {body}");
