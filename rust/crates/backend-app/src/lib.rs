@@ -31,9 +31,10 @@ use silverhand_backend_server::{
         TargetAddressRefusalLog,
         aftermath::MessagingAftermath,
         collaboration::{
-            activity, channel_directory, channel_lifecycle, conversation_agent_activity,
-            conversation_agent_directory, conversation_agent_runtime, conversation_message_window,
-            conversation_ref, conversation_threads, conversation_unread, human_search,
+            activity, attention_projection, channel_directory, channel_lifecycle,
+            conversation_agent_activity, conversation_agent_directory, conversation_agent_runtime,
+            conversation_message_window, conversation_ref, conversation_threads,
+            conversation_unread, human_search, message_unread,
             stale_message_resolution::{
                 StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
                 StaleMessageResolutionAdmissionRefusal, TracingStaleMessageResolutionObserver,
@@ -458,6 +459,13 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     let conversation_threads_read = messaging_store.conversation_threads();
     let conversation_message_window_read = messaging_store.conversation_message_window();
     let human_search_read = messaging_store.human_search();
+    // Wave 3A checkpoint A4: the five unread/attention read doors ride the SAME
+    // `MessagingStore` (each `&self` builder clones only the shared pool, no second
+    // authority), captured before `send_routers` moves the store as the send UoW. One
+    // `message_unread()` handle satisfies the three-port unread bound (workspace roll-up,
+    // viewer summary, per-conversation).
+    let message_unread_read = messaging_store.message_unread();
+    let attention_projection_read = messaging_store.attention_projection();
     let aftermath = MessagingAftermath::new(
         hub.clone(),
         daemon_runtime.effects(),
@@ -518,6 +526,11 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
                 conversation_message_window_read,
             ))
             .merge(human_search::router(human_search_read))
+            // Unread/attention read lane, Wave 3A checkpoint A4. One `message_unread`
+            // handle serves all three unread roll-up doors; `attention_projection` serves
+            // the two tiered-attention doors.
+            .merge(message_unread::router(message_unread_read))
+            .merge(attention_projection::router(attention_projection_read))
             .merge(presence_router)
             .merge(access::router(
                 access_store.clone(),
@@ -2168,7 +2181,7 @@ mod tests {
         let router = app.router;
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // The twenty-four human-perimeter product doors. Anonymous (no bearer) → the human
+        // The twenty-nine human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
         for (method, path) in [
@@ -2205,6 +2218,12 @@ mod tests {
             ("GET", "/api/conversations/conv000000000001/threads"),
             ("GET", "/api/channels/conv000000000001/messages"),
             ("GET", "/api/search"),
+            // Unread/attention read lane, Wave 3A checkpoint A4.
+            ("GET", "/api/workspaces/workspace0000001/message-unread"),
+            ("GET", "/api/message-unread-summary"),
+            ("GET", "/api/channels/conv000000000001/message-unread"),
+            ("GET", "/api/attention/badges"),
+            ("GET", "/api/attention/modes"),
         ] {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -3321,6 +3340,239 @@ mod tests {
                 format!("/api/conversations/{CONVERSATION_ID}/threads"),
                 format!("/api/channels/{CONVERSATION_ID}/messages"),
                 "/api/search?q=General".to_owned(),
+            ] {
+                let (status, body) = request(&router, "GET", &path, None).await;
+                assert_eq!(status, StatusCode::UNAUTHORIZED, "anon {path}: {body}");
+                assert_eq!(body, r#"{"error":"unauthorized"}"#, "anon {path}");
+            }
+
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "the perimeter must refuse every anonymous read before the product port is touched"
+            );
+        }
+    }
+
+    /// The five Wave 3A unread/attention reads, mounted behind the SAME
+    /// `require_human_session` perimeter in the real composed root. Two composition
+    /// obligations the leaf factories' own tests cannot prove:
+    ///
+    /// * `the_composition_serves_unread_and_attention_behind_the_perimeter` drives all five
+    ///   through the real `prepare()`: anonymous → the perimeter's `401`; an admitted member
+    ///   → a real `200` off each door's live SQLite adapter, asserted by each door's OWN
+    ///   success envelope (`by_conversation`/`by_workspace`/`by_workspace`+`muted_workspace_ids`/
+    ///   `channels`). A one-method checksum pins the badges door to GET.
+    /// * `the_unread_and_attention_perimeter_refuses_before_touching_the_product_port` mounts
+    ///   the SAME two factories behind the SAME perimeter over a counting spy implementing all
+    ///   four read ports and proves an anonymous read is refused `401` with every product port
+    ///   invoked ZERO times — the `.layer` runs before routing. A `401` status alone cannot
+    ///   prove this; the call counter can.
+    mod unread_attention_activation {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use silverhand_backend_core::{
+            auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
+            identity::{ConversationId, UserId, WorkspaceId},
+            messaging::collaboration::{
+                attention_projection::{
+                    AttentionBadgeRollup, AttentionModesRefusal, AttentionProjectionPort,
+                    WorkspaceAttentionModes,
+                },
+                message_unread::{
+                    ConversationMessageUnread, ConversationMessageUnreadReadPort,
+                    ConversationMessageUnreadRefusal, ViewerMessageUnreadSummary,
+                    ViewerMessageUnreadSummaryReadPort, WorkspaceMessageUnread,
+                    WorkspaceMessageUnreadReadPort, WorkspaceMessageUnreadRefusal,
+                },
+            },
+        };
+        use silverhand_backend_server::{
+            auth::{PublicJsonUnauthorized, require_human_session},
+            messaging::collaboration::{attention_projection, message_unread},
+        };
+        use silverhand_backend_sqlite::auth::SqliteSessionStore;
+
+        use super::*;
+
+        #[tokio::test]
+        async fn the_composition_serves_unread_and_attention_behind_the_perimeter() {
+            let fixture = fixture(true).await;
+            seed_human(&fixture.path).await;
+            seed_channel_directory(&fixture.path).await;
+            let app = prepare(&config(fixture.path.clone())).await.unwrap();
+            let router = app.router;
+            let bearer = format!("Bearer {TOKEN}");
+
+            let workspace_unread = format!("/api/workspaces/{WORKSPACE_ID}/message-unread");
+            let summary = "/api/message-unread-summary".to_owned();
+            let conversation_unread = format!("/api/channels/{CONVERSATION_ID}/message-unread");
+            let badges = "/api/attention/badges".to_owned();
+            let modes = format!("/api/attention/modes?workspace_id={WORKSPACE_ID}");
+
+            // Anonymous → the perimeter's refusal envelope on every door, never a read.
+            for path in [
+                &workspace_unread,
+                &summary,
+                &conversation_unread,
+                &badges,
+                &modes,
+            ] {
+                let (status, body) = request(&router, "GET", path, None).await;
+                assert_eq!(status, StatusCode::UNAUTHORIZED, "anon GET {path}: {body}");
+                assert_eq!(body, r#"{"error":"unauthorized"}"#, "anon GET {path}");
+            }
+
+            // workspace roll-up → its own `{"by_conversation":..,"total":..}` envelope.
+            let (status, body) = request(&router, "GET", &workspace_unread, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "workspace-message-unread: {body}");
+            let value = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+            assert!(
+                value.get("by_conversation").is_some() && value.get("total").is_some(),
+                "workspace roll-up projects its own envelope off the real adapter: {body}"
+            );
+
+            // viewer summary → its own `{"by_workspace":..}` envelope.
+            let (status, body) = request(&router, "GET", &summary, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "message-unread-summary: {body}");
+            assert!(
+                serde_json::from_str::<serde_json::Value>(&body)
+                    .unwrap()
+                    .get("by_workspace")
+                    .is_some(),
+                "viewer summary projects its by_workspace map off the real adapter: {body}"
+            );
+
+            // per-conversation roll-up → its own `{"by_conversation":..,"total":..}` envelope.
+            let (status, body) = request(&router, "GET", &conversation_unread, Some(&bearer)).await;
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "conversation-message-unread: {body}"
+            );
+            let value = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+            assert!(
+                value.get("by_conversation").is_some() && value.get("total").is_some(),
+                "per-conversation roll-up projects its own envelope off the real adapter: {body}"
+            );
+
+            // attention badges → its own `{"by_workspace":..,"total":..,"muted_workspace_ids":..}`.
+            let (status, body) = request(&router, "GET", &badges, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "attention-badges: {body}");
+            assert!(
+                serde_json::from_str::<serde_json::Value>(&body)
+                    .unwrap()
+                    .get("muted_workspace_ids")
+                    .is_some(),
+                "attention badges projects its rollup off the real adapter: {body}"
+            );
+
+            // attention modes → its own `{"workspace_id":..,"muted":..,"channels":[..]}`
+            // envelope, keyed to the requested workspace.
+            let (status, body) = request(&router, "GET", &modes, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "attention-modes: {body}");
+            let value = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+            assert_eq!(
+                value["workspace_id"].as_str(),
+                Some(WORKSPACE_ID),
+                "attention modes binds its answer to the requested workspace: {body}"
+            );
+            assert!(
+                value["channels"].is_array(),
+                "attention modes projects its channel list off the real adapter: {body}"
+            );
+
+            // One-method checksum: the badges path serves GET only.
+            let (status, body) = request(&router, "POST", &badges, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
+        }
+
+        /// A spy satisfying the five A4 doors' four read ports; every method bumps a shared
+        /// counter then diverges. Reaching any past the perimeter is a bug, so the bodies
+        /// never fabricate a success value.
+        #[derive(Clone, Default)]
+        struct UnreadAttentionCountingPort {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl WorkspaceMessageUnreadReadPort for UnreadAttentionCountingPort {
+            type Error = std::convert::Infallible;
+            async fn read_workspace(
+                &self,
+                _: &UserId,
+                _: &WorkspaceId,
+            ) -> Result<Result<WorkspaceMessageUnread, WorkspaceMessageUnreadRefusal>, Self::Error>
+            {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl ViewerMessageUnreadSummaryReadPort for UnreadAttentionCountingPort {
+            type Error = std::convert::Infallible;
+            async fn read_summary(
+                &self,
+                _: &UserId,
+            ) -> Result<ViewerMessageUnreadSummary, Self::Error> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl ConversationMessageUnreadReadPort for UnreadAttentionCountingPort {
+            type Error = std::convert::Infallible;
+            async fn read_conversation(
+                &self,
+                _: &UserId,
+                _: &ConversationId,
+            ) -> Result<
+                Result<ConversationMessageUnread, ConversationMessageUnreadRefusal>,
+                Self::Error,
+            > {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl AttentionProjectionPort for UnreadAttentionCountingPort {
+            type Error = std::convert::Infallible;
+            async fn badges(&self, _: &UserId) -> Result<AttentionBadgeRollup, Self::Error> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+            async fn modes(
+                &self,
+                _: &UserId,
+                _: &WorkspaceId,
+            ) -> Result<Result<WorkspaceAttentionModes, AttentionModesRefusal>, Self::Error>
+            {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+
+        #[tokio::test]
+        async fn the_unread_and_attention_perimeter_refuses_before_touching_the_product_port() {
+            let fixture = fixture(false).await;
+            let session_store = SqliteSessionStore::open(&fixture.path).await.unwrap();
+            let sessions = HumanSessionAuthenticator::new(
+                session_store,
+                SystemSessionClock,
+                SessionTtl::default(),
+            );
+            let spy = UnreadAttentionCountingPort::default();
+            let calls = spy.calls.clone();
+            // The SAME two factories `prepare()` mounts, behind the SAME perimeter.
+            let router = require_human_session(
+                message_unread::router(spy.clone()).merge(attention_projection::router(spy)),
+                sessions,
+                PublicJsonUnauthorized,
+            );
+
+            for path in [
+                format!("/api/workspaces/{WORKSPACE_ID}/message-unread"),
+                "/api/message-unread-summary".to_owned(),
+                format!("/api/channels/{CONVERSATION_ID}/message-unread"),
+                "/api/attention/badges".to_owned(),
+                format!("/api/attention/modes?workspace_id={WORKSPACE_ID}"),
             ] {
                 let (status, body) = request(&router, "GET", &path, None).await;
                 assert_eq!(status, StatusCode::UNAUTHORIZED, "anon {path}: {body}");
