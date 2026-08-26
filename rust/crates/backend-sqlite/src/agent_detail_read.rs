@@ -16,17 +16,26 @@
 //! ## Every committed value is decoded strictly
 //!
 //! Ids go through the domain's fallible parsers, the stage through
-//! [`MaterializationStatus::parse`], and the reachable integer columns through an
-//! `i64` decode: a stored value that cannot be a legal identity, a known stage, or a
-//! number is corruption of a committed row and surfaces as a [`PersistenceFailure`]
-//! (a safe `500`), never coerced to a default. The wire-shaped strings the DTO
-//! passes through verbatim (name, runtime, model, …) carry no decode of their own.
+//! [`MaterializationStatus::parse`], the runtime through
+//! [`RuntimeKind::parse`], and the reachable integer columns through an
+//! `i64` decode: a stored value that cannot be a legal identity, a known stage, a
+//! runtime in the closed set, or a number is corruption of a committed row and
+//! surfaces as a [`PersistenceFailure`] (a safe `500`), never coerced to a default.
+//! The remaining wire-shaped strings the DTO passes through verbatim (name, model, …)
+//! carry no decode of their own.
+//!
+//! `runtime` is decoded and not passed through because it is a CLOSED wire
+//! vocabulary: the same token the dispatch and roster faces refuse when it is outside
+//! the set. Both the detail and the list face project through
+//! [`decode_agent_row`], so neither can hand the wire a runtime the rest of the
+//! system would reject.
 
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
     agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
     agent_lifecycle::MaterializationStatus,
+    agents::runtime::RuntimeKind,
     identity::{AgentId, UserId},
     persistence::PersistenceFailure,
 };
@@ -88,6 +97,8 @@ pub enum AgentDetailColdReadError {
     MalformedIdentity { column: &'static str },
     #[error("stored agents.materialization_status holds {value:?}, which is not a known stage")]
     MalformedStatus { value: String },
+    #[error("stored agents.runtime holds {value:?}, which is not a runtime in the closed set")]
+    MalformedRuntime { value: String },
 }
 
 impl SqliteAgentDetailColdRead {
@@ -151,11 +162,15 @@ pub(crate) struct DecodedAgentRow {
 }
 
 /// Decode one row of [`AGENT_DETAIL_SELECT_FROM`] strictly: ids through the domain's
-/// fallible parsers, the stage through [`MaterializationStatus::parse`], and the
-/// reachable integer columns through an `i64` decode. A stored value that cannot be
-/// a legal identity, a known stage, or a number is corruption of a committed row and
-/// surfaces as an error (a safe `500`), never coerced to a default. The wire-shaped
-/// strings the DTO passes through verbatim carry no decode of their own.
+/// fallible parsers, the stage through [`MaterializationStatus::parse`], the runtime
+/// through [`RuntimeKind::parse`], and the reachable integer columns through an `i64`
+/// decode. A stored value that cannot be a legal identity, a known stage, a runtime in
+/// the closed set, or a number is corruption of a committed row and surfaces as an
+/// error (a safe `500`), never coerced to a default. The remaining wire-shaped strings
+/// the DTO passes through verbatim carry no decode of their own.
+///
+/// Shared by the detail and the list face, so the runtime gate holds for BOTH: there
+/// is one decoder, not one per face.
 pub(crate) fn decode_agent_row(
     row: &SqliteRow,
 ) -> Result<DecodedAgentRow, AgentDetailColdReadError> {
@@ -173,6 +188,13 @@ pub(crate) fn decode_agent_row(
     let materialization_status = MaterializationStatus::parse(&status_raw)
         .map_err(|_| AgentDetailColdReadError::MalformedStatus { value: status_raw })?;
 
+    // The runtime column has no CHECK, so an out-of-set token CAN be committed. Both
+    // faces render it, so it fails closed here with the offending value attached
+    // rather than being forwarded to the wire.
+    let runtime_raw: String = row.try_get("runtime")?;
+    let runtime = RuntimeKind::parse(&runtime_raw)
+        .ok_or(AgentDetailColdReadError::MalformedRuntime { value: runtime_raw })?;
+
     // SQLite stores the boolean as 0/1; a non-numeric text in the affinity-only
     // column is a decode error above, never a silent `false`. `agentRowToDto` maps
     // null → null and any value → Boolean(fast), which for the stored 0/1 is exactly
@@ -183,7 +205,7 @@ pub(crate) fn decode_agent_row(
     let projection = AgentDetailProjection {
         name: row.try_get("name")?,
         display_name: row.try_get("display_name")?,
-        runtime: row.try_get("runtime")?,
+        runtime,
         model: row.try_get("model")?,
         reasoning_effort: row.try_get("reasoning_effort")?,
         fast_mode,

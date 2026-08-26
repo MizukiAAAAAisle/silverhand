@@ -137,7 +137,10 @@ pub fn visible_agents<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{agent_detail_read::AgentDetailProjection, agent_lifecycle::MaterializationStatus};
+    use crate::{
+        agent_detail_read::AgentDetailProjection, agent_lifecycle::MaterializationStatus,
+        agents::runtime::RuntimeKind,
+    };
 
     fn user(id: &str) -> UserId {
         UserId::parse(id).expect("user id")
@@ -151,7 +154,7 @@ mod tests {
         AgentDetailProjection {
             name: "agent".to_string(),
             display_name: "Agent".to_string(),
-            runtime: "qoder".to_string(),
+            runtime: RuntimeKind::Qoder,
             model: None,
             reasoning_effort: None,
             fast_mode: None,

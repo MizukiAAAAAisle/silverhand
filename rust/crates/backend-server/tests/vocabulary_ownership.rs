@@ -64,16 +64,47 @@ fn collect(root: &Path, directory: &Path, sources: &mut Vec<(String, String)>) {
 
 /// Whether this line declares `item`, e.g. `enum RuntimeKind` or `struct NotificationId`.
 ///
-/// The name must be followed by something that cannot continue an identifier, so a
-/// longer name that merely starts the same way is a different declaration.
+/// Visibility-INDEPENDENT: `pub`, `pub(crate)`, `pub(super)`, `pub(in crate::x)` and no
+/// visibility at all are all legal ways to define a second copy of a type, so keying on
+/// one spelling would let the others through as a false green.
+///
+/// The declaration must START the line (after its indentation and that one visibility
+/// token), which is what keeps a doc comment, a `//` comment and a string literal out:
+/// each puts its own marker first. The name must then end on something that cannot
+/// continue an identifier, so a longer name that merely starts the same way is a
+/// different declaration.
 fn defines(line: &str, item: &str) -> bool {
-    let line = line.trim_start();
-    let line = line.strip_prefix("pub(crate) ").unwrap_or(line);
-    let line = line.strip_prefix("pub ").unwrap_or(line);
+    let line = strip_visibility(line.trim_start());
     let Some(rest) = line.strip_prefix(item) else {
         return false;
     };
     !rest.starts_with(|character: char| character.is_alphanumeric() || character == '_')
+}
+
+/// One leading Rust visibility, in any of its spellings, or the line unchanged when it
+/// carries none.
+///
+/// `pub` must itself end on a boundary — `(` for a restricted form, whitespace for the
+/// bare one — so an identifier that merely begins with those letters (`published`) is
+/// not mistaken for a visibility and does not expose the rest of the line to matching.
+fn strip_visibility(line: &str) -> &str {
+    let Some(rest) = line.strip_prefix("pub") else {
+        return line;
+    };
+    let rest = if rest.starts_with('(') {
+        // `pub(crate)`, `pub(super)`, `pub(in crate::path)`: the restriction is one
+        // parenthesized group, so the visibility ends at its close.
+        match rest.find(')') {
+            Some(close) => &rest[close + 1..],
+            None => return line,
+        }
+    } else {
+        rest
+    };
+    if rest.starts_with(|character: char| character.is_alphanumeric() || character == '_') {
+        return line;
+    }
+    rest.trim_start()
 }
 
 /// The files whose source defines `item`, e.g. `enum RuntimeKind`.
@@ -129,22 +160,48 @@ fn the_runtime_closed_set_has_exactly_one_owner() {
     );
 }
 
+/// Both directions for the declaration predicate itself. A definition inventory is
+/// only as good as what it RECOGNISES: a predicate blind to one legal visibility
+/// reports "exactly one definition" while a second one sits in the tree, and the
+/// mutation that would have caught it passes.
+#[test]
+fn the_definition_predicate_recognises_every_visibility_and_nothing_else() {
+    // Every legal way to declare the type. All five are a second definition if a
+    // second file carries one.
+    for declaration in [
+        "struct NotificationId(String);",
+        "pub struct NotificationId(String);",
+        "pub(crate) struct NotificationId(String);",
+        "pub(super) struct NotificationId(String);",
+        "pub(in crate::messaging) struct NotificationId(String);",
+        "    pub(super) struct NotificationId(String);",
+    ] {
+        assert!(
+            defines(declaration, "struct NotificationId"),
+            "{declaration} declares the type"
+        );
+    }
+
+    // And what must NOT count: a longer name, either comment form, a string literal,
+    // and an identifier that merely begins with `pub`.
+    for line in [
+        "pub struct NotificationIdentity(String);",
+        "/// pub struct NotificationId(String);",
+        "// pub struct NotificationId(String);",
+        "    let sample = \"pub struct NotificationId(String);\";",
+        "published struct NotificationId(String);",
+    ] {
+        assert!(!defines(line, "struct NotificationId"), "{line} does not");
+    }
+}
+
 /// Two same-named identity types are worse than two different ones: each half stays
 /// internally consistent, so nothing fails, and the seam between them is paid for with
 /// a `String` round trip that accepts values neither half would mint.
+///
+/// The predicate's own controls are one test up.
 #[test]
 fn the_notification_identity_has_exactly_one_definition() {
-    // Control, both directions: a tuple struct is a definition, and a longer name that
-    // merely starts the same way is not.
-    assert!(defines(
-        "pub struct NotificationId(String);",
-        "struct NotificationId"
-    ));
-    assert!(!defines(
-        "pub struct NotificationIdentity(String);",
-        "struct NotificationId"
-    ));
-
     assert_eq!(
         definitions_of("struct NotificationId"),
         vec!["crates/backend-core/src/messaging/identity.rs".to_owned()],
