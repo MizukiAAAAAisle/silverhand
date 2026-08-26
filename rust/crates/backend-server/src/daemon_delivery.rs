@@ -2997,6 +2997,221 @@ mod tests {
 
     use super::*;
 
+    /// Wave 3A A2 — load-bearing same-live-owner regression gate for the
+    /// `/api/channels/{id}/agent-run-states` door.
+    ///
+    /// The composed `prepare()` E2E proves the route is mounted and, against a
+    /// fresh owner, reads an empty run-state map. That alone cannot show the
+    /// reader shares the *specific* live owner the daemon writes into: swap the
+    /// route's snapshot source for a second, empty `DaemonDeliveryRuntime` and
+    /// every status code and the `{"states":[]}` body stay byte-identical.
+    ///
+    /// This gate closes that gap on the exact production mechanism. The daemon
+    /// reconnection hydration path (`events.hydrate`, the sole non-WebSocket
+    /// writer of the live run-state map) records a non-empty run-state into one
+    /// owner; the production route factory — fed the `.clone()` the composition
+    /// merge passes — reads that precise row back. The same read against an
+    /// independently constructed runtime is empty, so wiring the door to any
+    /// owner other than the one delivery mutates turns the assertion red.
+    mod run_states_same_owner {
+        use std::{convert::Infallible, path::Path};
+
+        use axum::{
+            body::{Body, to_bytes},
+            http::Request,
+        };
+        use serde_json::{Number, Value};
+        use silverhand_backend_core::{
+            access::WorkspaceRole,
+            identity::{AgentId, ConversationId, DaemonInstanceId, UserId, WorkspaceId},
+            messaging::{
+                collaboration::{
+                    channel_directory::{ChannelStatus, ChannelVisibility, DirectoryRoster},
+                    channel_lifecycle::{
+                        ChannelDetailFact, ChannelDetailReadPort, ChannelDetailRefusal,
+                        ChannelLifecycleRow,
+                    },
+                },
+                conversation_title::CanonicalConversationTitle,
+            },
+            runtime_credential::{
+                RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
+            },
+        };
+        use silverhand_backend_sqlite::{
+            host_runtime::SqliteHostRuntimeStore, runtime_credential::SqliteRuntimeCustodyStore,
+            runtime_delivery::SqliteRuntimeDeliveryStore,
+        };
+        use sqlx::Connection;
+        use tower::ServiceExt;
+
+        use crate::{
+            current_schema,
+            daemon_delivery::{DaemonDeliveryConfig, DaemonDeliveryRuntime},
+            daemon_events::{AgentRunStateWire, AgentRunStatus, HydratedRuntime},
+            messaging::collaboration::conversation_agent_run_states::{
+                ConversationAgentRunStateSource, router,
+            },
+            runtime_credential::RuntimeCredentialAuthority,
+            scope_events::ScopeEventHub,
+        };
+
+        const CONVERSATION: &str = "conversation0001";
+        const AGENT: &str = "agent-1";
+
+        /// Admits the viewer for the requested conversation so the route reaches
+        /// its snapshot source; the same-owner claim under test lives entirely in
+        /// that source, never in admission.
+        #[derive(Clone)]
+        struct AdmitViewer;
+
+        impl ChannelDetailReadPort for AdmitViewer {
+            type Error = Infallible;
+
+            async fn detail(
+                &self,
+                viewer: &UserId,
+                conversation: &ConversationId,
+            ) -> Result<Result<ChannelDetailFact, ChannelDetailRefusal>, Self::Error> {
+                Ok(Ok(ChannelDetailFact::projected(
+                    viewer.clone(),
+                    ChannelLifecycleRow::workspace_placed(
+                        conversation.clone(),
+                        WorkspaceId::parse("w").unwrap(),
+                        DirectoryRoster::Open,
+                        CanonicalConversationTitle::parse("General").unwrap(),
+                        ChannelStatus::Active,
+                        None,
+                        None,
+                        None,
+                        None,
+                        0,
+                        1,
+                        1,
+                        ChannelVisibility::Private,
+                    )
+                    .unwrap(),
+                    true,
+                    Some(WorkspaceRole::Member),
+                    1,
+                )
+                .unwrap()))
+            }
+        }
+
+        /// A fresh production runtime. Every construction builds its own live
+        /// owner (`DaemonRuntimeEventOwner::new`), so two calls against the same
+        /// database are two independent owners — the falsifier's second owner.
+        async fn build_runtime(
+            path: &Path,
+        ) -> DaemonDeliveryRuntime<
+            SqliteRuntimeCustodyStore,
+            SqliteRuntimeDeliveryStore,
+            SqliteHostRuntimeStore,
+        > {
+            let custody = SqliteRuntimeCustodyStore::open(path).await.unwrap();
+            let data = SqliteRuntimeDeliveryStore::open(path).await.unwrap();
+            let hosts = SqliteHostRuntimeStore::open(path).await.unwrap();
+            DaemonDeliveryRuntime::new(
+                RuntimeCredentialAuthority::production(custody),
+                data,
+                hosts,
+                DaemonDeliveryConfig::production(),
+                ScopeEventHub::production().unwrap(),
+            )
+            .unwrap()
+        }
+
+        async fn read_states<S>(reader: S) -> (u16, Value)
+        where
+            S: ConversationAgentRunStateSource + Send + Sync + 'static,
+        {
+            let mut request = Request::builder()
+                .uri(format!("/api/channels/{CONVERSATION}/agent-run-states"))
+                .body(Body::empty())
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(UserId::parse("viewer").unwrap());
+            let response = router(AdmitViewer, reader).oneshot(request).await.unwrap();
+            let status = response.status().as_u16();
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            (status, serde_json::from_slice(&body).unwrap())
+        }
+
+        #[tokio::test]
+        async fn the_door_reads_the_delivery_owner_and_a_second_owner_is_red() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("run-states-same-owner.sqlite");
+            current_schema::create_current_schema(&path)
+                .await
+                .close()
+                .await
+                .unwrap();
+
+            let delivery_owner = build_runtime(&path).await;
+            // The daemon reconnection hydration path writes a live run-state into
+            // this owner's `Arc<Mutex<..>>` map — the very map delivery effects
+            // mutate. No storage row backs it; run-state is process memory.
+            let principal = RuntimePrincipal::for_scope(
+                RuntimeScope::ConversationSlot {
+                    agent: AgentId::parse(AGENT).unwrap(),
+                    source: ConversationId::parse(CONVERSATION).unwrap(),
+                },
+                RuntimeCustody::new(
+                    RuntimeGeneration::new(1).unwrap(),
+                    DaemonInstanceId::parse("daemon-1").unwrap(),
+                ),
+            );
+            let wire = AgentRunStateWire {
+                run_id: "run-seeded".to_owned(),
+                agent_id: AGENT.to_owned(),
+                conversation_id: CONVERSATION.to_owned(),
+                status: AgentRunStatus::Thinking,
+                started_at: Number::from(1),
+                updated_at: Number::from(2),
+                last_activity_at: Number::from(2),
+                terminal_reason: None,
+                activity_snippet: None,
+                activity_snippet_kind: None,
+                tool_call_counts: None,
+                compacting: None,
+                compacting_since: None,
+                compaction_stale: None,
+                detail: None,
+            };
+            delivery_owner
+                .events
+                .hydrate(
+                    "host-1",
+                    vec![HydratedRuntime {
+                        principal,
+                        run_state: Some(wire),
+                    }],
+                )
+                .await
+                .unwrap();
+
+            // The reader is the `.clone()` the composition merge passes to the
+            // route. A clone shares the delivery owner's `Arc<Mutex<..>>`, so the
+            // route reads the exact seeded row — the same-live-owner contract.
+            let (status, body) = read_states(delivery_owner.clone()).await;
+            assert_eq!(status, 200);
+            let states = body["states"].as_array().unwrap();
+            assert_eq!(states.len(), 1);
+            assert_eq!(states[0]["runId"], "run-seeded");
+            assert_eq!(states[0]["agentId"], AGENT);
+            assert_eq!(states[0]["conversationId"], CONVERSATION);
+
+            // Falsifier: an independently constructed runtime is a different live
+            // owner. Same admission, same route, same request — the seeded row is
+            // gone. Wiring the door to any owner but the delivery owner is red.
+            let (status, body) = read_states(build_runtime(&path).await).await;
+            assert_eq!(status, 200);
+            assert!(body["states"].as_array().unwrap().is_empty());
+        }
+    }
+
     struct NoReferences;
 
     impl ReferencePositions for NoReferences {
