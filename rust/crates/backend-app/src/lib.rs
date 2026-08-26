@@ -2853,13 +2853,21 @@ mod tests {
             .unwrap();
         pool.close().await;
 
-        // Missing AND unknown credential → EXACT 401: auth refuses before the now-broken
-        // authority is ever consulted, so the drop is invisible on this path.
+        // Missing AND unknown credential → EXACT 401 with the exact unauthorized envelope:
+        // auth refuses before the now-broken authority is ever consulted, so the drop is
+        // invisible on this path. Asserting the body (not just the status line) is what makes
+        // "EXACT 401" true for BOTH branches — the missing-auth envelope proven on the mount
+        // gate cannot stand in for the unknown-token branch.
         for bearer in [None, Some("Bearer not-a-real-token")] {
             let refused = http_over_tcp(address, "POST", &path, bearer, r#"{"content":"x"}"#).await;
             assert!(
                 refused.starts_with("HTTP/1.1 401 Unauthorized\r\n"),
                 "an unauthenticated POST must be 401 regardless of authority health: {refused}"
+            );
+            assert_eq!(
+                http_json_body(&refused),
+                serde_json::json!({ "error": "unauthorized" }),
+                "the refusal must carry the exact unauthorized envelope, not a leaked fault: {refused}"
             );
         }
 
