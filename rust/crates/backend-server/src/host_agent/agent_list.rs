@@ -178,6 +178,7 @@ mod tests {
         agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         agent_lifecycle::MaterializationStatus,
         agent_list_read::AgentListReadModel,
+        agents::runtime::RuntimeKind,
         identity::{AgentId, UserId},
         persistence::PersistenceFailure,
     };
@@ -199,7 +200,7 @@ mod tests {
         AgentDetailProjection {
             name: "agent-one".to_string(),
             display_name: "Agent One".to_string(),
-            runtime: "qoder".to_string(),
+            runtime: RuntimeKind::Qoder,
             model: Some("sonnet".to_string()),
             reasoning_effort: Some("high".to_string()),
             fast_mode: Some(true),
@@ -222,7 +223,7 @@ mod tests {
         AgentDetailProjection {
             name: "agent".to_string(),
             display_name: "Agent".to_string(),
-            runtime: "qoder".to_string(),
+            runtime: RuntimeKind::Qoder,
             model: None,
             reasoning_effort: None,
             fast_mode: None,

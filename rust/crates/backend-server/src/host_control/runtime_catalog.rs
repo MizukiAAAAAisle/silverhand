@@ -21,8 +21,8 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    agents::runtime::RuntimeKind,
     identity::{DaemonInstanceId, HostId},
-    messaging::RuntimeKind,
 };
 
 use crate::daemon_delivery::{

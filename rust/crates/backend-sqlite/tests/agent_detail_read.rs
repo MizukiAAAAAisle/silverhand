@@ -17,6 +17,7 @@
 use silverhand_backend_core::{
     agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
     agent_lifecycle::MaterializationStatus,
+    agents::runtime::RuntimeKind,
     capability::agent_view::{AgentViewerArms, AgentVisibility},
     identity::{AgentId, UserId},
     persistence::PersistenceFailure,
@@ -256,7 +257,7 @@ async fn the_projection_decodes_every_wire_column() {
         &AgentDetailProjection {
             name: "agent-one".to_string(),
             display_name: "Agent One".to_string(),
-            runtime: "qoder".to_string(),
+            runtime: RuntimeKind::Qoder,
             model: Some("sonnet".to_string()),
             reasoning_effort: Some("high".to_string()),
             fast_mode: Some(true),
@@ -291,7 +292,7 @@ async fn the_optional_columns_decode_absent_when_null() {
         &AgentDetailProjection {
             name: "agent-one".to_string(),
             display_name: String::new(),
-            runtime: "qoder".to_string(),
+            runtime: RuntimeKind::Qoder,
             model: None,
             reasoning_effort: None,
             fast_mode: None,
@@ -335,8 +336,15 @@ async fn fast_mode_maps_zero_to_false() {
 // sole change that lets the read succeed — a coercion-to-default would erase the
 // difference. Excluded: `agents.id` (WHERE-bound, so a corrupt id is an absent row,
 // not a decode), `materialization_status` (a CHECK bars an illegal value from ever
-// committing), and `host_id` plus every wire-string column, which the DTO passes
-// through verbatim with no decode of their own.
+// committing), and `host_id` plus every PASS-THROUGH wire string, which the DTO
+// carries verbatim with no decode of its own.
+//
+// `agents.runtime` is decoded too (through the closed set's owner) and has no CHECK,
+// so it IS falsifiable — its gate lives in
+// `backend-server/tests/agent_runtime_wire_vocabulary.rs`, which drives the corrupt
+// and the repaired row through BOTH public runtime faces over one seeded store. The
+// point of that column is that the two faces cannot disagree, which is not observable
+// from this adapter alone.
 
 /// `INTEGER`-affinity columns keep a non-numeric text verbatim, so `'soon'`/`'yes'`
 /// is a committed-but-undecodable value — distinct from a numeric string, which

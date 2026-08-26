@@ -220,6 +220,7 @@ mod tests {
     use silverhand_backend_core::{
         agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
         agent_lifecycle::MaterializationStatus,
+        agents::runtime::RuntimeKind,
         identity::{AgentId, UserId},
         persistence::PersistenceFailure,
     };
@@ -266,7 +267,7 @@ mod tests {
         AgentDetailProjection {
             name: "agent-one".to_string(),
             display_name: "Agent One".to_string(),
-            runtime: "qoder".to_string(),
+            runtime: RuntimeKind::Qoder,
             model: Some("sonnet".to_string()),
             reasoning_effort: Some("high".to_string()),
             fast_mode: Some(true),
@@ -604,7 +605,7 @@ mod tests {
         let projection = AgentDetailProjection {
             name: "agent-one".to_string(),
             display_name: String::new(),
-            runtime: "qoder".to_string(),
+            runtime: RuntimeKind::Qoder,
             model: None,
             reasoning_effort: None,
             fast_mode: None,

@@ -4,6 +4,7 @@ use std::{collections::HashSet, path::Path, time::Duration};
 
 use serde::Serialize;
 use silverhand_backend_core::{
+    agents::runtime::RuntimeKind,
     identity::{AgentId, ConversationId, DaemonInstanceId, UserId, WorkspaceId},
     messaging::{FromKind, MessageContent, ReferencePositions},
     persistence::PersistenceFailure,
@@ -89,7 +90,8 @@ impl SqliteRuntimeDeliveryStore {
         let scope = runtime_scope_for(agent.clone(), conversation.clone(), &session_scope)
             .map_err(PersistenceFailure::from_source)?;
         let runtime: String = agent_row.try_get("runtime").map_err(persistence)?;
-        validate_runtime_kind(&runtime)?;
+        let runtime = RuntimeKind::parse(&runtime)
+            .ok_or_else(|| PersistenceFailure::from_source(InvalidPersistedRuntimeKind))?;
         let agent_spec = RuntimeAgentSpec {
             id: agent.clone(),
             name: agent_row.try_get("name").map_err(persistence)?,
@@ -2000,7 +2002,9 @@ async fn read_members(
                     let runtime = runtime.ok_or_else(|| {
                         PersistenceFailure::from_source(InvalidPersistedRuntimeMember)
                     })?;
-                    validate_runtime_kind(&runtime)?;
+                    let runtime = RuntimeKind::parse(&runtime).ok_or_else(|| {
+                        PersistenceFailure::from_source(InvalidPersistedRuntimeKind)
+                    })?;
                     Ok(RuntimeMember::Agent {
                         id: AgentId::parse(id).map_err(PersistenceFailure::from_source)?,
                         name: name.ok_or_else(|| {
@@ -2046,13 +2050,6 @@ fn decode_roster(raw: &str) -> Result<RuntimeRoster, PersistenceFailure> {
         _ => Err(PersistenceFailure::from_source(
             InvalidPersistedRuntimeTarget,
         )),
-    }
-}
-
-fn validate_runtime_kind(raw: &str) -> Result<(), PersistenceFailure> {
-    match raw {
-        "claude" | "codex" | "cursor" | "gemini" | "qoder" | "opencode" => Ok(()),
-        _ => Err(PersistenceFailure::from_source(InvalidPersistedRuntimeKind)),
     }
 }
 

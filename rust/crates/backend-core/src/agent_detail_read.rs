@@ -33,6 +33,7 @@ use std::future::Future;
 
 use crate::{
     agent_lifecycle::MaterializationStatus,
+    agents::runtime::RuntimeKind,
     capability::agent_view::{AgentViewerArms, AgentVisibility},
     identity::{AgentId, UserId},
     persistence::PersistenceFailure,
@@ -54,7 +55,11 @@ use crate::{
 pub struct AgentDetailProjection {
     pub name: String,
     pub display_name: String,
-    pub runtime: String,
+    /// The closed runtime set, decoded — not a pass-through string like its
+    /// neighbours. `runtime` is a public wire vocabulary two faces render (list and
+    /// detail), so a stored value outside the set is corruption that must fail closed
+    /// here rather than reach the wire as a token no other consumer accepts.
+    pub runtime: RuntimeKind,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub fast_mode: Option<bool>,
@@ -185,7 +190,7 @@ mod tests {
         AgentDetailProjection {
             name: "agent-one".to_string(),
             display_name: "Agent One".to_string(),
-            runtime: "qoder".to_string(),
+            runtime: RuntimeKind::Qoder,
             model: None,
             reasoning_effort: None,
             fast_mode: None,

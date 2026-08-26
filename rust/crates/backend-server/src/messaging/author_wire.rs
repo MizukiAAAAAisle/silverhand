@@ -99,8 +99,9 @@ pub(crate) fn author_dto(author: &MessageAuthor) -> Value {
 #[cfg(test)]
 mod tests {
     use silverhand_backend_core::{
+        agents::runtime::RuntimeKind,
         identity::{AgentId, UserId},
-        messaging::{AvatarRevision, MessageAuthor, PrincipalIdentity, RuntimeKind},
+        messaging::{AvatarRevision, MessageAuthor, PrincipalIdentity},
     };
 
     use super::*;
@@ -214,14 +215,7 @@ mod tests {
     /// arrive on the wire under a name this file invented.
     #[test]
     fn the_runtime_word_is_the_domains_own() {
-        for runtime in [
-            RuntimeKind::Claude,
-            RuntimeKind::Codex,
-            RuntimeKind::Cursor,
-            RuntimeKind::Gemini,
-            RuntimeKind::Qoder,
-            RuntimeKind::Opencode,
-        ] {
+        for runtime in RuntimeKind::ALL {
             let author = MessageAuthor::active_agent(
                 AgentId::parse("agent-1").unwrap(),
                 "a".to_owned(),

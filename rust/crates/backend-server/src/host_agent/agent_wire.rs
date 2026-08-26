@@ -23,7 +23,10 @@ pub(super) struct AgentDto {
     id: String,
     name: String,
     display_name: String,
-    runtime: String,
+    /// The closed set's own spelling, like `materialization_status`: the projection
+    /// carries a decoded [`silverhand_backend_core::agents::runtime::RuntimeKind`], so
+    /// this shared wire has no way to emit a token the set does not hold.
+    runtime: &'static str,
     model: Option<String>,
     reasoning_effort: Option<String>,
     fast_mode: Option<bool>,
@@ -47,7 +50,7 @@ pub(super) fn agent_dto(detail: &AgentDetailFacts) -> AgentDto {
     AgentDto {
         name: projection.name.clone(),
         display_name: projection.display_name.clone(),
-        runtime: projection.runtime.clone(),
+        runtime: projection.runtime.as_str(),
         model: projection.model.clone(),
         reasoning_effort: projection.reasoning_effort.clone(),
         fast_mode: projection.fast_mode,
