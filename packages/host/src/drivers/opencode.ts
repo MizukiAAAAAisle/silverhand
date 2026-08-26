@@ -82,6 +82,16 @@ export class OpenCodeDriver implements Driver {
   readonly binary = 'opencode';
   readonly kickoffMode = 'self_inits' as const;
   readonly releaseProfile = 'prompt-boundary' as const;
+  // #task:2210: OpenCode's ACP protocol serializes prompts (one active
+  // `session/prompt` at a time; `readyToEncode()` is false while one is
+  // live), so the driver can only write a new prompt once the prompt slot
+  // reopens at the previous turn boundary. shiki explicitly accepts that
+  // once that release fires and the `session/prompt` write succeeds, the
+  // payload is delivered — no waiting for the first `session/update` or
+  // `turn_end`. That is exactly OpenCode's current settlement point, so
+  // #2210 leaves its behavior unchanged; the prompt-boundary releaseProfile
+  // remains the sole gate keeping the write inside a safe window.
+  readonly admissionPolicy = 'write-success' as const;
   readonly oneShot = false;
   readonly supportsNativeStandingPrompt = true;
   readonly initLivenessSilenceMs = 30 * 1000;

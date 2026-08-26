@@ -45,6 +45,10 @@ export class ClaudeDriver implements Driver {
   readonly binary = 'claude';
   readonly kickoffMode = 'requires_first_message' as const;
   readonly releaseProfile = 'tool-boundary-steer' as const;
+  // #task:2210: claude echoes our payload uuid on `command_lifecycle`
+  // frames; `input_lifecycle{state:'started'}` is the per-payload proof
+  // the turn actually consumed this batch. Settle on it.
+  readonly admissionPolicy = 'lifecycle-start' as const;
   readonly oneShot = false;
   readonly supportsNativeStandingPrompt = true;
   readonly initLivenessSilenceMs = 30 * 1000;
