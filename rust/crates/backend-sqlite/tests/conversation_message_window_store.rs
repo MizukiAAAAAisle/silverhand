@@ -370,3 +370,113 @@ async fn linked_task_uses_its_actual_conversation_and_rejects_cross_conversation
         "task-1"
     );
 }
+
+/// A linked `tasks.task_number` past `Number.MAX_SAFE_INTEGER` must fault the read
+/// (safe 500) rather than serialise a value the JSON-number wire would round. This
+/// behaviour is unchanged by the canonical-vocabulary migration — the previous
+/// projection-local `WindowTaskNumber` also rejected it — but it is the load-bearing
+/// invariant the swap must preserve, so it is pinned explicitly here.
+#[tokio::test]
+async fn a_linked_task_number_past_the_javascript_safe_integer_faults_the_window_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir
+        .path()
+        .join("message-window-linked-task-unsafe-number.sqlite");
+    seed(&path).await;
+    let latest = ConversationMessageWindowRequest::new(
+        MessageWindowStreamRequest::Mainline,
+        2,
+        MessageWindowAnchor::Latest,
+    )
+    .unwrap();
+
+    // task_number is a board coordinate guarded by an immutability trigger; drop it
+    // so the corrupt value can be planted the way a persistence fault would present.
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    db.execute("DROP TRIGGER trg_tasks_board_coordinates_immutable")
+        .await
+        .unwrap();
+    // Number.MAX_SAFE_INTEGER + 1: the first task_number the wire would round.
+    db.execute("UPDATE tasks SET task_number=9007199254740992 WHERE id='task-1'")
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+
+    let error = read(&path, "viewer", latest).await.unwrap_err();
+    let source = std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<ConversationMessageWindowStoreError>())
+        .expect("message-window failure preserves its named SQLite source");
+    // Canonical TaskNumber rejects the over-safe value at decode, so the reader faults
+    // on tasks.task_number instead of projecting a lossy number.
+    assert!(matches!(
+        source,
+        ConversationMessageWindowStoreError::LinkedTask
+    ));
+}
+
+/// `Number.MAX_SAFE_INTEGER` itself and every one of the five task statuses survive
+/// the round trip through the canonical `TaskNumber`/`TaskStatus` window projection.
+#[tokio::test]
+async fn the_max_safe_task_number_and_every_status_round_trip_through_the_window_projection() {
+    for status in ["todo", "in_progress", "in_review", "done", "closed"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("message-window-linked-task-roundtrip.sqlite");
+        seed(&path).await;
+        let latest = ConversationMessageWindowRequest::new(
+            MessageWindowStreamRequest::Mainline,
+            2,
+            MessageWindowAnchor::Latest,
+        )
+        .unwrap();
+
+        let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+            .await
+            .unwrap();
+        db.execute("DROP TRIGGER trg_tasks_board_coordinates_immutable")
+            .await
+            .unwrap();
+        let update: &'static str = match status {
+            "todo" => {
+                "UPDATE tasks SET task_number=9007199254740991, status='todo' WHERE id='task-1'"
+            }
+            "in_progress" => {
+                "UPDATE tasks SET task_number=9007199254740991, status='in_progress' WHERE id='task-1'"
+            }
+            "in_review" => {
+                "UPDATE tasks SET task_number=9007199254740991, status='in_review' WHERE id='task-1'"
+            }
+            "done" => {
+                "UPDATE tasks SET task_number=9007199254740991, status='done' WHERE id='task-1'"
+            }
+            _ => {
+                "UPDATE tasks SET task_number=9007199254740991, status='closed', closed_at=1 WHERE id='task-1'"
+            }
+        };
+        db.execute(update).await.unwrap();
+        db.close().await.unwrap();
+
+        let window = read(&path, "viewer", latest.clone())
+            .await
+            .unwrap()
+            .unwrap()
+            .bind(
+                &UserId::parse("viewer").unwrap(),
+                &ConversationId::parse("c").unwrap(),
+                &latest,
+            )
+            .unwrap();
+        let linked = window.messages()[1]
+            .projection()
+            .linked_task
+            .as_ref()
+            .unwrap();
+        assert_eq!(linked.number().get(), 9_007_199_254_740_991);
+        assert_eq!(linked.status().as_str(), status);
+        assert_eq!(linked.id(), "task-1");
+        assert_eq!(linked.title(), "Linked task");
+    }
+}

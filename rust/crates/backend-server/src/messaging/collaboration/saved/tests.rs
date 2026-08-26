@@ -696,3 +696,86 @@ async fn same_millisecond_saved_rows_have_one_total_order_across_the_cap() {
         assert_eq!(entries.last().unwrap()["id"], ordering["last_saved_id"]);
     }
 }
+
+/// Plant a linked task whose `tasks.task_number` sits one past
+/// `Number.MAX_SAFE_INTEGER`. The canonical `TaskNumber` rejects it at decode, so the
+/// saved projection faults closed (500) rather than serialising a number the JSON wire
+/// would round — the drift the projection-local `SavedTaskNumber` used to allow.
+#[tokio::test]
+async fn a_saved_linked_task_number_past_the_javascript_safe_integer_faults_the_list() {
+    let (_directory, path, store, events) = seeded().await;
+    let app = router(store.saved(), store.saved(), events)
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+    assert_eq!(
+        call(app.clone(), Method::POST, "/api/messages/message-1/save")
+            .await
+            .0,
+        StatusCode::CREATED
+    );
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    // Number.MAX_SAFE_INTEGER + 1: the first task_number the wire would round.
+    sqlx::query(
+        "INSERT INTO tasks (id, workspace_id, task_number, conversation_id, title, status, \
+         creator_kind, creator_user_id, source_message_id, created_at, board_key) VALUES \
+         ('task-saved', 'workspace-1', 9007199254740992, 'conversation-1', 'Linked task', \
+          'todo', 'user', 'user-1', 'message-1', 1, 'ws:workspace-1')",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(
+        call(app, Method::GET, "/api/saved").await,
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Value::String("Internal Server Error".to_owned())
+        )
+    );
+}
+
+/// `Number.MAX_SAFE_INTEGER` itself and every one of the five task statuses survive the
+/// round trip through the canonical `TaskNumber`/`TaskStatus` saved-wire projection.
+#[tokio::test]
+async fn the_max_safe_task_number_and_every_status_round_trip_through_the_saved_projection() {
+    for status in ["todo", "in_progress", "in_review", "done", "closed"] {
+        let (_directory, path, store, events) = seeded().await;
+        let app = router(store.saved(), store.saved(), events)
+            .layer(Extension(UserId::parse("user-1").unwrap()));
+        assert_eq!(
+            call(app.clone(), Method::POST, "/api/messages/message-1/save")
+                .await
+                .0,
+            StatusCode::CREATED
+        );
+        let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+            .await
+            .unwrap();
+        // The schema ties status='closed' to a non-null closed_at.
+        let closed_at: Option<i64> = if status == "closed" { Some(1) } else { None };
+        sqlx::query(
+            "INSERT INTO tasks (id, workspace_id, task_number, conversation_id, title, status, \
+             creator_kind, creator_user_id, source_message_id, created_at, board_key, closed_at) \
+             VALUES ('task-saved', 'workspace-1', 9007199254740991, 'conversation-1', \
+              'Linked task', ?, 'user', 'user-1', 'message-1', 1, 'ws:workspace-1', ?)",
+        )
+        .bind(status)
+        .bind(closed_at)
+        .execute(&mut db)
+        .await
+        .unwrap();
+        let (http_status, body) = call(app, Method::GET, "/api/saved").await;
+        assert_eq!(http_status, StatusCode::OK);
+        assert_eq!(
+            body["saved"][0]["message"]["linked_task"],
+            json!({
+                "task_id": "task-saved",
+                "task_number": 9_007_199_254_740_991_i64,
+                "title": "Linked task",
+                "status": status,
+                "assignee": Value::Null,
+            }),
+            "status {status} must round-trip"
+        );
+    }
+}
