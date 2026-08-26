@@ -29,19 +29,17 @@ use silverhand_backend_server::{
     host_resources, host_runtime,
     messaging::{
         TargetAddressRefusalLog,
-        aftermath::MessagingAftermath,
         collaboration::{
             activity, attention_projection, channel_directory, channel_lifecycle,
             conversation_agent_activity, conversation_agent_directory, conversation_agent_runtime,
             conversation_message_window, conversation_ref, conversation_threads,
-            conversation_unread, direct_pair_initiation, human_search, message_unread,
+            conversation_unread, human_search, message_unread,
             stale_message_resolution::{
                 StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
                 StaleMessageResolutionAdmissionRefusal, TracingStaleMessageResolutionObserver,
                 router as stale_message_resolution_router,
             },
         },
-        router::{SendState, send_routers},
         task::{TaskListState, task_list_router},
     },
     runtime_credential::{
@@ -49,7 +47,7 @@ use silverhand_backend_server::{
     },
     scope_events::{
         AllowedOrigin, EventWebSocketConfig, EventWebSocketController, HubPresenceSink,
-        HubUnreadPublisher, ScopeEventHub, SystemDisconnectClock, compose_presence_vertical,
+        ScopeEventHub, SystemDisconnectClock, compose_presence_vertical,
     },
     workspaces,
 };
@@ -476,31 +474,32 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // viewer summary, per-conversation).
     let message_unread_read = messaging_store.message_unread();
     let attention_projection_read = messaging_store.attention_projection();
-    let aftermath = MessagingAftermath::new(
-        hub.clone(),
+    // The one post-commit fan-out, built by the hub over itself: the publication authority
+    // and the hub the unread axis routes through are both `hub`, and this statement has no
+    // hub argument that could name a second transport.
+    let aftermath = hub.messaging_aftermath(
         daemon_runtime.effects(),
         messaging_store.clone(),
-        HubUnreadPublisher::new(hub.clone(), unread_read_model),
+        unread_read_model,
     );
     // Wave 3A checkpoint A6 (#2203): the human direct-pair initiation door — the sole
     // write checkpoint of this wave — rides the SAME `MessagingStore` the ordinary send
     // door holds, in three roles: the get-or-create initiation authority (which publishes
     // the winner-only pair-opened fact through the SAME `ScopeEventHub`), the direct-line
-    // authority, and the send unit-of-work. It runs the SAME required `MessagingAftermath`.
-    // All four are captured here, before `send_routers` moves the store and the aftermath,
-    // so the door opens no second authority, write unit, or aftermath.
-    let direct_pair_initiation_port = messaging_store.direct_pair_initiation(hub.clone());
+    // authority, and the send unit-of-work. All three handles are captured here, before the
+    // send doors move the store, so the door opens no second authority or write unit. The
+    // aftermath and the transport its pair-open announcement rides are not captured at all:
+    // the door seam supplies both from the one aftermath below.
+    let direct_pair_initiation_store = messaging_store.clone();
     let direct_pair_direct_lines = messaging_store.clone();
     let direct_pair_unit_of_work = messaging_store.clone();
-    let direct_pair_aftermath = aftermath.clone();
-    let (human_send, agent_send) = send_routers(SendState {
-        channel_access: messaging_store.clone(),
+    let (human_send, agent_send) = aftermath.send_doors(
+        messaging_store.clone(),
         target_address,
-        capability: messaging_store.clone(),
-        authority: messaging_store.clone(),
-        unit_of_work: messaging_store,
-        aftermath,
-    });
+        messaging_store.clone(),
+        messaging_store.clone(),
+        messaging_store,
+    );
 
     let host = host_runtime::router(
         CreateHostInvite::new(host_store, OsEntropy, SystemClock),
@@ -513,11 +512,12 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             // `POST /api/agents/{id}/direct-messages` — get-or-create the pair, then send
             // its first message through the same send use-case. Distinct method/path from
             // the direct-pair read door merged just above, so neither shadows the other.
-            .merge(direct_pair_initiation::router(
-                direct_pair_initiation_port,
+            // The builder is handed the aftermath's own publication authority, so the
+            // winner-only pair-open cannot be announced anywhere else.
+            .merge(aftermath.direct_pair_initiation_door(
+                |opened| direct_pair_initiation_store.direct_pair_initiation(opened),
                 direct_pair_direct_lines,
                 direct_pair_unit_of_work,
-                direct_pair_aftermath,
             ))
             .merge(workspaces::router(workspace_cold_read))
             .merge(availability::router(
