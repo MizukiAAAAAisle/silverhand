@@ -183,6 +183,25 @@ export class QoderDriver implements Driver {
     return this.steerCapable ? 'tool-boundary-steer' : 'next-turn-batch';
   }
 
+  /**
+   * #task:2210: settlement policy is version-bound on the same evidence
+   * axis as {@link releaseProfile}. At/above the floor, `priority:"next"`
+   * echoes through `command_lifecycle` keyed by our payload uuid, so
+   * `input_lifecycle{state:'started'}` is a real per-payload proof
+   * (`lifecycle-start`).
+   *
+   * Below the floor there is no per-payload lifecycle frame and no uuid is
+   * stamped (see `encodeStdinMessage`). shiki explicitly accepts the weaker
+   * `write-success` settlement there: the existing `next-turn-batch` release
+   * already keeps the write inside a safe window, and #2210 preserves that
+   * driver's current behavior byte-for-byte (no new deferral, no fixture
+   * experiment). Pinned to the process generation via `bindRuntimeVersion`,
+   * never re-resolved per turn.
+   */
+  get admissionPolicy(): 'lifecycle-start' | 'write-success' {
+    return this.steerCapable ? 'lifecycle-start' : 'write-success';
+  }
+
   bindRuntimeVersion(version: string | null): void {
     this.steerCapable = versionAtLeast(version, STEER_MIN_VERSION);
   }

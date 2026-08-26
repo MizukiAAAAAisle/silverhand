@@ -344,6 +344,63 @@ export interface RuntimeHandle {
    *  critical section as `startupDelivery` via `clearStartupGate`,
    *  so the `(null, true)` interleaving is impossible. */
   startupAwaitingInit: boolean;
+  /** #task:2210 lifecycle-start admission gate, for admission-proof drivers
+   *  (claude / codex / qoder≥1.1.17). `null` means the handle is NOT in a
+   *  lifecycle gate; a non-null value carries the whole gate state as one
+   *  unit, so illegal combinations (a uuid without the flags, a `started`
+   *  proof recorded while no gate is armed) are simply unrepresentable rather
+   *  than held together by convention. Armed BEFORE the stdin write (a fast
+   *  runtime can echo `started` the instant it reads the payload, and
+   *  `dispatchParsedLine` runs OUTSIDE the lifecycle lock, so the gate must
+   *  already be held before the write) and stays held until the batch settles.
+   *
+   *  Settlement is the CONJUNCTION `startedObserved && writeConfirmed`, never
+   *  either half alone. A matching `started` only records the proof; a
+   *  successful write only records write-readiness; whichever becomes true
+   *  second settles exactly once. This is what keeps a transport-level
+   *  stdin-write ack (the anti-proof #task:2095 regressed to) from ever
+   *  settling, AND keeps an early `started` from settling before the write has
+   *  actually succeeded (which would allow consumed+failed double-settle, a
+   *  premature deferred-flush, and continuation on a cleared gate).
+   *  `session_init` proves the process is ready but NEVER counts as this
+   *  payload's admission.
+   *
+   *  Fields:
+   *   - `uuid` — the `payloadUuid` the daemon minted for the held batch. The
+   *     `input_lifecycle` handler records the proof ONLY on a `started` frame
+   *     whose `commandUuid` matches this exactly; a stale/duplicate/unknown
+   *     uuid is an idempotent no-op, so a late frame from a prior payload can
+   *     never admit the current one.
+   *   - `startedObserved` — first conjunction half; a matching `started` was
+   *     seen. Recording it NEVER settles or clears on its own; an early
+   *     `started` parks here so a subsequent write FAILURE settles `failed`
+   *     only, zero consumed.
+   *   - `writeConfirmed` — second half; the stdin write reached its FULL
+   *     success boundary (the same boundary the write-success path settles on
+   *     today — including `writeLastDeliveredSeq`), never a partial/early ack.
+   *
+   *  Sub-relation of `startupDelivery !== null` (the gate stays closed, so the
+   *  batch cannot be re-consumed and a child exit before settlement fails it
+   *  back to pending — the consumer-death rollback). Cleared with the gate in
+   *  `clearStartupGate` so no `(startupDelivery=null, startupAdmission!=null)`
+   *  interleaving appears. Mutually exclusive with `startupAwaitingInit`. */
+  startupAdmission:
+    | { uuid: string; startedObserved: boolean; writeConfirmed: boolean }
+    | null;
+  /** #task:2210 the child's stdout is the admission channel. `true` once that
+   *  stream reaches EOF (`'end'`) / `'close'`. Process `exit` does NOT imply
+   *  it — Node delivers buffered stdout data up to the stream's own end, which
+   *  can land AFTER `exit`. So the pending lifecycle-start gate's final
+   *  failed/rollback is deferred until this flips (see `onStdoutDrained`); a
+   *  matching `started` that raced the exit is still parsed and can settle
+   *  consumed before then. Never time-inferred. */
+  stdoutEnded: boolean;
+  /** #task:2210 set by `onChildExit` when it defers a still-pending
+   *  lifecycle-start gate's finalization to stdout drain, carrying the reason
+   *  (`child_exit` / `init_watchdog`) computed at exit time. `onStdoutDrained`
+   *  consumes it to emit the single failed/rollback once the channel is truly
+   *  closed and no proof arrived; `null` otherwise. */
+  startupGateExitReason: 'child_exit' | 'init_watchdog' | null;
   /** In-flight latch for `consumeStartupDelivery` (#task:1563). The
    *  consume awaits `writeStdinPayload`, and `dispatchParsedLine` runs
    *  synchronously OUTSIDE the lifecycle lock — a `session_init` parsed

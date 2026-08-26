@@ -95,6 +95,51 @@ export interface Driver {
     | 'next-turn-batch'
     | 'prompt-boundary'
     | 'one-shot';
+  /**
+   * WHEN a written payload is settled as delivered — the axis orthogonal
+   * to `releaseProfile` (#task:2210). `releaseProfile` answers *when the
+   * daemon may write* input; `admissionPolicy` answers *what observable
+   * event flips the inbox row from queued to delivered* (i.e. lets the
+   * daemon emit `runtime_delivery_consumed`, the sole trigger that sets
+   * `delivered_at`).
+   *
+   * History: #task:1561 established a per-payload lifecycle gate for codex
+   * (the `item/started userMessage` frame keyed by our payload uuid)
+   * precisely because the earlier transport-level ack "let already-generated
+   * sends pass" (countgame round 2). #task:2095 retired the observed-cursor
+   * and degraded that gate to pure observation — the supervisor fell back to
+   * treating a successful stdin write (or first `session_init`) as consumed
+   * for ALL stream-json drivers, re-opening the same countgame class this
+   * ticket fixes.
+   *
+   * shiki's ratified settlement policy has exactly TWO observable behaviors —
+   * release and settlement stay independent (`releaseProfile` decides the safe
+   * write window; `admissionPolicy` decides only the settle point):
+   *  - `lifecycle-start`: settle after the runtime echoes the per-payload
+   *    `input_lifecycle{state:'started'}` whose `commandUuid` is our minted
+   *    `payloadUuid` — real evidence the payload became precedent context for
+   *    the next generation. This is the fix #2210 restores. Applies ONLY to
+   *    drivers with an explicit steer + correlated admission frame: claude,
+   *    codex, qoder≥1.1.17.
+   *  - `write-success`: settle the moment the driver's existing releaseProfile
+   *    has released and the stdin write succeeds. This is NOT a re-assertion
+   *    that a transport ack is strong proof — it is shiki's explicit product
+   *    trade-off for fallback / non-steer drivers where no correlated lifecycle
+   *    frame exists (opencode: ACP prompt-boundary release then write; cursor:
+   *    one-shot argv; qoder<1.1.17: existing next-turn-batch release). The
+   *    releaseProfile gate is what keeps the write inside a safe window; this
+   *    policy adds no new deferral and preserves each such driver's current
+   *    behavior byte-for-byte.
+   *
+   * No `turn-terminal`/`unavailable` values: shiki declined to defer any
+   * current driver to its turn terminal and declined to pre-build concepts for
+   * hypothetical future protocols.
+   *
+   * Version-bound like `releaseProfile`: a driver whose protocol capability
+   * depends on the CLI version resolves this in `bindRuntimeVersion`
+   * (qoder), so it is constant per process generation but not per class.
+   */
+  readonly admissionPolicy: 'lifecycle-start' | 'write-success';
   /** True if the runtime exits after a single turn and must be
    *  respawned for each new kickoff (cursor-agent --print). False for
    *  long-lived stream-json runtimes (claude, codex). */

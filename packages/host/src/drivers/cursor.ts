@@ -31,6 +31,12 @@ export class CursorDriver implements Driver {
   readonly binary = 'cursor-agent';
   readonly kickoffMode = 'self_inits' as const;
   readonly releaseProfile = 'one-shot' as const;
+  // #task:2210: cursor is one-shot — the batch is drained into the argv
+  // kickoff before spawn, so its release *is* the spawn write. shiki accepts
+  // write-success as the settlement point for such non-steer drivers; there
+  // is no correlated lifecycle frame to gate on and #2210 leaves cursor's
+  // behavior unchanged.
+  readonly admissionPolicy = 'write-success' as const;
   readonly oneShot = true;
   readonly supportsNativeStandingPrompt = false;
   readonly initLivenessSilenceMs = 30 * 1000;

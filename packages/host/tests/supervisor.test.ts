@@ -204,6 +204,7 @@ function makeFakeDriver(extraArgs: string[] = []): Driver {
     binary: FIXTURE, // resolveRuntime stub returns this verbatim
     kickoffMode: 'self_inits',
     releaseProfile: 'native-steer',
+    admissionPolicy: 'write-success',
     oneShot: false,
     supportsNativeStandingPrompt: true,
     initLivenessSilenceMs: 30_000,
@@ -1578,6 +1579,7 @@ describe('Supervisor 3b — clearSession behavior', () => {
 function makeProgrammableDriver(
   extraArgs: string[] = [],
   kickoffMode: 'self_inits' | 'requires_first_message' = 'self_inits',
+  admissionPolicy: 'lifecycle-start' | 'write-success' = 'write-success',
 ): {
   driver: Driver;
   setNextParse: (events: ParsedEvent[]) => void;
@@ -1588,6 +1590,7 @@ function makeProgrammableDriver(
     binary: FIXTURE,
     kickoffMode,
     releaseProfile: 'native-steer',
+    admissionPolicy,
     oneShot: false,
     supportsNativeStandingPrompt: true,
     initLivenessSilenceMs: 30_000,
@@ -2088,6 +2091,569 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     );
     expect(sessionInit).toBeDefined();
     await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+  });
+});
+
+// ── #task:2210 lifecycle-start admission gate (regression: #task:2095
+//    degraded #task:1561's per-payload gate to pure observation, so a
+//    successful stdin write re-flipped rows to consumed — "countgame round
+//    2"). Two falsifier sets:
+//      Set 1 (started-gate): write-ack alone must NOT settle (test 1);
+//        the correlated `started` MUST settle (test 2). A settle-at-write
+//        mis-impl fails test 1; a never-settle mis-impl fails test 2.
+//      Set 2 (uuid correlation): a `started` for a DIFFERENT commandUuid
+//        must NOT settle (test 3). A "settle on any started" mis-impl
+//        fails test 3.
+//    All three drive a `lifecycle-start` programmable driver; the write's
+//    `--echo-stdin` echo triggers parseLine, and we queue the lifecycle
+//    frame from inside the encode wrapper so it correlates to the uuid the
+//    supervisor just minted for THIS batch.
+describe('Supervisor 3b — #task:2210 lifecycle-start admission gate', () => {
+  const deliverBatch = (supervisor: Supervisor, id: number) =>
+    supervisor.deliver({
+      runtime_generation: 1,
+      conversation_id: 'Conversation0001',
+      target: { conversation_id: 'Conversation0001', workspace: null },
+      agent_id: 'a1',
+      delivery_ids: [id],
+      kind: 'message',
+      text: `payload ${id}`,
+      deliveries: [{ delivery_id: id, seq: id, presentation: testDeliveryPresentation(`payload ${id}`) }],
+      spawn_options: baseStartParams.options,
+    }, { owner: 'test-owner' });
+
+  const hardStop = (supervisor: Supervisor) =>
+    supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+
+  it('a written batch stays UNCONSUMED on the stdin-write ack alone — no input_lifecycle started ⇒ no runtime_delivery_consumed (regression falsifier)', async () => {
+    const { driver, setNextParse } = makeProgrammableDriver([], 'self_inits', 'lifecycle-start');
+    // The write's stdin echo triggers parseLine; queue NOTHING so the
+    // transport ack is the ONLY signal the daemon sees.
+    const baseEncode = driver.encodeStdinMessage.bind(driver);
+    driver.encodeStdinMessage = (t, s, o) => {
+      setNextParse([]);
+      return baseEncode(t, s, o);
+    };
+    const logs: Array<Record<string, unknown>> = [];
+    const logger: DaemonLogger = {
+      info: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
+      warn: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
+      error: () => {},
+    } as unknown as DaemonLogger;
+    const { supervisor, events } = makeSupervisorWithDriver(driver, { logger });
+
+    await supervisor.start(baseStartParams);
+    await waitForRuntimeReady(events);
+    const res = await deliverBatch(supervisor, 77);
+    // Transport write succeeded — disposition is admitted (row handed to the
+    // runtime, in_flight_owner set) — but that is NOT admission.
+    expect(res.disposition).toBe('admitted');
+    // The gate recorded the awaiting-admission sub-state for THIS batch.
+    await waitFor(() =>
+      logs.some(
+        l =>
+          l['action'] === 'startup_delivery_awaiting_admission' &&
+          Array.isArray(l['delivery_ids']) &&
+          (l['delivery_ids'] as number[]).includes(77),
+      ),
+    );
+    // consumed is WITHHELD: a bounded negative wait proves it never fires on
+    // the write ack. (Pre-#2210 settle-at-write behavior fails HERE.)
+    await wait(150);
+    expect(
+      events.some(
+        e => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(77),
+      ),
+    ).toBe(false);
+    await hardStop(supervisor);
+  });
+
+  it('input_lifecycle{started} whose commandUuid == the minted payloadUuid settles the batch onto runtime_delivery_consumed', async () => {
+    const { driver, setNextParse } = makeProgrammableDriver([], 'self_inits', 'lifecycle-start');
+    // Queue a correlated `started` keyed to the uuid the supervisor mints
+    // for THIS write, so the echo replays the real admission proof.
+    const baseEncode = driver.encodeStdinMessage.bind(driver);
+    driver.encodeStdinMessage = (t, s, o) => {
+      setNextParse([{ kind: 'input_lifecycle', commandUuid: o?.payloadUuid ?? '', state: 'started' }]);
+      return baseEncode(t, s, o);
+    };
+    const { supervisor, events } = makeSupervisorWithDriver(driver);
+
+    await supervisor.start(baseStartParams);
+    await waitForRuntimeReady(events);
+    const res = await deliverBatch(supervisor, 88);
+    expect(res.disposition).toBe('admitted');
+    // The correlated `started` opens the gate — consumed now fires.
+    await waitForDeliveryConsumed(events, 88);
+    await hardStop(supervisor);
+  });
+
+  it('input_lifecycle{started} with a NON-matching commandUuid does NOT settle the batch (uuid-correlated, not any-started)', async () => {
+    const { driver, setNextParse } = makeProgrammableDriver([], 'self_inits', 'lifecycle-start');
+    const baseEncode = driver.encodeStdinMessage.bind(driver);
+    driver.encodeStdinMessage = (t, s, o) => {
+      setNextParse([{ kind: 'input_lifecycle', commandUuid: 'not-the-minted-uuid', state: 'started' }]);
+      return baseEncode(t, s, o);
+    };
+    const { supervisor, events } = makeSupervisorWithDriver(driver);
+
+    await supervisor.start(baseStartParams);
+    await waitForRuntimeReady(events);
+    const res = await deliverBatch(supervisor, 99);
+    expect(res.disposition).toBe('admitted');
+    // The mismatched `started` was parsed & fanned out...
+    await waitFor(() =>
+      events.some(
+        e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'input_lifecycle',
+      ),
+    );
+    // ...but it must NOT have opened the gate for delivery 99.
+    await wait(100);
+    expect(
+      events.some(
+        e => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(99),
+      ),
+    ).toBe(false);
+    await hardStop(supervisor);
+  });
+
+  // ── P0 interleaving (Cindy `ob6VQXH44mr1MXN_`): settlement is the
+  //    conjunction `startedObserved && writeConfirmed`, never either half
+  //    alone. We suspend the write's FULL success boundary by wrapping
+  //    `writeLastDeliveredSeq` (the in-try await AFTER `writeStdinPayload`),
+  //    so the stdin echo → matching `started` is dispatched (outside the
+  //    lifecycle lock) while `startupAdmission.writeConfirmed` is still false.
+  //    That is exactly the window where an early `started` must NOT
+  //    settle/clear/flush.
+  const captureLogger = (logs: Array<Record<string, unknown>>): DaemonLogger =>
+    ({
+      info: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
+      warn: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
+      error: () => {},
+    } as unknown as DaemonLogger);
+
+  const admittedLogged = (logs: Array<Record<string, unknown>>, id: number) =>
+    logs.some(
+      l =>
+        l['action'] === 'startup_delivery_admitted' &&
+        Array.isArray(l['delivery_ids']) &&
+        (l['delivery_ids'] as number[]).includes(id),
+    );
+
+  const consumedCount = (events: EventFrame[], id: number) =>
+    events.filter(e => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(id)).length;
+  const failedCount = (events: EventFrame[], id: number) =>
+    events.filter(e => e.event === 'runtime_delivery_failed' && e.delivery_ids.includes(id)).length;
+
+  it('P0-1: early started (write boundary still open) records the proof but does NOT settle; consumed fires EXACTLY once after the write completes', async () => {
+    const { driver, setNextParse } = makeProgrammableDriver([], 'self_inits', 'lifecycle-start');
+    // The write's stdin echo carries a correlated `started` for THIS batch.
+    const baseEncode = driver.encodeStdinMessage.bind(driver);
+    driver.encodeStdinMessage = (t, s, o) => {
+      setNextParse([{ kind: 'input_lifecycle', commandUuid: o?.payloadUuid ?? '', state: 'started' }]);
+      return baseEncode(t, s, o);
+    };
+    const logs: Array<Record<string, unknown>> = [];
+    const { supervisor, events } = makeSupervisorWithDriver(driver, { logger: captureLogger(logs) });
+
+    // Hold the write's full success boundary open (after writeStdinPayload,
+    // so the echo → started IS dispatched, but before writeConfirmed).
+    const origSeq = (supervisor as unknown as { writeLastDeliveredSeq: (h: unknown, s: unknown) => Promise<void> }).writeLastDeliveredSeq.bind(supervisor);
+    let releaseSeq!: () => void;
+    const seqGate = new Promise<void>(res => { releaseSeq = res; });
+    (supervisor as unknown as { writeLastDeliveredSeq: unknown }).writeLastDeliveredSeq = async (h: unknown, s: unknown) => {
+      await origSeq(h, s);
+      await seqGate;
+    };
+
+    await supervisor.start(baseStartParams);
+    await waitForRuntimeReady(events);
+    const res = await deliverBatch(supervisor, 55);
+    expect(res.disposition).toBe('admitted');
+
+    // The early `started` has been parsed & fanned out...
+    await waitFor(() =>
+      events.some(e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'input_lifecycle'),
+    );
+    // ...but with the write boundary still open it must NOT have settled:
+    // no consumed, no admitted log, gate still held.
+    expect(consumedCount(events, 55)).toBe(0);
+    expect(admittedLogged(logs, 55)).toBe(false);
+
+    // Complete the write boundary → the conjunction is now satisfied → settle
+    // exactly once (the post-write continuation is the second half here).
+    releaseSeq();
+    await waitForDeliveryConsumed(events, 55);
+    await wait(60);
+    expect(consumedCount(events, 55)).toBe(1);
+    expect(failedCount(events, 55)).toBe(0);
+    await hardStop(supervisor);
+  });
+
+  it('P0-2: early started then a FAILING write settles failed ONCE and never consumed (no consumed+failed double-settle)', async () => {
+    const { driver, setNextParse } = makeProgrammableDriver([], 'self_inits', 'lifecycle-start');
+    const baseEncode = driver.encodeStdinMessage.bind(driver);
+    driver.encodeStdinMessage = (t, s, o) => {
+      setNextParse([{ kind: 'input_lifecycle', commandUuid: o?.payloadUuid ?? '', state: 'started' }]);
+      return baseEncode(t, s, o);
+    };
+    const logs: Array<Record<string, unknown>> = [];
+    const { supervisor, events } = makeSupervisorWithDriver(driver, { logger: captureLogger(logs) });
+
+    // writeStdinPayload succeeds (echo → started recorded), then the write's
+    // full success boundary FAILS — the in-try catch must settle `failed`
+    // only, with zero consumed, even though the proof was already observed.
+    const origSeq = (supervisor as unknown as { writeLastDeliveredSeq: (h: unknown, s: unknown) => Promise<void> }).writeLastDeliveredSeq.bind(supervisor);
+    let failSeq!: () => void;
+    let startedSeen = false;
+    // Resolvable gate; the wrapper THROWS on release (rather than a
+    // free-floating rejected promise), so the failure is raised inside the
+    // consume try/catch that owns it — no unhandled-rejection window.
+    const seqGate = new Promise<void>(res => { failSeq = res; });
+    (supervisor as unknown as { writeLastDeliveredSeq: unknown }).writeLastDeliveredSeq = async (h: unknown, s: unknown) => {
+      await origSeq(h, s);
+      // Wait until the echoed `started` has actually been recorded before we
+      // fail, so this genuinely exercises the early-proof + write-fail order.
+      await waitFor(() => startedSeen);
+      await seqGate;
+      throw new Error('injected write-boundary failure');
+    };
+
+    await supervisor.start(baseStartParams);
+    await waitForRuntimeReady(events);
+    const res = await deliverBatch(supervisor, 66);
+    expect(res.disposition).toBe('admitted');
+
+    await waitFor(() =>
+      events.some(e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'input_lifecycle'),
+    );
+    startedSeen = true;
+    expect(consumedCount(events, 66)).toBe(0);
+
+    // Fail the write boundary → catch emits failed; the recorded early proof
+    // must NOT also produce a consumed.
+    failSeq();
+    await waitFor(() => failedCount(events, 66) === 1);
+    await wait(60);
+    expect(failedCount(events, 66)).toBe(1);
+    expect(consumedCount(events, 66)).toBe(0);
+    await hardStop(supervisor);
+  });
+
+  it('P0-3: an early started does NOT open the single delivery slot — a second deferred batch takes no write/flush until the first settles', async () => {
+    const { driver, setNextParse } = makeProgrammableDriver([], 'self_inits', 'lifecycle-start');
+    const baseEncode = driver.encodeStdinMessage.bind(driver);
+    driver.encodeStdinMessage = (t, s, o) => {
+      setNextParse([{ kind: 'input_lifecycle', commandUuid: o?.payloadUuid ?? '', state: 'started' }]);
+      return baseEncode(t, s, o);
+    };
+    const { supervisor, events } = makeSupervisorWithDriver(driver);
+
+    // Count stdin writes; hold the FIRST batch's write boundary open.
+    const origWrite = (supervisor as unknown as { writeStdinPayload: (h: unknown, e: unknown) => Promise<void> }).writeStdinPayload.bind(supervisor);
+    let writeCount = 0;
+    (supervisor as unknown as { writeStdinPayload: unknown }).writeStdinPayload = async (h: unknown, e: unknown) => {
+      writeCount += 1;
+      return origWrite(h, e);
+    };
+    const origSeq = (supervisor as unknown as { writeLastDeliveredSeq: (h: unknown, s: unknown) => Promise<void> }).writeLastDeliveredSeq.bind(supervisor);
+    let releaseSeq!: () => void;
+    const seqGate = new Promise<void>(res => { releaseSeq = res; });
+    let gateArmed = false; // only the FIRST batch hangs
+    (supervisor as unknown as { writeLastDeliveredSeq: unknown }).writeLastDeliveredSeq = async (h: unknown, s: unknown) => {
+      await origSeq(h, s);
+      if (!gateArmed) { gateArmed = true; await seqGate; }
+    };
+
+    await supervisor.start(baseStartParams);
+    await waitForRuntimeReady(events);
+    const res1 = await deliverBatch(supervisor, 71);
+    expect(res1.disposition).toBe('admitted');
+
+    // Batch 1's early `started` is recorded while its write boundary hangs.
+    await waitFor(() =>
+      events.some(e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'input_lifecycle'),
+    );
+    expect(consumedCount(events, 71)).toBe(0);
+    expect(writeCount).toBe(1);
+
+    // A second batch arrives while the slot is still held: it must DEFER, and
+    // the early `started` must not have flushed it (no second write).
+    const res2 = await deliverBatch(supervisor, 72);
+    expect(res2.disposition).toBe('deferred');
+    await wait(60);
+    expect(writeCount).toBe(1);
+    expect(consumedCount(events, 72)).toBe(0);
+
+    // Release batch 1's write boundary → it settles, freeing the slot; only
+    // THEN does the deferred batch 2 take its own write and settle.
+    releaseSeq();
+    await waitForDeliveryConsumed(events, 71);
+    await waitForDeliveryConsumed(events, 72);
+    expect(writeCount).toBe(2);
+    expect(consumedCount(events, 71)).toBe(1);
+    expect(consumedCount(events, 72)).toBe(1);
+    await hardStop(supervisor);
+  });
+
+  it('Qoder version binding moves releaseProfile and admissionPolicy on the SAME evidence axis (no orthogonal half-flip)', () => {
+    // Below the floor: the steer capability is UNPROVEN, so release stays the
+    // conservative `next-turn-batch` fallback. Settlement is NOT a symmetric
+    // "fail closed" — with no correlated lifecycle frame there is nothing to
+    // gate on, so it is `write-success`: shiki's explicit, accepted weaker-
+    // availability trade-off for these drivers (the existing release window
+    // already keeps the write safe), not a safety refusal.
+    const below = new QoderDriver();
+    below.bindRuntimeVersion('1.1.16');
+    expect(below.releaseProfile).toBe('next-turn-batch');
+    expect(below.admissionPolicy).toBe('write-success');
+
+    // At/above the floor: proven steer ⇒ tool-boundary-steer release AND
+    // lifecycle-start admission — both promote together off the same evidence.
+    const at = new QoderDriver();
+    at.bindRuntimeVersion('1.1.17');
+    expect(at.releaseProfile).toBe('tool-boundary-steer');
+    expect(at.admissionPolicy).toBe('lifecycle-start');
+
+    // Unbound / unparseable version = capability unproven ⇒ same conservative
+    // release + accepted write-success settlement as below the floor.
+    const unbound = new QoderDriver();
+    expect(unbound.releaseProfile).toBe('next-turn-batch');
+    expect(unbound.admissionPolicy).toBe('write-success');
+    const unparseable = new QoderDriver();
+    unparseable.bindRuntimeVersion('not-a-version');
+    expect(unparseable.releaseProfile).toBe('next-turn-batch');
+    expect(unparseable.admissionPolicy).toBe('write-success');
+  });
+
+  // ── P0 exit-vs-stdout-drain (Cindy `dfxZOd5LJ17FibYs`): a pending
+  //    lifecycle-start gate's failed/ROLLBACK must wait for the stdout
+  //    admission channel to reach EOF/`close`, NEVER fire on process `exit`.
+  //    Node delivers buffered stdout up to the stream's own end, which can land
+  //    AFTER `exit`; rolling an already-admitted row back to pending on `exit`
+  //    alone re-opens it for the next runtime = product double delivery. A
+  //    fully-controlled stub child lets us order exit → late-`started` stdout →
+  //    close EXACTLY (a real spawn can't sequence that deterministically).
+  const makeControlledGate = () => {
+    const { driver } = makeProgrammableDriver([], 'self_inits', 'lifecycle-start');
+    let capturedUuid = '';
+    const baseEncode = driver.encodeStdinMessage.bind(driver);
+    driver.encodeStdinMessage = (t, s, o) => {
+      capturedUuid = o?.payloadUuid ?? '';
+      return baseEncode(t, s, o);
+    };
+    class ControlledStub extends EventEmitter {
+      readonly pid = 45_100;
+      readonly stdout = new EventEmitter();
+      readonly stderr = new EventEmitter();
+      writeResolved = false;
+      readonly stdin = {
+        write: (_l: string, cb?: (err?: Error | null) => void): boolean => {
+          setImmediate(() => { this.writeResolved = true; cb?.(); });
+          return true;
+        },
+        end: () => {},
+        destroyed: false,
+        once: () => {},
+      };
+      kill(_sig?: NodeJS.Signals | number): boolean { return true; }
+    }
+    const stub = new ControlledStub();
+    const spawnFn = (
+      _b: string,
+      _a: ReadonlyArray<string>,
+      _o: SpawnOptions,
+    ): ChildProcess => stub as unknown as ChildProcess;
+    const spy = makeEmitSpy();
+    const supervisor = new Supervisor({
+      emit: spy.emit,
+      logger: silentLogger(),
+      driverFor: () => driver,
+      resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
+      spawnFn,
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
+      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
+      sigtermToSigkillMs: 50,
+      sigkillTimeoutMs: 200,
+    });
+    const deliverGate = (id: number) =>
+      supervisor.deliver(
+        {
+          runtime_generation: 1,
+          conversation_id: 'Conversation0001',
+          target: { conversation_id: 'Conversation0001', workspace: null },
+          agent_id: 'a1',
+          delivery_ids: [id],
+          kind: 'message',
+          text: 'gate batch',
+          deliveries: [
+            { delivery_id: id, seq: id, presentation: testDeliveryPresentation('gate batch') },
+          ],
+          spawn_options: baseStartParams.options,
+        },
+        { owner: 'test-owner' },
+      );
+    // Drive a matching `started` onto stdout: swap parseLine to emit it for the
+    // captured payload uuid, then push any non-empty line (parseLine ignores
+    // content). Used AFTER `exit` to exercise the post-exit/pre-close window.
+    const injectStarted = () => {
+      driver.parseLine = () => [
+        { kind: 'input_lifecycle', commandUuid: capturedUuid, state: 'started' },
+      ];
+      stub.stdout.emit('data', 'lifecycle-line\n');
+    };
+    return { supervisor, events: spy.events, stub, deliverGate, injectStarted, driver, uuid: () => capturedUuid };
+  };
+
+  it('P0-B1: a matching started arriving on stdout AFTER exit (before close) still settles consumed; exit does NOT roll back first', async () => {
+    const { events, stub, deliverGate, injectStarted } = makeControlledGate();
+    await deliverGate(81);
+    await waitFor(() => stub.writeResolved, 1_000);
+    await wait(20);
+    // Write confirmed; gate armed, still awaiting the `started` proof.
+    expect(consumedCount(events, 81)).toBe(0);
+    expect(failedCount(events, 81)).toBe(0);
+
+    // Child exits BEFORE the started chunk is delivered. The gate's rollback
+    // must be DEFERRED — no failed at exit.
+    stub.emit('exit', 0, null);
+    await wait(20);
+    expect(failedCount(events, 81)).toBe(0);
+    expect(consumedCount(events, 81)).toBe(0);
+
+    // The matching `started` now lands on stdout (post-exit, pre-close) and
+    // settles the batch to consumed — the whole point of deferring.
+    injectStarted();
+    await waitForDeliveryConsumed(events, 81);
+    expect(consumedCount(events, 81)).toBe(1);
+
+    // Channel closes with the gate already settled → still no failed.
+    stub.stdout.emit('close');
+    await wait(20);
+    expect(consumedCount(events, 81)).toBe(1);
+    expect(failedCount(events, 81)).toBe(0);
+  });
+
+  it('P0-B2: exit then stdout close with NO started finalizes failed exactly once (child_exit); duplicate close/exit does not re-settle', async () => {
+    const { events, stub, deliverGate } = makeControlledGate();
+    await deliverGate(82);
+    await waitFor(() => stub.writeResolved, 1_000);
+    await wait(20);
+    expect(consumedCount(events, 82)).toBe(0);
+    expect(failedCount(events, 82)).toBe(0);
+
+    // Exit defers finalization; no rollback yet.
+    stub.emit('exit', 0, null);
+    await wait(20);
+    expect(failedCount(events, 82)).toBe(0);
+
+    // The channel drains with no admission proof → single failed rollback,
+    // reason preserved from exit time (`child_exit`).
+    stub.stdout.emit('close');
+    await wait(20);
+    expect(failedCount(events, 82)).toBe(1);
+    expect(consumedCount(events, 82)).toBe(0);
+    const failed = events.find(
+      e => e.event === 'runtime_delivery_failed' && e.delivery_ids.includes(82),
+    );
+    expect(failed && failed.event === 'runtime_delivery_failed' && failed.reason).toBe(
+      'child_exit',
+    );
+
+    // A duplicate close/end and a re-fired exit must NOT settle a second time.
+    stub.stdout.emit('close');
+    stub.stdout.emit('end');
+    stub.emit('exit', 0, null);
+    await wait(20);
+    expect(failedCount(events, 82)).toBe(1);
+    expect(consumedCount(events, 82)).toBe(0);
+  });
+
+  it('P0-B3: a matching started SPLIT across the exit boundary re-stitches at EOF and settles consumed (exit must NOT flush the half-frame)', async () => {
+    // Cindy `CbJ59KTcL69Z6rJa` A: `exit` ≠ stdout EOF, so a `started` JSON can
+    // arrive in two chunks straddling exit. If `onChildExit` flushed the buffer,
+    // the prefix would be parsed as a broken complete line and cleared, and the
+    // suffix arriving post-exit could never be re-stitched → wrong failed. The
+    // fix preserves the buffer for a deferred gate and drains it at EOF.
+    const { events, stub, deliverGate, driver, uuid } = makeControlledGate();
+    // Content-sensitive parseLine: emit the `started` proof ONLY for the FULLY
+    // stitched line, never for either half alone. So a premature flush of the
+    // prefix produces no proof (and the bug would fail the batch).
+    driver.parseLine = (line: string) =>
+      line.includes('LIFECYCLE-STARTED-COMPLETE')
+        ? [{ kind: 'input_lifecycle', commandUuid: uuid(), state: 'started' }]
+        : [];
+    await deliverGate(83);
+    await waitFor(() => stub.writeResolved, 1_000);
+    await wait(20);
+    expect(consumedCount(events, 83)).toBe(0);
+
+    // Prefix (no newline) lands in the buffer BEFORE exit.
+    stub.stdout.emit('data', 'LIFECYCLE-');
+    // Child exits with only the half-frame buffered. Rollback deferred; the
+    // half-frame must NOT be flushed/cleared.
+    stub.emit('exit', 0, null);
+    await wait(20);
+    expect(failedCount(events, 83)).toBe(0);
+    expect(consumedCount(events, 83)).toBe(0);
+
+    // Suffix arrives post-exit, completing the line; then the channel closes.
+    stub.stdout.emit('data', 'STARTED-COMPLETE\n');
+    await waitForDeliveryConsumed(events, 83);
+    expect(consumedCount(events, 83)).toBe(1);
+    stub.stdout.emit('close');
+    await wait(20);
+    expect(consumedCount(events, 83)).toBe(1);
+    expect(failedCount(events, 83)).toBe(0);
+  });
+
+  it('P0-B4: post-exit ordinary frames (turn_end) before the matching started are drained admission-ONLY — consumed fires, but no new parsed event / second terminal after exit', async () => {
+    // Cindy `CbJ59KTcL69Z6rJa` B: after `runtime_exit`, the post-exit window may
+    // only extract the matching `started` admission proof. An ordinary frame
+    // (turn_end / tool / session / error) that precedes it must be dropped
+    // silently — running the full dispatch would resolve the already-terminal
+    // run twice, rebuild run-state, or publish an ordinary parsed event.
+    const { events, stub, deliverGate, driver, uuid } = makeControlledGate();
+    driver.parseLine = (line: string) => {
+      if (line.includes('TURNEND')) return [{ kind: 'turn_end' }];
+      if (line.includes('STARTED'))
+        return [{ kind: 'input_lifecycle', commandUuid: uuid(), state: 'started' }];
+      return [];
+    };
+    await deliverGate(84);
+    await waitFor(() => stub.writeResolved, 1_000);
+    await wait(20);
+
+    stub.emit('exit', 0, null);
+    await wait(20);
+    const parsedFor84 = () =>
+      events.filter(
+        e => e.event === 'runtime_parsed_event' && e.agent_id === 'a1',
+      ).length;
+    const exitCount = () =>
+      events.filter(e => e.event === 'runtime_exit' && e.agent_id === 'a1').length;
+    const stateCount = () =>
+      events.filter(e => e.event === 'runtime_state' && e.agent_id === 'a1').length;
+    const parsedBefore = parsedFor84();
+    const exitBefore = exitCount();
+    const stateBefore = stateCount();
+    expect(exitBefore).toBe(1); // the single terminal from onChildExit
+
+    // Post-exit chunk: an ordinary turn_end line, THEN the matching started.
+    stub.stdout.emit('data', 'TURNEND-line\nSTARTED-line\n');
+    await waitForDeliveryConsumed(events, 84);
+    stub.stdout.emit('close');
+    await wait(20);
+
+    // Admission settled exactly once…
+    expect(consumedCount(events, 84)).toBe(1);
+    expect(failedCount(events, 84)).toBe(0);
+    // …and NONE of the ordinary post-exit side effects fired: no new
+    // runtime_parsed_event (the turn_end was dropped), no second terminal,
+    // no new run-state transition after exit.
+    expect(parsedFor84()).toBe(parsedBefore);
+    expect(exitCount()).toBe(exitBefore);
+    expect(stateCount()).toBe(stateBefore);
   });
 });
 
@@ -3754,6 +4320,7 @@ function makeStatefulCodexLikeDriver(): {
     binary: FIXTURE,
     kickoffMode: 'self_inits',
     releaseProfile: 'native-steer',
+    admissionPolicy: 'write-success',
     oneShot: false,
     supportsNativeStandingPrompt: true,
     initLivenessSilenceMs: 30_000,
@@ -3825,6 +4392,7 @@ describe('Supervisor 3b — Option A v2 deliver arms (Cindy `UMGu36zoTDVuKWXi`)'
       binary: FIXTURE,
       kickoffMode: 'self_inits',
       releaseProfile: 'native-steer',
+      admissionPolicy: 'write-success',
       oneShot: false,
       supportsNativeStandingPrompt: true,
       initLivenessSilenceMs: 30_000,
@@ -4430,6 +4998,7 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       binary: FIXTURE,
       kickoffMode: 'self_inits',
       releaseProfile: 'one-shot',
+      admissionPolicy: 'write-success',
       oneShot: true,
       supportsNativeStandingPrompt: false,
       initLivenessSilenceMs: 30_000,

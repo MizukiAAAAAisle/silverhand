@@ -726,10 +726,12 @@ export class Supervisor implements SupervisorContract {
     this.daemonStartedAt = this.now();
   }
 
-  /** #task:1557 Phase 1: mint a stable uuid for one encoded stdin
-   *  payload and remember which delivery ids it carried. Claude echoes
-   *  the uuid back on `command_lifecycle` frames; other runtimes never
-   *  reference it. Bounded FIFO — observation only. */
+  /** #task:1557 / #task:2210: mint a stable uuid for one encoded stdin
+   *  payload and remember which delivery ids it carried. The
+   *  `lifecycle-start` drivers (claude, codex, qoder≥1.1.17) echo it back on
+   *  their `command_lifecycle` / `input_lifecycle` frames, where a matching
+   *  `started` is the per-payload admission proof; `write-success` drivers
+   *  (opencode, cursor, qoder<1.1.17) don't correlate it. Bounded FIFO. */
   private mintInputPayloadUuid(
     handle: RuntimeHandle,
     deliveryIds: readonly number[],
@@ -1833,6 +1835,9 @@ export class Supervisor implements SupervisorContract {
       // 3b additions
       startupDelivery: startupBatch,
       startupAwaitingInit: false,
+      startupAdmission: null,
+      stdoutEnded: false,
+      startupGateExitReason: null,
       startupConsumeInFlight: false,
       readyForDrainEmitted: false,
       initObserved: false,
@@ -2102,6 +2107,26 @@ export class Supervisor implements SupervisorContract {
       return;
     }
 
+    // #task:2210: arm the `lifecycle-start` admission gate BEFORE the stdin
+    // write. `dispatchParsedLine` runs synchronously from the stdout data
+    // listener OUTSIDE this lifecycle lock, so a fast runtime that echoes
+    // `input_lifecycle{state:'started'}` the instant it reads the payload can
+    // be dispatched during the write's own await window (or the
+    // `writeLastDeliveredSeq` await below) — i.e. BEFORE any post-write
+    // bookkeeping. Arming here means such an early `started` is RECORDED
+    // (`startupAdmission.startedObserved`) but does NOT settle: settlement is
+    // the conjunction `startedObserved && writeConfirmed`, so an early proof
+    // waits for the write's full success boundary and a write failure in
+    // between settles `failed` only. The write-failure catch below resets the
+    // whole gate via `clearStartupGate`.
+    if (handle.driver.admissionPolicy === 'lifecycle-start') {
+      handle.startupAdmission = {
+        uuid: payloadUuid,
+        startedObserved: false,
+        writeConfirmed: false,
+      };
+    }
+
     try {
       // #task:2095: the retired per-stream observed-cursor admission is gone —
       // freshness is now the RuntimeScope-wide undelivered-inbox guard, so a
@@ -2190,6 +2215,41 @@ export class Supervisor implements SupervisorContract {
     // no-op.
     this.ensureInitWatchdogArmed(handle);
 
+    // #task:2210: the stdin write reached its FULL success boundary (this
+    // point is past `writeStdinPayload` AND `writeLastDeliveredSeq`, the same
+    // boundary the write-success path settles on below — deliberately NOT
+    // shortened). For `lifecycle-start` drivers record write-readiness and try
+    // to settle: settlement is the conjunction `startedObserved &&
+    // writeConfirmed`, so if the runtime already echoed a matching
+    // `started` during the write (early proof) THIS is the second half and we
+    // settle exactly once here; otherwise the gate stays closed and the
+    // `input_lifecycle` handler settles when the (late) `started` arrives. A
+    // successful stdin write ALONE never settles (#task:2095 anti-proof); a
+    // child exit before settlement fails the still-pending gate back to
+    // pending (consumer-death rollback). session_init is process-ready, never
+    // this payload's admission. Precedes the requires_first_message/immediate
+    // paths below.
+    if (handle.driver.admissionPolicy === 'lifecycle-start') {
+      if (handle.startupAdmission !== null) {
+        handle.startupAdmission.writeConfirmed = true;
+      }
+      if (!this.settleLifecycleStartAdmissionIfReady(handle)) {
+        this.logger.info(
+          {
+            kind: 'process',
+            action: 'startup_delivery_awaiting_admission',
+            pid: handle.pid,
+            conversationId: handle.conversationId,
+            agent_id: handle.agentId,
+            delivery_ids: [...deliveryIds],
+            command_uuid: payloadUuid,
+          },
+          'startup_delivery written; deferring consumed until input_lifecycle started',
+        );
+      }
+      return;
+    }
+
     // Write succeeded. For `requires_first_message` drivers (claude) we
     // must defer the consumed emit until `session_init` confirms the
     // runtime actually accepted the turn — `startupAwaitingInit`
@@ -2230,6 +2290,12 @@ export class Supervisor implements SupervisorContract {
   private tryConsumeStartupDelivery(handle: RuntimeHandle): void {
     if (!handle.startupDelivery) return;
     if (handle.startupAwaitingInit) return; // write done, awaiting init
+    // #task:2210: write done, awaiting the lifecycle-start `started` proof.
+    // Same rationale as the awaitingInit bail — the batch was already
+    // written; re-consuming would write it to stdin twice. session_init
+    // (which calls this) proves process-readiness, never this payload's
+    // admission, so it must not re-drive the consume.
+    if (handle.startupAdmission !== null) return;
     // #task:1563: a consume is mid-write (dispatchParsedLine runs outside
     // the lifecycle lock, so session_init can land inside that await
     // window). Re-entering would write the SAME batch to stdin twice —
@@ -2238,6 +2304,49 @@ export class Supervisor implements SupervisorContract {
     if (handle.startupConsumeInFlight) return;
     if (!driverReadyToEncode(handle.driver)) return;
     void this.consumeStartupDelivery(handle);
+  }
+
+  /**
+   * #task:2210: settle a `lifecycle-start` batch ONLY on the conjunction of
+   * both halves of `startupAdmission` — a matching `input_lifecycle{started}`
+   * was observed (`startedObserved`) AND the stdin write reached its full
+   * success boundary (`writeConfirmed`). Called by whichever half completes
+   * second (the `input_lifecycle` handler for a late `started`; the consume
+   * body's post-write continuation for an early one). Emits consumed → clears
+   * the gate → re-evaluates ready_for_drain, the same order as every other
+   * settle, and is idempotent via the gate-held guard (a second call after the
+   * gate cleared is a no-op). Splitting settlement from either half is what
+   * prevents an early `started` from settling before the write succeeds —
+   * which would otherwise allow consumed+failed double-settle, a premature
+   * deferred flush, and continuation on an already-cleared gate. Returns
+   * whether it settled. */
+  private settleLifecycleStartAdmissionIfReady(handle: RuntimeHandle): boolean {
+    const admission = handle.startupAdmission;
+    if (
+      admission === null ||
+      handle.startupDelivery === null ||
+      !admission.startedObserved ||
+      !admission.writeConfirmed
+    ) {
+      return false;
+    }
+    const ids = handle.startupDelivery.deliveryIds;
+    this.logger.info(
+      {
+        kind: 'process',
+        action: 'startup_delivery_admitted',
+        pid: handle.pid,
+        conversationId: handle.conversationId,
+        agent_id: handle.agentId,
+        delivery_ids: [...ids],
+        command_uuid: admission.uuid,
+      },
+      'lifecycle-start admission: started proof + write success both confirmed; settling delivered',
+    );
+    this.emitStartupDeliveryConsumed(handle, ids);
+    this.clearStartupGate(handle);
+    this.maybeEmitReadyForDrain(handle);
+    return true;
   }
 
   /**
@@ -2251,6 +2360,13 @@ export class Supervisor implements SupervisorContract {
   private clearStartupGate(handle: RuntimeHandle): void {
     handle.startupDelivery = null;
     handle.startupAwaitingInit = false;
+    // #task:2210: the lifecycle-start admission gate clears with the delivery
+    // in the SAME critical section, mirroring startupAwaitingInit, so no
+    // `(startupDelivery=null, startupAdmission!=null)` interleaving can appear.
+    // `stdoutEnded` is NOT reset here — it tracks the child's stdout channel
+    // lifecycle, not the gate, and must survive gate settlement so a late
+    // `onStdoutDrained` stays a no-op rather than re-finalizing.
+    handle.startupAdmission = null;
     // Post-write re-drive (#task:1417 Stage 3, §11.4): the single delivery
     // slot just freed, so a queued deferred batch may now be admissible.
     // Guarded + lock-serialized inside; a no-op while a flush is active
@@ -3420,6 +3536,15 @@ export class Supervisor implements SupervisorContract {
       child.stdout.on('data', (chunk: Buffer | string) => {
         this.onChildBytes(handle, 'stdout', chunk);
       });
+      // #task:2210: the stdout stream reaching EOF (`end`) / `close` is the
+      // authoritative "admission channel fully drained" signal — every byte
+      // the child ever wrote has now been delivered and parsed. `exit` does
+      // NOT imply it (buffered stdout can arrive after the process is gone), so
+      // a still-pending lifecycle-start gate's failed/rollback is finalized
+      // here, not at exit. Idempotent via the `stdoutEnded` flag in
+      // `onStdoutDrained` (both events fire on a normal close).
+      child.stdout.once('end', () => this.onStdoutDrained(handle));
+      child.stdout.once('close', () => this.onStdoutDrained(handle));
     }
     if (child.stderr) {
       child.stderr.on('data', (chunk: Buffer | string) => {
@@ -3519,10 +3644,27 @@ export class Supervisor implements SupervisorContract {
    * `5nruk1IPaEHSab0T` B5). Without that flush the last complete-
    * but-unterminated JSON frame (typically the child's final
    * session_init / turn_end / error on quick exit) would silently
-   * disappear from the parsed-event stream.
+   * disappear from the parsed-event stream. The ONE exception is a
+   * deferred lifecycle-start gate (#task:2210): there `onChildExit`
+   * preserves the buffer so a `started` split across exit can re-stitch
+   * at EOF, and `onStdoutDrained` drains that tail admission-only.
    */
   private consumeStdoutForParse(handle: RuntimeHandle, text: string): void {
-    if (handle.phase === 'exited') return;
+    // #task:2210 exit-vs-stdout-drain: the guard is the stdout CHANNEL's
+    // lifecycle, not the process's. Once the channel has truly closed
+    // (`stdoutEnded`) nothing more can arrive, so stop. Between the child's
+    // `exit` and that close, KEEP framing lines the SAME way — but ONLY while
+    // a lifecycle-start admission gate is still pending, and route each line
+    // through the admission-ONLY drain reader (`drainAdmissionProofFromLine`),
+    // never the full `dispatchParsedLine`. That way a `started` that raced the
+    // exit still settles the batch to consumed, while `turn_end` / tool /
+    // session / error frames in the same window run NO run-state, wire, or
+    // boundary side effects against an already-terminal run (Cindy
+    // `CbJ59KTcL69Z6rJa` B). Once the gate settles/clears we bail exactly like
+    // the old `phase==='exited'` guard.
+    if (handle.stdoutEnded) return;
+    const postExit = handle.phase === 'exited';
+    if (postExit && handle.startupAdmission === null) return;
     const combined = handle.stdoutLineBuffer + text;
     const newlineIdx = combined.lastIndexOf('\n');
     if (newlineIdx === -1) {
@@ -3535,7 +3677,15 @@ export class Supervisor implements SupervisorContract {
     const lines = completePart.split('\n');
     for (const line of lines) {
       if (line.length === 0) continue;
-      this.dispatchParsedLine(handle, line);
+      // Post-exit: stop the moment the admission gate settles/clears, so a
+      // `started` that admits the batch is honored but a trailing frame in the
+      // same chunk is not drained against an already-settled gate.
+      if (postExit && handle.startupAdmission === null) break;
+      if (postExit) {
+        this.drainAdmissionProofFromLine(handle, line);
+      } else {
+        this.dispatchParsedLine(handle, line);
+      }
     }
   }
 
@@ -3613,6 +3763,66 @@ export class Supervisor implements SupervisorContract {
     // flush scheduler no-ops on an empty queue or an active flush.
     if (!boundaryOpenBeforeParse && strategyBoundaryOpen(handle)) {
       this.maybeScheduleDeferredFlush(handle);
+    }
+  }
+
+  /**
+   * #task:2210 exit-vs-stdout-drain — POST-EXIT admission-only drain reader.
+   *
+   * After the child's `exit`, the run has already been finalized: `resolveRun`
+   * ran, `runtime_exit` was emitted, `phase==='exited'`. The ONLY reason we
+   * keep reading stdout until EOF/`close` is to catch a matching
+   * `input_lifecycle{state:'started'}` that admits a still-pending
+   * lifecycle-start gate (the runtime read the payload and echoed `started`,
+   * then exited before its stdout chunk reached us). So this reader runs the
+   * SAME framing + `driver.parseLine` + schema-validate as the live pump, but
+   * per event it acts on ONLY that admission proof. Every other frame —
+   * `turn_end`, tool/session/error, anything driving run-state, the
+   * `runtime_parsed_event` wire, boundary/queue flush — is dropped silently
+   * (Cindy `CbJ59KTcL69Z6rJa` B): honoring them would let an already-terminal
+   * run resolve twice, rebuild run-state, publish ordinary events, or fire a
+   * deferred write after `runtime_exit`. `observeInitProgress`,
+   * `updateRunStateFromParsed`, `emitParsedEvent`, and the boundary reopen are
+   * deliberately NOT called here.
+   */
+  private drainAdmissionProofFromLine(handle: RuntimeHandle, line: string): void {
+    if (handle.startupAdmission === null || handle.startupDelivery === null) {
+      return;
+    }
+    let events: ParsedEvent[];
+    try {
+      events = handle.driver.parseLine(line);
+    } catch {
+      // A parse throw in the post-exit window is inert: there is no wire to
+      // fan out to and no run-state to advance. Match the live pump's
+      // swallow-and-continue rather than surface a second failure path.
+      return;
+    }
+    for (const ev of events) {
+      const validated = ParsedEventSchema.safeParse(ev);
+      if (!validated.success) continue;
+      const parsed = validated.data;
+      if (
+        parsed.kind === 'input_lifecycle' &&
+        parsed.state === 'started' &&
+        handle.startupAdmission !== null &&
+        handle.startupDelivery !== null &&
+        handle.startupAdmission.uuid === parsed.commandUuid
+      ) {
+        this.logger.info(
+          {
+            kind: 'process',
+            action: 'startup_admission_drained_post_exit',
+            pid: handle.pid,
+            conversationId: handle.conversationId,
+            agent_id: handle.agentId,
+            command_uuid: parsed.commandUuid,
+          },
+          'matching started drained after exit; settling admission before rollback',
+        );
+        handle.startupAdmission.startedObserved = true;
+        this.settleLifecycleStartAdmissionIfReady(handle);
+      }
     }
   }
 
@@ -3885,9 +4095,8 @@ export class Supervisor implements SupervisorContract {
         this.resolveRun(handle, 'turn_ended');
         break;
       case 'input_lifecycle': {
-        // #task:1557 Phase 1: pure observation. Correlate the runtime's
-        // per-payload lifecycle back to the delivery ids we stamped at
-        // encode time; log it, prune on completion, change nothing else.
+        // Correlate the runtime's per-payload lifecycle back to the
+        // delivery ids we stamped at encode time; log it always.
         const mapped = handle.inputPayloadUuids.get(parsed.commandUuid);
         this.logger.info(
           {
@@ -3903,12 +4112,40 @@ export class Supervisor implements SupervisorContract {
           },
           'runtime input lifecycle observed',
         );
-        // #task:2095: with the per-stream observed cursor retired, this frame
-        // has nothing to promote — freshness is the RuntimeScope-wide
-        // undelivered-inbox guard, not a per-payload seq — so #task:1557
-        // Phase 1 is now literally pure observation: correlate, log, prune.
-        // Drivers still emit it only as generation-boundary evidence
-        // (#task:1561); the daemon simply no longer derives a cursor from it.
+        // #task:2210: for `lifecycle-start` drivers a matching `started` is
+        // the ADMISSION proof (restoring the #task:1561 gate that #task:2095
+        // degraded to observation), but it is only ONE half of the settlement
+        // conjunction. A `started` whose `commandUuid` matches the batch the
+        // gate is holding (`startupAdmission.uuid`) RECORDS the proof
+        // (`startupAdmission.startedObserved`) and then attempts to settle; it
+        // never emits/clears on its own. Guards keep it idempotent and
+        // impossible to cross-admit:
+        //   - gate must still be held (`startupAdmission !== null` &&
+        //     `startupDelivery`) — a second `started`, or one after the batch
+        //     already settled/failed, is a no-op;
+        //   - the uuid must match exactly — a late frame from a PRIOR payload
+        //     (different uuid) can never admit the current batch.
+        // If the write has not yet reached its full success boundary (early
+        // `started`), `settleLifecycleStartAdmissionIfReady` is a no-op here
+        // and the write's post-write continuation settles once it confirms —
+        // so an intervening write FAILURE settles `failed` only. A successful
+        // stdin write alone NEVER records a `started`, so it can never settle.
+        // #task:2210 exit-vs-drain: this handler has NO phase guard, so a
+        // `started` that arrives on stdout AFTER the child's `exit` (but before
+        // its stdout channel closes) still records here and settles consumed —
+        // `onChildExit` deferred the failed/rollback precisely for this window.
+        if (
+          parsed.state === 'started' &&
+          handle.startupAdmission !== null &&
+          handle.startupDelivery !== null &&
+          handle.startupAdmission.uuid === parsed.commandUuid
+        ) {
+          handle.startupAdmission.startedObserved = true;
+          this.settleLifecycleStartAdmissionIfReady(handle);
+        }
+        // Prune the observation entry on completion (unchanged; the
+        // admission gate above is driven off `startupAdmission.uuid`, not
+        // this bounded observation map).
         if (parsed.state === 'completed') {
           handle.inputPayloadUuids.delete(parsed.commandUuid);
         }
@@ -4272,6 +4509,21 @@ export class Supervisor implements SupervisorContract {
     this.clearInitWatchdog(handle);
     this.clearCompactionWatchdog(handle);
 
+    // #task:2210 exit-vs-stdout-drain: decide the deferral BEFORE touching the
+    // line buffer. A lifecycle-start gate that is still pending with the stdout
+    // channel not yet closed must survive to EOF — because a matching `started`
+    // can arrive split across chunks around the exit. If `onChildExit` flushed
+    // the buffer now, a half-frame prefix already sitting in it would be parsed
+    // as a (broken) complete line and cleared, so the suffix arriving after
+    // exit could never be re-stitched → the gate would wrongly fail→rollback
+    // (Cindy `CbJ59KTcL69Z6rJa` A). So when deferring we leave `stdoutLineBuffer`
+    // intact; `onStdoutDrained` stitches and drains it at EOF.
+    const deferLifecycleGate =
+      handle.startupDelivery !== null &&
+      handle.startupAdmission !== null &&
+      !handle.stdoutEnded &&
+      handle.child.stdout != null;
+
     // Cindy `5nruk1IPaEHSab0T` B5: Node's `readline.createInterface`
     // (which CM uses) emits a final `line` for input that ended
     // without a trailing `\n` (verified locally:
@@ -4285,7 +4537,9 @@ export class Supervisor implements SupervisorContract {
     // — but `dispatchParsedLine` itself has no phase guard, so we
     // hand the tail to it directly. Cleared so the double-fire guard
     // above stays correct on the (impossible-by-contract) re-entry.
-    if (handle.stdoutLineBuffer.length > 0) {
+    // Skipped entirely when deferring a lifecycle gate (see above): the
+    // buffer is preserved for EOF reassembly instead.
+    if (!deferLifecycleGate && handle.stdoutLineBuffer.length > 0) {
       const tail = handle.stdoutLineBuffer;
       handle.stdoutLineBuffer = '';
       this.dispatchParsedLine(handle, tail);
@@ -4352,13 +4606,37 @@ export class Supervisor implements SupervisorContract {
     // wipes both `startupDelivery` and `startupAwaitingInit` in the
     // same critical section so no `(null, true)` interleaving
     // appears.
+    //
+    // #task:2210 exit-vs-stdout-drain: for a lifecycle-start gate the failed
+    // ROLLBACK must not run yet if the stdout admission channel is still open.
+    // Node's `exit` does not guarantee stdout is drained: a runtime that read
+    // the payload, echoed a matching `started`, then exited can have that
+    // stdout chunk delivered AFTER `exit`. Emitting failed here would roll an
+    // already-admitted row back to pending → the next runtime re-reads it →
+    // product-level double delivery, violating the safety root (reopen pending
+    // only once the old consumer can't read AND its admission proof is
+    // drained). So we DEFER: record the reason and let `onStdoutDrained`
+    // finalize the single failed once the channel truly closes with no
+    // matching `started`. The gate stays held meanwhile, so a raced `started`
+    // still settles it to consumed (see the `input_lifecycle` handler, which
+    // has no phase guard, and `consumeStdoutForParse`, which keeps feeding a
+    // pending admission gate post-exit). NOT time-inferred — purely EOF-driven.
+    // The non-lifecycle-start paths (`startupAwaitingInit`, plain immediate)
+    // keep settling at exit exactly as before.
     if (handle.startupDelivery !== null) {
-      this.emitStartupDeliveryFailed(
-        handle,
-        handle.startupDelivery.deliveryIds,
-        handle.initTimedOut ? 'init_watchdog' : 'child_exit',
-      );
-      this.clearStartupGate(handle);
+      const reason: 'child_exit' | 'init_watchdog' = handle.initTimedOut
+        ? 'init_watchdog'
+        : 'child_exit';
+      if (deferLifecycleGate) {
+        handle.startupGateExitReason = reason;
+      } else {
+        this.emitStartupDeliveryFailed(
+          handle,
+          handle.startupDelivery.deliveryIds,
+          reason,
+        );
+        this.clearStartupGate(handle);
+      }
     }
 
     // Any batches the daemon was holding in its mid-turn queue (#task:1417
@@ -4491,6 +4769,55 @@ export class Supervisor implements SupervisorContract {
       intentional,
       ts,
     });
+  }
+
+  /**
+   * #task:2210 exit-vs-stdout-drain finalizer. Fires when the child's stdout
+   * admission channel reaches EOF (`end`) / `close` — the point at which every
+   * byte the runtime ever wrote has been delivered and parsed. Idempotent: the
+   * `stdoutEnded` flag makes the second of the `end`/`close` pair (and any
+   * duplicate) a no-op, satisfying "close 后重复 exit/close 不二次结算".
+   *
+   * Two responsibilities, both scoped to a lifecycle-start gate that
+   * `onChildExit` DEFERRED (`startupGateExitReason !== null`):
+   *   1. Drain a final unterminated tail preserved across exit (`onChildExit`
+   *      deliberately did NOT flush it) through the admission-only reader, so a
+   *      matching `started` split across the exit boundary re-stitches here and
+   *      still settles consumed — without any ordinary post-exit side effect.
+   *   2. If the gate is STILL pending after the channel closed, no admission
+   *      proof will ever arrive → emit the single failed/rollback with the
+   *      reason captured at exit. If a raced `started` already settled it to
+   *      consumed, `startupAdmission` is null here and we emit nothing — the
+   *      exactly-once, EOF-not-timeout rollback the safety root requires.
+   */
+  private onStdoutDrained(handle: RuntimeHandle): void {
+    if (handle.stdoutEnded) return;
+    handle.stdoutEnded = true;
+    if (handle.startupGateExitReason === null) {
+      // Either no gate was deferred, or the channel drained before `exit`
+      // (then `onChildExit` finalizes inline via the `stdoutEnded` branch).
+      return;
+    }
+    if (handle.startupAdmission !== null && handle.stdoutLineBuffer.length > 0) {
+      // Final unterminated tail: a matching `started` may have arrived split
+      // across the exit and only completed here. Stitch it as ONE line (the
+      // post-exit pump always leaves a newline-free remainder) and run it
+      // through the SAME admission-only reader — never `dispatchParsedLine`, so
+      // no ordinary run-state / wire / boundary effect fires after exit
+      // (Cindy `CbJ59KTcL69Z6rJa` A+B).
+      const tail = handle.stdoutLineBuffer;
+      handle.stdoutLineBuffer = '';
+      this.drainAdmissionProofFromLine(handle, tail);
+    }
+    if (handle.startupAdmission !== null && handle.startupDelivery !== null) {
+      this.emitStartupDeliveryFailed(
+        handle,
+        handle.startupDelivery.deliveryIds,
+        handle.startupGateExitReason,
+      );
+      this.clearStartupGate(handle);
+    }
+    handle.startupGateExitReason = null;
   }
 
   // ── private: state emitter ─────────────────────────────────────

@@ -45,6 +45,11 @@ export class CodexDriver implements Driver {
   readonly binary = 'codex';
   readonly kickoffMode = 'self_inits' as const;
   readonly releaseProfile = 'native-steer' as const;
+  // #task:2210 / #task:1561: codex stamps our payload uuid as
+  // `clientUserMessageId` and echoes it as `item.clientId` on the
+  // `item/started userMessage` frame — the original per-payload
+  // lifecycle proof this ticket generalizes to claude/qoder.
+  readonly admissionPolicy = 'lifecycle-start' as const;
   readonly oneShot = false;
   readonly supportsNativeStandingPrompt = true;
   readonly initLivenessSilenceMs = 60 * 1000;
