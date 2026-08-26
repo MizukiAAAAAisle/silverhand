@@ -13,8 +13,8 @@ use std::{
 
 use serde_json::Value;
 
-/// Driver, wire and runtime families. `backend-core` stays free of all of them
-/// through its whole normal + build dependency closure.
+/// Driver, wire and runtime families. `backend-core`'s linked library stays free
+/// of all of them through its whole transitive normal closure.
 const DRIVER_WIRE_RUNTIME: &[&str] = &[
     "axum",
     "http",
@@ -33,6 +33,24 @@ const DRIVER_WIRE_RUNTIME: &[&str] = &[
     "tracing",
     "tracing-subscriber",
     "ts-rs",
+    "tungstenite",
+];
+
+/// Async runtimes, servers and DB drivers. A build script is allowed to read a
+/// pinned authority and generate tables, so a wire format alone says nothing
+/// about it; reaching one of these families says it does something other than
+/// generation. Build closures are held to this list instead of the linked one.
+const RUNTIME_AND_DRIVER: &[&str] = &[
+    "axum",
+    "hyper",
+    "libsqlite3-sys",
+    "sqlx",
+    "sqlx-core",
+    "sqlx-sqlite",
+    "tokio",
+    "tokio-tungstenite",
+    "tower",
+    "tower-http",
     "tungstenite",
 ];
 
@@ -294,24 +312,35 @@ impl ResolvedGraph {
             .unwrap_or_default()
     }
 
-    /// Everything cargo can compile into `package`: its own normal and build
-    /// edges, then the normal and build edges of everything those reach. A dev
-    /// edge is never transitive, so it is only ever a hop away from its own
-    /// package and never enters this closure.
-    fn production_closure(&self, package: &str) -> BTreeSet<String> {
-        let root = self.member(package);
+    /// Everything cargo links into `package`'s own library: its normal edges,
+    /// then the normal edges of everything those reach. A dev edge is never
+    /// transitive, and a dependency's build script feeds a separate binary that
+    /// is never linked into its consumer, so neither kind enters this closure.
+    fn linked_closure(&self, package: &str) -> BTreeSet<String> {
+        self.closure(self.kind(self.member(package), "normal"), &["normal"])
+    }
+
+    /// Everything cargo compiles to produce `package`'s build script: its build
+    /// edges, then the normal and build edges of everything those reach. None of
+    /// it is linked into the library, so this answers a different question than
+    /// [`Self::linked_closure`] and is held to a different family list.
+    fn build_closure(&self, package: &str) -> BTreeSet<String> {
+        self.closure(
+            self.kind(self.member(package), "build"),
+            &["normal", "build"],
+        )
+    }
+
+    fn closure(&self, roots: BTreeSet<String>, follow: &[&str]) -> BTreeSet<String> {
         let mut seen = BTreeSet::new();
-        let mut queue: VecDeque<String> = self
-            .kind(root, "normal")
-            .into_iter()
-            .chain(self.kind(root, "build"))
-            .collect();
+        let mut queue: VecDeque<String> = roots.into_iter().collect();
         while let Some(id) = queue.pop_front() {
             if !seen.insert(id.clone()) {
                 continue;
             }
-            queue.extend(self.kind(&id, "normal"));
-            queue.extend(self.kind(&id, "build"));
+            for kind in follow {
+                queue.extend(self.kind(&id, kind));
+            }
         }
         seen.iter().map(|id| self.names[id].clone()).collect()
     }
@@ -760,17 +789,29 @@ fn g0_every_lane_module_sits_in_the_inventory_that_guards_it() {
 #[test]
 fn g1_core_carries_no_driver_wire_or_runtime_dependency() {
     let graph = resolved_graph();
-    let closure = graph.production_closure("silverhand-backend-core");
-    let forbidden: Vec<&str> = DRIVER_WIRE_RUNTIME
+
+    let linked = graph.linked_closure("silverhand-backend-core");
+    let in_library: Vec<&str> = DRIVER_WIRE_RUNTIME
         .iter()
         .copied()
-        .filter(|package| closure.contains(*package))
+        .filter(|package| linked.contains(*package))
         .collect();
     assert!(
-        forbidden.is_empty(),
-        "backend-core production closure reached {forbidden:?}"
+        in_library.is_empty(),
+        "backend-core linked closure reached {in_library:?}"
     );
-    assert!(closure.contains("base64") && closure.contains("sha2"));
+    assert!(linked.contains("base64") && linked.contains("sha2"));
+
+    let build = graph.build_closure("silverhand-backend-core");
+    let in_build: Vec<&str> = RUNTIME_AND_DRIVER
+        .iter()
+        .copied()
+        .filter(|package| build.contains(*package))
+        .collect();
+    assert!(
+        in_build.is_empty(),
+        "backend-core build closure reached {in_build:?}"
+    );
 }
 
 #[test]
@@ -778,13 +819,13 @@ fn g1_the_persistence_and_wire_crates_keep_their_direction() {
     let graph = resolved_graph();
     assert!(
         !graph
-            .production_closure("silverhand-backend-sqlite")
+            .linked_closure("silverhand-backend-sqlite")
             .contains("silverhand-backend-server"),
         "backend-sqlite must not depend on the wire crate"
     );
     assert!(
         !graph
-            .production_closure("silverhand-backend-server")
+            .linked_closure("silverhand-backend-server")
             .contains("silverhand-backend-sqlite"),
         "backend-server production code must not be able to name the SQLite adapter"
     );
@@ -800,21 +841,25 @@ fn g1_the_persistence_and_wire_crates_keep_their_direction() {
 fn g2_background_policy_names_no_timer_or_driver() {
     // Residual guard only: aliases, macros and re-exports can bypass a source
     // scan. The compile-enforced carrier is G1 plus core's manifest.
-    const FORBIDDEN_PATHS: &[&str] = &[
-        "tokio",
-        "std::time",
-        "Instant",
-        "SystemTime",
-        "sleep",
-        "spawn",
-        "axum",
-        "sqlx",
-    ];
+    //
+    // A crate or module path is a reach wherever it appears, so it is matched as
+    // a substring. A bare type or function name only catches an aliased reach,
+    // and a domain type may legitimately end in one — `ActivityInstant` is a
+    // validated stamp, not a clock — so those are matched as whole identifiers.
+    const FORBIDDEN_PATHS: &[&str] = &["tokio", "std::time", "axum", "sqlx"];
+    const FORBIDDEN_NAMES: &[&str] = &["Instant", "SystemTime", "sleep", "spawn"];
     for path in lane_source_paths("backend-core", "policy") {
         let source = strip_comments(&read(&path));
         for forbidden in FORBIDDEN_PATHS {
             assert!(
                 !source.contains(forbidden),
+                "{} names {forbidden}: policy decisions stay timer-free",
+                path.display()
+            );
+        }
+        for forbidden in FORBIDDEN_NAMES {
+            assert!(
+                !names_identifier(&source, forbidden),
                 "{} names {forbidden}: policy decisions stay timer-free",
                 path.display()
             );
