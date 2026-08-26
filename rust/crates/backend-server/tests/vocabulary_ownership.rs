@@ -22,9 +22,18 @@
 //!
 //! `syn` is therefore a dev-dependency of this crate. It parses text: `#[cfg]` is not
 //! evaluated, so a gated duplicate still counts, which is what ownership requires.
-//! What a parser cannot see through is macro expansion, so token trees the walk skips
-//! are checked for the watched name and reported as an unprovable declaration rather
-//! than passed over.
+//!
+//! What a parser cannot see through is macro expansion, and both halves of a macro are
+//! unreadable for the same reason: a `macro_rules!` body may bind its own ARGUMENT as a
+//! type name, so `declare_type!(NotificationId)` really declares one. Neither a rule
+//! body nor an invocation's arguments are therefore read for meaning — if either names a
+//! watched type, ownership there is reported as unprovable. That is why this file's own
+//! subject, `NotificationId`, is declared and implemented explicitly instead of through
+//! the `opaque_id!` shorthand its siblings use.
+//!
+//! A declaration is not the only path to a name: a public `use` re-exports one, and the
+//! duplicate this ticket deleted hid behind exactly such a second public path. Those are
+//! inventoried too, while a private `use` — a consumer reaching the one owner — is not.
 
 use std::{
     fs,
@@ -137,13 +146,26 @@ fn declarations_in(source: &str, name: &str) -> Vec<&'static str> {
 struct Contents {
     /// Unrawed type name and the keyword that bound it.
     declared: Vec<(String, &'static str)>,
-    /// Token text no parser can expand: `macro_rules!` rules, and syntax syn hands back
-    /// verbatim.
+    /// Token text no parser reads for meaning: `macro_rules!` rules, the arguments of an
+    /// invocation, and syntax syn hands back verbatim.
     unexpandable: Vec<String>,
     /// Names of the `macro_rules!` definitions here, whose rules are in `unexpandable`.
     defined: Vec<String>,
     /// Paths of macros invoked at item position, whose expansions this walk cannot see.
     invoked: Vec<String>,
+    /// Second public paths to a name, from the `use` items that publish one.
+    public_paths: Vec<PublicPath>,
+}
+
+/// A path to a type that a public `use` opens, alongside the declaration itself.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PublicPath {
+    /// The name this `use` binds — after `as`, when it renames.
+    Name(String),
+    /// A public glob, rendered with its target path. Which names it carries depends on
+    /// another module's public surface, which this reader does not resolve, so a glob is
+    /// listed whatever it happens to re-export.
+    Glob(String),
 }
 
 fn contents_of(items: &[Item]) -> Contents {
@@ -167,32 +189,64 @@ fn walk(items: &[Item], contents: &mut Contents) {
                 }
                 continue;
             }
-            // Both halves of a macro have to be answered, and they are answered
-            // differently. A `macro_rules!` DEFINITION (`ident` is its name) carries rules
-            // no parser expands, so its tokens are checked for the watched name and its
-            // name is recorded — that is how an invocation elsewhere can be shown to feed
-            // rules this tree reads. An INVOCATION only feeds arguments to such a body, so
-            // `opaque_id!(NotificationId)` declares nothing; reading arguments as
-            // declarations would report the owner's own file as a duplicate.
+            // Neither half of a macro is read for meaning, and for one reason: the rules
+            // decide what the arguments become, and a body may bind an argument AS a type
+            // name — `declare_type!(NotificationId)` against
+            // `($name:ident) => { pub struct $name(String); }` declares that very type.
+            // So a DEFINITION contributes its rules and an INVOCATION its arguments, and
+            // either naming a watched type makes ownership there unprovable. A definition
+            // also records its name, which is how `include!` is separated below from the
+            // macros whose rules this tree holds.
             Item::Macro(macro_item) => {
-                match &macro_item.ident {
-                    Some(name) => {
-                        contents.defined.push(name.unraw().to_string());
-                        contents
-                            .unexpandable
-                            .push(macro_item.mac.tokens.to_string());
-                    }
-                    None => contents.invoked.push(path_of(&macro_item.mac.path)),
+                if let Some(name) = &macro_item.ident {
+                    contents.defined.push(name.unraw().to_string());
+                } else {
+                    contents.invoked.push(path_of(&macro_item.mac.path));
                 }
+                contents
+                    .unexpandable
+                    .push(macro_item.mac.tokens.to_string());
                 continue;
             }
             Item::Verbatim(tokens) => {
                 contents.unexpandable.push(tokens.to_string());
                 continue;
             }
+            // A `use` with any visibility of its own re-exports what it names, which is a
+            // second path to a type declared once — the form the deleted duplicate hid
+            // behind. An inherited-visibility `use` is a consumer reaching an owner and
+            // says nothing about ownership.
+            Item::Use(item) => {
+                if !matches!(item.vis, syn::Visibility::Inherited) {
+                    use_paths(&item.tree, &mut Vec::new(), &mut contents.public_paths);
+                }
+                continue;
+            }
             _ => continue,
         };
         contents.declared.push((ident.unraw().to_string(), kind));
+    }
+}
+
+/// Every name a `use` tree binds, and every glob in it, with `prefix` carrying the path
+/// segments already traversed so a glob can be reported with its target.
+fn use_paths(tree: &syn::UseTree, prefix: &mut Vec<String>, paths: &mut Vec<PublicPath>) {
+    match tree {
+        syn::UseTree::Path(segment) => {
+            prefix.push(segment.ident.unraw().to_string());
+            use_paths(&segment.tree, prefix, paths);
+            prefix.pop();
+        }
+        syn::UseTree::Group(group) => {
+            for branch in &group.items {
+                use_paths(branch, prefix, paths);
+            }
+        }
+        syn::UseTree::Name(leaf) => paths.push(PublicPath::Name(leaf.ident.unraw().to_string())),
+        // The bound name is the one after `as`: renaming a watched type still publishes it
+        // under whatever the alias says, so the alias is what an inventory has to carry.
+        syn::UseTree::Rename(leaf) => paths.push(PublicPath::Name(leaf.rename.unraw().to_string())),
+        syn::UseTree::Glob(_) => paths.push(PublicPath::Glob(format!("{}::*", prefix.join("::")))),
     }
 }
 
@@ -225,6 +279,36 @@ fn names(tokens: &str, name: &str) -> bool {
 
 fn continues_identifier(character: char) -> bool {
     character.is_alphanumeric() || character == '_'
+}
+
+/// Whether `file` declares the child module `name` with a visibility of its own.
+///
+/// A missing declaration panics rather than answering "not public": a module that moved or
+/// was renamed must be a red gate, not a premise that quietly holds.
+fn declares_public_module(file: &str, name: &str) -> bool {
+    let source = fs::read_to_string(rust_root().join(file)).expect("a module file");
+    let parsed = syn::parse_file(&source).expect("a module");
+    let declaration = parsed
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Mod(module) if module.ident.unraw() == name => Some(&module.vis),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{file} declares no module {name}"));
+    !matches!(declaration, syn::Visibility::Inherited)
+}
+
+/// The public paths a source opens, as the re-export gate reads them.
+///
+/// A source that does not parse as a module holds an expression, so it binds no `use` at
+/// all; that it does not parse is what `declarations_in` reports, and which files those
+/// are is pinned by `the_only_sources_that_are_not_modules_are_named`.
+fn public_paths_in(source: &str) -> Vec<PublicPath> {
+    match syn::parse_file(source) {
+        Ok(parsed) => contents_of(&parsed.items).public_paths,
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Where the type name `name` is declared across the production tree, as
@@ -307,6 +391,148 @@ fn the_notification_identity_has_exactly_one_declaration() {
     );
 }
 
+/// The other way a path to a name appears: a public `use`.
+///
+/// The duplicate this ticket deleted was reachable as `collaboration::notification::model::
+/// NotificationId` as well as where it was defined, and deleting a definition while leaving
+/// the re-export would let the split recur with nothing in the tree to notice — the
+/// declaration inventory reads items, and a `use` declares nothing.
+///
+/// This reader does not resolve module visibility, so it lists every public path and each
+/// one has to be named here. That is what separates the two shapes the tree actually uses:
+/// `NotificationId` is declared in a PRIVATE module and published by the messaging facade,
+/// so that re-export is its only public path, while `RuntimeKind` is declared in a public
+/// module and re-exported nowhere. Either way one path, and any addition is red.
+///
+/// Globs are listed whatever they carry: which names `pub use read::*` publishes depends
+/// on another module's public surface, so pinning the set is what keeps `pub use
+/// identity::*;` from becoming a silent second path. The cost is that a new public glob
+/// anywhere reddens this gate and has to be answered.
+///
+/// A private `use` is untouched — every consumer of these types has one, and reaching an
+/// owner is the opposite of being one.
+#[test]
+fn no_public_use_opens_a_second_path_to_a_watched_name() {
+    // The premise the inventory below is read against, as one pair so a single run reports
+    // both: the identity is publishable ONLY through the facade, and the runtime set only
+    // at its declaration. Turning `mod identity` public would give the identity a second
+    // public path while every entry below stayed exactly as it is.
+    assert_eq!(
+        (
+            declares_public_module("crates/backend-core/src/messaging/mod.rs", "identity"),
+            declares_public_module("crates/backend-core/src/agents/mod.rs", "runtime"),
+        ),
+        (false, true),
+        "the identity's module is private and the runtime set's module is public, which is \
+         why exactly one of the two vocabularies is re-exported by name"
+    );
+
+    let mut second_paths: Vec<(String, PublicPath)> = Vec::new();
+    for (file, source) in production_sources() {
+        for path in public_paths_in(&source) {
+            let second = match &path {
+                PublicPath::Name(name) => WATCHED.contains(&name.as_str()),
+                PublicPath::Glob(_) => true,
+            };
+            if second {
+                second_paths.push((file.clone(), path));
+            }
+        }
+    }
+
+    let attachment = "crates/backend-core/src/messaging/collaboration/attachment/mod.rs";
+    let directory = "crates/backend-core/src/messaging/collaboration/channel_directory/mod.rs";
+    let lifecycle = "crates/backend-core/src/messaging/collaboration/channel_lifecycle.rs";
+    assert_eq!(
+        second_paths,
+        vec![
+            (
+                attachment.to_owned(),
+                PublicPath::Glob("read::*".to_owned())
+            ),
+            (
+                attachment.to_owned(),
+                PublicPath::Glob("write::*".to_owned())
+            ),
+            (
+                directory.to_owned(),
+                PublicPath::Glob("create::*".to_owned())
+            ),
+            (directory.to_owned(), PublicPath::Glob("read::*".to_owned())),
+            (
+                lifecycle.to_owned(),
+                PublicPath::Glob("mutation::*".to_owned())
+            ),
+            (
+                "crates/backend-core/src/messaging/mod.rs".to_owned(),
+                PublicPath::Name("NotificationId".to_owned())
+            ),
+        ],
+        "each public path to a watched name has to be one of these: the messaging facade \
+         publishing the private identity module, and five globs re-exporting the halves of \
+         their own module, none of which declares a watched name"
+    );
+}
+
+/// What the re-export reader must report, and what it must leave alone. Without both
+/// directions a predicate that answered "nothing" everywhere would pass the gate above
+/// while every second path in the tree stayed invisible.
+#[test]
+fn the_reexport_reader_separates_publishing_from_consuming() {
+    let watched = |name: &str| PublicPath::Name(name.to_owned());
+    let cases: [(&str, Vec<PublicPath>, &str); 8] = [
+        (
+            "pub use crate::messaging::identity::NotificationId;",
+            vec![watched("NotificationId")],
+            "the form the deleted duplicate hid behind: a second public path to the one \
+             declaration",
+        ),
+        (
+            "use crate::messaging::identity::NotificationId;",
+            Vec::new(),
+            "a private import is a consumer reaching the owner, which is what every \
+             consumer of these types does",
+        ),
+        (
+            "pub(crate) use crate::messaging::identity::NotificationId;",
+            vec![watched("NotificationId")],
+            "a crate-visible re-export still publishes the name to every module that \
+             could hold the second half of a seam",
+        ),
+        (
+            "pub(in crate::messaging) use identity::NotificationId;",
+            vec![watched("NotificationId")],
+            "and so does a restricted one: any visibility of its own makes it a path",
+        ),
+        (
+            "pub use identity::MessageId as NotificationId;",
+            vec![watched("NotificationId")],
+            "an alias publishes the name it binds, not the one it came from, so the \
+             alias is what the inventory carries",
+        ),
+        (
+            "pub use identity::{MessageId, NotificationId};",
+            vec![watched("MessageId"), watched("NotificationId")],
+            "a group binds each of its leaves",
+        ),
+        (
+            "pub use identity::*;",
+            vec![PublicPath::Glob("identity::*".to_owned())],
+            "a glob spells no name at all, so it is reported by target: whether it \
+             carries a watched type depends on a module this reader does not resolve",
+        ),
+        (
+            "pub mod inner {\n    pub use crate::messaging::identity::NotificationId;\n}",
+            vec![watched("NotificationId")],
+            "inline modules are walked, or a re-export hides one brace deep",
+        ),
+    ];
+
+    for (source, expected, reason) in cases {
+        assert_eq!(public_paths_in(source), expected, "{reason}\n{source}");
+    }
+}
+
 /// What the reader must recognise as a declaration of a watched name, and what it must
 /// not. An inventory is only as good as its reader: one blind to a legal spelling
 /// reports "exactly one declaration" while a second one sits in the tree, and the
@@ -319,7 +545,7 @@ fn the_notification_identity_has_exactly_one_declaration() {
 /// one a search string happens to name.
 #[test]
 fn the_declaration_reader_follows_rust_declaration_grammar() {
-    let cases: [(&str, &str, &[&str], &str); 19] = [
+    let cases: [(&str, &str, &[&str], &str); 22] = [
         (
             "pub struct NotificationId(String);",
             "NotificationId",
@@ -392,12 +618,34 @@ fn the_declaration_reader_follows_rust_declaration_grammar() {
              reported as unprovable rather than silently absent",
         ),
         (
-            "opaque_id!(NotificationId);",
+            "macro_rules! declare_type {\n    ($name:ident) => {\n        pub struct $name(String);\n    };\n}",
             "NotificationId",
             &[],
-            "an invocation only feeds arguments to a body read in its own right: the \
-             owner's own file invokes exactly this, and counting arguments would report \
-             the owner as its own duplicate",
+            "and the definition side alone CANNOT answer this one: its rules hold only \
+             `$name`, so no watched name appears anywhere in them",
+        ),
+        (
+            "pub mod hidden {\n    declare_type!(NotificationId);\n}",
+            "NotificationId",
+            &[UNEXPANDED],
+            "which is why an invocation's arguments are unreadable too: this pair really \
+             declares hidden::NotificationId, and reading the invocation as \"only \
+             arguments\" admitted a second owner in a fmt-clean tree",
+        ),
+        (
+            "opaque_id!(NotificationId);",
+            "NotificationId",
+            &[UNEXPANDED],
+            "so the owner's own shorthand is reported as well — no argument naming a \
+             watched type is provable, which is why that one invocation is written out \
+             explicitly instead of exempted by name",
+        ),
+        (
+            "opaque_id!(MessageId);",
+            "NotificationId",
+            &[],
+            "while a macro whose arguments name nothing watched stays green: the test is \
+             the arguments, not the presence of a macro",
         ),
         (
             "pub struct NotificationIdentity(String);",
