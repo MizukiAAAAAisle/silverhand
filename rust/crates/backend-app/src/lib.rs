@@ -30,10 +30,13 @@ use silverhand_backend_server::{
     messaging::{
         TargetAddressRefusalLog,
         aftermath::MessagingAftermath,
-        collaboration::stale_message_resolution::{
-            StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
-            StaleMessageResolutionAdmissionRefusal, TracingStaleMessageResolutionObserver,
-            router as stale_message_resolution_router,
+        collaboration::{
+            channel_directory, channel_lifecycle, conversation_agent_directory,
+            stale_message_resolution::{
+                StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
+                StaleMessageResolutionAdmissionRefusal, TracingStaleMessageResolutionObserver,
+                router as stale_message_resolution_router,
+            },
         },
         router::{SendState, send_routers},
         task::{TaskListState, task_list_router},
@@ -426,6 +429,13 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     let stale_admission =
         StaleMessageResolutionAdmissionBridge(messaging_store.stale_message_resolution_admission());
     let stale_capability = messaging_store.clone();
+    // The five channel directory/detail read doors ride the SAME `MessagingStore` the
+    // send door holds — each `&self` builder clones only the shared pool, opening no
+    // second authority. Captured before `send_routers` consumes the store as the send
+    // unit-of-work. One handle satisfies the directory factory's three-port bound.
+    let channel_directory_read = messaging_store.channel_directory();
+    let channel_detail_read = messaging_store.channel_lifecycle();
+    let conversation_agent_directory_read = messaging_store.conversation_agent_directory();
     let aftermath = MessagingAftermath::new(
         hub.clone(),
         daemon_runtime.effects(),
@@ -458,6 +468,11 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             .merge(agent_presence::router(
                 agent_presence_cold_read,
                 SystemRuntimeClock,
+            ))
+            .merge(channel_directory::router(channel_directory_read))
+            .merge(channel_lifecycle::router(channel_detail_read))
+            .merge(conversation_agent_directory::router(
+                conversation_agent_directory_read,
             ))
             .merge(presence_router)
             .merge(access::router(
@@ -786,6 +801,41 @@ mod tests {
             "INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES (?, 'user-1', 1)",
         )
         .bind(CONVERSATION_ID)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    /// Seed the channel-directory/detail read surface for viewer `user-1`: a Regular
+    /// workspace they belong to, one open workspace channel they are a member of, and the
+    /// sort state the active projection reads. Mirrors the leaf directory fixture's proven
+    /// column/value set — a valid `ChannelStatus` (`idle`) and a `title_key` that is both
+    /// canonical to its title and spelling-valid (so the detail decode's
+    /// `CanonicalConversationTitle` and the directory decode's spelling check both pass) —
+    /// which `seed_workspace_conversation`'s `status='open'` does NOT satisfy for this
+    /// adapter (that helper serves routes that never decode a `ChannelStatus`). The
+    /// literals equal `WORKSPACE_ID`/`CONVERSATION_ID`; the E2E asserts on those consts,
+    /// so any drift fails loudly.
+    async fn seed_channel_directory(path: &Path) {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO workspaces(id,name,name_key,created_at,updated_at) VALUES \
+               ('workspace0000001','Workspace','directory-space',1,1); \
+             INSERT INTO workspace_users(workspace_id,user_id,joined_at,role) VALUES \
+               ('workspace0000001','user-1',1,'owner'); \
+             INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,archived_at,created_at,updated_at) VALUES \
+               ('conv000000000001','workspace0000001','workspace','open','General','general','idle','private',NULL,1,1); \
+             INSERT INTO conversation_users(conversation_id,user_id,joined_at) VALUES \
+               ('conv000000000001','user-1',1); \
+             INSERT INTO user_list_sort_mode(user_id,list_key,scope,mode,updated_at) VALUES \
+               ('user-1','channels:workspace0000001','','manual',1); \
+             INSERT INTO user_sort_entry(user_id,list_key,entity_id,rank,last_accessed_at,starred_at) VALUES \
+               ('user-1','channels:workspace0000001','conv000000000001',1,4,5);",
+        )
         .execute(&pool)
         .await
         .unwrap();
@@ -2052,15 +2102,15 @@ mod tests {
 
     /// Gate 1 of the CP2 convergence closure — the composed root's COMPLETE positive
     /// mounted table. It enumerates every `(method, path)` `prepare()` mounts across
-    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195) as fifteen entries —
-    /// ten behind the human session perimeter, three behind the runtime credential
+    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195) as twenty entries —
+    /// fifteen behind the human session perimeter, three behind the runtime credential
     /// perimeter, the two authenticated WebSockets — and asserts each is PRESENT
     /// (anon → its perimeter's `401`, or the WS upgrade surface, never the `404`
     /// fallback). Removing any mounted route's `.merge(...)` from `prepare()` flips its
     /// entry to `404` and reddens this gate.
     ///
     /// This is a PRESENCE ledger, not a closed universe: black-box probing cannot
-    /// prove "no sixteenth route was silently added" (axum exposes no route
+    /// prove "no twenty-first route was silently added" (axum exposes no route
     /// introspection), so this gate makes no such claim. A new registrar mounted into
     /// `prepare()` MUST add its route here (and, if in the #2195 lane, move it from
     /// residual to landed in gate 2). Each door's per-path method surface and adapter
@@ -2074,7 +2124,7 @@ mod tests {
         let router = app.router;
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // The ten human-perimeter product doors. Anonymous (no bearer) → the human
+        // The fifteen human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
         for (method, path) in [
@@ -2088,6 +2138,12 @@ mod tests {
             ("GET", "/api/agents/agent-1/presence"),
             ("GET", "/api/agents/agent-1/availability"),
             ("GET", "/api/presence"),
+            // #2194 channel directory/detail lane, Wave 3A checkpoint A1.
+            ("GET", "/api/workspaces/workspace0000001/channels"),
+            ("GET", "/api/workspaces/workspace0000001/channels/archived"),
+            ("GET", "/api/archived-channels"),
+            ("GET", "/api/channels/conv000000000001"),
+            ("GET", "/api/channels/conv000000000001/agents"),
         ] {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -2406,6 +2462,230 @@ mod tests {
         // One-method route checksum: the mounted path serves GET only.
         let (status, body) = request(&router, "POST", path, Some(&bearer)).await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
+    }
+
+    /// Wave 3A checkpoint A1: the five channel directory/detail read doors, mounted in
+    /// `prepare()` behind the SAME human perimeter and wired to the ONE production
+    /// `MessagingStore` the send door holds (`.channel_directory()`,
+    /// `.channel_lifecycle()`, `.conversation_agent_directory()` — pool clones, no second
+    /// authority). Two composition obligations the leaf factories' own tests cannot
+    /// prove:
+    ///
+    /// * `the_composition_serves_channel_directory_and_detail_behind_the_perimeter`
+    ///   drives every one of the five through the real composed root: anonymous → the
+    ///   perimeter's `401`; an admitted workspace member → a real `200` read off the live
+    ///   SQLite adapter (the active list and the detail door carry the seeded
+    ///   conversation id, proving the store adapter — not a stub — answered), plus a
+    ///   one-method checksum on the detail path.
+    /// * `the_channel_perimeter_refuses_before_touching_the_product_port` is the
+    ///   load-bearing refusal gate: it mounts the SAME three factories behind the SAME
+    ///   `require_human_session` over a counting spy port, and proves an anonymous read
+    ///   is refused `401` with the product port invoked ZERO times — the perimeter
+    ///   `.layer` runs before routing, so a handler (and its port call) never executes.
+    ///   A `401` status alone cannot prove this; the call counter can.
+    mod channel_directory_activation {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use silverhand_backend_core::{
+            auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
+            identity::{ConversationId, UserId, WorkspaceId},
+            messaging::collaboration::{
+                channel_directory::{
+                    ActiveChannelDirectoryPort, ActiveWorkspaceChannelDirectory, ArchivedSince,
+                    ArchivedWorkspaceChannelDirectory, ArchivedWorkspaceChannelDirectoryPort,
+                    GlobalArchivedChannelDirectory, GlobalArchivedChannelDirectoryPort,
+                    GlobalArchivedDirectoryRefusal, WorkspaceDirectoryRefusal,
+                },
+                channel_lifecycle::{
+                    ChannelDetailFact, ChannelDetailReadPort, ChannelDetailRefusal,
+                },
+                conversation_agent_directory::{
+                    ConversationAgentDirectory, ConversationAgentDirectoryReadPort,
+                    ConversationAgentDirectoryRefusal,
+                },
+            },
+        };
+        use silverhand_backend_server::{
+            auth::{PublicJsonUnauthorized, require_human_session},
+            messaging::collaboration::{
+                channel_directory, channel_lifecycle, conversation_agent_directory,
+            },
+        };
+        use silverhand_backend_sqlite::auth::SqliteSessionStore;
+
+        use super::*;
+
+        #[tokio::test]
+        async fn the_composition_serves_channel_directory_and_detail_behind_the_perimeter() {
+            let fixture = fixture(true).await;
+            seed_human(&fixture.path).await;
+            seed_channel_directory(&fixture.path).await;
+            let app = prepare(&config(fixture.path.clone())).await.unwrap();
+            let router = app.router;
+            let bearer = format!("Bearer {TOKEN}");
+
+            let workspace_channels = format!("/api/workspaces/{WORKSPACE_ID}/channels");
+            let workspace_archived = format!("/api/workspaces/{WORKSPACE_ID}/channels/archived");
+            let global_archived = "/api/archived-channels".to_owned();
+            let channel_detail = format!("/api/channels/{CONVERSATION_ID}");
+            let channel_agents = format!("/api/channels/{CONVERSATION_ID}/agents");
+
+            // Anonymous → the perimeter's refusal envelope on every door, never a read.
+            for path in [
+                &workspace_channels,
+                &workspace_archived,
+                &global_archived,
+                &channel_detail,
+                &channel_agents,
+            ] {
+                let (status, body) = request(&router, "GET", path, None).await;
+                assert_eq!(status, StatusCode::UNAUTHORIZED, "anon {path}: {body}");
+                assert_eq!(body, r#"{"error":"unauthorized"}"#, "anon {path}");
+            }
+
+            // Admitted workspace member → a real `200` off the live SQLite adapter; the
+            // active list and the detail door both carry the seeded conversation id.
+            let (status, body) = request(&router, "GET", &workspace_channels, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "active channels: {body}");
+            assert!(
+                body.contains(CONVERSATION_ID),
+                "active list must carry the seeded channel off the real adapter: {body}"
+            );
+
+            let (status, body) = request(&router, "GET", &channel_detail, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "channel detail: {body}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap()["channel"]["id"].as_str(),
+                Some(CONVERSATION_ID),
+                "detail door must project the seeded channel id: {body}"
+            );
+
+            for path in [&workspace_archived, &global_archived, &channel_agents] {
+                let (status, body) = request(&router, "GET", path, Some(&bearer)).await;
+                assert_eq!(status, StatusCode::OK, "authed {path}: {body}");
+            }
+
+            // One-method checksum: the detail path serves GET only.
+            let (status, body) = request(&router, "POST", &channel_detail, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
+        }
+
+        /// A spy satisfying all five A1 read ports; every method bumps a shared counter
+        /// then diverges. Reaching any of them past the perimeter is a bug, so the bodies
+        /// never need to fabricate a success value.
+        #[derive(Clone, Default)]
+        struct RefusalCountingPort {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl ActiveChannelDirectoryPort for RefusalCountingPort {
+            type Error = std::convert::Infallible;
+            async fn active(
+                &self,
+                _: &UserId,
+                _: &WorkspaceId,
+            ) -> Result<
+                Result<ActiveWorkspaceChannelDirectory, WorkspaceDirectoryRefusal>,
+                Self::Error,
+            > {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl ArchivedWorkspaceChannelDirectoryPort for RefusalCountingPort {
+            type Error = std::convert::Infallible;
+            async fn archived(
+                &self,
+                _: &UserId,
+                _: &WorkspaceId,
+            ) -> Result<
+                Result<ArchivedWorkspaceChannelDirectory, WorkspaceDirectoryRefusal>,
+                Self::Error,
+            > {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl GlobalArchivedChannelDirectoryPort for RefusalCountingPort {
+            type Error = std::convert::Infallible;
+            async fn archived_global(
+                &self,
+                _: &UserId,
+                _: Option<&WorkspaceId>,
+                _: Option<ArchivedSince>,
+            ) -> Result<
+                Result<GlobalArchivedChannelDirectory, GlobalArchivedDirectoryRefusal>,
+                Self::Error,
+            > {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl ChannelDetailReadPort for RefusalCountingPort {
+            type Error = std::convert::Infallible;
+            async fn detail(
+                &self,
+                _: &UserId,
+                _: &ConversationId,
+            ) -> Result<Result<ChannelDetailFact, ChannelDetailRefusal>, Self::Error> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl ConversationAgentDirectoryReadPort for RefusalCountingPort {
+            type Error = std::convert::Infallible;
+            async fn read(
+                &self,
+                _: &UserId,
+                _: &ConversationId,
+            ) -> Result<
+                Result<ConversationAgentDirectory, ConversationAgentDirectoryRefusal>,
+                Self::Error,
+            > {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+
+        #[tokio::test]
+        async fn the_channel_perimeter_refuses_before_touching_the_product_port() {
+            let fixture = fixture(false).await;
+            let session_store = SqliteSessionStore::open(&fixture.path).await.unwrap();
+            let sessions = HumanSessionAuthenticator::new(
+                session_store,
+                SystemSessionClock,
+                SessionTtl::default(),
+            );
+            let spy = RefusalCountingPort::default();
+            let calls = spy.calls.clone();
+            // The SAME three factories `prepare()` mounts, behind the SAME perimeter.
+            let router = require_human_session(
+                channel_directory::router(spy.clone())
+                    .merge(channel_lifecycle::router(spy.clone()))
+                    .merge(conversation_agent_directory::router(spy)),
+                sessions,
+                PublicJsonUnauthorized,
+            );
+
+            for path in [
+                format!("/api/workspaces/{WORKSPACE_ID}/channels"),
+                format!("/api/workspaces/{WORKSPACE_ID}/channels/archived"),
+                "/api/archived-channels".to_owned(),
+                format!("/api/channels/{CONVERSATION_ID}"),
+                format!("/api/channels/{CONVERSATION_ID}/agents"),
+            ] {
+                let (status, body) = request(&router, "GET", &path, None).await;
+                assert_eq!(status, StatusCode::UNAUTHORIZED, "anon {path}: {body}");
+                assert_eq!(body, r#"{"error":"unauthorized"}"#, "anon {path}");
+            }
+
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "the perimeter must refuse every anonymous read before the product port is touched"
+            );
+        }
     }
 
     /// The composition mounts `GET /api/agents/{id}/presence` behind the SAME human
