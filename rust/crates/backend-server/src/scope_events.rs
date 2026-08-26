@@ -845,6 +845,10 @@ fn latest_unread_wire(latest: &CoreLatestUnread) -> LatestUnread {
 /// root and no engine type appears here. This publisher owns only the routing — the read
 /// model decides placement, audience, and every count — so the placement fork below is a
 /// total match over [`UnreadAudience`]'s two arms and cannot silently drop one.
+///
+/// `Clone` (when `R: Clone`) so the `MessagingAftermath` that owns it can be cloned for
+/// the second send door; it holds only a Clone hub and the injected read model.
+#[derive(Clone)]
 pub struct HubUnreadPublisher<R> {
     hub: ScopeEventHub,
     read_model: R,

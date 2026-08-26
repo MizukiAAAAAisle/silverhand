@@ -37,6 +37,12 @@ pub trait SendAftermath {
 /// - `daemon`: runtime start/delivery, main/reply delivery and idle start;
 /// - `mentions`: durable mentioned-viewer rows;
 /// - `unread`: placement-aware unread/badge or direct-pair invalidation.
+///
+/// `Clone` because both send doors — the ordinary human/agent door and the direct-pair
+/// initiation door — run the SAME required aftermath after a committed send. The type
+/// carries no per-door state (only Clone handles), so cloning it is how "one aftermath,
+/// two doors" is expressed without a second construction site that could drift.
+#[derive(Clone)]
 pub struct MessagingAftermath<E, D, M, U> {
     events: E,
     daemon: D,

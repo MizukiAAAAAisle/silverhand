@@ -34,7 +34,7 @@ use silverhand_backend_server::{
             activity, attention_projection, channel_directory, channel_lifecycle,
             conversation_agent_activity, conversation_agent_directory, conversation_agent_runtime,
             conversation_message_window, conversation_ref, conversation_threads,
-            conversation_unread, human_search, message_unread,
+            conversation_unread, direct_pair_initiation, human_search, message_unread,
             stale_message_resolution::{
                 StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
                 StaleMessageResolutionAdmissionRefusal, TracingStaleMessageResolutionObserver,
@@ -482,6 +482,17 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         messaging_store.clone(),
         HubUnreadPublisher::new(hub.clone(), unread_read_model),
     );
+    // Wave 3A checkpoint A6 (#2203): the human direct-pair initiation door — the sole
+    // write checkpoint of this wave — rides the SAME `MessagingStore` the ordinary send
+    // door holds, in three roles: the get-or-create initiation authority (which publishes
+    // the winner-only pair-opened fact through the SAME `ScopeEventHub`), the direct-line
+    // authority, and the send unit-of-work. It runs the SAME required `MessagingAftermath`.
+    // All four are captured here, before `send_routers` moves the store and the aftermath,
+    // so the door opens no second authority, write unit, or aftermath.
+    let direct_pair_initiation_port = messaging_store.direct_pair_initiation(hub.clone());
+    let direct_pair_direct_lines = messaging_store.clone();
+    let direct_pair_unit_of_work = messaging_store.clone();
+    let direct_pair_aftermath = aftermath.clone();
     let (human_send, agent_send) = send_routers(SendState {
         channel_access: messaging_store.clone(),
         target_address,
@@ -498,6 +509,16 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     let human_products = require_human_session(
         host.merge(human_send)
             .merge(direct_pairs::router(direct_pair_read_model))
+            // Wave 3A checkpoint A6 (#2203): the human direct-pair initiation write door.
+            // `POST /api/agents/{id}/direct-messages` — get-or-create the pair, then send
+            // its first message through the same send use-case. Distinct method/path from
+            // the direct-pair read door merged just above, so neither shadows the other.
+            .merge(direct_pair_initiation::router(
+                direct_pair_initiation_port,
+                direct_pair_direct_lines,
+                direct_pair_unit_of_work,
+                direct_pair_aftermath,
+            ))
             .merge(workspaces::router(workspace_cold_read))
             .merge(availability::router(
                 agent_availability_cold_read,
@@ -2181,7 +2202,7 @@ mod tests {
     /// entry to `404` and reddens this gate.
     ///
     /// This is a PRESENCE ledger, not a closed universe: black-box probing cannot
-    /// prove "no thirty-sixth route was silently added" (axum exposes no route
+    /// prove "no thirty-seventh route was silently added" (axum exposes no route
     /// introspection), so this gate makes no such claim. A new registrar mounted into
     /// `prepare()` MUST add its route here (and, if in the #2195 lane, move it from
     /// residual to landed in gate 2). Each door's per-path method surface and adapter
@@ -2195,13 +2216,16 @@ mod tests {
         let router = app.router;
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // The thirty human-perimeter product doors. Anonymous (no bearer) → the human
+        // The thirty-one human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
         for (method, path) in [
             ("POST", "/api/hosts"),
             ("POST", "/api/channels/conv000000000001/messages"),
             ("GET", "/api/direct-pairs"),
+            // Direct-pair initiation write door, Wave 3A checkpoint A6 (#2203). Distinct
+            // method+path from the direct-pair read above; anon POST → the perimeter 401.
+            ("POST", "/api/agents/agent-1/direct-messages"),
             ("GET", "/api/workspaces"),
             ("POST", "/api/workspaces/workspace0000001/members"),
             ("GET", "/api/agents"),
@@ -2559,6 +2583,162 @@ mod tests {
         // One-method route checksum: the mounted path serves GET only.
         let (status, body) = request(&router, "POST", path, Some(&bearer)).await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
+    }
+
+    /// The direct-pair initiation TARGET for viewer `user-1`: one host and one active
+    /// agent the viewer created with an `agent` session scope. This is the "creator" arm
+    /// of the initiation authority (`direct_pair_initiation_candidate`: `created_by_user_id
+    /// = viewer AND materialization_status = 'active' AND session_scope = 'agent'`), so no
+    /// workspace membership or pre-existing pair is needed to be allowed to open the line.
+    /// The literal id equals `DP_TARGET_AGENT`, which the E2E builds its path from, so any
+    /// drift fails loudly.
+    const DP_TARGET_AGENT: &str = "dp-target-1";
+
+    async fn seed_direct_pair_target(path: &Path) {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        for statement in [
+            "INSERT INTO hosts (id, name, kind, created_at, user_id) VALUES ('h-dp', 'host-dp', 'remote', 1, 'user-1')",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, created_by_user_id, session_scope, materialization_status) \
+             VALUES ('dp-target-1', 'pair-target', 'qoder', 'h-dp', 100, 100, 'user-1', 'agent', 'active')",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        pool.close().await;
+    }
+
+    async fn count(path: &Path, sql: &'static str) -> i64 {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        let total: i64 = sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap();
+        pool.close().await;
+        total
+    }
+
+    /// Wave 3A checkpoint A6 (#2203): the human direct-pair initiation WRITE door,
+    /// `POST /api/agents/{id}/direct-messages`, mounted in `prepare()` behind the SAME
+    /// `require_human_session` perimeter and wired to the ONE production `MessagingStore`
+    /// the ordinary send door holds (as its get-or-create initiation authority, its
+    /// direct-line authority, and its send unit-of-work), the SAME `ScopeEventHub`
+    /// (winner-only pair-opened publication), and the SAME required `MessagingAftermath`.
+    ///
+    /// Two composition obligations the leaf router/adapter tests cannot prove:
+    /// * the before-product-port 0-call twin, expressed for a WRITE door as a
+    ///   zero-side-effect twin on the REAL composed adapter (not a spy): an anonymous POST
+    ///   is refused `401` by the perimeter's `.layer` before routing, so the live store
+    ///   shows no pair conversation and no message — the write counters ARE the "port never
+    ///   ran" proof;
+    /// * an admitted viewer opening a pair with an agent they own reaches the live SQLite
+    ///   mint through the real hub/aftermath (`201`), and the new pair then appears in the
+    ///   composed cold `GET /api/direct-pairs` read that was empty before — write→read both
+    ///   off the one production store. Get-or-create idempotency is the loser-does-not-
+    ///   re-announce positive control: a second POST returns the SAME pair (`201`, still
+    ///   ONE pair in the cold list) yet still sends a second message — existing parity, not
+    ///   a rollback. A one-method checksum pins the path to POST only.
+    ///
+    /// The per-branch refusal matrix (the two size-gate field shapes, reply-target-before-
+    /// content-cap ordering, the winner-only LIVE announce) stays with the door's own
+    /// router/adapter tests; this gate proves the route is MOUNTED and reaches the
+    /// composition's real adapters.
+    #[tokio::test]
+    async fn the_composition_opens_a_direct_pair_and_sends_behind_the_perimeter() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_direct_pair_target(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bearer = format!("Bearer {TOKEN}");
+        let path = format!("/api/agents/{DP_TARGET_AGENT}/direct-messages");
+        let pairs_sql = "SELECT COUNT(*) FROM conversations WHERE placement_kind = 'direct_pair'";
+
+        // 0-call / zero-side-effect twin: the anonymous POST is refused by the perimeter
+        // before any product work, so the real store shows no pair and no message.
+        let (status, body) = request_with_body(
+            &router,
+            "POST",
+            &path,
+            None,
+            Body::from(r#"{"content":"hi"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(body, r#"{"error":"unauthorized"}"#);
+        assert_eq!(
+            count(&fixture.path, pairs_sql).await,
+            0,
+            "anon POST minted a pair"
+        );
+        assert_eq!(
+            count(&fixture.path, "SELECT COUNT(*) FROM messages").await,
+            0,
+            "anon POST sent a message"
+        );
+
+        // Cold list is empty before the first admitted open.
+        let (status, body) = request(&router, "GET", "/api/direct-pairs", Some(&bearer)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body, r#"{"direct_pairs":[]}"#);
+
+        // Admitted viewer opens the pair with an agent they own → the live mint + send.
+        let (status, body) = request_with_body(
+            &router,
+            "POST",
+            &path,
+            Some(&bearer),
+            Body::from(r#"{"content":"hello"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(
+            count(&fixture.path, pairs_sql).await,
+            1,
+            "the winner mints one pair"
+        );
+        assert_eq!(
+            count(&fixture.path, "SELECT COUNT(*) FROM messages").await,
+            1,
+            "the first message is sent"
+        );
+
+        // The new pair is now visible in the composed cold read — write→read off one store.
+        let (status, body) = request(&router, "GET", "/api/direct-pairs", Some(&bearer)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let listed = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+        assert_eq!(
+            listed["direct_pairs"].as_array().unwrap().len(),
+            1,
+            "{body}"
+        );
+
+        // Loser-does-not-re-announce positive control: a second POST get-or-creates the
+        // SAME pair (still ONE) yet still sends (a second message) — parity, not a rollback.
+        let (status, body) = request_with_body(
+            &router,
+            "POST",
+            &path,
+            Some(&bearer),
+            Body::from(r#"{"content":"again"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(
+            count(&fixture.path, pairs_sql).await,
+            1,
+            "get-or-create loser re-uses the pair, never a second"
+        );
+        assert_eq!(
+            count(&fixture.path, "SELECT COUNT(*) FROM messages").await,
+            2,
+            "both paths send their first message"
+        );
+
+        // One-method checksum: the mounted path serves POST only.
+        let (status, _) = request(&router, "GET", &path, Some(&bearer)).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     }
 
     /// Wave 3A checkpoint A1: the five channel directory/detail read doors, mounted in
