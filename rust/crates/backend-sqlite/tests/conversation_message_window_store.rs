@@ -408,12 +408,86 @@ async fn a_linked_task_number_past_the_javascript_safe_integer_faults_the_window
     let source = std::error::Error::source(&error)
         .and_then(|source| source.downcast_ref::<ConversationMessageWindowStoreError>())
         .expect("message-window failure preserves its named SQLite source");
-    // Canonical TaskNumber rejects the over-safe value at decode, so the reader faults
-    // on tasks.task_number instead of projecting a lossy number.
-    assert!(matches!(
-        source,
-        ConversationMessageWindowStoreError::LinkedTask
-    ));
+    // Canonical TaskNumber rejects the over-safe value at decode, and the corruption
+    // is source-bearing: it names the exact column, not a generic linked-task fault.
+    assert!(
+        matches!(
+            source,
+            ConversationMessageWindowStoreError::LinkedTask { field } if *field == "tasks.task_number"
+        ),
+        "expected tasks.task_number source, got {source:?}"
+    );
+}
+
+/// A non-canonical stored `tasks.title` is corruption, not a title to project
+/// verbatim: `tasks.title` carries no canonicity CHECK, and `TaskAggregate::decode`
+/// already faults such a row, so the linked-task projection must agree. (A missing
+/// title is unconstructable — `tasks.title` is NOT NULL — so the decoder's Option
+/// handling of the LEFT JOIN column faults defensively but has no SQL falsifier.)
+#[tokio::test]
+async fn a_non_canonical_linked_task_title_faults_the_window_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("message-window-linked-task-title.sqlite");
+    seed(&path).await;
+    let latest = ConversationMessageWindowRequest::new(
+        MessageWindowStreamRequest::Mainline,
+        2,
+        MessageWindowAnchor::Latest,
+    )
+    .unwrap();
+
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    db.execute("UPDATE tasks SET title='  Linked   task  ' WHERE id='task-1'")
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+
+    let error = read(&path, "viewer", latest.clone()).await.unwrap_err();
+    let source = std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<ConversationMessageWindowStoreError>())
+        .expect("message-window failure preserves its named SQLite source");
+    assert!(
+        matches!(
+            source,
+            ConversationMessageWindowStoreError::LinkedTask { field }
+                if *field == "tasks.title:non_canonical"
+        ),
+        "expected tasks.title:non_canonical source, got {source:?}"
+    );
+
+    // The canonical form round-trips byte-for-byte after repair.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir
+        .path()
+        .join("message-window-linked-task-title-ok.sqlite");
+    seed(&path).await;
+    let latest = ConversationMessageWindowRequest::new(
+        MessageWindowStreamRequest::Mainline,
+        2,
+        MessageWindowAnchor::Latest,
+    )
+    .unwrap();
+    let bound = read(&path, "viewer", latest.clone())
+        .await
+        .unwrap()
+        .unwrap()
+        .bind(
+            &UserId::parse("viewer").unwrap(),
+            &ConversationId::parse("c").unwrap(),
+            &latest,
+        )
+        .unwrap();
+    assert_eq!(
+        bound.messages()[1]
+            .projection()
+            .linked_task
+            .as_ref()
+            .unwrap()
+            .title(),
+        "Linked task"
+    );
 }
 
 /// `Number.MAX_SAFE_INTEGER` itself and every one of the five task statuses survive

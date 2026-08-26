@@ -21,7 +21,7 @@ use crate::{
         ThreadRootId,
         attachments::{AttachmentLabel, AttachmentSnapshot},
         collaboration::reaction::ReactionAggregate,
-        task::{TaskId, TaskNumber, TaskStatus},
+        task::{TaskId, TaskNumber, TaskStatus, TaskTitle},
     },
 };
 
@@ -450,7 +450,7 @@ pub struct WindowLinkedTask {
     source_message: MessageId,
     id: TaskId,
     number: TaskNumber,
-    title: String,
+    title: TaskTitle,
     status: TaskStatus,
     assignee: Option<WindowTaskAssignee>,
 }
@@ -461,7 +461,7 @@ impl WindowLinkedTask {
         source_message: MessageId,
         id: TaskId,
         number: TaskNumber,
-        title: String,
+        title: TaskTitle,
         status: TaskStatus,
         assignee: Option<WindowTaskAssignee>,
     ) -> Self {
@@ -485,7 +485,7 @@ impl WindowLinkedTask {
     }
 
     pub fn title(&self) -> &str {
-        &self.title
+        self.title.as_str()
     }
 
     pub const fn status(&self) -> TaskStatus {
@@ -1652,7 +1652,7 @@ mod tests {
             message_id("other"),
             TaskId::parse("task").unwrap(),
             TaskNumber::new(1).unwrap(),
-            "Task".to_owned(),
+            TaskTitle::parse("Task").unwrap(),
             TaskStatus::Todo,
             None,
         ));

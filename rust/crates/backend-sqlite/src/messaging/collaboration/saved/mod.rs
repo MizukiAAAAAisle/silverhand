@@ -48,8 +48,8 @@ pub enum SavedStoreError {
     MalformedMetadataShape,
     #[error("stored message author kind is outside the published domain")]
     MalformedAuthor,
-    #[error("stored linked-task projection is malformed")]
-    MalformedLinkedTask,
+    #[error("stored linked-task projection field {field} is malformed")]
+    MalformedLinkedTask { field: &'static str },
     #[error("environment could not mint the saved-message fact")]
     Environment(#[source] silverhand_backend_core::messaging::EnvironmentUnavailable),
 }

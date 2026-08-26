@@ -4,7 +4,7 @@ use crate::{
         FromKind, MessageAuthor, MessageId, MessageSeq, PrincipalIdentity, ThreadRootId,
         attachments::AttachmentSnapshot,
         environment::{EnvironmentUnavailable, SendEntropy, base64url},
-        task::{TaskId, TaskNumber, TaskStatus},
+        task::{TaskId, TaskNumber, TaskStatus, TaskTitle},
     },
 };
 
@@ -103,7 +103,7 @@ impl SavedTaskAssignee {
 pub struct SavedLinkedTask {
     pub id: TaskId,
     pub number: TaskNumber,
-    pub title: String,
+    pub title: TaskTitle,
     pub status: TaskStatus,
     pub assignee: Option<SavedTaskAssignee>,
 }

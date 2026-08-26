@@ -144,7 +144,7 @@ fn linked_task(
     json!({
         "task_id": task.id.as_str(),
         "task_number": task.number.get(),
-        "title": task.title,
+        "title": task.title.as_str(),
         "status": task.status.as_str(),
         "assignee": task.assignee.as_ref().map(|assignee| json!({
             "type": match assignee.principal() {
