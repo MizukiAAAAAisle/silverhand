@@ -20,10 +20,11 @@ use silverhand_backend_core::{
                 WindowBoundaryDirection, WindowBoundaryFact, WindowCount, WindowLinkedTask,
                 WindowMessageMetadata, WindowMessageProjection, WindowReaction,
                 WindowReactionViewer, WindowReplier, WindowReplyPreview, WindowRootReplies,
-                WindowTaskAssignee, WindowTaskNumber, WindowTaskStatus,
+                WindowTaskAssignee,
             },
             reaction::Reactor,
         },
+        task::{TaskId, TaskNumber, TaskStatus, TaskTitle},
     },
     persistence::PersistenceFailure,
 };
@@ -78,8 +79,8 @@ pub enum ConversationMessageWindowStoreError {
     AuthorKind,
     #[error("stored message-window metadata is malformed")]
     Metadata,
-    #[error("stored linked-task projection is malformed")]
-    LinkedTask,
+    #[error("stored linked-task projection field {field} is malformed")]
+    LinkedTask { field: &'static str },
     #[error("stored message-window author projection failed")]
     Author(#[source] PersistenceFailure),
     #[error("stored message reaction projection failed")]
@@ -975,19 +976,29 @@ fn decode_linked_task(
     let Some(id) = row.try_get::<Option<String>, _>("task_id")? else {
         return Ok(None);
     };
-    let number = WindowTaskNumber::new(
+    let id = TaskId::parse(id).map_err(|_| linked_task("tasks.id"))?;
+    let number = TaskNumber::new(
         row.try_get::<Option<i64>, _>("task_number")?
-            .ok_or(ConversationMessageWindowStoreError::LinkedTask)?,
+            .ok_or(linked_task("tasks.task_number:missing"))?,
     )
-    .map_err(|_| ConversationMessageWindowStoreError::LinkedTask)?;
-    let title = row
+    .map_err(|_| linked_task("tasks.task_number"))?;
+    // A correct writer persists a title already run through the create/edit
+    // canonicalizer, and `tasks.title` carries no canonicity CHECK — so, exactly as
+    // `TaskAggregate::decode` does, parse for the contract then require the stored
+    // bytes to already equal the canonical form. Using the parsed (collapsed) value
+    // would silently rewrite a persisted fact.
+    let raw_title = row
         .try_get::<Option<String>, _>("task_title")?
-        .ok_or(ConversationMessageWindowStoreError::LinkedTask)?;
-    let status = WindowTaskStatus::parse(
+        .ok_or(linked_task("tasks.title:missing"))?;
+    let title = TaskTitle::parse(&raw_title).map_err(|_| linked_task("tasks.title"))?;
+    if title.as_str() != raw_title {
+        return Err(linked_task("tasks.title:non_canonical"));
+    }
+    let status = TaskStatus::parse(
         &row.try_get::<Option<String>, _>("task_status")?
-            .ok_or(ConversationMessageWindowStoreError::LinkedTask)?,
+            .ok_or(linked_task("tasks.status:missing"))?,
     )
-    .ok_or(ConversationMessageWindowStoreError::LinkedTask)?;
+    .map_err(|_| linked_task("tasks.status"))?;
     let agent: Option<String> = row.try_get("assignee_agent_id")?;
     let user: Option<String> = row.try_get("assignee_user_id")?;
     let assignee = match (agent, user) {
@@ -1006,12 +1017,12 @@ fn decode_linked_task(
                 .unwrap_or(id),
         )),
         (None, None) => None,
-        _ => return Err(ConversationMessageWindowStoreError::LinkedTask),
+        _ => return Err(linked_task("tasks.assignee")),
     };
-    WindowLinkedTask::projected(
+    Ok(Some(WindowLinkedTask::projected(
         ConversationId::parse(
             row.try_get::<Option<String>, _>("task_conversation_id")?
-                .ok_or(ConversationMessageWindowStoreError::LinkedTask)?,
+                .ok_or(linked_task("tasks.conversation_id:missing"))?,
         )
         .map_err(|_| identity("tasks.conversation_id"))?,
         message_id(row, "message_id")?,
@@ -1020,9 +1031,7 @@ fn decode_linked_task(
         title,
         status,
         assignee,
-    )
-    .map(Some)
-    .map_err(ConversationMessageWindowStoreError::Projection)
+    )))
 }
 
 pub(super) fn decode_attachments(
@@ -1171,4 +1180,8 @@ fn message_seq(
 
 fn identity(field: &'static str) -> ConversationMessageWindowStoreError {
     ConversationMessageWindowStoreError::Identity { field }
+}
+
+fn linked_task(field: &'static str) -> ConversationMessageWindowStoreError {
+    ConversationMessageWindowStoreError::LinkedTask { field }
 }

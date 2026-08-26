@@ -6,8 +6,9 @@ use silverhand_backend_core::{
         collaboration::saved::{
             SavedAt, SavedEntry, SavedEntryId, SavedLinkedTask, SavedListQuery, SavedMessage,
             SavedMessageProjection, SavedPlace, SavedReadPort, SavedReadRefusal, SavedSince,
-            SavedTaskAssignee, SavedTaskNumber, SavedTaskStatus,
+            SavedTaskAssignee,
         },
+        task::{TaskId, TaskNumber, TaskStatus, TaskTitle},
     },
     persistence::PersistenceFailure,
 };
@@ -222,21 +223,48 @@ fn decode_linked_task(row: &SqliteRow) -> Result<Option<SavedLinkedTask>, Persis
     else {
         return Ok(None);
     };
-    if id.is_empty() {
-        return Err(SavedStoreError::MalformedLinkedTask.into());
-    }
-    let number = SavedTaskNumber::new(
+    let id = TaskId::parse(id)
+        .map_err(|_| SavedStoreError::MalformedLinkedTask { field: "tasks.id" })?;
+    let number = TaskNumber::new(
         row.try_get::<Option<i64>, _>("task_number")
             .map_err(SavedStoreError::from)?
-            .ok_or(SavedStoreError::MalformedLinkedTask)?,
+            .ok_or(SavedStoreError::MalformedLinkedTask {
+                field: "tasks.task_number:missing",
+            })?,
     )
-    .map_err(|_| SavedStoreError::MalformedLinkedTask)?;
-    let status = SavedTaskStatus::parse(
+    .map_err(|_| SavedStoreError::MalformedLinkedTask {
+        field: "tasks.task_number",
+    })?;
+    // Strict-decode the title exactly as `TaskAggregate::decode`: `tasks.title` has
+    // no canonicity CHECK, so parse for the contract then require the stored bytes to
+    // already equal the canonical form (using the collapsed value would silently
+    // rewrite a persisted fact). A NULL title alongside a present task id is a row no
+    // correct writer could produce.
+    let raw_title = row
+        .try_get::<Option<String>, _>("task_title")
+        .map_err(SavedStoreError::from)?
+        .ok_or(SavedStoreError::MalformedLinkedTask {
+            field: "tasks.title:missing",
+        })?;
+    let title = TaskTitle::parse(&raw_title).map_err(|_| SavedStoreError::MalformedLinkedTask {
+        field: "tasks.title",
+    })?;
+    if title.as_str() != raw_title {
+        return Err(SavedStoreError::MalformedLinkedTask {
+            field: "tasks.title:non_canonical",
+        }
+        .into());
+    }
+    let status = TaskStatus::parse(
         &row.try_get::<Option<String>, _>("task_status")
             .map_err(SavedStoreError::from)?
-            .ok_or(SavedStoreError::MalformedLinkedTask)?,
+            .ok_or(SavedStoreError::MalformedLinkedTask {
+                field: "tasks.status:missing",
+            })?,
     )
-    .ok_or(SavedStoreError::MalformedLinkedTask)?;
+    .map_err(|_| SavedStoreError::MalformedLinkedTask {
+        field: "tasks.status",
+    })?;
     let agent: Option<String> = row
         .try_get("assignee_agent_id")
         .map_err(SavedStoreError::from)?;
@@ -261,15 +289,17 @@ fn decode_linked_task(row: &SqliteRow) -> Result<Option<SavedLinkedTask>, Persis
                 .unwrap_or(id),
         )),
         (None, None) => None,
-        _ => return Err(SavedStoreError::MalformedLinkedTask.into()),
+        _ => {
+            return Err(SavedStoreError::MalformedLinkedTask {
+                field: "tasks.assignee",
+            }
+            .into());
+        }
     };
     Ok(Some(SavedLinkedTask {
         id,
         number,
-        title: row
-            .try_get::<Option<String>, _>("task_title")
-            .map_err(SavedStoreError::from)?
-            .unwrap_or_default(),
+        title,
         status,
         assignee,
     }))
