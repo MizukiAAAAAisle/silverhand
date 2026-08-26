@@ -123,11 +123,12 @@ where
     };
     let admitted = match validate_human_payload(raw_body) {
         Ok(admitted) => admitted,
-        Err(PayloadRefusal::Shape(issues)) => return invalid_input(issues).into_response(),
-        Err(PayloadRefusal::ContentTooLarge { actual_bytes }) => {
-            return human_content_too_large(actual_bytes).into_response();
-        }
+        Err(refusal) => return refuse_payload(refusal),
     };
+    // TS refuses a reply target (400 `reply_to_unsupported`) BEFORE it meets the content
+    // cap (413). Admission has only refined so far; the cap is stage two, sealed below,
+    // so this door checks the reply target in between and restores the reference order.
+    // A direct pair has no cluster to reply into, so any reply target is a client error.
     if admitted.reply_to().is_some() {
         return (
             StatusCode::BAD_REQUEST,
@@ -138,7 +139,11 @@ where
         )
             .into_response();
     }
-    let payload = admitted.into_payload();
+    // STAGE TWO — the content cap, run only now that the reply target has been refused.
+    let payload = match admitted.seal() {
+        Ok(payload) => payload,
+        Err(refusal) => return refuse_payload(refusal),
+    };
 
     let inner = Arc::clone(&state.0);
     let send_inner = Arc::clone(&inner);
@@ -183,6 +188,19 @@ fn created(outcome: &SendMessageOutcome) -> Response {
 
 fn error(status: StatusCode, message: &'static str) -> Response {
     (status, Json(json!({"error": message}))).into_response()
+}
+
+/// The two payload stages — refine (shape/says-nothing) and seal (content cap) — refuse
+/// with the same [`PayloadRefusal`], and this door renders each to the identical wire
+/// wherever it was raised. Splitting the stages moved WHEN the cap runs, never WHAT it
+/// answers.
+fn refuse_payload(refusal: PayloadRefusal) -> Response {
+    match refusal {
+        PayloadRefusal::Shape(issues) => invalid_input(issues).into_response(),
+        PayloadRefusal::ContentTooLarge { actual_bytes } => {
+            human_content_too_large(actual_bytes).into_response()
+        }
+    }
 }
 
 fn internal() -> Response {

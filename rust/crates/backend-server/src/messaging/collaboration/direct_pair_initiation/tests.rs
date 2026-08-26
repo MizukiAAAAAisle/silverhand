@@ -332,6 +332,22 @@ async fn every_door_local_preflight_refuses_before_pair_allocation() {
             StatusCode::PAYLOAD_TOO_LARGE,
             "content_too_large",
         ),
+        // The reply-target↔cap crossing cell. Oversized content AND a reply target is
+        // reachable within the transport bound (513 bytes over the 64KiB cap, far under
+        // the 512KiB envelope), and TS answers the reply target first: 400
+        // `reply_to_unsupported`, never 413. The fused order this route used to inherit
+        // sealed the cap inside admission and answered 413 here — this cell is the
+        // resident falsifier that goes red the moment the two stages refuse in the wrong
+        // order. A single-trigger cell proves each gate exists but says nothing about
+        // which of two adjacent gates wins.
+        (
+            Body::from(
+                json!({"content":"x".repeat(65_537),"reply_to_message_id":"root"}).to_string(),
+            ),
+            None,
+            StatusCode::BAD_REQUEST,
+            "reply_to_unsupported",
+        ),
     ];
     for (body, declared, expected_status, marker) in cases {
         let initiation = Initiation::granted();

@@ -142,6 +142,12 @@ where
         None => SendDestination::MainLine,
     };
 
+    // STAGE TWO — the content cap. This door has no rule to insert between the refine
+    // and the cap, so it seals the moment it has read the destination: admit → seal, one
+    // uninterrupted order, byte-identical to when the two stages were fused. Both stages
+    // refuse as `HumanRefusal::Payload`, so the wire is unchanged whichever fired.
+    let payload = request.seal().map_err(HumanRefusal::Payload)?;
+
     execute(
         ResolvedSendContext::resolved(
             SendActor::User(author.clone()),
@@ -155,7 +161,7 @@ where
             // because this door declined to offer it.
             false,
         ),
-        request.into_payload(),
+        payload,
         ports.positions,
         ports.authority,
         ports.unit_of_work,

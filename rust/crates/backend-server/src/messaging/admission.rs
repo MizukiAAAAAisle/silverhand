@@ -48,6 +48,23 @@ impl ValidatedSendPayload {
     }
 }
 
+/// A request that has passed shape and the refine but has NOT yet met the content cap:
+/// STAGE ONE of closing a request, held apart from stage two so a door may run its own
+/// rule between them.
+///
+/// It is deliberately opaque. Its fields are private, it has no public constructor, and
+/// it exposes neither the raw text nor a [`ValidatedSendPayload`] — the ONLY way to
+/// obtain it is [`refine`], and the ONLY thing that can be done with it is [`seal`]. Two
+/// order mistakes are therefore unrepresentable rather than merely discouraged: a door
+/// cannot reach the cap without having refined (there is no other producer of this type),
+/// and it cannot forget the cap and send the text as-is (there is no accessor and no
+/// `ValidatedSendPayload` that did not come out of `seal`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct UnsealedSendPayload {
+    content: String,
+    attachments: Vec<AttachmentRef>,
+}
+
 /// A settled HUMAN request: the shared payload plus the only destination this door can
 /// express — a message in the same conversation to reply to.
 ///
@@ -55,7 +72,7 @@ impl ValidatedSendPayload {
 /// distinction is the difference between a reply and a top-level message.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ValidatedHumanSend {
-    payload: ValidatedSendPayload,
+    unsealed: UnsealedSendPayload,
     reply_to: Option<MessageId>,
 }
 
@@ -64,8 +81,14 @@ impl ValidatedHumanSend {
         self.reply_to.as_ref()
     }
 
-    pub(crate) fn into_payload(self) -> ValidatedSendPayload {
-        self.payload
+    /// STAGE TWO for the human doors: meet the content cap and hand back the send-ready
+    /// payload. The ordinary door calls this the moment it has admitted the body
+    /// (admit → seal); the direct-pair door calls it only AFTER refusing a reply target,
+    /// which is how ONE set of rules runs in the two orders the two doors need without
+    /// either restating a rule. Both stages fail with the same [`PayloadRefusal`], so a
+    /// door maps them to the wire uniformly.
+    pub(crate) fn seal(self) -> Result<ValidatedSendPayload, PayloadRefusal> {
+        seal(self.unsealed)
     }
 }
 
@@ -256,7 +279,7 @@ pub(crate) fn validate_human_payload(
     };
 
     Ok(ValidatedHumanSend {
-        payload: settle(content, attachments)?,
+        unsealed: refine(content, attachments)?,
         reply_to,
     })
 }
@@ -313,7 +336,7 @@ pub(crate) fn validate_agent_payload(
     };
 
     Ok(ValidatedAgentSend {
-        payload: settle(content, attachments)?,
+        payload: seal(refine(content, attachments)?)?,
         target,
         freshness_bypass,
     })
@@ -351,24 +374,29 @@ fn document(body: Option<serde_json::Value>) -> Result<Fields, PayloadRefusal> {
     }
 }
 
-/// The rules that close a request, in the order the reference runs them, and only once
-/// EVERY key has parsed: the refine belongs to the schema and reads values, so it has
-/// nothing to read while a key is still malformed; the content cap sits outside the schema
-/// altogether.
+/// The rules that close a request, split into the two stages a door may need to run
+/// APART, and reached only once EVERY key has parsed: the refine belongs to the schema
+/// and reads values, so it has nothing to read while a key is still malformed; the
+/// content cap sits outside the schema altogether.
 ///
-/// The order is observable. A body of 70KiB of spaces is answered "this says nothing", not
-/// "this is too big", because the schema is what rejects it first; and a body that is both
-/// oversized and carrying a malformed attachment is answered about the attachment.
-/// Checking the cap early would answer both the other way round. Collecting several issues
-/// does not move these two gates — they still run after the whole shape passes.
-fn settle(
+/// The order is observable, and it is a PRODUCT decision, not this file's — so the two
+/// stages are separable rather than fused. A body of 70KiB of spaces is answered "this
+/// says nothing", not "this is too big", because the refine runs before the cap; and a
+/// body that is both oversized and carrying a malformed attachment is answered about the
+/// attachment, because the whole shape runs before either. Checking the cap early would
+/// answer both the other way round. Collecting several issues does not move these gates —
+/// they still run after the whole shape passes.
+///
+/// STAGE ONE — the refine. It lives here rather than in `MessageContent`: an
+/// attachment-only send is legal, so an empty string is legal CONTENT — the rule is
+/// "this request says something", a fact about the request and not an invariant of the
+/// value. In the domain type it would forbid a legal send. Produces the opaque
+/// [`UnsealedSendPayload`]; the cap is stage two, and the type is what keeps them from
+/// being run out of order or one of them skipped.
+fn refine(
     content: String,
     attachments: Vec<AttachmentRef>,
-) -> Result<ValidatedSendPayload, PayloadRefusal> {
-    // THE REFINE, and it lives here rather than in `MessageContent`. An attachment-only
-    // send is legal, so an empty string is legal CONTENT — the rule is "this request says
-    // something", a fact about the request and not an invariant of the value. In the
-    // domain type it would forbid a legal send.
+) -> Result<UnsealedSendPayload, PayloadRefusal> {
     if ecmascript_trim(&content).is_empty() && attachments.is_empty() {
         return Err(shape(ShapeIssue::custom(
             PAYLOAD_REFINE_MESSAGE,
@@ -376,8 +404,24 @@ fn settle(
         )));
     }
 
-    // The cap is the domain type's own invariant, asked here rather than restated: one
-    // comparison, in one place, and no way to build content that skipped it.
+    Ok(UnsealedSendPayload {
+        content,
+        attachments,
+    })
+}
+
+/// STAGE TWO — the cap. The domain type's own invariant, asked here rather than
+/// restated: one comparison, in one place, and no way to build content that skipped it.
+///
+/// It is the SOLE producer of [`ValidatedSendPayload`], and it consumes a refined value
+/// rather than a raw string, so a caller can neither reach the cap without having refined
+/// nor obtain a send-ready payload any other way.
+fn seal(unsealed: UnsealedSendPayload) -> Result<ValidatedSendPayload, PayloadRefusal> {
+    let UnsealedSendPayload {
+        content,
+        attachments,
+    } = unsealed;
+
     let content =
         MessageContent::parse(content).map_err(|too_long| PayloadRefusal::ContentTooLarge {
             actual_bytes: too_long.actual_bytes,
@@ -606,8 +650,13 @@ mod tests {
 
     /// The rules BOTH doors share, reached through one of them. Which door asks is
     /// irrelevant to every assertion below: that is the point of one rule set.
+    ///
+    /// It composes the two stages in the ORDINARY door's order — refine, then seal —
+    /// with nothing between, so a `too_big` answer can only come after `says-nothing`
+    /// has passed. A test that feeds input which is BOTH (70KiB of spaces) therefore
+    /// reads the refine's answer through the real split, not through a fused helper.
     fn admit(body: Option<serde_json::Value>) -> Result<ValidatedSendPayload, PayloadRefusal> {
-        validate_human_payload(body).map(ValidatedHumanSend::into_payload)
+        validate_human_payload(body)?.seal()
     }
 
     fn issues(refusal: PayloadRefusal) -> Vec<ShapeIssue> {

@@ -320,7 +320,8 @@ mod tests {
     fn settled() -> ValidatedSendPayload {
         validate_human_payload(Some(serde_json::json!({"content": "hello"})))
             .unwrap()
-            .into_payload()
+            .seal()
+            .unwrap()
     }
 
     /// Both principals arrive at the SAME unit of work, and the only thing that
@@ -360,7 +361,8 @@ mod tests {
             "attachment_ids": [{"id": "att-1", "label": " Image #1 "}]
         })))
         .unwrap()
-        .into_payload();
+        .seal()
+        .unwrap();
         // Admission already normalized the label; execute must not touch it.
         assert_eq!(payload.attachments()[0].label.as_deref(), Some("Image #1"));
 
