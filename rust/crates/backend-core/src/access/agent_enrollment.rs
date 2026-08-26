@@ -21,18 +21,9 @@ use thiserror::Error;
 
 use super::clock::EnrollmentClock;
 use crate::{
-    identity::{AgentId, UserId, WorkspaceId},
+    identity::{AgentId, Principal, UserId, WorkspaceId},
     persistence::PersistenceFailure,
 };
-
-/// Who is asking to enroll an agent. `Agent` carries no further fields because
-/// no enrollment rule reads any: an agent principal can never enroll.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Principal {
-    System,
-    Human { user_id: UserId },
-    Agent { agent_id: AgentId },
-}
 
 /// The immutable authorization facts of an agent: enough to decide who may
 /// enroll it. Read through [`AgentEnrollmentReadPort`]; the rule that consumes

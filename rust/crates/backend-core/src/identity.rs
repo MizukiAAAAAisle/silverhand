@@ -77,6 +77,34 @@ opaque_identity!(
     EmptyDaemonInstanceId,
     "daemon instance id must not be empty"
 );
+opaque_identity!(HostId, EmptyHostId, "host id must not be empty");
+
+/// Who is asking. The one application principal, shared by every capability that
+/// decides on authority — enrollment, governance and the agent surfaces all read
+/// the same three arms, so a second definition would be a second vocabulary for
+/// one concept.
+///
+/// Three arms because the product has three callers with different authority: a
+/// human session, an agent's own runtime acting as itself, and the system acting
+/// from inside (migrations, internal hosts) where no ACL applies. Each arm
+/// carries only the identity a rule reads; `System` carries none, because a rule
+/// that admits it never looks further.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Principal {
+    System,
+    Human { user_id: UserId },
+    Agent { agent_id: AgentId },
+}
+
+impl Principal {
+    pub fn human(user_id: UserId) -> Self {
+        Self::Human { user_id }
+    }
+
+    pub fn agent(agent_id: AgentId) -> Self {
+        Self::Agent { agent_id }
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -34,11 +34,11 @@ use std::{path::Path, time::Duration};
 use silverhand_backend_core::access::{
     AddHumanMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
     AgentWorkspaceMembership, Capability, EnrollmentKey, HumanEnrollmentCommit, HumanEnrollmentKey,
-    HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, HumanUser, Principal,
-    WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceGovernanceFacts, WorkspaceRole,
-    WorkspaceUserMembership, governance_ceiling, human_enrollment_authorized,
+    HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, HumanUser, WorkspaceAccessPolicy,
+    WorkspaceGovernance, WorkspaceGovernanceFacts, WorkspaceRole, WorkspaceUserMembership,
+    governance_ceiling, human_enrollment_authorized,
 };
-use silverhand_backend_core::identity::{AgentId, UserId, WorkspaceId};
+use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
     SqlitePool,

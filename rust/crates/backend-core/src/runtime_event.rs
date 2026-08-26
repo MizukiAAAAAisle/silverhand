@@ -7,6 +7,8 @@
 
 use std::future::Future;
 
+use thiserror::Error;
+
 use crate::{
     identity::{AgentId, ConversationId, UserId},
     persistence::PersistenceFailure,
@@ -36,6 +38,11 @@ impl RuntimeEventAdmission {
     }
 }
 
+/// What a daemon last observed a runtime seat to be doing.
+///
+/// The persisted token and this enum are one bijection, so both halves live here:
+/// an adapter that re-stated the inverse would be a second authority nothing forces
+/// to agree with [`RuntimeObservedStatus::as_str`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeObservedStatus {
     Idle,
@@ -53,7 +60,26 @@ impl RuntimeObservedStatus {
             Self::Crashed => "crashed",
         }
     }
+
+    pub fn parse(raw: &str) -> Result<Self, UnknownRuntimeObservedStatus> {
+        match raw {
+            "idle" => Ok(Self::Idle),
+            "starting" => Ok(Self::Starting),
+            "active" => Ok(Self::Active),
+            "crashed" => Ok(Self::Crashed),
+            _ => Err(UnknownRuntimeObservedStatus),
+        }
+    }
 }
+
+/// A stored value outside the closed set is unreadable, not a fifth status.
+///
+/// It must not decay into a default: every consumer of this vocabulary decides
+/// whether a seat is running, and a token nobody wrote cannot be answered with "not
+/// running" — that would turn corrupt data into a live liveness verdict.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Error)]
+#[error("runtime observed status is outside the closed set")]
+pub struct UnknownRuntimeObservedStatus;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RuntimeActivityPayload {
@@ -740,4 +766,33 @@ pub trait DaemonEventDurablePort: Clone + Send + Sync + 'static {
         &self,
         event: StampRuntimePresence,
     ) -> impl Future<Output = Result<Option<Vec<UserId>>, PersistenceFailure>> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_observed_status_round_trips_through_its_persisted_token() {
+        for status in [
+            RuntimeObservedStatus::Idle,
+            RuntimeObservedStatus::Starting,
+            RuntimeObservedStatus::Active,
+            RuntimeObservedStatus::Crashed,
+        ] {
+            assert_eq!(RuntimeObservedStatus::parse(status.as_str()), Ok(status));
+        }
+    }
+
+    #[test]
+    fn an_unknown_token_is_unreadable_rather_than_a_fifth_status() {
+        assert_eq!(
+            RuntimeObservedStatus::parse("terminated"),
+            Err(UnknownRuntimeObservedStatus)
+        );
+        assert_eq!(
+            RuntimeObservedStatus::parse(""),
+            Err(UnknownRuntimeObservedStatus)
+        );
+    }
 }

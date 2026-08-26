@@ -15,11 +15,11 @@ use std::sync::{Arc, Mutex};
 
 use silverhand_backend_core::access::{
     AddHumanMemberError, EnrollmentClock, HumanEnrollmentCommit, HumanEnrollmentKey,
-    HumanEnrollmentOutcome, HumanEnrollmentUnitOfWork, Principal, ViewerAnnounce,
-    ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceRole, WorkspaceUserMembership,
+    HumanEnrollmentOutcome, HumanEnrollmentUnitOfWork, ViewerAnnounce, ViewerAnnounceFailure,
+    ViewerWorkspacesChangedSink, WorkspaceRole, WorkspaceUserMembership,
     add_workspace_human_member, human_enrollment_authorized,
 };
-use silverhand_backend_core::identity::{AgentId, UserId, WorkspaceId};
+use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 
 const JOINED_AT_MS: i64 = 1_700_000_000_000;

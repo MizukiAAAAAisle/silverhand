@@ -10,7 +10,7 @@ mod role;
 
 pub use agent_enrollment::{
     AddAgentMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
-    AgentWorkspaceMembership, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentKey, Principal,
+    AgentWorkspaceMembership, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentKey,
     add_workspace_agent_member, can_enroll_agent,
 };
 pub use clock::{EnrollmentClock, unix_millis};

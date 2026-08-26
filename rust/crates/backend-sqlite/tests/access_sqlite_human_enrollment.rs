@@ -19,10 +19,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use silverhand_backend_core::access::{
     AddHumanMemberError, EnrollmentClock, HumanEnrollmentOutcome, HumanEnrollmentReadPort,
-    Principal, ViewerAnnounce, ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceRole,
+    ViewerAnnounce, ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceRole,
     add_workspace_human_member,
 };
-use silverhand_backend_core::identity::{UserId, WorkspaceId};
+use silverhand_backend_core::identity::{Principal, UserId, WorkspaceId};
 use silverhand_backend_sqlite::access::SqliteAccessStore;
 use tempfile::TempDir;
 

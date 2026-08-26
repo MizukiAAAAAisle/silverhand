@@ -1,6 +1,8 @@
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, DaemonInstanceId},
     messaging::{MessageContent, ReferencePositions},
+    persistence::PersistenceFailure,
+    policy::agent_presence,
     runtime_credential::{ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeScope},
     runtime_delivery::{
         ClaimPendingInbox, DeliveryLeaseOwner, InboxSettlementDisposition,
@@ -8,8 +10,9 @@ use silverhand_backend_core::{
     },
     runtime_event::{
         CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
-        ProjectRuntimeStatus, RuntimeActivityFact, RuntimeActivityKind, RuntimeActivityPayload,
-        RuntimeEventAdmission, RuntimeExitDisposition, RuntimeObservedStatus,
+        ProjectRuntimeStatus, RuntimeActivityCommitResult, RuntimeActivityFact,
+        RuntimeActivityKind, RuntimeActivityPayload, RuntimeEventAdmission, RuntimeExitDisposition,
+        RuntimeObservedStatus,
     },
 };
 use silverhand_backend_sqlite::{
@@ -1170,7 +1173,7 @@ async fn presence_audience_is_emitted_only_on_deterministic_away_to_online_edges
         .unwrap();
     assert!(continuous.presence_viewers().is_empty());
 
-    let recovered_at = 2_000 + 30 * 60_000;
+    let recovered_at = 2_000 + agent_presence::AWAY_TTL_MS;
     let recovered = fixture
         .delivery
         .record_activity(
@@ -1188,5 +1191,156 @@ async fn presence_audience_is_emitted_only_on_deterministic_away_to_online_edges
             .map(|viewer| viewer.as_str())
             .collect::<Vec<_>>(),
         ["user-1"]
+    );
+}
+
+/// Walk the failure's source chain and return the offending value IF a link is the
+/// named `ActivityInstantOutOfRange`. A falsifier uses this to prove the fault is the
+/// shared authority's refusal — carrying the exact rejected value — rather than an
+/// unrelated driver error that would fake-green a bare `is_err()`.
+fn activity_out_of_range(error: &PersistenceFailure) -> Option<i64> {
+    let mut current = std::error::Error::source(error);
+    while let Some(link) = current {
+        if let Some(out_of_range) = link.downcast_ref::<agent_presence::ActivityInstantOutOfRange>()
+        {
+            return Some(out_of_range.0);
+        }
+        current = link.source();
+    }
+    None
+}
+
+/// Drive `record_activity` for the fixture agent, using `observed` as BOTH the fact time
+/// and the presence stamp — one knob per call. The fact time only matters on the success
+/// path; the fault path aborts before the activity is inserted.
+async fn record_presence(
+    fixture: &Fixture,
+    principal: &silverhand_backend_core::runtime_credential::RuntimePrincipal,
+    observed: i64,
+) -> Result<Option<RuntimeActivityCommitResult>, PersistenceFailure> {
+    fixture
+        .delivery
+        .record_activity(
+            RuntimeEventAdmission::new("host-1".into(), principal.clone()),
+            RuntimeActivityFact::new(
+                ConversationId::parse(CONVERSATION).unwrap(),
+                AgentId::parse(AGENT).unwrap(),
+                RuntimeActivityKind::Text,
+                RuntimeActivityPayload::Text {
+                    text: "wake".into(),
+                },
+                RuntimeEventTime::from_unix_millis(observed),
+            ),
+            RuntimeEventTime::from_unix_millis(observed),
+        )
+        .await
+}
+
+/// Read `agent-delivery`'s committed `last_activity_at` on a fresh connection.
+async fn stored_stamp(fixture: &Fixture) -> Option<i64> {
+    let mut db = open(&fixture.path).await;
+    let stored =
+        sqlx::query_scalar::<_, Option<i64>>("SELECT last_activity_at FROM agents WHERE id = ?")
+            .bind(AGENT)
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+    db.close().await.unwrap();
+    stored
+}
+
+/// Overwrite `agent-delivery`'s committed `last_activity_at` in place.
+async fn set_stamp(fixture: &Fixture, stamp: i64) {
+    let mut db = open(&fixture.path).await;
+    sqlx::query("UPDATE agents SET last_activity_at = ? WHERE id = ?")
+        .bind(stamp)
+        .bind(AGENT)
+        .execute(&mut db)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_corrupt_previous_activity_stamp_faults_instead_of_being_judged_online() {
+    // The saturation the fix removes would have washed a corrupt committed stamp into
+    // i64::MAX and judged the agent "still online", silently suppressing the away→online
+    // presence edge. Seed exactly such a value — a raw stamp inside the JS-safe range
+    // whose away deadline overflows it — and prove the writer now FAULTS on it through
+    // the SAME authority the read uses: the NAMED refusal (not any driver error) fires,
+    // the transaction does not commit, and a subsequent LEGAL write still succeeds so the
+    // fault was the corruption, not an unconditional failure faking green.
+    let fixture = fixture().await;
+    let principal = claim_runtime(&fixture, "daemon-presence").await;
+
+    let corrupt = agent_presence::MAX_SAFE_INTEGER;
+    set_stamp(&fixture, corrupt).await;
+
+    let error = record_presence(&fixture, &principal, 1_000)
+        .await
+        .expect_err("a corrupt previous stamp must fault, not be judged still-online");
+    assert_eq!(
+        activity_out_of_range(&error),
+        Some(corrupt),
+        "the fault must be the NAMED ActivityInstantOutOfRange carrying the corrupt value"
+    );
+    assert_eq!(
+        stored_stamp(&fixture).await,
+        Some(corrupt),
+        "the faulting write must not commit, leaving the committed row untouched"
+    );
+
+    // Repair positive control: with a legal previous stamp the SAME call path commits.
+    set_stamp(&fixture, 1_000).await;
+    record_presence(&fixture, &principal, 2_000)
+        .await
+        .expect("a legal previous stamp must let the write commit")
+        .expect("the principal is current, so the activity is recorded");
+    assert_eq!(
+        stored_stamp(&fixture).await,
+        Some(2_000),
+        "the repaired write must advance the committed stamp"
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_observed_stamp_faults_before_it_can_be_written() {
+    // The load-bearing guard: the writer must refuse to WRITE a stamp the read side is
+    // bound to reject. With a perfectly legal previous stamp, an observation one past the
+    // accepted domain (its away deadline would overflow the wire ceiling) must fault
+    // through the NAMED authority BEFORE the UPDATE — nothing committed, no audience — and
+    // the SAME fixture must accept a legal observation right after. Were the writer's
+    // `ActivityInstant::new(observed_at)` guard dropped, this observation would be written
+    // and this test would go red.
+    let fixture = fixture().await;
+    let principal = claim_runtime(&fixture, "daemon-presence").await;
+    set_stamp(&fixture, 1_000).await;
+
+    let invalid = agent_presence::ActivityInstant::MAX + 1;
+    let error = record_presence(&fixture, &principal, invalid)
+        .await
+        .expect_err("an out-of-domain observation must fault before it is written");
+    assert_eq!(
+        activity_out_of_range(&error),
+        Some(invalid),
+        "the fault must be the NAMED ActivityInstantOutOfRange carrying the rejected \
+         observation"
+    );
+    assert_eq!(
+        stored_stamp(&fixture).await,
+        Some(1_000),
+        "the rejected observation must not be written: the legal previous stamp stands"
+    );
+
+    // Repair: a legal observation on the SAME fixture commits, proving the fault was the
+    // observation's value and not an unconditional failure.
+    record_presence(&fixture, &principal, 2_000)
+        .await
+        .expect("a legal observation must let the write commit")
+        .expect("the principal is current, so the activity is recorded");
+    assert_eq!(
+        stored_stamp(&fixture).await,
+        Some(2_000),
+        "the repaired observation must advance the committed stamp"
     );
 }
