@@ -2619,6 +2619,60 @@ mod tests {
         total
     }
 
+    /// The one direct-pair conversation id from the live store — the pair the initiation
+    /// door minted. Used to name the conversation-scope the aftermath's `message` frame
+    /// rides, without the test having to predict the allocated id.
+    async fn direct_pair_conversation_id(path: &Path) -> String {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        let id: String =
+            sqlx::query_scalar("SELECT id FROM conversations WHERE placement_kind = 'direct_pair'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        pool.close().await;
+        id
+    }
+
+    /// A FRESH authenticated event-WS subscription's `subscribed.seq` for `scope`: the hub's
+    /// own high-water, which it reports deterministically in the ack. Reading it from a fresh
+    /// subscription (rather than draining a live socket) seals the "under-read / extra frame
+    /// left queued" false-green — the hub tells the truth about how many frames it published.
+    async fn fresh_scope_high_water(address: std::net::SocketAddr, scope: &str) -> i64 {
+        let mut request = format!("ws://{address}{EVENT_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert(ORIGIN, "http://localhost:5173".parse().unwrap());
+        request.headers_mut().insert(
+            COOKIE,
+            format!("{EVENT_WS_SESSION_COOKIE}={TOKEN}")
+                .parse()
+                .unwrap(),
+        );
+        request
+            .headers_mut()
+            .insert(DESKTOP_API_EPOCH_HEADER, MINIMUM_CLIENT_API_EPOCH.into());
+        let (mut socket, _) = connect_async(request).await.unwrap();
+        assert_eq!(next_socket_json(&mut socket).await["type"], "authenticated");
+        socket
+            .send(ClientMessage::Text(
+                serde_json::json!({ "type": "subscribe", "scope": scope })
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let subscribed = next_socket_json(&mut socket).await;
+        assert_eq!(subscribed["type"], "subscribed", "{subscribed}");
+        let seq = subscribed["seq"].as_i64().unwrap();
+        socket.close(None).await.unwrap();
+        seq
+    }
+
     /// Wave 3A checkpoint A6 (#2203): the human direct-pair initiation WRITE door,
     /// `POST /api/agents/{id}/direct-messages`, mounted in `prepare()` behind the SAME
     /// `require_human_session` perimeter and wired to the ONE production `MessagingStore`
@@ -2627,18 +2681,22 @@ mod tests {
     /// (winner-only pair-opened publication), and the SAME required `MessagingAftermath`.
     ///
     /// Two composition obligations the leaf router/adapter tests cannot prove:
-    /// * the before-product-port 0-call twin, expressed for a WRITE door as a
-    ///   zero-side-effect twin on the REAL composed adapter (not a spy): an anonymous POST
-    ///   is refused `401` by the perimeter's `.layer` before routing, so the live store
-    ///   shows no pair conversation and no message — the write counters ARE the "port never
-    ///   ran" proof;
+    /// * the route is MOUNTED behind the perimeter and reaches the composition's real
+    ///   adapters: an anonymous POST is refused `401` by the perimeter's `.layer` before
+    ///   routing (the live store showing no pair and no message is a zero-SIDE-EFFECT
+    ///   corroboration only — NOT a 0-call proof, since a read-then-write authority could
+    ///   also leave 0/0; the auth-before-authority order is proven by
+    ///   `the_direct_pair_initiation_authority_is_consulted_only_after_the_perimeter`, and
+    ///   the port's zero consult on missing auth by the leaf counting test);
     /// * an admitted viewer opening a pair with an agent they own reaches the live SQLite
     ///   mint through the real hub/aftermath (`201`), and the new pair then appears in the
     ///   composed cold `GET /api/direct-pairs` read that was empty before — write→read both
-    ///   off the one production store. Get-or-create idempotency is the loser-does-not-
-    ///   re-announce positive control: a second POST returns the SAME pair (`201`, still
-    ///   ONE pair in the cold list) yet still sends a second message — existing parity, not
-    ///   a rollback. A one-method checksum pins the path to POST only.
+    ///   off the one production store. A second POST returns the SAME pair (`201`, still ONE
+    ///   pair in the cold list) yet still sends a second message — get-or-create idempotency,
+    ///   not a rollback. (That the FIRST send additionally announces the winner pair-open and
+    ///   BOTH sends run the real aftermath is proven on the event WS by
+    ///   `the_composition_delivers_the_pair_open_and_the_aftermath_to_the_real_hubs`; row
+    ///   counts here prove neither.) A one-method checksum pins the path to POST only.
     ///
     /// The per-branch refusal matrix (the two size-gate field shapes, reply-target-before-
     /// content-cap ordering, the winner-only LIVE announce) stays with the door's own
@@ -2655,8 +2713,10 @@ mod tests {
         let path = format!("/api/agents/{DP_TARGET_AGENT}/direct-messages");
         let pairs_sql = "SELECT COUNT(*) FROM conversations WHERE placement_kind = 'direct_pair'";
 
-        // 0-call / zero-side-effect twin: the anonymous POST is refused by the perimeter
-        // before any product work, so the real store shows no pair and no message.
+        // Zero-side-effect corroboration (NOT a 0-call proof): the anonymous POST is refused
+        // by the perimeter before any product work, so the real store shows no pair and no
+        // message. Auth-before-authority order and the port's zero consult live in their own
+        // gates below.
         let (status, body) = request_with_body(
             &router,
             "POST",
@@ -2714,8 +2774,10 @@ mod tests {
             "{body}"
         );
 
-        // Loser-does-not-re-announce positive control: a second POST get-or-creates the
-        // SAME pair (still ONE) yet still sends (a second message) — parity, not a rollback.
+        // Get-or-create idempotency: a second POST re-uses the SAME pair (still ONE) yet
+        // still sends a second message — parity, not a rollback. (The winner-only pair-open
+        // announce and the per-send aftermath are proven on the event WS gate below, not by
+        // these row counts.)
         let (status, body) = request_with_body(
             &router,
             "POST",
@@ -2739,6 +2801,195 @@ mod tests {
         // One-method checksum: the mounted path serves POST only.
         let (status, _) = request(&router, "GET", &path, Some(&bearer)).await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    /// P0-1 (Cindy): the direct-pair initiation authority is a read-then-write port, so a
+    /// zero write count can never prove it was not CONSULTED. This proves the auth-before-
+    /// authority ORDER on the real `prepare()` wiring, by a broken-authority differential:
+    /// after `prepare()`, DROP the ONE table the initiation authority reads (`agents`) — the
+    /// perimeter's own session tables are untouched — and drive the SAME broken tree two
+    /// ways. A missing OR unknown credential is still an EXACT `401` (auth refuses before the
+    /// now-broken authority is ever touched, so the break is invisible to it); the SAME
+    /// broken tree with a real credential clears the perimeter, reaches the authority, and
+    /// faults into a safe `500`. That `500` excludes the two false-greens a bare `401`
+    /// cannot: a route never mounted (would `404`) and a break that never took effect (would
+    /// `201`). A "consult-authority-then-reject-anon" mis-mount would surface the break on the
+    /// anonymous call too, so the exact anon `401` is the load-bearing discriminator.
+    #[tokio::test]
+    async fn the_direct_pair_initiation_authority_is_consulted_only_after_the_perimeter() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_direct_pair_target(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+        let path = format!("/api/agents/{DP_TARGET_AGENT}/direct-messages");
+
+        // Healthy first: the authenticated door works end-to-end, so a later 500 is caused by
+        // the break we introduce and not a pre-existing fault.
+        let healthy = http_over_tcp(
+            address,
+            "POST",
+            &path,
+            Some(&format!("Bearer {TOKEN}")),
+            r#"{"content":"healthy"}"#,
+        )
+        .await;
+        assert!(healthy.starts_with("HTTP/1.1 201 Created\r\n"), "{healthy}");
+
+        // Break the ONE table the initiation authority reads (`SELECT ... FROM agents`).
+        let pool = SqlitePoolOptions::new()
+            .connect(fixture.path.to_str().unwrap())
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE agents")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+
+        // Missing AND unknown credential → EXACT 401: auth refuses before the now-broken
+        // authority is ever consulted, so the drop is invisible on this path.
+        for bearer in [None, Some("Bearer not-a-real-token")] {
+            let refused = http_over_tcp(address, "POST", &path, bearer, r#"{"content":"x"}"#).await;
+            assert!(
+                refused.starts_with("HTTP/1.1 401 Unauthorized\r\n"),
+                "an unauthenticated POST must be 401 regardless of authority health: {refused}"
+            );
+        }
+
+        // SAME broken tree, real credential: the perimeter admits, the authority IS reached
+        // and faults on the dropped table → safe 500. Not 404 (route mounted), not 201/created
+        // (the break is effective).
+        let broken = http_over_tcp(
+            address,
+            "POST",
+            &path,
+            Some(&format!("Bearer {TOKEN}")),
+            r#"{"content":"x"}"#,
+        )
+        .await;
+        assert!(
+            broken.starts_with("HTTP/1.1 500 Internal Server Error\r\n"),
+            "an authenticated POST must reach the broken authority and fail safe: {broken}"
+        );
+
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+    }
+
+    /// P0-2 (Cindy + Lio) — DUAL-AXIS causal proof that `prepare()` wires the REAL hub and
+    /// the REAL `MessagingAftermath` to this write door (not a no-op / second hub). Row
+    /// counts and the leaf `Opened` counter cannot see the activation's composition seam;
+    /// these two live event-WS axes can, and each reddens one mutation BY NAME:
+    ///
+    /// * CONVERSATION scope carries the aftermath. Every committed send publishes its own
+    ///   `message` frame there — a kind ONLY the aftermath produces (no-mention sends emit no
+    ///   viewer `Notification`). Swapping the mounted aftermath for `NoAftermath` drops this
+    ///   axis's high-water to 0, reddening the aftermath seam on its own axis.
+    /// * VIEWER scope carries the winner-only pair-open sink. `direct_pairs_changed` is a
+    ///   same-shape funnel — mint, direct-line invalidation, AND unread all publish the
+    ///   identical `{conversation_id}` frame — so a kind-set assertion has ZERO discriminating
+    ///   power here (Lio). The axis is pinned by two ABSOLUTE increments instead: the first
+    ///   POST adds exactly `N` viewer frames, the second (loser) exactly `M`, each measured
+    ///   against real production behavior. `N == M + 1` (explanation only) is the winner-only
+    ///   pair-open; a no-op / second-hub opened sink drops ONLY the first increment to `N-1`
+    ///   with `M` unchanged, so the first absolute count reddens alone. Pinning both absolutes
+    ///   (not just their difference) means any drift in another same-kind producer reddens a
+    ///   named count instead of silently re-tuning the gate.
+    ///
+    /// Both axes read their high-water from a FRESH subscription's `subscribed.seq`, which is
+    /// the hub's own deterministic count and seals the "under-read / extra frame left queued"
+    /// false-green.
+    #[tokio::test]
+    async fn the_composition_delivers_the_pair_open_and_the_aftermath_to_the_real_hubs() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_direct_pair_target(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+        let path = format!("/api/agents/{DP_TARGET_AGENT}/direct-messages");
+        let bearer = format!("Bearer {TOKEN}");
+
+        // Baseline: nothing published to the viewer's list yet.
+        assert_eq!(fresh_scope_high_water(address, "viewer:self").await, 0);
+
+        // First POST — winner: mints the pair AND sends the first message.
+        let first = http_over_tcp(
+            address,
+            "POST",
+            &path,
+            Some(&bearer),
+            r#"{"content":"first"}"#,
+        )
+        .await;
+        assert!(first.starts_with("HTTP/1.1 201 Created\r\n"), "{first}");
+        let viewer_after_first = fresh_scope_high_water(address, "viewer:self").await;
+
+        // The conversation the winner minted names the scope the aftermath's `message` rides.
+        let conversation = direct_pair_conversation_id(&fixture.path).await;
+        let conversation_scope = format!("conversation:{conversation}");
+        let conversation_after_first = fresh_scope_high_water(address, &conversation_scope).await;
+
+        // Second POST — loser: get-or-creates the SAME pair, sends a second message, and does
+        // NOT re-announce the pair-open.
+        let second = http_over_tcp(
+            address,
+            "POST",
+            &path,
+            Some(&bearer),
+            r#"{"content":"second"}"#,
+        )
+        .await;
+        assert!(second.starts_with("HTTP/1.1 201 Created\r\n"), "{second}");
+        let viewer_after_second = fresh_scope_high_water(address, "viewer:self").await;
+        let conversation_after_second = fresh_scope_high_water(address, &conversation_scope).await;
+
+        let first_viewer_increment = viewer_after_first;
+        let second_viewer_increment = viewer_after_second - viewer_after_first;
+        let first_conversation_increment = conversation_after_first;
+        let second_conversation_increment = conversation_after_second - conversation_after_first;
+
+        // CONVERSATION axis — the aftermath seam. Each send announces exactly one `message`
+        // frame; `NoAftermath` would leave both increments at 0.
+        assert_eq!(
+            first_conversation_increment, 1,
+            "the first send's aftermath must announce exactly one conversation `message` frame"
+        );
+        assert_eq!(
+            second_conversation_increment, 1,
+            "the second send's aftermath must announce exactly one conversation `message` frame"
+        );
+
+        // VIEWER axis — the winner-only pair-open sink. Two ABSOLUTE increments, pinned to the
+        // measured production behavior; `N == M + 1` is the winner-only pair-open.
+        assert_eq!(
+            first_viewer_increment, 2,
+            "first POST viewer frames: winner pair-open + one per-send direct-pair invalidation"
+        );
+        assert_eq!(
+            second_viewer_increment, 1,
+            "second POST viewer frames: the per-send direct-pair invalidation only (no re-announce)"
+        );
+        assert_eq!(
+            first_viewer_increment,
+            second_viewer_increment + 1,
+            "the winner-only pair-open is exactly one viewer frame more on the first send"
+        );
+
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
     }
 
     /// Wave 3A checkpoint A1: the five channel directory/detail read doors, mounted in
