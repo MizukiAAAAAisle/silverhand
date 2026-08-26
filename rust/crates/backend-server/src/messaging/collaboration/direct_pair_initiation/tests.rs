@@ -313,24 +313,41 @@ async fn authority_refusals_precede_and_do_not_poll_the_body() {
 
 #[tokio::test]
 async fn every_door_local_preflight_refuses_before_pair_allocation() {
+    // The reply-target refusal is asserted as the EXACT wire envelope, not a substring:
+    // a `contains` on the marker would pass a wrong message, an extra or missing field,
+    // or any non-contract body that merely mentions the code. The two cells that answer
+    // the reply target therefore pin the whole object. The shape (`content`) and cap
+    // (`content_too_large`) cells keep a marker here — each has its own dedicated exact
+    // evidence elsewhere (`invalid_input` issues; `each_door_words_the_content_cap_for_its_own_caller`
+    // pins `max_bytes`/`actual_bytes`).
+    enum Expect {
+        Exact(Value),
+        Contains(&'static str),
+    }
+    let reply_unsupported = || {
+        Expect::Exact(json!({
+            "error": "cannot open a direct-message line into a reply cluster",
+            "code": "reply_to_unsupported",
+        }))
+    };
     let cases = [
         (
             Body::from("{}"),
             None,
             StatusCode::BAD_REQUEST,
-            "\"content\"",
+            Expect::Contains("\"content\""),
         ),
         (
             Body::from(json!({"content":"x","reply_to_message_id":"root"}).to_string()),
             None,
             StatusCode::BAD_REQUEST,
-            "reply_to_unsupported",
+            reply_unsupported(),
         ),
         (
             Body::from(json!({"content":"x".repeat(65_537)}).to_string()),
             None,
             StatusCode::PAYLOAD_TOO_LARGE,
-            "content_too_large",
+            Expect::Contains("content_too_large"),
         ),
         // The reply-target↔cap crossing cell. Oversized content AND a reply target is
         // reachable within the transport bound (513 bytes over the 64KiB cap, far under
@@ -339,17 +356,18 @@ async fn every_door_local_preflight_refuses_before_pair_allocation() {
         // sealed the cap inside admission and answered 413 here — this cell is the
         // resident falsifier that goes red the moment the two stages refuse in the wrong
         // order. A single-trigger cell proves each gate exists but says nothing about
-        // which of two adjacent gates wins.
+        // which of two adjacent gates wins. Asserted as the EXACT 400 envelope so a
+        // 413-with-the-wrong-body can never masquerade as a pass.
         (
             Body::from(
                 json!({"content":"x".repeat(65_537),"reply_to_message_id":"root"}).to_string(),
             ),
             None,
             StatusCode::BAD_REQUEST,
-            "reply_to_unsupported",
+            reply_unsupported(),
         ),
     ];
-    for (body, declared, expected_status, marker) in cases {
+    for (body, declared, expected_status, expected_body) in cases {
         let initiation = Initiation::granted();
         let opens = initiation.opens.clone();
         let unit_calls = Arc::new(AtomicUsize::new(0));
@@ -365,7 +383,10 @@ async fn every_door_local_preflight_refuses_before_pair_allocation() {
         )
         .await;
         assert_eq!(status, expected_status);
-        assert!(body.to_string().contains(marker));
+        match expected_body {
+            Expect::Exact(expected) => assert_eq!(body, expected),
+            Expect::Contains(marker) => assert!(body.to_string().contains(marker)),
+        }
         assert_eq!(opens.load(Ordering::SeqCst), 0);
         assert_eq!(unit_calls.load(Ordering::SeqCst), 0);
     }
