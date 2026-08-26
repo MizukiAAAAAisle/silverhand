@@ -32,8 +32,7 @@ use silverhand_backend_server::{
         aftermath::MessagingAftermath,
         collaboration::{
             activity, channel_directory, channel_lifecycle, conversation_agent_activity,
-            conversation_agent_directory, conversation_agent_run_states,
-            conversation_agent_runtime,
+            conversation_agent_directory, conversation_agent_runtime,
             stale_message_resolution::{
                 StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
                 StaleMessageResolutionAdmissionRefusal, TracingStaleMessageResolutionObserver,
@@ -490,10 +489,10 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             .merge(conversation_agent_runtime::router(
                 conversation_agent_runtime_read,
             ))
-            .merge(conversation_agent_run_states::router(
-                agent_run_states_admission,
-                daemon_runtime.clone(),
-            ))
+            // The reader owner is not chosen here: the seam binds it to the
+            // delivery runtime by construction, so this line cannot fork the
+            // HTTP reader onto an owner other than the one delivery writes into.
+            .merge(daemon_runtime.agent_run_states_router(agent_run_states_admission))
             .merge(conversation_agent_activity::router(
                 conversation_agent_activity_read,
             ))

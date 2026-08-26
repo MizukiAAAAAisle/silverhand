@@ -218,6 +218,30 @@ where
         }
     }
 
+    /// The authenticated live-run-state HTTP reader, bound to *this* runtime's
+    /// owner by construction. The snapshot source is `self.clone()` — a share of
+    /// the same `Arc<Mutex<..>>` map that `effects()`/`router()` mutate — and is
+    /// fixed here, not exposed as a parameter. That is deliberate: the same
+    /// reason `admission` and `seeds` are built in `new` rather than in `router`.
+    /// If the composition root could pass an arbitrary
+    /// `ConversationAgentRunStateSource`, it could silently wire the reader to a
+    /// different owner than the one delivery writes into; producing the reader
+    /// here removes that degree of freedom, so "the delivery writer and the
+    /// run-state reader are the same owner" is a property of construction, not a
+    /// call-site argument the composition root is trusted to get right.
+    pub fn agent_run_states_router<A>(&self, admission: A) -> Router
+    where
+        A: silverhand_backend_core::messaging::collaboration::channel_lifecycle::ChannelDetailReadPort
+            + Send
+            + Sync
+            + 'static,
+    {
+        crate::messaging::collaboration::conversation_agent_run_states::router(
+            admission,
+            self.clone(),
+        )
+    }
+
     async fn resolve_target(
         &self,
         conversation: &ConversationId,
@@ -2998,21 +3022,28 @@ mod tests {
     use super::*;
 
     /// Wave 3A A2 — load-bearing same-live-owner regression gate for the
-    /// `/api/channels/{id}/agent-run-states` door.
+    /// `/api/channels/{id}/agent-run-states` door, exercised through the
+    /// production composition seam.
     ///
     /// The composed `prepare()` E2E proves the route is mounted and, against a
     /// fresh owner, reads an empty run-state map. That alone cannot show the
-    /// reader shares the *specific* live owner the daemon writes into: swap the
-    /// route's snapshot source for a second, empty `DaemonDeliveryRuntime` and
-    /// every status code and the `{"states":[]}` body stay byte-identical.
+    /// reader shares the *specific* live owner the daemon writes into. Nor could
+    /// a component gate that hand-wires the correct `.clone()` into the raw
+    /// `router` factory: it re-proves the mechanism but never touches the line
+    /// that chooses the reader owner, so a `prepare()` edit that forked the
+    /// reader onto a fresh owner would leave it green.
     ///
-    /// This gate closes that gap on the exact production mechanism. The daemon
-    /// reconnection hydration path (`events.hydrate`, the sole non-WebSocket
-    /// writer of the live run-state map) records a non-empty run-state into one
-    /// owner; the production route factory — fed the `.clone()` the composition
-    /// merge passes — reads that precise row back. The same read against an
-    /// independently constructed runtime is empty, so wiring the door to any
-    /// owner other than the one delivery mutates turns the assertion red.
+    /// This gate binds to that line by routing through the seam `prepare()` uses:
+    /// `DaemonDeliveryRuntime::agent_run_states_router`. The seam takes no owner
+    /// argument — it binds the reader to the runtime it is called on by
+    /// construction — so the fork `prepare()` could once commit (a second-arg
+    /// swap) is now unrepresentable, and the only surviving choice is which
+    /// runtime the seam is handed. The daemon reconnection hydration path
+    /// (`events.hydrate`, the sole non-WebSocket writer of the live run-state
+    /// map) records a non-empty run-state into one runtime's owner; the seam on
+    /// that runtime reads the precise row back. The seam on an independently
+    /// constructed runtime is empty — so binding the door to any runtime but the
+    /// delivery one turns the assertion red.
     mod run_states_same_owner {
         use std::{convert::Infallible, path::Path};
 
@@ -3049,9 +3080,6 @@ mod tests {
             current_schema,
             daemon_delivery::{DaemonDeliveryConfig, DaemonDeliveryRuntime},
             daemon_events::{AgentRunStateWire, AgentRunStatus, HydratedRuntime},
-            messaging::collaboration::conversation_agent_run_states::{
-                ConversationAgentRunStateSource, router,
-            },
             runtime_credential::RuntimeCredentialAuthority,
             scope_events::ScopeEventHub,
         };
@@ -3122,10 +3150,13 @@ mod tests {
             .unwrap()
         }
 
-        async fn read_states<S>(reader: S) -> (u16, Value)
-        where
-            S: ConversationAgentRunStateSource + Send + Sync + 'static,
-        {
+        async fn read_states(
+            runtime: DaemonDeliveryRuntime<
+                SqliteRuntimeCustodyStore,
+                SqliteRuntimeDeliveryStore,
+                SqliteHostRuntimeStore,
+            >,
+        ) -> (u16, Value) {
             let mut request = Request::builder()
                 .uri(format!("/api/channels/{CONVERSATION}/agent-run-states"))
                 .body(Body::empty())
@@ -3133,7 +3164,17 @@ mod tests {
             request
                 .extensions_mut()
                 .insert(UserId::parse("viewer").unwrap());
-            let response = router(AdmitViewer, reader).oneshot(request).await.unwrap();
+            // Exercise the PRODUCTION seam `prepare()` mounts. The seam takes no
+            // owner argument: it binds the reader to `runtime`'s own owner by
+            // construction. So the positive/negative difference below is *which
+            // runtime the seam is handed* — the exact choice `prepare()` makes at
+            // its `.merge(daemon_runtime.agent_run_states_router(..))` line. There
+            // is no second-parameter fork for that line to get wrong.
+            let response = runtime
+                .agent_run_states_router(AdmitViewer)
+                .oneshot(request)
+                .await
+                .unwrap();
             let status = response.status().as_u16();
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             (status, serde_json::from_slice(&body).unwrap())
@@ -3192,9 +3233,10 @@ mod tests {
                 .await
                 .unwrap();
 
-            // The reader is the `.clone()` the composition merge passes to the
-            // route. A clone shares the delivery owner's `Arc<Mutex<..>>`, so the
-            // route reads the exact seeded row — the same-live-owner contract.
+            // Positive: hand the seeded runtime to the same seam `prepare()`
+            // uses. The seam binds this runtime's owner (a share of the seeded
+            // `Arc<Mutex<..>>` map) as the reader, so the route reads the exact
+            // seeded row — the same-live-owner contract, proven at the seam.
             let (status, body) = read_states(delivery_owner.clone()).await;
             assert_eq!(status, 200);
             let states = body["states"].as_array().unwrap();
@@ -3203,9 +3245,11 @@ mod tests {
             assert_eq!(states[0]["agentId"], AGENT);
             assert_eq!(states[0]["conversationId"], CONVERSATION);
 
-            // Falsifier: an independently constructed runtime is a different live
-            // owner. Same admission, same route, same request — the seeded row is
-            // gone. Wiring the door to any owner but the delivery owner is red.
+            // Falsifier: hand the seam an independently constructed runtime — a
+            // different live owner. Same admission, same seam, same request; the
+            // seeded row is gone. This is the only fork the seam still permits
+            // (a whole second runtime, not a silent second-arg swap), and it is
+            // red — so binding the door to any runtime but delivery's fails here.
             let (status, body) = read_states(build_runtime(&path).await).await;
             assert_eq!(status, 200);
             assert!(body["states"].as_array().unwrap().is_empty());
