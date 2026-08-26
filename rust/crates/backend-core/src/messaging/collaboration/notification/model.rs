@@ -1,19 +1,7 @@
 use crate::{
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    messaging::{MessageId, ThreadRootId},
+    messaging::{MessageId, NotificationId, ThreadRootId},
 };
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct NotificationId(String);
-impl NotificationId {
-    pub fn parse(raw: impl Into<String>) -> Option<Self> {
-        let raw = raw.into();
-        (!raw.is_empty()).then_some(Self(raw))
-    }
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NotificationKind {

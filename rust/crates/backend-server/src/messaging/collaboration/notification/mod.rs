@@ -13,7 +13,7 @@ use axum::{
 use serde_json::{Value, json};
 use silverhand_backend_core::{
     identity::{ConversationId, UserId, WorkspaceId},
-    messaging::collaboration::notification::*,
+    messaging::{NotificationId, collaboration::notification::*},
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -126,7 +126,9 @@ async fn clear<R: NotificationReadPort, C: NotificationClearPort, A: Notificatio
         .and_then(Value::as_str)
         .filter(|v| !v.is_empty())
     {
-        NotificationId::parse(v).map(NotificationClearSelector::Id)
+        NotificationId::parse(v)
+            .ok()
+            .map(NotificationClearSelector::Id)
     } else if let Some(v) = o
         .get("workspace_id")
         .and_then(Value::as_str)

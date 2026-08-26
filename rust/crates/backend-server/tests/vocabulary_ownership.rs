@@ -128,3 +128,26 @@ fn the_runtime_closed_set_has_exactly_one_owner() {
          out twice can disagree with its owner, and the disagreement reaches the wire"
     );
 }
+
+/// Two same-named identity types are worse than two different ones: each half stays
+/// internally consistent, so nothing fails, and the seam between them is paid for with
+/// a `String` round trip that accepts values neither half would mint.
+#[test]
+fn the_notification_identity_has_exactly_one_definition() {
+    // Control, both directions: a tuple struct is a definition, and a longer name that
+    // merely starts the same way is not.
+    assert!(defines(
+        "pub struct NotificationId(String);",
+        "struct NotificationId"
+    ));
+    assert!(!defines(
+        "pub struct NotificationIdentity(String);",
+        "struct NotificationId"
+    ));
+
+    assert_eq!(
+        definitions_of("struct NotificationId"),
+        vec!["crates/backend-core/src/messaging/identity.rs".to_owned()],
+        "the notification identity must be defined once, where it is minted"
+    );
+}

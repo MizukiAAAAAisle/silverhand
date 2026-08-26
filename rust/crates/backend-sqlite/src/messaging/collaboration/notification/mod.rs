@@ -4,7 +4,9 @@ use crate::{
 };
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    messaging::{MessageId, SendClock, ThreadRootId, collaboration::notification::*},
+    messaging::{
+        MessageId, NotificationId, SendClock, ThreadRootId, collaboration::notification::*,
+    },
     persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
@@ -92,7 +94,7 @@ fn decode(row: SqliteRow) -> Result<Notification, NotificationStoreError> {
     }
     Ok(Notification {
         id: NotificationId::parse(row.try_get::<String, _>("id")?)
-            .ok_or(NotificationStoreError::MalformedIdentity)?,
+            .map_err(|_| NotificationStoreError::MalformedIdentity)?,
         kind: NotificationKind::parse(row.try_get::<String, _>("kind")?.as_str())
             .ok_or(NotificationStoreError::MalformedKind)?,
         user: opt(row.try_get("user_id")?, |v| UserId::parse(v).ok())?,

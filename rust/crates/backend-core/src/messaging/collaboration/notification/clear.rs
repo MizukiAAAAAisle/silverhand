@@ -1,5 +1,5 @@
-use super::NotificationId;
 use crate::identity::{ConversationId, UserId, WorkspaceId};
+use crate::messaging::NotificationId;
 use std::{error::Error, future::Future, num::NonZeroU64};
 
 #[derive(Clone, Debug, Eq, PartialEq)]

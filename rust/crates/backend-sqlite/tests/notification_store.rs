@@ -1,11 +1,14 @@
 use silverhand_backend_core::{
     identity::UserId,
-    messaging::collaboration::notification::{
-        NotificationClearPort, NotificationClearSelector, NotificationListQuery,
-        NotificationReadPort,
+    messaging::{
+        NotificationId,
+        collaboration::notification::{
+            NotificationClearPort, NotificationClearSelector, NotificationListQuery,
+            NotificationReadPort,
+        },
     },
 };
-use silverhand_backend_sqlite::messaging::MessagingStore;
+use silverhand_backend_sqlite::messaging::{MessagingStore, collaboration::NotificationStoreError};
 use sqlx::Connection;
 #[path = "support/current_schema_snapshot.rs"]
 mod current_schema;
@@ -53,7 +56,10 @@ async fn viewer_read_and_atomic_clear_return_exact_committed_workspaces() {
     assert_eq!(summary.total, 4);
     assert_eq!(summary.latest_by_workspace.len(), 1);
     let by_id = n
-        .clear(viewer.clone(), NotificationClearSelector::Id(silverhand_backend_core::messaging::collaboration::notification::NotificationId::parse("n1").unwrap()))
+        .clear(
+            viewer.clone(),
+            NotificationClearSelector::Id(NotificationId::parse("n1").unwrap()),
+        )
         .await
         .unwrap();
     assert_eq!(by_id.marked(), 1);
@@ -132,11 +138,17 @@ async fn malformed_selected_identity_or_scope_rolls_back_the_entire_clear() {
     let store = MessagingStore::open(&path).await.unwrap();
     let notifications = store.notifications();
     let viewer = UserId::parse("u").unwrap();
+    let failure = notifications
+        .clear(viewer.clone(), NotificationClearSelector::All)
+        .await
+        .expect_err("an empty stored identity must refuse the clear");
     assert!(
-        notifications
-            .clear(viewer.clone(), NotificationClearSelector::All)
-            .await
-            .is_err()
+        matches!(
+            std::error::Error::source(&failure)
+                .and_then(|source| source.downcast_ref::<NotificationStoreError>()),
+            Some(NotificationStoreError::MalformedIdentity)
+        ),
+        "the refusal must be the identity fault, not the scope fault this test checks next"
     );
 
     let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
