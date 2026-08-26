@@ -10,6 +10,12 @@
 //! Deliberately source-text driven rather than type driven: what has to be proven is
 //! that a SECOND definition does not exist, and a type-level test can only speak
 //! about the definitions it already names.
+//!
+//! Reading source text means the reader must be trivia-independent. Rust lets comments
+//! sit anywhere between two tokens, and rustfmt leaves them there, so a predicate that
+//! matches raw text answers "no declaration" for a declaration that is really present
+//! and a second definition enters the tree with `cargo fmt --check` clean. Everything
+//! here therefore matches against the token stream produced by `without_trivia`.
 
 use std::{
     fs,
@@ -62,56 +68,189 @@ fn collect(root: &Path, directory: &Path, sources: &mut Vec<(String, String)>) {
     }
 }
 
-/// Whether this line declares `item`, e.g. `enum RuntimeKind` or `struct NotificationId`.
+/// Whether `source` declares `item`, e.g. `enum RuntimeKind` or `struct NotificationId`.
 ///
-/// Visibility-INDEPENDENT: `pub`, `pub(crate)`, `pub(super)`, `pub(in crate::x)` and no
-/// visibility at all are all legal ways to define a second copy of a type, so keying on
-/// one spelling would let the others through as a false green.
+/// Visibility-INDEPENDENT and trivia-INDEPENDENT: `pub`, `pub(crate)`, `pub(super)`,
+/// `pub(in crate::x)`, no visibility at all, an attribute above, a line break or a
+/// comment in between are all legal ways to define a second copy of a type, so keying
+/// on one spelling would let the others through as a false green. What remains after
+/// `without_trivia` is a token stream in which every one of those spellings reads the
+/// same.
 ///
-/// The declaration must START the line (after its indentation and that one visibility
-/// token), which is what keeps a doc comment, a `//` comment and a string literal out:
-/// each puts its own marker first. The name must then end on something that cannot
-/// continue an identifier, so a longer name that merely starts the same way is a
-/// different declaration.
-fn defines(line: &str, item: &str) -> bool {
-    let line = strip_visibility(line.trim_start());
-    let Some(rest) = line.strip_prefix(item) else {
-        return false;
-    };
-    !rest.starts_with(|character: char| character.is_alphanumeric() || character == '_')
+/// The match must fall on identifier boundaries at both ends, so a longer name that
+/// merely starts the same way (`NotificationIdentity`) is a different declaration, and
+/// the `struct` of some other item cannot be glued to this name.
+fn declares(source: &str, item: &str) -> bool {
+    let tokens = without_trivia(source);
+    tokens.match_indices(item).any(|(at, _)| {
+        let before = tokens[..at].chars().next_back();
+        let after = tokens[at + item.len()..].chars().next();
+        before.is_none_or(|character| !continues_identifier(character))
+            && after.is_none_or(|character| !continues_identifier(character))
+    })
 }
 
-/// One leading Rust visibility, in any of its spellings, or the line unchanged when it
-/// carries none.
+/// The source's tokens, with every comment and every literal replaced by a single space
+/// and every whitespace run collapsed to one space.
 ///
-/// `pub` must itself end on a boundary — `(` for a restricted form, whitespace for the
-/// bare one — so an identifier that merely begins with those letters (`published`) is
-/// not mistaken for a visibility and does not expose the rest of the line to matching.
-fn strip_visibility(line: &str) -> &str {
-    let Some(rest) = line.strip_prefix("pub") else {
-        return line;
-    };
-    let rest = if rest.starts_with('(') {
-        // `pub(crate)`, `pub(super)`, `pub(in crate::path)`: the restriction is one
-        // parenthesized group, so the visibility ends at its close.
-        match rest.find(')') {
-            Some(close) => &rest[close + 1..],
-            None => return line,
+/// Replaced by a space rather than deleted, so two tokens on either side of the removed
+/// text can never fuse into a third one.
+///
+/// Three things the walk has to get right; each one skipped is a hole of its own:
+/// - block comments NEST, so their close is found by depth and never by the first `*/`,
+///   which would leave the tail of an outer comment reading as code;
+/// - a literal body may hold `/*` or a quote of its own, so literals are consumed as
+///   literals instead of being scanned for comment openers — a raw string is closed only
+///   by a quote followed by its own number of hashes;
+/// - `'` opens a char literal only when a single character or an escape closes it, and
+///   otherwise begins a lifetime, where consuming to the next `'` would swallow every
+///   token in between.
+fn without_trivia(source: &str) -> String {
+    let characters: Vec<char> = source.chars().collect();
+    let mut tokens = String::with_capacity(source.len());
+    let mut index = 0;
+    while index < characters.len() {
+        if let Some(resume) = end_of_trivia(&characters, index) {
+            push_gap(&mut tokens);
+            index = resume;
+        } else if characters[index].is_whitespace() {
+            push_gap(&mut tokens);
+            index += 1;
+        } else {
+            tokens.push(characters[index]);
+            index += 1;
         }
-    } else {
-        rest
-    };
-    if rest.starts_with(|character: char| character.is_alphanumeric() || character == '_') {
-        return line;
     }
-    rest.trim_start()
+    tokens
 }
 
-/// The files whose source defines `item`, e.g. `enum RuntimeKind`.
+fn push_gap(tokens: &mut String) {
+    if !tokens.ends_with(' ') && !tokens.is_empty() {
+        tokens.push(' ');
+    }
+}
+
+/// The index just past the comment or literal starting at `index`, or `None` when what
+/// starts there is an ordinary token character.
+fn end_of_trivia(characters: &[char], index: usize) -> Option<usize> {
+    match (characters[index], characters.get(index + 1)) {
+        ('/', Some('/')) => {
+            let mut end = index + 2;
+            while end < characters.len() && characters[end] != '\n' {
+                end += 1;
+            }
+            Some(end)
+        }
+        ('/', Some('*')) => Some(end_of_block_comment(characters, index)),
+        ('"', _) => Some(end_of_quoted(characters, index + 1, '"')),
+        ('\'', _) if opens_char_literal(characters, index) => {
+            Some(end_of_quoted(characters, index + 1, '\''))
+        }
+        _ => end_of_raw_string(characters, index),
+    }
+}
+
+/// The index just past the block comment opening at `index`, counting depth.
+///
+/// `/* outer /* inner */ still commented */` is one comment: a reader that stopped at
+/// the first `*/` would hand back `still commented */` as code, and a declaration parked
+/// in an outer comment would count.
+fn end_of_block_comment(characters: &[char], index: usize) -> usize {
+    let mut depth = 0usize;
+    let mut cursor = index;
+    while cursor < characters.len() {
+        if characters[cursor] == '/' && characters.get(cursor + 1) == Some(&'*') {
+            depth += 1;
+            cursor += 2;
+        } else if characters[cursor] == '*' && characters.get(cursor + 1) == Some(&'/') {
+            depth -= 1;
+            cursor += 2;
+            if depth == 0 {
+                return cursor;
+            }
+        } else {
+            cursor += 1;
+        }
+    }
+    characters.len()
+}
+
+/// The index just past a `"…"` or `'…'` body that starts at `start`, honouring escapes.
+fn end_of_quoted(characters: &[char], start: usize, terminator: char) -> usize {
+    let mut cursor = start;
+    while cursor < characters.len() {
+        if characters[cursor] == '\\' {
+            cursor += 2;
+        } else if characters[cursor] == terminator {
+            return cursor + 1;
+        } else {
+            cursor += 1;
+        }
+    }
+    characters.len()
+}
+
+/// Whether the `'` at `index` opens a char literal rather than a lifetime.
+fn opens_char_literal(characters: &[char], index: usize) -> bool {
+    match characters.get(index + 1) {
+        Some('\\') => true,
+        Some(_) => characters.get(index + 2) == Some(&'\''),
+        None => false,
+    }
+}
+
+/// The index just past the raw string starting at `index`, or `None` when none does.
+///
+/// `r"…"`, `r#"…"#`, `br##"…"##`: the body is verbatim, so nothing but a quote followed
+/// by the same number of hashes closes it, and a quote inside the body is content.
+/// Recognised only where a token can start, so the `r` inside an identifier cannot open
+/// one.
+fn end_of_raw_string(characters: &[char], index: usize) -> Option<usize> {
+    if index > 0 && continues_identifier(characters[index - 1]) {
+        return None;
+    }
+    let mut cursor = index;
+    if characters.get(cursor) == Some(&'b') {
+        cursor += 1;
+    }
+    if characters.get(cursor) != Some(&'r') {
+        return None;
+    }
+    cursor += 1;
+    let hashes = characters[cursor..]
+        .iter()
+        .take_while(|character| **character == '#')
+        .count();
+    cursor += hashes;
+    if characters.get(cursor) != Some(&'"') {
+        return None;
+    }
+    cursor += 1;
+    while cursor < characters.len() {
+        if characters[cursor] == '"'
+            && characters[cursor + 1..]
+                .iter()
+                .take(hashes)
+                .filter(|character| **character == '#')
+                .count()
+                == hashes
+        {
+            return Some(cursor + 1 + hashes);
+        }
+        cursor += 1;
+    }
+    Some(characters.len())
+}
+
+fn continues_identifier(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
+
+/// The files whose source declares `item`, e.g. `enum RuntimeKind`.
 fn definitions_of(item: &str) -> Vec<String> {
     production_sources()
         .into_iter()
-        .filter(|(_, source)| source.lines().any(|line| defines(line, item)))
+        .filter(|(_, source)| declares(source, item))
         .map(|(path, _)| path)
         .collect()
 }
@@ -124,6 +263,11 @@ const RUNTIME_TOKENS: [&str; 6] = ["claude", "codex", "cursor", "gemini", "qoder
 ///
 /// Naming one or two tokens is not that shape: a decode test and a seeded fixture
 /// both do it legitimately, and forbidding it would say nothing about ownership.
+///
+/// Reads the RAW source, and must keep doing so: this predicate is ABOUT quoted
+/// literals, while `without_trivia` replaces every literal with a space, so a token
+/// stream would answer "no" for every file in the tree — a false green over the whole
+/// sweep rather than a single missed file.
 fn names_the_whole_runtime_set(source: &str) -> bool {
     RUNTIME_TOKENS
         .iter()
@@ -160,38 +304,106 @@ fn the_runtime_closed_set_has_exactly_one_owner() {
     );
 }
 
-/// Both directions for the declaration predicate itself. A definition inventory is
-/// only as good as what it RECOGNISES: a predicate blind to one legal visibility
-/// reports "exactly one definition" while a second one sits in the tree, and the
-/// mutation that would have caught it passes.
+/// What the reader must RECOGNISE, and what it must not, with the reason each case is
+/// in the table. A definition inventory is only as good as its reader: one blind to a
+/// legal spelling reports "exactly one definition" while a second one sits in the tree,
+/// and the mutation that should have caught it passes.
+///
+/// Every `declares == true` row below is a spelling rustfmt leaves alone, so each is a
+/// way for a second definition to enter a tree that is `cargo fmt --check` clean.
 #[test]
-fn the_definition_predicate_recognises_every_visibility_and_nothing_else() {
-    // Every legal way to declare the type. All five are a second definition if a
-    // second file carries one.
-    for declaration in [
-        "struct NotificationId(String);",
-        "pub struct NotificationId(String);",
-        "pub(crate) struct NotificationId(String);",
-        "pub(super) struct NotificationId(String);",
-        "pub(in crate::messaging) struct NotificationId(String);",
-        "    pub(super) struct NotificationId(String);",
-    ] {
-        assert!(
-            defines(declaration, "struct NotificationId"),
-            "{declaration} declares the type"
-        );
-    }
+fn the_declaration_reader_is_visibility_and_trivia_independent() {
+    const ITEM: &str = "struct NotificationId";
+    let cases: [(&str, bool, &str); 17] = [
+        ("struct NotificationId(String);", true, "no visibility"),
+        ("pub struct NotificationId(String);", true, "bare pub"),
+        (
+            "pub(crate) struct NotificationId(String);",
+            true,
+            "restricted visibility",
+        ),
+        (
+            "pub(super) struct NotificationId(String);",
+            true,
+            "parent visibility",
+        ),
+        (
+            "pub(in crate::messaging) struct NotificationId(String);",
+            true,
+            "path visibility",
+        ),
+        (
+            "    pub(super) struct NotificationId(String);",
+            true,
+            "indented",
+        ),
+        (
+            "pub /* gap */ struct NotificationId(String);",
+            true,
+            "a comment between visibility and item still declares the type",
+        ),
+        (
+            "pub(crate) /* outer /* inner */ tail */ struct NotificationId(String);",
+            true,
+            "a nested comment between visibility and item likewise",
+        ),
+        (
+            "pub /* gap\n    across lines */ struct NotificationId(String);",
+            true,
+            "the gap may span lines, so no line-local reader can see this one",
+        ),
+        (
+            "#[derive(Debug)]\npub struct NotificationId(String);",
+            true,
+            "an attribute above the declaration",
+        ),
+        (
+            "fn borrow<'x>(_: &str) {}\npub struct NotificationId(String);",
+            true,
+            "a lifetime is not a char literal: consuming to the next quote would \
+             swallow the declaration behind it",
+        ),
+        (
+            "const QUOTE: char = '\"';\npub struct NotificationId(String);",
+            true,
+            "a quote inside a char literal must not open a string and swallow the \
+             declaration behind it",
+        ),
+        (
+            "pub struct NotificationIdentity(String);",
+            false,
+            "a longer name is a different declaration",
+        ),
+        (
+            "/// pub struct NotificationId(String);",
+            false,
+            "a doc comment declares nothing",
+        ),
+        (
+            "/* outer /* inner */ pub struct NotificationId(String); */",
+            false,
+            "still inside the outer comment: a reader that stopped at the first close \
+             would read this as code",
+        ),
+        (
+            "let sample = \"pub struct NotificationId(String);\";",
+            false,
+            "a string literal declares nothing",
+        ),
+        (
+            r##"let sample = r#"a " pub struct NotificationId(String);"#;"##,
+            false,
+            "a quote inside a raw string is content, not the close of the literal",
+        ),
+    ];
 
-    // And what must NOT count: a longer name, either comment form, a string literal,
-    // and an identifier that merely begins with `pub`.
-    for line in [
-        "pub struct NotificationIdentity(String);",
-        "/// pub struct NotificationId(String);",
-        "// pub struct NotificationId(String);",
-        "    let sample = \"pub struct NotificationId(String);\";",
-        "published struct NotificationId(String);",
-    ] {
-        assert!(!defines(line, "struct NotificationId"), "{line} does not");
+    for (source, expected, reason) in cases {
+        assert_eq!(
+            declares(source, ITEM),
+            expected,
+            "{reason}\n{source}\ntokens: {}",
+            without_trivia(source)
+        );
     }
 }
 
@@ -199,7 +411,7 @@ fn the_definition_predicate_recognises_every_visibility_and_nothing_else() {
 /// internally consistent, so nothing fails, and the seam between them is paid for with
 /// a `String` round trip that accepts values neither half would mint.
 ///
-/// The predicate's own controls are one test up.
+/// The reader's own controls are one test up.
 #[test]
 fn the_notification_identity_has_exactly_one_definition() {
     assert_eq!(
