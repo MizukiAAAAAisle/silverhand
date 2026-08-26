@@ -21,6 +21,7 @@ use crate::{
         ThreadRootId,
         attachments::{AttachmentLabel, AttachmentSnapshot},
         collaboration::reaction::ReactionAggregate,
+        task::{TaskId, TaskNumber, TaskStatus},
     },
 };
 
@@ -423,55 +424,6 @@ impl WindowCount {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WindowTaskNumber(i64);
-
-impl WindowTaskNumber {
-    pub fn new(value: i64) -> Result<Self, MessageWindowCorruption> {
-        exact_nonnegative("tasks.task_number", value)?;
-        if value == 0 {
-            return Err(MessageWindowCorruption::LinkedTask);
-        }
-        Ok(Self(value))
-    }
-
-    pub const fn get(self) -> i64 {
-        self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WindowTaskStatus {
-    Todo,
-    InProgress,
-    InReview,
-    Done,
-    Closed,
-}
-
-impl WindowTaskStatus {
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw {
-            "todo" => Some(Self::Todo),
-            "in_progress" => Some(Self::InProgress),
-            "in_review" => Some(Self::InReview),
-            "done" => Some(Self::Done),
-            "closed" => Some(Self::Closed),
-            _ => None,
-        }
-    }
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Todo => "todo",
-            Self::InProgress => "in_progress",
-            Self::InReview => "in_review",
-            Self::Done => "done",
-            Self::Closed => "closed",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WindowTaskAssignee {
     principal: PrincipalIdentity,
@@ -496,10 +448,10 @@ impl WindowTaskAssignee {
 pub struct WindowLinkedTask {
     source_conversation: ConversationId,
     source_message: MessageId,
-    id: String,
-    number: WindowTaskNumber,
+    id: TaskId,
+    number: TaskNumber,
     title: String,
-    status: WindowTaskStatus,
+    status: TaskStatus,
     assignee: Option<WindowTaskAssignee>,
 }
 
@@ -507,16 +459,13 @@ impl WindowLinkedTask {
     pub fn projected(
         source_conversation: ConversationId,
         source_message: MessageId,
-        id: String,
-        number: WindowTaskNumber,
+        id: TaskId,
+        number: TaskNumber,
         title: String,
-        status: WindowTaskStatus,
+        status: TaskStatus,
         assignee: Option<WindowTaskAssignee>,
-    ) -> Result<Self, MessageWindowCorruption> {
-        if id.is_empty() {
-            return Err(MessageWindowCorruption::LinkedTask);
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             source_conversation,
             source_message,
             id,
@@ -524,14 +473,14 @@ impl WindowLinkedTask {
             title,
             status,
             assignee,
-        })
+        }
     }
 
     pub fn id(&self) -> &str {
-        &self.id
+        self.id.as_str()
     }
 
-    pub const fn number(&self) -> WindowTaskNumber {
+    pub const fn number(&self) -> TaskNumber {
         self.number
     }
 
@@ -539,7 +488,7 @@ impl WindowLinkedTask {
         &self.title
     }
 
-    pub const fn status(&self) -> WindowTaskStatus {
+    pub const fn status(&self) -> TaskStatus {
         self.status
     }
 
@@ -1698,18 +1647,15 @@ mod tests {
         );
 
         let mut foreign_task = selected("c", "m", 1, None, false).0;
-        foreign_task.linked_task = Some(
-            WindowLinkedTask::projected(
-                conversation("c"),
-                message_id("other"),
-                "task".to_owned(),
-                WindowTaskNumber::new(1).unwrap(),
-                "Task".to_owned(),
-                WindowTaskStatus::Todo,
-                None,
-            )
-            .unwrap(),
-        );
+        foreign_task.linked_task = Some(WindowLinkedTask::projected(
+            conversation("c"),
+            message_id("other"),
+            TaskId::parse("task").unwrap(),
+            TaskNumber::new(1).unwrap(),
+            "Task".to_owned(),
+            TaskStatus::Todo,
+            None,
+        ));
         assert_eq!(
             SelectedWindowMessage::seal(foreign_task),
             Err(MessageWindowCorruption::LinkedTask)

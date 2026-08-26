@@ -20,10 +20,11 @@ use silverhand_backend_core::{
                 WindowBoundaryDirection, WindowBoundaryFact, WindowCount, WindowLinkedTask,
                 WindowMessageMetadata, WindowMessageProjection, WindowReaction,
                 WindowReactionViewer, WindowReplier, WindowReplyPreview, WindowRootReplies,
-                WindowTaskAssignee, WindowTaskNumber, WindowTaskStatus,
+                WindowTaskAssignee,
             },
             reaction::Reactor,
         },
+        task::{TaskId, TaskNumber, TaskStatus},
     },
     persistence::PersistenceFailure,
 };
@@ -975,7 +976,8 @@ fn decode_linked_task(
     let Some(id) = row.try_get::<Option<String>, _>("task_id")? else {
         return Ok(None);
     };
-    let number = WindowTaskNumber::new(
+    let id = TaskId::parse(id).map_err(|_| ConversationMessageWindowStoreError::LinkedTask)?;
+    let number = TaskNumber::new(
         row.try_get::<Option<i64>, _>("task_number")?
             .ok_or(ConversationMessageWindowStoreError::LinkedTask)?,
     )
@@ -983,11 +985,11 @@ fn decode_linked_task(
     let title = row
         .try_get::<Option<String>, _>("task_title")?
         .ok_or(ConversationMessageWindowStoreError::LinkedTask)?;
-    let status = WindowTaskStatus::parse(
+    let status = TaskStatus::parse(
         &row.try_get::<Option<String>, _>("task_status")?
             .ok_or(ConversationMessageWindowStoreError::LinkedTask)?,
     )
-    .ok_or(ConversationMessageWindowStoreError::LinkedTask)?;
+    .map_err(|_| ConversationMessageWindowStoreError::LinkedTask)?;
     let agent: Option<String> = row.try_get("assignee_agent_id")?;
     let user: Option<String> = row.try_get("assignee_user_id")?;
     let assignee = match (agent, user) {
@@ -1008,7 +1010,7 @@ fn decode_linked_task(
         (None, None) => None,
         _ => return Err(ConversationMessageWindowStoreError::LinkedTask),
     };
-    WindowLinkedTask::projected(
+    Ok(Some(WindowLinkedTask::projected(
         ConversationId::parse(
             row.try_get::<Option<String>, _>("task_conversation_id")?
                 .ok_or(ConversationMessageWindowStoreError::LinkedTask)?,
@@ -1020,9 +1022,7 @@ fn decode_linked_task(
         title,
         status,
         assignee,
-    )
-    .map(Some)
-    .map_err(ConversationMessageWindowStoreError::Projection)
+    )))
 }
 
 pub(super) fn decode_attachments(

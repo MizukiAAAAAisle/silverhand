@@ -142,7 +142,7 @@ fn linked_task(
     task: &silverhand_backend_core::messaging::collaboration::saved::SavedLinkedTask,
 ) -> Value {
     json!({
-        "task_id": task.id,
+        "task_id": task.id.as_str(),
         "task_number": task.number.get(),
         "title": task.title,
         "status": task.status.as_str(),

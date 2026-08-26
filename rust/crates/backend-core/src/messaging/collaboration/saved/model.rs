@@ -4,6 +4,7 @@ use crate::{
         FromKind, MessageAuthor, MessageId, MessageSeq, PrincipalIdentity, ThreadRootId,
         attachments::AttachmentSnapshot,
         environment::{EnvironmentUnavailable, SendEntropy, base64url},
+        task::{TaskId, TaskNumber, TaskStatus},
     },
 };
 
@@ -78,58 +79,6 @@ impl SavedPlace {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SavedTaskNumber(i64);
-
-impl SavedTaskNumber {
-    pub fn new(value: i64) -> Result<Self, InvalidTaskNumber> {
-        if value <= 0 {
-            return Err(InvalidTaskNumber);
-        }
-        Ok(Self(value))
-    }
-
-    pub fn get(self) -> i64 {
-        self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-#[error("task number must be positive")]
-pub struct InvalidTaskNumber;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SavedTaskStatus {
-    Todo,
-    InProgress,
-    InReview,
-    Done,
-    Closed,
-}
-
-impl SavedTaskStatus {
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw {
-            "todo" => Some(Self::Todo),
-            "in_progress" => Some(Self::InProgress),
-            "in_review" => Some(Self::InReview),
-            "done" => Some(Self::Done),
-            "closed" => Some(Self::Closed),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Todo => "todo",
-            Self::InProgress => "in_progress",
-            Self::InReview => "in_review",
-            Self::Done => "done",
-            Self::Closed => "closed",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SavedTaskAssignee {
     principal: PrincipalIdentity,
@@ -152,10 +101,10 @@ impl SavedTaskAssignee {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SavedLinkedTask {
-    pub id: String,
-    pub number: SavedTaskNumber,
+    pub id: TaskId,
+    pub number: TaskNumber,
     pub title: String,
-    pub status: SavedTaskStatus,
+    pub status: TaskStatus,
     pub assignee: Option<SavedTaskAssignee>,
 }
 

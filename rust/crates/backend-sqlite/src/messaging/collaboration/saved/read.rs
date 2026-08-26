@@ -6,8 +6,9 @@ use silverhand_backend_core::{
         collaboration::saved::{
             SavedAt, SavedEntry, SavedEntryId, SavedLinkedTask, SavedListQuery, SavedMessage,
             SavedMessageProjection, SavedPlace, SavedReadPort, SavedReadRefusal, SavedSince,
-            SavedTaskAssignee, SavedTaskNumber, SavedTaskStatus,
+            SavedTaskAssignee,
         },
+        task::{TaskId, TaskNumber, TaskStatus},
     },
     persistence::PersistenceFailure,
 };
@@ -222,21 +223,19 @@ fn decode_linked_task(row: &SqliteRow) -> Result<Option<SavedLinkedTask>, Persis
     else {
         return Ok(None);
     };
-    if id.is_empty() {
-        return Err(SavedStoreError::MalformedLinkedTask.into());
-    }
-    let number = SavedTaskNumber::new(
+    let id = TaskId::parse(id).map_err(|_| SavedStoreError::MalformedLinkedTask)?;
+    let number = TaskNumber::new(
         row.try_get::<Option<i64>, _>("task_number")
             .map_err(SavedStoreError::from)?
             .ok_or(SavedStoreError::MalformedLinkedTask)?,
     )
     .map_err(|_| SavedStoreError::MalformedLinkedTask)?;
-    let status = SavedTaskStatus::parse(
+    let status = TaskStatus::parse(
         &row.try_get::<Option<String>, _>("task_status")
             .map_err(SavedStoreError::from)?
             .ok_or(SavedStoreError::MalformedLinkedTask)?,
     )
-    .ok_or(SavedStoreError::MalformedLinkedTask)?;
+    .map_err(|_| SavedStoreError::MalformedLinkedTask)?;
     let agent: Option<String> = row
         .try_get("assignee_agent_id")
         .map_err(SavedStoreError::from)?;
