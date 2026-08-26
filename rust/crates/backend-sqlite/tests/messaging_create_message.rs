@@ -558,46 +558,75 @@ async fn a_main_line_send_writes_the_ordinal_the_message_the_head_and_the_recipi
     );
 }
 
-/// P0 — the current message's delivery witness rides the send's own transaction. A
-/// deterministic failure on the `turn` INSERT (a plain main-line send's only inbox
-/// write) must roll the WHOLE unit back: no message, no reserved ordinal, no stream
-/// head, no witness, no sidecar. If the witness insert were moved after the commit,
-/// the message would survive the trigger and this gate would go red — which is
-/// exactly what it is here to catch.
+/// P0 — the current message's delivery witness rides the send's own transaction,
+/// and it is written AFTER the send's other durable side effects. A mention send
+/// writes real work before the witness: the DM copy message, its direct-pair
+/// stream head, the outsider's copy inbox row, and the copy notification all land
+/// earlier in this same transaction (that they appear at all on success is the
+/// control in `every_effect_failing_leaves_the_committed_facts_in_place`). This
+/// gate rejects ONLY the current channel's `turn` — the witness this fix added —
+/// so those earlier effects are already written when it fails, and the whole unit
+/// must roll back with them: no message, no ordinal, no head, no copy, no
+/// direct-pair, no inbox on either side, no notification, no witness. If the
+/// witness insert were moved after the commit, the message and its side effects
+/// would survive the trigger and this gate would go red.
 #[tokio::test]
 async fn a_failed_current_message_witness_rolls_back_the_whole_send() {
     let mut fixture = Fixture::new().await;
     let store = fixture.store().await;
-    // Reject the current-message witness specifically: a main-line send queues its
-    // recipients a `turn` and nothing else, so this fires on exactly that INSERT.
+    // Reject the current channel's witness specifically. The outsider's copy inbox
+    // row is a `turn` in the direct-pair line, not this channel, so it is written
+    // first and unharmed; the trigger fires on the current-message witness for a
+    // channel participant, which the fix writes only after the copy work is done.
     fixture
         .execute(
             "CREATE TRIGGER reject_current_turn BEFORE INSERT ON conversation_inboxes WHEN \
-             NEW.delivery_kind = 'turn' BEGIN SELECT RAISE(ABORT, 'forced witness failure'); END",
+             NEW.delivery_kind = 'turn' AND NEW.conversation_id = 'conv-1' BEGIN \
+             SELECT RAISE(ABORT, 'forced witness failure'); END",
         )
         .await;
 
     let error = store
-        .send_message(send(agent_actor(), CHANNEL_ID, "never lands"))
+        .send_message(prepared_with(
+            mentioning_outsider(CHANNEL_ID),
+            &grants_outsider(),
+        ))
         .await
         .unwrap_err();
 
     assert!(matches!(error, SendMessageError::Persistence(_)));
-    // Every fact this send would have written is gone with the transaction.
+    // Every fact this send would have written is gone with the transaction — both
+    // the current-message witness AND the copy work that preceded it.
     assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 0);
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM messages WHERE cc_source_message_id IS NOT NULL")
+            .await,
+        0
+    );
     assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 0);
     assert_eq!(fixture.stream_head(CHANNEL_ID, None).await, None);
+    assert!(
+        fixture.direct_pairs().await.is_empty(),
+        "the copy's direct-pair line rolled back with the send"
+    );
     assert_eq!(
         fixture
             .count("SELECT count(*) FROM conversation_inboxes")
             .await,
-        0
+        0,
+        "neither the copy inbox row nor the current witness survives"
     );
+    assert!(fixture.queued_for(OUTSIDER_AGENT_ID).await.is_empty());
     assert_eq!(
         fixture
             .count("SELECT count(*) FROM conversation_events")
             .await,
         0
+    );
+    assert!(
+        fixture.notification_rows().await.is_empty(),
+        "the copy notification rolled back too"
     );
     assert_eq!(
         fixture.count("SELECT count(*) FROM thread_followers").await,
@@ -1634,15 +1663,17 @@ async fn a_reply_records_its_author_and_the_root_author_as_followers() {
     assert!(fixture.queued_for(USER_ID).await.is_empty());
 }
 
-/// A newly followed agent is caught up on the cluster as it stood before this
-/// reply — the root plus every earlier message — and not on the reply that
-/// followed it, which is delivered separately.
 /// A newly followed agent's catch-up covers the cluster it had not seen — but only
 /// the messages it had not seen. A channel participant already holds the root as a
-/// live `turn`, so catch-up cannot re-queue it as `observe` (the stronger `turn`
-/// wins the conflict); the reply it genuinely missed arrives as `observe`; and the
-/// reply that named it is delivered in the same transaction as a `turn`. Catch-up
-/// `observe` and current-turn coexist without duplicating a row.
+/// live `turn`, written earlier than this catch-up would run. The unique key is
+/// `(conversation, agent, message)` and does NOT include `delivery_kind`, so the
+/// catch-up's `observe(root)` INSERT hits `ON CONFLICT DO NOTHING`: it is dropped
+/// because a row for that message already exists — first writer wins, not because
+/// `turn` outranks `observe`. (Had the `observe` been written first, a later `turn`
+/// for the same message would be dropped just the same.) The reply it genuinely
+/// missed arrives as `observe`; the reply that named it is delivered in the same
+/// transaction as a `turn`. Catch-up `observe` and current-turn coexist without
+/// duplicating a row.
 #[tokio::test]
 async fn a_mentioned_participant_is_followed_and_caught_up_on_the_cluster() {
     let mut fixture = Fixture::new().await;
@@ -2707,6 +2738,33 @@ async fn every_effect_failing_leaves_the_committed_facts_in_place() {
     );
     assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 2);
     assert_eq!(fixture.queued_for(OUTSIDER_AGENT_ID).await.len(), 1);
+    // Load-bearing evidence 5: the current-message `turn` witness this fix added is
+    // itself durable and still PENDING after publication, start, and delivery all
+    // failed — the exact row (target conversation, sent message, `turn`, all three
+    // settlement columns empty) a recovering daemon would go on to claim. Both
+    // channel participants (the send's recipients; the user sender is excluded) hold
+    // it and nothing else.
+    let pending_turn = InboxWitness {
+        conversation_id: CHANNEL_ID.to_owned(),
+        message_id: fact.message().id.as_str().to_owned(),
+        delivery_kind: "turn".to_owned(),
+        delivered_at: None,
+        failed_at: None,
+        in_flight_owner: None,
+    };
+    assert_eq!(fixture.witness_rows(AGENT_ID).await, vec![pending_turn]);
+    let pending_turn_broad = InboxWitness {
+        conversation_id: CHANNEL_ID.to_owned(),
+        message_id: fact.message().id.as_str().to_owned(),
+        delivery_kind: "turn".to_owned(),
+        delivered_at: None,
+        failed_at: None,
+        in_flight_owner: None,
+    };
+    assert_eq!(
+        fixture.witness_rows(BROAD_AGENT_ID).await,
+        vec![pending_turn_broad]
+    );
     assert_eq!(fixture.notification_rows().await.len(), 1);
     assert_eq!(fixture.latest_seq(CHANNEL_ID).await, 1);
     assert_eq!(fixture.stream_head(CHANNEL_ID, None).await, Some(1));
