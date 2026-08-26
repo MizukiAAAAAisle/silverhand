@@ -31,7 +31,9 @@ use silverhand_backend_server::{
         TargetAddressRefusalLog,
         aftermath::MessagingAftermath,
         collaboration::{
-            channel_directory, channel_lifecycle, conversation_agent_directory,
+            activity, channel_directory, channel_lifecycle, conversation_agent_activity,
+            conversation_agent_directory, conversation_agent_run_states,
+            conversation_agent_runtime,
             stale_message_resolution::{
                 StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
                 StaleMessageResolutionAdmissionRefusal, TracingStaleMessageResolutionObserver,
@@ -436,6 +438,17 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     let channel_directory_read = messaging_store.channel_directory();
     let channel_detail_read = messaging_store.channel_lifecycle();
     let conversation_agent_directory_read = messaging_store.conversation_agent_directory();
+    // Wave 3A checkpoint A2: the four runtime/activity projection doors ride the SAME
+    // `MessagingStore` (each `&self` builder clones only the shared pool, no second
+    // authority) and — for the live run-state map — the SAME `daemon_runtime` owner
+    // already composed for delivery, cloned at the merge (a clone shares the owner's
+    // `Arc<Mutex<..>>` state; it is never a second runtime snapshot). The run-states
+    // admission takes its own `channel_lifecycle()` handle because the A1 detail handle
+    // above is moved into its own router.
+    let conversation_agent_runtime_read = messaging_store.conversation_agent_runtime();
+    let conversation_agent_activity_read = messaging_store.conversation_agent_activity();
+    let activity_read_model = messaging_store.activity_read_model();
+    let agent_run_states_admission = messaging_store.channel_lifecycle();
     let aftermath = MessagingAftermath::new(
         hub.clone(),
         daemon_runtime.effects(),
@@ -474,6 +487,17 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             .merge(conversation_agent_directory::router(
                 conversation_agent_directory_read,
             ))
+            .merge(conversation_agent_runtime::router(
+                conversation_agent_runtime_read,
+            ))
+            .merge(conversation_agent_run_states::router(
+                agent_run_states_admission,
+                daemon_runtime.clone(),
+            ))
+            .merge(conversation_agent_activity::router(
+                conversation_agent_activity_read,
+            ))
+            .merge(activity::router(activity_read_model))
             .merge(presence_router)
             .merge(access::router(
                 access_store.clone(),
@@ -2102,15 +2126,15 @@ mod tests {
 
     /// Gate 1 of the CP2 convergence closure — the composed root's COMPLETE positive
     /// mounted table. It enumerates every `(method, path)` `prepare()` mounts across
-    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195) as twenty entries —
-    /// fifteen behind the human session perimeter, three behind the runtime credential
+    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195) as twenty-four entries —
+    /// nineteen behind the human session perimeter, three behind the runtime credential
     /// perimeter, the two authenticated WebSockets — and asserts each is PRESENT
     /// (anon → its perimeter's `401`, or the WS upgrade surface, never the `404`
     /// fallback). Removing any mounted route's `.merge(...)` from `prepare()` flips its
     /// entry to `404` and reddens this gate.
     ///
     /// This is a PRESENCE ledger, not a closed universe: black-box probing cannot
-    /// prove "no twenty-first route was silently added" (axum exposes no route
+    /// prove "no twenty-fifth route was silently added" (axum exposes no route
     /// introspection), so this gate makes no such claim. A new registrar mounted into
     /// `prepare()` MUST add its route here (and, if in the #2195 lane, move it from
     /// residual to landed in gate 2). Each door's per-path method surface and adapter
@@ -2124,7 +2148,7 @@ mod tests {
         let router = app.router;
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // The fifteen human-perimeter product doors. Anonymous (no bearer) → the human
+        // The nineteen human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
         for (method, path) in [
@@ -2144,6 +2168,14 @@ mod tests {
             ("GET", "/api/archived-channels"),
             ("GET", "/api/channels/conv000000000001"),
             ("GET", "/api/channels/conv000000000001/agents"),
+            // Runtime/activity projection lane, Wave 3A checkpoint A2.
+            ("GET", "/api/channels/conv000000000001/agent-runtime"),
+            ("GET", "/api/channels/conv000000000001/agent-run-states"),
+            (
+                "GET",
+                "/api/conversations/conv000000000001/agents/agent-1/activity",
+            ),
+            ("GET", "/api/activity"),
         ] {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -2674,6 +2706,293 @@ mod tests {
                 "/api/archived-channels".to_owned(),
                 format!("/api/channels/{CONVERSATION_ID}"),
                 format!("/api/channels/{CONVERSATION_ID}/agents"),
+            ] {
+                let (status, body) = request(&router, "GET", &path, None).await;
+                assert_eq!(status, StatusCode::UNAUTHORIZED, "anon {path}: {body}");
+                assert_eq!(body, r#"{"error":"unauthorized"}"#, "anon {path}");
+            }
+
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "the perimeter must refuse every anonymous read before the product port is touched"
+            );
+        }
+    }
+
+    /// Wave 3A checkpoint A2: the four runtime/activity projection doors, mounted in
+    /// `prepare()` behind the SAME human perimeter. Three ride pool-clone `&self` reads
+    /// off the ONE production `MessagingStore` (`.conversation_agent_runtime()`,
+    /// `.conversation_agent_activity()`, `.activity_read_model()`); the run-state door
+    /// additionally joins the SAME live `daemon_runtime` owner already composed for
+    /// delivery — cloned, sharing the owner's `Arc<Mutex<..>>` state, never a second
+    /// runtime snapshot. Two composition obligations the leaf factories' own tests cannot
+    /// prove:
+    ///
+    /// * `the_composition_serves_runtime_and_activity_behind_the_perimeter` drives every
+    ///   one of the four through the real composed root: anonymous → the perimeter's
+    ///   `401`; an admitted workspace member (whose committed agent seat is seeded) → a
+    ///   real `200` off the live composed authorities. Each door's own success envelope
+    ///   (`runtime`/`states`/`events`/`items`) proves the real adapter — not a stub —
+    ///   answered, and the run-state door's `200` proves the joined SQLite admission and
+    ///   live-owner snapshot both resolved. A one-method checksum pins the feed to GET.
+    /// * `the_runtime_activity_perimeter_refuses_before_touching_the_product_port` is the
+    ///   load-bearing refusal gate: it mounts the SAME four factories behind the SAME
+    ///   `require_human_session` over a counting spy port (which serves the run-state
+    ///   door's admission AND owner snapshot), and proves an anonymous read is refused
+    ///   `401` with the product port invoked ZERO times — the perimeter `.layer` runs
+    ///   before routing, so a handler (and its port call) never executes. A `401` status
+    ///   alone cannot prove this; the call counter can.
+    mod runtime_activity_activation {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use silverhand_backend_core::{
+            auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
+            identity::{AgentId, ConversationId, UserId, WorkspaceId},
+            messaging::collaboration::{
+                activity::{ActivityList, ActivityReadModel},
+                channel_lifecycle::{
+                    ChannelDetailFact, ChannelDetailReadPort, ChannelDetailRefusal,
+                },
+                conversation_agent_activity::{
+                    ActivityPageRequest, ConversationAgentActivityPage,
+                    ConversationAgentActivityReadPort, ConversationAgentActivityRefusal,
+                },
+                conversation_agent_runtime::{
+                    ConversationAgentRuntimeProjection, ConversationAgentRuntimeReadPort,
+                    ConversationAgentRuntimeRefusal,
+                },
+            },
+        };
+        use silverhand_backend_server::{
+            auth::{PublicJsonUnauthorized, require_human_session},
+            messaging::collaboration::{
+                activity, conversation_agent_activity, conversation_agent_run_states,
+                conversation_agent_run_states::{
+                    AgentRunStateProjection, ConversationAgentRunStateSource,
+                },
+                conversation_agent_runtime,
+            },
+        };
+        use silverhand_backend_sqlite::auth::SqliteSessionStore;
+
+        use super::*;
+
+        const AGENT_ID: &str = "agent-1";
+
+        /// Seed the target agent's committed participation for the conversation
+        /// `seed_channel_directory` created: a host, the agent, and its conversation seat.
+        /// No live runtime slot and no activity event are seeded, so the run-state,
+        /// activity, and feed doors answer an empty projection while the runtime door
+        /// projects the committed seat as a single idle row — each the real adapter's
+        /// honest answer, none a fabricated fact.
+        async fn seed_channel_agent(path: &Path) {
+            let pool = SqlitePoolOptions::new()
+                .connect(path.to_str().unwrap())
+                .await
+                .unwrap();
+            sqlx::raw_sql(
+                "INSERT INTO hosts(id,name,kind,created_at) VALUES ('host-1','host-1','app',1); \
+                 INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,created_by_user_id) \
+                   VALUES ('agent-1','agent-1','claude','host-1',1,1,'user-1'); \
+                 INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES \
+                   ('conv000000000001','agent-1',1);",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            pool.close().await;
+        }
+
+        #[tokio::test]
+        async fn the_composition_serves_runtime_and_activity_behind_the_perimeter() {
+            let fixture = fixture(true).await;
+            seed_human(&fixture.path).await;
+            seed_channel_directory(&fixture.path).await;
+            seed_channel_agent(&fixture.path).await;
+            let app = prepare(&config(fixture.path.clone())).await.unwrap();
+            let router = app.router;
+            let bearer = format!("Bearer {TOKEN}");
+
+            let agent_runtime = format!("/api/channels/{CONVERSATION_ID}/agent-runtime");
+            let agent_run_states = format!("/api/channels/{CONVERSATION_ID}/agent-run-states");
+            let agent_activity =
+                format!("/api/conversations/{CONVERSATION_ID}/agents/{AGENT_ID}/activity");
+            let activity = "/api/activity".to_owned();
+
+            // Anonymous → the perimeter's refusal envelope on every door, never a read.
+            for path in [
+                &agent_runtime,
+                &agent_run_states,
+                &agent_activity,
+                &activity,
+            ] {
+                let (status, body) = request(&router, "GET", path, None).await;
+                assert_eq!(status, StatusCode::UNAUTHORIZED, "anon {path}: {body}");
+                assert_eq!(body, r#"{"error":"unauthorized"}"#, "anon {path}");
+            }
+
+            // Admitted member → a real `200` off the live composed authorities; each
+            // door's own success envelope proves the real adapter (not a stub) answered.
+            // The committed-roster runtime projection emits an idle row for the seeded
+            // agent seat even with no live slot, so a stub could never fabricate it.
+            let (status, body) = request(&router, "GET", &agent_runtime, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "agent-runtime: {body}");
+            let runtime = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+            assert_eq!(
+                runtime["runtime"][0]["agent_id"].as_str(),
+                Some(AGENT_ID),
+                "agent-runtime projects the committed roster off the real SQLite adapter: {body}"
+            );
+            assert_eq!(
+                runtime["runtime"][0]["status"].as_str(),
+                Some("idle"),
+                "the seeded seat with no live slot projects the idle runtime status: {body}"
+            );
+
+            // The run-state door joins two live authorities: SQLite admission (member)
+            // and the SAME `daemon_runtime` owner's snapshot (empty in a fresh owner).
+            let (status, body) = request(&router, "GET", &agent_run_states, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "agent-run-states: {body}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap()["states"],
+                serde_json::json!([]),
+                "agent-run-states rides the live daemon owner snapshot: {body}"
+            );
+
+            let (status, body) = request(&router, "GET", &agent_activity, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "agent-activity: {body}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap()["events"],
+                serde_json::json!([]),
+                "agent-activity rides the persisted-event SQLite projection: {body}"
+            );
+
+            let (status, body) = request(&router, "GET", &activity, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "activity: {body}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap()["items"],
+                serde_json::json!([]),
+                "activity rides the viewer Activity cold projection: {body}"
+            );
+
+            // One-method checksum: the activity feed path serves GET only.
+            let (status, body) = request(&router, "POST", &activity, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
+        }
+
+        /// A spy satisfying the four A2 doors' read ports (the run-state door needs two —
+        /// the SQLite admission and the live-owner snapshot); every method bumps a shared
+        /// counter then diverges. Reaching any of them past the perimeter is a bug, so the
+        /// bodies never need to fabricate a success value.
+        #[derive(Clone, Default)]
+        struct RuntimeActivityCountingPort {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl ConversationAgentRuntimeReadPort for RuntimeActivityCountingPort {
+            type Error = std::convert::Infallible;
+            async fn read(
+                &self,
+                _: &UserId,
+                _: &ConversationId,
+            ) -> Result<
+                Result<ConversationAgentRuntimeProjection, ConversationAgentRuntimeRefusal>,
+                Self::Error,
+            > {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl ChannelDetailReadPort for RuntimeActivityCountingPort {
+            type Error = std::convert::Infallible;
+            async fn detail(
+                &self,
+                _: &UserId,
+                _: &ConversationId,
+            ) -> Result<Result<ChannelDetailFact, ChannelDetailRefusal>, Self::Error> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl ConversationAgentRunStateSource for RuntimeActivityCountingPort {
+            type Error = std::convert::Infallible;
+            fn snapshot(
+                &self,
+                _: &ConversationId,
+            ) -> Result<Vec<AgentRunStateProjection>, Self::Error> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl ConversationAgentActivityReadPort for RuntimeActivityCountingPort {
+            type Error = std::convert::Infallible;
+            async fn admit(
+                &self,
+                _: &UserId,
+                _: &ConversationId,
+                _: &AgentId,
+            ) -> Result<Result<(), ConversationAgentActivityRefusal>, Self::Error> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+            async fn read(
+                &self,
+                _: &UserId,
+                _: &ConversationId,
+                _: &AgentId,
+                _: ActivityPageRequest,
+            ) -> Result<
+                Result<ConversationAgentActivityPage, ConversationAgentActivityRefusal>,
+                Self::Error,
+            > {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+        impl ActivityReadModel for RuntimeActivityCountingPort {
+            type Error = std::convert::Infallible;
+            async fn list_activity(
+                &self,
+                _: &UserId,
+                _: Option<&WorkspaceId>,
+            ) -> Result<ActivityList, Self::Error> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                unreachable!("perimeter must refuse the anonymous read before the product port")
+            }
+        }
+
+        #[tokio::test]
+        async fn the_runtime_activity_perimeter_refuses_before_touching_the_product_port() {
+            let fixture = fixture(false).await;
+            let session_store = SqliteSessionStore::open(&fixture.path).await.unwrap();
+            let sessions = HumanSessionAuthenticator::new(
+                session_store,
+                SystemSessionClock,
+                SessionTtl::default(),
+            );
+            let spy = RuntimeActivityCountingPort::default();
+            let calls = spy.calls.clone();
+            // The SAME four factories `prepare()` mounts, behind the SAME perimeter. The
+            // run-state door takes the spy for BOTH its admission and its owner snapshot.
+            let router = require_human_session(
+                conversation_agent_runtime::router(spy.clone())
+                    .merge(conversation_agent_run_states::router(
+                        spy.clone(),
+                        spy.clone(),
+                    ))
+                    .merge(conversation_agent_activity::router(spy.clone()))
+                    .merge(activity::router(spy)),
+                sessions,
+                PublicJsonUnauthorized,
+            );
+
+            for path in [
+                format!("/api/channels/{CONVERSATION_ID}/agent-runtime"),
+                format!("/api/channels/{CONVERSATION_ID}/agent-run-states"),
+                format!("/api/conversations/{CONVERSATION_ID}/agents/{AGENT_ID}/activity"),
+                "/api/activity".to_owned(),
             ] {
                 let (status, body) = request(&router, "GET", &path, None).await;
                 assert_eq!(status, StatusCode::UNAUTHORIZED, "anon {path}: {body}");
