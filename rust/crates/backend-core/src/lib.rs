@@ -13,6 +13,7 @@ pub mod agent_list_read;
 pub mod agent_presence_read;
 pub mod agents;
 pub mod auth;
+pub mod avatar;
 pub mod blob_store;
 pub mod capability;
 pub mod cold_read;
