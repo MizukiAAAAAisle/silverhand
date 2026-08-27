@@ -100,8 +100,17 @@ impl From<&WorkspaceColdRead> for WorkspaceColdReadResponse {
 /// contract order, mirroring `ViewerWorkspaceDtoSchema` / `toViewerWorkspace`:
 /// nullable strings/number serialize as JSON `null`, `dm_channel_ids` as an
 /// array. `name_key` never reaches the wire.
+///
+/// This is the ONE canonical published-workspace wire projection for the crate:
+/// the workspace-list route here, the detail route
+/// ([`crate::workspace_detail`]), and the metadata-write route
+/// ([`crate::workspace_metadata_write`]) all serve this exact shape, so it is
+/// defined once and imported rather than re-declared per route. The `From<&
+/// WorkspaceFace>` is the projection; a route that must gate WHICH faces may reach
+/// the wire (the detail route, which admits only an `AuthorizedWorkspaceFace`)
+/// carries that gate on its own response type, not by withholding this DTO.
 #[derive(Serialize)]
-struct ViewerWorkspaceDto {
+pub(crate) struct ViewerWorkspaceDto {
     id: String,
     name: String,
     description: Option<String>,
