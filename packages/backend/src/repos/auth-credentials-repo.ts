@@ -4,6 +4,7 @@ import { prepareObserved } from '../observability/observed-statement.js';
 import type {
   Argon2idPasswordHashParams,
   PasswordHashResult,
+  PersistedPasswordHashParams,
 } from '../auth/credential-types.js';
 import type { AuthCredentialsPort } from '../auth/ports.js';
 
@@ -67,21 +68,37 @@ export function serializePasswordHashParams(
   return JSON.stringify(params);
 }
 
-export function parsePasswordHashParams(raw: string): Argon2idPasswordHashParams {
-  const parsed = JSON.parse(raw) as Partial<Argon2idPasswordHashParams>;
+/**
+ * Read the persisted `password_hash_params`, admitting BOTH producer arms. The
+ * shared cost fields are validated once; then `library` discriminates the arm and
+ * selects its required provenance block (`benchmark` for Node, `calibration` for
+ * Rust). Any other `library`, or a missing provenance block, is invalid.
+ */
+export function parsePasswordHashParams(raw: string): PersistedPasswordHashParams {
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
   if (
     parsed.algorithm !== 'argon2id'
-    || parsed.library !== '@node-rs/argon2'
     || parsed.version !== '0x13'
     || !positiveInteger(parsed.memoryCostKiB)
     || !positiveInteger(parsed.timeCost)
     || !positiveInteger(parsed.parallelism)
     || !positiveInteger(parsed.outputLen)
-    || !parsed.benchmark
   ) {
     throw new Error('invalid password_hash_params');
   }
-  return parsed as Argon2idPasswordHashParams;
+  if (parsed.library === '@node-rs/argon2') {
+    if (!parsed.benchmark) {
+      throw new Error('invalid password_hash_params');
+    }
+    return parsed as unknown as Argon2idPasswordHashParams;
+  }
+  if (parsed.library === 'silverhand/argon2-rustcrypto') {
+    if (!parsed.calibration) {
+      throw new Error('invalid password_hash_params');
+    }
+    return parsed as unknown as PersistedPasswordHashParams;
+  }
+  throw new Error('invalid password_hash_params');
 }
 
 function positiveInteger(value: unknown): value is number {
