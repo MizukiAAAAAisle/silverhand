@@ -25,6 +25,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
     host_runtime::{
+        aftermath::{CustodyEffectFailure, DaemonConnectionControl},
         custody::{HostCredentialLookup, VerifyHostTokenFact, verify_host_token},
         rotation::{DaemonRotationAck, DaemonTokenRotationChannel, RotatedTokenDelivery},
     },
@@ -48,9 +49,10 @@ use silverhand_backend_core::{
         RuntimeRoster, RuntimeSpawnPlan,
     },
     runtime_event::{CommitRuntimeConsumed, DaemonEventDurablePort, RuntimeEventAdmission},
+    teardown::facts::AgentRuntimeSessionFacts,
 };
 use tokio::{
-    sync::{Notify, mpsc, oneshot},
+    sync::{Notify, mpsc, oneshot, watch},
     time::Instant,
 };
 
@@ -66,6 +68,7 @@ use crate::{
     },
     host_control::status_seed::{CustodyUnavailable, DaemonCustody, HostStatusSeeds},
     host_control::status_snapshot::{self, StatusSnapshotOutcome, StatusSnapshotRequest},
+    host_runtime::detail::ConnectedHostName,
     messaging::references::MarkdownReferencePositions,
     runtime_credential::{
         RuntimeCredentialAuthority, RuntimeDispatchFailure, RuntimeStartFailure,
@@ -83,6 +86,9 @@ const MAX_DAEMON_FRAME_BYTES: usize = 1024 * 1024;
 /// schema is a corrupt-dialer signal, not an actionable "upgrade this daemon" fact.
 const MAX_READABLE_PROTOCOL_VERSION: u32 = 100;
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+/// The purge waits for runtime quiescence before removing the agent home, matching
+/// the TS production data-plane budget rather than the ordinary control round trip.
+const HOST_LOCAL_PURGE_TIMEOUT: Duration = Duration::from_secs(60);
 /// The budget for one `rotate_token` round trip. Deliberately shorter than a general
 /// command: it mirrors the TS `HostTokenRotationCoordinator`'s own 10s, and a rotation
 /// that has not been acknowledged in that window is read as "may not have stored it",
@@ -92,6 +98,7 @@ const DEFAULT_LEASE_TTL: Duration = Duration::from_secs(60);
 const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_PONG_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_millis(1_500);
+const HOST_REVOKED_CLOSE_REASON: &str = "host_revoked";
 
 #[derive(Clone)]
 pub struct DaemonDeliveryConfig {
@@ -581,7 +588,14 @@ struct DaemonAttachment {
     host_id: String,
     connection_id: String,
     daemon_instance: DaemonInstanceId,
+    host_name: String,
     commands: mpsc::Sender<ConnectionControl>,
+}
+
+#[derive(Clone)]
+struct AttachedDaemon {
+    daemon_instance: DaemonInstanceId,
+    host_name: String,
 }
 
 #[derive(Clone)]
@@ -601,7 +615,14 @@ struct RegistryState {
 struct DaemonSlot {
     connection_id: String,
     commands: mpsc::Sender<ConnectionControl>,
-    daemon_instance: Option<DaemonInstanceId>,
+    close: watch::Sender<Option<ConnectionClose>>,
+    attached: Option<AttachedDaemon>,
+}
+
+#[derive(Clone)]
+struct GenerationCloseControl {
+    connection_id: String,
+    sender: watch::Sender<Option<ConnectionClose>>,
 }
 
 impl DaemonRegistry {
@@ -623,6 +644,7 @@ impl DaemonRegistry {
         &self,
         host_id: &str,
         commands: mpsc::Sender<ConnectionControl>,
+        close: watch::Sender<Option<ConnectionClose>>,
     ) -> Result<String, ReserveConnectionError> {
         let mut state = self
             .state
@@ -647,7 +669,8 @@ impl DaemonRegistry {
             DaemonSlot {
                 connection_id: connection_id.clone(),
                 commands,
-                daemon_instance: None,
+                close,
+                attached: None,
             },
         );
         self.changed.notify_waiters();
@@ -658,7 +681,7 @@ impl DaemonRegistry {
         &self,
         host_id: &str,
         connection_id: &str,
-        daemon_instance: DaemonInstanceId,
+        attached: AttachedDaemon,
     ) -> Result<bool, DaemonRegistryError> {
         let mut state = self
             .state
@@ -670,7 +693,7 @@ impl DaemonRegistry {
         if slot.connection_id != connection_id {
             return Ok(false);
         }
-        slot.daemon_instance = Some(daemon_instance);
+        slot.attached = Some(attached);
         self.changed.notify_waiters();
         Ok(true)
     }
@@ -683,15 +706,39 @@ impl DaemonRegistry {
         let Some(slot) = state.slots.get(host_id) else {
             return Ok(None);
         };
-        let Some(daemon_instance) = slot.daemon_instance.clone() else {
+        let Some(attached) = slot.attached.clone() else {
             return Ok(None);
         };
         Ok(Some(DaemonAttachment {
             host_id: host_id.to_owned(),
             connection_id: slot.connection_id.clone(),
-            daemon_instance,
+            daemon_instance: attached.daemon_instance,
+            host_name: attached.host_name,
             commands: slot.commands.clone(),
         }))
+    }
+
+    /// Snapshot exactly the generation that holds `host_id` now.
+    ///
+    /// The connection id plus its private channel are one generation-bound capability.
+    /// If that generation disappears after this lock is released, a replacement gets a
+    /// different channel; sending through the captured value can therefore never close
+    /// the replacement. Cleanup keeps the slot until the socket task actually exits, so
+    /// two live transports are not briefly admitted for one host.
+    fn current_close_control(
+        &self,
+        host_id: &str,
+    ) -> Result<Option<GenerationCloseControl>, DaemonRegistryError> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| DaemonRegistryError::Poisoned)?
+            .slots
+            .get(host_id)
+            .map(|slot| GenerationCloseControl {
+                connection_id: slot.connection_id.clone(),
+                sender: slot.close.clone(),
+            }))
     }
 
     fn remove(&self, host_id: &str, connection_id: &str) {
@@ -715,7 +762,7 @@ impl DaemonRegistry {
             state
                 .slots
                 .values()
-                .filter(|slot| slot.daemon_instance.is_some())
+                .filter(|slot| slot.attached.is_some())
                 .count()
         })
     }
@@ -843,6 +890,31 @@ impl DaemonDeliveryController {
         self.seeds.clone()
     }
 
+    /// A read-only projection of daemon-reported host names. The handle carries no
+    /// dispatch or shutdown methods, so a detail route cannot accidentally grow into a
+    /// second connection controller merely because it needs diagnostic metadata.
+    pub fn connected_host_names(&self) -> ConnectedHostNameView {
+        ConnectedHostNameView {
+            registry: self.registry.clone(),
+        }
+    }
+
+    /// Per-computer connection control sharing this runtime's one registry.
+    pub fn connection_control(&self) -> DaemonConnectionControlHandle {
+        DaemonConnectionControlHandle {
+            registry: self.registry.clone(),
+        }
+    }
+
+    /// The daemon-backed half of computer-cascade teardown. It can stop an exact
+    /// captured seat and purge one agent home, but cannot announce identity changes or
+    /// touch the blob store; those authorities are composed separately.
+    pub fn cascade_daemon_effects(&self) -> DaemonCascadeEffects {
+        DaemonCascadeEffects {
+            registry: self.registry.clone(),
+        }
+    }
+
     pub fn active_connection_count(&self) -> usize {
         self.registry.active_count()
     }
@@ -869,11 +941,14 @@ impl DaemonDeliveryController {
             state
                 .slots
                 .values()
-                .map(|slot| slot.commands.clone())
+                .map(|slot| slot.close.clone())
                 .collect::<Vec<_>>()
         };
         for sender in senders {
-            let _ = sender.send(ConnectionControl::Close).await;
+            let _ = sender.send(Some(ConnectionClose {
+                expected_connection_id: None,
+                reason: "server_shutdown",
+            }));
         }
         let deadline = Instant::now() + self.shutdown_grace;
         while self.active_connection_count() != 0 {
@@ -887,11 +962,165 @@ impl DaemonDeliveryController {
     }
 }
 
+/// Diagnostic-only attachment-name view. `Clone` shares the registry; it never
+/// snapshots names into a second lifecycle authority.
+#[derive(Clone)]
+pub struct ConnectedHostNameView {
+    registry: DaemonRegistry,
+}
+
+impl ConnectedHostName for ConnectedHostNameView {
+    fn connected_host_name(&self, computer: &HostId) -> Option<String> {
+        self.registry
+            .attachment(computer.as_str())
+            .ok()
+            .flatten()
+            .map(|attachment| attachment.host_name)
+    }
+}
+
+/// The narrow production answer to the core's post-commit disconnect port.
+#[derive(Clone)]
+pub struct DaemonConnectionControlHandle {
+    registry: DaemonRegistry,
+}
+
+impl DaemonConnectionControl for DaemonConnectionControlHandle {
+    async fn disconnect(&self, computer: HostId) -> Result<(), CustodyEffectFailure> {
+        let current = self
+            .registry
+            .current_close_control(computer.as_str())
+            .map_err(CustodyEffectFailure::from_source)?;
+        let Some(current) = current else {
+            return Ok(());
+        };
+        // If the captured task ended between the snapshot and this send, there is no
+        // live captured generation left to close. Any replacement has a different
+        // channel, so the idempotent effect is complete without touching it.
+        let _ = current.sender.send(Some(ConnectionClose {
+            expected_connection_id: Some(current.connection_id),
+            reason: HOST_REVOKED_CLOSE_REASON,
+        }));
+        Ok(())
+    }
+}
+
+/// Real daemon transports used by the production computer-cascade composer.
+#[derive(Clone)]
+pub struct DaemonCascadeEffects {
+    registry: DaemonRegistry,
+}
+
+impl DaemonCascadeEffects {
+    pub(crate) async fn stop_runtime_seat(
+        &self,
+        computer: &HostId,
+        seat: &AgentRuntimeSessionFacts,
+    ) -> Result<(), CustodyEffectFailure> {
+        let attachment = self
+            .attachment(computer)
+            .map_err(CustodyEffectFailure::from_source)?;
+        let result = attachment
+            .command(
+                "runtime_stop",
+                json!({
+                    "runtime_scope": scope_wire(&seat.scope),
+                    "runtime_generation": seat.generation.as_i64(),
+                    "mode": "hard",
+                }),
+                DEFAULT_COMMAND_TIMEOUT,
+            )
+            .await
+            .map_err(|source| {
+                CustodyEffectFailure::from_source(CascadeDaemonError::Command(source))
+            })?;
+        if !valid_runtime_stop_result(&result) {
+            return Err(CustodyEffectFailure::from_source(
+                CascadeDaemonError::InvalidRuntimeStopResponse,
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn purge_host_local_files(
+        &self,
+        computer: &HostId,
+        agent: &AgentId,
+    ) -> Result<(), CustodyEffectFailure> {
+        let attachment = self
+            .attachment(computer)
+            .map_err(CustodyEffectFailure::from_source)?;
+        let result = attachment
+            .command(
+                "agent_files_purge",
+                json!({ "agent_id": agent.as_str() }),
+                HOST_LOCAL_PURGE_TIMEOUT,
+            )
+            .await
+            .map_err(|source| {
+                CustodyEffectFailure::from_source(CascadeDaemonError::Command(source))
+            })?;
+        if !valid_agent_files_purge_result(&result) {
+            return Err(CustodyEffectFailure::from_source(
+                CascadeDaemonError::InvalidAgentFilesPurgeResponse,
+            ));
+        }
+        Ok(())
+    }
+
+    fn attachment(&self, computer: &HostId) -> Result<DaemonAttachment, CascadeDaemonError> {
+        self.registry
+            .attachment(computer.as_str())
+            .map_err(CascadeDaemonError::Registry)?
+            .ok_or(CascadeDaemonError::NoCurrentDaemon)
+    }
+}
+
+#[derive(Debug)]
+enum CascadeDaemonError {
+    Registry(DaemonRegistryError),
+    NoCurrentDaemon,
+    Command(CommandDispatchError),
+    InvalidRuntimeStopResponse,
+    InvalidAgentFilesPurgeResponse,
+}
+
+impl fmt::Display for CascadeDaemonError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Registry(_) => "daemon attachment registry is unavailable",
+            Self::NoCurrentDaemon => "host has no attached daemon",
+            Self::Command(_) => "daemon cascade command failed",
+            Self::InvalidRuntimeStopResponse => "daemon returned an invalid runtime_stop response",
+            Self::InvalidAgentFilesPurgeResponse => {
+                "daemon returned an invalid agent_files_purge response"
+            }
+        })
+    }
+}
+
+impl Error for CascadeDaemonError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Registry(source) => Some(source),
+            Self::Command(source) => Some(source),
+            Self::NoCurrentDaemon
+            | Self::InvalidRuntimeStopResponse
+            | Self::InvalidAgentFilesPurgeResponse => None,
+        }
+    }
+}
+
 enum ConnectionControl {
     Command(CommandRequest),
     CommandTimedOut(String),
-    Hydrated(Result<DaemonInstanceId, DaemonDeliveryError>),
-    Close,
+    Hydrated(Result<AttachedDaemon, DaemonDeliveryError>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ConnectionClose {
+    expected_connection_id: Option<String>,
+    reason: &'static str,
 }
 
 struct CommandRequest {
@@ -969,6 +1198,24 @@ enum RuntimeRefusalCode {
     RegistryUnavailable,
 }
 
+/// Codes scoped to `agent_files_purge`. They are accepted only on that command;
+/// seeing one on any other kind is protocol corruption.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AgentFilesPurgeRefusalCode {
+    QuiesceFailed,
+    PartialPurge,
+}
+
+impl AgentFilesPurgeRefusalCode {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "quiesce_failed" => Some(Self::QuiesceFailed),
+            "partial_purge" => Some(Self::PartialPurge),
+            _ => None,
+        }
+    }
+}
+
 impl RuntimeRefusalCode {
     fn parse(raw: &str) -> Option<Self> {
         match raw {
@@ -990,6 +1237,7 @@ impl RuntimeRefusalCode {
 enum CommandRefusal {
     Response,
     RuntimeScoped,
+    AgentFilesPurgeScoped,
 }
 
 impl CommandRefusal {
@@ -1003,7 +1251,10 @@ impl CommandRefusal {
             return Some(Self::Response);
         }
         if !matches!(kind, "runtime_start" | "runtime_deliver") {
-            return None;
+            return (kind == "agent_files_purge")
+                .then(|| AgentFilesPurgeRefusalCode::parse(code))
+                .flatten()
+                .map(|_| Self::AgentFilesPurgeScoped);
         }
         RuntimeRefusalCode::parse(code).map(|_| Self::RuntimeScoped)
     }
@@ -1139,7 +1390,9 @@ impl HostCommandFailure {
             // A runtime-scoped code is not admitted for a host-control kind, so
             // reaching this arm means the frame decoded as something no
             // host-control command can be refused with.
-            CommandDispatchError::DaemonRefused(CommandRefusal::RuntimeScoped)
+            CommandDispatchError::DaemonRefused(
+                CommandRefusal::RuntimeScoped | CommandRefusal::AgentFilesPurgeScoped,
+            )
             | CommandDispatchError::InvalidResponse => Self::ProtocolCorruption,
         }
     }
@@ -1441,20 +1694,39 @@ impl RuntimeStopTransport for StopTransport {
             )
             .await
             .map_err(StopTransportError::Command)?;
-        let object = result
-            .as_object()
-            .ok_or(StopTransportError::InvalidResponse)?;
-        if object.len() != 3
-            || object.get("mode").and_then(Value::as_str) != Some("hard")
-            || object.get("stopped").and_then(Value::as_bool).is_none()
-            || !object
-                .get("exit_code")
-                .is_some_and(|value| value.is_null() || value.as_i64().is_some())
-        {
+        if !valid_runtime_stop_result(&result) {
             return Err(StopTransportError::InvalidResponse);
         }
         Ok(())
     }
+}
+
+fn valid_runtime_stop_result(result: &Value) -> bool {
+    let Some(object) = result.as_object() else {
+        return false;
+    };
+    object.len() == 3
+        && object.get("mode").and_then(Value::as_str) == Some("hard")
+        && object.get("stopped").and_then(Value::as_bool).is_some()
+        && object
+            .get("exit_code")
+            .is_some_and(|value| value.is_null() || value.as_i64().is_some())
+}
+
+fn valid_agent_files_purge_result(result: &Value) -> bool {
+    let Some(object) = result.as_object() else {
+        return false;
+    };
+    object.len() == 3
+        && object.get("ok").and_then(Value::as_bool) == Some(true)
+        && object
+            .get("purged_count")
+            .and_then(Value::as_i64)
+            .is_some_and(|count| count >= 0)
+        && object
+            .get("quiesced_count")
+            .and_then(Value::as_i64)
+            .is_some_and(|count| count >= 0)
 }
 
 #[derive(Debug)]
@@ -1621,6 +1893,92 @@ impl Error for DeliveryTransportError {
     }
 }
 
+enum ConnectionInput {
+    Close(ConnectionClose),
+    Control(ConnectionControl),
+    Terminated,
+}
+
+enum InterruptibleSend {
+    Sent,
+    TransportFailed,
+    Close(ConnectionClose),
+    Terminated,
+}
+
+/// Wait for this private connection generation's close signal. A mismatched id can
+/// only be produced by a faulty in-process caller or a test; ignoring it preserves
+/// the generation boundary instead of turning the private channel into host lookup.
+async fn matching_connection_close(
+    close: &mut watch::Receiver<Option<ConnectionClose>>,
+    connection_id: &str,
+) -> Option<ConnectionClose> {
+    loop {
+        close.changed().await.ok()?;
+        let requested = close.borrow_and_update().clone();
+        if let Some(requested) = requested
+            && requested
+                .expected_connection_id
+                .as_deref()
+                .is_none_or(|expected| expected == connection_id)
+        {
+            return Some(requested);
+        }
+    }
+}
+
+/// The custody lane is deliberately separate from the bounded business-command
+/// FIFO. `biased` is load-bearing: when both are ready after a stalled connection
+/// resumes, revocation is observed before any queued command.
+async fn next_connection_input(
+    close: &mut watch::Receiver<Option<ConnectionClose>>,
+    connection_id: &str,
+    commands: &mut mpsc::Receiver<ConnectionControl>,
+) -> ConnectionInput {
+    tokio::select! {
+        biased;
+        requested = matching_connection_close(close, connection_id) => requested
+            .map(ConnectionInput::Close)
+            .unwrap_or(ConnectionInput::Terminated),
+        received = commands.recv() => received
+            .map(ConnectionInput::Control)
+            .unwrap_or(ConnectionInput::Terminated),
+    }
+}
+
+/// A command write that is still backpressured is not allowed to hide a later
+/// custody revocation. Cancelling the in-flight send is conservatively ambiguous;
+/// the close is then written and no further business command is dequeued.
+async fn send_command_interruptibly(
+    socket: &mut WebSocket,
+    close: &mut watch::Receiver<Option<ConnectionClose>>,
+    connection_id: &str,
+    message: Message,
+) -> InterruptibleSend {
+    let send = socket.send(message);
+    tokio::pin!(send);
+    tokio::select! {
+        biased;
+        requested = matching_connection_close(close, connection_id) => requested
+            .map(InterruptibleSend::Close)
+            .unwrap_or(InterruptibleSend::Terminated),
+        result = &mut send => if result.is_ok() {
+            InterruptibleSend::Sent
+        } else {
+            InterruptibleSend::TransportFailed
+        },
+    }
+}
+
+async fn send_connection_close(socket: &mut WebSocket, close: ConnectionClose) {
+    let _ = socket
+        .send(Message::Close(Some(CloseFrame {
+            code: 1001,
+            reason: close.reason.into(),
+        })))
+        .await;
+}
+
 async fn daemon_websocket<C, D, H>(
     State(runtime): State<DaemonDeliveryRuntime<C, D, H>>,
     websocket: WebSocketUpgrade,
@@ -1652,7 +2010,8 @@ where
         }
     };
     let (commands, receive) = mpsc::channel(32);
-    let connection_id = match runtime.registry.reserve(&host_id, commands.clone()) {
+    let (close, close_receive) = watch::channel(None);
+    let connection_id = match runtime.registry.reserve(&host_id, commands.clone(), close) {
         Ok(id) => id,
         Err(ReserveConnectionError::Occupied) => return StatusCode::CONFLICT.into_response(),
         Err(ReserveConnectionError::Closing) => {
@@ -1667,7 +2026,15 @@ where
         .max_message_size(MAX_DAEMON_FRAME_BYTES)
         .max_frame_size(MAX_DAEMON_FRAME_BYTES)
         .on_upgrade(move |socket| {
-            connection(socket, runtime, host_id, connection_id, commands, receive)
+            connection(
+                socket,
+                runtime,
+                host_id,
+                connection_id,
+                commands,
+                receive,
+                close_receive,
+            )
         })
 }
 
@@ -1678,6 +2045,7 @@ async fn connection<C, D, H>(
     connection_id: String,
     control: mpsc::Sender<ConnectionControl>,
     mut commands: mpsc::Receiver<ConnectionControl>,
+    mut close: watch::Receiver<Option<ConnectionClose>>,
 ) where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
@@ -1685,7 +2053,7 @@ async fn connection<C, D, H>(
 {
     let mut pending: HashMap<String, PendingCommand> = HashMap::new();
     let mut next_command = 0_u64;
-    let mut compatible: Option<DaemonInstanceId> = None;
+    let mut compatible: Option<AttachedDaemon> = None;
     let mut attached: Option<DaemonInstanceId> = None;
     let mut heartbeat = tokio::time::interval_at(
         Instant::now() + runtime.config.ping_interval,
@@ -1695,6 +2063,114 @@ async fn connection<C, D, H>(
     let mut awaiting_pong: Option<(i64, Instant)> = None;
     loop {
         tokio::select! {
+            received_control = next_connection_input(&mut close, &connection_id, &mut commands) => match received_control {
+                ConnectionInput::Close(requested) => {
+                    send_connection_close(&mut socket, requested).await;
+                    break;
+                }
+                ConnectionInput::Control(ConnectionControl::Command(command)) if compatible.is_some() => {
+                    next_command = match next_command.checked_add(1) {
+                        Some(next) => next,
+                        None => {
+                            let _ = command.response.send(Err(CommandDispatchError::ProvenNotDispatched));
+                            continue;
+                        }
+                    };
+                    let id = format!("rust-daemon-{next_command}");
+                    let frame = json!({
+                        "direction": "server_to_daemon",
+                        "type": "command",
+                        "id": id,
+                        "kind": command.kind,
+                        "params": command.params,
+                    });
+                    match send_command_interruptibly(
+                        &mut socket,
+                        &mut close,
+                        &connection_id,
+                        Message::Text(frame.to_string().into()),
+                    ).await {
+                        InterruptibleSend::Sent => {}
+                        InterruptibleSend::TransportFailed => {
+                            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
+                            break;
+                        }
+                        InterruptibleSend::Close(requested) => {
+                            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
+                            send_connection_close(&mut socket, requested).await;
+                            break;
+                        }
+                        InterruptibleSend::Terminated => {
+                            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
+                            break;
+                        }
+                    }
+                    let timeout_id = id.clone();
+                    let timeout_control = control.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(command.timeout).await;
+                        let _ = timeout_control
+                            .send(ConnectionControl::CommandTimedOut(timeout_id))
+                            .await;
+                    });
+                    pending.insert(id, (command.kind, command.response));
+                }
+                ConnectionInput::Control(ConnectionControl::Command(command)) => {
+                    let _ = command.response.send(Err(CommandDispatchError::ProvenNotDispatched));
+                }
+                ConnectionInput::Control(ConnectionControl::CommandTimedOut(id)) => {
+                    if let Some((_, response)) = pending.remove(&id) {
+                        let _ = response.send(Err(CommandDispatchError::TimedOut));
+                    }
+                }
+                ConnectionInput::Control(ConnectionControl::Hydrated(Ok(ready))) => {
+                    if compatible
+                        .as_ref()
+                        .is_none_or(|current| current.daemon_instance != ready.daemon_instance)
+                    {
+                        break;
+                    }
+                    match runtime.registry.attach(&host_id, &connection_id, ready.clone()) {
+                        Ok(true) => {
+                            attached = Some(ready.daemon_instance);
+                            // The only edge that resolves a refusal, and only now: strict
+                            // ready passed AND the registry promoted THIS connection. A
+                            // parse that never became custody leaves the record standing.
+                            if let Err(cause) = runtime.admission.clear(&host_id) {
+                                tracing::error!(
+                                    error_chain = %error::describe(&cause),
+                                    host_id = %host_id,
+                                    "host admission refusal could not be cleared after attachment"
+                                );
+                            }
+                        }
+                        Ok(false) => break,
+                        Err(cause) => {
+                            tracing::error!(
+                                error_chain = %error::describe(&cause),
+                                "daemon attachment registry failed after hydration"
+                            );
+                            let _ = socket.send(Message::Close(Some(CloseFrame {
+                                code: 1011,
+                                reason: "attachment_registry_failed".into(),
+                            }))).await;
+                            break;
+                        }
+                    }
+                }
+                ConnectionInput::Control(ConnectionControl::Hydrated(Err(cause))) => {
+                    tracing::error!(
+                        error_chain = %error::describe(&cause),
+                        "daemon runtime hydration failed"
+                    );
+                    let _ = socket.send(Message::Close(Some(CloseFrame {
+                        code: 1011,
+                        reason: "runtime_hydration_failed".into(),
+                    }))).await;
+                    break;
+                }
+                ConnectionInput::Terminated => break,
+            },
             _ = heartbeat.tick() => {
                 let ts = signed_unix_millis(SystemTime::now()).max(0);
                 let frame = json!({
@@ -1721,96 +2197,6 @@ async fn connection<C, D, H>(
                 }))).await;
                 break;
             }
-            received_control = commands.recv() => match received_control {
-                Some(ConnectionControl::Command(command)) if compatible.is_some() => {
-                    next_command = match next_command.checked_add(1) {
-                        Some(next) => next,
-                        None => {
-                            let _ = command.response.send(Err(CommandDispatchError::ProvenNotDispatched));
-                            continue;
-                        }
-                    };
-                    let id = format!("rust-daemon-{next_command}");
-                    let frame = json!({
-                        "direction": "server_to_daemon",
-                        "type": "command",
-                        "id": id,
-                        "kind": command.kind,
-                        "params": command.params,
-                    });
-                    if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
-                        let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
-                        break;
-                    }
-                    let timeout_id = id.clone();
-                    let timeout_control = control.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(command.timeout).await;
-                        let _ = timeout_control
-                            .send(ConnectionControl::CommandTimedOut(timeout_id))
-                            .await;
-                    });
-                    pending.insert(id, (command.kind, command.response));
-                }
-                Some(ConnectionControl::Command(command)) => {
-                    let _ = command.response.send(Err(CommandDispatchError::ProvenNotDispatched));
-                }
-                Some(ConnectionControl::CommandTimedOut(id)) => {
-                    if let Some((_, response)) = pending.remove(&id) {
-                        let _ = response.send(Err(CommandDispatchError::TimedOut));
-                    }
-                }
-                Some(ConnectionControl::Hydrated(Ok(instance))) => {
-                    if compatible.as_ref() != Some(&instance) {
-                        break;
-                    }
-                    match runtime.registry.attach(&host_id, &connection_id, instance.clone()) {
-                        Ok(true) => {
-                            attached = Some(instance);
-                            // The only edge that resolves a refusal, and only now: strict
-                            // ready passed AND the registry promoted THIS connection. A
-                            // parse that never became custody leaves the record standing.
-                            if let Err(cause) = runtime.admission.clear(&host_id) {
-                                tracing::error!(
-                                    error_chain = %error::describe(&cause),
-                                    host_id = %host_id,
-                                    "host admission refusal could not be cleared after attachment"
-                                );
-                            }
-                        }
-                        Ok(false) => break,
-                        Err(cause) => {
-                            tracing::error!(
-                                error_chain = %error::describe(&cause),
-                                "daemon attachment registry failed after hydration"
-                            );
-                            let _ = socket.send(Message::Close(Some(CloseFrame {
-                                code: 1011,
-                                reason: "attachment_registry_failed".into(),
-                            }))).await;
-                            break;
-                        }
-                    }
-                }
-                Some(ConnectionControl::Hydrated(Err(cause))) => {
-                    tracing::error!(
-                        error_chain = %error::describe(&cause),
-                        "daemon runtime hydration failed"
-                    );
-                    let _ = socket.send(Message::Close(Some(CloseFrame {
-                        code: 1011,
-                        reason: "runtime_hydration_failed".into(),
-                    }))).await;
-                    break;
-                }
-                Some(ConnectionControl::Close) | None => {
-                    let _ = socket.send(Message::Close(Some(CloseFrame {
-                        code: 1001,
-                        reason: "server_shutdown".into(),
-                    }))).await;
-                    break;
-                }
-            },
             inbound = socket.recv() => match inbound {
                 Some(Ok(Message::Text(text))) => {
                     // Before the schema, because the schema is the current one. The host
@@ -1858,7 +2244,11 @@ async fn connection<C, D, H>(
                     }
                     let parsed = parse_daemon_frame(&text);
                     match parsed {
-                        Ok(DaemonFrame::Ready(ReadyFrame { protocol_version, instance_id })) => {
+                        Ok(DaemonFrame::Ready(ReadyFrame {
+                            protocol_version,
+                            instance_id,
+                            host_descriptor,
+                        })) => {
                             // Reachable only for a version the envelope probe declined to
                             // read: a strictly valid frame whose number is out of the
                             // readable range. Refused, and deliberately not recorded.
@@ -1875,17 +2265,22 @@ async fn connection<C, D, H>(
                             if compatible.is_some() {
                                 break;
                             }
-                            compatible = Some(instance.clone());
+                            let ready = AttachedDaemon {
+                                daemon_instance: instance.clone(),
+                                host_name: host_descriptor.name,
+                            };
+                            compatible = Some(ready.clone());
                             let attachment = DaemonAttachment {
                                 host_id: host_id.clone(),
                                 connection_id: connection_id.clone(),
                                 daemon_instance: instance.clone(),
+                                host_name: ready.host_name.clone(),
                                 commands: control.clone(),
                             };
                             let hydrate_runtime = runtime.clone();
                             let hydrate_control = control.clone();
                             tokio::spawn(async move {
-                                let result = hydrate_runtime.hydrate(&attachment).await.map(|()| instance);
+                                let result = hydrate_runtime.hydrate(&attachment).await.map(|()| ready);
                                 let _ = hydrate_control.send(ConnectionControl::Hydrated(result)).await;
                             });
                         }
@@ -2043,7 +2438,9 @@ async fn connection<C, D, H>(
     for (_, (_, response)) in pending {
         let _ = response.send(Err(CommandDispatchError::Ambiguous));
     }
-    if let Some(instance) = attached.as_ref().or(compatible.as_ref())
+    if let Some(instance) = attached
+        .as_ref()
+        .or_else(|| compatible.as_ref().map(|ready| &ready.daemon_instance))
         && let Err(cause) = runtime.events.detach_daemon(&host_id, instance)
     {
         tracing::error!(
@@ -2375,6 +2772,12 @@ struct HeartbeatPongFrame {
 struct ReadyFrame {
     protocol_version: u32,
     instance_id: String,
+    host_descriptor: ReadyHostDescriptor,
+}
+
+#[derive(Deserialize)]
+struct ReadyHostDescriptor {
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -2668,6 +3071,7 @@ fn valid_command_response_envelope(value: &Value) -> bool {
                     kind,
                     "runtime_start" | "runtime_stop" | "runtime_deliver" | "runtime_status"
                 ) || HostCommandKind::sends_wire(kind)
+                    || kind == "agent_files_purge"
             })
 }
 
@@ -3184,6 +3588,76 @@ mod tests {
     use crate::current_schema;
 
     use super::*;
+
+    #[tokio::test]
+    async fn disconnect_outranks_a_saturated_command_fifo_and_stays_generation_bound() {
+        let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+        let (old_sender, mut old_receiver) = mpsc::channel(1);
+        let (old_close, mut old_close_receiver) = watch::channel(None);
+        let old_id = registry
+            .reserve("host-1", old_sender.clone(), old_close)
+            .unwrap();
+        let (blocked_response, _blocked_receive) = oneshot::channel();
+        old_sender
+            .try_send(ConnectionControl::Command(CommandRequest {
+                kind: "host_status",
+                params: json!({}),
+                timeout: DEFAULT_COMMAND_TIMEOUT,
+                response: blocked_response,
+            }))
+            .unwrap();
+
+        let (other_sender, _) = mpsc::channel(1);
+        let (other_close, other_close_receiver) = watch::channel(None);
+        registry
+            .reserve("host-2", other_sender, other_close)
+            .unwrap();
+
+        // This is the real production port. Its completion cannot depend on space in
+        // the ordinary FIFO, which is full and deliberately has no active receiver.
+        let control = DaemonConnectionControlHandle {
+            registry: registry.clone(),
+        };
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            control.disconnect(HostId::parse("host-1").unwrap()),
+        )
+        .await
+        .expect("disconnect must not wait for ordinary command capacity")
+        .unwrap();
+
+        // The old socket ends and a replacement reserves before the captured close is
+        // observed. The close is still on the old generation's private channel.
+        registry.remove("host-1", &old_id);
+        let (replacement_sender, _) = mpsc::channel(1);
+        let (replacement_close, replacement_close_receiver) = watch::channel(None);
+        let replacement_id = registry
+            .reserve("host-1", replacement_sender, replacement_close)
+            .unwrap();
+
+        // Both lanes are ready when the stalled receiver resumes. The production
+        // arbitration must select close first and leave the queued command untouched.
+        assert!(matches!(
+            next_connection_input(&mut old_close_receiver, &old_id, &mut old_receiver).await,
+            ConnectionInput::Close(ConnectionClose {
+                expected_connection_id: Some(ref expected),
+                reason: HOST_REVOKED_CLOSE_REASON,
+            }) if expected == &old_id
+        ));
+        assert!(matches!(
+            old_receiver.try_recv(),
+            Ok(ConnectionControl::Command(_))
+        ));
+        assert!(replacement_close_receiver.borrow().is_none());
+        assert!(other_close_receiver.borrow().is_none());
+
+        // The old task's eventual cleanup is generation-compared as well.
+        registry.remove("host-1", &old_id);
+        assert_eq!(
+            registry.slot_connection_id("host-1").unwrap().as_deref(),
+            Some(replacement_id.as_str())
+        );
+    }
 
     /// Wave 3A A2 — load-bearing same-live-owner regression gate for the
     /// `/api/channels/{id}/agent-run-states` door, exercised through the
@@ -3889,10 +4363,18 @@ mod tests {
         let (second_b, _) = mpsc::channel(1);
         let (second_a, _) = mpsc::channel(1);
 
-        let old_host_a = first_process.reserve("host-a", first_a).unwrap();
-        let old_host_b = first_process.reserve("host-b", first_b).unwrap();
-        let new_host_b = second_process.reserve("host-b", second_b).unwrap();
-        let new_host_a = second_process.reserve("host-a", second_a).unwrap();
+        let old_host_a = first_process
+            .reserve("host-a", first_a, watch::channel(None).0)
+            .unwrap();
+        let old_host_b = first_process
+            .reserve("host-b", first_b, watch::channel(None).0)
+            .unwrap();
+        let new_host_b = second_process
+            .reserve("host-b", second_b, watch::channel(None).0)
+            .unwrap();
+        let new_host_a = second_process
+            .reserve("host-a", second_a, watch::channel(None).0)
+            .unwrap();
 
         assert_ne!(old_host_a, new_host_a);
         assert_ne!(old_host_b, new_host_b);
@@ -3988,10 +4470,18 @@ mod tests {
         let (old_b_tx, _) = mpsc::channel(1);
         let (new_b_tx, _) = mpsc::channel(1);
         let (new_a_tx, _) = mpsc::channel(1);
-        let _old_host_a = first_process.reserve("host-a", old_a_tx).unwrap();
-        let old_host_b = first_process.reserve("host-b", old_b_tx).unwrap();
-        let _new_host_b = second_process.reserve("host-b", new_b_tx).unwrap();
-        let new_host_a = second_process.reserve("host-a", new_a_tx).unwrap();
+        let _old_host_a = first_process
+            .reserve("host-a", old_a_tx, watch::channel(None).0)
+            .unwrap();
+        let old_host_b = first_process
+            .reserve("host-b", old_b_tx, watch::channel(None).0)
+            .unwrap();
+        let _new_host_b = second_process
+            .reserve("host-b", new_b_tx, watch::channel(None).0)
+            .unwrap();
+        let new_host_a = second_process
+            .reserve("host-a", new_a_tx, watch::channel(None).0)
+            .unwrap();
         let old_owner = DeliveryLeaseOwner::parse(old_host_b).unwrap();
         let new_owner = DeliveryLeaseOwner::parse(new_host_a).unwrap();
 
