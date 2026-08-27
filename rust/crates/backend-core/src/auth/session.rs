@@ -47,8 +47,7 @@ impl SessionBearer {
     }
 
     fn token_hash(&self) -> SessionTokenHash {
-        let digest = Sha256::digest(self.0.as_bytes());
-        SessionTokenHash(URL_SAFE_NO_PAD.encode(digest))
+        SessionTokenHash::of_plaintext(&self.0)
     }
 }
 
@@ -63,6 +62,15 @@ impl fmt::Debug for SessionBearer {
 pub struct SessionTokenHash(String);
 
 impl SessionTokenHash {
+    /// The one canonical derivation of a lookup coordinate from a plaintext
+    /// token. Both the read path (bearer verification) and the write path
+    /// (freshly minted secrets) route through this so a stored `token_hash`
+    /// and a presented bearer can never disagree on the hashing rule.
+    pub fn of_plaintext(plaintext: &str) -> Self {
+        let digest = Sha256::digest(plaintext.as_bytes());
+        SessionTokenHash(URL_SAFE_NO_PAD.encode(digest))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
