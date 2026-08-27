@@ -17,11 +17,15 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    avatar::{
+        AvatarBlobPointer, AvatarContentType, AvatarPointerWrite, AvatarPointerWriteUnitOfWork,
+        AvatarStorageRef, AvatarStorageRefRead,
+    },
     identity::UserId,
     messaging::AvatarRevision,
     persistence::PersistenceFailure,
     user_identity::{
-        DisplayName, UserEmailLookup, UserProfileRead, UserProfileWrite,
+        DisplayName, UserDirectoryRead, UserEmailLookup, UserProfileRead, UserProfileWrite,
         UserProfileWriteUnitOfWork, UserRecord,
     },
 };
@@ -40,6 +44,19 @@ SELECT id, name, display_name, email, avatar_storage_key, created_at, updated_at
 const SELECT_ID_BY_EMAIL: &str = "SELECT id FROM users WHERE email = ? COLLATE NOCASE";
 const UPDATE_DISPLAY_NAME: &str = "\
 UPDATE users SET display_name = ?, updated_at = ? \
+ WHERE id = ? \
+ RETURNING id, name, display_name, email, avatar_storage_key, created_at, updated_at";
+const LIST_PROFILES: &str = "\
+SELECT id, name, display_name, email, avatar_storage_key, created_at, updated_at \
+ FROM users ORDER BY created_at ASC";
+const SELECT_AVATAR_REF: &str =
+    "SELECT avatar_storage_key, avatar_content_type FROM users WHERE id = ?";
+const SET_AVATAR: &str = "\
+UPDATE users SET avatar_storage_key = ?, avatar_content_type = ?, updated_at = ? \
+ WHERE id = ? \
+ RETURNING id, name, display_name, email, avatar_storage_key, created_at, updated_at";
+const CLEAR_AVATAR: &str = "\
+UPDATE users SET avatar_storage_key = NULL, avatar_content_type = NULL, updated_at = ? \
  WHERE id = ? \
  RETURNING id, name, display_name, email, avatar_storage_key, created_at, updated_at";
 
@@ -65,6 +82,13 @@ pub enum SqliteUserStoreError {
 #[derive(Debug, Error)]
 #[error("users.id holds an unusable identifier")]
 struct CorruptStoredUserId;
+
+/// A committed `avatar_content_type` that is not one of the admitted image types.
+/// The sole production writer validates against the allowlist before storing, so a
+/// stored value outside it is a persistence-integrity fault, not a served type.
+#[derive(Debug, Error)]
+#[error("users.avatar_content_type holds an unsupported media type")]
+struct CorruptStoredAvatarContentType;
 
 /// A write that failed in the driver or on a row that cannot be decoded into the
 /// domain. Both reach the caller as the source of one `PersistenceFailure`.
@@ -145,6 +169,93 @@ impl SqliteUserStore {
             prior_display_name,
         })
     }
+
+    async fn write_avatar_pointer(
+        &self,
+        user_id: &UserId,
+        pointer: &AvatarBlobPointer,
+        content_type: AvatarContentType,
+        now_ms: i64,
+    ) -> Result<AvatarPointerWrite, ProfileWriteFailure> {
+        let mut tx = self.pool.begin_with(ROOT_WRITE_BEGIN).await?;
+        // The before-image under the write lock: its storage key is the previous
+        // blob the orchestration cleans up after the pointer moves.
+        let Some(current) = sqlx::query(SELECT_PROFILE)
+            .bind(user_id.as_str())
+            .fetch_optional(&mut *tx)
+            .await?
+        else {
+            tx.commit().await?;
+            return Ok(AvatarPointerWrite::NoSuchUser);
+        };
+        let prior_key = decode_prior_avatar_key(&current)?;
+
+        let committed = sqlx::query(SET_AVATAR)
+            .bind(pointer.as_str())
+            .bind(content_type.as_str())
+            .bind(now_ms)
+            .bind(user_id.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+        let user = decode_user(&committed)?;
+        tx.commit().await?;
+        Ok(AvatarPointerWrite::Committed { user, prior_key })
+    }
+
+    async fn clear_avatar_pointer(
+        &self,
+        user_id: &UserId,
+        now_ms: i64,
+    ) -> Result<AvatarPointerWrite, ProfileWriteFailure> {
+        let mut tx = self.pool.begin_with(ROOT_WRITE_BEGIN).await?;
+        let Some(current) = sqlx::query(SELECT_PROFILE)
+            .bind(user_id.as_str())
+            .fetch_optional(&mut *tx)
+            .await?
+        else {
+            tx.commit().await?;
+            return Ok(AvatarPointerWrite::NoSuchUser);
+        };
+        let prior_key = decode_prior_avatar_key(&current)?;
+
+        // Already clear: skip the write so `updated_at` is not bumped — the no-op
+        // the product's `clearAvatar` returns without publishing. The core seal
+        // reads `prior_key == None` as "nothing was cleared".
+        if prior_key.is_none() {
+            let user = decode_user(&current)?;
+            tx.commit().await?;
+            return Ok(AvatarPointerWrite::Committed {
+                user,
+                prior_key: None,
+            });
+        }
+
+        let committed = sqlx::query(CLEAR_AVATAR)
+            .bind(now_ms)
+            .bind(user_id.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+        let user = decode_user(&committed)?;
+        tx.commit().await?;
+        Ok(AvatarPointerWrite::Committed { user, prior_key })
+    }
+}
+
+/// The previous avatar blob pointer from a `users` before-image, or `None` when
+/// the row carried no avatar (absent or empty key — the same fold `decode_user`
+/// uses for the revision).
+fn decode_prior_avatar_key(
+    row: &sqlx::sqlite::SqliteRow,
+) -> Result<Option<AvatarBlobPointer>, CorruptStoredUserId> {
+    let key: Option<String> = row
+        .try_get("avatar_storage_key")
+        .map_err(|_| CorruptStoredUserId)?;
+    match key.as_deref() {
+        None | Some("") => Ok(None),
+        Some(key) => Ok(Some(
+            AvatarBlobPointer::parse(key).map_err(|_| CorruptStoredUserId)?,
+        )),
+    }
 }
 
 /// Decode a `users` row into the projected [`UserRecord`]. Every identity
@@ -212,6 +323,81 @@ impl UserProfileWriteUnitOfWork for SqliteUserStore {
         now_ms: i64,
     ) -> Result<UserProfileWrite, PersistenceFailure> {
         self.write_display_name(user_id, display_name, now_ms)
+            .await
+            .map_err(PersistenceFailure::from_source)
+    }
+}
+
+impl UserDirectoryRead for SqliteUserStore {
+    async fn list(&self) -> Result<Vec<UserRecord>, PersistenceFailure> {
+        let rows = sqlx::query(LIST_PROFILES)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        rows.iter()
+            .map(|row| decode_user(row).map_err(PersistenceFailure::from_source))
+            .collect()
+    }
+}
+
+impl AvatarStorageRefRead for SqliteUserStore {
+    async fn get_avatar_ref(
+        &self,
+        user_id: &UserId,
+    ) -> Result<Option<AvatarStorageRef>, PersistenceFailure> {
+        let Some(row) = sqlx::query(SELECT_AVATAR_REF)
+            .bind(user_id.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(PersistenceFailure::from_source)?
+        else {
+            return Ok(None);
+        };
+        let key: Option<String> = row
+            .try_get("avatar_storage_key")
+            .map_err(PersistenceFailure::from_source)?;
+        let content_type: Option<String> = row
+            .try_get("avatar_content_type")
+            .map_err(PersistenceFailure::from_source)?;
+        // The product's `getAvatarStorageRef` returns null unless BOTH the key
+        // and the content type are present (the CHECK couples them, but a defensive
+        // read still guards each). An empty key is "no avatar", as elsewhere.
+        let (Some(key), Some(content_type)) = (key.filter(|k| !k.is_empty()), content_type) else {
+            return Ok(None);
+        };
+        let pointer =
+            AvatarBlobPointer::parse(key).map_err(PersistenceFailure::from_source)?;
+        // The only production writer stores an admitted (allowlist) content type,
+        // so a stored value that does not parse is a persistence-integrity fault,
+        // surfaced as a safe-500 rather than a silent 404 or a raw served type.
+        let content_type = AvatarContentType::parse(&content_type)
+            .ok_or_else(|| PersistenceFailure::from_source(CorruptStoredAvatarContentType))?;
+        Ok(Some(AvatarStorageRef {
+            pointer,
+            content_type,
+        }))
+    }
+}
+
+impl AvatarPointerWriteUnitOfWork for SqliteUserStore {
+    async fn set_avatar(
+        &self,
+        user_id: &UserId,
+        pointer: &AvatarBlobPointer,
+        content_type: AvatarContentType,
+        now_ms: i64,
+    ) -> Result<AvatarPointerWrite, PersistenceFailure> {
+        self.write_avatar_pointer(user_id, pointer, content_type, now_ms)
+            .await
+            .map_err(PersistenceFailure::from_source)
+    }
+
+    async fn clear_avatar(
+        &self,
+        user_id: &UserId,
+        now_ms: i64,
+    ) -> Result<AvatarPointerWrite, PersistenceFailure> {
+        self.clear_avatar_pointer(user_id, now_ms)
             .await
             .map_err(PersistenceFailure::from_source)
     }
@@ -341,5 +527,117 @@ INSERT INTO users (id, name, display_name, email, avatar_storage_key, avatar_con
             .await
             .unwrap();
         assert!(matches!(outcome, UserProfileWrite::NoSuchUser));
+    }
+
+    #[tokio::test]
+    async fn list_returns_every_user_ordered_by_created_at() {
+        let (_dir, store) = open_seeded().await;
+        let records = store.list().await.unwrap();
+        // All three seeded users, in created_at ASC order (ties broken by insert
+        // order under a stable sort — the seed shares created_at 10 for 1 and 2).
+        let ids: Vec<_> = records.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["user-1", "user-2", "user-3"]);
+        // The directory read folds avatar keys exactly as the self-profile read.
+        assert_eq!(records[2].avatar, Some(AvatarRevision::at(250)));
+    }
+
+    #[tokio::test]
+    async fn avatar_ref_is_none_without_a_stored_avatar() {
+        let (_dir, store) = open_seeded().await;
+        assert!(store.get_avatar_ref(&uid("user-1")).await.unwrap().is_none());
+        assert!(store.get_avatar_ref(&uid("ghost")).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn avatar_ref_projects_the_stored_pointer_and_typed_content_type() {
+        let (_dir, store) = open_seeded().await;
+        let stored = store.get_avatar_ref(&uid("user-3")).await.unwrap().expect("a ref");
+        assert_eq!(stored.pointer.as_str(), "avatars/carol.png");
+        assert_eq!(stored.content_type, AvatarContentType::Png);
+    }
+
+    #[tokio::test]
+    async fn set_avatar_records_the_pointer_and_witnesses_the_prior_key() {
+        let (_dir, store) = open_seeded().await;
+        let pointer = AvatarBlobPointer::parse("avatars/alice.webp".to_string()).unwrap();
+        let outcome = store
+            .set_avatar(&uid("user-1"), &pointer, AvatarContentType::Webp, 500)
+            .await
+            .unwrap();
+        let AvatarPointerWrite::Committed { user, prior_key } = outcome else {
+            panic!("expected Committed");
+        };
+        assert_eq!(user.updated_at, 500);
+        assert_eq!(user.avatar, Some(AvatarRevision::at(500)));
+        assert_eq!(prior_key, None, "user-1 had no prior avatar");
+        // The stored ref now resolves to the new pointer and declared type.
+        let stored = store.get_avatar_ref(&uid("user-1")).await.unwrap().unwrap();
+        assert_eq!(stored.pointer.as_str(), "avatars/alice.webp");
+        assert_eq!(stored.content_type, AvatarContentType::Webp);
+    }
+
+    #[tokio::test]
+    async fn set_avatar_over_an_existing_one_reports_the_replaced_key() {
+        let (_dir, store) = open_seeded().await;
+        let pointer = AvatarBlobPointer::parse("avatars/carol-2.jpg".to_string()).unwrap();
+        let outcome = store
+            .set_avatar(&uid("user-3"), &pointer, AvatarContentType::Jpeg, 600)
+            .await
+            .unwrap();
+        let AvatarPointerWrite::Committed { prior_key, .. } = outcome else {
+            panic!("expected Committed");
+        };
+        assert_eq!(
+            prior_key.as_ref().map(AvatarBlobPointer::as_str),
+            Some("avatars/carol.png"),
+            "the replaced blob is reported for cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_avatar_on_an_unknown_user_is_no_such_user() {
+        let (_dir, store) = open_seeded().await;
+        let pointer = AvatarBlobPointer::parse("avatars/ghost.png".to_string()).unwrap();
+        let outcome = store
+            .set_avatar(&uid("ghost"), &pointer, AvatarContentType::Png, 100)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, AvatarPointerWrite::NoSuchUser));
+    }
+
+    #[tokio::test]
+    async fn clear_avatar_removes_the_pointer_and_reports_the_prior_key() {
+        let (_dir, store) = open_seeded().await;
+        let outcome = store.clear_avatar(&uid("user-3"), 700).await.unwrap();
+        let AvatarPointerWrite::Committed { user, prior_key } = outcome else {
+            panic!("expected Committed");
+        };
+        assert_eq!(user.updated_at, 700);
+        assert_eq!(user.avatar, None);
+        assert_eq!(
+            prior_key.as_ref().map(AvatarBlobPointer::as_str),
+            Some("avatars/carol.png")
+        );
+        assert!(store.get_avatar_ref(&uid("user-3")).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn clear_avatar_when_already_clear_is_a_no_op_without_a_bump() {
+        let (_dir, store) = open_seeded().await;
+        let outcome = store.clear_avatar(&uid("user-1"), 999).await.unwrap();
+        let AvatarPointerWrite::Committed { user, prior_key } = outcome else {
+            panic!("expected Committed");
+        };
+        // No write: updated_at stays the seeded 100, and no prior key was reported,
+        // which the core seal reads as "nothing to clear, do not announce".
+        assert_eq!(user.updated_at, 100);
+        assert_eq!(prior_key, None);
+    }
+
+    #[tokio::test]
+    async fn clear_avatar_on_an_unknown_user_is_no_such_user() {
+        let (_dir, store) = open_seeded().await;
+        let outcome = store.clear_avatar(&uid("ghost"), 100).await.unwrap();
+        assert!(matches!(outcome, AvatarPointerWrite::NoSuchUser));
     }
 }

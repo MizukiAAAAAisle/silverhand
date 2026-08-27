@@ -91,14 +91,19 @@ impl AvatarContentType {
         format!("avatar.{}", self.subtype())
     }
 
-    /// Parse a DECLARED content type against the closed set. The declared value
-    /// is lowercased and matched verbatim — no trimming, no `;charset` stripping —
-    /// exactly as the product's `validateAvatarFile` does (`file.type` lowercased,
-    /// then `AVATAR_ALLOWED_CONTENT_TYPES.includes`). A value with parameters or
-    /// surrounding whitespace is therefore NOT a member and yields
-    /// [`AvatarRejection::UnsupportedType`], matching the product's 415.
-    fn from_declared(declared: &str) -> Option<Self> {
-        match declared.to_ascii_lowercase().as_str() {
+    /// Parse a content type against the closed set. The value is lowercased and
+    /// matched verbatim — no trimming, no `;charset` stripping — exactly as the
+    /// product's `validateAvatarFile` does (`file.type` lowercased, then
+    /// `AVATAR_ALLOWED_CONTENT_TYPES.includes`). A value with parameters or
+    /// surrounding whitespace is therefore NOT a member.
+    ///
+    /// This is the ONE avatar-content-type parser, shared by the upload admission
+    /// (a DECLARED multipart value) and the stored-row read. The only production
+    /// writer of `users.avatar_content_type` is an admitted upload, so a stored
+    /// value is always a member; a read that fails to parse is a persistence
+    /// integrity fault the adapter surfaces as a safe-500, never a silent 404.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
             "image/jpeg" => Some(Self::Jpeg),
             "image/png" => Some(Self::Png),
             "image/gif" => Some(Self::Gif),
@@ -157,7 +162,7 @@ pub fn validate_avatar(
     if byte_len > AVATAR_MAX_BYTES {
         return Err(AvatarRejection::TooLarge);
     }
-    AvatarContentType::from_declared(declared_content_type).ok_or(AvatarRejection::UnsupportedType)
+    AvatarContentType::parse(declared_content_type).ok_or(AvatarRejection::UnsupportedType)
 }
 
 // ===========================================================================
