@@ -33,3 +33,4 @@ pub mod user_presence_last_seen;
 pub mod viewer_workspace_sort;
 pub mod workspace_cold_read;
 pub mod workspace_face;
+pub mod workspace_name;
