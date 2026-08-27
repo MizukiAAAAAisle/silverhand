@@ -49,7 +49,7 @@ use silverhand_backend_core::{
     teardown::facts::AgentRuntimeSessionFacts,
 };
 use tokio::{
-    sync::{Notify, mpsc, oneshot},
+    sync::{Notify, mpsc, oneshot, watch},
     time::Instant,
 };
 
@@ -588,7 +588,14 @@ struct RegistryState {
 struct DaemonSlot {
     connection_id: String,
     commands: mpsc::Sender<ConnectionControl>,
+    close: watch::Sender<Option<ConnectionClose>>,
     attached: Option<AttachedDaemon>,
+}
+
+#[derive(Clone)]
+struct GenerationCloseControl {
+    connection_id: String,
+    sender: watch::Sender<Option<ConnectionClose>>,
 }
 
 impl DaemonRegistry {
@@ -610,6 +617,7 @@ impl DaemonRegistry {
         &self,
         host_id: &str,
         commands: mpsc::Sender<ConnectionControl>,
+        close: watch::Sender<Option<ConnectionClose>>,
     ) -> Result<String, ReserveConnectionError> {
         let mut state = self
             .state
@@ -634,6 +642,7 @@ impl DaemonRegistry {
             DaemonSlot {
                 connection_id: connection_id.clone(),
                 commands,
+                close,
                 attached: None,
             },
         );
@@ -689,17 +698,20 @@ impl DaemonRegistry {
     /// different channel; sending through the captured value can therefore never close
     /// the replacement. Cleanup keeps the slot until the socket task actually exits, so
     /// two live transports are not briefly admitted for one host.
-    fn current_control(
+    fn current_close_control(
         &self,
         host_id: &str,
-    ) -> Result<Option<(String, mpsc::Sender<ConnectionControl>)>, DaemonRegistryError> {
+    ) -> Result<Option<GenerationCloseControl>, DaemonRegistryError> {
         Ok(self
             .state
             .lock()
             .map_err(|_| DaemonRegistryError::Poisoned)?
             .slots
             .get(host_id)
-            .map(|slot| (slot.connection_id.clone(), slot.commands.clone())))
+            .map(|slot| GenerationCloseControl {
+                connection_id: slot.connection_id.clone(),
+                sender: slot.close.clone(),
+            }))
     }
 
     fn remove(&self, host_id: &str, connection_id: &str) {
@@ -902,16 +914,14 @@ impl DaemonDeliveryController {
             state
                 .slots
                 .values()
-                .map(|slot| slot.commands.clone())
+                .map(|slot| slot.close.clone())
                 .collect::<Vec<_>>()
         };
         for sender in senders {
-            let _ = sender
-                .send(ConnectionControl::Close {
-                    expected_connection_id: None,
-                    reason: "server_shutdown",
-                })
-                .await;
+            let _ = sender.send(Some(ConnectionClose {
+                expected_connection_id: None,
+                reason: "server_shutdown",
+            }));
         }
         let deadline = Instant::now() + self.shutdown_grace;
         while self.active_connection_count() != 0 {
@@ -952,20 +962,18 @@ impl DaemonConnectionControl for DaemonConnectionControlHandle {
     async fn disconnect(&self, computer: HostId) -> Result<(), CustodyEffectFailure> {
         let current = self
             .registry
-            .current_control(computer.as_str())
+            .current_close_control(computer.as_str())
             .map_err(CustodyEffectFailure::from_source)?;
-        let Some((connection_id, sender)) = current else {
+        let Some(current) = current else {
             return Ok(());
         };
         // If the captured task ended between the snapshot and this send, there is no
         // live captured generation left to close. Any replacement has a different
         // channel, so the idempotent effect is complete without touching it.
-        let _ = sender
-            .send(ConnectionControl::Close {
-                expected_connection_id: Some(connection_id),
-                reason: HOST_REVOKED_CLOSE_REASON,
-            })
-            .await;
+        let _ = current.sender.send(Some(ConnectionClose {
+            expected_connection_id: Some(current.connection_id),
+            reason: HOST_REVOKED_CLOSE_REASON,
+        }));
         Ok(())
     }
 }
@@ -1080,10 +1088,12 @@ enum ConnectionControl {
     Command(CommandRequest),
     CommandTimedOut(String),
     Hydrated(Result<AttachedDaemon, DaemonDeliveryError>),
-    Close {
-        expected_connection_id: Option<String>,
-        reason: &'static str,
-    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ConnectionClose {
+    expected_connection_id: Option<String>,
+    reason: &'static str,
 }
 
 struct CommandRequest {
@@ -1856,6 +1866,92 @@ impl Error for DeliveryTransportError {
     }
 }
 
+enum ConnectionInput {
+    Close(ConnectionClose),
+    Control(ConnectionControl),
+    Terminated,
+}
+
+enum InterruptibleSend {
+    Sent,
+    TransportFailed,
+    Close(ConnectionClose),
+    Terminated,
+}
+
+/// Wait for this private connection generation's close signal. A mismatched id can
+/// only be produced by a faulty in-process caller or a test; ignoring it preserves
+/// the generation boundary instead of turning the private channel into host lookup.
+async fn matching_connection_close(
+    close: &mut watch::Receiver<Option<ConnectionClose>>,
+    connection_id: &str,
+) -> Option<ConnectionClose> {
+    loop {
+        close.changed().await.ok()?;
+        let requested = close.borrow_and_update().clone();
+        if let Some(requested) = requested
+            && requested
+                .expected_connection_id
+                .as_deref()
+                .is_none_or(|expected| expected == connection_id)
+        {
+            return Some(requested);
+        }
+    }
+}
+
+/// The custody lane is deliberately separate from the bounded business-command
+/// FIFO. `biased` is load-bearing: when both are ready after a stalled connection
+/// resumes, revocation is observed before any queued command.
+async fn next_connection_input(
+    close: &mut watch::Receiver<Option<ConnectionClose>>,
+    connection_id: &str,
+    commands: &mut mpsc::Receiver<ConnectionControl>,
+) -> ConnectionInput {
+    tokio::select! {
+        biased;
+        requested = matching_connection_close(close, connection_id) => requested
+            .map(ConnectionInput::Close)
+            .unwrap_or(ConnectionInput::Terminated),
+        received = commands.recv() => received
+            .map(ConnectionInput::Control)
+            .unwrap_or(ConnectionInput::Terminated),
+    }
+}
+
+/// A command write that is still backpressured is not allowed to hide a later
+/// custody revocation. Cancelling the in-flight send is conservatively ambiguous;
+/// the close is then written and no further business command is dequeued.
+async fn send_command_interruptibly(
+    socket: &mut WebSocket,
+    close: &mut watch::Receiver<Option<ConnectionClose>>,
+    connection_id: &str,
+    message: Message,
+) -> InterruptibleSend {
+    let send = socket.send(message);
+    tokio::pin!(send);
+    tokio::select! {
+        biased;
+        requested = matching_connection_close(close, connection_id) => requested
+            .map(InterruptibleSend::Close)
+            .unwrap_or(InterruptibleSend::Terminated),
+        result = &mut send => if result.is_ok() {
+            InterruptibleSend::Sent
+        } else {
+            InterruptibleSend::TransportFailed
+        },
+    }
+}
+
+async fn send_connection_close(socket: &mut WebSocket, close: ConnectionClose) {
+    let _ = socket
+        .send(Message::Close(Some(CloseFrame {
+            code: 1001,
+            reason: close.reason.into(),
+        })))
+        .await;
+}
+
 async fn daemon_websocket<C, D, H>(
     State(runtime): State<DaemonDeliveryRuntime<C, D, H>>,
     websocket: WebSocketUpgrade,
@@ -1887,7 +1983,8 @@ where
         }
     };
     let (commands, receive) = mpsc::channel(32);
-    let connection_id = match runtime.registry.reserve(&host_id, commands.clone()) {
+    let (close, close_receive) = watch::channel(None);
+    let connection_id = match runtime.registry.reserve(&host_id, commands.clone(), close) {
         Ok(id) => id,
         Err(ReserveConnectionError::Occupied) => return StatusCode::CONFLICT.into_response(),
         Err(ReserveConnectionError::Closing) => {
@@ -1902,7 +1999,15 @@ where
         .max_message_size(MAX_DAEMON_FRAME_BYTES)
         .max_frame_size(MAX_DAEMON_FRAME_BYTES)
         .on_upgrade(move |socket| {
-            connection(socket, runtime, host_id, connection_id, commands, receive)
+            connection(
+                socket,
+                runtime,
+                host_id,
+                connection_id,
+                commands,
+                receive,
+                close_receive,
+            )
         })
 }
 
@@ -1913,6 +2018,7 @@ async fn connection<C, D, H>(
     connection_id: String,
     control: mpsc::Sender<ConnectionControl>,
     mut commands: mpsc::Receiver<ConnectionControl>,
+    mut close: watch::Receiver<Option<ConnectionClose>>,
 ) where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
@@ -1930,34 +2036,12 @@ async fn connection<C, D, H>(
     let mut awaiting_pong: Option<(i64, Instant)> = None;
     loop {
         tokio::select! {
-            _ = heartbeat.tick() => {
-                let ts = signed_unix_millis(SystemTime::now()).max(0);
-                let frame = json!({
-                    "direction": "server_to_daemon",
-                    "type": "heartbeat",
-                    "kind": "ping",
-                    "ts": ts,
-                });
-                if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
+            received_control = next_connection_input(&mut close, &connection_id, &mut commands) => match received_control {
+                ConnectionInput::Close(requested) => {
+                    send_connection_close(&mut socket, requested).await;
                     break;
                 }
-                awaiting_pong = Some((ts, Instant::now() + runtime.config.pong_timeout));
-            }
-            _ = async {
-                if let Some((_, deadline)) = awaiting_pong {
-                    tokio::time::sleep_until(deadline).await;
-                } else {
-                    std::future::pending::<()>().await;
-                }
-            } => {
-                let _ = socket.send(Message::Close(Some(CloseFrame {
-                    code: 1008,
-                    reason: "heartbeat_timeout".into(),
-                }))).await;
-                break;
-            }
-            received_control = commands.recv() => match received_control {
-                Some(ConnectionControl::Command(command)) if compatible.is_some() => {
+                ConnectionInput::Control(ConnectionControl::Command(command)) if compatible.is_some() => {
                     next_command = match next_command.checked_add(1) {
                         Some(next) => next,
                         None => {
@@ -1973,9 +2057,26 @@ async fn connection<C, D, H>(
                         "kind": command.kind,
                         "params": command.params,
                     });
-                    if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
-                        let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
-                        break;
+                    match send_command_interruptibly(
+                        &mut socket,
+                        &mut close,
+                        &connection_id,
+                        Message::Text(frame.to_string().into()),
+                    ).await {
+                        InterruptibleSend::Sent => {}
+                        InterruptibleSend::TransportFailed => {
+                            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
+                            break;
+                        }
+                        InterruptibleSend::Close(requested) => {
+                            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
+                            send_connection_close(&mut socket, requested).await;
+                            break;
+                        }
+                        InterruptibleSend::Terminated => {
+                            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
+                            break;
+                        }
                     }
                     let timeout_id = id.clone();
                     let timeout_control = control.clone();
@@ -1987,15 +2088,15 @@ async fn connection<C, D, H>(
                     });
                     pending.insert(id, (command.kind, command.response));
                 }
-                Some(ConnectionControl::Command(command)) => {
+                ConnectionInput::Control(ConnectionControl::Command(command)) => {
                     let _ = command.response.send(Err(CommandDispatchError::ProvenNotDispatched));
                 }
-                Some(ConnectionControl::CommandTimedOut(id)) => {
+                ConnectionInput::Control(ConnectionControl::CommandTimedOut(id)) => {
                     if let Some((_, response)) = pending.remove(&id) {
                         let _ = response.send(Err(CommandDispatchError::TimedOut));
                     }
                 }
-                Some(ConnectionControl::Hydrated(Ok(ready))) => {
+                ConnectionInput::Control(ConnectionControl::Hydrated(Ok(ready))) => {
                     if compatible
                         .as_ref()
                         .is_none_or(|current| current.daemon_instance != ready.daemon_instance)
@@ -2030,7 +2131,7 @@ async fn connection<C, D, H>(
                         }
                     }
                 }
-                Some(ConnectionControl::Hydrated(Err(cause))) => {
+                ConnectionInput::Control(ConnectionControl::Hydrated(Err(cause))) => {
                     tracing::error!(
                         error_chain = %error::describe(&cause),
                         "daemon runtime hydration failed"
@@ -2041,21 +2142,34 @@ async fn connection<C, D, H>(
                     }))).await;
                     break;
                 }
-                Some(ConnectionControl::Close { expected_connection_id, reason }) => {
-                    if expected_connection_id
-                        .as_deref()
-                        .is_some_and(|expected| expected != connection_id)
-                    {
-                        continue;
-                    }
-                    let _ = socket.send(Message::Close(Some(CloseFrame {
-                        code: 1001,
-                        reason: reason.into(),
-                    }))).await;
+                ConnectionInput::Terminated => break,
+            },
+            _ = heartbeat.tick() => {
+                let ts = signed_unix_millis(SystemTime::now()).max(0);
+                let frame = json!({
+                    "direction": "server_to_daemon",
+                    "type": "heartbeat",
+                    "kind": "ping",
+                    "ts": ts,
+                });
+                if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
                     break;
                 }
-                None => break,
-            },
+                awaiting_pong = Some((ts, Instant::now() + runtime.config.pong_timeout));
+            }
+            _ = async {
+                if let Some((_, deadline)) = awaiting_pong {
+                    tokio::time::sleep_until(deadline).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                let _ = socket.send(Message::Close(Some(CloseFrame {
+                    code: 1008,
+                    reason: "heartbeat_timeout".into(),
+                }))).await;
+                break;
+            }
             inbound = socket.recv() => match inbound {
                 Some(Ok(Message::Text(text))) => {
                     // Before the schema, because the schema is the current one. The host
@@ -3449,37 +3563,66 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn a_captured_disconnect_and_stale_cleanup_cannot_touch_a_replacement_generation() {
+    async fn disconnect_outranks_a_saturated_command_fifo_and_stays_generation_bound() {
         let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
         let (old_sender, mut old_receiver) = mpsc::channel(1);
-        let old_id = registry.reserve("host-1", old_sender).unwrap();
-        let (_, captured_sender) = registry.current_control("host-1").unwrap().unwrap();
-
-        // The old socket ends and a replacement reserves before the captured close is
-        // delivered. The captured capability is still the old channel, never a host-id
-        // lookup performed late.
-        registry.remove("host-1", &old_id);
-        let (replacement_sender, mut replacement_receiver) = mpsc::channel(1);
-        let replacement_id = registry.reserve("host-1", replacement_sender).unwrap();
-        captured_sender
-            .send(ConnectionControl::Close {
-                expected_connection_id: Some(old_id.clone()),
-                reason: HOST_REVOKED_CLOSE_REASON,
-            })
-            .await
+        let (old_close, mut old_close_receiver) = watch::channel(None);
+        let old_id = registry
+            .reserve("host-1", old_sender.clone(), old_close)
+            .unwrap();
+        let (blocked_response, _blocked_receive) = oneshot::channel();
+        old_sender
+            .try_send(ConnectionControl::Command(CommandRequest {
+                kind: "host_status",
+                params: json!({}),
+                timeout: DEFAULT_COMMAND_TIMEOUT,
+                response: blocked_response,
+            }))
             .unwrap();
 
+        let (other_sender, _) = mpsc::channel(1);
+        let (other_close, other_close_receiver) = watch::channel(None);
+        registry
+            .reserve("host-2", other_sender, other_close)
+            .unwrap();
+
+        // This is the real production port. Its completion cannot depend on space in
+        // the ordinary FIFO, which is full and deliberately has no active receiver.
+        let control = DaemonConnectionControlHandle {
+            registry: registry.clone(),
+        };
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            control.disconnect(HostId::parse("host-1").unwrap()),
+        )
+        .await
+        .expect("disconnect must not wait for ordinary command capacity")
+        .unwrap();
+
+        // The old socket ends and a replacement reserves before the captured close is
+        // observed. The close is still on the old generation's private channel.
+        registry.remove("host-1", &old_id);
+        let (replacement_sender, _) = mpsc::channel(1);
+        let (replacement_close, replacement_close_receiver) = watch::channel(None);
+        let replacement_id = registry
+            .reserve("host-1", replacement_sender, replacement_close)
+            .unwrap();
+
+        // Both lanes are ready when the stalled receiver resumes. The production
+        // arbitration must select close first and leave the queued command untouched.
         assert!(matches!(
-            old_receiver.recv().await,
-            Some(ConnectionControl::Close {
+            next_connection_input(&mut old_close_receiver, &old_id, &mut old_receiver).await,
+            ConnectionInput::Close(ConnectionClose {
                 expected_connection_id: Some(ref expected),
                 reason: HOST_REVOKED_CLOSE_REASON,
             }) if expected == &old_id
         ));
         assert!(matches!(
-            replacement_receiver.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
+            old_receiver.try_recv(),
+            Ok(ConnectionControl::Command(_))
         ));
+        assert!(replacement_close_receiver.borrow().is_none());
+        assert!(other_close_receiver.borrow().is_none());
 
         // The old task's eventual cleanup is generation-compared as well.
         registry.remove("host-1", &old_id);
@@ -4193,10 +4336,18 @@ mod tests {
         let (second_b, _) = mpsc::channel(1);
         let (second_a, _) = mpsc::channel(1);
 
-        let old_host_a = first_process.reserve("host-a", first_a).unwrap();
-        let old_host_b = first_process.reserve("host-b", first_b).unwrap();
-        let new_host_b = second_process.reserve("host-b", second_b).unwrap();
-        let new_host_a = second_process.reserve("host-a", second_a).unwrap();
+        let old_host_a = first_process
+            .reserve("host-a", first_a, watch::channel(None).0)
+            .unwrap();
+        let old_host_b = first_process
+            .reserve("host-b", first_b, watch::channel(None).0)
+            .unwrap();
+        let new_host_b = second_process
+            .reserve("host-b", second_b, watch::channel(None).0)
+            .unwrap();
+        let new_host_a = second_process
+            .reserve("host-a", second_a, watch::channel(None).0)
+            .unwrap();
 
         assert_ne!(old_host_a, new_host_a);
         assert_ne!(old_host_b, new_host_b);
@@ -4292,10 +4443,18 @@ mod tests {
         let (old_b_tx, _) = mpsc::channel(1);
         let (new_b_tx, _) = mpsc::channel(1);
         let (new_a_tx, _) = mpsc::channel(1);
-        let _old_host_a = first_process.reserve("host-a", old_a_tx).unwrap();
-        let old_host_b = first_process.reserve("host-b", old_b_tx).unwrap();
-        let _new_host_b = second_process.reserve("host-b", new_b_tx).unwrap();
-        let new_host_a = second_process.reserve("host-a", new_a_tx).unwrap();
+        let _old_host_a = first_process
+            .reserve("host-a", old_a_tx, watch::channel(None).0)
+            .unwrap();
+        let old_host_b = first_process
+            .reserve("host-b", old_b_tx, watch::channel(None).0)
+            .unwrap();
+        let _new_host_b = second_process
+            .reserve("host-b", new_b_tx, watch::channel(None).0)
+            .unwrap();
+        let new_host_a = second_process
+            .reserve("host-a", new_a_tx, watch::channel(None).0)
+            .unwrap();
         let old_owner = DeliveryLeaseOwner::parse(old_host_b).unwrap();
         let new_owner = DeliveryLeaseOwner::parse(new_host_a).unwrap();
 
