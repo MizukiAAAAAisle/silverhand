@@ -12,6 +12,7 @@
 //! the SQLite boundary (which already owns JSON serialization).
 
 mod password;
+mod store;
 
 pub use password::{
     ARGON2ID_ALGORITHM, ARGON2ID_VERSION, Argon2idCost, Argon2idPasswordHasher, CostMeasurer,
@@ -19,3 +20,4 @@ pub use password::{
     PasswordHasher, PreparedPasswordCredential, RUST_PRODUCER, RealArgon2Measurer, RustCalibration,
     TARGET_HASH_MILLIS,
 };
+pub use store::{LoginCandidate, LoginCredentialLookup};

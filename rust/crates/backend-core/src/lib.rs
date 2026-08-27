@@ -20,6 +20,7 @@ pub mod credential;
 pub mod direct_pair_read;
 pub mod host_resources_read;
 pub mod host_runtime;
+pub mod human_auth_flows;
 pub mod identity;
 pub mod messaging;
 pub mod name_canonicalization;

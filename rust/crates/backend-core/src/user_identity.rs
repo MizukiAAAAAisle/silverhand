@@ -103,7 +103,7 @@ pub struct ParticipantHandle(String);
 impl ParticipantHandle {
     pub fn parse(raw: &str) -> Result<Self, InvalidParticipantHandle> {
         let units = raw.encode_utf16().count();
-        if units < 1 || units > HANDLE_MAX_UTF16 {
+        if !(1..=HANDLE_MAX_UTF16).contains(&units) {
             return Err(InvalidParticipantHandle);
         }
         let mut chars = raw.chars();
@@ -141,7 +141,7 @@ impl DisplayName {
     pub fn parse(raw: &str) -> Result<Self, InvalidDisplayName> {
         let trimmed = trim_ecmascript(raw);
         let units = trimmed.encode_utf16().count();
-        if units < 1 || units > DISPLAY_NAME_MAX_UTF16 {
+        if !(1..=DISPLAY_NAME_MAX_UTF16).contains(&units) {
             return Err(InvalidDisplayName);
         }
         if trimmed.chars().any(is_display_name_forbidden) {
@@ -332,6 +332,18 @@ where
     R: UserProfileRead,
 {
     reads.get(user_id).await
+}
+
+/// Resolve a normalized login email to the user that holds it, if any — the
+/// `users.getByEmail` existence read signup consults before deciding the
+/// credential answer. This is a `users`-authority read (email→user existence),
+/// distinct from the credential context's login lookup (email→{user, PHC}): the
+/// two touch different tables for different questions.
+pub trait UserEmailLookup: Clone + Send + Sync + 'static {
+    fn find_by_email(
+        &self,
+        email: &str,
+    ) -> impl Future<Output = Result<Option<UserId>, PersistenceFailure>> + Send;
 }
 
 // ===========================================================================

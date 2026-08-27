@@ -46,7 +46,10 @@ impl SessionBearer {
         (!normalized.is_empty()).then_some(Self(normalized))
     }
 
-    fn token_hash(&self) -> SessionTokenHash {
+    /// The lookup coordinate this bearer folds to. Crate-visible so the logout
+    /// flow can derive the revoke coordinate from a presented bearer through the
+    /// one canonical derivation, never a second hashing rule.
+    pub(crate) fn token_hash(&self) -> SessionTokenHash {
         SessionTokenHash::of_plaintext(&self.0)
     }
 }
