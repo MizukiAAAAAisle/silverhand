@@ -14,6 +14,7 @@ pub mod host_control;
 pub mod host_resources;
 pub mod host_runtime;
 pub mod messaging;
+pub mod ops;
 pub mod runtime_credential;
 pub mod scope_events;
 pub mod workspaces;

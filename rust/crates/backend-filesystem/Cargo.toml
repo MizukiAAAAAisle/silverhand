@@ -8,7 +8,7 @@ publish.workspace = true
 [dependencies]
 getrandom.workspace = true
 silverhand-backend-core.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 tempfile.workspace = true
