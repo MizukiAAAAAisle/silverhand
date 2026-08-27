@@ -9,13 +9,16 @@ mod mutation;
 mod read;
 
 pub use model::{
-    InvalidSavedAt, InvalidSavedEntryId, SavedAt, SavedCoordinateMismatch, SavedEntry,
-    SavedEntryId, SavedLinkedTask, SavedMessage, SavedMessageProjection, SavedPlace,
-    SavedTaskAssignee,
+    BoundSavedEntry, InvalidSavedAt, InvalidSavedEntryId, SavedAt, SavedCoordinateMismatch,
+    SavedEntry, SavedEntryId, SavedIdentityMismatch, SavedLinkedTask, SavedMessage,
+    SavedMessageProjection, SavedPlace, SavedTaskAssignee,
 };
 pub use mutation::{
-    CommittedSave, CommittedUnsave, SaveExecution, SavedAction, SavedAftermath, SavedChangeFact,
-    SavedMutationPort, SavedMutationRefusal, SavedPublicationFailure, UnsaveExecution,
-    save_message, unsave_message,
+    BoundCommittedSave, BoundCommittedUnsave, CommittedSave, CommittedUnsave, SaveExecution,
+    SavedAction, SavedAftermath, SavedChangeFact, SavedExecutionError, SavedMutationPort,
+    SavedMutationRefusal, SavedPublicationFailure, UnsaveExecution, save_message, unsave_message,
 };
-pub use read::{SavedListQuery, SavedReadPort, SavedReadRefusal, SavedSender, SavedSince};
+pub use read::{
+    SavedListQuery, SavedReadExecutionError, SavedReadPort, SavedReadRefusal, SavedSender,
+    SavedSince, list_saved,
+};

@@ -16,7 +16,8 @@ use sqlx::{QueryBuilder, Row, Sqlite, sqlite::SqliteRow};
 
 use crate::messaging::author::{AuthorEvidence, resolve_authors};
 
-use super::{SELECT_JOINED, SavedStoreError, SqliteSavedStore, push_participates};
+use super::{SELECT_JOINED, SavedStoreError, SqliteSavedStore};
+use crate::messaging::collaboration::conversation_participation::human_participation_source;
 
 const LIST_LIMIT: i64 = 200;
 
@@ -61,12 +62,18 @@ where
             }
         }
 
-        let mut builder = QueryBuilder::<Sqlite>::new(SELECT_JOINED);
+        let mut builder = QueryBuilder::<Sqlite>::new("WITH requested(viewer) AS (SELECT ");
         builder
-            .push(" WHERE sm.user_id = ")
             .push_bind(viewer.as_str())
-            .push(" AND ");
-        push_participates(&mut builder, viewer.as_str());
+            .push(") ")
+            .push(SELECT_JOINED);
+        builder
+            .push(" WHERE sm.user_id = (SELECT viewer FROM requested) AND ")
+            .push(human_participation_source!(
+                "c",
+                "(SELECT viewer FROM requested)"
+            ))
+            .push(" IS NOT NULL");
         if let Some(workspace) = query.workspace.as_ref() {
             builder
                 .push(" AND c.workspace_id = ")
@@ -135,6 +142,11 @@ fn decode_entry(
     row: &SqliteRow,
     author: Option<silverhand_backend_core::messaging::MessageAuthor>,
 ) -> Result<SavedEntry, PersistenceFailure> {
+    let source_viewer = UserId::parse(
+        row.try_get::<String, _>("saved_user_id")
+            .map_err(SavedStoreError::from)?,
+    )
+    .map_err(|_| SavedStoreError::MalformedIdentity)?;
     let saved_conversation = conversation_id(
         row.try_get("saved_conversation_id")
             .map_err(SavedStoreError::from)?,
@@ -171,7 +183,7 @@ fn decode_entry(
     };
     let metadata_json: Option<String> = row.try_get("metadata").map_err(SavedStoreError::from)?;
     let attachments = decode_attachments(metadata_json.as_deref())?;
-    let linked_task = decode_linked_task(row)?;
+    let linked_task = decode_linked_task(row, &message_conversation)?;
     let projection = SavedMessageProjection {
         id: message_id(row.try_get("message_id").map_err(SavedStoreError::from)?)?,
         conversation: message_conversation,
@@ -200,6 +212,7 @@ fn decode_entry(
         linked_task,
     };
     SavedEntry::projected(
+        source_viewer,
         SavedEntryId::parse(
             row.try_get::<String, _>("saved_id")
                 .map_err(SavedStoreError::from)?,
@@ -216,7 +229,10 @@ fn decode_entry(
     .map_err(|_| SavedStoreError::MismatchedConversation.into())
 }
 
-fn decode_linked_task(row: &SqliteRow) -> Result<Option<SavedLinkedTask>, PersistenceFailure> {
+fn decode_linked_task(
+    row: &SqliteRow,
+    message_conversation: &ConversationId,
+) -> Result<Option<SavedLinkedTask>, PersistenceFailure> {
     let Some(id) = row
         .try_get::<Option<String>, _>("task_id")
         .map_err(SavedStoreError::from)?
@@ -225,6 +241,22 @@ fn decode_linked_task(row: &SqliteRow) -> Result<Option<SavedLinkedTask>, Persis
     };
     let id = TaskId::parse(id)
         .map_err(|_| SavedStoreError::MalformedLinkedTask { field: "tasks.id" })?;
+    let task_conversation = ConversationId::parse(
+        row.try_get::<Option<String>, _>("task_conversation_id")
+            .map_err(SavedStoreError::from)?
+            .ok_or(SavedStoreError::MalformedLinkedTask {
+                field: "tasks.conversation_id:missing",
+            })?,
+    )
+    .map_err(|_| SavedStoreError::MalformedLinkedTask {
+        field: "tasks.conversation_id",
+    })?;
+    if &task_conversation != message_conversation {
+        return Err(SavedStoreError::MalformedLinkedTask {
+            field: "tasks.conversation_id:source",
+        }
+        .into());
+    }
     let number = TaskNumber::new(
         row.try_get::<Option<i64>, _>("task_number")
             .map_err(SavedStoreError::from)?

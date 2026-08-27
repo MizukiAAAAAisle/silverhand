@@ -1,5 +1,5 @@
 use crate::{
-    identity::{ConversationId, WorkspaceId},
+    identity::{ConversationId, UserId, WorkspaceId},
     messaging::{
         FromKind, MessageAuthor, MessageId, MessageSeq, PrincipalIdentity, ThreadRootId,
         attachments::AttachmentSnapshot,
@@ -140,6 +140,7 @@ impl SavedMessage {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SavedEntry {
+    source_viewer: UserId,
     id: SavedEntryId,
     message: SavedMessage,
     place: SavedPlace,
@@ -148,6 +149,7 @@ pub struct SavedEntry {
 
 impl SavedEntry {
     pub fn projected(
+        source_viewer: UserId,
         id: SavedEntryId,
         message: SavedMessage,
         place: SavedPlace,
@@ -157,6 +159,7 @@ impl SavedEntry {
             return Err(SavedCoordinateMismatch);
         }
         Ok(Self {
+            source_viewer,
             id,
             message,
             place,
@@ -179,8 +182,28 @@ impl SavedEntry {
     pub fn saved_at(&self) -> SavedAt {
         self.saved_at
     }
+
+    pub fn bind(self, viewer: &UserId) -> Result<BoundSavedEntry, SavedIdentityMismatch> {
+        if &self.source_viewer != viewer {
+            return Err(SavedIdentityMismatch);
+        }
+        Ok(BoundSavedEntry(self))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BoundSavedEntry(SavedEntry);
+
+impl BoundSavedEntry {
+    pub fn entry(&self) -> &SavedEntry {
+        &self.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("saved row and message disagree on conversation")]
 pub struct SavedCoordinateMismatch;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("saved-message fact identity differs from the authenticated request")]
+pub struct SavedIdentityMismatch;

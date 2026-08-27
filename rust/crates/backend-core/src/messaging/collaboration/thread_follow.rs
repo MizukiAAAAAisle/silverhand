@@ -67,6 +67,7 @@ pub struct ThreadFollowerState {
     viewer: UserId,
     conversation: ConversationId,
     requested: ThreadRootId,
+    root_conversation: ConversationId,
     root: ThreadRootId,
     viewer_following: bool,
     agents: Vec<ThreadFollowerAgent>,
@@ -77,6 +78,7 @@ impl ThreadFollowerState {
         viewer: UserId,
         conversation: ConversationId,
         requested: ThreadRootId,
+        root_conversation: ConversationId,
         root: ThreadRootId,
         viewer_following: bool,
         agents: Vec<ThreadFollowerAgent>,
@@ -98,6 +100,7 @@ impl ThreadFollowerState {
             viewer,
             conversation,
             requested,
+            root_conversation,
             root,
             viewer_following,
             agents,
@@ -113,6 +116,7 @@ impl ThreadFollowerState {
         if &self.viewer != viewer
             || &self.conversation != conversation
             || &self.requested != requested
+            || &self.root_conversation != conversation
             || self
                 .agents
                 .iter()
@@ -156,6 +160,7 @@ pub struct CommittedHumanFollow {
     viewer: UserId,
     conversation: ConversationId,
     requested: ThreadRootId,
+    root_conversation: ConversationId,
     root: ThreadRootId,
     changed: bool,
 }
@@ -165,6 +170,7 @@ pub struct CommittedHumanUnfollow {
     viewer: UserId,
     conversation: ConversationId,
     requested: ThreadRootId,
+    root_conversation: ConversationId,
     root: ThreadRootId,
     changed: bool,
 }
@@ -176,6 +182,7 @@ macro_rules! committed_operation {
                 viewer: UserId,
                 conversation: ConversationId,
                 requested: ThreadRootId,
+                root_conversation: ConversationId,
                 root: ThreadRootId,
                 changed: bool,
             ) -> Self {
@@ -183,6 +190,7 @@ macro_rules! committed_operation {
                     viewer,
                     conversation,
                     requested,
+                    root_conversation,
                     root,
                     changed,
                 }
@@ -197,6 +205,7 @@ macro_rules! committed_operation {
                 if &self.viewer != viewer
                     || &self.conversation != conversation
                     || &self.requested != requested
+                    || &self.root_conversation != conversation
                 {
                     return Err(ThreadFollowIdentityMismatch);
                 }
@@ -459,6 +468,7 @@ mod tests {
             viewer.clone(),
             conversation.clone(),
             ThreadRootId::parse("r").unwrap(),
+            conversation.clone(),
             ThreadRootId::parse("r").unwrap(),
             true,
             vec![agent("c", "r", "a", 1), agent("c", "r", "b", 1)],
@@ -497,6 +507,7 @@ mod tests {
                 viewer.clone(),
                 conversation.clone(),
                 ThreadRootId::parse("r").unwrap(),
+                conversation.clone(),
                 ThreadRootId::parse("r").unwrap(),
                 false,
                 vec![agent("c", "r", "b", 1), agent("c", "r", "a", 1)],
@@ -508,6 +519,7 @@ mod tests {
                 viewer.clone(),
                 conversation.clone(),
                 ThreadRootId::parse("r").unwrap(),
+                conversation.clone(),
                 ThreadRootId::parse("r").unwrap(),
                 false,
                 vec![agent("c", "r", "a", 1), agent("c", "r", "a", 2)],
@@ -518,6 +530,7 @@ mod tests {
             viewer.clone(),
             conversation.clone(),
             ThreadRootId::parse("r").unwrap(),
+            ConversationId::parse("other").unwrap(),
             ThreadRootId::parse("r").unwrap(),
             false,
             vec![agent("other", "r", "a", 1)],
@@ -534,5 +547,34 @@ mod tests {
     fn followed_at_is_wire_exact() {
         assert!(FollowedAt::new(-1).is_err());
         assert!(FollowedAt::new(FollowedAt::MAX_JAVASCRIPT_INTEGER + 1).is_err());
+    }
+
+    #[test]
+    fn committed_root_carries_its_actual_conversation_source() {
+        let viewer = UserId::parse("viewer").unwrap();
+        let conversation = ConversationId::parse("conversation").unwrap();
+        let requested = ThreadRootId::parse("reply").unwrap();
+        let root = ThreadRootId::parse("root").unwrap();
+        let spliced = CommittedHumanFollow::committed(
+            viewer.clone(),
+            conversation.clone(),
+            requested.clone(),
+            ConversationId::parse("foreign").unwrap(),
+            root.clone(),
+            true,
+        );
+        assert!(spliced.bind(&viewer, &conversation, &requested).is_err());
+        assert!(
+            CommittedHumanFollow::committed(
+                viewer.clone(),
+                conversation.clone(),
+                requested.clone(),
+                conversation.clone(),
+                root,
+                true,
+            )
+            .bind(&viewer, &conversation, &requested)
+            .is_ok()
+        );
     }
 }

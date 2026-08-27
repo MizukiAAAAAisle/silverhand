@@ -8,7 +8,8 @@ use silverhand_backend_core::messaging::{
     FromKind,
     attachments::AttachmentSnapshot,
     collaboration::saved::{
-        SaveExecution, SavedAction, SavedEntry, SavedPlace, SavedReadRefusal, UnsaveExecution,
+        BoundSavedEntry, SaveExecution, SavedAction, SavedEntry, SavedPlace, SavedReadRefusal,
+        UnsaveExecution,
     },
 };
 
@@ -25,7 +26,7 @@ pub fn changed_event(
     })
 }
 
-pub(super) fn list_success(entries: &[SavedEntry]) -> Response {
+pub(super) fn list_success(entries: &[BoundSavedEntry]) -> Response {
     Json(json!({
         "saved": entries.iter().map(saved_entry).collect::<Vec<_>>()
     }))
@@ -59,7 +60,8 @@ pub(super) fn unsave_success(execution: UnsaveExecution) -> Response {
     StatusCode::NO_CONTENT.into_response()
 }
 
-fn saved_entry(entry: &SavedEntry) -> Value {
+fn saved_entry(bound: &BoundSavedEntry) -> Value {
+    let entry: &SavedEntry = bound.entry();
     let projection = entry.message().projection();
     let metadata = projection
         .metadata_json

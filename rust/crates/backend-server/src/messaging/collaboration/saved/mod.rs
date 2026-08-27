@@ -22,7 +22,7 @@ use silverhand_backend_core::{
         MessageId,
         collaboration::saved::{
             SavedAftermath, SavedListQuery, SavedMutationPort, SavedReadPort, SavedSender,
-            SavedSince, save_message, unsave_message,
+            SavedSince, list_saved, save_message, unsave_message,
         },
     },
 };
@@ -103,7 +103,7 @@ where
         },
         Err(_) => return invalid_input(Vec::new()),
     };
-    match state.0.reads.list(&viewer, query).await {
+    match list_saved(&state.0.reads, &viewer, query).await {
         Ok(Ok(entries)) => list_success(&entries),
         Ok(Err(refusal)) => list_refusal(refusal),
         Err(error) => {

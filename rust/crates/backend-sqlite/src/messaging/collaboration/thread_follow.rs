@@ -146,14 +146,14 @@ where
              FROM thread_followers WHERE thread_root_id=? \
              ORDER BY followed_at ASC,principal_kind ASC,principal_id ASC",
         )
-        .bind(root.as_str())
+        .bind(root.id.as_str())
         .fetch_all(&mut *tx)
         .await?;
         // Complete-snapshot safety: no product filtering starts until every
         // selected row has passed the closed persisted-row decoder.
         let decoded = rows
             .iter()
-            .map(|row| decode_follower(row, conversation, &root))
+            .map(|row| decode_follower(row, conversation, &root.id))
             .collect::<Result<Vec<_>, _>>()?;
         let live_agents =
             live_participating_agents(&mut tx, conversation, &placement, &decoded).await?;
@@ -182,7 +182,8 @@ where
             viewer.clone(),
             conversation.clone(),
             message.clone(),
-            root,
+            root.conversation,
+            root.id,
             viewer_following,
             agents,
         )
@@ -221,7 +222,7 @@ where
             tx.rollback().await?;
             return Err(ThreadFollowStoreError::MalformedIdentity);
         }
-        let existing = existing_human(&mut tx, &viewer, &conversation, &root).await?;
+        let existing = existing_human(&mut tx, &viewer, &conversation, &root.id).await?;
         let changed = if existing.is_some() {
             false
         } else {
@@ -233,7 +234,7 @@ where
                  VALUES(?,?,'human',?,?,'manual') \
                  ON CONFLICT(thread_root_id,principal_kind,principal_id) DO NOTHING",
             )
-            .bind(root.as_str())
+            .bind(root.id.as_str())
             .bind(conversation.as_str())
             .bind(viewer.as_str())
             .bind(followed_at.get())
@@ -242,8 +243,14 @@ where
             .rows_affected()
                 == 1
         };
-        let committed =
-            CommittedHumanFollow::committed(viewer, conversation, message, root, changed);
+        let committed = CommittedHumanFollow::committed(
+            viewer,
+            conversation,
+            message,
+            root.conversation,
+            root.id,
+            changed,
+        );
         tx.commit().await?;
         Ok(Ok(committed))
     }
@@ -278,13 +285,13 @@ where
             tx.rollback().await?;
             return Err(ThreadFollowStoreError::MalformedIdentity);
         }
-        let existing = existing_human(&mut tx, &viewer, &conversation, &root).await?;
+        let existing = existing_human(&mut tx, &viewer, &conversation, &root.id).await?;
         let changed = if existing.is_some() {
             sqlx::query(
                 "DELETE FROM thread_followers WHERE thread_root_id=? \
                  AND principal_kind='human' AND principal_id=?",
             )
-            .bind(root.as_str())
+            .bind(root.id.as_str())
             .bind(viewer.as_str())
             .execute(&mut *tx)
             .await?
@@ -293,8 +300,14 @@ where
         } else {
             false
         };
-        let committed =
-            CommittedHumanUnfollow::committed(viewer, conversation, message, root, changed);
+        let committed = CommittedHumanUnfollow::committed(
+            viewer,
+            conversation,
+            message,
+            root.conversation,
+            root.id,
+            changed,
+        );
         tx.commit().await?;
         Ok(Ok(committed))
     }
@@ -334,7 +347,7 @@ async fn resolve_root(
     tx: &mut Transaction<'_, Sqlite>,
     conversation: &ConversationId,
     message: &ThreadRootId,
-) -> Result<Option<ThreadRootId>, ThreadFollowStoreError> {
+) -> Result<Option<SelectedRoot>, ThreadFollowStoreError> {
     let Some(row) = sqlx::query(
         "SELECT id,conversation_id,thread_root_id FROM messages WHERE conversation_id=? AND id=?",
     )
@@ -358,17 +371,34 @@ async fn resolve_root(
         }
         None => id,
     };
-    let valid: i64 = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM messages WHERE id=? AND conversation_id=? AND thread_root_id IS NULL)",
+    let root_row = sqlx::query(
+        "SELECT id,conversation_id,thread_root_id FROM messages WHERE id=? AND conversation_id=?",
     )
     .bind(root.as_str())
     .bind(conversation.as_str())
-    .fetch_one(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await?;
-    if valid != 1 {
+    let Some(root_row) = root_row else {
+        return Err(ThreadFollowStoreError::MalformedIdentity);
+    };
+    let selected_id = ThreadRootId::parse(root_row.try_get::<String, _>("id")?)
+        .map_err(|_| ThreadFollowStoreError::MalformedIdentity)?;
+    let selected_conversation =
+        ConversationId::parse(root_row.try_get::<String, _>("conversation_id")?)
+            .map_err(|_| ThreadFollowStoreError::MalformedIdentity)?;
+    let selected_parent: Option<String> = root_row.try_get("thread_root_id")?;
+    if selected_id != root || &selected_conversation != conversation || selected_parent.is_some() {
         return Err(ThreadFollowStoreError::MalformedIdentity);
     }
-    Ok(Some(root))
+    Ok(Some(SelectedRoot {
+        conversation: selected_conversation,
+        id: selected_id,
+    }))
+}
+
+struct SelectedRoot {
+    conversation: ConversationId,
+    id: ThreadRootId,
 }
 
 async fn existing_human(

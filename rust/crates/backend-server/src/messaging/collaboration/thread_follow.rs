@@ -361,6 +361,7 @@ mod tests {
                 viewer.clone(),
                 ConversationId::parse(self.state_conversation).unwrap(),
                 ThreadRootId::parse(self.state_requested).unwrap(),
+                ConversationId::parse(self.state_agent_conversation).unwrap(),
                 ThreadRootId::parse(self.mutation_requested).unwrap(),
                 true,
                 vec![ThreadFollowerAgent::projected(
@@ -383,6 +384,7 @@ mod tests {
                 viewer,
                 ConversationId::parse(self.mutation_conversation).unwrap(),
                 ThreadRootId::parse(self.mutation_requested).unwrap(),
+                ConversationId::parse(self.state_agent_conversation).unwrap(),
                 ThreadRootId::parse("root").unwrap(),
                 true,
             )))
@@ -398,6 +400,7 @@ mod tests {
                 viewer,
                 ConversationId::parse(self.mutation_conversation).unwrap(),
                 ThreadRootId::parse(self.mutation_requested).unwrap(),
+                ConversationId::parse(self.state_agent_conversation).unwrap(),
                 ThreadRootId::parse("root").unwrap(),
                 true,
             )))

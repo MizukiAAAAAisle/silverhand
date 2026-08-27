@@ -1,5 +1,5 @@
 use silverhand_backend_core::{
-    identity::UserId,
+    identity::{ConversationId, UserId},
     messaging::{
         MessageId,
         collaboration::saved::{
@@ -10,7 +10,17 @@ use silverhand_backend_core::{
 };
 use sqlx::{QueryBuilder, Row, Sqlite};
 
-use super::{SELECT_JOINED, SavedStoreError, SqliteSavedStore, decode_entries, push_participates};
+use crate::messaging::collaboration::conversation_participation::{
+    SELECT_CONVERSATION, decode_conversation, participating_viewer,
+};
+
+use super::{SELECT_JOINED, SavedStoreError, SqliteSavedStore, decode_entries};
+
+struct AuthorizedMessage<'a> {
+    tx: sqlx::Transaction<'a, Sqlite>,
+    viewer: UserId,
+    message: MessageId,
+}
 
 impl<E> SavedMutationPort for SqliteSavedStore<E>
 where
@@ -28,10 +38,15 @@ where
         viewer: UserId,
         message: MessageId,
     ) -> Result<Result<CommittedSave, SavedMutationRefusal>, Self::Error> {
-        let mut tx = match self.authorized(&viewer, &message).await? {
-            Ok(tx) => tx,
+        let authorized = match self.authorized(&viewer, &message).await? {
+            Ok(authorized) => authorized,
             Err(refusal) => return Ok(Err(refusal)),
         };
+        let AuthorizedMessage {
+            mut tx,
+            viewer,
+            message,
+        } = authorized;
         let entry = self.new_entry_id()?;
         let saved_at = self.now()?;
         let changed = sqlx::query(
@@ -59,11 +74,10 @@ where
             .map_err(SavedStoreError::from)?;
         let mut entries = decode_entries(&mut tx, rows).await?;
         let entry = entries.pop().ok_or(SavedStoreError::MalformedIdentity)?;
-        let committed = if changed {
-            CommittedSave::changed(viewer, entry)
-        } else {
-            CommittedSave::unchanged(entry)
-        };
+        if !entries.is_empty() {
+            return Err(SavedStoreError::MalformedIdentity.into());
+        }
+        let committed = CommittedSave::committed(viewer, message, entry, changed);
         tx.commit().await.map_err(SavedStoreError::from)?;
         Ok(Ok(committed))
     }
@@ -73,24 +87,56 @@ where
         viewer: UserId,
         message: MessageId,
     ) -> Result<Result<CommittedUnsave, SavedMutationRefusal>, Self::Error> {
-        let mut tx = match self.authorized(&viewer, &message).await? {
-            Ok(tx) => tx,
+        let authorized = match self.authorized(&viewer, &message).await? {
+            Ok(authorized) => authorized,
             Err(refusal) => return Ok(Err(refusal)),
         };
-        let changed =
-            sqlx::query("DELETE FROM saved_messages WHERE user_id = ? AND message_id = ?")
-                .bind(viewer.as_str())
-                .bind(message.as_str())
+        let AuthorizedMessage {
+            mut tx,
+            viewer,
+            message,
+        } = authorized;
+        let mut existing_query = QueryBuilder::<Sqlite>::new(SELECT_JOINED);
+        existing_query
+            .push(" WHERE sm.user_id = ")
+            .push_bind(viewer.as_str())
+            .push(" AND sm.message_id = ")
+            .push_bind(message.as_str());
+        let existing_rows = existing_query
+            .build()
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(SavedStoreError::from)?;
+        let mut existing = decode_entries(&mut tx, existing_rows).await?;
+        let changed = if let Some(entry) = existing.pop() {
+            if !existing.is_empty() {
+                return Err(SavedStoreError::MalformedIdentity.into());
+            }
+            let deleted = sqlx::query("DELETE FROM saved_messages WHERE id = ?")
+                .bind(entry.id().as_str())
                 .execute(&mut *tx)
                 .await
                 .map_err(SavedStoreError::from)?
-                .rows_affected()
-                == 1;
-        let committed = if changed {
-            CommittedUnsave::changed(viewer, message)
+                .rows_affected();
+            if deleted != 1 {
+                return Err(SavedStoreError::MalformedIdentity.into());
+            }
+            let remains: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM saved_messages WHERE user_id = ? AND message_id = ?",
+            )
+            .bind(viewer.as_str())
+            .bind(message.as_str())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(SavedStoreError::from)?;
+            if remains != 0 {
+                return Err(SavedStoreError::MalformedIdentity.into());
+            }
+            true
         } else {
-            CommittedUnsave::unchanged()
+            false
         };
+        let committed = CommittedUnsave::committed(viewer, message, changed);
         tx.commit().await.map_err(SavedStoreError::from)?;
         Ok(Ok(committed))
     }
@@ -109,19 +155,14 @@ where
         &'a self,
         viewer: &UserId,
         message: &MessageId,
-    ) -> Result<Result<sqlx::Transaction<'a, Sqlite>, SavedMutationRefusal>, PersistenceFailure>
-    {
+    ) -> Result<Result<AuthorizedMessage<'a>, SavedMutationRefusal>, PersistenceFailure> {
         let mut tx = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(SavedStoreError::from)?;
-        let mut authority = QueryBuilder::<Sqlite>::new("SELECT c.placement_kind, ");
-        push_participates(&mut authority, viewer.as_str());
-        authority.push(" AS participates FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE m.id = ");
-        authority.push_bind(message.as_str());
-        let row = authority
-            .build()
+        let row = sqlx::query("SELECT id,conversation_id FROM messages WHERE id=?")
+            .bind(message.as_str())
             .fetch_optional(&mut *tx)
             .await
             .map_err(SavedStoreError::from)?;
@@ -129,22 +170,39 @@ where
             tx.rollback().await.map_err(SavedStoreError::from)?;
             return Ok(Err(SavedMutationRefusal));
         };
-        match row
-            .try_get::<String, _>("placement_kind")
-            .map_err(SavedStoreError::from)?
-            .as_str()
-        {
-            "workspace" | "direct_pair" => {}
-            _ => return Err(SavedStoreError::MalformedPlacement.into()),
+        let source_message = MessageId::parse(
+            row.try_get::<String, _>("id")
+                .map_err(SavedStoreError::from)?,
+        )
+        .map_err(|_| SavedStoreError::MalformedIdentity)?;
+        if &source_message != message {
+            return Err(SavedStoreError::MalformedIdentity.into());
         }
-        if row
-            .try_get::<i64, _>("participates")
-            .map_err(SavedStoreError::from)?
-            == 0
-        {
+        let conversation = ConversationId::parse(
+            row.try_get::<String, _>("conversation_id")
+                .map_err(SavedStoreError::from)?,
+        )
+        .map_err(|_| SavedStoreError::MalformedIdentity)?;
+        let conversation_row = sqlx::query(SELECT_CONVERSATION)
+            .bind(conversation.as_str())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(SavedStoreError::from)?;
+        let (source_conversation, placement) =
+            decode_conversation(&conversation_row, &conversation)
+                .map_err(PersistenceFailure::from)?;
+        let Some(source_viewer) =
+            participating_viewer(&mut tx, viewer, &source_conversation, &placement)
+                .await
+                .map_err(PersistenceFailure::from)?
+        else {
             tx.rollback().await.map_err(SavedStoreError::from)?;
             return Ok(Err(SavedMutationRefusal));
-        }
-        Ok(Ok(tx))
+        };
+        Ok(Ok(AuthorizedMessage {
+            tx,
+            viewer: source_viewer,
+            message: source_message,
+        }))
     }
 }

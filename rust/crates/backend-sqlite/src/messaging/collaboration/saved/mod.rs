@@ -89,20 +89,7 @@ where
     }
 }
 
-pub(super) fn push_participates(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, viewer: &str) {
-    builder
-        .push("((c.placement_kind = 'workspace' AND EXISTS (SELECT 1 FROM conversation_users cu WHERE cu.conversation_id = c.id AND cu.user_id = ")
-        .push_bind(viewer.to_owned())
-        .push(") AND EXISTS (SELECT 1 FROM workspace_users wu WHERE wu.workspace_id = c.workspace_id AND wu.user_id = ")
-        .push_bind(viewer.to_owned())
-        .push(")) OR (c.placement_kind = 'direct_pair' AND ((c.endpoint_a_kind = 'human' AND c.endpoint_a_id = ")
-        .push_bind(viewer.to_owned())
-        .push(") OR (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = ")
-        .push_bind(viewer.to_owned())
-        .push("))))");
-}
-
-pub(super) const SELECT_JOINED: &str = "SELECT sm.id AS saved_id, sm.saved_at, sm.conversation_id AS saved_conversation_id, m.id AS message_id, m.conversation_id AS message_conversation_id, m.from_kind, m.from_agent_id, m.from_user_id, m.author_id, m.author_name, m.author_display_name, m.content, m.metadata, m.seq, m.created_at, m.thread_root_id, c.placement_kind, c.workspace_id, CASE WHEN c.placement_kind = 'workspace' THEN c.title ELSE NULL END AS channel_name, lt.id AS task_id, lt.task_number, lt.title AS task_title, lt.status AS task_status, lt.assignee_agent_id, lt.assignee_user_id, lta.display_name AS assignee_agent_name, ltu.display_name AS assignee_user_name FROM saved_messages sm JOIN messages m ON m.id = sm.message_id JOIN conversations c ON c.id = sm.conversation_id LEFT JOIN tasks lt ON lt.source_message_id = m.id LEFT JOIN agents lta ON lta.id = lt.assignee_agent_id LEFT JOIN users ltu ON ltu.id = lt.assignee_user_id";
+pub(super) const SELECT_JOINED: &str = "SELECT sm.id AS saved_id, sm.user_id AS saved_user_id, sm.saved_at, sm.conversation_id AS saved_conversation_id, m.id AS message_id, m.conversation_id AS message_conversation_id, m.from_kind, m.from_agent_id, m.from_user_id, m.author_id, m.author_name, m.author_display_name, m.content, m.metadata, m.seq, m.created_at, m.thread_root_id, c.placement_kind, c.workspace_id, CASE WHEN c.placement_kind = 'workspace' THEN c.title ELSE NULL END AS channel_name, lt.id AS task_id, lt.conversation_id AS task_conversation_id, lt.task_number, lt.title AS task_title, lt.status AS task_status, lt.assignee_agent_id, lt.assignee_user_id, lta.display_name AS assignee_agent_name, ltu.display_name AS assignee_user_name FROM saved_messages sm JOIN messages m ON m.id = sm.message_id JOIN conversations c ON c.id = sm.conversation_id LEFT JOIN tasks lt ON lt.source_message_id = m.id LEFT JOIN agents lta ON lta.id = lt.assignee_agent_id LEFT JOIN users ltu ON ltu.id = lt.assignee_user_id";
 
 pub(super) async fn decode_entries(
     conn: &mut sqlx::SqliteConnection,

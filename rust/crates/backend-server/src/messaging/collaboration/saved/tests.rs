@@ -132,9 +132,9 @@ async fn seeded() -> (
          INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, \
            title_key, status, visibility, created_at, updated_at, latest_message_seq) VALUES \
            ('conversation-1', 'workspace-1', 'workspace', 'open', 'saved-main', 'saved-main', \
-            'open', 'private', 0, 0, 2), \
+            'active', 'private', 0, 0, 2), \
            ('conversation-public', 'workspace-1', 'workspace', 'open', 'Public', 'public', \
-            'open', 'public', 0, 0, 1); \
+            'active', 'public', 0, 0, 1); \
          INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, \
            title_key, status, visibility, endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, \
            created_at, updated_at, latest_message_seq) VALUES \
@@ -649,6 +649,53 @@ async fn saved_and_message_conversation_mismatch_is_corruption_not_a_split_wire_
             StatusCode::INTERNAL_SERVER_ERROR,
             Value::String("Internal Server Error".to_owned())
         )
+    );
+}
+
+#[tokio::test]
+async fn linked_task_actual_conversation_is_bound_to_its_source_message() {
+    let (_directory, path, store, events) = seeded().await;
+    let app = router(store.saved(), store.saved(), events)
+        .layer(Extension(UserId::parse("user-1").unwrap()));
+    assert_eq!(
+        call(app.clone(), Method::POST, "/api/messages/message-1/save")
+            .await
+            .0,
+        StatusCode::CREATED
+    );
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO tasks (id, workspace_id, task_number, conversation_id, title, status, \
+         creator_kind, creator_user_id, source_message_id, created_at, board_key) VALUES \
+         ('task-saved', 'workspace-1', 1, 'conversation-1', 'Linked task', 'todo', \
+          'user', 'user-1', 'message-1', 1, 'ws:workspace-1')",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    sqlx::query("DROP TRIGGER trg_tasks_board_coordinates_immutable")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE tasks SET conversation_id='pair-1' WHERE id='task-saved'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(app.clone(), Method::GET, "/api/saved").await.0,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    sqlx::query("UPDATE tasks SET conversation_id='conversation-1' WHERE id='task-saved'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    let (status, body) = call(app, Method::GET, "/api/saved").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["saved"][0]["message"]["linked_task"]["task_id"],
+        "task-saved"
     );
 }
 
