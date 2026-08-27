@@ -484,15 +484,15 @@ where
 
     async fn deliver(
         &self,
-        conversation: &ConversationId,
         agent: &AgentId,
-        // The committed message id is carried by the port so the seam names exactly
-        // what was authored; the runtime locates the work by (conversation, agent),
-        // identically to the copy/main/reply delivery legs above.
-        _message: &BoundWorkspaceRenameMessage,
+        message: &BoundWorkspaceRenameMessage,
     ) -> Result<(), Self::Error> {
+        // The target conversation is the SEALED message's own, never a caller
+        // coordinate: a message committed for c1 can only wake c1's agents. The
+        // runtime then locates the work by (conversation, agent), identically to the
+        // copy/main/reply delivery legs above.
         self.runtime
-            .deliver(conversation, agent)
+            .deliver(message.draft().conversation(), agent)
             .await
             .map_err(EffectFailure::from_source)
     }

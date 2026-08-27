@@ -355,9 +355,11 @@ where
             // anything itself): the messaging context's adapter receives the
             // committed `WorkspaceNameChange`. It is independent of the viewer hint
             // above — attempted whether or not the hint succeeded — and best-effort:
-            // a failure is recorded and the channels stay un-notified, but the
-            // committed 200 never downgrades. The address-reassignment audit is
-            // logged off the same gate.
+            // the fan-out is PARTIAL (author is a per-channel precondition, delivery
+            // isolates per agent, publication rides each authored channel), so a
+            // failure means SOME legs may not have completed while others did. The
+            // FIRST failing leg's cause is retained; the committed 200 never
+            // downgrades. The address-reassignment audit is logged off the same gate.
             if let Some(change) = &name_change {
                 tracing::info!(
                     workspace = %workspace_id.as_str(),
@@ -370,8 +372,9 @@ where
                     tracing::error!(
                         error_chain = %error::describe(&failure),
                         workspace = %workspace_id.as_str(),
-                        "workspace rename fan-out could not be completed; \
-                         the affected channels were not sent the rename system message"
+                        "workspace rename fan-out was incomplete; the first failing leg's \
+                         cause is retained — some channels or agents may not have received \
+                         the rename system message"
                     );
                 }
             }

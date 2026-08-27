@@ -1047,17 +1047,18 @@ impl CommittedMessagePublication for ScopeEventHub {
 impl WorkspaceRenamePublicationPort for ScopeEventHub {
     type Error = EffectFailure;
 
-    async fn publish(
-        &self,
-        conversation: &ConversationId,
-        message: &BoundWorkspaceRenameMessage,
-    ) -> Result<(), Self::Error> {
+    async fn publish(&self, message: &BoundWorkspaceRenameMessage) -> Result<(), Self::Error> {
         // A committed rename IS a system message on the channel it landed on: it rides
         // the SAME conversation-scope `message` frame every reader receives, projected
         // by the one wire authority. It is never a thread reply, so the payload is
         // `{message}` alone — no `projections` sidecar — exactly like a mention-CC copy.
+        //
+        // The scope is the SEALED message's own conversation, never a caller
+        // coordinate: the frame's scope and the `conversation_id` inside its body are
+        // one and the same identity (`rename_dto` reads `draft.conversation()` too),
+        // so a message sealed for c1 can never surface on c2's scope.
         self.publish(
-            EventScope::Conversation(conversation.clone()),
+            EventScope::Conversation(message.draft().conversation().clone()),
             ProductEvent::Message(json!({ "message": rename_dto(message) })),
         )
         .map_err(EffectFailure::from_source)
@@ -1353,6 +1354,29 @@ pub struct HubAgentAvailabilityAnnouncer<H, V> {
     view: V,
 }
 
+/// The availability view resolved for a DIFFERENT agent than the one asked for — a
+/// resolver/composition defect, not a product outcome. Retained as this agent's
+/// production failure so a spliced ACL can never fan one agent's availability out
+/// to another agent's viewers. Mirrors the availability route's source==request
+/// bind ([`crate::host_agent::availability`]).
+#[derive(Debug)]
+struct AgentAvailabilityAudienceMismatch {
+    requested: String,
+    resolved: String,
+}
+
+impl fmt::Display for AgentAvailabilityAudienceMismatch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "agent-availability view resolved for the wrong agent: requested {}, resolved {}",
+            self.requested, self.resolved
+        )
+    }
+}
+
+impl Error for AgentAvailabilityAudienceMismatch {}
+
 impl<H, V> HubAgentAvailabilityAnnouncer<H, V> {
     pub(crate) fn new(hub: ScopeEventHub, computer_agents: H, view: V) -> Self {
         Self {
@@ -1390,6 +1414,28 @@ where
                     continue;
                 }
             };
+            // BIND the resolved facts to the requested agent BEFORE reading its
+            // audience — the same source==request bind the availability route makes
+            // (`host_agent::availability`). A view whose decoded source is a DIFFERENT
+            // agent is a resolver/splice defect: its ACL would send THIS agent's
+            // `agent_id` payload to some OTHER agent's viewers (leak + misdelivery)
+            // while missing this agent's true audience. Skip this agent's publish and
+            // retain it as a production failure; the remaining agents still run and
+            // the aggregate ends in Err. A short read (no row) has nothing to bind —
+            // it is the empty-audience arm below.
+            if let Some(facts) = view.as_ref()
+                && facts.source() != agent
+            {
+                if first_failure.is_none() {
+                    first_failure = Some(CustodyEffectFailure::from_source(
+                        AgentAvailabilityAudienceMismatch {
+                            requested: agent.as_str().to_owned(),
+                            resolved: facts.source().as_str().to_owned(),
+                        },
+                    ));
+                }
+                continue;
+            }
             let viewers = agent_viewer_user_ids(view.as_ref().map(|facts| facts.visibility()));
             for viewer in &viewers {
                 if let Err(cause) = self.hub.publish_agent_availability_changed(viewer, agent)
@@ -5586,7 +5632,11 @@ mod tests {
         .bind(&draft)
         .unwrap();
 
-        WorkspaceRenamePublicationPort::publish(&hub, &conversation(), &bound)
+        // The publication scope is derived from the SEALED message
+        // (`draft().conversation()`), not a separately passed conversation
+        // coordinate. There is no second parameter that could splice the frame onto a
+        // conversation other than the one the rename was committed for.
+        WorkspaceRenamePublicationPort::publish(&hub, &bound)
             .await
             .unwrap();
 
@@ -5853,6 +5903,91 @@ mod tests {
         assert_eq!(availability_agent_ids(&two), vec!["agent-a"]);
         assert!(matches!(
             sub_2.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn availability_view_resolved_for_the_wrong_agent_is_a_failure_that_reaches_no_viewer() {
+        use silverhand_backend_core::agent_lifecycle::MaterializationStatus;
+        // The splice this guards against: the roster asks for agent-a, but the view
+        // model resolves facts whose decoded `source()` is agent-b. Its ACL admits
+        // viewer-99. Without the source==request bind, agent-a's `agent_id` payload
+        // would be blasted to agent-b's viewer (viewer-99) — a leak AND a misdelivery
+        // (viewer-99 is not agent-a's audience). The bind must instead: (1) send
+        // viewer-99 ZERO frames, (2) still attempt the remaining roster (agent-c), and
+        // (3) surface the mismatch as the aggregate production failure.
+        let hub = ScopeEventHub::test("epoch-1");
+        let viewer_99 = UserId::parse("viewer-99").unwrap();
+        let viewer_1 = UserId::parse("viewer-1").unwrap();
+        let mut sub_99 = hub
+            .subscribe(EventScope::Viewer(viewer_99.clone()))
+            .unwrap()
+            .receiver;
+        let mut sub_1 = hub
+            .subscribe(EventScope::Viewer(viewer_1.clone()))
+            .unwrap()
+            .receiver;
+
+        let mut views = std::collections::HashMap::new();
+        // agent-a's lookup returns facts whose source is agent-b (the splice). agent-b's
+        // ACL would admit viewer-99 — the very viewer we prove gets nothing.
+        views.insert(
+            "agent-a".to_owned(),
+            availability_view(
+                "agent-b",
+                Some("viewer-99"),
+                &[],
+                &[],
+                MaterializationStatus::Active,
+            ),
+        );
+        // agent-c resolves honestly and admits viewer-1: it must still be reached even
+        // though agent-a failed the bind earlier in the roster.
+        views.insert(
+            "agent-c".to_owned(),
+            availability_view(
+                "agent-c",
+                Some("viewer-1"),
+                &[],
+                &[],
+                MaterializationStatus::Active,
+            ),
+        );
+
+        let announcer = HubAgentAvailabilityAnnouncer::new(
+            hub.clone(),
+            StubComputerAgents(vec![
+                AgentId::parse("agent-a").unwrap(),
+                AgentId::parse("agent-c").unwrap(),
+            ]),
+            StubAgentView(views),
+        );
+
+        // The mismatch is retained and returned as the aggregate production failure.
+        let failure = announcer
+            .agents_availability_changed(HostId::parse("host-1").unwrap())
+            .await
+            .unwrap_err();
+        let source = std::error::Error::source(&failure).expect("a retained source cause");
+        assert!(
+            source.to_string().contains("resolved for the wrong agent"),
+            "{source}"
+        );
+
+        // agent-c was still attempted: viewer-1 sees exactly agent-c.
+        let one = sub_1.recv().await.unwrap();
+        assert_eq!(one.scope, "viewer:viewer-1");
+        assert_eq!(availability_agent_ids(&[one]), vec!["agent-c"]);
+        assert!(matches!(
+            sub_1.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+
+        // The spliced agent-a reached NO viewer — viewer-99 (agent-b's audience) is
+        // empty, so agent-a's payload never leaked onto another agent's viewers.
+        assert!(matches!(
+            sub_99.try_recv(),
             Err(broadcast::error::TryRecvError::Empty)
         ));
     }

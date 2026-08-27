@@ -308,29 +308,37 @@ pub trait ConversationAgentsReadPort {
 }
 
 /// Push a committed rename message onto ONE agent's runtime — the dual of the
-/// TypeScript `runtimeHost.deliverMessage(conversation, agent, message.id)`. The
-/// message id is carried so the seam names exactly what was committed, though the
-/// underlying runtime locates the work by (conversation, agent).
+/// TypeScript `runtimeHost.deliverMessage(conversation, agent, message.id)`.
+///
+/// The conversation is NOT a separate parameter: it is derived from the sealed
+/// message's own [`draft().conversation()`](WorkspaceRenameMessageDraft::conversation),
+/// so a message committed for conversation c1 can only ever be delivered against
+/// c1. A caller cannot splice c1's committed message onto c2's runtime, because
+/// there is no second coordinate to disagree with the sealed one.
 pub trait WorkspaceRenameDeliveryPort {
     type Error: Error + Send + Sync + 'static;
 
     fn deliver(
         &self,
-        conversation: &ConversationId,
         agent: &AgentId,
         message: &BoundWorkspaceRenameMessage,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
-/// Publish a committed rename message to a conversation's live subscribers — the
+/// Publish a committed rename message to its conversation's live subscribers — the
 /// dual of the TypeScript `events.publish(channel.id, {kind:'message', payload})`.
 /// The adapter owns the wire projection; this port names only the obligation.
+///
+/// As with [`WorkspaceRenameDeliveryPort`], the target scope is derived from the
+/// sealed message's own [`draft().conversation()`](WorkspaceRenameMessageDraft::conversation)
+/// — never a caller-supplied coordinate — so the frame's scope and the
+/// `conversation_id` inside its body are one and the same sealed identity and can
+/// never be spliced apart.
 pub trait WorkspaceRenamePublicationPort {
     type Error: Error + Send + Sync + 'static;
 
     fn publish(
         &self,
-        conversation: &ConversationId,
         message: &BoundWorkspaceRenameMessage,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
@@ -377,10 +385,12 @@ impl WorkspaceRenameFanoutFailure {
 ///    agents, and the channel's publication is still attempted afterward.
 ///  - PUBLICATION is always attempted once author succeeded, after delivery.
 ///
-/// Every leg's failure is retained (first cause wins) and the aggregate is
-/// returned as `Err` only after every channel has been fully attempted, so one
-/// dead leg cannot silently drop the rest. The caller records it and still returns
-/// the committed `200`; nothing here downgrades the durable rename to an error.
+/// The FIRST failing leg's cause is retained (later causes are not carried — they
+/// are subsumed into the single aggregate `Err`); the fan-out is PARTIAL, so
+/// channels and agents that succeeded stay done. The aggregate is returned as `Err`
+/// only after every channel has been fully attempted, so one dead leg cannot
+/// silently skip the rest. The caller records it and still returns the committed
+/// `200`; nothing here downgrades the durable rename to an error.
 #[allow(clippy::too_many_arguments)]
 pub async fn fan_out_workspace_rename<Ch, Au, Ag, De, Pu>(
     channels: &Ch,
@@ -430,19 +440,24 @@ where
             }
         };
         // DELIVERY — every agent attempted; a per-agent failure is retained but
-        // does not abort the rest, and publication still runs afterward.
+        // does not abort the rest, and publication still runs afterward. Each push
+        // targets the committed message's OWN conversation (the port derives it from
+        // the sealed message), so the agents read for `conversation` and the message
+        // delivered to them are one and the same channel.
         match conversation_agents.agent_ids(&conversation).await {
             Ok(agents) => {
                 for agent in &agents {
-                    if let Err(cause) = delivery.deliver(&conversation, agent, &committed).await {
+                    if let Err(cause) = delivery.deliver(agent, &committed).await {
                         retain(WorkspaceRenameFanoutFailure::from_source(cause));
                     }
                 }
             }
             Err(cause) => retain(WorkspaceRenameFanoutFailure::from_source(cause)),
         }
-        // PUBLICATION — always attempted once the message is committed.
-        if let Err(cause) = publication.publish(&conversation, &committed).await {
+        // PUBLICATION — always attempted once the message is committed. Targets the
+        // committed message's own conversation (derived by the port), never a
+        // caller-supplied scope.
+        if let Err(cause) = publication.publish(&committed).await {
             retain(WorkspaceRenameFanoutFailure::from_source(cause));
         }
     }
@@ -709,10 +724,12 @@ mod tests {
 
         async fn deliver(
             &self,
-            conversation: &ConversationId,
             agent: &AgentId,
-            _: &BoundWorkspaceRenameMessage,
+            message: &BoundWorkspaceRenameMessage,
         ) -> Result<(), Self::Error> {
+            // Record the target from the SEALED message, not a caller coordinate:
+            // this is the only conversation the port can act on.
+            let conversation = message.draft().conversation();
             self.attempted
                 .lock()
                 .unwrap()
@@ -736,11 +753,10 @@ mod tests {
     impl WorkspaceRenamePublicationPort for RecordingPublication {
         type Error = StubLegFailure;
 
-        async fn publish(
-            &self,
-            conversation: &ConversationId,
-            _: &BoundWorkspaceRenameMessage,
-        ) -> Result<(), Self::Error> {
+        async fn publish(&self, message: &BoundWorkspaceRenameMessage) -> Result<(), Self::Error> {
+            // Target derived from the sealed message; there is no caller scope to
+            // splice against.
+            let conversation = message.draft().conversation();
             self.attempted
                 .lock()
                 .unwrap()
@@ -803,6 +819,52 @@ mod tests {
         fn published(&self) -> Vec<String> {
             self.publication.attempted.lock().unwrap().clone()
         }
+    }
+
+    /// IDENTITY-SPLICE FALSIFIER: the effect target is the sealed message's own
+    /// conversation, never a caller coordinate. A message sealed for `c1` can be
+    /// delivered/published only against `c1` — there is NO second parameter by
+    /// which a caller could aim it at `c2`, so a `c1` body can never surface on the
+    /// `c2` scope or wake `c2`'s runtime. This test pins that the recorded target is
+    /// exactly the sealed conversation; the impossibility of the mismatch itself is
+    /// structural (the ports take only `&BoundWorkspaceRenameMessage`), so this
+    /// would need to be rewritten before any target parameter could be re-added.
+    #[tokio::test]
+    async fn effect_target_is_the_sealed_conversation_not_a_caller_coordinate() {
+        let draft = WorkspaceRenameMessageDraft::for_names(
+            workspace("w"),
+            conversation("c1"),
+            "Old",
+            "New",
+        );
+        let sealed = CommittedWorkspaceRenameMessage::committed(
+            draft.clone(),
+            MessageId::parse("message").unwrap(),
+            MessageSeq::try_from(2).unwrap(),
+            WorkspaceRenameMessageCreatedAt::new(3).unwrap(),
+        )
+        .bind(&draft)
+        .unwrap();
+
+        let delivery = RecordingDelivery {
+            attempted: Arc::new(Mutex::new(Vec::new())),
+            fail_on_agent: None,
+        };
+        let publication = RecordingPublication {
+            attempted: Arc::new(Mutex::new(Vec::new())),
+            fail_on: None,
+        };
+        delivery
+            .deliver(&AgentId::parse("agent-a").unwrap(), &sealed)
+            .await
+            .unwrap();
+        publication.publish(&sealed).await.unwrap();
+
+        assert_eq!(
+            delivery.attempted.lock().unwrap().clone(),
+            [("c1".to_owned(), "agent-a".to_owned())]
+        );
+        assert_eq!(publication.attempted.lock().unwrap().clone(), ["c1"]);
     }
 
     /// SUCCESS ARM: every leg fires for every channel, in order. This is the
