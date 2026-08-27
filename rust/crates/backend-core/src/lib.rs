@@ -21,6 +21,7 @@ pub mod host_resources_read;
 pub mod host_runtime;
 pub mod identity;
 pub mod messaging;
+pub mod name_canonicalization;
 pub mod persistence;
 pub mod policy;
 pub mod runtime_credential;

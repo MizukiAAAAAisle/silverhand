@@ -6,21 +6,23 @@
 //! private makes it impossible for a persistence adapter to pair one name with
 //! another name's key.
 //!
-//! This mirrors the TypeScript `workspace-name` authority, which delegates the
-//! entire Unicode verdict — NFC normalization, ECMAScript trim, the forbidden
-//! code-point domain, and the pinned case fold — to the single shared
-//! conversation-title authority and adds only a narrower 64-code-point cap and
-//! a distinct brand. We do the same here: the Unicode verdict comes from ONE
-//! shared authority ([`crate::messaging::conversation_title`]), so there is no
-//! second Unicode table and no second canonicalizer. This module owns only the
-//! 64-code-point cap and the workspace ubiquitous language — a consumer of
-//! [`CanonicalWorkspaceName`] never speaks in conversation-title terms.
+//! ## The Unicode capability is shared; the cap and the brand are ours
 //!
-//! The forbidden-code-point check is owned by the shared authority and runs
-//! *before* the workspace cap, so a name that is both over-long and contains a
-//! forbidden scalar reports the forbidden scalar — the same order the delegated
-//! TypeScript parser produces. Re-deriving that ordering here would fork the
-//! shared authority; delegation keeps it single.
+//! The whole Unicode verdict — NFC, the ECMAScript trim set, the forbidden
+//! code-point domain, and the pinned case fold — comes from the ONE neutral
+//! [`crate::name_canonicalization`] primitive, the single table/normalizer/fold
+//! in the backend. There is no second Unicode table and no second canonicalizer.
+//! This module consumes that primitive with a 64-code-point cap and brands the
+//! result as a [`CanonicalWorkspaceName`], so a workspace name's legality is
+//! expressed in the workspace's OWN vocabulary — a consumer never speaks in
+//! conversation-title terms, and the shared primitive returns neither a title
+//! type nor a title issue.
+//!
+//! The shared pipeline checks the length cap BEFORE it scans for a forbidden
+//! scalar, so a name that is both over 64 code points and carries a forbidden
+//! scalar reports its length, not the interior scalar. That ordering is a
+//! property of the shared primitive, inherited identically by every consumer;
+//! only the 64 bound is this domain's.
 //!
 //! ```
 //! use silverhand_backend_core::workspace_name::CanonicalWorkspaceName;
@@ -41,7 +43,7 @@
 
 use thiserror::Error;
 
-use crate::messaging::conversation_title::{CanonicalConversationTitle, ConversationTitleIssue};
+use crate::name_canonicalization::{NameCanonicalizationIssue, canonicalize_name};
 
 /// The maximum code-point length of a regular workspace name, measured on the
 /// NFC + trimmed display form. Narrower than the shared conversation-title cap.
@@ -56,20 +58,14 @@ pub struct CanonicalWorkspaceName {
 }
 
 impl CanonicalWorkspaceName {
-    /// Runs the shared conversation-title Unicode verdict (NFC, ECMAScript
-    /// trim, forbidden code points, pinned case fold) and then applies the
-    /// narrower 64-code-point cap — exactly as the TypeScript `parseWorkspaceName`
-    /// delegates to `parseConversationTitle`.
+    /// Runs the shared name canonicalization (NFC, ECMAScript trim, empty check,
+    /// the 64-code-point cap, the forbidden-scalar scan, and the pinned fold) and
+    /// brands the neutral result as a workspace name. The Unicode verdict is the
+    /// shared one; only the cap and the vocabulary are this domain's.
     pub fn parse(raw: &str) -> Result<Self, WorkspaceNameIssue> {
-        let canonical = CanonicalConversationTitle::parse(raw)?;
-        let code_points = canonical.title().chars().count();
-        if code_points > MAX_CODE_POINTS {
-            return Err(WorkspaceNameIssue::TooLong { code_points });
-        }
-        Ok(Self {
-            name: canonical.title().to_owned(),
-            key: canonical.key().to_owned(),
-        })
+        let canonical = canonicalize_name(raw, MAX_CODE_POINTS)?;
+        let (name, key) = canonical.into_parts();
+        Ok(Self { name, key })
     }
 
     /// The NFC + trimmed display name, carried verbatim onto the wire.
@@ -86,7 +82,7 @@ impl CanonicalWorkspaceName {
 
 /// Why a candidate workspace name is not canonical. `too_long` reports the
 /// measured code-point count so the boundary is observable; the empty and
-/// forbidden arms carry the same shape the shared authority reports.
+/// forbidden arms carry the same shape the shared primitive reports.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum WorkspaceNameIssue {
     #[error("workspace name is empty")]
@@ -97,12 +93,12 @@ pub enum WorkspaceNameIssue {
     ForbiddenCodePoint { code_point: u32, index: usize },
 }
 
-impl From<ConversationTitleIssue> for WorkspaceNameIssue {
-    fn from(issue: ConversationTitleIssue) -> Self {
+impl From<NameCanonicalizationIssue> for WorkspaceNameIssue {
+    fn from(issue: NameCanonicalizationIssue) -> Self {
         match issue {
-            ConversationTitleIssue::Empty => Self::Empty,
-            ConversationTitleIssue::TooLong { code_points } => Self::TooLong { code_points },
-            ConversationTitleIssue::ForbiddenCodePoint { code_point, index } => {
+            NameCanonicalizationIssue::Empty => Self::Empty,
+            NameCanonicalizationIssue::TooLong { code_points, .. } => Self::TooLong { code_points },
+            NameCanonicalizationIssue::ForbiddenCodePoint { code_point, index } => {
                 Self::ForbiddenCodePoint { code_point, index }
             }
         }
@@ -159,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn a_name_over_the_shared_cap_reports_the_true_count() {
+    fn a_name_far_over_the_cap_reports_the_true_count() {
         assert_eq!(
             CanonicalWorkspaceName::parse(&"a".repeat(200)),
             Err(WorkspaceNameIssue::TooLong { code_points: 200 })
@@ -167,23 +163,42 @@ mod tests {
     }
 
     #[test]
-    fn forbidden_scalars_win_over_the_length_cap() {
-        // 100 code points (> 64) AND a sequence-forming joiner: the shared
-        // authority checks forbidden scalars before the workspace cap, so the
-        // forbidden verdict wins — matching the delegated TypeScript order.
-        let mut raw = "a".repeat(99);
-        raw.push('\u{200D}');
+    fn a_forbidden_scalar_within_the_cap_is_reported_with_its_index() {
+        // ≤ 64 code points, so the cap passes and the forbidden scan fires.
+        let raw = format!("{}\u{200D}", "a".repeat(10));
         assert_eq!(
             CanonicalWorkspaceName::parse(&raw),
             Err(WorkspaceNameIssue::ForbiddenCodePoint {
                 code_point: 0x200D,
-                index: 99,
+                index: 10,
             })
         );
     }
 
     #[test]
-    fn parses_the_shared_authority_fixture_recapped_at_sixty_four() {
+    fn the_cap_is_checked_before_the_forbidden_scan() {
+        // 100 code points (> 64) AND a sequence-forming joiner: the shared
+        // primitive checks the length cap before the forbidden scan, so the
+        // length verdict wins — the same order every consumer inherits. (The
+        // conversation-title owner, whose cap is 128, reports the joiner for this
+        // same input, because 100 is within ITS cap; the divergence is the cap,
+        // not the order.)
+        let mut raw = "a".repeat(99);
+        raw.push('\u{200D}');
+        assert_eq!(
+            CanonicalWorkspaceName::parse(&raw),
+            Err(WorkspaceNameIssue::TooLong { code_points: 100 })
+        );
+    }
+
+    #[test]
+    fn reuses_the_shared_authority_fixture_recapped_at_sixty_four() {
+        // Reconcile against the SAME production fixture the conversation-title
+        // owner is pinned to, proving both domains fold on one shared table. Only
+        // order-independent arms are asserted against the title verdict; where the
+        // 64 cap reorders against the title's 128 cap (a title-legal name in
+        // (64,128], or a forbidden scalar past position 64) the workspace verdict
+        // is asserted on its own terms.
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../packages/shared/tests/fixtures/conversation-title-parity.json"
         ))
@@ -194,41 +209,39 @@ mod tests {
             let expected = &test_case["expected"];
             match CanonicalWorkspaceName::parse(input) {
                 Ok(actual) => {
-                    // The shared parser accepted it (≤128, no forbidden); the
-                    // workspace type accepts it only when also ≤64.
+                    // Accepted ⇒ the shared parser accepted it (≤128, no forbidden)
+                    // AND it is ≤64; the display and key are the shared ones.
                     assert_eq!(expected["ok"], true, "{name}");
-                    let cp = actual.name().chars().count();
-                    assert!(cp <= 64, "{name}");
+                    assert!(actual.name().chars().count() <= 64, "{name}");
                     assert_eq!(expected["title"], actual.name(), "{name}");
                     assert_eq!(expected["key"], actual.key(), "{name}");
                 }
                 Err(WorkspaceNameIssue::Empty) => {
+                    // Empty precedes the cap in both domains, so the title verdict
+                    // agrees.
                     assert_eq!(expected["ok"], false, "{name}");
                     assert_eq!(expected["kind"], "empty", "{name}");
                 }
                 Err(WorkspaceNameIssue::ForbiddenCodePoint { code_point, index }) => {
+                    // Reaching the forbidden scan means ≤64 ≤128, so the wider-cap
+                    // title parser scanned too and found the SAME first forbidden
+                    // scalar at the same index.
                     assert_eq!(expected["ok"], false, "{name}");
                     assert_eq!(expected["kind"], "forbidden_code_point", "{name}");
                     assert_eq!(expected["codePoint"], code_point, "{name}");
                     assert_eq!(expected["index"], index, "{name}");
                 }
                 Err(WorkspaceNameIssue::TooLong { code_points }) => {
-                    // Either the shared 128 cap or the workspace 64 cap.
+                    // Over 64. The title verdict for the same input may be ok,
+                    // too_long, or forbidden depending on where 128 falls; the only
+                    // shared invariant is the measured count exceeds this cap.
                     assert!(code_points > 64, "{name}");
-                    if expected["ok"] == true {
-                        assert!(
-                            expected["title"].as_str().unwrap().chars().count() > 64,
-                            "{name}"
-                        );
-                    } else {
-                        assert_eq!(expected["kind"], "too_long", "{name}");
-                    }
                 }
             }
         }
 
-        // The astral boundary the fixture pins at 128 for titles is re-verified
-        // at 64 for workspace names.
+        // The astral boundary the fixture pins at 128 for titles is re-verified at
+        // 64 for workspace names.
         let astral = &fixture["astralBoundary"];
         let scalar = char::from_u32(astral["codePoint"].as_u64().unwrap() as u32).unwrap();
         assert!(CanonicalWorkspaceName::parse(&scalar.to_string().repeat(64)).is_ok());
