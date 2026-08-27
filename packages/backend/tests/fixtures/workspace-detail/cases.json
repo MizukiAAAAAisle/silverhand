@@ -1,0 +1,70 @@
+{
+  "note": "GET /api/workspaces/:id is a VISIBILITY read: existence is resolved before visibility, so an absent id is 404 for everyone and a present workspace the viewer cannot see is a distinct 403. The 200 face is the SAME published ViewerWorkspaceDto the list read emits. Viewer = user-1.",
+  "cases": [
+    {
+      "name": "a member sees the regular workspace face",
+      "id": "ws-regular",
+      "expected": {
+        "status": 200,
+        "body": {
+          "workspace": {
+            "id": "ws-regular",
+            "name": "Regular",
+            "description": "desc",
+            "owner_agent_id": null,
+            "owner_user_id": "user-1",
+            "dm_channel_id": null,
+            "dm_channel_ids": [],
+            "archived_at": null,
+            "created_at": 1,
+            "updated_at": 300
+          }
+        }
+      }
+    },
+    {
+      "name": "a member sees an agent-home face with its derived dm channels",
+      "id": "ws-home",
+      "expected": {
+        "status": 200,
+        "body": {
+          "workspace": {
+            "id": "ws-home",
+            "name": "Agent Home",
+            "description": null,
+            "owner_agent_id": "agent-1",
+            "owner_user_id": null,
+            "dm_channel_id": "conv-onboarding",
+            "dm_channel_ids": [
+              "conv-onboarding",
+              "conv-dm"
+            ],
+            "archived_at": null,
+            "created_at": 1,
+            "updated_at": 200
+          }
+        }
+      }
+    },
+    {
+      "name": "a non-member of a present workspace is forbidden",
+      "id": "ws-foreign",
+      "expected": {
+        "status": 403,
+        "body": {
+          "error": "forbidden"
+        }
+      }
+    },
+    {
+      "name": "an absent id is not found",
+      "id": "ws-missing",
+      "expected": {
+        "status": 404,
+        "body": {
+          "error": "workspace not found"
+        }
+      }
+    }
+  ]
+}

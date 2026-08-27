@@ -16,6 +16,8 @@ pub mod host_runtime;
 pub mod messaging;
 pub mod runtime_credential;
 pub mod scope_events;
+pub mod workspace_detail;
+pub mod workspace_name_availability;
 pub mod workspaces;
 
 #[cfg(test)]

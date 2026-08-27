@@ -91,10 +91,20 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "teardown"),
     ("backend-core", "user_presence_cold_read"),
     ("backend-core", "user_presence_last_seen"),
+    // #task:2193 — the workspace metadata/read vertical. Core primitives and ports;
+    // their SQLite adapters and server routes are the sibling entries below. Not yet
+    // mounted (the app composition root is out of this task's scope).
+    ("backend-core", "name_canonicalization"),
+    ("backend-core", "workspace_detail_read"),
+    ("backend-core", "workspace_metadata_write"),
+    ("backend-core", "workspace_name"),
+    ("backend-core", "workspace_name_availability"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
     ("backend-server", "host_resources"),
+    ("backend-server", "workspace_detail"),
+    ("backend-server", "workspace_name_availability"),
     ("backend-sqlite", "agent_availability_read"),
     ("backend-sqlite", "agent_detail_read"),
     ("backend-sqlite", "agent_list_read"),
@@ -104,6 +114,8 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-sqlite", "host_resources_read"),
     ("backend-sqlite", "user_presence_cold_read"),
     ("backend-sqlite", "user_presence_last_seen"),
+    ("backend-sqlite", "workspace_detail_read"),
+    ("backend-sqlite", "workspace_name_availability"),
 ];
 
 /// The declarations this lane did NOT add, across EVERY root in `CRATE_ROOTS`.

@@ -1,0 +1,70 @@
+{
+  "note": "The name-availability endpoint always answers HTTP 200; an unusable name is carried in `reason`, never a 4xx. Every FORMAT refusal collapses to reason=invalid, so this endpoint does NOT expose the TS refusal PRECEDENCE (forbidden_code_point vs too_long) that the two cross-length cases below distinguish -- both are `invalid` here. That precedence is gated where it is observable: the core workspace_name fixture (conversation-title-parity.json) and slice 2's PATCH admission fixture.",
+  "status": 200,
+  "cases": [
+    {
+      "name": "a free name is available",
+      "input": "Marketing",
+      "expected": {
+        "available": true,
+        "reason": "available"
+      }
+    },
+    {
+      "name": "a held key is taken regardless of spelling",
+      "input": "  DESIGN TEAM  ",
+      "expected": {
+        "available": false,
+        "reason": "taken"
+      }
+    },
+    {
+      "name": "an agent-home name does not occupy the regular namespace",
+      "input": "Agent Home",
+      "expected": {
+        "available": true,
+        "reason": "available"
+      }
+    },
+    {
+      "name": "empty is invalid",
+      "input": "",
+      "expected": {
+        "available": false,
+        "reason": "invalid"
+      }
+    },
+    {
+      "name": "a forbidden scalar is invalid",
+      "input": "a‍b",
+      "expected": {
+        "available": false,
+        "reason": "invalid"
+      }
+    },
+    {
+      "name": "one code point over the 64 cap is invalid",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": {
+        "available": false,
+        "reason": "invalid"
+      }
+    },
+    {
+      "name": "cross-length: 65-128 code points WITH a forbidden scalar (TS forbidden_code_point) is invalid",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa‍",
+      "expected": {
+        "available": false,
+        "reason": "invalid"
+      }
+    },
+    {
+      "name": "cross-length: over 128 code points WITH a forbidden scalar (TS too_long) is invalid",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa‍",
+      "expected": {
+        "available": false,
+        "reason": "invalid"
+      }
+    }
+  ]
+}

@@ -27,6 +27,8 @@ pub mod unread_read;
 pub mod user_presence_cold_read;
 pub mod user_presence_last_seen;
 pub mod workspace_cold_read;
+pub mod workspace_detail_read;
+pub mod workspace_name_availability;
 
 #[cfg(test)]
 #[path = "../tests/support/current_schema_snapshot.rs"]
