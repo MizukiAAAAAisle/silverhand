@@ -71,8 +71,10 @@ export function serializePasswordHashParams(
 /**
  * Read the persisted `password_hash_params`, admitting BOTH producer arms. The
  * shared cost fields are validated once; then `library` discriminates the arm and
- * selects its required provenance block (`benchmark` for Node, `calibration` for
- * Rust). Any other `library`, or a missing provenance block, is invalid.
+ * fully validates its required provenance block (`benchmark` for Node,
+ * `calibration` for Rust) down to each field's type and range. Any other
+ * `library`, a missing block, or a block with a missing/mistyped/out-of-range
+ * field is invalid — a truthy `{}` provenance object never passes.
  */
 export function parsePasswordHashParams(raw: string): PersistedPasswordHashParams {
   const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -87,13 +89,13 @@ export function parsePasswordHashParams(raw: string): PersistedPasswordHashParam
     throw new Error('invalid password_hash_params');
   }
   if (parsed.library === '@node-rs/argon2') {
-    if (!parsed.benchmark) {
+    if (!validNodeBenchmark(parsed.benchmark)) {
       throw new Error('invalid password_hash_params');
     }
     return parsed as unknown as Argon2idPasswordHashParams;
   }
   if (parsed.library === 'silverhand/argon2-rustcrypto') {
-    if (!parsed.calibration) {
+    if (!validRustCalibration(parsed.calibration)) {
       throw new Error('invalid password_hash_params');
     }
     return parsed as unknown as PersistedPasswordHashParams;
@@ -101,6 +103,55 @@ export function parsePasswordHashParams(raw: string): PersistedPasswordHashParam
   throw new Error('invalid password_hash_params');
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function positiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+/**
+ * The Node arm's `benchmark` provenance: six required positive-integer fields
+ * plus an OPTIONAL `flooredFrom` that, when present, must itself carry two
+ * positive-integer costs. Mirrors `Argon2idPasswordHashParams['benchmark']`.
+ */
+function validNodeBenchmark(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  if (
+    !positiveInteger(value.targetMs)
+    || !positiveInteger(value.measuredMs)
+    || !positiveInteger(value.candidateCount)
+    || !positiveInteger(value.selectedAt)
+    || !positiveInteger(value.cpuCount)
+    || !positiveInteger(value.totalMemoryMiB)
+  ) {
+    return false;
+  }
+  if (value.flooredFrom !== undefined) {
+    if (!isObject(value.flooredFrom)) return false;
+    if (
+      !positiveInteger(value.flooredFrom.memoryCostKiB)
+      || !positiveInteger(value.flooredFrom.timeCost)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The Rust arm's `calibration` provenance: five required positive-integer
+ * fields. Mirrors `Argon2idRustCalibration`; it never carries the Node-only
+ * `selectedAt`/`cpuCount`/`totalMemoryMiB`.
+ */
+function validRustCalibration(value: unknown): boolean {
+  return (
+    isObject(value)
+    && positiveInteger(value.targetMs)
+    && positiveInteger(value.measuredMs)
+    && positiveInteger(value.candidateCount)
+    && positiveInteger(value.floorMemoryCostKiB)
+    && positiveInteger(value.floorTimeCost)
+  );
 }

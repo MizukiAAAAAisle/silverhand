@@ -234,4 +234,71 @@ describe('persisted password_hash_params producer union', () => {
       'invalid password_hash_params',
     );
   });
+
+  // A truthy-but-empty or malformed provenance block must NOT slip through: the
+  // reader validates every required nested field's type and range, not just the
+  // block's presence. These are the mutations a `!parsed.calibration`-style guard
+  // would wrongly admit.
+  const rustArm = () => JSON.parse(RUST_FIXTURE) as Record<string, unknown>;
+
+  it('rejects a Rust arm whose calibration is an empty object', () => {
+    const mutant = { ...rustArm(), calibration: {} };
+    expect(() => parsePasswordHashParams(JSON.stringify(mutant))).toThrow(
+      'invalid password_hash_params',
+    );
+  });
+
+  it('rejects a Rust calibration with a missing, mistyped or out-of-range field', () => {
+    const base = rustArm().calibration as Record<string, unknown>;
+    const withCalibration = (calibration: Record<string, unknown>) =>
+      JSON.stringify({ ...rustArm(), calibration });
+
+    // Missing one required field.
+    const missing = { ...base };
+    delete missing.floorTimeCost;
+    expect(() => parsePasswordHashParams(withCalibration(missing))).toThrow(
+      'invalid password_hash_params',
+    );
+    // Wrong type (string instead of number).
+    expect(() =>
+      parsePasswordHashParams(withCalibration({ ...base, candidateCount: '3' })),
+    ).toThrow('invalid password_hash_params');
+    // Out of range (must be a positive integer).
+    expect(() =>
+      parsePasswordHashParams(withCalibration({ ...base, floorTimeCost: 0 })),
+    ).toThrow('invalid password_hash_params');
+    expect(() =>
+      parsePasswordHashParams(withCalibration({ ...base, measuredMs: 12.5 })),
+    ).toThrow('invalid password_hash_params');
+  });
+
+  it('rejects a Node arm whose benchmark is empty or missing a field', () => {
+    const empty = { ...TEST_PARAMS, benchmark: {} };
+    expect(() => parsePasswordHashParams(JSON.stringify(empty))).toThrow(
+      'invalid password_hash_params',
+    );
+    const missing = { ...TEST_PARAMS, benchmark: { ...TEST_PARAMS.benchmark } };
+    delete (missing.benchmark as Record<string, unknown>).cpuCount;
+    expect(() => parsePasswordHashParams(JSON.stringify(missing))).toThrow(
+      'invalid password_hash_params',
+    );
+  });
+
+  it('rejects a Node benchmark whose optional flooredFrom is present but malformed', () => {
+    const bad = {
+      ...TEST_PARAMS,
+      benchmark: { ...TEST_PARAMS.benchmark, flooredFrom: { memoryCostKiB: 256 } },
+    };
+    expect(() => parsePasswordHashParams(JSON.stringify(bad))).toThrow(
+      'invalid password_hash_params',
+    );
+  });
+
+  it('admits a Node arm carrying a well-formed optional flooredFrom', () => {
+    const floored = {
+      ...TEST_PARAMS,
+      benchmark: { ...TEST_PARAMS.benchmark, flooredFrom: { memoryCostKiB: 256, timeCost: 1 } },
+    };
+    expect(parsePasswordHashParams(JSON.stringify(floored)).library).toBe('@node-rs/argon2');
+  });
 });

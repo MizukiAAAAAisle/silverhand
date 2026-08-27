@@ -486,6 +486,23 @@ mod tests {
         }
     }
 
+    /// An entropy source that always refuses. Used to prove the real hasher's
+    /// dummy-verify path surfaces an infrastructure fault instead of swallowing
+    /// it into a silent `Ok(())`.
+    #[derive(Debug, thiserror::Error)]
+    #[error("entropy source refused")]
+    struct EntropyRefused;
+
+    struct FailingEntropy;
+
+    impl EntropySource for FailingEntropy {
+        type Error = EntropyRefused;
+
+        fn fill(&self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+            Err(EntropyRefused)
+        }
+    }
+
     fn ladder() -> Vec<Argon2idCost> {
         [1u32, 2, 3, 4]
             .into_iter()
@@ -591,6 +608,28 @@ mod tests {
         // Its only observable effect is spending hash cost; with sound entropy
         // and KDF it succeeds rather than silently no-opping.
         hasher.verify_dummy("some password").unwrap();
+    }
+
+    #[test]
+    fn verify_dummy_propagates_an_entropy_fault_rather_than_swallowing_it() {
+        // The REAL production hasher, given a refusing entropy source: producing
+        // the dummy PHC needs a drawn dummy password, so the fault must surface as
+        // an Err. This is the load-bearing gate for the safe-500 seam — if
+        // `dummy_phc` ever swallowed the fault (e.g. `.ok()` + a fallback), the
+        // login flow would silently skip the uniform-timing cost and this gate
+        // goes red. `FailingDummyHasher` in `human_auth_flows` only proves the flow
+        // propagates an already-returned Err; only this exercises the real KDF.
+        let hasher = Argon2idPasswordHasher::with_measurer(
+            FailingEntropy,
+            LinearMeasurer { millis_per_mib: 0 },
+            ladder(),
+            TARGET_HASH_MILLIS,
+        )
+        .unwrap();
+        assert!(
+            hasher.verify_dummy("some password").is_err(),
+            "an entropy fault in the dummy hash must propagate, never become Ok(())"
+        );
     }
 
     #[test]
