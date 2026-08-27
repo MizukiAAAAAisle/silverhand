@@ -358,6 +358,20 @@ pub trait UserEmailLookup: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<Option<UserId>, PersistenceFailure>> + Send;
 }
 
+/// The global human directory — every registered `users` row, in the order the
+/// product lists them. `GET /api/users` projects each row to a `UserDto` and
+/// wraps them as `{"users":[...]}`. This is an ungated read: any authenticated
+/// viewer sees the whole directory (there is no hidden-profile concept in V1),
+/// so the port carries no viewer and no filter.
+///
+/// Ordering is `created_at ASC` — the product's `SELECT * FROM users ORDER BY
+/// created_at ASC`. It is a stable read of the authority, NOT a second in-memory
+/// cache: the TS service reads the same rows through an in-memory port, but the
+/// authoritative fact is the table, so the Rust adapter reads it directly.
+pub trait UserDirectoryRead: Clone + Send + Sync + 'static {
+    fn list(&self) -> impl Future<Output = Result<Vec<UserRecord>, PersistenceFailure>> + Send;
+}
+
 // ===========================================================================
 // Write: PATCH /api/me (display_name), with the user_changed announce.
 // ===========================================================================
