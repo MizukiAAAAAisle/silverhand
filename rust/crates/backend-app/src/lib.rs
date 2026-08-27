@@ -2892,20 +2892,26 @@ mod tests {
     /// Gate 1 of the CP2 convergence closure — the composed root's COMPLETE positive
     /// mounted table. It enumerates every `(method, path)` `prepare()` mounts across
     /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195 + #2198 + #2218 + the
-    /// #2219 CP4 batch-B custody doors + the #2223 CP5 host residual doors) as fifty-four
-    /// entries — forty-five behind the human
+    /// #2219 CP4 batch-B custody doors + the #2223 CP3 workspace-metadata / human-`me`
+    /// doors + the #2223 CP4 directory/avatar doors + the #2223 CP5 host residual doors) as
+    /// sixty-seven entries — fifty-five behind the human
     /// session perimeter (including #2218's authenticated `/api/runtimes`, the three #2219
-    /// host custody/credential doors, and the four #2223 CP5 host residual doors: detail,
-    /// revoke, connect-token rotate and delete), three behind the runtime
-    /// credential perimeter, the two authenticated WebSockets, and four ANONYMOUS faces
-    /// (#2218's three root faces plus #2219's allowlisted `connect-token/resolve`) — and
+    /// host custody/credential doors, the four #2223 CP5 host residual doors: detail,
+    /// revoke, connect-token rotate and delete, the four #2223 CP3 workspace-metadata /
+    /// detail doors, the `me` pair, and the four #2223 CP4 directory/avatar doors), three
+    /// behind the runtime
+    /// credential perimeter, the two authenticated WebSockets, and seven ANONYMOUS faces
+    /// (#2218's three root faces, #2219's allowlisted `connect-token/resolve`, and the
+    /// #2223 CP3 signup/login/logout trio mounted ahead of the perimeter) — and
     /// asserts each is PRESENT: a guarded route anon → its
     /// perimeter's `401`, a WebSocket → its upgrade surface, an anonymous face → its
-    /// handler's own status, and never the `404` fallback. Removing any mounted route's
+    /// handler's own status (never the perimeter's bodiless `401`), and never the `404`
+    /// fallback. Removing any mounted route's
     /// `.merge(...)` from `prepare()` flips its entry to `404` and reddens this gate.
-    /// The tables are named consts with per-table `assert_eq!(len)` (45 / 3 / 2, plus
-    /// the four anon faces asserted by exact status/body) so a mis-added or mis-deleted row
-    /// reddens the count directly.
+    /// The tables are named consts with per-table `assert_eq!(len)` (55 / 3 / 2, plus
+    /// the four #2218/#2219 anon faces asserted by exact status/body and the #2223 CP3
+    /// signup/login/logout trio asserted by presence-plus-handler-reach) so a mis-added or
+    /// mis-deleted row reddens the count directly.
     ///
     /// This is a PRESENCE ledger, not a closed universe: black-box probing cannot
     /// prove "no further route was silently added" (axum exposes no route
@@ -2931,7 +2937,7 @@ mod tests {
         // The forty-one human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
-        const HUMAN_PERIMETER_DOORS: [(&str, &str); 45] = [
+        const HUMAN_PERIMETER_DOORS: [(&str, &str); 55] = [
             ("POST", "/api/hosts"),
             // #2219 CP4 host-custody batch B — the three perimeter-guarded custody doors.
             // `GET /api/hosts` shares the path node with the invite POST above, so its anon
@@ -3017,8 +3023,30 @@ mod tests {
             ("DELETE", "/api/hosts/host-1"),
             ("POST", "/api/hosts/host-1/revoke"),
             ("POST", "/api/hosts/host-1/connect-token/rotate"),
+            // #2223 CP3: the #2193 CP1 workspace-metadata / detail lane, behind the human
+            // perimeter. `GET`/`PATCH /api/workspaces/{id}` share one node (detail read +
+            // metadata write, disjoint methods), `{id}/archive` is a distinct sub-path, and
+            // the static `name-availability` GET coexists with the `{id}` param node
+            // (matchit static-over-param). Anon on each → the perimeter's bodiless 401; the
+            // authenticated behaviour of these routes is borne by their own leaf suites.
+            ("GET", "/api/workspaces/workspace0000001"),
+            ("PATCH", "/api/workspaces/workspace0000001"),
+            ("PATCH", "/api/workspaces/workspace0000001/archive"),
+            ("GET", "/api/workspaces/name-availability"),
+            // #2223 CP3: the #2193 CP2 human-identity `me` pair. `human_auth` self-wraps
+            // `require_human_session` around ONLY this pair; the signup/login/logout trio is
+            // anonymous and asserted with the other anon faces below, so anon here → 401.
+            ("GET", "/api/me"),
+            ("PATCH", "/api/me"),
+            // #2223 CP4: the #2222 human-directory + avatar family. All four self-wrap the
+            // same perimeter. `/api/me/avatar` is a child of `/api/me`, and
+            // `/api/users/{id}/avatar` shares no node with the `/api/users` directory read.
+            ("GET", "/api/users"),
+            ("POST", "/api/me/avatar"),
+            ("DELETE", "/api/me/avatar"),
+            ("GET", "/api/users/user-1/avatar"),
         ];
-        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 45);
+        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 55);
         for (method, path) in HUMAN_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -3084,6 +3112,44 @@ mod tests {
         assert_eq!(
             body, r#"{"error":"unauthorized","error_code":"unauthorized"}"#,
             "anonymous resolve reaches its own handler, not the perimeter"
+        );
+
+        // #2223 CP3: the #2193 CP2 signup/login/logout trio is mounted ahead of the human
+        // perimeter (login must be reachable before any session exists). They share ONE
+        // public-router construction, so witnessing signup + login reach their own handlers
+        // proves the whole trio sits ahead of the perimeter — had the trio been wrapped,
+        // anonymous signup/login would carry the perimeter's bodiless 401 and redden below.
+        //
+        // signup + login: an anonymous POST reaches the handler's own admission (a 4xx on
+        // the empty probe body), never the 404 an absent path gives and never the
+        // perimeter's `{"error":"unauthorized"}`. The exact status is that handler's
+        // business; the invariant is presence + reached-anonymously.
+        for (method, path) in [("POST", "/auth/signup"), ("POST", "/auth/login")] {
+            let (status, body) = request(&router, method, path, None).await;
+            assert_ne!(
+                status,
+                StatusCode::NOT_FOUND,
+                "anonymous {method} {path} must be mounted: {body}"
+            );
+            assert_ne!(
+                body, unauthorized,
+                "anonymous {method} {path} must reach its own handler, not the perimeter"
+            );
+        }
+
+        // logout is the third trio member, but UNLIKE signup/login its own no-bearer answer
+        // is `401 {"error":"unauthorized"}` — byte-identical to the perimeter's — because it
+        // reads the raw bearer itself (living outside the perimeter so it can revoke
+        // unknown/expired bearers) and refuses a missing one with the same shape. Body
+        // therefore cannot witness anonymity here; presence is the `401 != 404` (an absent
+        // path would fall to the 404 fallback proven below), and its ahead-of-perimeter
+        // placement rides the shared public-router construction the signup/login asserts
+        // above already pin.
+        let (status, _) = request(&router, "POST", "/auth/logout", None).await;
+        assert_ne!(
+            status,
+            StatusCode::NOT_FOUND,
+            "anonymous POST /auth/logout must be mounted"
         );
 
         // Mounted-vs-absent discriminator: sibling paths that are NOT routes fall to
@@ -3726,7 +3792,11 @@ mod tests {
         // Authenticated GET → the DETAIL handler: the host wire for the owned computer.
         // The DETAIL shape carries `host` and no `deleted`.
         let (status, body) = request(&router, "GET", "/api/hosts/h-own", Some(&bearer)).await;
-        assert_eq!(status, StatusCode::OK, "authed GET /api/hosts/h-own: {body}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "authed GET /api/hosts/h-own: {body}"
+        );
         let detail: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(
             detail["host"]["id"], "h-own",

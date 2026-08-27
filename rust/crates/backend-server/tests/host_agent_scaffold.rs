@@ -108,11 +108,16 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "user_identity"),
     // #task:2222 — the human-directory and avatar route family (Rust Wave 2). The
     // avatar sub-capability of the `users` authority (ports + orchestration; it
-    // reuses the CP2 identity above and ships no production blob/announce adapter).
-    // Its server route surface is the sibling `users` entry below. Not yet mounted
-    // (the app composition root is out of this task's scope).
+    // reuses the CP2 identity above). Its server route surface is the sibling `users`
+    // entry below and its production blob adapter the sibling `avatar_blob` entry —
+    // both wired by the #task:2223 integration over #task:2221's local blob store.
     ("backend-core", "avatar"),
     ("backend-filesystem", "runtime_detection"),
+    // #task:2223 — the production avatar blob adapter (`SingleKindAvatarBlobs`),
+    // bridging the #task:2222 `avatar` capability to #task:2221's local blob store
+    // under one ambient storage kind. An adapter like `clock` / `password_hasher`
+    // below, so it belongs in this seam ledger but NOT `ACTIVATION_NAMESPACES`.
+    ("backend-server", "avatar_blob"),
     ("backend-server", "clock"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
@@ -178,7 +183,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
 /// with no seam entry among them. #task:2209 then removed the foundation proof
 /// vertical (`backend-core::foundation_message`, `backend-server::{http,wire}`),
 /// leaving 1 in backend-app, 14 in backend-core, 13 in backend-server, 11 in
-/// backend-sqlite.
+/// backend-sqlite. #task:2223 then added `backend-app::request_perimeter` (the
+/// composition-root request-body perimeter, a non-seam production module the
+/// host-agent seam lane did not add), bringing backend-app to 2.
 ///
 /// CP1-temporary, with G3's accounting: it guards "every lane module is registered
 /// where it is guarded", it is deleted when the seam is extracted into the
@@ -187,6 +194,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
 /// other, and having to choose is the point.
 const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-app", "current_schema"),
+    // #task:2223 composition-root request-body perimeter: a non-seam production module
+    // the host-agent seam lane did not add. It owes no labeled seam line and is not
+    // fenced against composition (it is deliberately MOUNTED as the outermost layer),
+    // so it belongs in the non-seam baseline this list closes the tree over, not in
+    // `SEAM_ROOT_MODULES`.
+    ("backend-app", "request_perimeter"),
     ("backend-core", "access"),
     ("backend-core", "auth"),
     ("backend-core", "blob_store"),

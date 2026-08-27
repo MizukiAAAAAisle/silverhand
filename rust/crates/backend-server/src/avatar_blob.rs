@@ -126,6 +126,11 @@ mod tests {
 
     use super::*;
 
+    /// The in-memory double's store: each entry is a minted physical key paired with
+    /// the bytes put under it, shared behind one `Arc<Mutex<_>>` so clones observe the
+    /// same state.
+    type MemoryEntries = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
     /// An in-memory [`BlobStore`] double: it mints a fresh sequential key under the
     /// requested namespace on every `put`, stores the bytes, and reports its ambient
     /// kind on the returned blob. It fails on nothing, so the adapter's own mapping —
@@ -133,7 +138,7 @@ mod tests {
     #[derive(Clone)]
     struct MemoryBlobs {
         kind: StorageKind,
-        entries: Arc<Mutex<Vec<(String, Vec<u8>)>>>,
+        entries: MemoryEntries,
         next: Arc<AtomicUsize>,
     }
 
