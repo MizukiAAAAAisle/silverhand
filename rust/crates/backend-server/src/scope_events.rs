@@ -503,12 +503,15 @@ impl ScopeEventHub {
     ///
     /// A committed follow/unfollow changes which replies a viewer is owed, so the
     /// conversation's unread must be republished — the SAME fact a new message publishes.
-    /// This factory therefore composes the one [`HubUnreadPublisher`] rather than opening a
-    /// second unread path: it supplies the hub from `&self` and keeps
-    /// [`HubUnreadPublisher::new`] crate-private, so the follow lane's unread axis is on the
-    /// hub it publishes on, decides no audience of its own, and re-counts nothing. It does
-    /// NOT touch [`messaging_aftermath`](ScopeEventHub::messaging_aftermath)'s signature —
-    /// the two events thread through separate factories by design.
+    /// This factory builds a [`HubUnreadPublisher`] bound to the SAME two authorities the
+    /// message door's publisher binds: this hub (supplied from `&self`) and the caller's
+    /// shared-pool read model. It is a second publisher *instance*, not a second unread
+    /// *path* — the audience and per-viewer count come from the one read-model authority,
+    /// so the follow lane decides no audience of its own and re-counts nothing.
+    /// [`HubUnreadPublisher::new`] stays crate-private, so the lane cannot point its unread
+    /// axis at a hub other than the one it publishes on. It does NOT touch
+    /// [`messaging_aftermath`](ScopeEventHub::messaging_aftermath)'s signature — the two
+    /// events thread through separate factories by design.
     pub fn thread_follow_aftermath<R>(&self, unread_read_model: R) -> HubThreadFollowUnread<R> {
         HubThreadFollowUnread::new(HubUnreadPublisher::new(self.clone(), unread_read_model))
     }
@@ -1018,10 +1021,11 @@ impl<R: UnreadReadModel + Send + Sync> UnreadPublication for HubUnreadPublisher<
     }
 }
 
-/// The thread-follow lane's [`ThreadFollowAftermath`], built ONLY over the one unread
-/// publisher. It holds a [`HubUnreadPublisher`] and forwards the committed change to its
-/// `publish_unread` — the same read-model audience oracle and per-viewer count the
-/// committed-message door uses. It owns no hub of its own, no second audience path, and
+/// The thread-follow lane's [`ThreadFollowAftermath`], forwarding through a
+/// [`HubUnreadPublisher`]. It holds one such publisher and forwards the committed change
+/// to its `publish_unread` — the same read-model audience oracle and per-viewer count the
+/// committed-message door uses (the SAME hub and read-model authorities, not necessarily
+/// the same publisher instance). It owns no hub of its own, no second audience path, and
 /// no count: a follow toggle republishes the conversation's unread and nothing more.
 /// Constructed only by [`ScopeEventHub::thread_follow_aftermath`]; the wrapped
 /// publisher's constructor stays crate-private, so this cannot point its unread axis at a
@@ -5670,6 +5674,7 @@ mod tests {
         "unread_updated",
         "attention_badge_updated",
         "viewer_workspaces_changed",
+        "saved_changed",
     ];
 
     /// The wire `kind` a product event MUST serialize as. Exhaustive by construction: a new
@@ -5744,6 +5749,16 @@ mod tests {
                 workspace_id: "w-1".to_owned(),
                 role: WorkspaceRole::Member.as_str(),
             },
+            // A representative saved-set toggle. Its inner `Value` is illustrative, exactly
+            // as the other opaque-payload samples above are (`Message`, `AgentActivity`, …):
+            // this gate pins the variant→`kind` mapping, the serde tag, and set membership,
+            // NOT payload fidelity. `SavedChanged`'s payload is projected in production only
+            // by `saved::changed_event`, and its exact `{message_id, action}` shape is pinned
+            // against that sole authority over a real subscription by the backend-app test
+            // `the_composition_publishes_saved_changed_to_the_writer_on_the_real_hub`. The
+            // authority cannot be exercised here: `SavedChangeFact` is deliberately
+            // un-constructable outside `backend-core` (private `committed`/`fact`).
+            ProductEvent::SavedChanged(json!({ "message_id": "m-1", "action": "save" })),
         ];
         let mut produced = std::collections::BTreeSet::new();
         for event in &samples {

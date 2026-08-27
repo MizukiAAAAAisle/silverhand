@@ -439,11 +439,13 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // mutation port; `thread_follow` is the follow/unfollow write door.
     let saved_store = messaging_store.saved();
     let thread_follow_store = messaging_store.thread_follow();
-    // The thread-follow post-commit unread axis reuses the ONE unread publisher over the
-    // ONE read model: the model is cloned (a shared-pool handle, no second audience
-    // authority) before the messaging aftermath moves the original just below. This
-    // factory does not touch `messaging_aftermath`'s signature — the two events thread
-    // through separate hub factories by design (#2205 seam left untouched).
+    // The thread-follow post-commit unread axis binds the SAME two authorities the
+    // messaging aftermath's unread publisher binds — this `hub` and this `unread_read_model`
+    // (cloned as a shared-pool handle, no second audience authority) — before the messaging
+    // aftermath moves the original just below. It is a separate publisher instance over the
+    // same authorities, not a second unread path. This factory does not touch
+    // `messaging_aftermath`'s signature — the two events thread through separate hub
+    // factories by design (#2205 seam left untouched).
     let thread_follow_aftermath = hub.thread_follow_aftermath(unread_read_model.clone());
     // The one post-commit fan-out, built by the hub over itself: the publication authority
     // and the hub the unread axis routes through are both `hub`, and this statement has no
