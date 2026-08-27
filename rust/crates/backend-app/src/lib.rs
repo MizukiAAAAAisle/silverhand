@@ -17,6 +17,7 @@ use silverhand_backend_core::{
     host_runtime::{CreateHostInvite, OsEntropy, SystemClock},
     policy::presence_grace::GraceWindow,
 };
+use silverhand_backend_filesystem::runtime_detection::MachineRuntimeDetector;
 use silverhand_backend_server::{
     access,
     auth::{PublicJsonUnauthorized, require_human_session},
@@ -39,6 +40,14 @@ use silverhand_backend_server::{
             thread_follow,
         },
         task::{TaskListState, task_list_router},
+    },
+    ops::{
+        bind_address::classify_bind_address_scope,
+        deployment::DeploymentProfile,
+        health,
+        readiness::{self, BootProgress},
+        runtimes,
+        server_info::{self, ServerAdvertisement},
     },
     runtime_credential::{RuntimeCredentialAuthority, require_runtime_credential},
     scope_events::{
@@ -74,6 +83,14 @@ const DATABASE_PATH_ENV: &str = "SILVERHAND_DATABASE_PATH";
 const LISTEN_ADDR_ENV: &str = "SILVERHAND_LISTEN_ADDR";
 const ALLOWED_ORIGINS_ENV: &str = "SILVERHAND_ALLOWED_ORIGINS";
 const DAEMON_NPM_SPEC_ENV: &str = "SILVERHAND_DAEMON_NPM_SPEC";
+/// The launcher's packaging choice. Required with NO default: a backend that is not
+/// told which profile it is must fail to start rather than guess (see
+/// [`DeploymentProfile`]). Binding the Desktop and standalone-server entrypoints to
+/// their profiles is a named packaging residual — there is no Rust launcher yet.
+const DEPLOYMENT_PROFILE_ENV: &str = "SILVERHAND_DEPLOYMENT_PROFILE";
+/// Optional. When set to a truthy value, public signup is closed; otherwise it is
+/// open, matching the product default.
+const DISABLE_SIGNUP_ENV: &str = "SILVERHAND_DISABLE_SIGNUP";
 const BASELINE_MIGRATION_STEP: i64 = const_parse_i64(env!("SILVERHAND_BASELINE_MIGRATION_STEP"));
 const CURRENT_MIGRATION_STEP: i64 = const_parse_i64(env!("SILVERHAND_CURRENT_MIGRATION_STEP"));
 const MIGRATION_STEPS: &str = env!("SILVERHAND_MIGRATION_STEPS");
@@ -96,6 +113,12 @@ pub struct AppConfig {
     listen_addr: SocketAddr,
     allowed_origins: Vec<AllowedOrigin>,
     daemon_npm_spec: Option<String>,
+    /// The launcher-chosen packaging profile. Both mode axes and the runtime-detection
+    /// capability project from this ONE value — never picked per factory, never
+    /// inferred from the listen address or the daemon spec.
+    deployment_profile: DeploymentProfile,
+    /// Whether public signup is open. Advertised by `/api/server/info`.
+    signup_enabled: bool,
 }
 
 impl AppConfig {
@@ -104,6 +127,8 @@ impl AppConfig {
         listen_addr: SocketAddr,
         allowed_origins: Vec<AllowedOrigin>,
         daemon_npm_spec: Option<String>,
+        deployment_profile: DeploymentProfile,
+        signup_enabled: bool,
     ) -> Result<Self, ConfigError> {
         if database_path.as_os_str().is_empty() {
             return Err(ConfigError::EmptyDatabasePath);
@@ -119,6 +144,8 @@ impl AppConfig {
             listen_addr,
             allowed_origins,
             daemon_npm_spec,
+            deployment_profile,
+            signup_enabled,
         })
     }
 
@@ -134,7 +161,22 @@ impl AppConfig {
             .map(|value| AllowedOrigin::parse(value.to_owned()).map_err(ConfigError::InvalidOrigin))
             .collect::<Result<Vec<_>, _>>()?;
         let daemon_npm_spec = env::var(DAEMON_NPM_SPEC_ENV).ok();
-        Self::new(database_path, listen_addr, allowed_origins, daemon_npm_spec)
+        // Required, no default: an unset profile is a launcher that has not said what
+        // this process is, and the only safe answer is to refuse to start.
+        let deployment_profile = match required_env(DEPLOYMENT_PROFILE_ENV)?.as_str() {
+            "embedded" => DeploymentProfile::Embedded,
+            "remote-only" => DeploymentProfile::RemoteOnly,
+            other => return Err(ConfigError::InvalidDeploymentProfile(other.to_owned())),
+        };
+        let signup_enabled = !truthy_env(DISABLE_SIGNUP_ENV);
+        Self::new(
+            database_path,
+            listen_addr,
+            allowed_origins,
+            daemon_npm_spec,
+            deployment_profile,
+            signup_enabled,
+        )
     }
 
     pub fn listen_addr(&self) -> SocketAddr {
@@ -149,6 +191,18 @@ fn required_env(name: &'static str) -> Result<String, ConfigError> {
         .ok_or(ConfigError::MissingEnvironment(name))
 }
 
+/// A boolean env flag: set to `1` or `true` (case-insensitive) means on; anything
+/// else, including unset, means off.
+fn truthy_env(name: &'static str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            value == "1" || value == "true"
+        })
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("required environment variable {0} is missing or empty")]
@@ -161,6 +215,8 @@ pub enum ConfigError {
     InvalidListenAddress(#[source] std::net::AddrParseError),
     #[error("event websocket origin is invalid")]
     InvalidOrigin(#[source] silverhand_backend_server::scope_events::InvalidAllowedOrigin),
+    #[error("deployment profile {0:?} is not one of: embedded, remote-only")]
+    InvalidDeploymentProfile(String),
 }
 
 #[derive(Debug, Error)]
@@ -212,6 +268,10 @@ impl EnrollmentClock for SystemEnrollmentClock {
 
 pub struct PreparedApp {
     pub router: Router,
+    /// The live boot facts the `/readyz` router reads. Carried out of `prepare()` so
+    /// the serving boundary — never `prepare()`, never a handler — can mark
+    /// `listen_ready` once the listener is actually bound.
+    boot: BootProgress,
     event_controller: EventWebSocketController,
     daemon_controller: DaemonDeliveryController,
     presence_timers: PresenceGraceTimers<SqliteLastSeenSink, HubPresenceSink>,
@@ -225,6 +285,14 @@ impl PreparedApp {
             &self.presence_timers,
         )
         .await;
+    }
+
+    /// Mark the serving boundary: the listener is bound and this process is now serving.
+    /// The `/readyz` router shares this exact holder, so the flip is visible to the next
+    /// probe. Called by [`run`] after `TcpListener::bind` succeeds — a prepared but
+    /// not-yet-served app deliberately still reports `listen_ready: false`.
+    pub fn mark_listen_ready(&self) {
+        self.boot.mark_listen_ready();
     }
 }
 
@@ -261,6 +329,18 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     verify_schema(&config.database_path)
         .await
         .map_err(StartupError::Schema)?;
+
+    // The migration ledger has just been verified as the exact prefix this binary owns,
+    // which is the fact `/readyz` reports. `listen_ready` is NOT marked here — it is a
+    // serving-boundary fact, established in `run()` after the listener binds. The
+    // outbound-fanout fact has no mark call anywhere yet: that transport is unmigrated,
+    // so a standalone deployment stays honestly `503` rather than claiming a projection
+    // it does not run.
+    let boot = BootProgress::new();
+    boot.mark_migrations_applied();
+
+    let server_mode = config.deployment_profile.server_mode();
+    let deployment_mode = config.deployment_profile.deployment_mode();
 
     let host_store = open(
         "host runtime",
@@ -438,6 +518,11 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // mutation port; `thread_follow` is the follow/unfollow write door.
     let saved_store = messaging_store.saved();
     let thread_follow_store = messaging_store.thread_follow();
+    // `/readyz`'s live write probe rides the SAME `MessagingStore` pool handle the send
+    // door holds — it does NOT reopen SQLite by path. Captured before `write_doors`
+    // moves the store below. The probe is the one thing readiness cannot answer from
+    // cached boot state: a fully booted process can still have lost its database.
+    let readiness_write_probe = messaging_store.write_probe();
     // The thread-follow post-commit unread axis binds the SAME two authorities the
     // messaging aftermath's unread publisher binds — this `hub` and this `unread_read_model`
     // (cloned as a shared-pool handle, no second audience authority) — before the messaging
@@ -469,6 +554,19 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         CreateHostInvite::new(host_store, OsEntropy, SystemClock),
         config.daemon_npm_spec.clone(),
     );
+    // `/api/runtimes` is the one root face that is NOT anonymous (it sits under the
+    // product's `/api/*` bearer gate with no allowlist entry), so it mounts behind this
+    // same human-session perimeter. The profile — not a per-request flag — decides which
+    // router: an embedded backend constructs the process's ONE runtime detector and can
+    // answer; a control-plane backend is handed [`runtimes::control_plane_router`], which
+    // has no detector field to hold and so can only refuse `503`. The detector is
+    // constructed ONLY in the embedded arm, so a standalone process never obtains one.
+    let runtimes_router = match config.deployment_profile {
+        DeploymentProfile::Embedded => {
+            runtimes::detecting_router(MachineRuntimeDetector::for_this_process())
+        }
+        DeploymentProfile::RemoteOnly => runtimes::control_plane_router(),
+    };
     let human_products = require_human_session(
         host.merge(human_writes)
             // Wave 3A checkpoint A6 (#2203): `POST /api/agents/{id}/direct-messages`, the
@@ -539,7 +637,10 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
                 access_store,
                 hub.clone(),
                 SystemEnrollmentClock,
-            )),
+            ))
+            // #2218: `/api/runtimes`, behind the human perimeter — anonymous → 401,
+            // exactly as the product's un-allowlisted `/api/*` bearer gate refuses it.
+            .merge(runtimes_router),
         sessions.clone(),
         PublicJsonUnauthorized,
     );
@@ -575,12 +676,35 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         event_config,
     );
 
+    // The three ANONYMOUS root faces — mounted at the top level, ahead of no perimeter,
+    // because a supervisor probes liveness/readiness and a client reads discovery before
+    // it holds any session (the product allowlists `server/info` + `health` past the
+    // bearer gate and registers `/readyz` outside `/api/*`). All three project from the
+    // ONE deployment profile and the ONE process clock; `/readyz` additionally reads the
+    // live `boot` holder and the shared-pool write probe.
+    let server_info_router = server_info::router(ServerAdvertisement {
+        signup_enabled: config.signup_enabled,
+        bind_address_scope: classify_bind_address_scope(&config.listen_addr.ip().to_string()),
+    });
+    let health_router = health::router(server_mode, SystemProcessClock);
+    let readyz_router = readiness::router(
+        server_mode,
+        deployment_mode,
+        boot.clone(),
+        readiness_write_probe,
+        SystemProcessClock,
+    );
+
     Ok(PreparedApp {
         router: Router::new()
             .merge(human_products)
             .merge(agent_products)
             .merge(event_router)
-            .merge(daemon_router),
+            .merge(daemon_router)
+            .merge(server_info_router)
+            .merge(health_router)
+            .merge(readyz_router),
+        boot,
         event_controller,
         daemon_controller,
         presence_timers,
@@ -644,6 +768,11 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     let listener = TcpListener::bind(config.listen_addr)
         .await
         .map_err(StartupError::Bind)?;
+    // The serving boundary: the listener is bound, so this process is now serving and
+    // `/readyz` may report `listen_ready`. Marked here — after a successful bind, before
+    // `serve` — never in `prepare()` (which can succeed and then have the bind fail) and
+    // never inferred from a handler receiving a request.
+    app.mark_listen_ready();
     serve(listener, app, shutdown_signal()).await
 }
 
@@ -658,6 +787,7 @@ where
 {
     let PreparedApp {
         router,
+        boot: _,
         event_controller,
         daemon_controller,
         presence_timers,
@@ -795,6 +925,12 @@ mod tests {
             "127.0.0.1:0".parse().unwrap(),
             vec![AllowedOrigin::parse("http://localhost:5173".to_owned()).unwrap()],
             Some("@silverhand-ai/daemon@test".to_owned()),
+            // The composition gates seed a human perimeter and probe the embedded shape:
+            // Embedded projects `ServerMode::Embedded` + `DeploymentMode::Embedded`, so
+            // `/api/runtimes` is the detecting router (still anon → 401 behind the
+            // perimeter) and `/readyz` omits the fanout key.
+            DeploymentProfile::Embedded,
+            true,
         )
         .unwrap()
     }
@@ -1051,6 +1187,8 @@ mod tests {
                 "127.0.0.1:0".parse().unwrap(),
                 vec![AllowedOrigin::parse("http://localhost:5173".to_owned()).unwrap()],
                 None,
+                DeploymentProfile::Embedded,
+                true,
             ),
             Err(ConfigError::EmptyDatabasePath)
         ));
@@ -1060,6 +1198,8 @@ mod tests {
                 "127.0.0.1:0".parse().unwrap(),
                 Vec::new(),
                 None,
+                DeploymentProfile::Embedded,
+                true,
             ),
             Err(ConfigError::EmptyAllowedOrigins)
         ));
@@ -2162,17 +2302,20 @@ mod tests {
 
     /// Gate 1 of the CP2 convergence closure — the composed root's COMPLETE positive
     /// mounted table. It enumerates every `(method, path)` `prepare()` mounts across
-    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195 + #2198) as forty-two
-    /// entries — thirty-seven behind the human session perimeter, three behind the runtime
-    /// credential perimeter, the two authenticated WebSockets — and asserts each is PRESENT
-    /// (anon → its perimeter's `401`, or the WS upgrade surface, never the `404`
-    /// fallback). Removing any mounted route's `.merge(...)` from `prepare()` flips its
-    /// entry to `404` and reddens this gate. The three tables are named consts with a
-    /// per-table `assert_eq!(len)` (37 / 3 / 2) so a mis-added or mis-deleted row reddens
-    /// the count directly; 42 is their sum, not any one length (the WS table is path-only).
+    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195 + #2198 + #2218) as
+    /// forty-six entries — thirty-eight behind the human session perimeter (the last
+    /// being #2218's authenticated `/api/runtimes`), three behind the runtime
+    /// credential perimeter, the two authenticated WebSockets, and #2218's three
+    /// ANONYMOUS root faces — and asserts each is PRESENT: a guarded route anon → its
+    /// perimeter's `401`, a WebSocket → its upgrade surface, an anonymous face → its
+    /// handler's own status, and never the `404` fallback. Removing any mounted route's
+    /// `.merge(...)` from `prepare()` flips its entry to `404` and reddens this gate.
+    /// The tables are named consts with per-table `assert_eq!(len)` (38 / 3 / 2, plus
+    /// the three anon faces asserted by exact status) so a mis-added or mis-deleted row
+    /// reddens the count directly.
     ///
     /// This is a PRESENCE ledger, not a closed universe: black-box probing cannot
-    /// prove "no forty-third route was silently added" (axum exposes no route
+    /// prove "no further route was silently added" (axum exposes no route
     /// introspection), so this gate makes no such claim; the length asserts guard the
     /// table rows against mis-add/mis-delete, they make no closed-universe claim (that is
     /// gate 2's property). A new registrar mounted into
@@ -2195,7 +2338,7 @@ mod tests {
         // The thirty-seven human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
-        const HUMAN_PERIMETER_DOORS: [(&str, &str); 37] = [
+        const HUMAN_PERIMETER_DOORS: [(&str, &str); 38] = [
             ("POST", "/api/hosts"),
             ("POST", "/api/channels/conv000000000001/messages"),
             ("GET", "/api/direct-pairs"),
@@ -2259,8 +2402,11 @@ mod tests {
             ("GET", "/api/saved"),
             ("POST", "/api/messages/msg000000000000001/save"),
             ("DELETE", "/api/messages/msg000000000000001/save"),
+            // #2218: `/api/runtimes`, the one root ops face that is authenticated (under
+            // the product's `/api/*` bearer gate with no allowlist entry). Anon → 401.
+            ("GET", "/api/runtimes"),
         ];
-        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 37);
+        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 38);
         for (method, path) in HUMAN_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -2289,6 +2435,21 @@ mod tests {
         for path in AUTHENTICATED_WEBSOCKETS {
             let (status, _) = request(&router, "GET", path, None).await;
             assert_ne!(status, StatusCode::NOT_FOUND, "{path} must be mounted");
+        }
+
+        // #2218: the three ANONYMOUS root faces are mounted ahead of every perimeter, so
+        // an anonymous probe reaches the handler — never the 401 the guarded doors give,
+        // never the 404 an absent path gives. The exact status pins the mount: discovery
+        // and liveness always answer 200; `/readyz` on this prepared-but-not-served
+        // router answers 503 because `listen_ready` is a serving-boundary fact that
+        // `prepare()` does not mark (migrations are marked, the listener is not bound).
+        for (method, path, expected) in [
+            ("GET", "/api/server/info", StatusCode::OK),
+            ("GET", "/api/health", StatusCode::OK),
+            ("GET", "/readyz", StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let (status, body) = request(&router, method, path, None).await;
+            assert_eq!(status, expected, "anonymous {method} {path}: {body}");
         }
 
         // Mounted-vs-absent discriminator: sibling paths that are NOT routes fall to
@@ -2560,19 +2721,27 @@ mod tests {
     }
 
     /// Gate 2 of the CP2 convergence closure — the #2195 host-agent control-plane lane
-    /// as a bidirectionally CLOSED universe of 54 = 6 landed + 48 residual, every entry
-    /// itemized `(method, path)` in a named table that is mechanically checksummed: the
-    /// three tables' lengths are pinned (`6`/`43`/`5`), every `(method, path)` across the
-    /// union is unique, landed is disjoint from residual, and the union is exactly `54`.
-    /// This is the lane's ORIGINAL owned total (it still counts the three dynamic host
-    /// reads since handed to #2198). Deleting a row, or copying one between tables, breaks
-    /// the checksum — `6 + 48 == 54` is an assertion, not prose.
+    /// as a bidirectionally CLOSED universe of 54, every entry itemized `(method, path)`
+    /// in a named table that is mechanically checksummed: the five tables' lengths are
+    /// pinned (`7`/`3`/`39`/`4`/`1`), every `(method, path)` across the union is unique,
+    /// landed is disjoint from residual, and the union is exactly `54`. This is the
+    /// lane's ORIGINAL owned total (it still counts the three dynamic host reads since
+    /// handed to #2198). Deleting a row, or copying one between tables, breaks the
+    /// checksum — `(7 + 3) + (39 + 4 + 1) == 54` is an assertion, not prose.
     ///
-    /// Every one of the 48 residual routes is FALSIFIABLE — none rests on an
+    /// Every one of the 44 residual routes is FALSIFIABLE — none rests on an
     /// unfalsifiable anon `401`:
-    /// * The 6 LANDED routes are mounted in `prepare()` → anon `401`. Deleting any one's
-    ///   `.merge(...)` flips it to `404` and reddens this gate (delete-landed RED).
-    /// * 43 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
+    /// * The 7 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
+    ///   perimeter → anon `401` (the last is #2218's authenticated `/api/runtimes`).
+    ///   Deleting any one's `.merge(...)` flips it to `404` and reddens this gate
+    ///   (delete-landed RED).
+    /// * The 3 ANON-LANDED routes are #2218's anonymous root faces, mounted ahead of
+    ///   every perimeter → an anonymous probe reaches the handler: `server/info` and
+    ///   `health` answer `200`, and `/readyz` answers `503` on this prepared-but-not-
+    ///   served router (`listen_ready` is a serving-boundary fact `prepare()` does not
+    ///   mark). Neither the guarded `401` nor the absent `404`. Deleting any one's
+    ///   `.merge(...)` flips it to `404` and reddens this gate.
+    /// * 39 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
     ///   Mounting any one flips it to its perimeter's `401`/`405` and reddens this gate
     ///   (mount-residual RED).
     /// * 4 METHOD-SHADOW residuals share a concrete path with a mounted sibling that
@@ -2590,10 +2759,13 @@ mod tests {
     ///
     /// RESIDUAL routes are NEVER implemented in this lane — they are disproved (404, 405,
     /// or the detail-route fallthrough), not built. A new registrar mounted into
-    /// `prepare()` at any of these paths MUST move its row from residual to landed here.
+    /// `prepare()` at any of these paths MUST move its row from residual to landed here
+    /// (#2218 moved `/api/runtimes` to perimeter-landed and the three root faces to
+    /// anon-landed).
     #[tokio::test]
     async fn the_host_agent_lane_stays_a_closed_universe_of_fifty_four() {
-        // The 6 LANDED routes, mounted in `prepare()` behind the human perimeter.
+        // The 7 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
+        // perimeter → anon 401.
         const LANDED: &[(&str, &str)] = &[
             ("GET", "/api/agents"),
             ("GET", "/api/agents/agent-1"),
@@ -2602,15 +2774,23 @@ mod tests {
             ("GET", "/api/presence"),
             // Host-resources read, Wave 3A checkpoint A5 (#2198).
             ("GET", "/api/hosts/host-1/resources"),
-        ];
-        // 43 RESIDUAL routes whose path matches no mounted route → anon 404.
-        const CLEAN_RESIDUAL: &[(&str, &str)] = &[
-            // routes.ts remaining (5)
-            ("GET", "/api/server/info"),
-            ("POST", "/auth/embedded-bootstrap"),
-            ("GET", "/api/health"),
-            ("GET", "/readyz"),
+            // Root runtime catalogue, #2218: under `/api/*` with no allowlist entry, so
+            // the product refuses anon 401 before the handler; mounted behind the human
+            // perimeter to match.
             ("GET", "/api/runtimes"),
+        ];
+        // The 3 ANON-LANDED routes, #2218: mounted ahead of every perimeter, so an
+        // anonymous probe reaches the handler. server/info and health answer 200; readyz
+        // answers 503 on this prepared-but-not-served router (listen_ready unmarked).
+        const ANON_LANDED: &[(&str, &str, StatusCode)] = &[
+            ("GET", "/api/server/info", StatusCode::OK),
+            ("GET", "/api/health", StatusCode::OK),
+            ("GET", "/readyz", StatusCode::SERVICE_UNAVAILABLE),
+        ];
+        // 39 RESIDUAL routes whose path matches no mounted route → anon 404.
+        const CLEAN_RESIDUAL: &[(&str, &str)] = &[
+            // routes.ts remaining (1)
+            ("POST", "/auth/embedded-bootstrap"),
             // hosts remaining (13 of 15; `GET /api/hosts` is method-shadowed, below)
             ("GET", "/api/hosts/connect-token/resolve"),
             ("GET", "/api/hosts/host-1"),
@@ -2669,20 +2849,26 @@ mod tests {
         // answer (asserted below), not a static handler.
         const STATIC_SHADOW_RESIDUAL: &[(&str, &str)] = &[("GET", "/api/agents/name-availability")];
 
-        // ── Mechanical checksum: 6 + 43 + 4 + 1 == 54, all unique, landed ∩ residual = ∅ ──
-        assert_eq!(LANDED.len(), 6);
-        assert_eq!(CLEAN_RESIDUAL.len(), 43);
+        // ── Mechanical checksum: (7 + 3) + (39 + 4 + 1) == 54, all unique, landed ∩
+        // residual = ∅ ──
+        assert_eq!(LANDED.len(), 7);
+        assert_eq!(ANON_LANDED.len(), 3);
+        assert_eq!(CLEAN_RESIDUAL.len(), 39);
         assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 4);
         assert_eq!(STATIC_SHADOW_RESIDUAL.len(), 1);
-        let landed: std::collections::HashSet<(&str, &str)> = LANDED.iter().copied().collect();
+        let landed: std::collections::HashSet<(&str, &str)> = LANDED
+            .iter()
+            .copied()
+            .chain(ANON_LANDED.iter().map(|(m, p, _)| (*m, *p)))
+            .collect();
         let residual: std::collections::HashSet<(&str, &str)> = CLEAN_RESIDUAL
             .iter()
             .chain(METHOD_SHADOW_RESIDUAL)
             .chain(STATIC_SHADOW_RESIDUAL)
             .copied()
             .collect();
-        assert_eq!(landed.len(), 6, "landed rows are unique");
-        assert_eq!(residual.len(), 48, "residual rows are unique");
+        assert_eq!(landed.len(), 10, "landed rows are unique");
+        assert_eq!(residual.len(), 44, "residual rows are unique");
         assert!(
             landed.is_disjoint(&residual),
             "landed and residual are disjoint"
@@ -2700,7 +2886,7 @@ mod tests {
         let bearer = format!("Bearer {TOKEN}");
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // ── 6 LANDED → anon 401 (delete-landed RED) ──
+        // ── 7 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
         for (method, path) in LANDED {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(
@@ -2711,7 +2897,14 @@ mod tests {
             assert_eq!(body, unauthorized, "landed {method} {path}");
         }
 
-        // ── 43 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
+        // ── 3 ANON-LANDED → anon reaches the handler (delete-landed RED). Neither the
+        // guarded 401 nor the absent 404: server/info 200, health 200, readyz 503. ──
+        for (method, path, expected) in ANON_LANDED {
+            let (status, body) = request(&router, method, path, None).await;
+            assert_eq!(status, *expected, "anon-landed {method} {path}: {body}");
+        }
+
+        // ── 39 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
         for (method, path) in CLEAN_RESIDUAL {
             let (status, _) = request(&router, method, path, None).await;
             assert_eq!(
@@ -2748,6 +2941,46 @@ mod tests {
             body, r#"{"error":"agent not found"}"#,
             "static-shadow falls through to GET /api/agents/{{id}}, not a static route"
         );
+    }
+
+    /// P0-1: `listen_ready` is a SERVING-boundary fact, not a `prepare()` one. The
+    /// prepared router — migrations applied, db writable, but not yet bound — answers
+    /// `/readyz` 503 with `listen_ready:false`; the fact flips ONLY when `run()` marks it
+    /// after `TcpListener::bind` succeeds. This test drives that boundary directly:
+    /// `PreparedApp::mark_listen_ready` (the same call `run()` makes) flips the SAME
+    /// shared `BootProgress` the router holds, so a second probe of the SAME router turns
+    /// 200. If `prepare()` ever marked listen-ready itself, the first probe would already
+    /// be 200 and this reddens.
+    #[tokio::test]
+    async fn readyz_reports_listen_ready_only_after_the_serving_boundary() {
+        let fixture = fixture(true).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router.clone();
+
+        // Prepared but not served: migrations + db green, listen_ready false → 503.
+        let (status, body) = request(&router, "GET", "/readyz", None).await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "before bind: {body}"
+        );
+        let before: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(before["ok"], serde_json::json!(false));
+        assert_eq!(
+            before["checks"]["migrations_applied"],
+            serde_json::json!(true)
+        );
+        assert_eq!(before["checks"]["listen_ready"], serde_json::json!(false));
+
+        // The serving boundary: the same mark `run()` makes after bind succeeds.
+        app.mark_listen_ready();
+
+        // Same router, same shared BootProgress → now all green → 200.
+        let (status, body) = request(&router, "GET", "/readyz", None).await;
+        assert_eq!(status, StatusCode::OK, "after bind: {body}");
+        let after: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(after["ok"], serde_json::json!(true));
+        assert_eq!(after["checks"]["listen_ready"], serde_json::json!(true));
     }
     /// one host with DISTINCT `created_at`, so the list's `created_at ASC` order is
     /// defined, plus a registered STRANGER (`user-stranger`, its own seeded session over

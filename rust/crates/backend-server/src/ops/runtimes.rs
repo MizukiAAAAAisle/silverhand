@@ -1,15 +1,29 @@
 //! `GET /api/runtimes` — which agent runtimes the machine THIS process runs on has.
 //!
-//! Two answers, and the order they are decided in is the whole route:
+//! Whether there is a machine to ask about at all is a DEPLOYMENT fact, and it is
+//! decided ONCE, at composition, by which router is mounted — not per request:
 //!
-//!  1. DEPLOYMENT — is there a machine to ask about? A standalone backend is
-//!     control-plane only: it has no co-located daemon host, so the machine it runs on
-//!     is not a machine any agent runs on. It refuses with `503` BEFORE anything is
-//!     probed, so a control-plane server never shells out to look for binaries it
-//!     would have no use for.
-//!  2. DETECTION — run one pass and project it. The pass cannot fail: every way it
-//!     could go wrong already has an arm, so this route has no `500` path and a broken
-//!     probe cannot take down the surface that reports it.
+//!  - An embedded backend has a co-located daemon host, so its machine is a machine
+//!    agents run on. It mounts [`detecting_router`], which holds the process's one
+//!    runtime detector and projects a detection pass.
+//!  - A standalone backend is control-plane only: it has no co-located host, so the
+//!    machine it runs on is not one any agent runs on. It mounts
+//!    [`control_plane_router`], which has no detector to hold and can only refuse with
+//!    `503`. It cannot shell out to look for binaries it would have no use for, because
+//!    it was never handed anything to shell out WITH.
+//!
+//! This is a structural port of the product's `if (standaloneMode(ctx)) return
+//! hostRuntimeDisabledResponse(...)` guard. The control-plane refusal is the same
+//! `503`, but instead of a runtime branch inside one handler — which would require the
+//! detector to be present in BOTH deployments and rely on the branch never being
+//! mis-taken — the two deployments are two routers, and the standalone composition
+//! never constructs a detector in the first place. A control-plane server that probed
+//! its own machine is not a bug this route can commit: there is no detector on the
+//! `control_plane_router` to probe.
+//!
+//! The detection pass cannot fail: every way it could go wrong already has an arm, so
+//! this route has no `500` path and a broken probe cannot take down the surface that
+//! reports it.
 //!
 //! ## The detector is a process-lifetime singleton, not a route dependency
 //!
@@ -17,9 +31,10 @@
 //! thirty seconds. That cache is a property of the machine being asked about, not of
 //! any request or any route, so it lives in ONE component the composition root builds
 //! once ([`silverhand_backend_filesystem::runtime_detection::MachineRuntimeDetector`])
-//! and this factory merely receives. A cache built here — per factory, per request, or
-//! as a second layer in front of the port — would either duplicate the window or reset
-//! it, and either way the thirty seconds would stop meaning what it says.
+//! and [`detecting_router`] merely receives. A cache built here — per factory, per
+//! request, or as a second layer in front of the port — would either duplicate the
+//! window or reset it, and either way the thirty seconds would stop meaning what it
+//! says.
 //!
 //! ## This is the LOCAL machine, never a daemon's
 //!
@@ -36,6 +51,14 @@
 //! only `{ runtimes }`, because the field would tell a client the age of a cache entry
 //! it cannot refresh. The port is likewise `detected_at`-free: a stamp nobody may read
 //! is not a fact worth carrying to the boundary.
+//!
+//! ## Authentication
+//!
+//! Unlike the other three root faces, this one is NOT anonymous: in the product it sits
+//! behind the bearer middleware (`app.use('/api/*')`) with no allowlist entry, so an
+//! anonymous request is refused `401` before reaching the handler. The composition
+//! mounts both routers behind the human-session perimeter accordingly; this module owns
+//! only the answer a request receives once admitted.
 
 use axum::{
     Json, Router,
@@ -49,8 +72,6 @@ use silverhand_backend_core::agents::runtime_catalog::{
     DetectedRuntime, RuntimeCatalogDetector, RuntimeDetection,
 };
 
-use crate::ops::deployment::DeploymentMode;
-
 pub const RUNTIMES_PATH: &str = "/api/runtimes";
 
 /// The standalone refusal, pinned to `hostRuntimeDisabledResponse(c, 'runtime
@@ -61,36 +82,39 @@ const RUNTIME_DETECTION_DISABLED: &str = "runtime detection requires a daemon-ho
 runtime; standalone server mode is control-plane only until D2";
 const HOST_RUNTIME_DISABLED_CODE: &str = "host_runtime_disabled";
 
-#[derive(Clone)]
-struct RuntimesState<D> {
-    deployment: DeploymentMode,
-    detector: D,
-}
-
-pub fn router<D>(deployment: DeploymentMode, detector: D) -> Router
+/// The embedded face: holds the process's one runtime detector and projects a
+/// detection pass. The detector is the ENTIRE state — there is no deployment flag to
+/// read, because being handed a detector at all is what "this deployment has a machine
+/// to ask about" means.
+pub fn detecting_router<D>(detector: D) -> Router
 where
     D: RuntimeCatalogDetector + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route(RUNTIMES_PATH, get(runtimes::<D>))
-        .with_state(RuntimesState {
-            deployment,
-            detector,
-        })
+        .route(RUNTIMES_PATH, get(detecting::<D>))
+        .with_state(detector)
 }
 
-async fn runtimes<D>(State(state): State<RuntimesState<D>>) -> Response
+/// The control-plane face: no detector field, no generic slot, no state. It can only
+/// refuse, so a standalone composition that mounts this can never — by construction —
+/// probe the machine it runs on.
+pub fn control_plane_router() -> Router {
+    Router::new().route(RUNTIMES_PATH, get(control_plane_refusal))
+}
+
+async fn detecting<D>(State(detector): State<D>) -> Response
 where
     D: RuntimeCatalogDetector,
 {
-    if state.deployment.is_standalone() {
-        return disabled();
-    }
-    let catalog = state.detector.detect_runtimes().await;
+    let catalog = detector.detect_runtimes().await;
     Json(RuntimesResponse {
         runtimes: catalog.entries().iter().map(runtime_dto).collect(),
     })
     .into_response()
+}
+
+async fn control_plane_refusal() -> Response {
+    disabled()
 }
 
 /// Success body: `{ "runtimes": [RuntimeInfo] }` — the offered catalogue in the offered
@@ -215,13 +239,14 @@ mod tests {
         passes: usize,
     }
 
-    async fn get(deployment: DeploymentMode, catalog: RuntimeCatalog) -> Reply {
+    /// Probe the EMBEDDED face, which holds the detector and counts its passes.
+    async fn detect(catalog: RuntimeCatalog) -> Reply {
         let passes = Arc::new(AtomicUsize::new(0));
         let detector = FakeDetector {
             catalog,
             passes: passes.clone(),
         };
-        let response = router(deployment, detector)
+        let response = detecting_router(detector)
             .oneshot(Request::get(RUNTIMES_PATH).body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -238,7 +263,7 @@ mod tests {
     /// and no other runtime present.
     #[tokio::test]
     async fn each_offered_runtime_is_reported_with_the_evidence_its_outcome_carries() {
-        let reply = get(DeploymentMode::Embedded, every_outcome()).await;
+        let reply = detect(every_outcome()).await;
         assert_eq!(reply.status, StatusCode::OK);
         assert_eq!(
             reply.body,
@@ -286,26 +311,33 @@ mod tests {
     /// value would describe a cache the client cannot refresh.
     #[tokio::test]
     async fn the_response_carries_only_the_catalogue() {
-        let reply = get(DeploymentMode::Embedded, every_outcome()).await;
+        let reply = detect(every_outcome()).await;
         let object = reply.body.as_object().expect("a JSON object");
         assert_eq!(object.keys().collect::<Vec<_>>(), vec!["runtimes"]);
     }
 
-    /// The standalone refusal is decided FIRST: the exact bytes the product sends, and
-    /// zero detection passes — a control-plane server must not spawn processes looking
-    /// for runtimes it cannot run.
+    /// The control-plane face refuses with the product's exact bytes — and there is no
+    /// detector to probe: `control_plane_router` takes none, so "probes nothing" is a
+    /// property of its TYPE rather than a branch that must be tested for every input.
+    /// The only way to reach a detection pass is to mount the OTHER router, which a
+    /// standalone composition does not.
     #[tokio::test]
-    async fn a_standalone_server_refuses_before_it_probes_anything() {
-        let reply = get(DeploymentMode::Standalone, every_outcome()).await;
-        assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE);
+    async fn a_control_plane_server_refuses_with_the_disabled_body() {
+        let response = control_plane_router()
+            .oneshot(Request::get(RUNTIMES_PATH).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
-            reply.body,
+            body,
             json!({
                 "error": "runtime detection requires a daemon-host runtime; \
             standalone server mode is control-plane only until D2",
                 "code": "host_runtime_disabled"
             })
         );
-        assert_eq!(reply.passes, 0);
     }
 }

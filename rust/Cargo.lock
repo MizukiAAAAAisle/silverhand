@@ -1251,6 +1251,7 @@ dependencies = [
  "futures-util",
  "serde_json",
  "silverhand-backend-core",
+ "silverhand-backend-filesystem",
  "silverhand-backend-server",
  "silverhand-backend-sqlite",
  "sqlx",

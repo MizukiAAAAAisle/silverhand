@@ -1,10 +1,17 @@
-//! The root operational read cluster: four unauthenticated faces that describe the
-//! PROCESS rather than anything in it.
+//! The root operational read cluster: four faces that describe the PROCESS rather than
+//! anything in it.
 //!
 //! `GET /api/server/info` — what this build is.
 //! `GET /api/health` — that this process is alive.
 //! `GET /readyz` — whether it is ready to serve, and why not.
 //! `GET /api/runtimes` — what the machine it runs on has.
+//!
+//! Three of the four are ANONYMOUS: `server_info` and `health` sit ahead of the bearer
+//! middleware on the product's `/api/*` allowlist, and `/readyz` is registered outside
+//! `/api/*` entirely, so a supervisor can probe liveness and readiness without a
+//! session. `/api/runtimes` is the exception — it is under `/api/*` with no allowlist
+//! entry, so the product refuses an anonymous request `401` before the handler; the
+//! composition mounts it behind the human-session perimeter to match.
 //!
 //! ## Why none of this is in `backend-core`
 //!
@@ -28,10 +35,13 @@
 //!    `mark_*` calls; the composition root calls them where the facts actually happen
 //!    (migration runner, accept loop, transport wiring). Nothing here defaults them,
 //!    because a default would be an assertion nobody checked.
-//!  - The runtime detector — this module delivers a route that consumes one; the
-//!    composition root constructs it ONCE for the process, which is what makes the
-//!    thirty-second detection window a property of the machine instead of of a
-//!    request.
+//!  - The runtime detector — this module delivers TWO routers, and the composition
+//!    root picks between them by deployment profile: an embedded backend constructs the
+//!    process's one detector and mounts [`runtimes::detecting_router`]; a standalone
+//!    backend mounts [`runtimes::control_plane_router`], which has no detector to hold.
+//!    Constructing the detector ONCE for the process is what makes the thirty-second
+//!    detection window a property of the machine instead of of a request; giving the
+//!    standalone face no detector at all is what makes its refusal structural.
 
 pub mod bind_address;
 pub mod deployment;

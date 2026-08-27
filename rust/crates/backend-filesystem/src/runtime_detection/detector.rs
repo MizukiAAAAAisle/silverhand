@@ -72,9 +72,21 @@ impl DetectionClock for SystemDetectionClock {
 }
 
 /// Detects the offered runtimes on the machine this process runs on.
-#[derive(Clone)]
 pub struct MachineRuntimeDetector<C = SystemDetectionClock> {
     shared: Arc<Shared<C>>,
+}
+
+// Cloning a detector shares its ONE pass cache (the `Arc`), which is the whole point:
+// every route handler that clones the router's state reads and refreshes the same
+// thirty-second window. This is unconditional — the sole field is always cheaply
+// cloneable — so it is spelled by hand rather than `#[derive(Clone)]`, which would
+// wrongly demand `C: Clone` and lock out the non-`Clone` `SystemDetectionClock`.
+impl<C> Clone for MachineRuntimeDetector<C> {
+    fn clone(&self) -> Self {
+        Self {
+            shared: Arc::clone(&self.shared),
+        }
+    }
 }
 
 struct Shared<C> {

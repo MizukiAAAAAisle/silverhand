@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 axum.workspace = true
 silverhand-backend-core.workspace = true
+silverhand-backend-filesystem.workspace = true
 silverhand-backend-server.workspace = true
 silverhand-backend-sqlite.workspace = true
 sqlx.workspace = true
