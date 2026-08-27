@@ -45,6 +45,9 @@ use silverhand_backend_core::{
             thread_follow::{
                 ThreadFollowAftermath, ThreadFollowChangedFact, ThreadFollowPublicationFailure,
             },
+            workspace_rename_messaging::{
+                BoundWorkspaceRenameMessage, WorkspaceRenamePublicationPort,
+            },
         },
         mention_cc::CommittedMentionCopy,
         post_commit::{
@@ -65,7 +68,7 @@ use silverhand_backend_core::{
 use crate::host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers};
 use crate::messaging::aftermath::MessagingAftermath;
 use crate::messaging::collaboration::saved::changed_event as saved_changed_payload;
-use crate::messaging::message_wire::{copy_dto, message_event_payload};
+use crate::messaging::message_wire::{copy_dto, message_event_payload, rename_dto};
 use tokio::{
     sync::{Notify, broadcast, mpsc, oneshot, watch},
     task::{AbortHandle, JoinHandle},
@@ -576,6 +579,68 @@ impl ScopeEventHub {
         HubThreadFollowUnread::new(HubUnreadPublisher::new(self.clone(), unread_read_model))
     }
 
+    /// The workspace-metadata context's post-commit viewer hint, built over THIS hub.
+    ///
+    /// A committed rename/description edit owes every human member of the workspace a
+    /// `viewer_workspaces_changed{metadata_changed}` frame on their OWN viewer scope.
+    /// This factory binds the fan-out to the ONE hub (supplied from `&self`) and the
+    /// caller's human-audience read model, mirroring
+    /// [`messaging_aftermath`](ScopeEventHub::messaging_aftermath):
+    /// [`HubWorkspaceMetadataPublisher::new`] stays crate-private, so the lane cannot
+    /// point its fan-out at a hub other than the one it publishes on. It is a sink
+    /// *instance*, not a second event authority.
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_server::scope_events::{HubWorkspaceMetadataPublisher, ScopeEventHub};
+    ///
+    /// let hub = ScopeEventHub::production().unwrap();
+    /// let _ = HubWorkspaceMetadataPublisher::new(hub, ());
+    /// ```
+    ///
+    /// ```
+    /// use silverhand_backend_server::scope_events::ScopeEventHub;
+    ///
+    /// let hub = ScopeEventHub::production().unwrap();
+    /// let _ = hub.workspace_metadata_changed_sink(());
+    /// ```
+    pub fn workspace_metadata_changed_sink<R>(
+        &self,
+        audience: R,
+    ) -> HubWorkspaceMetadataPublisher<R> {
+        HubWorkspaceMetadataPublisher::new(self.clone(), audience)
+    }
+
+    /// The custody context's post-commit availability fan-out, built over THIS hub.
+    ///
+    /// When a computer's custody moves, every agent on it changes availability
+    /// together; the announcer is handed only the computer id and enumerates the
+    /// roster and each agent's viewer audience from committed authority. This factory
+    /// binds it to the ONE hub (from `&self`) and the caller's roster/view read
+    /// models, mirroring [`messaging_aftermath`](ScopeEventHub::messaging_aftermath):
+    /// [`HubAgentAvailabilityAnnouncer::new`] stays crate-private, so the fan-out
+    /// cannot publish on a hub other than the one this seam owns.
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_server::scope_events::{HubAgentAvailabilityAnnouncer, ScopeEventHub};
+    ///
+    /// let hub = ScopeEventHub::production().unwrap();
+    /// let _ = HubAgentAvailabilityAnnouncer::new(hub, (), ());
+    /// ```
+    ///
+    /// ```
+    /// use silverhand_backend_server::scope_events::ScopeEventHub;
+    ///
+    /// let hub = ScopeEventHub::production().unwrap();
+    /// let _ = hub.agent_availability_announcer((), ());
+    /// ```
+    pub fn agent_availability_announcer<H, V>(
+        &self,
+        computer_agents: H,
+        view: V,
+    ) -> HubAgentAvailabilityAnnouncer<H, V> {
+        HubAgentAvailabilityAnnouncer::new(self.clone(), computer_agents, view)
+    }
+
     pub fn publish_direct_pairs_changed(
         &self,
         viewer: &UserId,
@@ -665,10 +730,15 @@ impl ScopeEventHub {
     /// the TypeScript `publishToScope('app', 'agent_changed', { agent_id })`, the
     /// SAME seam deletion reuses. Its own typed producer, never a generic app-scope
     /// announcer shared with [`publish_user_changed`](Self::publish_user_changed).
-    pub(crate) fn publish_agent_changed(
-        &self,
-        agent_id: &AgentId,
-    ) -> Result<(), ScopeEventHubError> {
+    ///
+    /// Public because its sole caller is another lane's composition: the committed
+    /// computer-cascade's `agent_deleted` leg
+    /// ([`ComputerCascadeEffects`](silverhand_backend_core::teardown::computer_delete::ComputerCascadeEffects)),
+    /// whose adapter is out of this lane's scope. This is a producer primitive, not
+    /// an assembly seam — it widens no constructor or mint of the shared hub/aftermath
+    /// authority; the hub already exposes its addressed producers this way (see
+    /// [`publish_direct_pairs_changed`](Self::publish_direct_pairs_changed)).
+    pub fn publish_agent_changed(&self, agent_id: &AgentId) -> Result<(), ScopeEventHubError> {
         self.publish(
             EventScope::App,
             ProductEvent::AgentChanged {
@@ -969,6 +1039,26 @@ impl CommittedMessagePublication for ScopeEventHub {
                 committed.message(),
                 committed.reply_projection(),
             )),
+        )
+        .map_err(EffectFailure::from_source)
+    }
+}
+
+impl WorkspaceRenamePublicationPort for ScopeEventHub {
+    type Error = EffectFailure;
+
+    async fn publish(
+        &self,
+        conversation: &ConversationId,
+        message: &BoundWorkspaceRenameMessage,
+    ) -> Result<(), Self::Error> {
+        // A committed rename IS a system message on the channel it landed on: it rides
+        // the SAME conversation-scope `message` frame every reader receives, projected
+        // by the one wire authority. It is never a thread reply, so the payload is
+        // `{message}` alone — no `projections` sidecar — exactly like a mention-CC copy.
+        self.publish(
+            EventScope::Conversation(conversation.clone()),
+            ProductEvent::Message(json!({ "message": rename_dto(message) })),
         )
         .map_err(EffectFailure::from_source)
     }
@@ -5459,6 +5549,80 @@ mod tests {
         );
     }
 
+    /// The rename fan-out's PUBLICATION leg, over a REAL subscription: a committed
+    /// rename rides the conversation's OWN `message` frame, projected by the one wire
+    /// authority, exactly as the TypeScript `events.publish(channel.id, {kind:'message',
+    /// payload:{message}})`. It is never a thread reply, so the payload is `{message}`
+    /// alone — no `projections` sidecar. Driven through the production
+    /// `WorkspaceRenamePublicationPort` adapter so the port's routing (scope + kind) is
+    /// what this pins; the exact body is the same closed-key-set `rename_dto` the wire
+    /// module's own gate locks.
+    #[tokio::test]
+    async fn workspace_rename_publication_rides_the_conversation_message_frame() {
+        use silverhand_backend_core::messaging::MessageSeq;
+        use silverhand_backend_core::messaging::collaboration::workspace_rename_messaging::{
+            CommittedWorkspaceRenameMessage, WorkspaceRenameMessageCreatedAt,
+            WorkspaceRenameMessageDraft,
+        };
+
+        let hub = ScopeEventHub::test("epoch-1");
+        let mut subscriber = hub
+            .subscribe(EventScope::Conversation(conversation()))
+            .unwrap()
+            .receiver;
+
+        let draft = WorkspaceRenameMessageDraft::for_names(
+            WorkspaceId::parse("ws-1").unwrap(),
+            conversation(),
+            "Old Workspace",
+            "New Workspace",
+        );
+        let bound = CommittedWorkspaceRenameMessage::committed(
+            draft.clone(),
+            MessageId::parse("msg-1").unwrap(),
+            MessageSeq::try_from(7).unwrap(),
+            WorkspaceRenameMessageCreatedAt::new(77).unwrap(),
+        )
+        .bind(&draft)
+        .unwrap();
+
+        WorkspaceRenamePublicationPort::publish(&hub, &conversation(), &bound)
+            .await
+            .unwrap();
+
+        let frame = subscriber.recv().await.unwrap();
+        assert_eq!(frame.scope, "conversation:pair-1");
+        assert_eq!(
+            serde_json::to_value(&frame.event).unwrap(),
+            json!({
+                "kind": "message",
+                "payload": {
+                    "message": {
+                        "id": "msg-1",
+                        "conversation_id": "pair-1",
+                        "from_kind": "system",
+                        "from_agent_id": Value::Null,
+                        "from_user_id": Value::Null,
+                        "author": Value::Null,
+                        "content": draft.content(),
+                        "metadata": {
+                            "subtype": "rename",
+                            "old_name": "Old Workspace",
+                            "new_name": "New Workspace",
+                            "scope": "workspace",
+                        },
+                        "attachments": Value::Null,
+                        "reactions": Value::Null,
+                        "seq": 7,
+                        "created_at": 77,
+                        "thread_root_id": Value::Null,
+                        "linked_task": Value::Null,
+                    }
+                },
+            })
+        );
+    }
+
     #[derive(Clone)]
     struct StubHumanAudience(Vec<UserId>);
 
@@ -5535,7 +5699,12 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct StubAgentView(std::collections::HashMap<String, silverhand_backend_core::agent_availability_read::AgentViewFacts>);
+    struct StubAgentView(
+        std::collections::HashMap<
+            String,
+            silverhand_backend_core::agent_availability_read::AgentViewFacts,
+        >,
+    );
 
     impl AgentAvailabilityReadModel for StubAgentView {
         async fn read_agent_view(
@@ -5621,18 +5790,36 @@ mod tests {
         // agent-a: active, seen by viewer-1 (creator) AND viewer-2 (workspace).
         views.insert(
             "agent-a".to_owned(),
-            availability_view("agent-a", Some("viewer-1"), &[], &["viewer-2"], MaterializationStatus::Active),
+            availability_view(
+                "agent-a",
+                Some("viewer-1"),
+                &[],
+                &["viewer-2"],
+                MaterializationStatus::Active,
+            ),
         );
         // agent-b: active, seen by viewer-1 (direct pair) only.
         views.insert(
             "agent-b".to_owned(),
-            availability_view("agent-b", None, &["viewer-1"], &[], MaterializationStatus::Active),
+            availability_view(
+                "agent-b",
+                None,
+                &["viewer-1"],
+                &[],
+                MaterializationStatus::Active,
+            ),
         );
         // agent-c: on the computer and would admit viewer-1, but NON-active — its
         // audience is empty, so no viewer is told. Falsifier for the active gate.
         views.insert(
             "agent-c".to_owned(),
-            availability_view("agent-c", Some("viewer-1"), &[], &[], MaterializationStatus::Failed),
+            availability_view(
+                "agent-c",
+                Some("viewer-1"),
+                &[],
+                &[],
+                MaterializationStatus::Failed,
+            ),
         );
 
         let announcer = HubAgentAvailabilityAnnouncer::new(

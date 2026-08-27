@@ -6,11 +6,11 @@
 //! this adapter.
 
 use silverhand_backend_core::{
-    identity::{ConversationId, WorkspaceId},
+    identity::{AgentId, ConversationId, WorkspaceId},
     messaging::{
         MessageId, MessageSeq, SendClock, SendEntropy,
         collaboration::workspace_rename_messaging::{
-            CommittedWorkspaceRenameMessage, WorkspaceRenameChannel,
+            CommittedWorkspaceRenameMessage, ConversationAgentsReadPort, WorkspaceRenameChannel,
             WorkspaceRenameChannelProjectionError, WorkspaceRenameChannels,
             WorkspaceRenameChannelsReadPort, WorkspaceRenameMessageAuthorPort,
             WorkspaceRenameMessageCreatedAt, WorkspaceRenameMessageDraft,
@@ -121,6 +121,41 @@ impl<E> SqliteWorkspaceRenameMessaging<E> {
         let population = WorkspaceRenameChannels::selected(stored_workspace, channels)?;
         tx.commit().await?;
         Ok(population)
+    }
+}
+
+impl<E> ConversationAgentsReadPort for SqliteWorkspaceRenameMessaging<E>
+where
+    E: Send + Sync,
+{
+    type Error = PersistenceFailure;
+
+    async fn agent_ids(&self, conversation: &ConversationId) -> Result<Vec<AgentId>, Self::Error> {
+        self.agent_ids_inner(conversation)
+            .await
+            .map_err(PersistenceFailure::from)
+    }
+}
+
+impl<E> SqliteWorkspaceRenameMessaging<E> {
+    /// The agents joined to one conversation — the ungated delivery audience for
+    /// the rename fan-out. Ordered by `agent_id` so the fan-out adapter's own tests
+    /// observe a deterministic sequence; delivery itself is per-agent and
+    /// order-independent. An absent or empty conversation is the empty audience,
+    /// never an error: there is simply no one to push to.
+    async fn agent_ids_inner(
+        &self,
+        conversation: &ConversationId,
+    ) -> Result<Vec<AgentId>, WorkspaceRenameMessagingStoreError> {
+        let rows = sqlx::query_scalar::<_, String>(
+            "SELECT agent_id FROM conversation_agents WHERE conversation_id=? ORDER BY agent_id ASC",
+        )
+        .bind(conversation.as_str())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|raw| AgentId::parse(raw).map_err(|_| corrupt("conversation_agents.agent_id")))
+            .collect()
     }
 }
 

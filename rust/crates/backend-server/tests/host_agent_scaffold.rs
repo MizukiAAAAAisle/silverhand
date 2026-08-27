@@ -116,6 +116,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "workspace_detail"),
     ("backend-server", "workspace_metadata_write"),
     ("backend-server", "workspace_name_availability"),
+    // #task:2220 — the workspace-rename fan-out production adapter, wiring the core
+    // rename orchestrator over the messaging store, daemon delivery, and scope-event
+    // hub. Not yet mounted (the app composition root is out of this task's scope).
+    ("backend-server", "workspace_rename_fanout"),
     ("backend-server", "human_auth"),
     ("backend-server", "password_hasher"),
     ("backend-sqlite", "agent_availability_read"),
@@ -134,6 +138,13 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-sqlite", "workspace_detail_read"),
     ("backend-sqlite", "workspace_metadata_write"),
     ("backend-sqlite", "workspace_name_availability"),
+    // #task:2220 — the SQLite reads the rename fan-out and the workspace-metadata
+    // viewer hint consume: the conversation agent audience (folded into the rename
+    // messaging store) and the workspace human audience. `computer_agents_read` is
+    // the host-runtime agent roster the availability announcer enumerates. Not yet
+    // mounted (the app composition root is out of this task's scope).
+    ("backend-sqlite", "computer_agents_read"),
+    ("backend-sqlite", "workspace_audience_read"),
     ("backend-sqlite", "write_probe"),
 ];
 

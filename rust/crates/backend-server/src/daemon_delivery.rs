@@ -31,6 +31,9 @@ use silverhand_backend_core::{
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId},
     messaging::{
         CreatedMessage,
+        collaboration::workspace_rename_messaging::{
+            BoundWorkspaceRenameMessage, WorkspaceRenameDeliveryPort,
+        },
         mention_cc::CommittedMentionCopy,
         post_commit::{
             EffectFailure, IdleStart, MainDelivery, ReplyDelivery, RuntimeDelivery, RuntimeStart,
@@ -466,6 +469,30 @@ where
     ) -> Result<(), EffectFailure> {
         self.runtime
             .deliver(&message.conversation_id, recipient)
+            .await
+            .map_err(EffectFailure::from_source)
+    }
+}
+
+impl<C, D, H> WorkspaceRenameDeliveryPort for DaemonDeliveryEffects<C, D, H>
+where
+    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
+    H: HostCredentialLookup,
+{
+    type Error = EffectFailure;
+
+    async fn deliver(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        // The committed message id is carried by the port so the seam names exactly
+        // what was authored; the runtime locates the work by (conversation, agent),
+        // identically to the copy/main/reply delivery legs above.
+        _message: &BoundWorkspaceRenameMessage,
+    ) -> Result<(), Self::Error> {
+        self.runtime
+            .deliver(conversation, agent)
             .await
             .map_err(EffectFailure::from_source)
     }

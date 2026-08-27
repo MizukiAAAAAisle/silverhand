@@ -23,6 +23,7 @@ pub mod scope_events;
 pub mod workspace_detail;
 pub mod workspace_metadata_write;
 pub mod workspace_name_availability;
+pub mod workspace_rename_fanout;
 pub mod workspaces;
 
 #[cfg(test)]

@@ -7,12 +7,13 @@ use std::{
 };
 
 use silverhand_backend_core::{
-    identity::{ConversationId, WorkspaceId},
+    identity::{AgentId, ConversationId, WorkspaceId},
     messaging::{
         SendClock, SendEntropy,
         collaboration::workspace_rename_messaging::{
-            WorkspaceRenameMessageAuthorPort, WorkspaceRenameMessageDraft,
-            author_workspace_rename_message, read_workspace_rename_channels,
+            ConversationAgentsReadPort, WorkspaceRenameMessageAuthorPort,
+            WorkspaceRenameMessageDraft, author_workspace_rename_message,
+            read_workspace_rename_channels,
         },
         environment::EnvironmentUnavailable,
     },
@@ -270,4 +271,59 @@ async fn a_trigger_cannot_diverge_the_conversation_head_from_the_committed_messa
         "conversations.latest_message_seq:readback",
     )
     .await;
+}
+
+#[tokio::test]
+async fn conversation_agents_are_the_ungated_ordered_membership_of_that_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir
+        .path()
+        .join("workspace-rename-conversation-agents.sqlite");
+    seed(&path).await;
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    for statement in [
+        "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES ('u','u','U',1,1)",
+        "INSERT INTO hosts(id,name,kind,created_at) VALUES ('h','H','local',1)",
+        "INSERT INTO agents(id,name,display_name,runtime,host_id,created_by_user_id,created_at,updated_at) VALUES \
+         ('agent-b','b','B','claude','h','u',1,1),\
+         ('agent-a','a','A','claude','h','u',1,1),\
+         ('agent-z','z','Z','claude','h','u',1,1)",
+        // active-a holds agent-b and agent-a; active-b holds only agent-z. The read
+        // must return active-a's pair ordered by id and never bleed active-b's agent.
+        "INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES \
+         ('active-a','agent-b',1),('active-a','agent-a',1),('active-b','agent-z',1)",
+    ] {
+        db.execute(statement).await.unwrap();
+    }
+    db.close().await.unwrap();
+
+    let port = MessagingStore::open(&path)
+        .await
+        .unwrap()
+        .workspace_rename_messaging();
+
+    // active-a: both its agents, ordered by id; active-b's agent-z is excluded.
+    assert_eq!(
+        port.agent_ids(&conversation("active-a")).await.unwrap(),
+        vec![
+            AgentId::parse("agent-a").unwrap(),
+            AgentId::parse("agent-b").unwrap(),
+        ]
+    );
+    // A conversation with no joined agents is the empty audience, not an error.
+    assert!(
+        port.agent_ids(&conversation("fixed"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // An absent conversation is equally the empty audience: no one to push to.
+    assert!(
+        port.agent_ids(&conversation("missing"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
