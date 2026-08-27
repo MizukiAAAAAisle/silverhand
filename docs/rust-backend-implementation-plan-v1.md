@@ -34,9 +34,12 @@ backend-server  ───────▶  backend-core  ◀───────
   errors, root-write and deferred-read transaction modes remain private here.
 - `backend-server` owns Axum, process composition, HTTP/WS rendering, and the
   Rust wire DTO authority. It projects application facts to wire DTOs.
-- checked-in TypeScript and Zod artifacts are generated offline from one
-  aggregate Rust wire manifest. Runtime and remote-only builds never invoke
-  Cargo.
+- the foundation increment additionally carried a Rust→TS→Zod contract-generation
+  proof (an aggregate wire manifest exported to checked-in TypeScript/Zod
+  artifacts, built offline with Cargo never invoked at runtime or in remote-only
+  builds). That proof, its `rust/tools/**` codegen/composition scripts, and the
+  generated `packages/shared/src/generated/rust-backend/**` artifacts were
+  **retired by #2209** and must not be rebuilt.
 
 Only two Rust traits are currently justified and implemented:
 `MessageUnitOfWork` and `MessageReadUnitOfWork`. New ports are added only when a
@@ -60,7 +63,7 @@ After the scaffold commit:
 |---|---|---|
 | Core | `rust/crates/backend-core/**` | Extract the two proven semantic UoW ports, application facts/errors/use cases, and driver-free contract tests. |
 | SQLite | `rust/crates/backend-sqlite/**` | Implement the semantic UoWs with SQLx; retain `FULL`, WAL/FK, root `BEGIN IMMEDIATE`, deferred snapshot reads, durable-payload projection, and source chains. |
-| Server/wire | `rust/Cargo.toml`, `rust/Cargo.lock`, `rust/crates/backend-server/**`, `rust/tools/**`, `packages/shared/src/generated/rust-backend/**`, narrowly scoped verification scripts | Axum composition, application-fact → wire projection, aggregate TS generation, Zod generation/drift gate, and embedded/remote-only artifact audit. |
+| Server | `rust/Cargo.toml`, `rust/Cargo.lock`, `rust/crates/backend-server/**` | Axum composition and application-fact → wire projection for the real product server and its adapters. **The foundation-only wire/codegen/composition proof — `rust/tools/**`, `packages/shared/src/generated/rust-backend/**`, aggregate Rust→TS generation, the Zod generation/drift gate, and the embedded/remote-only artifact audit — was retired by #2209 and must not be rebuilt.** |
 
 The Core owner publishes an early interface checkpoint as soon as the two port
 signatures and fact/error types compile. SQLite and Server rebase on that

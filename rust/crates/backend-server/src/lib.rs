@@ -13,11 +13,9 @@ pub mod host_agent_background;
 pub mod host_control;
 pub mod host_resources;
 pub mod host_runtime;
-pub mod http;
 pub mod messaging;
 pub mod runtime_credential;
 pub mod scope_events;
-pub mod wire;
 pub mod workspaces;
 
 #[cfg(test)]

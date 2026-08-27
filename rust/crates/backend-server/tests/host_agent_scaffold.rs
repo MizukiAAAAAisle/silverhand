@@ -123,7 +123,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
 /// gate holds every declaration to EXACTLY ONE classification; the classification
 /// itself was reconciled once against the root declarations at base `08d5e4de` — 1
 /// in backend-app, 15 in backend-core, 15 in backend-server, 11 in backend-sqlite,
-/// with no seam entry among them.
+/// with no seam entry among them. #task:2209 then removed the foundation proof
+/// vertical (`backend-core::foundation_message`, `backend-server::{http,wire}`),
+/// leaving 1 in backend-app, 14 in backend-core, 13 in backend-server, 11 in
+/// backend-sqlite.
 ///
 /// CP1-temporary, with G3's accounting: it guards "every lane module is registered
 /// where it is guarded", it is deleted when the seam is extracted into the
@@ -136,7 +139,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-core", "auth"),
     ("backend-core", "blob_store"),
     ("backend-core", "direct_pair_read"),
-    ("backend-core", "foundation_message"),
     ("backend-core", "host_runtime"),
     ("backend-core", "identity"),
     ("backend-core", "messaging"),
@@ -158,11 +160,9 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-server", "direct_pairs"),
     ("backend-server", "error"),
     ("backend-server", "host_runtime"),
-    ("backend-server", "http"),
     ("backend-server", "messaging"),
     ("backend-server", "runtime_credential"),
     ("backend-server", "scope_events"),
-    ("backend-server", "wire"),
     ("backend-server", "workspaces"),
     ("backend-sqlite", "access"),
     ("backend-sqlite", "auth"),

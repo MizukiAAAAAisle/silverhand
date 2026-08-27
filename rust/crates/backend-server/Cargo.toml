@@ -19,7 +19,6 @@ silverhand-backend-filesystem.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
-ts-rs.workspace = true
 
 [build-dependencies]
 serde_json.workspace = true
