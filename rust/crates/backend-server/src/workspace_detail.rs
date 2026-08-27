@@ -177,8 +177,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        persistence::PersistenceFailure,
-        workspace_detail_read::WorkspaceDetailForViewer,
+        persistence::PersistenceFailure, workspace_detail_read::WorkspaceDetailForViewer,
         workspace_face::WorkspaceFace,
     };
     use tower::ServiceExt;
@@ -250,7 +249,8 @@ mod tests {
             face: regular_face("ws-1"),
             membership_subject: Some(UserId::parse("user-1").unwrap()),
         };
-        let (status, body) = get_detail(FakeUnitOfWork::Reads(Some(Box::new(detail))), "ws-1", true).await;
+        let (status, body) =
+            get_detail(FakeUnitOfWork::Reads(Some(Box::new(detail))), "ws-1", true).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
             body,
@@ -277,7 +277,8 @@ mod tests {
             face: regular_face("ws-1"),
             membership_subject: None,
         };
-        let (status, body) = get_detail(FakeUnitOfWork::Reads(Some(Box::new(detail))), "ws-1", true).await;
+        let (status, body) =
+            get_detail(FakeUnitOfWork::Reads(Some(Box::new(detail))), "ws-1", true).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert_eq!(body, json!({ "error": "forbidden" }));
     }
@@ -297,7 +298,8 @@ mod tests {
             face: regular_face("ws-2"),
             membership_subject: Some(UserId::parse("user-1").unwrap()),
         };
-        let (status, _) = get_detail(FakeUnitOfWork::Reads(Some(Box::new(detail))), "ws-1", true).await;
+        let (status, _) =
+            get_detail(FakeUnitOfWork::Reads(Some(Box::new(detail))), "ws-1", true).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -307,7 +309,8 @@ mod tests {
             face: regular_face("ws-1"),
             membership_subject: Some(UserId::parse("user-2").unwrap()),
         };
-        let (status, _) = get_detail(FakeUnitOfWork::Reads(Some(Box::new(detail))), "ws-1", true).await;
+        let (status, _) =
+            get_detail(FakeUnitOfWork::Reads(Some(Box::new(detail))), "ws-1", true).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -317,7 +320,8 @@ mod tests {
             face: regular_face("ws-1"),
             membership_subject: Some(UserId::parse("user-1").unwrap()),
         };
-        let (status, _) = get_detail(FakeUnitOfWork::Reads(Some(Box::new(detail))), "ws-1", false).await;
+        let (status, _) =
+            get_detail(FakeUnitOfWork::Reads(Some(Box::new(detail))), "ws-1", false).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -366,13 +370,15 @@ mod tests {
 
         // The detail unit of work would 404 any id; if the merge shadowed the
         // static path, the probe request would land here and 404 instead of 200.
-        let app = router(FakeUnitOfWork::Reads(None))
-            .merge(name_availability::router(EmptyNamespace));
+        let app =
+            router(FakeUnitOfWork::Reads(None)).merge(name_availability::router(EmptyNamespace));
 
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("{WORKSPACE_NAME_AVAILABILITY_PATH}?name=Design%20Team"))
+                    .uri(format!(
+                        "{WORKSPACE_NAME_AVAILABILITY_PATH}?name=Design%20Team"
+                    ))
                     .extension(UserId::parse("user-1").unwrap())
                     .body(Body::empty())
                     .unwrap(),

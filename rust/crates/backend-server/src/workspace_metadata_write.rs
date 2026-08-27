@@ -23,11 +23,14 @@
 //!    This route holds it as ONE narrow outbound requirement,
 //!    [`WorkspaceRenameFanout`], whose input is the sealed [`WorkspaceNameChange`]
 //!    and which on a committed rename this handler MUST call. It is a single
-//!    WHOLE-fan-out requirement (author PLUS deliver PLUS publish), never three
-//!    separate ports the leaf could satisfy by authoring a message that is never
-//!    delivered or published — that half-effect stays unrepresentable. The route
-//!    does not author anything itself; it hands the committed gate to the messaging
-//!    context's adapter.
+//!    WHOLE-fan-out requirement (author PLUS deliver PLUS publish) so the leaf
+//!    cannot call three separate partial ports and can never OMIT the requirement
+//!    on a committed rename. It does NOT, however, force the eventual production
+//!    impl to truly author AND deliver AND publish — an adapter that merely
+//!    INSERTs and returns `Ok(())` still compiles; that completeness is an
+//!    integration review/test responsibility (see the [#task:2215] residual),
+//!    not something this type guarantees. The route does not author anything
+//!    itself; it hands the committed gate to the messaging context's adapter.
 //!
 //! The messaging fan-out ships NO production implementation in this leaf: the
 //! [#task:2215] integration residual is to implement that ONE complete adapter
@@ -116,6 +119,7 @@ use std::future::Future;
 
 use serde::Serialize;
 use serde_json::Value;
+use silverhand_backend_core::access::WorkspaceGovernanceFloor;
 use silverhand_backend_core::{
     access::{WorkspaceGovernanceFactsRead, WorkspaceRole, governance_floor_verdict},
     identity::{Principal, UserId, WorkspaceId},
@@ -126,7 +130,6 @@ use silverhand_backend_core::{
         archive_workspace, update_workspace_metadata_and_announce,
     },
 };
-use silverhand_backend_core::access::WorkspaceGovernanceFloor;
 
 use crate::error;
 use crate::workspaces::ViewerWorkspaceDto;
@@ -260,7 +263,10 @@ where
             WORKSPACE_METADATA_PATH,
             patch(patch_metadata::<G, W, S, F, C>),
         )
-        .route(WORKSPACE_ARCHIVE_PATH, patch(patch_archive::<G, W, S, F, C>))
+        .route(
+            WORKSPACE_ARCHIVE_PATH,
+            patch(patch_archive::<G, W, S, F, C>),
+        )
         .with_state(WorkspaceWriteState {
             governance,
             writes,
@@ -294,7 +300,13 @@ where
 
     // 404 (existence) → 403 (governance) resolved BEFORE the body is parsed, so a
     // caller without standing cannot probe body shape. Rename requires `Admin`.
-    match governance_floor(&state.governance, &principal, &workspace_id, WorkspaceRole::Admin).await
+    match governance_floor(
+        &state.governance,
+        &principal,
+        &workspace_id,
+        WorkspaceRole::Admin,
+    )
+    .await
     {
         Ok(WorkspaceGovernanceFloor::WorkspaceNotFound) => return not_found(),
         Ok(WorkspaceGovernanceFloor::Denied) => return forbidden(),
@@ -399,7 +411,13 @@ where
     };
 
     // Archive requires the stricter `Owner` floor. Same 404→403 pre-lock order.
-    match governance_floor(&state.governance, &principal, &workspace_id, WorkspaceRole::Owner).await
+    match governance_floor(
+        &state.governance,
+        &principal,
+        &workspace_id,
+        WorkspaceRole::Owner,
+    )
+    .await
     {
         Ok(WorkspaceGovernanceFloor::WorkspaceNotFound) => return not_found(),
         Ok(WorkspaceGovernanceFloor::Denied) => return forbidden(),
@@ -441,7 +459,10 @@ async fn governance_floor<G>(
 where
     G: WorkspaceGovernanceFactsRead,
 {
-    match governance.read_governance_facts(principal, workspace_id).await {
+    match governance
+        .read_governance_facts(principal, workspace_id)
+        .await
+    {
         Ok(facts) => Ok(governance_floor_verdict(principal, facts, min_role)),
         Err(cause) => {
             tracing::error!(
@@ -516,11 +537,7 @@ fn forbidden() -> Response {
 }
 
 fn name_taken() -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(ErrorBody { error: NAME_TAKEN }),
-    )
-        .into_response()
+    (StatusCode::CONFLICT, Json(ErrorBody { error: NAME_TAKEN })).into_response()
 }
 
 fn invalid_input(issues: Vec<wire::ZodIssue>) -> Response {
@@ -749,10 +766,9 @@ mod wire {
         // The object parsed; now the `refine`. `description: null` counts as a
         // present field, so it clears rather than fails the "no fields" gate.
         match (name, name_present, description_present) {
-            (Some(name), _, true) => Ok(WorkspaceMetadataEdit::NameAndDescription {
-                name,
-                description,
-            }),
+            (Some(name), _, true) => {
+                Ok(WorkspaceMetadataEdit::NameAndDescription { name, description })
+            }
             (Some(name), _, false) => Ok(WorkspaceMetadataEdit::Name(name)),
             (None, false, true) => Ok(WorkspaceMetadataEdit::Description(description)),
             // No field survived: the `refine` message, at the root path.
@@ -874,7 +890,10 @@ mod admission_parity {
         let cases = fixture["admitted_update"]
             .as_array()
             .expect("admitted update cases");
-        assert!(!cases.is_empty(), "the fixture must carry admitted update cases");
+        assert!(
+            !cases.is_empty(),
+            "the fixture must carry admitted update cases"
+        );
         for case in cases {
             let name = case["name"].as_str().unwrap();
             let edit = wire::parse_update_body(&case["input"])
@@ -889,7 +908,10 @@ mod admission_parity {
         let cases = fixture["admitted_archive"]
             .as_array()
             .expect("admitted archive cases");
-        assert!(!cases.is_empty(), "the fixture must carry admitted archive cases");
+        assert!(
+            !cases.is_empty(),
+            "the fixture must carry admitted archive cases"
+        );
         for case in cases {
             let name = case["name"].as_str().unwrap();
             let archived = wire::parse_archive_body(&case["input"])

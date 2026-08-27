@@ -23,8 +23,8 @@ use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
-use thiserror::Error;
 use std::time::Duration;
+use thiserror::Error;
 
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -161,7 +161,9 @@ INSERT INTO workspaces (id, name, name_key, description, owner_agent_id, owner_u
         // name_key, so the regular namespace does not hold it — "Agent Home" is
         // available for a REGULAR workspace.
         let (_dir, namespace) = open_seeded().await;
-        let verdict = probe_workspace_name(&namespace, "Agent Home").await.unwrap();
+        let verdict = probe_workspace_name(&namespace, "Agent Home")
+            .await
+            .unwrap();
         assert_eq!(verdict, WorkspaceNameAvailability::Available);
     }
 

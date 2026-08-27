@@ -28,13 +28,15 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    access::{WorkspaceGovernanceFacts, WorkspaceGovernanceFloor, WorkspaceRole, governance_floor_verdict},
+    access::{
+        WorkspaceGovernanceFacts, WorkspaceGovernanceFloor, WorkspaceRole, governance_floor_verdict,
+    },
     identity::{AgentId, Principal, UserId, WorkspaceId},
     persistence::PersistenceFailure,
     workspace_face::WorkspaceFace,
     workspace_metadata_write::{
-        PriorWorkspaceAddress, WorkspaceArchiveWrite, WorkspaceMetadataEdit, WorkspaceMetadataWrite,
-        WorkspaceMetadataWriteUnitOfWork,
+        PriorWorkspaceAddress, WorkspaceArchiveWrite, WorkspaceMetadataEdit,
+        WorkspaceMetadataWrite, WorkspaceMetadataWriteUnitOfWork,
     },
 };
 use sqlx::{
@@ -295,19 +297,23 @@ impl SqliteWorkspaceMetadataWrite {
                     .fetch_one(&mut *tx)
                     .await?
             }
-            WorkspaceMetadataEdit::Name(name) => sqlx::query(UPDATE_NAME)
-                .bind(name.name())
-                .bind(name.key())
-                .bind(now_ms)
-                .bind(workspace_id.as_str())
-                .fetch_one(&mut *tx)
-                .await?,
-            WorkspaceMetadataEdit::Description(description) => sqlx::query(UPDATE_DESCRIPTION)
-                .bind(description.as_deref())
-                .bind(now_ms)
-                .bind(workspace_id.as_str())
-                .fetch_one(&mut *tx)
-                .await?,
+            WorkspaceMetadataEdit::Name(name) => {
+                sqlx::query(UPDATE_NAME)
+                    .bind(name.name())
+                    .bind(name.key())
+                    .bind(now_ms)
+                    .bind(workspace_id.as_str())
+                    .fetch_one(&mut *tx)
+                    .await?
+            }
+            WorkspaceMetadataEdit::Description(description) => {
+                sqlx::query(UPDATE_DESCRIPTION)
+                    .bind(description.as_deref())
+                    .bind(now_ms)
+                    .bind(workspace_id.as_str())
+                    .fetch_one(&mut *tx)
+                    .await?
+            }
         };
         let face = decode_face(&row)?;
         // The committed fold key from the write's own `RETURNING` row — the second
@@ -372,11 +378,9 @@ fn decode_face(row: &sqlx::sqlite::SqliteRow) -> Result<WorkspaceFace, MetadataW
     let id = WorkspaceId::parse(row.try_get::<String, _>("id")?)
         .map_err(|_| CorruptStoredIdentifier { column: "id" })?;
     let owner_agent_id = match row.try_get::<Option<String>, _>("owner_agent_id")? {
-        Some(raw) => {
-            Some(AgentId::parse(raw).map_err(|_| CorruptStoredIdentifier {
-                column: "owner_agent_id",
-            })?)
-        }
+        Some(raw) => Some(AgentId::parse(raw).map_err(|_| CorruptStoredIdentifier {
+            column: "owner_agent_id",
+        })?),
         None => None,
     };
     let owner_user_id = match row.try_get::<Option<String>, _>("owner_user_id")? {
@@ -488,7 +492,10 @@ INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) VALUES ('ws
         CanonicalWorkspaceName::parse(raw).unwrap()
     }
 
-    async fn stored_name_key(adapter: &SqliteWorkspaceMetadataWrite, id: &str) -> (String, Option<String>) {
+    async fn stored_name_key(
+        adapter: &SqliteWorkspaceMetadataWrite,
+        id: &str,
+    ) -> (String, Option<String>) {
         sqlx::query_as::<_, (String, Option<String>)>(
             "SELECT name, name_key FROM workspaces WHERE id = ?",
         )
@@ -524,7 +531,10 @@ INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) VALUES ('ws
         assert_eq!(committed_name_key, name("Design Team").key());
         assert_eq!(
             stored_name_key(&adapter, "ws-1").await,
-            ("Design Team".to_owned(), Some(name("Design Team").key().to_owned()))
+            (
+                "Design Team".to_owned(),
+                Some(name("Design Team").key().to_owned())
+            )
         );
     }
 
@@ -596,7 +606,12 @@ INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) VALUES ('ws
     async fn an_admin_may_rename_but_not_archive() {
         let (_dir, adapter) = open_seeded().await;
         let rename = adapter
-            .update_metadata(human("user-2"), &ws("ws-1"), &WorkspaceMetadataEdit::Name(name("Renamed")), 800)
+            .update_metadata(
+                human("user-2"),
+                &ws("ws-1"),
+                &WorkspaceMetadataEdit::Name(name("Renamed")),
+                800,
+            )
             .await
             .unwrap();
         assert!(matches!(rename, WorkspaceMetadataWrite::Committed { .. }));
@@ -612,7 +627,12 @@ INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) VALUES ('ws
     async fn a_plain_member_is_forbidden_from_renaming() {
         let (_dir, adapter) = open_seeded().await;
         let outcome = adapter
-            .update_metadata(human("user-3"), &ws("ws-1"), &WorkspaceMetadataEdit::Name(name("Nope")), 900)
+            .update_metadata(
+                human("user-3"),
+                &ws("ws-1"),
+                &WorkspaceMetadataEdit::Name(name("Nope")),
+                900,
+            )
             .await
             .unwrap();
         assert_eq!(outcome, WorkspaceMetadataWrite::Forbidden);
@@ -622,7 +642,12 @@ INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) VALUES ('ws
     async fn a_non_member_is_forbidden() {
         let (_dir, adapter) = open_seeded().await;
         let outcome = adapter
-            .update_metadata(human("user-9"), &ws("ws-1"), &WorkspaceMetadataEdit::Name(name("Nope")), 900)
+            .update_metadata(
+                human("user-9"),
+                &ws("ws-1"),
+                &WorkspaceMetadataEdit::Name(name("Nope")),
+                900,
+            )
             .await
             .unwrap();
         assert_eq!(outcome, WorkspaceMetadataWrite::Forbidden);
@@ -633,7 +658,12 @@ INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) VALUES ('ws
         let (_dir, adapter) = open_seeded().await;
         for id in ["ws-missing", "ws-home"] {
             let outcome = adapter
-                .update_metadata(human("user-1"), &ws(id), &WorkspaceMetadataEdit::Name(name("X")), 100)
+                .update_metadata(
+                    human("user-1"),
+                    &ws(id),
+                    &WorkspaceMetadataEdit::Name(name("X")),
+                    100,
+                )
                 .await
                 .unwrap();
             assert_eq!(outcome, WorkspaceMetadataWrite::NoSuchWorkspace, "{id}");

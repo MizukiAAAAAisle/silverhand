@@ -209,7 +209,9 @@ impl Harness {
         fanout: RecordingFanout,
     ) -> Router {
         let governance = SqliteAccessStore::open(&self.path).await.unwrap();
-        let writes = SqliteWorkspaceMetadataWrite::open(&self.path).await.unwrap();
+        let writes = SqliteWorkspaceMetadataWrite::open(&self.path)
+            .await
+            .unwrap();
         workspace_metadata_write::router(governance, writes, sink, fanout, clock)
     }
 
@@ -264,7 +266,11 @@ async fn a_rename_by_the_owner_commits_and_drives_both_the_hint_and_the_fanout()
         .await;
 
     let response = app
-        .oneshot(metadata_request("ws-1", "user-1", r#"{"name":"Design Team"}"#))
+        .oneshot(metadata_request(
+            "ws-1",
+            "user-1",
+            r#"{"name":"Design Team"}"#,
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -289,7 +295,11 @@ async fn a_rename_by_the_owner_commits_and_drives_both_the_hint_and_the_fanout()
     // The rename is durably committed with the folded key.
     assert_eq!(
         harness.stored("ws-1").await,
-        ("Design Team".to_owned(), Some("design team".to_owned()), None)
+        (
+            "Design Team".to_owned(),
+            Some("design team".to_owned()),
+            None
+        )
     );
     // BOTH committed-rename effects fired for exactly this workspace, off the one
     // sealed gate: the viewer hint and the per-channel rename fan-out.
@@ -322,7 +332,9 @@ async fn a_non_admin_is_forbidden_before_the_body_is_parsed() {
 #[tokio::test]
 async fn an_unknown_workspace_is_not_found() {
     let harness = Harness::seeded().await;
-    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
+    let app = harness
+        .router(FixedClock(777), RecordingSink::new(false))
+        .await;
 
     let response = app
         .oneshot(metadata_request("ws-missing", "user-1", r#"{"name":"X"}"#))
@@ -338,7 +350,9 @@ async fn an_unknown_workspace_is_not_found() {
 #[tokio::test]
 async fn an_agent_home_workspace_is_not_found_through_the_regular_door() {
     let harness = Harness::seeded().await;
-    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
+    let app = harness
+        .router(FixedClock(777), RecordingSink::new(false))
+        .await;
 
     let response = app
         .oneshot(metadata_request("ws-home", "user-1", r#"{"name":"X"}"#))
@@ -350,7 +364,9 @@ async fn an_agent_home_workspace_is_not_found_through_the_regular_door() {
 #[tokio::test]
 async fn a_malformed_body_from_an_admin_is_invalid_input() {
     let harness = Harness::seeded().await;
-    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
+    let app = harness
+        .router(FixedClock(777), RecordingSink::new(false))
+        .await;
 
     // user-2 is an admin, so it clears the rename floor and the body IS parsed.
     let response = app
@@ -370,7 +386,9 @@ async fn a_malformed_body_from_an_admin_is_invalid_input() {
 #[tokio::test]
 async fn a_name_held_by_another_workspace_is_conflict() {
     let harness = Harness::seeded().await;
-    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
+    let app = harness
+        .router(FixedClock(777), RecordingSink::new(false))
+        .await;
 
     let response = app
         .oneshot(metadata_request("ws-1", "user-1", r#"{"name":"Taken"}"#))
@@ -426,11 +444,18 @@ async fn a_committed_rename_survives_both_a_failing_hint_and_a_failing_fanout() 
         .await;
 
     let response = app
-        .oneshot(metadata_request("ws-1", "user-1", r#"{"name":"Design Team"}"#))
+        .oneshot(metadata_request(
+            "ws-1",
+            "user-1",
+            r#"{"name":"Design Team"}"#,
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(json_body(response).await["workspace"]["name"], json!("Design Team"));
+    assert_eq!(
+        json_body(response).await["workspace"]["name"],
+        json!("Design Team")
+    );
     // The rename is durably committed regardless of both failures.
     assert_eq!(harness.stored("ws-1").await.0, "Design Team");
     // Each effect was attempted exactly once; neither failure downgraded the 200.
@@ -444,7 +469,9 @@ async fn a_committed_rename_survives_both_a_failing_hint_and_a_failing_fanout() 
 #[tokio::test]
 async fn archive_requires_the_owner_floor() {
     let harness = Harness::seeded().await;
-    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
+    let app = harness
+        .router(FixedClock(777), RecordingSink::new(false))
+        .await;
 
     // An admin clears the rename floor but NOT the archive floor.
     let response = app
@@ -458,7 +485,9 @@ async fn archive_requires_the_owner_floor() {
 #[tokio::test]
 async fn the_owner_archives_and_unarchives() {
     let harness = Harness::seeded().await;
-    let archive_app = harness.router(FixedClock(900), RecordingSink::new(false)).await;
+    let archive_app = harness
+        .router(FixedClock(900), RecordingSink::new(false))
+        .await;
 
     let response = archive_app
         .oneshot(archive_request("ws-1", "user-1", r#"{"archived":true}"#))
@@ -470,20 +499,27 @@ async fn the_owner_archives_and_unarchives() {
     assert_eq!(harness.stored("ws-1").await.2, Some(900));
 
     // A fresh router (a new pool) clears it again.
-    let unarchive_app = harness.router(FixedClock(950), RecordingSink::new(false)).await;
+    let unarchive_app = harness
+        .router(FixedClock(950), RecordingSink::new(false))
+        .await;
     let response = unarchive_app
         .oneshot(archive_request("ws-1", "user-1", r#"{"archived":false}"#))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(json_body(response).await["workspace"]["archived_at"], Value::Null);
+    assert_eq!(
+        json_body(response).await["workspace"]["archived_at"],
+        Value::Null
+    );
     assert_eq!(harness.stored("ws-1").await.2, None);
 }
 
 #[tokio::test]
 async fn a_missing_archived_flag_is_invalid_input() {
     let harness = Harness::seeded().await;
-    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
+    let app = harness
+        .router(FixedClock(777), RecordingSink::new(false))
+        .await;
 
     let response = app
         .oneshot(archive_request("ws-1", "user-1", "{}"))
@@ -526,7 +562,9 @@ async fn a_large_body_with_unknown_keys_is_accepted_no_size_cap() {
 #[tokio::test]
 async fn a_large_body_from_a_non_governor_is_403_before_the_body_is_read() {
     let harness = Harness::seeded().await;
-    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
+    let app = harness
+        .router(FixedClock(777), RecordingSink::new(false))
+        .await;
 
     // user-3 is a plain member: the floor refuses BEFORE the body is read, so the
     // body's size is irrelevant — the deferred read proves the floor gates it.

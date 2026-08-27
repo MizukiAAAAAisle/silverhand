@@ -548,7 +548,10 @@ pub(crate) async fn update_workspace_metadata<W>(
 where
     W: WorkspaceMetadataWriteUnitOfWork,
 {
-    match writes.update_metadata(actor, workspace_id, &edit, now_ms).await? {
+    match writes
+        .update_metadata(actor, workspace_id, &edit, now_ms)
+        .await?
+    {
         WorkspaceMetadataWrite::NoSuchWorkspace => Ok(WorkspaceMetadataUpdate::NoSuchWorkspace),
         WorkspaceMetadataWrite::Forbidden => Ok(WorkspaceMetadataUpdate::Forbidden),
         WorkspaceMetadataWrite::NameTaken => Ok(WorkspaceMetadataUpdate::NameTaken),
@@ -591,12 +594,17 @@ pub async fn archive_workspace<W>(
 where
     W: WorkspaceMetadataWriteUnitOfWork,
 {
-    match writes.set_archived(actor, workspace_id, archived, now_ms).await? {
+    match writes
+        .set_archived(actor, workspace_id, archived, now_ms)
+        .await?
+    {
         WorkspaceArchiveWrite::NoSuchWorkspace => Ok(WorkspaceArchiveUpdate::NoSuchWorkspace),
         WorkspaceArchiveWrite::Forbidden => Ok(WorkspaceArchiveUpdate::Forbidden),
         WorkspaceArchiveWrite::Committed { face } => {
             seal_archive_write_fact(workspace_id, archived, &face, now_ms)?;
-            Ok(WorkspaceArchiveUpdate::Committed(ArchivedWorkspace { face }))
+            Ok(WorkspaceArchiveUpdate::Committed(ArchivedWorkspace {
+                face,
+            }))
         }
     }
 }
@@ -1026,8 +1034,7 @@ mod tests {
         edit: WorkspaceMetadataEdit,
     ) {
         let writes = FakeWrites::on_metadata(write);
-        let result =
-            update_workspace_metadata(&writes, system(), &workspace_id(), edit, NOW).await;
+        let result = update_workspace_metadata(&writes, system(), &workspace_id(), edit, NOW).await;
         assert!(
             matches!(
                 result,

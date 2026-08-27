@@ -136,8 +136,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        persistence::PersistenceFailure,
-        workspace_name::CanonicalWorkspaceName,
+        persistence::PersistenceFailure, workspace_name::CanonicalWorkspaceName,
         workspace_name_availability::HeldName,
     };
     use tower::ServiceExt;
@@ -175,9 +174,8 @@ mod tests {
         query: &str,
         with_principal: bool,
     ) -> (StatusCode, Value) {
-        let mut request = Request::builder().uri(format!(
-            "{WORKSPACE_NAME_AVAILABILITY_PATH}?{query}"
-        ));
+        let mut request =
+            Request::builder().uri(format!("{WORKSPACE_NAME_AVAILABILITY_PATH}?{query}"));
         if with_principal {
             request = request.extension(UserId::parse("user-1").unwrap());
         }
@@ -193,8 +191,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_free_name_is_available_at_200() {
-        let (status, body) =
-            probe_request(FakeNamespace::Empty, "name=Design%20Team", true).await;
+        let (status, body) = probe_request(FakeNamespace::Empty, "name=Design%20Team", true).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, json!({ "available": true, "reason": "available" }));
     }
@@ -220,12 +217,12 @@ mod tests {
         let forbidden_in_envelope = format!("{}%E2%80%8D", "a".repeat(100)); // 100a + ZWJ (101 cp)
         let beyond_envelope = format!("{}%E2%80%8D", "a".repeat(200)); // 200a + ZWJ (201 cp)
         let cases = [
-            String::new(),                              // absent `name`
-            "name=".to_owned(),                         // empty value
-            "name=a%E2%80%8Db".to_owned(),              // forbidden ZWJ
-            format!("name={sixty_five_a}"),             // over the 64 cap
-            format!("name={forbidden_in_envelope}"),    // 65–128 + forbidden
-            format!("name={beyond_envelope}"),          // over 128
+            String::new(),                           // absent `name`
+            "name=".to_owned(),                      // empty value
+            "name=a%E2%80%8Db".to_owned(),           // forbidden ZWJ
+            format!("name={sixty_five_a}"),          // over the 64 cap
+            format!("name={forbidden_in_envelope}"), // 65–128 + forbidden
+            format!("name={beyond_envelope}"),       // over 128
         ];
         for query in cases {
             let (status, body) =

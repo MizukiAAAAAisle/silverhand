@@ -270,7 +270,11 @@ mod tests {
                 agent_id: AgentId::parse("agent-1").unwrap(),
             },
         ] {
-            for floor in [WorkspaceRole::Member, WorkspaceRole::Admin, WorkspaceRole::Owner] {
+            for floor in [
+                WorkspaceRole::Member,
+                WorkspaceRole::Admin,
+                WorkspaceRole::Owner,
+            ] {
                 assert_eq!(
                     governance_floor_verdict(
                         &principal,
@@ -290,31 +294,55 @@ mod tests {
         // clears only member. This is the resolution the collapsed ceiling loses,
         // and it is exactly what the owner-floored archive surface needs.
         assert_eq!(
-            governance_floor_verdict(&human(), regular(Some(WorkspaceRole::Owner)), WorkspaceRole::Owner),
+            governance_floor_verdict(
+                &human(),
+                regular(Some(WorkspaceRole::Owner)),
+                WorkspaceRole::Owner
+            ),
             WorkspaceGovernanceFloor::Governs
         );
         assert_eq!(
-            governance_floor_verdict(&human(), regular(Some(WorkspaceRole::Admin)), WorkspaceRole::Owner),
+            governance_floor_verdict(
+                &human(),
+                regular(Some(WorkspaceRole::Admin)),
+                WorkspaceRole::Owner
+            ),
             WorkspaceGovernanceFloor::Denied,
             "an admin does not clear the owner floor — the distinction Admin cannot express"
         );
         assert_eq!(
-            governance_floor_verdict(&human(), regular(Some(WorkspaceRole::Admin)), WorkspaceRole::Admin),
+            governance_floor_verdict(
+                &human(),
+                regular(Some(WorkspaceRole::Admin)),
+                WorkspaceRole::Admin
+            ),
             WorkspaceGovernanceFloor::Governs
         );
         assert_eq!(
-            governance_floor_verdict(&human(), regular(Some(WorkspaceRole::Member)), WorkspaceRole::Admin),
+            governance_floor_verdict(
+                &human(),
+                regular(Some(WorkspaceRole::Member)),
+                WorkspaceRole::Admin
+            ),
             WorkspaceGovernanceFloor::Denied
         );
         assert_eq!(
-            governance_floor_verdict(&human(), regular(Some(WorkspaceRole::Member)), WorkspaceRole::Member),
+            governance_floor_verdict(
+                &human(),
+                regular(Some(WorkspaceRole::Member)),
+                WorkspaceRole::Member
+            ),
             WorkspaceGovernanceFloor::Governs
         );
     }
 
     #[test]
     fn a_human_with_no_role_row_clears_no_floor() {
-        for floor in [WorkspaceRole::Member, WorkspaceRole::Admin, WorkspaceRole::Owner] {
+        for floor in [
+            WorkspaceRole::Member,
+            WorkspaceRole::Admin,
+            WorkspaceRole::Owner,
+        ] {
             assert_eq!(
                 governance_floor_verdict(&human(), regular(None), floor),
                 WorkspaceGovernanceFloor::Denied
@@ -324,7 +352,11 @@ mod tests {
 
     #[test]
     fn the_system_principal_clears_every_floor_of_an_existing_workspace() {
-        for floor in [WorkspaceRole::Member, WorkspaceRole::Admin, WorkspaceRole::Owner] {
+        for floor in [
+            WorkspaceRole::Member,
+            WorkspaceRole::Admin,
+            WorkspaceRole::Owner,
+        ] {
             assert_eq!(
                 governance_floor_verdict(&Principal::System, regular(None), floor),
                 WorkspaceGovernanceFloor::Governs
@@ -338,7 +370,11 @@ mod tests {
             agent_id: AgentId::parse("agent-1").unwrap(),
         };
         for role in [None, Some(WorkspaceRole::Owner)] {
-            for floor in [WorkspaceRole::Member, WorkspaceRole::Admin, WorkspaceRole::Owner] {
+            for floor in [
+                WorkspaceRole::Member,
+                WorkspaceRole::Admin,
+                WorkspaceRole::Owner,
+            ] {
                 assert_eq!(
                     governance_floor_verdict(&agent, regular(role), floor),
                     WorkspaceGovernanceFloor::Denied,
