@@ -84,6 +84,8 @@ use sqlx::{Row, sqlite::SqlitePoolOptions};
 use thiserror::Error;
 use tokio::{net::TcpListener, sync::oneshot};
 
+mod request_perimeter;
+
 const DATABASE_PATH_ENV: &str = "SILVERHAND_DATABASE_PATH";
 const LISTEN_ADDR_ENV: &str = "SILVERHAND_LISTEN_ADDR";
 const ALLOWED_ORIGINS_ENV: &str = "SILVERHAND_ALLOWED_ORIGINS";
@@ -786,7 +788,15 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             // `require_human_session`, which would reject the daemon's connect-token bearer
             // before the handler's own verification could run.
             .merge(host_resolve)
-            .merge(readyz_router),
+            .merge(readyz_router)
+            // The one app/proxy request-body ceiling (128 MiB, uniform 413), applied
+            // as the OUTERMOST layer over the fully-composed router — ahead of every
+            // auth perimeter and domain check, and covering both deployment arms since
+            // they are already merged into this single router. Product routes keep their
+            // tighter in-stream caps; this only bounds the outer envelope.
+            .layer(axum::middleware::from_fn(
+                request_perimeter::enforce_request_body_ceiling,
+            )),
         boot,
         event_controller,
         daemon_controller,

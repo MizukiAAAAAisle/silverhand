@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 axum.workspace = true
+http-body-util.workspace = true
 silverhand-backend-core.workspace = true
 silverhand-backend-filesystem.workspace = true
 silverhand-backend-server.workspace = true
