@@ -6,21 +6,28 @@
 //! backend, and it lives here. This module BRANDS nothing: [`canonicalize_name`]
 //! returns a neutral [`CanonicalName`] and a neutral [`NameCanonicalizationIssue`],
 //! never a conversation-title or workspace-name value. Each domain wraps the neutral
-//! result in its own value type and applies its OWN length cap, so no domain's
-//! legality, error vocabulary, or key mint is defined in another domain's language.
-//! The shared thing is the Unicode capability (NFC, the ECMAScript trim set, the
-//! forbidden code-point domain, the pinned case fold); the cap and the brand are the
-//! consumer's.
+//! result in its own value type, so no domain's legality, error vocabulary, or key
+//! mint is defined in another domain's language.
 //!
-//! ## The pipeline order is the shared contract; the cap is the caller's
+//! ## The neutral primitive is the whole BASE ENVELOPE, not a cap-parameterized step
 //!
-//! [`canonicalize_name`] runs NFC → ECMAScript-trim → reject-empty →
-//! reject-over-`max_code_points` → reject-forbidden → fold, in THAT order. The
-//! length cap is checked BEFORE the forbidden scan, so a name that is both over the
-//! cap and carries a forbidden scalar reports its length, not the interior scalar.
-//! That ordering is a property every consumer inherits identically; only the
-//! `max_code_points` value differs per domain (128 for a conversation title, 64 for
-//! a workspace name).
+//! [`canonicalize_name`] runs the entire base envelope every human-visible name must
+//! satisfy: NFC → ECMAScript-trim → reject-empty → reject over
+//! [`MAX_NAME_CODE_POINTS`] → reject-forbidden → fold, in THAT fixed order. The
+//! `128` envelope cap is checked BEFORE the forbidden scan, so a name that is both
+//! over the envelope and carries a forbidden scalar reports its length, not the
+//! interior scalar.
+//!
+//! A domain does NOT canonicalize with a different cap — the refusal precedence is
+//! not a per-domain parameter, it is the shared contract. A domain that wants a
+//! NARROWER limit (a regular workspace name caps at 64) applies that cap only AFTER
+//! a successful base canonicalization, so it inherits the full envelope verdict —
+//! including forbidden-before-its-own-cap — exactly as the TypeScript
+//! `parseWorkspaceName` inherits the full `parseConversationTitle` verdict before it
+//! checks 64. Collapsing the two into one cap-parameterized pipeline would reorder
+//! the refusals (a 65–128-code-point name with a forbidden scalar would report its
+//! length instead of the scalar); the base envelope stays whole precisely so it
+//! cannot.
 
 use thiserror::Error;
 use unicode_normalization::UnicodeNormalization;
@@ -28,6 +35,13 @@ use unicode_normalization::UnicodeNormalization;
 mod pinned_unicode {
     include!(concat!(env!("OUT_DIR"), "/name_charset.rs"));
 }
+
+/// The base name envelope's maximum length, in NFC + trimmed code points. Every
+/// human-visible name in the product must fit it; a domain may NARROW it (a regular
+/// workspace name caps at 64) but never widen it. It is checked before the forbidden
+/// scan, which is why the refusal precedence — empty, then over-envelope length,
+/// then forbidden scalar — is fixed for every consumer.
+pub const MAX_NAME_CODE_POINTS: usize = 128;
 
 /// A canonicalized display form and the uniqueness key derived from that exact
 /// display, produced by [`canonicalize_name`].
@@ -60,34 +74,26 @@ impl CanonicalName {
     }
 }
 
-/// Why a candidate name is not canonical. Neutral: a consumer maps this into its
-/// own domain issue (adding, e.g., a domain-specific `too_long` message). The
-/// `TooLong` arm reports both the measured count and the cap that refused it so the
-/// neutral message is self-describing; a consumer forwarding only the count may
-/// drop `max_code_points`.
+/// Why a candidate name fails the base envelope. Neutral: a consumer maps this into
+/// its own domain issue. `TooLong` reports the measured count; the cap that refused
+/// it is the fixed [`MAX_NAME_CODE_POINTS`].
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum NameCanonicalizationIssue {
     #[error("name is empty after trimming")]
     Empty,
-    #[error("name contains {code_points} code points; the maximum is {max_code_points}")]
-    TooLong {
-        code_points: usize,
-        max_code_points: usize,
-    },
+    #[error("name contains {code_points} code points; the maximum is 128")]
+    TooLong { code_points: usize },
     #[error("name contains forbidden code point U+{code_point:04X} at index {index}")]
     ForbiddenCodePoint { code_point: u32, index: usize },
 }
 
-/// NFC-normalize, ECMAScript-trim, reject empty, reject over `max_code_points`,
-/// reject a forbidden code point, and derive the pinned fold key — in that order.
+/// Run the base name envelope: NFC-normalize, ECMAScript-trim, reject empty, reject
+/// over [`MAX_NAME_CODE_POINTS`], reject a forbidden code point, and derive the
+/// pinned fold key — in that fixed order.
 ///
-/// The length cap is applied before the forbidden scan (see the module docs). The
-/// `max_code_points` bound is supplied by the calling domain; every other step is
-/// the shared Unicode contract.
-pub fn canonicalize_name(
-    raw: &str,
-    max_code_points: usize,
-) -> Result<CanonicalName, NameCanonicalizationIssue> {
+/// A domain with a narrower limit applies it to the returned display AFTER a
+/// success; it does not re-run this with a different cap (see the module docs).
+pub fn canonicalize_name(raw: &str) -> Result<CanonicalName, NameCanonicalizationIssue> {
     let normalized: String = raw.nfc().collect();
     let display = normalized
         .trim_matches(is_ecmascript_trim_whitespace)
@@ -96,11 +102,8 @@ pub fn canonicalize_name(
     if code_points == 0 {
         return Err(NameCanonicalizationIssue::Empty);
     }
-    if code_points > max_code_points {
-        return Err(NameCanonicalizationIssue::TooLong {
-            code_points,
-            max_code_points,
-        });
+    if code_points > MAX_NAME_CODE_POINTS {
+        return Err(NameCanonicalizationIssue::TooLong { code_points });
     }
     if let Some((index, character)) = display
         .chars()
@@ -198,66 +201,62 @@ fn is_ecmascript_trim_whitespace(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CanonicalName, NameCanonicalizationIssue, canonicalize_name, name_character_is_forbidden,
-        name_is_nfc,
+        CanonicalName, MAX_NAME_CODE_POINTS, NameCanonicalizationIssue, canonicalize_name,
+        name_character_is_forbidden, name_is_nfc,
     };
 
     #[test]
     fn canonicalizes_with_exact_ecmascript_trim_and_pinned_fold() {
-        let value = canonicalize_name("\u{FEFF}Straße\u{3000}", 128).unwrap();
+        let value = canonicalize_name("\u{FEFF}Straße\u{3000}").unwrap();
         assert_eq!(value.display(), "Straße");
         assert_eq!(value.key(), "strasse");
     }
 
     #[test]
-    fn empty_after_trimming_is_reported_before_any_cap() {
+    fn empty_after_trimming_is_reported_before_the_cap() {
         assert_eq!(
-            canonicalize_name("   \u{3000}\u{FEFF}", 64),
+            canonicalize_name("   \u{3000}\u{FEFF}"),
             Err(NameCanonicalizationIssue::Empty)
         );
     }
 
     #[test]
-    fn the_cap_is_the_callers_and_is_checked_before_the_forbidden_scan() {
-        // Same input, two caps: accepted under 128, refused under 64 — the cap is a
-        // parameter, not a shared constant.
-        assert!(canonicalize_name(&"a".repeat(100), 128).is_ok());
+    fn the_envelope_caps_at_128_before_the_forbidden_scan() {
+        assert!(canonicalize_name(&"a".repeat(MAX_NAME_CODE_POINTS)).is_ok());
         assert_eq!(
-            canonicalize_name(&"a".repeat(100), 64),
+            canonicalize_name(&"a".repeat(MAX_NAME_CODE_POINTS + 1)),
             Err(NameCanonicalizationIssue::TooLong {
-                code_points: 100,
-                max_code_points: 64,
+                code_points: MAX_NAME_CODE_POINTS + 1
             })
         );
 
-        // Over the cap AND carrying a forbidden joiner: the cap wins, because it is
-        // checked first. This is the ordering every consumer inherits.
-        let mut raw = "a".repeat(100);
+        // Over the 128 envelope AND carrying a forbidden joiner: the cap wins,
+        // because it is checked first. This is the ordering every consumer inherits.
+        let mut raw = "a".repeat(200);
         raw.push('\u{200D}');
         assert_eq!(
-            canonicalize_name(&raw, 64),
-            Err(NameCanonicalizationIssue::TooLong {
-                code_points: 101,
-                max_code_points: 64,
-            })
+            canonicalize_name(&raw),
+            Err(NameCanonicalizationIssue::TooLong { code_points: 201 })
         );
     }
 
     #[test]
-    fn a_forbidden_scalar_within_the_cap_is_reported_with_its_index() {
-        let raw = format!("{}\u{200D}", "a".repeat(10));
+    fn a_forbidden_scalar_within_the_envelope_is_reported_with_its_index() {
+        // 101 code points: within the 128 envelope, so the forbidden scan fires and
+        // reports the joiner rather than a length verdict.
+        let raw = format!("{}\u{200D}", "a".repeat(100));
         assert_eq!(
-            canonicalize_name(&raw, 64),
+            canonicalize_name(&raw),
             Err(NameCanonicalizationIssue::ForbiddenCodePoint {
                 code_point: 0x200D,
-                index: 10,
+                index: 100,
             })
         );
     }
 
     #[test]
     fn into_parts_yields_the_pair_the_primitive_produced() {
-        let value: CanonicalName = canonicalize_name("  Design Review  ", 128).unwrap();
+        let value: CanonicalName = canonicalize_name("  Design Review  ").unwrap();
         let (display, key) = value.into_parts();
         assert_eq!(display, "Design Review");
         assert_eq!(key, "design review");

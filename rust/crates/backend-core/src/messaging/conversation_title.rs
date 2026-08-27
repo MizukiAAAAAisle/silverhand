@@ -36,11 +36,6 @@ pub use crate::name_canonicalization::{
     fold_name_key, is_space_separator, name_character_is_forbidden, name_is_nfc,
 };
 
-/// The conversation-title code-point cap. Conversation titles apply the shared
-/// canonicalization with this bound; a regular workspace name applies its own,
-/// narrower cap to the same primitive.
-const MAX_CODE_POINTS: usize = 128;
-
 /// A canonical display title and the uniqueness key derived from it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanonicalConversationTitle {
@@ -49,12 +44,13 @@ pub struct CanonicalConversationTitle {
 }
 
 impl CanonicalConversationTitle {
-    /// Runs the shared name canonicalization (NFC, ECMAScript trim, empty check,
-    /// the 128-code-point cap, the forbidden-scalar scan, and the pinned fold) and
-    /// brands the neutral result as a conversation title. The Unicode verdict is
-    /// the shared one; only the cap and the vocabulary are this domain's.
+    /// Runs the shared base name envelope (NFC, ECMAScript trim, empty check, the
+    /// 128-code-point cap, the forbidden-scalar scan, and the pinned fold) and
+    /// brands the neutral result as a conversation title. A conversation title IS
+    /// the full base envelope — it applies no narrower cap — so it simply brands
+    /// the neutral verdict.
     pub fn parse(raw: &str) -> Result<Self, ConversationTitleIssue> {
-        let canonical = canonicalize_name(raw, MAX_CODE_POINTS)?;
+        let canonical = canonicalize_name(raw)?;
         let (title, key) = canonical.into_parts();
         Ok(Self { title, key })
     }
@@ -82,7 +78,7 @@ impl From<NameCanonicalizationIssue> for ConversationTitleIssue {
     fn from(issue: NameCanonicalizationIssue) -> Self {
         match issue {
             NameCanonicalizationIssue::Empty => Self::Empty,
-            NameCanonicalizationIssue::TooLong { code_points, .. } => Self::TooLong { code_points },
+            NameCanonicalizationIssue::TooLong { code_points } => Self::TooLong { code_points },
             NameCanonicalizationIssue::ForbiddenCodePoint { code_point, index } => {
                 Self::ForbiddenCodePoint { code_point, index }
             }
