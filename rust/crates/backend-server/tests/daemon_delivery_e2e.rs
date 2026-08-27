@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
     auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
+    blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
+    host_runtime::aftermath::{CustodyEffectFailure, DaemonConnectionControl},
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
     messaging::{
         AddressedPrincipals, CreatedMessage, DirectLineAuthority, FromKind, MessageContent,
@@ -20,7 +22,8 @@ use silverhand_backend_core::{
     },
     persistence::PersistenceFailure,
     runtime_credential::{
-        ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimePrincipal, RuntimeScope,
+        ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeGeneration,
+        RuntimePrincipal, RuntimeScope,
     },
     runtime_delivery::{
         ClaimPendingInbox, DeliveryLeaseOwner, InboxDeliveryId, InboxSettlementDisposition,
@@ -31,10 +34,16 @@ use silverhand_backend_core::{
         CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
         ProjectRuntimeStatus, RefineRuntimeToolCallInput, RuntimeActivityCommitResult,
         RuntimeActivityFact, RuntimeConsumedCommitResult, RuntimeEventAdmission,
-        RuntimeExitCommitResult, RuntimeSessionInitCommitResult, RuntimeStatusCommitResult,
-        RuntimeToolCallInputCommitResult, StampRuntimePresence, UpsertRuntimeTextActivity,
+        RuntimeExitCommitResult, RuntimeObservedStatus, RuntimeSessionInitCommitResult,
+        RuntimeStatusCommitResult, RuntimeToolCallInputCommitResult, StampRuntimePresence,
+        UpsertRuntimeTextActivity,
+    },
+    teardown::{
+        computer_delete::ComputerCascadeEffects,
+        facts::{AgentRuntimeSessionFacts, StoredBlobRef},
     },
 };
+use silverhand_backend_filesystem::blob_store::LocalBlobStore;
 use silverhand_backend_server::{
     daemon_delivery::{
         DaemonDeliveryController, DaemonDeliveryEffects, DaemonDeliveryRuntime,
@@ -48,6 +57,10 @@ use silverhand_backend_server::{
     host_control::status_seed::{HostStatusSeeds, SeedAttempt, SeedFailure, SeedRead},
     host_control::status_snapshot::{
         self, SnapshotCoordinateMismatch, StatusSnapshotOutcome, StatusSnapshotRequest,
+    },
+    host_runtime::{
+        cascade_effects::{AgentDeletedAnnouncement, ProductionComputerCascadeEffects},
+        detail::ConnectedHostName,
     },
     runtime_credential::RuntimeCredentialAuthority,
     scope_events::{
@@ -632,6 +645,15 @@ fn admission_refusal(
 }
 
 async fn send_ready_with_instance(socket: &mut Socket, protocol_version: u32, instance_id: &str) {
+    send_ready_with_name(socket, protocol_version, instance_id, "Test host").await;
+}
+
+async fn send_ready_with_name(
+    socket: &mut Socket,
+    protocol_version: u32,
+    instance_id: &str,
+    host_name: &str,
+) {
     socket
         .send(Message::Text(
             json!({
@@ -642,7 +664,7 @@ async fn send_ready_with_instance(socket: &mut Socket, protocol_version: u32, in
                 "daemon_version": "test",
                 "daemon_id": "daemon-test",
                 "instance_id": instance_id,
-                "host_descriptor": { "name": "Test host", "kind": "remote" },
+                "host_descriptor": { "name": host_name, "kind": "remote" },
                 "capabilities": [],
                 "daemon_pid": 42,
                 "started_at": 100,
@@ -679,6 +701,20 @@ async fn complete_attachment_until(
     wait_for_attached_count(controller, attached).await;
 }
 
+async fn complete_named_attachment_until(
+    socket: &mut Socket,
+    controller: &DaemonDeliveryController,
+    instance_id: &str,
+    host_name: &str,
+    attached: usize,
+) {
+    send_ready_with_name(socket, OUTBOUND_PROTOCOL_VERSION, instance_id, host_name).await;
+    let status = next_json(socket).await;
+    assert_eq!(status["kind"], "runtime_status");
+    respond(socket, &status, json!({ "runtimes": [] })).await;
+    wait_for_attached_count(controller, attached).await;
+}
+
 async fn wait_for_attachment(controller: &DaemonDeliveryController) {
     wait_for_attached_count(controller, 1).await;
 }
@@ -701,6 +737,300 @@ async fn wait_for_free_host_slot(controller: &DaemonDeliveryController) {
     })
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn self_reported_host_name_exists_only_for_the_live_attachment_generation() {
+    let fixture = fixture("connected-host-name.sqlite").await;
+    let names = fixture.controller.connected_host_names();
+    let host = host_id("host-1");
+    assert_eq!(names.connected_host_name(&host), None);
+
+    // Authentication alone is not an attachment and exposes no diagnostic name.
+    let mut first = connect(fixture.address).await;
+    assert_eq!(names.connected_host_name(&host), None);
+    complete_named_attachment_until(
+        &mut first,
+        &fixture.controller,
+        "instance-first",
+        "Daemon First",
+        1,
+    )
+    .await;
+    assert_eq!(
+        names.connected_host_name(&host).as_deref(),
+        Some("Daemon First")
+    );
+
+    first.close(None).await.unwrap();
+    wait_for_free_host_slot(&fixture.controller).await;
+    assert_eq!(names.connected_host_name(&host), None);
+
+    let mut replacement = connect(fixture.address).await;
+    complete_named_attachment_until(
+        &mut replacement,
+        &fixture.controller,
+        "instance-replacement",
+        "Daemon Replacement",
+        1,
+    )
+    .await;
+    assert_eq!(
+        names.connected_host_name(&host).as_deref(),
+        Some("Daemon Replacement")
+    );
+
+    replacement.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn per_host_disconnect_is_idempotent_and_never_becomes_global_shutdown() {
+    let fixture = fixture("per-host-disconnect.sqlite").await;
+    let mut db = open(&fixture.path).await;
+    sqlx::query(
+        "INSERT INTO hosts (id, name, kind, created_at, user_id)
+         VALUES ('host-2', 'host-2', 'remote', 1, 'user-1')",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO host_credentials (
+            id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at
+         ) VALUES ('credential-2', 'host-2', ?, 'long_lived', NULL, NULL, NULL)",
+    )
+    .bind(token_hash(TOKEN_2))
+    .execute(&mut db)
+    .await
+    .unwrap();
+
+    let mut selected = connect(fixture.address).await;
+    complete_attachment_until(&mut selected, &fixture.controller, "instance-1", 1).await;
+    let mut survivor = connect_with_token(fixture.address, TOKEN_2).await.unwrap();
+    complete_attachment_until(&mut survivor, &fixture.controller, "instance-2", 2).await;
+
+    let control = fixture.controller.connection_control();
+    control.disconnect(host_id("host-1")).await.unwrap();
+    expect_close(
+        &mut selected,
+        CloseCode::Away,
+        HOST_REVOKED_CLOSE_REASON_FOR_TEST,
+    )
+    .await;
+    wait_for_attached_count(&fixture.controller, 1).await;
+    assert!(fixture.controller.host_attached("host-2").unwrap());
+    assert!(!fixture.controller.host_attached("host-1").unwrap());
+
+    // A second attempt names no live generation and succeeds without touching host-2.
+    control.disconnect(host_id("host-1")).await.unwrap();
+    survivor
+        .send(Message::Text(
+            json!({
+                "direction": "daemon_to_server",
+                "type": "heartbeat",
+                "kind": "ping",
+                "ts": 77,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let pong = next_json(&mut survivor).await;
+    assert_eq!(pong["kind"], "pong");
+    assert_eq!(pong["echo_ts"], 77);
+
+    // A later generation attaches normally; the already-delivered close and the old
+    // task's generation-compared cleanup cannot remove it.
+    let mut replacement = connect(fixture.address).await;
+    complete_named_attachment_until(
+        &mut replacement,
+        &fixture.controller,
+        "instance-replacement",
+        "Replacement host",
+        2,
+    )
+    .await;
+    tokio::task::yield_now().await;
+    assert!(fixture.controller.host_attached("host-1").unwrap());
+    assert_eq!(
+        fixture
+            .controller
+            .connected_host_names()
+            .connected_host_name(&host_id("host-1"))
+            .as_deref(),
+        Some("Replacement host")
+    );
+
+    replacement.close(None).await.unwrap();
+    survivor.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+const HOST_REVOKED_CLOSE_REASON_FOR_TEST: &str = "host_revoked";
+
+#[derive(Clone)]
+struct RecordingDeletedAnnouncement {
+    calls: Arc<AtomicUsize>,
+}
+
+impl AgentDeletedAnnouncement for RecordingDeletedAnnouncement {
+    async fn agent_deleted(&self, _agent: &AgentId) -> Result<(), CustodyEffectFailure> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn production_cascade_effects_use_exact_daemon_targets_and_the_real_blob_store() {
+    let fixture = fixture("cascade-effects.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+
+    let blobs = LocalBlobStore::open(fixture.path.with_extension("blobs"))
+        .await
+        .unwrap();
+    let stored = blobs
+        .put(
+            &BlobNamespace::from_segments(["attachments", "cascade"]).unwrap(),
+            "text/plain",
+            b"delete me".to_vec(),
+        )
+        .await
+        .unwrap();
+    let stored_ref = StoredBlobRef {
+        storage: stored.storage().as_str().to_owned(),
+        storage_key: stored.key().as_str().to_owned(),
+    };
+    let deleted_calls = Arc::new(AtomicUsize::new(0));
+    let effects = ProductionComputerCascadeEffects::new(
+        RecordingDeletedAnnouncement {
+            calls: deleted_calls.clone(),
+        },
+        fixture.controller.cascade_daemon_effects(),
+        blobs.clone(),
+    );
+
+    effects
+        .agent_deleted(&AgentId::parse(AGENT).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(deleted_calls.load(Ordering::SeqCst), 1);
+
+    let seat = AgentRuntimeSessionFacts {
+        scope: RuntimeScope::ConversationSlot {
+            agent: AgentId::parse(AGENT).unwrap(),
+            source: ConversationId::parse(CONVERSATION).unwrap(),
+        },
+        status: RuntimeObservedStatus::Active,
+        generation: RuntimeGeneration::new(7).unwrap(),
+    };
+    let stopping_effects = effects.clone();
+    let stopping_seat = seat.clone();
+    let stopping = tokio::spawn(async move {
+        stopping_effects
+            .stop_runtime_seat(&host_id("host-1"), &stopping_seat)
+            .await
+    });
+    let stop = next_json(&mut socket).await;
+    assert_eq!(stop["kind"], "runtime_stop");
+    assert_eq!(
+        stop["params"],
+        json!({
+            "runtime_scope": {
+                "kind": "conversation",
+                "conversation_id": CONVERSATION,
+                "agent_id": AGENT,
+            },
+            "runtime_generation": 7,
+            "mode": "hard",
+        })
+    );
+    respond(
+        &mut socket,
+        &stop,
+        json!({ "mode": "hard", "stopped": true, "exit_code": 0 }),
+    )
+    .await;
+    stopping.await.unwrap().unwrap();
+    assert!(
+        effects
+            .stop_runtime_seat(&host_id("missing-host"), &seat)
+            .await
+            .is_err()
+    );
+
+    let purging_effects = effects.clone();
+    let purging = tokio::spawn(async move {
+        purging_effects
+            .purge_host_local_files(&host_id("host-1"), &AgentId::parse(AGENT).unwrap())
+            .await
+    });
+    let purge = next_json(&mut socket).await;
+    assert_eq!(purge["kind"], "agent_files_purge");
+    assert_eq!(purge["params"], json!({ "agent_id": AGENT }));
+    respond(
+        &mut socket,
+        &purge,
+        json!({ "ok": true, "purged_count": 1, "quiesced_count": 1 }),
+    )
+    .await;
+    purging.await.unwrap().unwrap();
+    assert!(
+        effects
+            .purge_host_local_files(&host_id("missing-host"), &AgentId::parse(AGENT).unwrap(),)
+            .await
+            .is_err()
+    );
+
+    // Command-specific typed refusals are admitted on this one kind and reported as
+    // residue; they do not corrupt or close the live connection.
+    let retry_effects = effects.clone();
+    let retry = tokio::spawn(async move {
+        retry_effects
+            .purge_host_local_files(&host_id("host-1"), &AgentId::parse(AGENT).unwrap())
+            .await
+    });
+    let refused = next_json(&mut socket).await;
+    respond_error(
+        &mut socket,
+        &refused,
+        json!({ "code": "partial_purge", "message": "disk refused removal" }),
+    )
+    .await;
+    assert!(retry.await.unwrap().is_err());
+    assert!(fixture.controller.host_attached("host-1").unwrap());
+
+    effects.forget_stored_blob(&stored_ref).await.unwrap();
+    assert_eq!(blobs.read(&stored).await.unwrap(), BlobReadOutcome::Missing);
+    // Physical absence is idempotent, while an invalid/foreign coordinate is not
+    // silently interpreted as a server path.
+    effects.forget_stored_blob(&stored_ref).await.unwrap();
+    assert!(
+        effects
+            .forget_stored_blob(&StoredBlobRef {
+                storage: "local".to_owned(),
+                storage_key: "../outside".to_owned(),
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        effects
+            .forget_stored_blob(&StoredBlobRef {
+                storage: "s3".to_owned(),
+                storage_key: stored.key().as_str().to_owned(),
+            })
+            .await
+            .is_err()
+    );
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
 }
 
 fn runtime_scope() -> RuntimeScope {
