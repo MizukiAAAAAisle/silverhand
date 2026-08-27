@@ -112,6 +112,12 @@ function makeDriver(): Driver {
     binary: execPath,
     kickoffMode: 'self_inits',
     releaseProfile: 'native-steer',
+    // #task:2210: this fake driver echoes stdin and only emits `session_init`
+    // — it never produces an `input_lifecycle{started}` proof. Use
+    // `write-success` so delivery settles at the stdin write exactly as these
+    // e2e fixtures assumed pre-#2210; `lifecycle-start` would leave every
+    // delivery unadmitted forever here.
+    admissionPolicy: 'write-success',
     oneShot: false,
     supportsNativeStandingPrompt: true,
     // Keep the failure matrix fast without making a healthy child lose a

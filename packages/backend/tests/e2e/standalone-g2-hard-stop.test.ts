@@ -66,6 +66,9 @@ function makeSessionInitDriver(sessionId: string): Driver {
     binary: FIXTURE,
     kickoffMode: 'self_inits',
     releaseProfile: 'native-steer',
+    // #task:2210: session-init-only fake driver -- no input_lifecycle proof, so
+    // settle at the stdin write (pre-#2210 behavior); lifecycle-start would never admit.
+    admissionPolicy: 'write-success',
     oneShot: false,
     supportsNativeStandingPrompt: true,
     initLivenessSilenceMs: 30_000,
