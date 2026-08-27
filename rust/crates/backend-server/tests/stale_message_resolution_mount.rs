@@ -36,16 +36,20 @@ use axum::{
 use serde_json::Value;
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, DaemonInstanceId},
-    messaging::{CapabilityDenied, SendCapability},
+    messaging::{
+        CapabilityDenied, SendCapability,
+        collaboration::stale_message_resolution::{
+            StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
+            StaleMessageResolutionAdmissionRefusal,
+        },
+    },
     persistence::PersistenceFailure,
     runtime_credential::{RuntimeEventTime, RuntimeScope},
 };
 use silverhand_backend_server::{
     messaging::collaboration::stale_message_resolution::{
-        StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
-        StaleMessageResolutionAdmissionRefusal, StaleMessageResolutionObservation,
-        StaleMessageResolutionObserver, TracingStaleMessageResolutionObserver,
-        router as stale_message_resolution_router,
+        StaleMessageResolutionObservation, StaleMessageResolutionObserver,
+        TracingStaleMessageResolutionObserver, router as stale_message_resolution_router,
     },
     runtime_credential::{
         RuntimeClock, RuntimeCredentialAuthority, RuntimeDispatchFailure, RuntimeEntropy,
@@ -55,10 +59,7 @@ use silverhand_backend_server::{
 use silverhand_backend_sqlite::{
     messaging::{
         MessagingStore,
-        collaboration::stale_message_resolution::{
-            SqliteStaleMessageResolutionAdmission,
-            StaleMessageResolutionAdmissionRefusal as SqlRefusal,
-        },
+        collaboration::stale_message_resolution::SqliteStaleMessageResolutionAdmission,
     },
     runtime_credential::SqliteRuntimeCustodyStore,
 };
@@ -125,8 +126,9 @@ impl RuntimeStartTransport for CapturingStart {
 }
 
 /// Wraps the real SQLite admission so the refused arms can assert the post authority was
-/// NEVER consulted; every admitted call delegates to the real one-snapshot admission and maps
-/// its source into the server port fact exactly as the composition-root bridge does.
+/// NEVER consulted; every admitted call delegates to the real one-snapshot admission and
+/// returns its canonical fact unchanged — the adapter answers the core port itself, so no
+/// translation happens anywhere.
 #[derive(Clone)]
 struct CountingAdmission {
     inner: SqliteStaleMessageResolutionAdmission,
@@ -145,13 +147,7 @@ impl StaleMessageResolutionAdmissionPort for CountingAdmission {
         Self::Error,
     > {
         self.calls.fetch_add(1, SeqCst);
-        Ok(match self.inner.admit(agent, conversation).await? {
-            Ok(source) => Ok(StaleMessageResolutionAdmissionFact::selected(
-                source.agent().clone(),
-                source.conversation().clone(),
-            )),
-            Err(SqlRefusal::Forbidden) => Err(StaleMessageResolutionAdmissionRefusal::Forbidden),
-        })
+        self.inner.admit(agent, conversation).await
     }
 }
 

@@ -1,7 +1,10 @@
-use silverhand_backend_core::identity::{AgentId, ConversationId};
-use silverhand_backend_sqlite::messaging::{
-    MessagingStore, collaboration::stale_message_resolution::StaleMessageResolutionAdmissionRefusal,
+use silverhand_backend_core::{
+    identity::{AgentId, ConversationId},
+    messaging::collaboration::stale_message_resolution::{
+        StaleMessageResolutionAdmissionPort, StaleMessageResolutionAdmissionRefusal,
+    },
 };
+use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection};
 
 #[path = "support/current_schema_snapshot.rs"]
@@ -94,9 +97,15 @@ async fn workspace_and_live_pair_return_actual_source_coordinates() {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(source.agent(), &agent(), "{id}");
-        assert_eq!(source.conversation(), &requested, "{id}");
-        assert!(source.clone().bind(&agent(), &requested).is_ok(), "{id}");
+        assert_eq!(
+            source
+                .clone()
+                .bind(&agent(), &requested)
+                .unwrap()
+                .into_parts(),
+            (agent(), requested.clone()),
+            "{id}"
+        );
         assert!(
             source
                 .clone()

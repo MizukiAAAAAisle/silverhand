@@ -13,16 +13,13 @@ use axum::{
 use futures_util::stream;
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, DaemonInstanceId},
-    messaging::{CapabilityDenied, SendCapability},
-    persistence::PersistenceFailure,
+    messaging::{
+        CapabilityDenied, SendCapability,
+        collaboration::stale_message_resolution::StaleMessageResolutionAdmissionFact,
+    },
     runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
-use silverhand_backend_sqlite::messaging::{
-    MessagingStore,
-    collaboration::stale_message_resolution::{
-        SqliteStaleMessageResolutionAdmission, StaleMessageResolutionAdmissionRefusal as SqlRefusal,
-    },
-};
+use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
 use tower::ServiceExt;
 
@@ -349,30 +346,6 @@ async fn source_splices_and_both_authority_refusals_never_reach_the_observer() {
     }
 }
 
-#[derive(Clone)]
-struct SqliteAdmission(SqliteStaleMessageResolutionAdmission);
-
-impl StaleMessageResolutionAdmissionPort for SqliteAdmission {
-    type Error = PersistenceFailure;
-
-    async fn admit(
-        &self,
-        agent: &AgentId,
-        conversation: &ConversationId,
-    ) -> Result<
-        Result<StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionRefusal>,
-        Self::Error,
-    > {
-        Ok(match self.0.admit(agent, conversation).await? {
-            Ok(source) => Ok(StaleMessageResolutionAdmissionFact::selected(
-                source.agent().clone(),
-                source.conversation().clone(),
-            )),
-            Err(SqlRefusal::Forbidden) => Err(StaleMessageResolutionAdmissionRefusal::Forbidden),
-        })
-    }
-}
-
 #[tokio::test]
 async fn production_sqlite_admission_and_capability_drive_the_route() {
     const SCHEMA: &str = include_str!(concat!(
@@ -415,7 +388,7 @@ async fn production_sqlite_admission_and_capability_drive_the_route() {
     let store = MessagingStore::open(&path).await.unwrap();
     let observer = Observer::default();
     let app = router(
-        SqliteAdmission(store.stale_message_resolution_admission()),
+        store.stale_message_resolution_admission(),
         store.clone(),
         observer.clone(),
     );

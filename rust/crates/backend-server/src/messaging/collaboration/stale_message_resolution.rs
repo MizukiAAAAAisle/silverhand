@@ -5,7 +5,7 @@
 //! existing post authority and independent `send_messages` capability, then
 //! synchronously emits the one warning record the TypeScript service owns.
 
-use std::{error::Error, future::Future, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
@@ -17,72 +17,19 @@ use axum::{
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId},
-    messaging::{CapabilityDenied, SendCapability},
+    messaging::{
+        CapabilityDenied, SendCapability,
+        collaboration::stale_message_resolution::{
+            BoundStaleMessageResolutionAdmission, StaleMessageResolutionAdmissionPort,
+            StaleMessageResolutionAdmissionRefusal,
+        },
+    },
     runtime_credential::RuntimePrincipal,
 };
 
 use super::json_body::{BodyRead, payload_too_large, read_body};
 
 pub const STALE_MESSAGE_RESOLUTION_PATH: &str = "/internal/agents/{aid}/stale-message-resolution";
-
-pub trait StaleMessageResolutionAdmissionPort {
-    type Error: Error + Send + Sync + 'static;
-
-    fn admit(
-        &self,
-        agent: &AgentId,
-        conversation: &ConversationId,
-    ) -> impl Future<
-        Output = Result<
-            Result<StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionRefusal>,
-            Self::Error,
-        >,
-    > + Send;
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StaleMessageResolutionAdmissionFact {
-    agent: AgentId,
-    conversation: ConversationId,
-}
-
-impl StaleMessageResolutionAdmissionFact {
-    pub fn selected(agent: AgentId, conversation: ConversationId) -> Self {
-        Self {
-            agent,
-            conversation,
-        }
-    }
-
-    fn bind(
-        self,
-        agent: &AgentId,
-        conversation: &ConversationId,
-    ) -> Result<BoundStaleMessageResolutionAdmission, StaleMessageResolutionIdentityMismatch> {
-        if &self.agent != agent || &self.conversation != conversation {
-            return Err(StaleMessageResolutionIdentityMismatch);
-        }
-        Ok(BoundStaleMessageResolutionAdmission(self))
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StaleMessageResolutionAdmissionRefusal {
-    Forbidden,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct StaleMessageResolutionIdentityMismatch;
-
-impl std::fmt::Display for StaleMessageResolutionIdentityMismatch {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("stale-message resolution admission source differs from the request")
-    }
-}
-
-impl Error for StaleMessageResolutionIdentityMismatch {}
-
-struct BoundStaleMessageResolutionAdmission(StaleMessageResolutionAdmissionFact);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StaleMessageResolutionObservation {
@@ -93,9 +40,10 @@ pub struct StaleMessageResolutionObservation {
 
 impl StaleMessageResolutionObservation {
     fn from_bound(admission: BoundStaleMessageResolutionAdmission, stale_event_id: String) -> Self {
+        let (agent, conversation) = admission.into_parts();
         Self {
-            agent: admission.0.agent,
-            conversation: admission.0.conversation,
+            agent,
+            conversation,
             stale_event_id,
         }
     }

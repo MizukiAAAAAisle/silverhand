@@ -391,6 +391,25 @@ fn the_notification_identity_has_exactly_one_declaration() {
     );
 }
 
+/// The other shape of the same defect: one closed refusal set declared in the adapter crate
+/// AND in the route crate, with the composition root translating between them. Two
+/// one-variant enums cannot disagree today, which is exactly the trap — the translation is
+/// where a later variant gets dropped, and nothing in the tree would say so.
+#[test]
+fn the_stale_resolution_refusal_has_exactly_one_declaration() {
+    assert_eq!(
+        declarations_of("StaleMessageResolutionAdmissionRefusal"),
+        vec![(
+            "crates/backend-core/src/messaging/collaboration/stale_message_resolution.rs"
+                .to_owned(),
+            "enum"
+        )],
+        "the stale-resolution refusal must be declared once, where the admission contract \
+         lives: a copy in an adapter or a route crate needs a mapping, and a mapping is what \
+         loses a variant silently"
+    );
+}
+
 /// The other way a path to a name appears: a public `use`.
 ///
 /// The duplicate this ticket deleted was reachable as `collaboration::notification::model::
@@ -731,7 +750,11 @@ fn the_only_sources_that_are_not_modules_are_named() {
 }
 
 /// The names this file holds to one owner each.
-const WATCHED: [&str; 2] = ["NotificationId", "RuntimeKind"];
+const WATCHED: [&str; 3] = [
+    "NotificationId",
+    "RuntimeKind",
+    "StaleMessageResolutionAdmissionRefusal",
+];
 
 /// Nothing at item position may bind a type name this inventory cannot read.
 ///

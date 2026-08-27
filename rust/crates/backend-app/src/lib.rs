@@ -15,8 +15,6 @@ use silverhand_backend_core::{
     access::{EnrollmentClock, unix_millis},
     auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     host_runtime::{CreateHostInvite, OsEntropy, SystemClock},
-    identity::{AgentId, ConversationId},
-    persistence::PersistenceFailure,
     policy::presence_grace::GraceWindow,
 };
 use silverhand_backend_server::{
@@ -35,9 +33,7 @@ use silverhand_backend_server::{
             conversation_message_window, conversation_ref, conversation_threads,
             conversation_unread, human_search, message_unread,
             stale_message_resolution::{
-                StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
-                StaleMessageResolutionAdmissionRefusal, TracingStaleMessageResolutionObserver,
-                router as stale_message_resolution_router,
+                TracingStaleMessageResolutionObserver, router as stale_message_resolution_router,
             },
         },
         task::{TaskListState, task_list_router},
@@ -61,14 +57,7 @@ use silverhand_backend_sqlite::{
     direct_pair_read::SqliteDirectPairReadModel,
     host_resources_read::SqliteHostResourcesColdRead,
     host_runtime::SqliteHostRuntimeStore,
-    messaging::{
-        MessagingStore,
-        collaboration::stale_message_resolution::{
-            SqliteStaleMessageResolutionAdmission,
-            StaleMessageResolutionAdmissionRefusal as SqliteStaleMessageResolutionRefusal,
-        },
-        task::SqliteTaskStore,
-    },
+    messaging::{MessagingStore, task::SqliteTaskStore},
     runtime_credential::SqliteRuntimeCustodyStore,
     runtime_delivery::SqliteRuntimeDeliveryStore,
     scope_event::SqliteEventScopeAuthority,
@@ -268,36 +257,6 @@ async fn shut_down_transports(
     );
 }
 
-/// App-private adapter binding the committed sqlite stale-resolution admission to
-/// the server port. It lives in the composition root, not in backend-server, so the
-/// production server keeps `silverhand-backend-sqlite` a dev-dependency only — the
-/// one place allowed to name a concrete authority. The mapping is mechanical: the
-/// admitted source becomes the port fact, `Forbidden` stays `Forbidden`.
-struct StaleMessageResolutionAdmissionBridge(SqliteStaleMessageResolutionAdmission);
-
-impl StaleMessageResolutionAdmissionPort for StaleMessageResolutionAdmissionBridge {
-    type Error = PersistenceFailure;
-
-    async fn admit(
-        &self,
-        agent: &AgentId,
-        conversation: &ConversationId,
-    ) -> Result<
-        Result<StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionRefusal>,
-        Self::Error,
-    > {
-        match self.0.admit(agent, conversation).await? {
-            Ok(source) => Ok(Ok(StaleMessageResolutionAdmissionFact::selected(
-                source.agent().clone(),
-                source.conversation().clone(),
-            ))),
-            Err(SqliteStaleMessageResolutionRefusal::Forbidden) => {
-                Ok(Err(StaleMessageResolutionAdmissionRefusal::Forbidden))
-            }
-        }
-    }
-}
-
 pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     verify_schema(&config.database_path)
         .await
@@ -437,8 +396,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // participation + placement + half-dead narrowing) and the independent
     // `send_messages` capability the send door holds; both captured before
     // `send_routers` consumes the store as the send unit-of-work.
-    let stale_admission =
-        StaleMessageResolutionAdmissionBridge(messaging_store.stale_message_resolution_admission());
+    let stale_admission = messaging_store.stale_message_resolution_admission();
     let stale_capability = messaging_store.clone();
     // The five channel directory/detail read doors ride the SAME `MessagingStore` the
     // send door holds — each `&self` builder clones only the shared pool, opening no

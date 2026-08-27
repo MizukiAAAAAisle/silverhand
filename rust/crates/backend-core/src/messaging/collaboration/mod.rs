@@ -24,6 +24,7 @@ pub mod notification;
 pub mod reaction;
 mod runtime_control;
 pub mod saved;
+pub mod stale_message_resolution;
 pub mod thread_follow;
 pub mod workspace_rename_messaging;
 
