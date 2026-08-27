@@ -12,32 +12,30 @@
 //! that itself fails is a probe failure — the process just failed to release a write
 //! lock it took, which is not a writable store.
 //!
-//! ## One connection, because the product has one writer
+//! ## The probe rides a store's handle; it never opens its own
 //!
-//! The pool is deliberately a single connection. The product's probe runs on the
-//! process's one synchronous handle, so two probes can never contend with each other
-//! there; a wider pool here would invent write-lock contention between two
-//! concurrent readiness probes and report a busy database that only this adapter's
-//! own shape created.
+//! Readiness is about the handle the process actually writes through. A probe that
+//! opened the same FILE would be a different writer: its own connections, its own
+//! PRAGMAs, its own lifetime. It would answer `Ok` after the store it reports for
+//! was closed, and it would answer for configuration the store does not have —
+//! either way `/readyz` goes green for a process that cannot write.
 //!
-//! The busy timeout matches the product handle's (5s), so a probe waits out the same
-//! transient contention before it calls a database unwritable.
-
-use std::{path::Path, time::Duration};
+//! So there is no path constructor. [`SqliteWriteProbe::sharing`] takes a pool and is
+//! `pub(crate)`, which leaves exactly one way to obtain a probe from outside this
+//! crate: ask a store for one
+//! ([`MessagingStore::write_probe`](crate::messaging::MessagingStore::write_probe)),
+//! which hands over the handle it writes with. `SqlitePool` is a shared handle, so a
+//! probe cannot outlive the store's usability — the gate for that lives beside the
+//! store, where the handle is private.
 
 use silverhand_backend_core::persistence::{PersistenceFailure, WriteProbe};
-use sqlx::{
-    SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-};
+use sqlx::SqlitePool;
 use thiserror::Error;
 
-/// One connection — see the module note. Not a tuning parameter.
-const POOL_CONNECTIONS: u32 = 1;
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const IMMEDIATE_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 
-/// Takes and releases the write lock on the process's database.
+/// Takes and releases the write lock on the store's database, through the store's own
+/// handle.
 #[derive(Clone)]
 pub struct SqliteWriteProbe {
     pool: SqlitePool,
@@ -52,21 +50,11 @@ pub enum SqliteWriteProbeError {
 }
 
 impl SqliteWriteProbe {
-    /// `create_if_missing(false)`: a probe must never bring the database it is
-    /// checking into existence — an absent file is a fault to report, not one to fix.
-    pub async fn open(path: impl AsRef<Path>) -> Result<Self, SqliteWriteProbeError> {
-        let options = SqliteConnectOptions::new()
-            .filename(path.as_ref())
-            .create_if_missing(false)
-            .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Full)
-            .busy_timeout(BUSY_TIMEOUT);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(options)
-            .await?;
-        Ok(Self { pool })
+    /// Probe the database behind an existing handle. Not public: a caller outside this
+    /// crate must go through the store that owns the handle, which is what keeps the
+    /// probe and the writer the same thing.
+    pub(crate) fn sharing(pool: SqlitePool) -> Self {
+        Self { pool }
     }
 
     async fn take_and_release_write_lock(&self) -> Result<(), SqliteWriteProbeError> {
@@ -86,51 +74,39 @@ impl WriteProbe for SqliteWriteProbe {
 
 #[cfg(test)]
 mod tests {
-    use sqlx::Executor;
+    use std::{path::Path, time::Duration};
+
+    use sqlx::{
+        Connection, Executor,
+        sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
+    };
     use tempfile::TempDir;
 
     use super::*;
+    use crate::messaging::{HostEnvironment, MessagingStore};
 
-    /// A database file the product could have written: WAL, and existing, since the
-    /// probe refuses to create one.
-    async fn database(dir: &TempDir) -> std::path::PathBuf {
-        let path = dir.path().join("silverhand.db");
-        let options = SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true)
-            .journal_mode(SqliteJournalMode::Wal);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
+    /// A product database plus the store the process writes through. Every probe under
+    /// test is minted from that store, so these are tests of the production shape and
+    /// not of a pool this module invented.
+    async fn store_over_a_product_database(
+        dir: &TempDir,
+        busy_timeout: Duration,
+    ) -> (std::path::PathBuf, MessagingStore) {
+        let path = dir.path().join("silverhand.sqlite");
+        crate::current_schema::create_current_schema(&path)
             .await
-            .expect("create the database");
-        pool.execute("CREATE TABLE probe_target (id INTEGER PRIMARY KEY)")
+            .close()
             .await
-            .expect("give the database a page to lock");
-        pool.close().await;
-        path
+            .expect("release the schema handle");
+        let store = MessagingStore::open_with_busy_timeout(&path, HostEnvironment, busy_timeout)
+            .await
+            .expect("open the store the process writes through");
+        (path, store)
     }
 
-    /// A probe that refuses instantly instead of waiting out the product's 5s busy
-    /// timeout. Only the wait is different: the statement, the lock it takes and the
-    /// rollback are the production ones.
-    async fn impatient_probe(path: &std::path::Path) -> SqliteWriteProbe {
-        let options = SqliteConnectOptions::new()
-            .filename(path)
-            .create_if_missing(false)
-            .journal_mode(SqliteJournalMode::Wal)
-            .busy_timeout(Duration::ZERO);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(options)
-            .await
-            .expect("open the probe pool");
-        SqliteWriteProbe { pool }
-    }
-
-    /// Hold the write lock from a connection this adapter does not own — what a
-    /// concurrent writer in the same process, or another process, looks like.
-    async fn writer_holding_the_lock(path: &std::path::Path) -> SqlitePool {
+    /// Hold the write lock from a connection no store here owns — what a concurrent
+    /// writer in another process looks like.
+    async fn writer_holding_the_lock(path: &Path) -> sqlx::SqlitePool {
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(false)
@@ -140,33 +116,36 @@ mod tests {
             .connect_with(options)
             .await
             .expect("open the competing writer");
-        pool.execute("BEGIN IMMEDIATE")
+        pool.execute(IMMEDIATE_WRITE_BEGIN)
             .await
             .expect("take the write lock");
         pool
     }
 
     #[tokio::test]
-    async fn a_writable_database_answers_ok_and_stays_probeable() {
+    async fn a_writable_store_answers_ok_and_stays_probeable() {
         let dir = TempDir::new().expect("temp dir");
-        let path = database(&dir).await;
-        let probe = SqliteWriteProbe::open(&path).await.expect("open");
+        let (_, store) = store_over_a_product_database(&dir, Duration::from_secs(5)).await;
+        let probe = store.write_probe();
 
-        // Twice, on one connection: the second probe can only succeed if the first
-        // left no transaction open.
+        // Twice: the second probe can only succeed if the first left no transaction
+        // open on the handle the store also writes through.
         probe.probe_write().await.expect("first probe");
         probe.probe_write().await.expect("second probe");
     }
 
     /// The failure the probe exists to catch: the lock is held elsewhere, so the
-    /// process cannot write right now. And the refusal must not poison the
-    /// connection — once the lock is free, the same probe answers `Ok` again, which
-    /// is what proves the failed attempt left nothing open either.
+    /// process cannot write right now. And the refusal must not poison the store's
+    /// handle — once the lock is free the same probe answers `Ok` again, which is what
+    /// proves the failed attempt left nothing open either.
+    ///
+    /// The store is opened with a short busy timeout so the refusal is prompt; the
+    /// statement, the lock it takes and the rollback are the production ones.
     #[tokio::test]
     async fn a_held_write_lock_is_a_refusal_the_probe_recovers_from() {
         let dir = TempDir::new().expect("temp dir");
-        let path = database(&dir).await;
-        let probe = impatient_probe(&path).await;
+        let (path, store) = store_over_a_product_database(&dir, Duration::from_millis(25)).await;
+        let probe = store.write_probe();
         let competitor = writer_holding_the_lock(&path).await;
 
         let refused = probe.probe_write().await.expect_err("the lock is taken");
@@ -186,16 +165,5 @@ mod tests {
             .probe_write()
             .await
             .expect("probe after the lock frees");
-    }
-
-    /// A probe never creates the database it is asked about: an absent file is a
-    /// fault to report at construction, not one to paper over with an empty store
-    /// that would then answer `Ok`.
-    #[tokio::test]
-    async fn an_absent_database_is_not_created_by_opening_a_probe_on_it() {
-        let dir = TempDir::new().expect("temp dir");
-        let missing = dir.path().join("absent.db");
-        assert!(SqliteWriteProbe::open(&missing).await.is_err());
-        assert!(!missing.exists());
     }
 }

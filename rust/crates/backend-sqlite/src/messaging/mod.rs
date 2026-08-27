@@ -428,7 +428,17 @@ impl<E> MessagingStore<E> {
         Self::open_with_busy_timeout(path, environment, BUSY_TIMEOUT).await
     }
 
-    async fn open_with_busy_timeout(
+    /// The readiness write probe for the database THIS store writes to.
+    ///
+    /// The probe is handed the store's own handle, not its path and not a copy of its
+    /// configuration: readiness has to answer for the writer the process actually
+    /// uses, and a probe holding a handle of its own would report a writable database
+    /// through a connection nothing else writes on.
+    pub fn write_probe(&self) -> crate::write_probe::SqliteWriteProbe {
+        crate::write_probe::SqliteWriteProbe::sharing(self.pool.clone())
+    }
+
+    pub(crate) async fn open_with_busy_timeout(
         path: impl AsRef<Path>,
         environment: E,
         busy_timeout: Duration,
@@ -2964,5 +2974,34 @@ mod tests {
             assert_eq!(foreign_keys, 1);
             assert_eq!(busy_timeout_ms, 5_000);
         }
+    }
+
+    /// The readiness probe this store mints IS this store's handle.
+    ///
+    /// Closing the store closes the probe with it. A probe that opened its own pool on
+    /// the same file would still answer `Ok` after this point — a green `/readyz` for
+    /// a process whose writer is gone — so the shared handle is what the gate is
+    /// about, and it cannot be shown by reading the wiring.
+    #[tokio::test]
+    async fn the_probe_this_store_mints_dies_with_the_store() {
+        use silverhand_backend_core::persistence::WriteProbe;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("readiness-handle.db");
+        empty_database(&path).await;
+        let store = MessagingStore::open(&path).await.unwrap();
+        let probe = store.write_probe();
+
+        probe
+            .probe_write()
+            .await
+            .expect("the store's database is writable");
+
+        store.pool.close().await;
+
+        probe
+            .probe_write()
+            .await
+            .expect_err("a closed store is not a writable one");
     }
 }

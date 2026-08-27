@@ -20,7 +20,7 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::{ops::deployment::ServerMode, runtime_credential::RuntimeClock};
+use crate::{clock::ProcessClock, ops::deployment::ServerMode};
 
 pub const HEALTH_PATH: &str = "/api/health";
 
@@ -32,7 +32,7 @@ struct HealthState<C> {
 
 pub fn router<C>(mode: ServerMode, clock: C) -> Router
 where
-    C: RuntimeClock,
+    C: ProcessClock,
 {
     Router::new()
         .route(HEALTH_PATH, get(health::<C>))
@@ -41,12 +41,12 @@ where
 
 async fn health<C>(State(state): State<HealthState<C>>) -> Response
 where
-    C: RuntimeClock,
+    C: ProcessClock,
 {
     Json(HealthResponse {
         ok: true,
         mode: state.mode.as_str(),
-        ts: state.clock.now().as_unix_millis(),
+        ts: state.clock.now_unix_millis(),
     })
     .into_response()
 }
@@ -71,7 +71,6 @@ mod tests {
         http::{Request, StatusCode},
     };
     use serde_json::{Value, json};
-    use silverhand_backend_core::runtime_credential::RuntimeEventTime;
     use tower::ServiceExt;
 
     use super::*;
@@ -83,9 +82,9 @@ mod tests {
     #[derive(Clone, Copy)]
     struct FrozenClock;
 
-    impl RuntimeClock for FrozenClock {
-        fn now(&self) -> RuntimeEventTime {
-            RuntimeEventTime::from_unix_millis(FIXED_NOW)
+    impl ProcessClock for FrozenClock {
+        fn now_unix_millis(&self) -> i64 {
+            FIXED_NOW
         }
     }
 

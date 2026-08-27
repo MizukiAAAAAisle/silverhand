@@ -72,11 +72,26 @@ impl MachineFacts {
     }
 }
 
-/// `$HOME` if the process has one. Read from the environment rather than from the
-/// password database, matching what the product's `homedir()` prefers.
+/// Where this process's user's home is, or `None` when even the OS cannot say.
+///
+/// [`std::env::home_dir`] is the product's `os.homedir()`: `$HOME` when the process
+/// has a usable one, and the OS's own account record otherwise. The fallback is not
+/// theoretical — a desktop- or `launchd`-started process can inherit no `HOME` at
+/// all, and reading only the environment would drop every home-relative location
+/// (package managers, version managers) from the search path on exactly the machines
+/// this crate exists to find runtimes on.
+///
+/// Whatever the source, the answer must be usable as a search root: an empty or
+/// relative home is no answer, because joining candidates onto it would silently
+/// produce paths relative to the process's working directory.
 fn home_directory() -> Option<PathBuf> {
-    let home = env::var_os("HOME")?;
-    let home = PathBuf::from(home);
+    usable_search_root(env::home_dir())
+}
+
+/// Whether an answer can be joined onto. Separate from where the answer CAME from,
+/// so the rule is checkable without a process that has a different environment.
+fn usable_search_root(home: Option<PathBuf>) -> Option<PathBuf> {
+    let home = home?;
     if home.as_os_str().is_empty() || !home.is_absolute() {
         return None;
     }
@@ -94,6 +109,46 @@ impl MachineFacts {
             login_shell: None,
             path_helper: None,
             include_default_directories: false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A home that cannot be joined onto is not a home. `.` is the one that matters:
+    /// accepting it would turn every home-relative candidate into a path relative to
+    /// the process's working directory.
+    #[test]
+    fn only_an_absolute_home_is_usable_as_a_search_root() {
+        assert_eq!(usable_search_root(None), None);
+        assert_eq!(usable_search_root(Some(PathBuf::new())), None);
+        assert_eq!(usable_search_root(Some(PathBuf::from("."))), None);
+        assert_eq!(
+            usable_search_root(Some(PathBuf::from("relative/home"))),
+            None
+        );
+        assert_eq!(
+            usable_search_root(Some(PathBuf::from("/Users/someone"))),
+            Some(PathBuf::from("/Users/someone"))
+        );
+    }
+
+    /// The facts this process reports come from the OS's home answer, not from a bare
+    /// `HOME` read — and where `HOME` is usable, that answer IS `HOME`, which is the
+    /// preference half of `os.homedir()`. The other half is the API's own fallback to
+    /// the account record, which is why the resolver calls it instead of the
+    /// environment.
+    #[test]
+    fn the_home_this_process_reports_is_the_os_answer_and_prefers_a_usable_home_env() {
+        let reported = MachineFacts::for_this_process().home;
+        assert_eq!(reported, usable_search_root(env::home_dir()));
+
+        if let Some(from_env) = env::var_os("HOME").map(PathBuf::from)
+            && from_env.is_absolute()
+        {
+            assert_eq!(reported, Some(from_env));
         }
     }
 }

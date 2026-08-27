@@ -24,12 +24,15 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, DaemonInstanceId},
-    runtime_credential::{RuntimeEventTime, RuntimeFinalStatus, RuntimePrincipal, RuntimeScope},
+    runtime_credential::{RuntimeFinalStatus, RuntimePrincipal, RuntimeScope},
 };
-use silverhand_backend_server::runtime_credential::{
-    HydrateCredentialDisposition, PrepareRuntimeCredentialError, RuntimeClock,
-    RuntimeCredentialAuthority, RuntimeDispatchFailure, RuntimeEntropy, RuntimeStartFailure,
-    RuntimeStartHandoff, RuntimeStartTransport, RuntimeStopTransport, require_runtime_credential,
+use silverhand_backend_server::{
+    clock::ProcessClock,
+    runtime_credential::{
+        HydrateCredentialDisposition, PrepareRuntimeCredentialError, RuntimeCredentialAuthority,
+        RuntimeDispatchFailure, RuntimeEntropy, RuntimeStartFailure, RuntimeStartHandoff,
+        RuntimeStartTransport, RuntimeStopTransport, require_runtime_credential,
+    },
 };
 use silverhand_backend_sqlite::runtime_credential::SqliteRuntimeCustodyStore;
 use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
@@ -73,9 +76,9 @@ impl RuntimeEntropy for SequenceEntropy {
 #[derive(Clone, Copy)]
 struct FixedClock;
 
-impl RuntimeClock for FixedClock {
-    fn now(&self) -> RuntimeEventTime {
-        RuntimeEventTime::from_unix_millis(1_000)
+impl ProcessClock for FixedClock {
+    fn now_unix_millis(&self) -> i64 {
+        1_000
     }
 }
 

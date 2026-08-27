@@ -41,7 +41,7 @@
 
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering::SeqCst},
+    atomic::{AtomicU8, Ordering::SeqCst},
 };
 
 use axum::{
@@ -55,9 +55,9 @@ use serde::Serialize;
 use silverhand_backend_core::persistence::WriteProbe;
 
 use crate::{
+    clock::ProcessClock,
     error,
     ops::deployment::{DeploymentMode, ServerMode},
-    runtime_credential::RuntimeClock,
 };
 
 /// The probe path, outside `/api/*` in the product.
@@ -65,22 +65,14 @@ pub const READYZ_PATH: &str = "/readyz";
 
 /// The boot facts, as one value read at one instant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BootFacts {
-    pub migrations_applied: bool,
-    pub listen_ready: bool,
+struct BootFacts {
+    migrations_applied: bool,
+    listen_ready: bool,
     /// Whether the outbound runtime event fanout was constructed and registered as the
     /// host transport's event sink. A BACKEND-SIDE wiring fact: it says nothing about
     /// whether any daemon has connected, and must never be derived from attachment
     /// state.
-    pub outbound_event_fanout_installed: bool,
-}
-
-/// What the route is allowed to do with boot progress: read it.
-///
-/// The handler is generic over this trait rather than over the holder, so the marking
-/// capability is unreachable from HTTP even though the same value carries both.
-pub trait BootReadiness: Clone + Send + Sync + 'static {
-    fn boot_facts(&self) -> BootFacts;
+    outbound_event_fanout_installed: bool,
 }
 
 /// The live boot facts, shared between whoever establishes them and whoever reports
@@ -89,18 +81,26 @@ pub trait BootReadiness: Clone + Send + Sync + 'static {
 /// Cloning shares one state — that is the point. The composition root marks
 /// migrations from the migration runner, the listener from the accept loop and the
 /// fanout from the transport wiring, each holding its own clone, while `/readyz` reads
-/// the same three cells.
+/// the same cells.
+///
+/// This type is what the route takes, and there is deliberately no trait in front of
+/// it. A trait would let anything with the right shape be substituted, and the useful
+/// substitution — a holder that answers ready without anything having happened — is
+/// exactly what this endpoint must not be able to report. Marking is separated from
+/// reading by this type's own surface instead: `mark_*` writes, [`Self::facts`] reads,
+/// and the route only ever calls the latter.
 #[derive(Clone, Default)]
 pub struct BootProgress {
-    shared: Arc<BootProgressState>,
+    /// One cell, because the three facts are answered together. Three atomics could
+    /// only be read one after another, so "the facts at one instant" would be three
+    /// instants and a claim the type could not keep.
+    established: Arc<AtomicU8>,
 }
 
-#[derive(Default)]
-struct BootProgressState {
-    migrations_applied: AtomicBool,
-    listen_ready: AtomicBool,
-    outbound_event_fanout_installed: AtomicBool,
-}
+/// Which fact each bit of the cell carries.
+const MIGRATIONS_APPLIED: u8 = 1 << 0;
+const LISTEN_READY: u8 = 1 << 1;
+const OUTBOUND_EVENT_FANOUT_INSTALLED: u8 = 1 << 2;
 
 impl BootProgress {
     /// A process that has established nothing. The only constructor.
@@ -109,56 +109,56 @@ impl BootProgress {
     }
 
     pub fn mark_migrations_applied(&self) {
-        self.shared.migrations_applied.store(true, SeqCst);
+        self.mark(MIGRATIONS_APPLIED);
     }
 
     pub fn mark_listen_ready(&self) {
-        self.shared.listen_ready.store(true, SeqCst);
+        self.mark(LISTEN_READY);
     }
 
     pub fn mark_outbound_event_fanout_installed(&self) {
-        self.shared
-            .outbound_event_fanout_installed
-            .store(true, SeqCst);
+        self.mark(OUTBOUND_EVENT_FANOUT_INSTALLED);
     }
-}
 
-impl BootReadiness for BootProgress {
-    fn boot_facts(&self) -> BootFacts {
+    /// Marking is additive and independent: `fetch_or` sets one fact without reading
+    /// the others, so two boot steps finishing at once cannot lose each other's.
+    fn mark(&self, fact: u8) {
+        self.established.fetch_or(fact, SeqCst);
+    }
+
+    /// All three facts, from ONE read of the cell.
+    fn facts(&self) -> BootFacts {
+        let established = self.established.load(SeqCst);
         BootFacts {
-            migrations_applied: self.shared.migrations_applied.load(SeqCst),
-            listen_ready: self.shared.listen_ready.load(SeqCst),
-            outbound_event_fanout_installed: self
-                .shared
-                .outbound_event_fanout_installed
-                .load(SeqCst),
+            migrations_applied: established & MIGRATIONS_APPLIED != 0,
+            listen_ready: established & LISTEN_READY != 0,
+            outbound_event_fanout_installed: established & OUTBOUND_EVENT_FANOUT_INSTALLED != 0,
         }
     }
 }
 
 #[derive(Clone)]
-struct ReadinessState<R, W, C> {
+struct ReadinessState<W, C> {
     mode: ServerMode,
     deployment: DeploymentMode,
-    boot: R,
+    boot: BootProgress,
     write_probe: W,
     clock: C,
 }
 
-pub fn router<R, W, C>(
+pub fn router<W, C>(
     mode: ServerMode,
     deployment: DeploymentMode,
-    boot: R,
+    boot: BootProgress,
     write_probe: W,
     clock: C,
 ) -> Router
 where
-    R: BootReadiness,
     W: WriteProbe + Clone + Send + Sync + 'static,
-    C: RuntimeClock,
+    C: ProcessClock,
 {
     Router::new()
-        .route(READYZ_PATH, get(readyz::<R, W, C>))
+        .route(READYZ_PATH, get(readyz::<W, C>))
         .with_state(ReadinessState {
             mode,
             deployment,
@@ -168,11 +168,10 @@ where
         })
 }
 
-async fn readyz<R, W, C>(State(state): State<ReadinessState<R, W, C>>) -> Response
+async fn readyz<W, C>(State(state): State<ReadinessState<W, C>>) -> Response
 where
-    R: BootReadiness,
     W: WriteProbe,
-    C: RuntimeClock,
+    C: ProcessClock,
 {
     // ONE write outcome. Everything the body says about the database is derived from
     // it below, so the boolean and the cause are the same answer rendered twice.
@@ -185,9 +184,9 @@ where
     let (status, body) = assess(
         state.mode,
         state.deployment,
-        state.boot.boot_facts(),
+        state.boot.facts(),
         refusal,
-        state.clock.now().as_unix_millis(),
+        state.clock.now_unix_millis(),
     );
     (status, Json(body)).into_response()
 }
@@ -297,9 +296,7 @@ mod tests {
         http::Request,
     };
     use serde_json::{Value, json};
-    use silverhand_backend_core::{
-        persistence::PersistenceFailure, runtime_credential::RuntimeEventTime,
-    };
+    use silverhand_backend_core::persistence::PersistenceFailure;
     use tower::ServiceExt;
 
     use super::*;
@@ -309,9 +306,9 @@ mod tests {
     #[derive(Clone, Copy)]
     struct FrozenClock;
 
-    impl RuntimeClock for FrozenClock {
-        fn now(&self) -> RuntimeEventTime {
-            RuntimeEventTime::from_unix_millis(FIXED_NOW)
+    impl ProcessClock for FrozenClock {
+        fn now_unix_millis(&self) -> i64 {
+            FIXED_NOW
         }
     }
 
@@ -339,6 +336,30 @@ mod tests {
         boot.mark_listen_ready();
         boot.mark_outbound_event_fanout_installed();
         boot
+    }
+
+    /// Each fact is its own bit of the one cell: establishing one adds it and disturbs
+    /// nothing, and establishing it again is not a toggle. Two facts sharing a bit
+    /// would make an unmarked one report ready, which no wire test could see.
+    #[test]
+    fn each_fact_is_established_independently_and_stays_established() {
+        let facts = |migrations, listen, fanout| BootFacts {
+            migrations_applied: migrations,
+            listen_ready: listen,
+            outbound_event_fanout_installed: fanout,
+        };
+        let boot = BootProgress::new();
+        assert_eq!(boot.facts(), facts(false, false, false));
+
+        boot.mark_listen_ready();
+        assert_eq!(boot.facts(), facts(false, true, false));
+        boot.mark_migrations_applied();
+        assert_eq!(boot.facts(), facts(true, true, false));
+        boot.mark_outbound_event_fanout_installed();
+        assert_eq!(boot.facts(), facts(true, true, true));
+
+        boot.mark_listen_ready();
+        assert_eq!(boot.facts(), facts(true, true, true));
     }
 
     async fn get(

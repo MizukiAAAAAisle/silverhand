@@ -10,5 +10,8 @@ getrandom.workspace = true
 silverhand-backend-core.workspace = true
 tokio = { workspace = true, features = ["process"] }
 
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true

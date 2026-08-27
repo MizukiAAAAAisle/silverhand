@@ -38,13 +38,14 @@ use silverhand_backend_core::{
     identity::{AgentId, DaemonInstanceId},
     messaging::task::{TaskCandidateFetch, TaskCandidateQuery, TaskListCandidate},
     persistence::PersistenceFailure,
-    runtime_credential::{RuntimeEventTime, RuntimeScope},
+    runtime_credential::RuntimeScope,
 };
 use silverhand_backend_server::{
+    clock::ProcessClock,
     messaging::task::{TaskListState, task_list_router},
     runtime_credential::{
-        RuntimeClock, RuntimeCredentialAuthority, RuntimeDispatchFailure, RuntimeEntropy,
-        RuntimeStartHandoff, RuntimeStartTransport, require_runtime_credential,
+        RuntimeCredentialAuthority, RuntimeDispatchFailure, RuntimeEntropy, RuntimeStartHandoff,
+        RuntimeStartTransport, require_runtime_credential,
     },
 };
 use silverhand_backend_sqlite::{
@@ -85,9 +86,9 @@ impl RuntimeEntropy for SequenceEntropy {
 #[derive(Clone, Copy)]
 struct FixedClock;
 
-impl RuntimeClock for FixedClock {
-    fn now(&self) -> RuntimeEventTime {
-        RuntimeEventTime::from_unix_millis(1_000)
+impl ProcessClock for FixedClock {
+    fn now_unix_millis(&self) -> i64 {
+        1_000
     }
 }
 

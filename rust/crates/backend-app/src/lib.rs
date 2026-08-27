@@ -20,6 +20,7 @@ use silverhand_backend_core::{
 use silverhand_backend_server::{
     access,
     auth::{PublicJsonUnauthorized, require_human_session},
+    clock::SystemProcessClock,
     daemon_delivery::{DaemonDeliveryController, DaemonDeliveryRuntime},
     direct_pairs,
     host_agent::{agent_detail, agent_list, agent_presence, availability},
@@ -38,9 +39,7 @@ use silverhand_backend_server::{
         },
         task::{TaskListState, task_list_router},
     },
-    runtime_credential::{
-        RuntimeCredentialAuthority, SystemRuntimeClock, require_runtime_credential,
-    },
+    runtime_credential::{RuntimeCredentialAuthority, require_runtime_credential},
     scope_events::{
         AllowedOrigin, EventWebSocketConfig, EventWebSocketController, HubPresenceSink,
         ScopeEventHub, SystemDisconnectClock, compose_presence_vertical,
@@ -472,7 +471,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             .merge(agent_list::router(agent_list_cold_read))
             .merge(agent_presence::router(
                 agent_presence_cold_read,
-                SystemRuntimeClock,
+                SystemProcessClock,
             ))
             .merge(channel_directory::router(channel_directory_read))
             .merge(channel_lifecycle::router(channel_detail_read))
@@ -4162,7 +4161,7 @@ mod tests {
 
     /// The composition mounts `GET /api/agents/{id}/presence` behind the SAME human
     /// perimeter, wired to the real SQLite agent-presence cold read and the production
-    /// `SystemRuntimeClock`. Proves the composition obligation the leaf's own tests
+    /// `SystemProcessClock`. Proves the composition obligation the leaf's own tests
     /// cannot: the anonymous perimeter refusal; the anti-enumeration 404 a registered
     /// stranger and an absent id share BYTE-for-byte; a one-method route checksum; AND
     /// an admitted creator reading a real seeded stamp projected off the live SQLite

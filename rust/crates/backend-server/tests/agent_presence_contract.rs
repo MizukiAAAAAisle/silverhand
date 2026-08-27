@@ -34,9 +34,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{identity::UserId, policy::agent_presence};
-use silverhand_backend_server::{
-    host_agent::agent_presence::router, runtime_credential::SystemRuntimeClock,
-};
+use silverhand_backend_server::{clock::SystemProcessClock, host_agent::agent_presence::router};
 use silverhand_backend_sqlite::agent_presence_read::SqliteAgentPresenceColdRead;
 use sqlx::{Connection, Executor};
 use tower::ServiceExt;
@@ -61,7 +59,7 @@ async fn run(seed_sql: &'static str, viewer: &str, agent_id: &str) -> (StatusCod
     // The production wall clock: `server_now` is a live emit-only stamp, so the composed
     // proof wires the real clock rather than a fixture. `away_at` stays deterministic
     // because it is clock-free.
-    let app: Router = router(cold_read, SystemRuntimeClock);
+    let app: Router = router(cold_read, SystemProcessClock);
 
     // The authenticated principal is the composition perimeter's contribution; this
     // test isolates the production projector, so it injects the viewer fact the auth

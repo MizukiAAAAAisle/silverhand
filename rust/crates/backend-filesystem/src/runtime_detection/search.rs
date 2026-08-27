@@ -20,16 +20,18 @@
 //! path, in the order listed, and no version equality with the npm CLI is required —
 //! installing the app IS the acceptance.
 //!
-//! ## Executability is asked of the file, not of us
+//! ## Executability is the OS's answer about THIS process
 //!
-//! The product asks the OS whether the CURRENT process may execute the candidate
-//! (`access(X_OK)`). This crate forbids unsafe code and the standard library exposes
-//! no effective-permission check, so the closest available question is whether ANY
-//! execute bit is set. The two answers differ only for a file that someone else may
-//! execute and we may not: the product would keep searching, and this resolves it and
-//! then fails to read its version, which the caller reports as installed-without-a-
-//! version rather than absent. Narrowing that gap needs a libc call, which is a
-//! bigger change than the case is worth.
+//! A candidate counts when `stat` says it is a regular file AND the OS says this
+//! process may execute it — the two questions the product asks, in that order.
+//!
+//! Neither implies the other, which is why both are asked. A permission-bit test is
+//! a DIFFERENT question: a file owned by this process with mode `010` has an execute
+//! bit set and cannot be executed by it, so a bit test resolves a candidate the
+//! product would have skipped, and the runtime is then reported installed on a
+//! machine where nothing can start it. And `X_OK` alone answers yes for a directory,
+//! where the bit means searchable, so dropping the `is_file` half would resolve a
+//! directory named after a runtime.
 
 use std::path::{Path, PathBuf};
 
@@ -270,25 +272,43 @@ fn deduplicate(directories: Vec<PathBuf>) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Whether the candidate is a regular file this process may execute.
+///
+/// Both questions are asked on one blocking hop: they are about the same file, and a
+/// candidate can sit on a mount where either of them waits on I/O.
 async fn is_executable_file(path: &Path) -> bool {
-    match tokio::fs::metadata(path).await {
-        Ok(metadata) => metadata.is_file() && is_executable(&metadata),
-        Err(_) => false,
-    }
+    let candidate = path.to_path_buf();
+    tokio::task::spawn_blocking(move || is_regular_file(&candidate) && may_execute(&candidate))
+        .await
+        .unwrap_or(false)
 }
 
+fn is_regular_file(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+}
+
+/// Asks the OS whether this process may execute the path.
+///
+/// `EACCESS` asks under the identity a spawn would actually run as (the effective
+/// ids) rather than the invoking user's. The two agree for any process that is not
+/// setuid — which this is not — and asking the spawn's own question is the one that
+/// stays correct if that ever changes.
 #[cfg(unix)]
-fn is_executable(metadata: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    metadata.permissions().mode() & 0o111 != 0
+fn may_execute(path: &Path) -> bool {
+    rustix::fs::accessat(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::Access::EXEC_OK,
+        rustix::fs::AtFlags::EACCESS,
+    )
+    .is_ok()
 }
 
-/// No execute bit to consult. The version probe is then the real test of whether the
-/// candidate runs — a platform that spells executables differently needs its own
-/// resolution rules, not a lenient check here.
+/// No execute permission to consult. The version probe is then the real test of
+/// whether the candidate runs — a platform that spells executables differently needs
+/// its own resolution rules, not a lenient check here.
 #[cfg(not(unix))]
-fn is_executable(_metadata: &std::fs::Metadata) -> bool {
+fn may_execute(_path: &Path) -> bool {
     true
 }
 
@@ -429,5 +449,91 @@ mod tests {
             assert!(hard_candidates(kind, DetectionPlatform::MacOs).is_empty());
             assert!(hard_candidates(kind, DetectionPlatform::Other).is_empty());
         }
+    }
+
+    /// Executability is the OS's answer about THIS process, not a bit pattern.
+    ///
+    /// The refused candidate is an ordinary file with mode `010`: it HAS an execute
+    /// bit, and its owner — this process — may not run it. So it is not an answer,
+    /// and a later candidate the OS does say yes about is. A `mode & 0o111` check
+    /// resolves the refused one and never reaches the second assertion.
+    ///
+    /// Nothing here is executed: the refused file is only asked about, and the
+    /// control is a symlink to an executable the machine already has.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resolution_skips_a_candidate_this_process_may_not_execute() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // For root the access check succeeds on any execute bit, so the distinction
+        // this gate is about does not exist under that identity.
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let machine = tempfile::TempDir::new().expect("temp dir");
+        let refusing = machine.path().join("bin-we-cannot-use");
+        let runnable = machine.path().join("bin-we-can");
+        std::fs::create_dir(&refusing).expect("a candidate directory");
+        std::fs::create_dir(&runnable).expect("a candidate directory");
+
+        let refused = refusing.join("claude");
+        std::fs::write(&refused, "never executed by this test").expect("write the file");
+        std::fs::set_permissions(&refused, std::fs::Permissions::from_mode(0o010))
+            .expect("an execute bit its owner cannot use");
+
+        assert_eq!(
+            resolve_executable(
+                RuntimeKind::Claude,
+                std::slice::from_ref(&refusing),
+                DetectionPlatform::Other
+            )
+            .await,
+            None,
+            "a file this process may not execute is not a runtime the machine has"
+        );
+
+        let usable = runnable.join("claude");
+        std::os::unix::fs::symlink(A_SYSTEM_EXECUTABLE, &usable).expect("link the control");
+        assert_eq!(
+            resolve_executable(
+                RuntimeKind::Claude,
+                &[refusing, runnable],
+                DetectionPlatform::Other
+            )
+            .await,
+            Some(usable),
+            "the search continues past the refusal to the candidate that can run"
+        );
+    }
+
+    /// An executable the machine already has, used as the positive control — nothing
+    /// in these tests is executed, so the control must be something the OS already
+    /// answers yes about.
+    #[cfg(unix)]
+    const A_SYSTEM_EXECUTABLE: &str = "/bin/sh";
+
+    /// `X_OK` on a directory answers yes, because there the bit means searchable. The
+    /// file half of the question is what keeps a directory named after a runtime from
+    /// being resolved as one.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_directory_named_after_a_runtime_is_not_an_executable() {
+        let machine = tempfile::TempDir::new().expect("temp dir");
+        let in_the_way = machine.path().join("claude");
+        std::fs::create_dir(&in_the_way).expect("a directory where a binary would be");
+
+        assert!(
+            may_execute(&in_the_way),
+            "the OS calls a searchable directory executable"
+        );
+        assert_eq!(
+            resolve_executable(
+                RuntimeKind::Claude,
+                &[machine.path().to_path_buf()],
+                DetectionPlatform::Other
+            )
+            .await,
+            None
+        );
     }
 }

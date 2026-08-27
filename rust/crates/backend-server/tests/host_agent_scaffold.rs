@@ -92,6 +92,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "user_presence_cold_read"),
     ("backend-core", "user_presence_last_seen"),
     ("backend-filesystem", "runtime_detection"),
+    ("backend-server", "clock"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),

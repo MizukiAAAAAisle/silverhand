@@ -4,6 +4,7 @@
 pub mod access;
 pub mod auth;
 mod bearer;
+pub mod clock;
 pub mod daemon_delivery;
 mod daemon_events;
 pub mod direct_pairs;

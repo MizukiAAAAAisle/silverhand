@@ -41,6 +41,11 @@ use crate::agents::runtime::RuntimeKind;
 /// `selectable: true`, kept in `RUNTIME_ORDER`. `Cursor` and `Gemini` are part of
 /// the vocabulary — an agent may be filed under either — but the product does not
 /// offer them, so a detection pass never probes for them.
+///
+/// That pin is enforced, not commented: `tests/runtime_catalog_parity.rs` holds this
+/// constant to a checked-in artifact the TypeScript half signs from the real product
+/// catalogue, so offering a runtime — or reordering the picker — on one side only fails
+/// on both.
 pub const SELECTABLE_RUNTIMES: [RuntimeKind; 4] = [
     RuntimeKind::Claude,
     RuntimeKind::Codex,
@@ -201,29 +206,11 @@ mod tests {
         assert!(SELECTABLE_RUNTIME_COUNT < RuntimeKind::ALL.len());
     }
 
-    /// The order is the product's, pinned to `RUNTIME_ORDER` filtered by
-    /// `selectable: true` in `packages/shared/src/runtime-catalog.ts`. Written
-    /// through the vocabulary's own spellings, so this pins the ORDER without
-    /// becoming a second authority on how a runtime is spelled.
-    #[test]
-    fn the_offered_order_is_the_products_order() {
-        assert_eq!(
-            SELECTABLE_RUNTIMES.map(|offered| offered.as_str()),
-            ["claude", "codex", "qoder", "opencode"],
-        );
-    }
-
-    /// `Cursor` and `Gemini` are `selectable: false` in the product catalogue: part
-    /// of the vocabulary, never probed and never listed.
-    #[test]
-    fn runtimes_the_product_does_not_offer_are_not_in_the_catalogue() {
-        for unoffered in [RuntimeKind::Cursor, RuntimeKind::Gemini] {
-            assert!(
-                !SELECTABLE_RUNTIMES.contains(&unoffered),
-                "{unoffered:?} must not be offered"
-            );
-        }
-    }
+    // The order is the product's, and the remainder is what the product does not
+    // offer — both compared against the shared checked-in artifact by
+    // `tests/runtime_catalog_parity.rs`, whose TypeScript half signs it from the real
+    // product catalogue. Restating those names here would only assert this file
+    // against itself, so they are deliberately absent.
 
     /// The pairing is the constructor's guarantee: detection `i` describes the
     /// runtime the owner lists at `i`, so a pass cannot attribute one runtime's
