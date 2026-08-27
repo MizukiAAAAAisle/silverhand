@@ -1,0 +1,361 @@
+{
+  "success_full": {
+    "parsed": {
+      "installation_id": "11111111-1111-4111-8111-111111111111",
+      "label": "Foo",
+      "current_host_id": "h1"
+    }
+  },
+  "invalid_inputs": [
+    {
+      "request": {},
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "invalid_type",
+            "expected": "string",
+            "received": "undefined",
+            "path": [
+              "installation_id"
+            ],
+            "message": "Required"
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "installation_id": 5
+      },
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "invalid_type",
+            "expected": "string",
+            "received": "number",
+            "path": [
+              "installation_id"
+            ],
+            "message": "Expected string, received number"
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "installation_id": "not-a-uuid"
+      },
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "validation": "uuid",
+            "code": "invalid_string",
+            "message": "Invalid uuid",
+            "path": [
+              "installation_id"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "installation_id": "11111111-1111-4111-8111-111111111111",
+        "label": 5
+      },
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "invalid_type",
+            "expected": "string",
+            "received": "number",
+            "path": [
+              "label"
+            ],
+            "message": "Expected string, received number"
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "installation_id": "11111111-1111-4111-8111-111111111111",
+        "label": "   "
+      },
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "too_small",
+            "minimum": 1,
+            "type": "string",
+            "inclusive": true,
+            "exact": false,
+            "message": "String must contain at least 1 character(s)",
+            "path": [
+              "label"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "installation_id": "11111111-1111-4111-8111-111111111111",
+        "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "too_big",
+            "maximum": 64,
+            "type": "string",
+            "inclusive": true,
+            "exact": false,
+            "message": "String must contain at most 64 character(s)",
+            "path": [
+              "label"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "installation_id": "11111111-1111-4111-8111-111111111111",
+        "current_host_id": 5
+      },
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "invalid_type",
+            "expected": "string",
+            "received": "number",
+            "path": [
+              "current_host_id"
+            ],
+            "message": "Expected string, received number"
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "installation_id": "11111111-1111-4111-8111-111111111111",
+        "current_host_id": ""
+      },
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "too_small",
+            "minimum": 1,
+            "type": "string",
+            "inclusive": true,
+            "exact": false,
+            "message": "String must contain at least 1 character(s)",
+            "path": [
+              "current_host_id"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "installation_id": "11111111-1111-4111-8111-111111111111",
+        "zeta": true
+      },
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "unrecognized_keys",
+            "keys": [
+              "zeta"
+            ],
+            "path": [],
+            "message": "Unrecognized key(s) in object: 'zeta'"
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "installation_id": "bad",
+        "label": "  ",
+        "current_host_id": "",
+        "zeta": true
+      },
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "validation": "uuid",
+            "code": "invalid_string",
+            "message": "Invalid uuid",
+            "path": [
+              "installation_id"
+            ]
+          },
+          {
+            "code": "too_small",
+            "minimum": 1,
+            "type": "string",
+            "inclusive": true,
+            "exact": false,
+            "message": "String must contain at least 1 character(s)",
+            "path": [
+              "label"
+            ]
+          },
+          {
+            "code": "too_small",
+            "minimum": 1,
+            "type": "string",
+            "inclusive": true,
+            "exact": false,
+            "message": "String must contain at least 1 character(s)",
+            "path": [
+              "current_host_id"
+            ]
+          },
+          {
+            "code": "unrecognized_keys",
+            "keys": [
+              "zeta"
+            ],
+            "path": [],
+            "message": "Unrecognized key(s) in object: 'zeta'"
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "zeta": true
+      },
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "invalid_type",
+            "expected": "string",
+            "received": "undefined",
+            "path": [
+              "installation_id"
+            ],
+            "message": "Required"
+          },
+          {
+            "code": "unrecognized_keys",
+            "keys": [
+              "zeta"
+            ],
+            "path": [],
+            "message": "Unrecognized key(s) in object: 'zeta'"
+          }
+        ]
+      }
+    }
+  ],
+  "invalid_shapes": [
+    {
+      "request": [],
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "invalid_type",
+            "expected": "object",
+            "received": "array",
+            "path": [],
+            "message": "Expected object, received array"
+          }
+        ]
+      }
+    },
+    {
+      "request": "value",
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "invalid_type",
+            "expected": "object",
+            "received": "string",
+            "path": [],
+            "message": "Expected object, received string"
+          }
+        ]
+      }
+    },
+    {
+      "request": 1,
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "invalid_type",
+            "expected": "object",
+            "received": "number",
+            "path": [],
+            "message": "Expected object, received number"
+          }
+        ]
+      }
+    },
+    {
+      "request": null,
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "invalid_type",
+            "expected": "object",
+            "received": "null",
+            "path": [],
+            "message": "Expected object, received null"
+          }
+        ]
+      }
+    },
+    {
+      "request": true,
+      "status": 400,
+      "body": {
+        "error": "invalid input",
+        "issues": [
+          {
+            "code": "invalid_type",
+            "expected": "object",
+            "received": "boolean",
+            "path": [],
+            "message": "Expected object, received boolean"
+          }
+        ]
+      }
+    }
+  ]
+}

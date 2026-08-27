@@ -24,7 +24,10 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    host_runtime::{HostCredentialLookup, VerifyHostTokenFact, verify_host_token},
+    host_runtime::{
+        custody::{HostCredentialLookup, VerifyHostTokenFact, verify_host_token},
+        rotation::{DaemonRotationAck, DaemonTokenRotationChannel, RotatedTokenDelivery},
+    },
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId},
     messaging::{
         CreatedMessage,
@@ -77,6 +80,11 @@ const MAX_DAEMON_FRAME_BYTES: usize = 1024 * 1024;
 /// schema is a corrupt-dialer signal, not an actionable "upgrade this daemon" fact.
 const MAX_READABLE_PROTOCOL_VERSION: u32 = 100;
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+/// The budget for one `rotate_token` round trip. Deliberately shorter than a general
+/// command: it mirrors the TS `HostTokenRotationCoordinator`'s own 10s, and a rotation
+/// that has not been acknowledged in that window is read as "may not have stored it",
+/// so the database is left alone and the user rotates again.
+const HOST_TOKEN_ROTATION_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_LEASE_TTL: Duration = Duration::from_secs(60);
 const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_PONG_TIMEOUT: Duration = Duration::from_secs(5);
@@ -781,6 +789,15 @@ impl DaemonDeliveryController {
         }
     }
 
+    /// The R6 token-rotation transport, bound to a share of the one registry so it names
+    /// the same live attachments the delivery path does — never a second registry, which
+    /// could rotate a token against a connection this runtime does not hold.
+    pub fn host_token_rotation(&self) -> DaemonTokenRotation {
+        DaemonTokenRotation {
+            registry: self.registry.clone(),
+        }
+    }
+
     /// The admission ledger the connection tasks of this runtime write through.
     ///
     /// A clone of one ledger, never a new one: [`HostAdmission`] has no public
@@ -992,17 +1009,19 @@ impl DaemonAttachment {
 pub(crate) enum HostCommandKind {
     HostStatus,
     RuntimeCatalog,
+    RotateToken,
 }
 
 impl HostCommandKind {
     /// Every variant, so the response envelope admits exactly the kinds this face can
     /// send. A variant missing here is not silently tolerated: nothing could answer it.
-    const ALL: [Self; 2] = [Self::HostStatus, Self::RuntimeCatalog];
+    const ALL: [Self; 3] = [Self::HostStatus, Self::RuntimeCatalog, Self::RotateToken];
 
     fn as_wire(self) -> &'static str {
         match self {
             Self::HostStatus => "host_status",
             Self::RuntimeCatalog => "host_runtime_catalog",
+            Self::RotateToken => "rotate_token",
         }
     }
 
@@ -1197,6 +1216,124 @@ impl HostCommandDispatch {
             instance: attachment.daemon_instance,
             result,
         })
+    }
+}
+
+/// The R6 transport: hands a freshly minted long-lived token to the daemon that must
+/// store it and waits for its answer. A share of the one registry, so it names the same
+/// live attachment the delivery path does, and public as an opaque handle only — the
+/// round trip behind it is the crate-private [`DaemonAttachment::command`], so the sole
+/// way to rotate a token from outside is the core operation this satisfies.
+#[derive(Clone)]
+pub struct DaemonTokenRotation {
+    registry: DaemonRegistry,
+}
+
+impl DaemonTokenRotation {
+    /// Whoever holds this computer's slot right now. No instance is checked: the TS
+    /// coordinator sends by host id and lets the acknowledgement's own `host_id` be the
+    /// verdict, which is the core's to render, not this transport's.
+    fn attachment(
+        &self,
+        computer: &HostId,
+    ) -> Result<DaemonAttachment, DaemonRotationDeliveryError> {
+        self.registry
+            .attachment(computer.as_str())
+            .map_err(|_| DaemonRotationDeliveryError::Unreachable)?
+            .ok_or(DaemonRotationDeliveryError::NoConnection)
+    }
+}
+
+impl DaemonTokenRotationChannel for DaemonTokenRotation {
+    type Failure = DaemonRotationDeliveryError;
+
+    async fn deliver_rotated_token(
+        &self,
+        delivery: RotatedTokenDelivery,
+    ) -> Result<DaemonRotationAck, Self::Failure> {
+        let attachment = self.attachment(delivery.computer())?;
+        // Read the coordinates first and take the secret last: the delivery's own type
+        // enforces that order, so the frame is built without a second reader of the token.
+        let host_id = delivery.computer().as_str().to_owned();
+        let issued_at = delivery.issued_at();
+        let grace_until = delivery.grace_until();
+        let params = rotation_params(&host_id, delivery.reveal_token(), issued_at, grace_until);
+        let result = attachment
+            .command(
+                HostCommandKind::RotateToken.as_wire(),
+                params,
+                HOST_TOKEN_ROTATION_TIMEOUT,
+            )
+            .await
+            .map_err(|_| DaemonRotationDeliveryError::Unreachable)?;
+        parse_rotation_ack(&result).ok_or(DaemonRotationDeliveryError::Unreachable)
+    }
+}
+
+/// Why a `rotate_token` round trip produced no answer. Exactly the two the core trait
+/// asks this component to tell apart, because they decide the status code: nobody was
+/// connected, or a daemon was but the round trip did not complete usably.
+#[derive(Debug)]
+pub enum DaemonRotationDeliveryError {
+    /// No daemon holds this computer's slot. The route answers 503 — `transport_no_connection`.
+    NoConnection,
+    /// A daemon was attached but the round trip did not complete cleanly: it timed out,
+    /// the connection broke, the registry was unreadable, or the answer was unusable. The
+    /// route answers 502.
+    Unreachable,
+}
+
+impl fmt::Display for DaemonRotationDeliveryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NoConnection => "no daemon is connected for this computer",
+            Self::Unreachable => "the daemon could not be reached for a token rotation",
+        })
+    }
+}
+
+impl Error for DaemonRotationDeliveryError {}
+
+/// The `rotate_token` frame the daemon receives, keyed exactly as the TS coordinator
+/// sends it: `host_id`, the cleartext `host_token`, and the two instants.
+fn rotation_params(host_id: &str, host_token: String, issued_at: i64, grace_until: i64) -> Value {
+    json!({
+        "host_id": host_id,
+        "host_token": host_token,
+        "issued_at": issued_at,
+        "grace_until": grace_until,
+    })
+}
+
+/// Decode the daemon's answer into the core's acknowledgement vocabulary.
+///
+/// `rotated: true` is the only shape that stores anything, and it must carry the computer
+/// the daemon refreshed and the instant it did — the core compares that computer against
+/// the one we sent, so a wrong-but-parseable host is reported faithfully and rejected
+/// there. Anything else is a refusal, matching the TS coordinator's `!rotated` branch; the
+/// daemon's prose reason, if it sent one, rides along for the adapter's log. A `rotated:
+/// true` frame missing the computer or the instant is not a refusal but a broken
+/// acknowledgement, so it returns `None` and the caller reads it as unreachable.
+fn parse_rotation_ack(result: &Value) -> Option<DaemonRotationAck> {
+    let object = result.as_object()?;
+    match object.get("rotated").and_then(Value::as_bool) {
+        Some(true) => {
+            let acknowledged = object.get("host_id").and_then(Value::as_str)?;
+            let computer = HostId::parse(acknowledged).ok()?;
+            let config_refreshed_at = object.get("config_refreshed_at").and_then(Value::as_i64)?;
+            Some(DaemonRotationAck::Stored {
+                computer,
+                config_refreshed_at,
+            })
+        }
+        _ => {
+            let reason = object
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            Some(DaemonRotationAck::Refused { reason })
+        }
     }
 }
 
@@ -3454,6 +3591,99 @@ mod tests {
             answer().into_result_for(&host("host-2"), &instance("instance-old")),
             Err(HostAnswerMismatch::Host)
         );
+    }
+
+    #[test]
+    fn rotate_token_is_a_host_control_word_whose_answer_is_admitted() {
+        // The variant exists so the connection admits a `rotate_token` RESPONSE frame:
+        // without it the daemon's acknowledgement decodes as an unsupported kind and the
+        // socket is closed before the pending command is ever settled.
+        assert_eq!(HostCommandKind::RotateToken.as_wire(), "rotate_token");
+        assert!(HostCommandKind::sends_wire("rotate_token"));
+        assert!(valid_command_response_envelope(&json!({
+            "id": "r1",
+            "kind": "rotate_token",
+            "result": { "rotated": true, "host_id": "host-1", "config_refreshed_at": 42 },
+        })));
+    }
+
+    #[test]
+    fn the_rotate_token_frame_is_keyed_as_the_daemon_expects() {
+        assert_eq!(
+            rotation_params("host-1", "cleartext-token".to_owned(), 100, 61),
+            json!({
+                "host_id": "host-1",
+                "host_token": "cleartext-token",
+                "issued_at": 100,
+                "grace_until": 61,
+            })
+        );
+    }
+
+    #[test]
+    fn a_stored_ack_carries_the_computer_and_the_refresh_instant() {
+        assert_eq!(
+            parse_rotation_ack(&json!({
+                "rotated": true,
+                "host_id": "host-1",
+                "config_refreshed_at": 42,
+            })),
+            Some(DaemonRotationAck::Stored {
+                computer: HostId::parse("host-1").unwrap(),
+                config_refreshed_at: 42,
+            })
+        );
+    }
+
+    #[test]
+    fn anything_but_a_clean_success_is_a_refusal_that_keeps_the_reason() {
+        assert_eq!(
+            parse_rotation_ack(&json!({ "rotated": false, "reason": "daemon_busy" })),
+            Some(DaemonRotationAck::Refused {
+                reason: "daemon_busy".to_owned(),
+            })
+        );
+        // A daemon that answered without saying it rotated has refused, matching the TS
+        // coordinator's `!rotated` branch; with no reason to carry the field is empty.
+        assert_eq!(
+            parse_rotation_ack(&json!({ "reason": "nope" })),
+            Some(DaemonRotationAck::Refused {
+                reason: "nope".to_owned(),
+            })
+        );
+        assert_eq!(
+            parse_rotation_ack(&json!({ "rotated": false })),
+            Some(DaemonRotationAck::Refused {
+                reason: String::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_broken_success_frame_is_not_an_acknowledgement() {
+        // `rotated: true` with no computer, or no refresh instant, or not an object at
+        // all: none stores anything. The caller reads the `None` as unreachable (502),
+        // never as a silent success.
+        assert_eq!(
+            parse_rotation_ack(&json!({ "rotated": true, "config_refreshed_at": 42 })),
+            None
+        );
+        assert_eq!(
+            parse_rotation_ack(&json!({ "rotated": true, "host_id": "host-1" })),
+            None
+        );
+        assert_eq!(parse_rotation_ack(&json!("rotated")), None);
+    }
+
+    #[test]
+    fn a_rotation_with_no_attached_daemon_is_a_no_connection() {
+        let rotation = DaemonTokenRotation {
+            registry: DaemonRegistry::with_process_epoch("process-a".to_owned()),
+        };
+        assert!(matches!(
+            rotation.attachment(&HostId::parse("host-unattached").unwrap()),
+            Err(DaemonRotationDeliveryError::NoConnection)
+        ));
     }
 
     #[test]

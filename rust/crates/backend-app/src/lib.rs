@@ -14,7 +14,10 @@ use axum::Router;
 use silverhand_backend_core::{
     access::{EnrollmentClock, unix_millis},
     auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
-    host_runtime::{CreateHostInvite, OsEntropy, SystemClock},
+    host_runtime::{
+        environment::{OsEntropy, SystemClock},
+        invite::CreateHostInvite,
+    },
     policy::presence_grace::GraceWindow,
 };
 use silverhand_backend_server::{

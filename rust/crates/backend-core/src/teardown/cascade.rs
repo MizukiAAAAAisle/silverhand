@@ -28,11 +28,12 @@
 
 use crate::{
     capability::computer_access::ComputerAccessHeld,
+    host_runtime::computer::is_user_managed,
     identity::UserId,
     teardown::{
         contract::{TeardownContractViolation, same_computer},
         eligibility::{TeardownBranch, teardown_branch},
-        facts::{AgentTeardownFacts, ComputerTeardownFacts, HostKind, ProvisioningSource},
+        facts::{AgentTeardownFacts, ComputerTeardownFacts},
     },
 };
 
@@ -75,10 +76,11 @@ pub enum CascadeConsent {
 /// ```
 /// use silverhand_backend_core::{
 ///     capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
+///     host_runtime::computer::{HostKind, ProvisioningSource},
 ///     identity::{HostId, UserId},
 ///     teardown::{
 ///         cascade::{ComputerLifecycle, ComputerLifecycleHeld, hold_computer_lifecycle},
-///         facts::{ComputerTeardownFacts, HostKind, ProvisioningSource},
+///         facts::ComputerTeardownFacts,
 ///     },
 /// };
 /// let owner = UserId::parse("u1").unwrap();
@@ -148,8 +150,7 @@ pub fn hold_computer_lifecycle(
     facts: ComputerTeardownFacts,
 ) -> Result<ComputerLifecycle, TeardownContractViolation> {
     same_computer(access.computer(), &facts.id)?;
-    if facts.provisioning_source != ProvisioningSource::UserInvite || facts.kind != HostKind::Remote
-    {
+    if !is_user_managed(facts.kind, facts.provisioning_source) {
         return Ok(ComputerLifecycle::NotUserManaged);
     }
     Ok(ComputerLifecycle::Held(ComputerLifecycleHeld {
@@ -202,13 +203,14 @@ pub enum CascadeRefused {
 /// ```
 /// use silverhand_backend_core::{
 ///     capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
+///     host_runtime::computer::{HostKind, ProvisioningSource},
 ///     identity::{HostId, UserId},
 ///     teardown::{
 ///         cascade::{
 ///             CascadeAdmission, CascadeAdmitted, CascadeConsent, ComputerLifecycle, admit_cascade,
 ///             hold_computer_lifecycle,
 ///         },
-///         facts::{ComputerTeardownFacts, HostKind, ProvisioningSource},
+///         facts::ComputerTeardownFacts,
 ///     },
 /// };
 /// let owner = UserId::parse("u1").unwrap();
@@ -360,6 +362,7 @@ mod tests {
         capability::computer_access::{
             ComputerAccess, ComputerOwnershipFacts, can_access_computer,
         },
+        host_runtime::computer::{HostKind, ProvisioningSource},
         identity::{AgentId, HostId},
     };
 

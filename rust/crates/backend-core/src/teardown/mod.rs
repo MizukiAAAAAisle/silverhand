@@ -24,6 +24,7 @@
 //! in [`crate::capability::computer_access`]. This namespace consumes its witness.
 
 pub mod cascade;
+pub mod computer_delete;
 pub mod contract;
 pub mod eligibility;
 pub mod facts;

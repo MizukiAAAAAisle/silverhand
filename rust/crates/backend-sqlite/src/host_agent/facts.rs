@@ -315,8 +315,8 @@ mod tests {
 
     use silverhand_backend_core::{
         agent_lifecycle::MaterializationStatus,
+        host_runtime::computer::{HostKind, ProvisioningSource},
         identity::HostId,
-        teardown::facts::{HostKind, ProvisioningSource},
     };
     use sqlx::Connection;
     use tempfile::TempDir;
