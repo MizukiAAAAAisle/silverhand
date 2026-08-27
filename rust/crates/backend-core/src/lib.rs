@@ -35,5 +35,6 @@ pub mod viewer_workspace_sort;
 pub mod workspace_cold_read;
 pub mod workspace_detail_read;
 pub mod workspace_face;
+pub mod workspace_metadata_write;
 pub mod workspace_name;
 pub mod workspace_name_availability;
