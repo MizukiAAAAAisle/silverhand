@@ -20,6 +20,7 @@ pub mod ops;
 pub mod password_hasher;
 pub mod runtime_credential;
 pub mod scope_events;
+pub mod users;
 pub mod workspace_detail;
 pub mod workspace_metadata_write;
 pub mod workspace_name_availability;

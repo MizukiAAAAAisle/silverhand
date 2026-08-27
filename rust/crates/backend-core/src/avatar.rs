@@ -359,6 +359,14 @@ impl CommittedAvatar {
     }
 }
 
+/// The raw uploaded bytes together with the client-declared content type — the
+/// candidate avatar before validation. The two always arrive together from the
+/// multipart `file` part and are consumed as a unit by [`validate_avatar`].
+pub struct CandidateAvatar {
+    pub bytes: Vec<u8>,
+    pub declared_content_type: String,
+}
+
 /// Upload (or replace) the caller's avatar.
 ///
 /// Order matches the product exactly: existence first (so a missing user costs no
@@ -372,8 +380,7 @@ pub async fn upload_avatar<R, W, B, S>(
     blobs: &B,
     announce_sink: &S,
     user_id: &UserId,
-    bytes: Vec<u8>,
-    declared_content_type: &str,
+    candidate: CandidateAvatar,
     now_ms: i64,
 ) -> Result<AvatarUploadOutcome, AvatarWriteError>
 where
@@ -382,12 +389,17 @@ where
     B: AvatarBlobStore,
     S: UserChangedSink,
 {
+    let CandidateAvatar {
+        bytes,
+        declared_content_type,
+    } = candidate;
+
     // Existence pre-check: user_not_found precedes validation and any blob write.
     if reads.get(user_id).await?.is_none() {
         return Ok(AvatarUploadOutcome::NoSuchUser);
     }
 
-    let content_type = match validate_avatar(bytes.len() as u64, declared_content_type) {
+    let content_type = match validate_avatar(bytes.len() as u64, &declared_content_type) {
         Ok(content_type) => content_type,
         Err(rejection) => return Ok(AvatarUploadOutcome::Rejected(rejection)),
     };
@@ -415,7 +427,10 @@ where
                 let _ = blobs.delete(&prior_key).await;
             }
             let announce = announce(announce_sink, user_id).await;
-            Ok(AvatarUploadOutcome::Committed(CommittedAvatar { user, announce }))
+            Ok(AvatarUploadOutcome::Committed(CommittedAvatar {
+                user,
+                announce,
+            }))
         }
     }
 }
@@ -461,7 +476,10 @@ where
                     seal_avatar_clear(user_id, &user, true, now_ms)?;
                     let _ = blobs.delete(&prior_key).await;
                     let announce = announce(announce_sink, user_id).await;
-                    Ok(AvatarUploadOutcome::Committed(CommittedAvatar { user, announce }))
+                    Ok(AvatarUploadOutcome::Committed(CommittedAvatar {
+                        user,
+                        announce,
+                    }))
                 }
                 // Already clear: no bump, no blob delete, no announce.
                 None => {
@@ -585,14 +603,20 @@ mod tests {
     #[test]
     fn validation_follows_the_empty_then_too_large_then_type_order() {
         // Empty beats an unsupported type.
-        assert_eq!(validate_avatar(0, "text/plain"), Err(AvatarRejection::Empty));
+        assert_eq!(
+            validate_avatar(0, "text/plain"),
+            Err(AvatarRejection::Empty)
+        );
         // Too-large beats an unsupported type.
         assert_eq!(
             validate_avatar(AVATAR_MAX_BYTES + 1, "text/plain"),
             Err(AvatarRejection::TooLarge)
         );
         // At the cap is admitted; over is not.
-        assert_eq!(validate_avatar(AVATAR_MAX_BYTES, "image/png"), Ok(AvatarContentType::Png));
+        assert_eq!(
+            validate_avatar(AVATAR_MAX_BYTES, "image/png"),
+            Ok(AvatarContentType::Png)
+        );
         // Declared type is matched verbatim after lowercasing: parameters/whitespace
         // are NOT stripped, so they fall out of the allowlist (415).
         assert_eq!(validate_avatar(10, "IMAGE/PNG"), Ok(AvatarContentType::Png));
@@ -600,7 +624,10 @@ mod tests {
             validate_avatar(10, "image/png; charset=binary"),
             Err(AvatarRejection::UnsupportedType)
         );
-        assert_eq!(validate_avatar(10, "image/svg+xml"), Err(AvatarRejection::UnsupportedType));
+        assert_eq!(
+            validate_avatar(10, "image/svg+xml"),
+            Err(AvatarRejection::UnsupportedType)
+        );
     }
 
     #[test]
@@ -612,8 +639,12 @@ mod tests {
     #[test]
     fn a_blob_pointer_rejects_only_the_empty_key() {
         assert!(AvatarBlobPointer::parse("").is_err());
-        assert_eq!(AvatarBlobPointer::parse("users/u/avatars/k.png").unwrap().as_str(),
-            "users/u/avatars/k.png");
+        assert_eq!(
+            AvatarBlobPointer::parse("users/u/avatars/k.png")
+                .unwrap()
+                .as_str(),
+            "users/u/avatars/k.png"
+        );
     }
 
     // ---- fakes ----
@@ -679,7 +710,10 @@ mod tests {
             Ok(self.read.clone().unwrap_or(AvatarBlobReadOutcome::Missing))
         }
         async fn delete(&self, pointer: &AvatarBlobPointer) -> Result<(), AvatarStorageFailure> {
-            self.deleted.lock().unwrap().push(pointer.as_str().to_owned());
+            self.deleted
+                .lock()
+                .unwrap()
+                .push(pointer.as_str().to_owned());
             Ok(())
         }
     }
@@ -691,7 +725,10 @@ mod tests {
     }
     impl FakeSink {
         fn new(fail: bool) -> Self {
-            Self { calls: Arc::new(AtomicUsize::new(0)), fail }
+            Self {
+                calls: Arc::new(AtomicUsize::new(0)),
+                fail,
+            }
         }
         fn calls(&self) -> usize {
             self.calls.load(Ordering::SeqCst)
@@ -720,10 +757,22 @@ mod tests {
             user: record(Some(NOW), NOW),
             prior_key: Some(AvatarBlobPointer::parse("old/key.png").unwrap()),
         });
-        let blobs = RecordingBlobs { put_key: "new/key.png".to_owned(), ..Default::default() };
+        let blobs = RecordingBlobs {
+            put_key: "new/key.png".to_owned(),
+            ..Default::default()
+        };
         let sink = FakeSink::new(false);
         let outcome = upload_avatar(
-            &reads, &writes, &blobs, &sink, &user_id(), vec![1, 2, 3], "image/png", NOW,
+            &reads,
+            &writes,
+            &blobs,
+            &sink,
+            &user_id(),
+            CandidateAvatar {
+                bytes: vec![1, 2, 3],
+                declared_content_type: "image/png".to_owned(),
+            },
+            NOW,
         )
         .await
         .unwrap();
@@ -734,7 +783,10 @@ mod tests {
         assert!(user.avatar.is_some());
         assert!(matches!(ann, UserChangedAnnounce::Delivered));
         assert_eq!(blobs.puts.load(Ordering::SeqCst), 1);
-        assert_eq!(*blobs.deleted.lock().unwrap(), vec!["old/key.png".to_owned()]);
+        assert_eq!(
+            *blobs.deleted.lock().unwrap(),
+            vec!["old/key.png".to_owned()]
+        );
         assert_eq!(sink.calls(), 1);
     }
 
@@ -745,11 +797,25 @@ mod tests {
             user: record(Some(NOW), NOW),
             prior_key: None,
         });
-        let blobs = RecordingBlobs { put_key: "new/key.png".to_owned(), ..Default::default() };
+        let blobs = RecordingBlobs {
+            put_key: "new/key.png".to_owned(),
+            ..Default::default()
+        };
         let sink = FakeSink::new(false);
-        upload_avatar(&reads, &writes, &blobs, &sink, &user_id(), vec![1], "image/png", NOW)
-            .await
-            .unwrap();
+        upload_avatar(
+            &reads,
+            &writes,
+            &blobs,
+            &sink,
+            &user_id(),
+            CandidateAvatar {
+                bytes: vec![1],
+                declared_content_type: "image/png".to_owned(),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
         assert!(blobs.deleted.lock().unwrap().is_empty());
     }
 
@@ -757,14 +823,31 @@ mod tests {
     async fn upload_refuses_a_missing_user_before_touching_the_blob() {
         let reads = FakeReads(None);
         let writes = FakeWrites(AvatarPointerWrite::NoSuchUser);
-        let blobs = RecordingBlobs { put_key: "new/key.png".to_owned(), ..Default::default() };
+        let blobs = RecordingBlobs {
+            put_key: "new/key.png".to_owned(),
+            ..Default::default()
+        };
         let sink = FakeSink::new(false);
-        let outcome =
-            upload_avatar(&reads, &writes, &blobs, &sink, &user_id(), vec![1], "image/png", NOW)
-                .await
-                .unwrap();
+        let outcome = upload_avatar(
+            &reads,
+            &writes,
+            &blobs,
+            &sink,
+            &user_id(),
+            CandidateAvatar {
+                bytes: vec![1],
+                declared_content_type: "image/png".to_owned(),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
         assert!(matches!(outcome, AvatarUploadOutcome::NoSuchUser));
-        assert_eq!(blobs.puts.load(Ordering::SeqCst), 0, "no blob write for a missing user");
+        assert_eq!(
+            blobs.puts.load(Ordering::SeqCst),
+            0,
+            "no blob write for a missing user"
+        );
         assert_eq!(sink.calls(), 0);
     }
 
@@ -772,13 +855,26 @@ mod tests {
     async fn upload_rejects_bad_payload_after_existence_but_before_the_blob() {
         let reads = FakeReads(Some(record(None, 1)));
         let writes = FakeWrites(AvatarPointerWrite::NoSuchUser);
-        let blobs = RecordingBlobs { put_key: "new/key.png".to_owned(), ..Default::default() };
+        let blobs = RecordingBlobs {
+            put_key: "new/key.png".to_owned(),
+            ..Default::default()
+        };
         let sink = FakeSink::new(false);
         // Unsupported type.
-        let outcome =
-            upload_avatar(&reads, &writes, &blobs, &sink, &user_id(), vec![1], "text/plain", NOW)
-                .await
-                .unwrap();
+        let outcome = upload_avatar(
+            &reads,
+            &writes,
+            &blobs,
+            &sink,
+            &user_id(),
+            CandidateAvatar {
+                bytes: vec![1],
+                declared_content_type: "text/plain".to_owned(),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
         assert!(matches!(
             outcome,
             AvatarUploadOutcome::Rejected(AvatarRejection::UnsupportedType)
@@ -790,12 +886,25 @@ mod tests {
     async fn upload_reports_storage_failed_when_the_put_fails() {
         let reads = FakeReads(Some(record(None, 1)));
         let writes = FakeWrites(AvatarPointerWrite::NoSuchUser);
-        let blobs = RecordingBlobs { fail_put: true, ..Default::default() };
+        let blobs = RecordingBlobs {
+            fail_put: true,
+            ..Default::default()
+        };
         let sink = FakeSink::new(false);
-        let outcome =
-            upload_avatar(&reads, &writes, &blobs, &sink, &user_id(), vec![1], "image/png", NOW)
-                .await
-                .unwrap();
+        let outcome = upload_avatar(
+            &reads,
+            &writes,
+            &blobs,
+            &sink,
+            &user_id(),
+            CandidateAvatar {
+                bytes: vec![1],
+                declared_content_type: "image/png".to_owned(),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
         assert!(matches!(outcome, AvatarUploadOutcome::StorageFailed));
         assert_eq!(sink.calls(), 0);
     }
@@ -804,14 +913,31 @@ mod tests {
     async fn upload_row_vanished_mid_flight_cleans_up_the_orphan_and_reports_no_such_user() {
         let reads = FakeReads(Some(record(None, 1)));
         let writes = FakeWrites(AvatarPointerWrite::NoSuchUser);
-        let blobs = RecordingBlobs { put_key: "new/key.png".to_owned(), ..Default::default() };
+        let blobs = RecordingBlobs {
+            put_key: "new/key.png".to_owned(),
+            ..Default::default()
+        };
         let sink = FakeSink::new(false);
-        let outcome =
-            upload_avatar(&reads, &writes, &blobs, &sink, &user_id(), vec![1], "image/png", NOW)
-                .await
-                .unwrap();
+        let outcome = upload_avatar(
+            &reads,
+            &writes,
+            &blobs,
+            &sink,
+            &user_id(),
+            CandidateAvatar {
+                bytes: vec![1],
+                declared_content_type: "image/png".to_owned(),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
         assert!(matches!(outcome, AvatarUploadOutcome::NoSuchUser));
-        assert_eq!(blobs.puts.load(Ordering::SeqCst), 1, "the new blob was written");
+        assert_eq!(
+            blobs.puts.load(Ordering::SeqCst),
+            1,
+            "the new blob was written"
+        );
         assert_eq!(
             *blobs.deleted.lock().unwrap(),
             vec!["new/key.png".to_owned()],
@@ -827,12 +953,28 @@ mod tests {
             user: record(Some(NOW - 1), NOW - 1), // stale updated_at
             prior_key: None,
         });
-        let blobs = RecordingBlobs { put_key: "new/key.png".to_owned(), ..Default::default() };
+        let blobs = RecordingBlobs {
+            put_key: "new/key.png".to_owned(),
+            ..Default::default()
+        };
         let sink = FakeSink::new(false);
-        let result =
-            upload_avatar(&reads, &writes, &blobs, &sink, &user_id(), vec![1], "image/png", NOW)
-                .await;
-        assert!(matches!(result, Err(AvatarWriteError::UntrustworthyWriteFact)));
+        let result = upload_avatar(
+            &reads,
+            &writes,
+            &blobs,
+            &sink,
+            &user_id(),
+            CandidateAvatar {
+                bytes: vec![1],
+                declared_content_type: "image/png".to_owned(),
+            },
+            NOW,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(AvatarWriteError::UntrustworthyWriteFact)
+        ));
         assert_eq!(sink.calls(), 0);
     }
 
@@ -843,12 +985,25 @@ mod tests {
             user: record(Some(NOW), NOW),
             prior_key: None,
         });
-        let blobs = RecordingBlobs { put_key: "new/key.png".to_owned(), ..Default::default() };
+        let blobs = RecordingBlobs {
+            put_key: "new/key.png".to_owned(),
+            ..Default::default()
+        };
         let sink = FakeSink::new(true);
-        let outcome =
-            upload_avatar(&reads, &writes, &blobs, &sink, &user_id(), vec![1], "image/png", NOW)
-                .await
-                .unwrap();
+        let outcome = upload_avatar(
+            &reads,
+            &writes,
+            &blobs,
+            &sink,
+            &user_id(),
+            CandidateAvatar {
+                bytes: vec![1],
+                declared_content_type: "image/png".to_owned(),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
         let AvatarUploadOutcome::Committed(committed) = outcome else {
             panic!("a failed announce must not turn the commit into a refusal");
         };
@@ -866,14 +1021,19 @@ mod tests {
         });
         let blobs = RecordingBlobs::default();
         let sink = FakeSink::new(false);
-        let outcome = clear_avatar(&writes, &blobs, &sink, &user_id(), NOW).await.unwrap();
+        let outcome = clear_avatar(&writes, &blobs, &sink, &user_id(), NOW)
+            .await
+            .unwrap();
         let AvatarUploadOutcome::Committed(committed) = outcome else {
             panic!("expected Committed");
         };
         let (user, ann) = committed.into_parts();
         assert!(user.avatar.is_none());
         assert!(matches!(ann, UserChangedAnnounce::Delivered));
-        assert_eq!(*blobs.deleted.lock().unwrap(), vec!["old/key.png".to_owned()]);
+        assert_eq!(
+            *blobs.deleted.lock().unwrap(),
+            vec!["old/key.png".to_owned()]
+        );
         assert_eq!(sink.calls(), 1);
     }
 
@@ -885,12 +1045,18 @@ mod tests {
         });
         let blobs = RecordingBlobs::default();
         let sink = FakeSink::new(false);
-        let outcome = clear_avatar(&writes, &blobs, &sink, &user_id(), NOW).await.unwrap();
+        let outcome = clear_avatar(&writes, &blobs, &sink, &user_id(), NOW)
+            .await
+            .unwrap();
         let AvatarUploadOutcome::Committed(committed) = outcome else {
             panic!("expected Committed");
         };
         let (user, ann) = committed.into_parts();
-        assert_eq!(user.updated_at, NOW - 100, "a no-op must not bump updated_at");
+        assert_eq!(
+            user.updated_at,
+            NOW - 100,
+            "a no-op must not bump updated_at"
+        );
         assert!(matches!(ann, UserChangedAnnounce::NotOwed));
         assert!(blobs.deleted.lock().unwrap().is_empty());
         assert_eq!(sink.calls(), 0);
@@ -901,7 +1067,9 @@ mod tests {
         let writes = FakeWrites(AvatarPointerWrite::NoSuchUser);
         let blobs = RecordingBlobs::default();
         let sink = FakeSink::new(false);
-        let outcome = clear_avatar(&writes, &blobs, &sink, &user_id(), NOW).await.unwrap();
+        let outcome = clear_avatar(&writes, &blobs, &sink, &user_id(), NOW)
+            .await
+            .unwrap();
         assert!(matches!(outcome, AvatarUploadOutcome::NoSuchUser));
         assert_eq!(sink.calls(), 0);
     }
@@ -930,7 +1098,12 @@ mod tests {
             ..Default::default()
         };
         let outcome = fetch_avatar(&refs, &blobs, &user_id()).await.unwrap();
-        let AvatarFetchOutcome::Found { bytes, content_type, filename } = outcome else {
+        let AvatarFetchOutcome::Found {
+            bytes,
+            content_type,
+            filename,
+        } = outcome
+        else {
             panic!("expected Found");
         };
         assert_eq!(bytes, vec![7, 8, 9]);

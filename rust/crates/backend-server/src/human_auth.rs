@@ -81,8 +81,8 @@ use silverhand_backend_core::{
     messaging::PrincipalKind,
     user_identity::{
         DisplayName, EmailAddress, ParticipantHandle, UserChangedAnnounce, UserChangedSink,
-        UserEmailLookup, UserProfileRead, UserProfileUpdate, UserProfileWriteUnitOfWork, UserRecord,
-        read_self_profile, update_self_display_name,
+        UserEmailLookup, UserProfileRead, UserProfileUpdate, UserProfileWriteUnitOfWork,
+        UserRecord, read_self_profile, update_self_display_name,
     },
 };
 
@@ -448,8 +448,14 @@ where
     };
 
     let now_ms = deps.clock.now_unix_millis();
-    match update_self_display_name(&deps.writes, &deps.user_changed, &user_id, display_name, now_ms)
-        .await
+    match update_self_display_name(
+        &deps.writes,
+        &deps.user_changed,
+        &user_id,
+        display_name,
+        now_ms,
+    )
+    .await
     {
         Ok(UserProfileUpdate::Committed(updated)) => {
             let (user, announce) = updated.into_parts();
@@ -490,8 +496,7 @@ async fn read_body(request: Request) -> Bytes {
 /// object's job.
 fn capture_audit(headers: &HeaderMap) -> SessionAudit {
     let user_agent = header_value(headers, "user-agent");
-    let ip_first_seen =
-        first_forwarded_for(headers).or_else(|| header_value(headers, "x-real-ip"));
+    let ip_first_seen = first_forwarded_for(headers).or_else(|| header_value(headers, "x-real-ip"));
     SessionAudit::capture(user_agent.as_deref(), ip_first_seen.as_deref())
 }
 
@@ -605,7 +610,7 @@ fn within_utf16(value: &str, min: usize, max: usize) -> bool {
 /// stored avatar revision (the shared [`principal_avatar_url`] human arm), or
 /// `null` when no avatar is stored — a freshly signed-up user has none.
 #[derive(Serialize)]
-struct UserDto {
+pub(crate) struct UserDto {
     id: String,
     name: String,
     display_name: String,
@@ -615,7 +620,7 @@ struct UserDto {
 }
 
 impl UserDto {
-    fn from_record(user: &UserRecord) -> Self {
+    pub(crate) fn from_record(user: &UserRecord) -> Self {
         Self {
             id: user.id.as_str().to_owned(),
             name: user.handle.clone(),
@@ -624,6 +629,12 @@ impl UserDto {
             created_at: user.created_at,
             updated_at: user.updated_at,
         }
+    }
+
+    /// The cache-busted avatar URL this DTO projects, cloned for the avatar-upload
+    /// response's top-level `avatar_url` mirror (which repeats `user.avatar_url`).
+    pub(crate) fn avatar_url(&self) -> Option<String> {
+        self.avatar_url.clone()
     }
 }
 
@@ -733,7 +744,7 @@ fn internal_error() -> Response {
 
 /// A committed identity change owes a best-effort `user_changed` hint; a lost hint
 /// never downgrades the committed `200`, so it is only recorded.
-fn log_lost_announce(announce: &UserChangedAnnounce, origin: &str) {
+pub(crate) fn log_lost_announce(announce: &UserChangedAnnounce, origin: &str) {
     if let UserChangedAnnounce::Failed(failure) = announce {
         tracing::error!(
             error_chain = %error::describe(failure),

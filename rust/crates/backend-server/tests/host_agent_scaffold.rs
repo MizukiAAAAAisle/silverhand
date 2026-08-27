@@ -106,6 +106,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "credential"),
     ("backend-core", "human_auth_flows"),
     ("backend-core", "user_identity"),
+    // #task:2222 — the human-directory and avatar route family (Rust Wave 2). The
+    // avatar sub-capability of the `users` authority (ports + orchestration; it
+    // reuses the CP2 identity above and ships no production blob/announce adapter).
+    // Its server route surface is the sibling `users` entry below. Not yet mounted
+    // (the app composition root is out of this task's scope).
+    ("backend-core", "avatar"),
     ("backend-filesystem", "runtime_detection"),
     ("backend-server", "clock"),
     ("backend-server", "host_agent"),
@@ -113,6 +119,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "host_control"),
     ("backend-server", "host_resources"),
     ("backend-server", "human_auth"),
+    // #task:2222 — the human-directory and avatar route surface (GET /api/users,
+    // POST/DELETE /api/me/avatar, GET /api/users/{id}/avatar). Sibling of the core
+    // `avatar` entry above; not yet mounted.
+    ("backend-server", "users"),
     ("backend-server", "ops"),
     ("backend-server", "password_hasher"),
     ("backend-server", "workspace_detail"),

@@ -262,13 +262,17 @@ fn decode_prior_avatar_key(
 /// coordinate is parsed through the domain's fallible parser, so a malformed
 /// committed id is corruption, never a product answer.
 fn decode_user(row: &sqlx::sqlite::SqliteRow) -> Result<UserRecord, CorruptStoredUserId> {
-    let id = UserId::parse(row.try_get::<String, _>("id").map_err(|_| CorruptStoredUserId)?)
-        .map_err(|_| CorruptStoredUserId)?;
+    let id = UserId::parse(
+        row.try_get::<String, _>("id")
+            .map_err(|_| CorruptStoredUserId)?,
+    )
+    .map_err(|_| CorruptStoredUserId)?;
     let updated_at: i64 = row.try_get("updated_at").map_err(|_| CorruptStoredUserId)?;
     // The avatar URL is cache-busted by `updated_at`; an absent or empty storage
     // key means "no avatar", exactly as the messaging author projection folds it.
-    let avatar_storage_key: Option<String> =
-        row.try_get("avatar_storage_key").map_err(|_| CorruptStoredUserId)?;
+    let avatar_storage_key: Option<String> = row
+        .try_get("avatar_storage_key")
+        .map_err(|_| CorruptStoredUserId)?;
     let avatar = match avatar_storage_key.as_deref() {
         None | Some("") => None,
         Some(_) => Some(AvatarRevision::at(updated_at)),
@@ -276,7 +280,9 @@ fn decode_user(row: &sqlx::sqlite::SqliteRow) -> Result<UserRecord, CorruptStore
     Ok(UserRecord {
         id,
         handle: row.try_get("name").map_err(|_| CorruptStoredUserId)?,
-        display_name: row.try_get("display_name").map_err(|_| CorruptStoredUserId)?,
+        display_name: row
+            .try_get("display_name")
+            .map_err(|_| CorruptStoredUserId)?,
         email: row.try_get("email").map_err(|_| CorruptStoredUserId)?,
         avatar,
         created_at: row.try_get("created_at").map_err(|_| CorruptStoredUserId)?,
@@ -292,7 +298,9 @@ impl UserProfileRead for SqliteUserStore {
             .await
             .map_err(PersistenceFailure::from_source)?;
         match row {
-            Some(row) => Ok(Some(decode_user(&row).map_err(PersistenceFailure::from_source)?)),
+            Some(row) => Ok(Some(
+                decode_user(&row).map_err(PersistenceFailure::from_source)?,
+            )),
             None => Ok(None),
         }
     }
@@ -365,8 +373,7 @@ impl AvatarStorageRefRead for SqliteUserStore {
         let (Some(key), Some(content_type)) = (key.filter(|k| !k.is_empty()), content_type) else {
             return Ok(None);
         };
-        let pointer =
-            AvatarBlobPointer::parse(key).map_err(PersistenceFailure::from_source)?;
+        let pointer = AvatarBlobPointer::parse(key).map_err(PersistenceFailure::from_source)?;
         // The only production writer stores an admitted (allowlist) content type,
         // so a stored value that does not parse is a persistence-integrity fault,
         // surfaced as a safe-500 rather than a silent 404 or a raw served type.
@@ -446,7 +453,10 @@ INSERT INTO users (id, name, display_name, email, avatar_storage_key, avatar_con
         assert_eq!(record.handle, "alice");
         assert_eq!(record.display_name, "Alice");
         assert_eq!(record.email.as_deref(), Some("alice@example.com"));
-        assert_eq!(record.avatar, None, "no stored avatar key projects no revision");
+        assert_eq!(
+            record.avatar, None,
+            "no stored avatar key projects no revision"
+        );
         assert_eq!(record.created_at, 10);
         assert_eq!(record.updated_at, 100);
     }
@@ -477,20 +487,39 @@ INSERT INTO users (id, name, display_name, email, avatar_storage_key, avatar_con
     async fn find_by_email_is_case_insensitive_and_none_for_unknown() {
         let (_dir, store) = open_seeded().await;
         assert_eq!(
-            store.find_by_email("ALICE@example.com").await.unwrap().unwrap().as_str(),
+            store
+                .find_by_email("ALICE@example.com")
+                .await
+                .unwrap()
+                .unwrap()
+                .as_str(),
             "user-1"
         );
-        assert!(store.find_by_email("nobody@example.com").await.unwrap().is_none());
+        assert!(
+            store
+                .find_by_email("nobody@example.com")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
     async fn a_real_change_bumps_updated_at_and_witnesses_the_before_image() {
         let (_dir, store) = open_seeded().await;
         let outcome = store
-            .update_display_name(&uid("user-1"), &DisplayName::parse("Alice Cooper").unwrap(), 777)
+            .update_display_name(
+                &uid("user-1"),
+                &DisplayName::parse("Alice Cooper").unwrap(),
+                777,
+            )
             .await
             .unwrap();
-        let UserProfileWrite::Committed { user, prior_display_name } = outcome else {
+        let UserProfileWrite::Committed {
+            user,
+            prior_display_name,
+        } = outcome
+        else {
             panic!("expected Committed");
         };
         assert_eq!(user.display_name, "Alice Cooper");
@@ -509,14 +538,21 @@ INSERT INTO users (id, name, display_name, email, avatar_storage_key, avatar_con
             .update_display_name(&uid("user-1"), &DisplayName::parse("Alice").unwrap(), 999)
             .await
             .unwrap();
-        let UserProfileWrite::Committed { user, prior_display_name } = outcome else {
+        let UserProfileWrite::Committed {
+            user,
+            prior_display_name,
+        } = outcome
+        else {
             panic!("expected Committed");
         };
         // No write happened: updated_at is still the seeded 100, and the before-image
         // equals the committed display (the core seal reads that as "no move").
         assert_eq!(user.updated_at, 100);
         assert_eq!(prior_display_name, "Alice");
-        assert_eq!(store.get(&uid("user-1")).await.unwrap().unwrap().updated_at, 100);
+        assert_eq!(
+            store.get(&uid("user-1")).await.unwrap().unwrap().updated_at,
+            100
+        );
     }
 
     #[tokio::test]
@@ -544,14 +580,24 @@ INSERT INTO users (id, name, display_name, email, avatar_storage_key, avatar_con
     #[tokio::test]
     async fn avatar_ref_is_none_without_a_stored_avatar() {
         let (_dir, store) = open_seeded().await;
-        assert!(store.get_avatar_ref(&uid("user-1")).await.unwrap().is_none());
+        assert!(
+            store
+                .get_avatar_ref(&uid("user-1"))
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert!(store.get_avatar_ref(&uid("ghost")).await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn avatar_ref_projects_the_stored_pointer_and_typed_content_type() {
         let (_dir, store) = open_seeded().await;
-        let stored = store.get_avatar_ref(&uid("user-3")).await.unwrap().expect("a ref");
+        let stored = store
+            .get_avatar_ref(&uid("user-3"))
+            .await
+            .unwrap()
+            .expect("a ref");
         assert_eq!(stored.pointer.as_str(), "avatars/carol.png");
         assert_eq!(stored.content_type, AvatarContentType::Png);
     }
@@ -618,7 +664,13 @@ INSERT INTO users (id, name, display_name, email, avatar_storage_key, avatar_con
             prior_key.as_ref().map(AvatarBlobPointer::as_str),
             Some("avatars/carol.png")
         );
-        assert!(store.get_avatar_ref(&uid("user-3")).await.unwrap().is_none());
+        assert!(
+            store
+                .get_avatar_ref(&uid("user-3"))
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
