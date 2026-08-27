@@ -23,8 +23,11 @@
 //!   replacement must happen in for no holder to be left with only a dead token.
 //! - [`aftermath`] names what a change of custody owes the rest of the system once it
 //!   has committed, and nothing else here may decide those effects are optional.
+//! - [`agent_roster`] enumerates the agents a computer carries, the set the
+//!   availability fan-out walks when custody moves them all at once.
 
 pub mod aftermath;
+pub mod agent_roster;
 pub mod claim;
 pub mod computer;
 pub mod custody;

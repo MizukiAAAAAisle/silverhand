@@ -30,8 +30,14 @@ use silverhand_backend_core::{
         ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceHumanAudienceReadPort,
         WorkspaceRole,
     },
+    agent_availability_read::AgentAvailabilityReadModel,
     auth::{AuthenticateHumanSession, SessionBearer},
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    capability::agent_view::agent_viewer_user_ids,
+    host_runtime::{
+        aftermath::{AgentAvailabilityAnnouncer, CustodyEffectFailure},
+        agent_roster::ComputerAgentsReadPort,
+    },
+    identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
     messaging::{
         CommittedMessageView, DirectPairOpenedFact, DirectPairOpenedPort, PrincipalIdentity,
         collaboration::{
@@ -244,6 +250,22 @@ enum ProductEvent {
     AgentEvent(Value),
     ConversationActivity(Value),
     AgentPresenceChanged {
+        agent_id: String,
+    },
+    /// An agent's AVAILABILITY (validity × host reachability) may have moved, so a
+    /// viewer's cached `GET /api/agents/{id}/availability` is stale. A cache-
+    /// invalidation HINT carrying only the agent id — the route stays the single
+    /// source of the value — mirroring the TypeScript
+    /// `publishToScope(viewer:<id>, 'agent_availability_changed', { agent_id })`
+    /// (`application/agent-availability-changed.ts`).
+    ///
+    /// Per-VIEWER scoped, never app-scoped: availability is a private read (only a
+    /// viewer who may see the agent has the cache), so the fan-out reaches exactly
+    /// that agent's viewer audience — the dual of the view ACL — and no one else.
+    /// Distinct from [`AgentPresenceChanged`](ProductEvent::AgentPresenceChanged):
+    /// they share the viewer scope but not the fact (reachability/validity vs the
+    /// Away→Online liveness edge), and a client discriminates on `kind`.
+    AgentAvailabilityChanged {
         agent_id: String,
     },
     /// An agent's identity record changed (or the agent was deleted — deletion
@@ -663,6 +685,24 @@ impl ScopeEventHub {
         self.publish(
             EventScope::Viewer(viewer.clone()),
             ProductEvent::AgentPresenceChanged {
+                agent_id: agent.as_str().to_owned(),
+            },
+        )
+    }
+
+    /// Publish an agent-availability invalidation to ONE viewer's scope. The
+    /// per-viewer primitive the availability fan-out fires for each admitted
+    /// viewer of each affected agent; mirrors the TypeScript
+    /// `publishToScope(viewer:<id>, 'agent_availability_changed', { agent_id })`.
+    /// An id-only hint — the route recomputes the value — never a value channel.
+    pub(crate) fn publish_agent_availability_changed(
+        &self,
+        viewer: &UserId,
+        agent: &AgentId,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::AgentAvailabilityChanged {
                 agent_id: agent.as_str().to_owned(),
             },
         )
@@ -1184,7 +1224,97 @@ impl<R: WorkspaceHumanAudienceReadPort> WorkspaceMetadataChangedSink
     }
 }
 
-/// The thread-follow lane's [`ThreadFollowAftermath`], forwarding through a
+/// The custody context's post-commit availability fan-out, over the real
+/// transport: the production [`AgentAvailabilityAnnouncer`].
+///
+/// When a computer's custody moves (revoke, or a daemon attach/detach), every
+/// agent on it changes availability together. The announcer is handed only the
+/// computer id, so it enumerates in two committed-authority steps and re-decides
+/// nothing:
+///
+///  1. WHICH agents — [`ComputerAgentsReadPort`], the viewer-blind roster of every
+///     agent filed under the computer. Blind on purpose: per-agent visibility is
+///     step 2, and an ACL here would silently drop agents from the announcement.
+///  2. WHO to tell, per agent — the SAME committed view ACL the read face admits
+///     against ([`AgentAvailabilityReadModel::read_agent_view`]) fed through
+///     [`agent_viewer_user_ids`], the audience dual of `can_view_agent`. Reusing
+///     that authority — not a parallel viewer computation — is what keeps the
+///     fan-out reaching exactly the humans the availability route would serve
+///     (active-only widener included: a non-active agent has an empty audience).
+///
+/// Mirrors the TypeScript `publishAgentAvailabilityChangedForHost` (enumerate the
+/// host's agents) → `publishAgentAvailabilityChangedForAgent` (fan the per-viewer
+/// hint). Best-effort by the [`aftermath`](silverhand_backend_core::host_runtime::aftermath)
+/// contract: it runs after custody is durable, so a failure is REPORTED (source
+/// preserved) but never becomes a refusal.
+///
+/// Per-agent AND per-viewer isolation: a persistence failure reading one agent's
+/// view does not abandon the remaining agents, and a transport failure to one
+/// viewer does not abandon the rest. The first cause is retained and returned only
+/// after every agent and viewer has been attempted, so one dead read or
+/// subscription cannot silently drop the others' hints.
+///
+/// It composes the ONE hub — never a second event authority — and its constructor
+/// stays crate-private.
+#[derive(Clone)]
+pub struct HubAgentAvailabilityAnnouncer<H, V> {
+    hub: ScopeEventHub,
+    computer_agents: H,
+    view: V,
+}
+
+impl<H, V> HubAgentAvailabilityAnnouncer<H, V> {
+    pub(crate) fn new(hub: ScopeEventHub, computer_agents: H, view: V) -> Self {
+        Self {
+            hub,
+            computer_agents,
+            view,
+        }
+    }
+}
+
+impl<H, V> AgentAvailabilityAnnouncer for HubAgentAvailabilityAnnouncer<H, V>
+where
+    H: ComputerAgentsReadPort,
+    V: AgentAvailabilityReadModel + Clone + Send + Sync + 'static,
+{
+    async fn agents_availability_changed(
+        &self,
+        computer: HostId,
+    ) -> Result<(), CustodyEffectFailure> {
+        let agents = self
+            .computer_agents
+            .agent_ids_on_computer(&computer)
+            .await
+            .map_err(CustodyEffectFailure::from_source)?;
+        let mut first_failure = None;
+        for agent in &agents {
+            // Resolve the agent's viewer audience from the committed view ACL. A
+            // read failure for one agent is retained but does not abort the rest.
+            let view = match self.view.read_agent_view(agent).await {
+                Ok(view) => view,
+                Err(cause) => {
+                    if first_failure.is_none() {
+                        first_failure = Some(CustodyEffectFailure::from_source(cause));
+                    }
+                    continue;
+                }
+            };
+            let viewers = agent_viewer_user_ids(view.as_ref().map(|facts| facts.visibility()));
+            for viewer in &viewers {
+                if let Err(cause) = self.hub.publish_agent_availability_changed(viewer, agent)
+                    && first_failure.is_none()
+                {
+                    first_failure = Some(CustodyEffectFailure::from_source(cause));
+                }
+            }
+        }
+        if let Some(failure) = first_failure {
+            return Err(failure);
+        }
+        Ok(())
+    }
+}
 /// [`HubUnreadPublisher`]. It holds one such publisher and forwards the committed change
 /// to its `publish_unread` — the same read-model audience oracle and per-viewer count the
 /// committed-message door uses (the SAME hub and read-model authorities, not necessarily
@@ -5392,6 +5522,154 @@ mod tests {
             .unwrap();
     }
 
+    #[derive(Clone)]
+    struct StubComputerAgents(Vec<AgentId>);
+
+    impl ComputerAgentsReadPort for StubComputerAgents {
+        async fn agent_ids_on_computer(
+            &self,
+            _computer: &HostId,
+        ) -> Result<Vec<AgentId>, PersistenceFailure> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[derive(Clone)]
+    struct StubAgentView(std::collections::HashMap<String, silverhand_backend_core::agent_availability_read::AgentViewFacts>);
+
+    impl AgentAvailabilityReadModel for StubAgentView {
+        async fn read_agent_view(
+            &self,
+            agent: &AgentId,
+        ) -> Result<
+            Option<silverhand_backend_core::agent_availability_read::AgentViewFacts>,
+            PersistenceFailure,
+        > {
+            Ok(self.0.get(agent.as_str()).cloned())
+        }
+
+        async fn read_host_reachability(
+            &self,
+            _host: &HostId,
+        ) -> Result<
+            Option<silverhand_backend_core::cold_read::availability::HostReachabilityFacts>,
+            PersistenceFailure,
+        > {
+            Ok(None)
+        }
+    }
+
+    /// An agent-view fact bundle for `source` on `host-1` whose ACL admits the
+    /// given viewers through the three arms, at the given materialization stage.
+    fn availability_view(
+        source: &str,
+        creator: Option<&str>,
+        direct_pairs: &[&str],
+        workspaces: &[&str],
+        status: silverhand_backend_core::agent_lifecycle::MaterializationStatus,
+    ) -> silverhand_backend_core::agent_availability_read::AgentViewFacts {
+        use silverhand_backend_core::capability::agent_view::{AgentViewerArms, AgentVisibility};
+        silverhand_backend_core::agent_availability_read::AgentViewFacts::from_source(
+            AgentId::parse(source).unwrap(),
+            AgentVisibility {
+                viewers: AgentViewerArms::new(
+                    creator.map(|c| UserId::parse(c).unwrap()),
+                    direct_pairs.iter().map(|u| UserId::parse(*u).unwrap()),
+                    workspaces.iter().map(|u| UserId::parse(*u).unwrap()),
+                ),
+                materialization_status: status,
+            },
+            HostId::parse("host-1").unwrap(),
+            None,
+        )
+    }
+
+    fn availability_agent_ids(frames: &[ScopedEvent]) -> Vec<String> {
+        let mut ids: Vec<String> = frames
+            .iter()
+            .map(|frame| {
+                let value = serde_json::to_value(&frame.event).unwrap();
+                assert_eq!(value["kind"], "agent_availability_changed");
+                value["payload"]["agent_id"].as_str().unwrap().to_owned()
+            })
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    #[tokio::test]
+    async fn availability_announcer_fans_out_per_agent_to_each_agents_own_viewer_audience() {
+        use silverhand_backend_core::agent_lifecycle::MaterializationStatus;
+        // Computer host-1 carries three agents. Two are active with different
+        // audiences; the third is a non-active row that a viewer would still be
+        // able to see if it were active. The announcer is handed ONLY the computer
+        // id and must, per agent, reach exactly that agent's viewer audience (the
+        // dual of the view ACL) with the active-only widener applied.
+        let hub = ScopeEventHub::test("epoch-1");
+        let viewer_1 = UserId::parse("viewer-1").unwrap();
+        let viewer_2 = UserId::parse("viewer-2").unwrap();
+        let mut sub_1 = hub
+            .subscribe(EventScope::Viewer(viewer_1.clone()))
+            .unwrap()
+            .receiver;
+        let mut sub_2 = hub
+            .subscribe(EventScope::Viewer(viewer_2.clone()))
+            .unwrap()
+            .receiver;
+
+        let mut views = std::collections::HashMap::new();
+        // agent-a: active, seen by viewer-1 (creator) AND viewer-2 (workspace).
+        views.insert(
+            "agent-a".to_owned(),
+            availability_view("agent-a", Some("viewer-1"), &[], &["viewer-2"], MaterializationStatus::Active),
+        );
+        // agent-b: active, seen by viewer-1 (direct pair) only.
+        views.insert(
+            "agent-b".to_owned(),
+            availability_view("agent-b", None, &["viewer-1"], &[], MaterializationStatus::Active),
+        );
+        // agent-c: on the computer and would admit viewer-1, but NON-active — its
+        // audience is empty, so no viewer is told. Falsifier for the active gate.
+        views.insert(
+            "agent-c".to_owned(),
+            availability_view("agent-c", Some("viewer-1"), &[], &[], MaterializationStatus::Failed),
+        );
+
+        let announcer = HubAgentAvailabilityAnnouncer::new(
+            hub.clone(),
+            StubComputerAgents(vec![
+                AgentId::parse("agent-a").unwrap(),
+                AgentId::parse("agent-b").unwrap(),
+                AgentId::parse("agent-c").unwrap(),
+            ]),
+            StubAgentView(views),
+        );
+        announcer
+            .agents_availability_changed(HostId::parse("host-1").unwrap())
+            .await
+            .unwrap();
+
+        // viewer-1 sees agent-a and agent-b, NOT agent-c (non-active gate).
+        let one = vec![sub_1.recv().await.unwrap(), sub_1.recv().await.unwrap()];
+        assert_eq!(one[0].scope, "viewer:viewer-1");
+        assert_eq!(availability_agent_ids(&one), vec!["agent-a", "agent-b"]);
+        assert!(matches!(
+            sub_1.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+
+        // viewer-2 sees ONLY agent-a — not agent-b (outside its ACL) and not
+        // agent-c (non-active). This is the viewer-audience discriminator: the
+        // fan-out consults each agent's own admitted set, never a blanket blast.
+        let two = vec![sub_2.recv().await.unwrap()];
+        assert_eq!(two[0].scope, "viewer:viewer-2");
+        assert_eq!(availability_agent_ids(&two), vec!["agent-a"]);
+        assert!(matches!(
+            sub_2.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
     /// A person's plain send into an arbitrary conversation — enough to move a seated
     /// reader's unread, whichever placement the channel has.
     fn plain_send(conversation: ConversationId) -> SendMessage {
@@ -5958,6 +6236,7 @@ mod tests {
         "agent_event",
         "conversation_activity",
         "agent_presence_changed",
+        "agent_availability_changed",
         "agent_changed",
         "user_presence",
         "user_changed",
@@ -5982,6 +6261,7 @@ mod tests {
             ProductEvent::AgentEvent(_) => "agent_event",
             ProductEvent::ConversationActivity(_) => "conversation_activity",
             ProductEvent::AgentPresenceChanged { .. } => "agent_presence_changed",
+            ProductEvent::AgentAvailabilityChanged { .. } => "agent_availability_changed",
             ProductEvent::AgentChanged { .. } => "agent_changed",
             ProductEvent::UserPresence { .. } => "user_presence",
             ProductEvent::UserChanged { .. } => "user_changed",
@@ -6014,6 +6294,9 @@ mod tests {
             ProductEvent::AgentEvent(json!({ "event": "tool_use" })),
             ProductEvent::ConversationActivity(json!({ "message_id": "m-1" })),
             ProductEvent::AgentPresenceChanged {
+                agent_id: "agent-1".to_owned(),
+            },
+            ProductEvent::AgentAvailabilityChanged {
                 agent_id: "agent-1".to_owned(),
             },
             ProductEvent::AgentChanged {

@@ -16,6 +16,7 @@ pub mod agent_presence_read;
 pub mod agent_view_acl;
 
 pub mod auth;
+pub mod computer_agents_read;
 pub mod credential;
 pub mod direct_pair_read;
 pub mod handle_namespace;
