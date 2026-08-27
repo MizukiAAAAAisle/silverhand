@@ -26,7 +26,10 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    access::{ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceRole},
+    access::{
+        ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceHumanAudienceReadPort,
+        WorkspaceRole,
+    },
     auth::{AuthenticateHumanSession, SessionBearer},
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
@@ -47,8 +50,10 @@ use silverhand_backend_core::{
     },
     policy::presence_grace::{GraceWindow, PresenceFact},
     scope_event::{AuthorizeEventScope, EventScope},
+    user_identity::{UserChangedAnnounceFailure, UserChangedSink},
     user_presence_cold_read::UserPresenceReadModel,
     user_presence_last_seen::LastSeenSink,
+    workspace_metadata_write::{WorkspaceMetadataAnnounceFailure, WorkspaceMetadataChangedSink},
 };
 
 use crate::host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers};
@@ -241,6 +246,32 @@ enum ProductEvent {
     AgentPresenceChanged {
         agent_id: String,
     },
+    /// An agent's identity record changed (or the agent was deleted — deletion
+    /// deliberately reuses this seam rather than minting a parallel `agent_deleted`
+    /// event, matching the TypeScript `AgentService.publishDeleted → publishChanged`
+    /// whose comment states the id-only payload and every consumer's reaction are
+    /// identical). Rides the global `app` scope — every authenticated viewer holds
+    /// an agent directory — mirroring the TypeScript
+    /// `publishToScope('app', 'agent_changed', { agent_id })`. A cache-invalidation
+    /// HINT carrying only the id; the client refetches the record as the authority.
+    ///
+    /// Its OWN typed variant, never folded into a generic app-scope announcer with
+    /// [`UserChanged`](ProductEvent::UserChanged): the two share a scope but not a
+    /// subject, and a client discriminates on `kind` to know which directory moved.
+    AgentChanged {
+        agent_id: String,
+    },
+    /// A human's identity record changed (signup, or a real `display_name` edit),
+    /// so every authenticated viewer's directory + identity carriers must
+    /// reconverge. Rides the global `app` scope, mirroring the TypeScript
+    /// `UserService.publishChanged → publishToScope('app', 'user_changed',
+    /// { user_id })`. A cache-invalidation HINT carrying only the id — never a
+    /// value channel — so it fires post-commit off the derived change gate without
+    /// re-reading anything. Its own typed variant, distinct from
+    /// [`AgentChanged`](ProductEvent::AgentChanged) though both are app-scoped.
+    UserChanged {
+        user_id: String,
+    },
     /// A human viewer's presence transitioned. The USER-presence axis, distinct
     /// from [`AgentPresenceChanged`](ProductEvent::AgentPresenceChanged): it rides
     /// the global `app` scope (every viewer sees every viewer's presence, mirroring
@@ -279,18 +310,23 @@ enum ProductEvent {
     /// authority — which is only sound while every producer agrees on `change`
     /// and on the per-viewer scope.
     ///
-    /// Only `added` exists here because only enrollment has been migrated. The
-    /// TypeScript contract also carries `role_changed`, `removed` and
-    /// `metadata_changed`, and those belong to the removal, role and metadata
-    /// paths; naming them without a producer would ship a shape no test can
-    /// exercise. Their `role` is optional there for the same reason it is
-    /// mandatory here — `added` always carries the role it was added at.
+    /// Two `change` arms are migrated, owed by two different bounded contexts on
+    /// two different facts: `added` (enrollment, carries the `role` it was added
+    /// at) and `metadata_changed` (a committed rename, carries NO role — the label
+    /// moved, not the membership). The TypeScript contract also carries
+    /// `role_changed` and `removed`; naming those without a producer would ship a
+    /// shape no test can exercise, so they stay absent until their paths migrate.
+    /// `role` is `Option` for exactly this reason — mandatory on `added`, absent on
+    /// `metadata_changed` — and is skipped on the wire when absent, matching the
+    /// TypeScript payload where `role` is optional.
     ViewerWorkspacesChanged {
         change: ViewerWorkspaceChange,
         workspace_id: String,
         /// The persisted role token, taken from the committed membership row via
-        /// `WorkspaceRole::as_str` — never spelled again at this boundary.
-        role: &'static str,
+        /// `WorkspaceRole::as_str` — never spelled again at this boundary. `Some`
+        /// on `added`, `None` on `metadata_changed`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        role: Option<&'static str>,
     },
     /// A viewer's saved-message set changed, so their `['saved']` list is stale. Rides
     /// the WRITER's own viewer scope — a private toggle, seen by no one else — mirroring
@@ -306,13 +342,15 @@ enum ProductEvent {
     },
 }
 
-/// Which delta moved a viewer's workspace set. Closed, and today one-valued: see
-/// [`ProductEvent::ViewerWorkspacesChanged`] for why the other three TypeScript
+/// Which delta moved a viewer's workspace set. Closed: `added` (enrollment) and
+/// `metadata_changed` (a committed rename). See
+/// [`ProductEvent::ViewerWorkspacesChanged`] for why the other two TypeScript
 /// values are absent rather than forgotten.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ViewerWorkspaceChange {
     Added,
+    MetadataChanged,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -561,7 +599,58 @@ impl ScopeEventHub {
             ProductEvent::ViewerWorkspacesChanged {
                 change: ViewerWorkspaceChange::Added,
                 workspace_id: workspace.as_str().to_owned(),
-                role: role.as_str(),
+                role: Some(role.as_str()),
+            },
+        )
+    }
+
+    /// Tell one viewer that a workspace they can see was renamed, so their
+    /// `['workspaces']` list (and every read model that froze the old label) is
+    /// stale. Rides the VIEWER scope like the `added` arm, but carries NO role — a
+    /// rename moved the label, not the membership. The caller enumerates the human
+    /// audience and invokes this once per member; this method spells one frame.
+    /// Mirrors the TypeScript `publishViewerWorkspacesChanged(viewer, { change:
+    /// 'metadata_changed', workspace_id })`.
+    pub(crate) fn publish_viewer_workspace_metadata_changed(
+        &self,
+        viewer: &UserId,
+        workspace: &WorkspaceId,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::ViewerWorkspacesChanged {
+                change: ViewerWorkspaceChange::MetadataChanged,
+                workspace_id: workspace.as_str().to_owned(),
+                role: None,
+            },
+        )
+    }
+
+    /// Announce that a human's identity record changed, to the global `app` scope.
+    /// The id-only cache-invalidation hint the signup and profile-edit paths owe;
+    /// mirrors the TypeScript `publishToScope('app', 'user_changed', { user_id })`.
+    pub(crate) fn publish_user_changed(&self, user_id: &UserId) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::App,
+            ProductEvent::UserChanged {
+                user_id: user_id.as_str().to_owned(),
+            },
+        )
+    }
+
+    /// Announce that an agent's identity record changed (or was deleted), to the
+    /// global `app` scope. The id-only hint agent create/edit/delete owe; mirrors
+    /// the TypeScript `publishToScope('app', 'agent_changed', { agent_id })`, the
+    /// SAME seam deletion reuses. Its own typed producer, never a generic app-scope
+    /// announcer shared with [`publish_user_changed`](Self::publish_user_changed).
+    pub(crate) fn publish_agent_changed(
+        &self,
+        agent_id: &AgentId,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::App,
+            ProductEvent::AgentChanged {
+                agent_id: agent_id.as_str().to_owned(),
             },
         )
     }
@@ -913,6 +1002,20 @@ impl ViewerWorkspacesChangedSink for ScopeEventHub {
     }
 }
 
+/// The identity context's `user_changed` announce, over the real transport.
+///
+/// Like [`SavedAftermath`], this is a scope-addressed frame with no audience to
+/// compute — the whole app scope — so the hub IS the adapter: the signup/profile
+/// use case decided WHAT is true (this human's identity moved), and this seam only
+/// routes the id-only hint and maps the transport's own error into the identity
+/// context's failure, keeping the concrete cause as the chain's tail.
+impl UserChangedSink for ScopeEventHub {
+    async fn user_changed(&self, user_id: &UserId) -> Result<(), UserChangedAnnounceFailure> {
+        self.publish_user_changed(user_id)
+            .map_err(UserChangedAnnounceFailure::from_source)
+    }
+}
+
 /// The saved-message context's post-commit announce, over the real transport.
 ///
 /// The hub IS the aftermath: a save/unsave is a single scope-addressed frame to the
@@ -1016,6 +1119,66 @@ impl<R: UnreadReadModel + Send + Sync> UnreadPublication for HubUnreadPublisher<
                     return Err(failure);
                 }
             }
+        }
+        Ok(())
+    }
+}
+
+/// The workspace-metadata context's post-commit `metadata_changed` fan-out, over
+/// the real transport.
+///
+/// Unlike the scope-addressed hub effects above, this one has an AUDIENCE to
+/// enumerate: the sink is handed one `workspace_id` and owes an independent
+/// per-viewer `viewer_workspaces_changed{metadata_changed}` frame to each human
+/// member. Who those members are is decided against the committed database by the
+/// read model ([`WorkspaceHumanAudienceReadPort`]); this ROUTES that answer and
+/// re-decides nothing. A workspace with no human members publishes nothing — the
+/// hint is owed to nobody, which is a true answer, not a failure.
+///
+/// Per-viewer isolation mirrors [`HubUnreadPublisher`]: a scope-local transport
+/// failure to one viewer does not abandon the rest. The first cause is retained and
+/// returned only after every member has been attempted, so one dead subscription
+/// cannot silently drop the others' hints.
+///
+/// It composes the ONE hub — it is NOT a second event authority — and its
+/// constructor stays crate-private, so the lane cannot point its fan-out at a hub
+/// other than the one it publishes on.
+#[derive(Clone)]
+pub struct HubWorkspaceMetadataPublisher<R> {
+    hub: ScopeEventHub,
+    audience: R,
+}
+
+impl<R> HubWorkspaceMetadataPublisher<R> {
+    pub(crate) fn new(hub: ScopeEventHub, audience: R) -> Self {
+        Self { hub, audience }
+    }
+}
+
+impl<R: WorkspaceHumanAudienceReadPort> WorkspaceMetadataChangedSink
+    for HubWorkspaceMetadataPublisher<R>
+{
+    async fn workspace_metadata_changed(
+        &self,
+        workspace_id: &WorkspaceId,
+    ) -> Result<(), WorkspaceMetadataAnnounceFailure> {
+        let members = self
+            .audience
+            .human_member_ids(workspace_id)
+            .await
+            .map_err(WorkspaceMetadataAnnounceFailure::from_source)?;
+        let mut first_failure = None;
+        for viewer in &members {
+            if let Err(cause) = self
+                .hub
+                .publish_viewer_workspace_metadata_changed(viewer, workspace_id)
+                && first_failure.is_none()
+            {
+                first_failure = Some(WorkspaceMetadataAnnounceFailure::from_source(cause));
+            }
+        }
+        if let Some(failure) = first_failure {
+            return Err(failure);
         }
         Ok(())
     }
@@ -5102,6 +5265,133 @@ mod tests {
         }
     }
 
+    /// The `user_changed` identity hint, over a REAL subscription: it rides the
+    /// global `app` scope and carries only `{user_id}`, exactly as the TypeScript
+    /// `publishToScope('app', 'user_changed', { user_id })`. Driven through the
+    /// production `UserChangedSink` adapter, not the raw producer, so the adapter's
+    /// own routing is what this pins.
+    #[tokio::test]
+    async fn user_changed_rides_the_app_scope_with_the_id_only_payload() {
+        let hub = ScopeEventHub::test("epoch-1");
+        let mut app = hub.subscribe(EventScope::App).unwrap().receiver;
+
+        UserChangedSink::user_changed(&hub, &user()).await.unwrap();
+
+        let frame = app.recv().await.unwrap();
+        assert_eq!(frame.scope, "app");
+        assert_eq!(
+            serde_json::to_value(&frame.event).unwrap(),
+            json!({ "kind": "user_changed", "payload": { "user_id": "user-1" } })
+        );
+    }
+
+    /// The `agent_changed` identity hint (the SAME seam agent deletion reuses):
+    /// global `app` scope, `{agent_id}` only, mirroring the TypeScript
+    /// `publishToScope('app', 'agent_changed', { agent_id })`. Its own typed frame,
+    /// never a generic app-scope announcer folded together with `user_changed`.
+    #[tokio::test]
+    async fn agent_changed_rides_the_app_scope_with_the_id_only_payload() {
+        let hub = ScopeEventHub::test("epoch-1");
+        let mut app = hub.subscribe(EventScope::App).unwrap().receiver;
+
+        hub.publish_agent_changed(&agent()).unwrap();
+
+        let frame = app.recv().await.unwrap();
+        assert_eq!(frame.scope, "app");
+        assert_eq!(
+            serde_json::to_value(&frame.event).unwrap(),
+            json!({ "kind": "agent_changed", "payload": { "agent_id": "agent-1" } })
+        );
+    }
+
+    /// The `metadata_changed` viewer hint rides the addressed viewer's OWN scope and
+    /// carries NO role — a rename moved the label, not the membership. Exactly the
+    /// TypeScript `publishToScope('viewer:<id>', 'viewer_workspaces_changed',
+    /// { change: 'metadata_changed', workspace_id })`. The absence of a `role` key is
+    /// the discriminator against the `added` arm and is asserted by exact-equality.
+    #[tokio::test]
+    async fn workspace_metadata_changed_rides_the_viewer_scope_without_a_role() {
+        let hub = ScopeEventHub::test("epoch-1");
+        let workspace = WorkspaceId::parse("ws-1").unwrap();
+        let mut viewer = hub.subscribe(EventScope::Viewer(user())).unwrap().receiver;
+
+        hub.publish_viewer_workspace_metadata_changed(&user(), &workspace)
+            .unwrap();
+
+        let frame = viewer.recv().await.unwrap();
+        assert_eq!(frame.scope, "viewer:user-1");
+        assert_eq!(
+            serde_json::to_value(&frame.event).unwrap(),
+            json!({
+                "kind": "viewer_workspaces_changed",
+                "payload": { "change": "metadata_changed", "workspace_id": "ws-1" },
+            })
+        );
+    }
+
+    #[derive(Clone)]
+    struct StubHumanAudience(Vec<UserId>);
+
+    impl WorkspaceHumanAudienceReadPort for StubHumanAudience {
+        async fn human_member_ids(
+            &self,
+            _workspace_id: &WorkspaceId,
+        ) -> Result<Vec<UserId>, silverhand_backend_core::persistence::PersistenceFailure> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_changed_sink_fans_out_one_viewer_frame_per_human_member() {
+        // The discriminator against a scope-addressed impl: the sink is handed ONE
+        // workspace id and must emit an INDEPENDENT frame to each member's own viewer
+        // scope, not a single workspace-scoped frame. Two members => two distinct
+        // viewer subscriptions each see exactly one metadata_changed hint.
+        let hub = ScopeEventHub::test("epoch-1");
+        let workspace = WorkspaceId::parse("ws-1").unwrap();
+        let member_a = UserId::parse("user-1").unwrap();
+        let member_b = UserId::parse("user-2").unwrap();
+        let mut sub_a = hub
+            .subscribe(EventScope::Viewer(member_a.clone()))
+            .unwrap()
+            .receiver;
+        let mut sub_b = hub
+            .subscribe(EventScope::Viewer(member_b.clone()))
+            .unwrap()
+            .receiver;
+
+        let publisher = HubWorkspaceMetadataPublisher::new(
+            hub.clone(),
+            StubHumanAudience(vec![member_a.clone(), member_b.clone()]),
+        );
+        publisher
+            .workspace_metadata_changed(&workspace)
+            .await
+            .unwrap();
+
+        let expected = json!({
+            "kind": "viewer_workspaces_changed",
+            "payload": { "change": "metadata_changed", "workspace_id": "ws-1" },
+        });
+        let frame_a = sub_a.recv().await.unwrap();
+        assert_eq!(frame_a.scope, "viewer:user-1");
+        assert_eq!(serde_json::to_value(&frame_a.event).unwrap(), expected);
+        let frame_b = sub_b.recv().await.unwrap();
+        assert_eq!(frame_b.scope, "viewer:user-2");
+        assert_eq!(serde_json::to_value(&frame_b.event).unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn metadata_changed_sink_owes_nothing_when_the_workspace_has_no_human_members() {
+        let hub = ScopeEventHub::test("epoch-1");
+        let publisher = HubWorkspaceMetadataPublisher::new(hub.clone(), StubHumanAudience(vec![]));
+        // An empty audience is a true "owed to nobody" answer, not a failure.
+        publisher
+            .workspace_metadata_changed(&WorkspaceId::parse("ws-1").unwrap())
+            .await
+            .unwrap();
+    }
+
     /// A person's plain send into an arbitrary conversation — enough to move a seated
     /// reader's unread, whichever placement the channel has.
     fn plain_send(conversation: ConversationId) -> SendMessage {
@@ -5668,7 +5958,9 @@ mod tests {
         "agent_event",
         "conversation_activity",
         "agent_presence_changed",
+        "agent_changed",
         "user_presence",
+        "user_changed",
         "message",
         "notification",
         "unread_updated",
@@ -5690,7 +5982,9 @@ mod tests {
             ProductEvent::AgentEvent(_) => "agent_event",
             ProductEvent::ConversationActivity(_) => "conversation_activity",
             ProductEvent::AgentPresenceChanged { .. } => "agent_presence_changed",
+            ProductEvent::AgentChanged { .. } => "agent_changed",
             ProductEvent::UserPresence { .. } => "user_presence",
+            ProductEvent::UserChanged { .. } => "user_changed",
             ProductEvent::Message(_) => "message",
             ProductEvent::Notification(_) => "notification",
             ProductEvent::UnreadUpdated(_) => "unread_updated",
@@ -5722,10 +6016,16 @@ mod tests {
             ProductEvent::AgentPresenceChanged {
                 agent_id: "agent-1".to_owned(),
             },
+            ProductEvent::AgentChanged {
+                agent_id: "agent-1".to_owned(),
+            },
             ProductEvent::UserPresence {
                 user_id: "user-1".to_owned(),
                 presence: "offline",
                 last_seen_at: Some(1_234),
+            },
+            ProductEvent::UserChanged {
+                user_id: "user-1".to_owned(),
             },
             ProductEvent::Message(json!({ "message": { "id": "m-1" } })),
             ProductEvent::Notification(NotificationEvent {
@@ -5747,7 +6047,12 @@ mod tests {
             ProductEvent::ViewerWorkspacesChanged {
                 change: ViewerWorkspaceChange::Added,
                 workspace_id: "w-1".to_owned(),
-                role: WorkspaceRole::Member.as_str(),
+                role: Some(WorkspaceRole::Member.as_str()),
+            },
+            ProductEvent::ViewerWorkspacesChanged {
+                change: ViewerWorkspaceChange::MetadataChanged,
+                workspace_id: "w-1".to_owned(),
+                role: None,
             },
             // A representative saved-set toggle. Its inner `Value` is illustrative, exactly
             // as the other opaque-payload samples above are (`Message`, `AgentActivity`, …):
@@ -6371,7 +6676,7 @@ mod tests {
             [ProductEvent::ViewerWorkspacesChanged {
                 change: ViewerWorkspaceChange::Added,
                 workspace_id: "ws-foreign".to_owned(),
-                role: "member",
+                role: Some("member"),
             }]
         );
 

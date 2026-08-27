@@ -30,6 +30,7 @@ pub mod unread_read;
 pub mod user_identity;
 pub mod user_presence_cold_read;
 pub mod user_presence_last_seen;
+pub mod workspace_audience_read;
 pub mod workspace_cold_read;
 pub mod workspace_detail_read;
 pub mod workspace_metadata_write;
