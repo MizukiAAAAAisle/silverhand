@@ -5570,6 +5570,35 @@ mod tests {
         );
     }
 
+    /// The production [`HubAgentDeletedAnnouncer`] — the composition-root glue that a
+    /// committed computer cascade calls for each deleted agent — routes to the SAME
+    /// app-scope `agent_changed` frame as the raw producer. Per the ratified A/B decision
+    /// the terminal deletion reuses `agent_changed` rather than minting a distinct
+    /// `agent_deleted` wire event, so this proves the adapter names no new event and folds
+    /// nothing together: driven through the `AgentDeletedAnnouncement` trait it satisfies,
+    /// it lands the exact `{agent_id}`-only frame on a REAL subscription.
+    #[tokio::test]
+    async fn hub_agent_deleted_announcer_reuses_the_agent_changed_frame() {
+        use crate::host_runtime::cascade_effects::{
+            AgentDeletedAnnouncement, HubAgentDeletedAnnouncer,
+        };
+
+        let hub = ScopeEventHub::test("epoch-1");
+        let mut app = hub.subscribe(EventScope::App).unwrap().receiver;
+
+        HubAgentDeletedAnnouncer::new(hub.clone())
+            .agent_deleted(&agent())
+            .await
+            .unwrap();
+
+        let frame = app.recv().await.unwrap();
+        assert_eq!(frame.scope, "app");
+        assert_eq!(
+            serde_json::to_value(&frame.event).unwrap(),
+            json!({ "kind": "agent_changed", "payload": { "agent_id": "agent-1" } })
+        );
+    }
+
     /// The `metadata_changed` viewer hint rides the addressed viewer's OWN scope and
     /// carries NO role — a rename moved the label, not the membership. Exactly the
     /// TypeScript `publishToScope('viewer:<id>', 'viewer_workspaces_changed',

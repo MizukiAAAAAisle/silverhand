@@ -19,7 +19,7 @@ use silverhand_backend_core::{
 };
 use silverhand_backend_filesystem::blob_store::{LocalBlobStore, LocalBlobStoreError};
 
-use crate::daemon_delivery::DaemonCascadeEffects;
+use crate::{daemon_delivery::DaemonCascadeEffects, scope_events::ScopeEventHub};
 
 /// The one cross-lane dependency: publish the terminal identity event for a
 /// deleted agent. Its concrete producer owns the event name, bytes and audience.
@@ -28,6 +28,34 @@ pub trait AgentDeletedAnnouncement: Send + Sync + 'static {
         &self,
         agent: &AgentId,
     ) -> impl Future<Output = Result<(), CustodyEffectFailure>> + Send;
+}
+
+/// The crate-local production producer for that terminal event. Per the ratified A/B
+/// decision, a deleted agent reuses the shared app-scope `agent_changed` bytes rather
+/// than minting a distinct `agent_deleted` wire event, so this adapter names no new
+/// event: it forwards to the one [`ScopeEventHub`], which owns the event name, bytes and
+/// audience. A hub failure reaches the cascade as the original `ScopeEventHubError`
+/// preserved beneath [`CustodyEffectFailure`], never a new opaque error — so the teardown
+/// still refuses safely instead of reporting a phantom success.
+#[derive(Clone)]
+pub struct HubAgentDeletedAnnouncer {
+    hub: ScopeEventHub,
+}
+
+impl HubAgentDeletedAnnouncer {
+    /// Adapt the one process hub into the cascade's announcement seam. The hub is the
+    /// same instance every other producer publishes on; this adapter mints none of its own.
+    pub fn new(hub: ScopeEventHub) -> Self {
+        Self { hub }
+    }
+}
+
+impl AgentDeletedAnnouncement for HubAgentDeletedAnnouncer {
+    async fn agent_deleted(&self, agent: &AgentId) -> Result<(), CustodyEffectFailure> {
+        self.hub
+            .publish_agent_changed(agent)
+            .map_err(CustodyEffectFailure::from_source)
+    }
 }
 
 /// Complete production implementation of [`ComputerCascadeEffects`].

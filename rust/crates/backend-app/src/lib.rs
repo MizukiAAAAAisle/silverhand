@@ -20,9 +20,11 @@ use silverhand_backend_core::{
         claim::ClaimLocalComputer,
         environment::{OsEntropy, SystemClock},
         invite::CreateHostInvite,
-        rotation::{RotateHostToken, RotateHostTokenThroughDaemon},
+        revoke::RevokeComputer,
+        rotation::{RotateConnectToken, RotateHostToken, RotateHostTokenThroughDaemon},
     },
     policy::presence_grace::GraceWindow,
+    teardown::computer_delete::DeleteComputer,
 };
 use silverhand_backend_filesystem::{
     blob_store::LocalBlobStore, runtime_detection::MachineRuntimeDetector,
@@ -80,9 +82,11 @@ use silverhand_backend_sqlite::{
     agent_list_read::SqliteAgentListColdRead,
     agent_presence_read::SqliteAgentPresenceColdRead,
     auth::SqliteSessionStore,
+    computer_agents_read::SqliteComputerAgentsRead,
     credential::SqliteCredentialStore,
     direct_pair_read::SqliteDirectPairReadModel,
     handle_namespace::SqliteHandleNamespace,
+    host_agent::SqliteHostAgentStore,
     host_resources_read::SqliteHostResourcesColdRead,
     host_runtime::SqliteHostRuntimeStore,
     human_registration::SqliteHumanRegistration,
@@ -423,6 +427,23 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         SqliteHostRuntimeStore::open(&config.database_path),
     )
     .await?;
+    // The agent-teardown read/write ports for the computer-delete cascade. A SECOND handle
+    // on the same product database, not a second authority: it owns the `agents`/runtime-
+    // session/computer-lifecycle rows the cascade tears down, disjoint from the host-invite
+    // rows `host_store` owns.
+    let host_agent_store = open(
+        "host agent teardown",
+        SqliteHostAgentStore::open(&config.database_path),
+    )
+    .await?;
+    // The per-computer agent roster the availability announcer enumerates. Same database,
+    // its own read model — it answers "which agents sit on this computer" so the announcer
+    // can recompute each one's viewer-scoped availability after a revoke.
+    let computer_agents_read = open(
+        "computer agents read",
+        SqliteComputerAgentsRead::open(&config.database_path),
+    )
+    .await?;
     let session_store = open(
         "human session",
         SqliteSessionStore::open(&config.database_path),
@@ -697,20 +718,16 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         CreateHostInvite::new(host_store.clone(), OsEntropy, SystemClock),
         config.daemon_npm_spec.clone(),
     );
-    // #2219 CP4 host-custody batch (scope B): the FOUR routes whose production
-    // authorities already exist — read/list, connect-token resolve, claim-or-create, and
-    // token rotation. Three (list/claim/rotate) sit behind the human session perimeter;
-    // `resolve` is the one door the product ALLOWLISTS past the bearer gate (it is
-    // daemon-authenticated: the caller proves possession of its connect token in the
-    // handler, not a human session), so it mounts anonymously at the top level with the
-    // other allowlisted faces, mirroring `installPublicBearerMiddleware`'s allowlist
-    // (`health`, `server/info`, `hostConnectTokenResolve`). The other four CP4 handlers
-    // (detail/revoke/connect-token rotate/delete) travel in this convergence tree but stay
-    // UNMOUNTED: each needs an effect authority with no production implementer yet
-    // (self-reported daemon name, per-host disconnect, whole-computer availability
-    // announcement, computer-cascade teardown), tracked as follow-up seams by authority
-    // family. All four here bind the ONE `SqliteHostRuntimeStore` (its Arc pool clones
-    // cheaply), never a second store.
+    // The host-invite create door plus the read/list, connect-token resolve,
+    // claim-or-create, and token-rotation family. Three (list/claim/rotate) sit behind the
+    // human session perimeter; `resolve` is the one door the product ALLOWLISTS past the
+    // bearer gate (it is daemon-authenticated: the caller proves possession of its connect
+    // token in the handler, not a human session), so it mounts anonymously at the top level
+    // with the other allowlisted faces, mirroring `installPublicBearerMiddleware`'s
+    // allowlist (`health`, `server/info`, `hostConnectTokenResolve`). The remaining four
+    // handlers (detail/revoke/connect-token rotate/delete) are mounted by #2223 CP5 below,
+    // now that the convergence supplies their effect authorities. All bind the ONE
+    // `SqliteHostRuntimeStore` (its Arc pool clones cheaply), never a second store.
     let host_list = host_runtime::list::router(host_store.clone());
     let host_resolve =
         host_runtime::resolve::router(host_store.clone(), host_store.clone(), SystemProcessClock);
@@ -743,6 +760,53 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             )),
         ),
     };
+    // #2223 CP5: the four host residual routes whose effect authorities the convergence
+    // now supplies — detail, revoke, connect-token rotate, and delete — mounted behind the
+    // same human perimeter as their host siblings. Each reads the ONE
+    // `SqliteHostRuntimeStore` as its `ComputerReadModel`; their live-control and cascade
+    // effects all come from the ONE `daemon_controller` (self-reported connected name,
+    // generation-bound disconnect, exact-seat stop + host-local purge) and the ONE `hub`
+    // (per-viewer availability announce, agent-deletion `agent_changed`) — never a second
+    // registry, store, hub, or blob root.
+    let host_detail =
+        host_runtime::detail::router(host_store.clone(), daemon_controller.connected_host_names());
+    let host_revoke = host_runtime::revoke::router(
+        host_store.clone(),
+        RevokeComputer::new(
+            host_store.clone(),
+            hub.agent_availability_announcer(
+                computer_agents_read,
+                agent_availability_cold_read.clone(),
+            ),
+            daemon_controller.connection_control(),
+            SystemClock,
+        ),
+    );
+    let host_rotate_connect_token = host_runtime::rotate_connect_token::router(
+        host_store.clone(),
+        RotateConnectToken::new(
+            host_store.clone(),
+            OsEntropy,
+            SystemClock,
+            daemon_controller.connection_control(),
+        ),
+        config.daemon_npm_spec.clone(),
+    );
+    // The computer-cascade teardown effects, composed from three existing authorities and
+    // minting none of them: the deletion `agent_changed` producer over the one hub, the
+    // daemon's exact-seat stop + host-local file purge, and physical blob deletion on the
+    // one local blob root. The teardown read/write ports are the one `SqliteHostAgentStore`.
+    let cascade_effects = host_runtime::cascade_effects::ProductionComputerCascadeEffects::new(
+        host_runtime::cascade_effects::HubAgentDeletedAnnouncer::new(hub.clone()),
+        daemon_controller.cascade_daemon_effects(),
+        blob_store.clone(),
+    );
+    let host_delete = host_runtime::delete::router(DeleteComputer::new(
+        host_agent_store.clone(),
+        host_agent_store,
+        cascade_effects,
+        daemon_controller.connection_control(),
+    ));
     // `/api/runtimes` is the one root face that is NOT anonymous (it sits under the
     // product's `/api/*` bearer gate with no allowlist entry), so it mounts behind this
     // same human-session perimeter. The profile — not a per-request flag — decides which
@@ -918,6 +982,16 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             .merge(host_list)
             .merge(host_claim)
             .merge(host_rotate_token)
+            // #2223 CP5: the four host residual routes, behind this same human perimeter.
+            // `host_detail` GET and `host_delete` DELETE share the `/api/hosts/{id}` node —
+            // axum accumulates their disjoint methods into one method router, so neither
+            // shadows the other. `host_revoke` and `host_rotate_connect_token` carry their
+            // own distinct sub-paths. All four sit in the `{id}` param subtree, disjoint
+            // from the anonymous static `/api/hosts/connect-token/resolve` mounted below.
+            .merge(host_detail)
+            .merge(host_revoke)
+            .merge(host_rotate_connect_token)
+            .merge(host_delete)
             // #2218: `/api/runtimes`, behind the human perimeter — anonymous → 401,
             // exactly as the product's un-allowlisted `/api/*` bearer gate refuses it.
             .merge(runtimes_router),
@@ -1631,6 +1705,57 @@ mod tests {
             Err(SchemaAdmissionError::LedgerMismatch)
         ));
         pool.close().await;
+    }
+
+    /// #2223 CP5: the four host residual routes are mounted behind the human perimeter and
+    /// reach their real `ComputerReadModel`/ownership authority — not a no-op mount. For
+    /// each (method, path): anonymous is refused `401` by the perimeter (auth precedes the
+    /// handler), and an authenticated request naming an UNKNOWN computer returns the shared
+    /// anti-enumeration `404` with the EXACT domain body `{host not found, host_not_found}`.
+    /// That domain body is the discriminator a bare status code cannot give: an unmounted
+    /// route falls to axum's empty-body `404`, and a no-op mount could not synthesize the
+    /// domain code — only the real read authority, consulted and returning "no such
+    /// computer", produces it. All four collapse absent and unowned to that one answer.
+    #[tokio::test]
+    async fn the_root_mounts_the_four_host_residual_routes_behind_auth_over_the_real_read() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let bearer = format!("Bearer {TOKEN}");
+        let host_not_found = r#"{"error":"host not found","error_code":"host_not_found"}"#;
+
+        // (method, unknown-id path) for detail, revoke, connect-token rotate, delete. Each
+        // uses the `{id}` param subtree; `unknown-host` never matches the static
+        // `connect-token`/`claim-or-create` siblings.
+        let routes = [
+            ("GET", "/api/hosts/unknown-host"),
+            ("POST", "/api/hosts/unknown-host/revoke"),
+            ("POST", "/api/hosts/unknown-host/connect-token/rotate"),
+            ("DELETE", "/api/hosts/unknown-host"),
+        ];
+
+        for (method, uri) in routes {
+            let (anon_status, _) = request(&app.router, method, uri, None).await;
+            assert_eq!(
+                anon_status,
+                StatusCode::UNAUTHORIZED,
+                "{method} {uri}: the perimeter must refuse an anonymous caller before the handler"
+            );
+
+            let (authed_status, authed_body) =
+                request(&app.router, method, uri, Some(&bearer)).await;
+            assert_eq!(
+                authed_status,
+                StatusCode::NOT_FOUND,
+                "{method} {uri}: an authenticated unknown-computer request reaches the mounted \
+                 route and its read authority"
+            );
+            assert_eq!(
+                authed_body, host_not_found,
+                "{method} {uri}: the domain 404 body proves the real read authority was \
+                 consulted, not an empty-body fallback from an absent route"
+            );
+        }
     }
 
     /// #2223 CP4: the composed avatar body-limit proof. It drives the avatar upload
@@ -2767,16 +2892,18 @@ mod tests {
     /// Gate 1 of the CP2 convergence closure — the composed root's COMPLETE positive
     /// mounted table. It enumerates every `(method, path)` `prepare()` mounts across
     /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195 + #2198 + #2218 + the
-    /// #2219 CP4 batch-B custody doors) as fifty entries — forty-one behind the human
-    /// session perimeter (including #2218's authenticated `/api/runtimes` and three of the
-    /// four #2219 host custody/credential doors), three behind the runtime
+    /// #2219 CP4 batch-B custody doors + the #2223 CP5 host residual doors) as fifty-four
+    /// entries — forty-five behind the human
+    /// session perimeter (including #2218's authenticated `/api/runtimes`, the three #2219
+    /// host custody/credential doors, and the four #2223 CP5 host residual doors: detail,
+    /// revoke, connect-token rotate and delete), three behind the runtime
     /// credential perimeter, the two authenticated WebSockets, and four ANONYMOUS faces
     /// (#2218's three root faces plus #2219's allowlisted `connect-token/resolve`) — and
     /// asserts each is PRESENT: a guarded route anon → its
     /// perimeter's `401`, a WebSocket → its upgrade surface, an anonymous face → its
     /// handler's own status, and never the `404` fallback. Removing any mounted route's
     /// `.merge(...)` from `prepare()` flips its entry to `404` and reddens this gate.
-    /// The tables are named consts with per-table `assert_eq!(len)` (41 / 3 / 2, plus
+    /// The tables are named consts with per-table `assert_eq!(len)` (45 / 3 / 2, plus
     /// the four anon faces asserted by exact status/body) so a mis-added or mis-deleted row
     /// reddens the count directly.
     ///
@@ -2804,7 +2931,7 @@ mod tests {
         // The forty-one human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
-        const HUMAN_PERIMETER_DOORS: [(&str, &str); 41] = [
+        const HUMAN_PERIMETER_DOORS: [(&str, &str); 45] = [
             ("POST", "/api/hosts"),
             // #2219 CP4 host-custody batch B — the three perimeter-guarded custody doors.
             // `GET /api/hosts` shares the path node with the invite POST above, so its anon
@@ -2881,8 +3008,17 @@ mod tests {
             // #2218: `/api/runtimes`, the one root ops face that is authenticated (under
             // the product's `/api/*` bearer gate with no allowlist entry). Anon → 401.
             ("GET", "/api/runtimes"),
+            // #2223 CP5: the four host residual doors, mounted behind the human perimeter.
+            // `GET` and `DELETE /api/hosts/{id}` share one path node (detail + teardown,
+            // disjoint methods); anon presence here witnesses only the shared path-guard,
+            // and the authenticated GET→detail / DELETE→teardown / unregistered→405 dispatch
+            // is borne by `the_api_hosts_id_path_dispatches_get_to_detail_and_delete_to_teardown`.
+            ("GET", "/api/hosts/host-1"),
+            ("DELETE", "/api/hosts/host-1"),
+            ("POST", "/api/hosts/host-1/revoke"),
+            ("POST", "/api/hosts/host-1/connect-token/rotate"),
         ];
-        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 41);
+        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 45);
         for (method, path) in HUMAN_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -3221,19 +3357,21 @@ mod tests {
     /// Gate 2 of the CP2 convergence closure — the #2195 host-agent control-plane lane
     /// as a bidirectionally CLOSED universe of 54, every entry itemized `(method, path)`
     /// in a named table that is mechanically checksummed: the five tables' lengths are
-    /// pinned (`10`/`4`/`36`/`3`/`1`), every `(method, path)` across the union is unique,
+    /// pinned (`14`/`4`/`31`/`4`/`1`), every `(method, path)` across the union is unique,
     /// landed is disjoint from residual, and the union is exactly `54`. This is the
     /// lane's ORIGINAL owned total (it still counts the three dynamic host reads since
     /// handed to #2198). Deleting a row, or copying one between tables, breaks the
-    /// checksum — `(10 + 4) + (36 + 3 + 1) == 54` is an assertion, not prose.
+    /// checksum — `(14 + 4) + (31 + 4 + 1) == 54` is an assertion, not prose.
     ///
-    /// Every one of the 40 residual routes is FALSIFIABLE — none rests on an
+    /// Every one of the 36 residual routes is FALSIFIABLE — none rests on an
     /// unfalsifiable anon `401`:
-    /// * The 10 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
-    ///   perimeter → anon `401` (includes #2218's authenticated `/api/runtimes` and
-    ///   three of #2219's four host-custody routes: list, claim-or-create, and
+    /// * The 14 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
+    ///   perimeter → anon `401` (includes #2218's authenticated `/api/runtimes`, three of
+    ///   #2219's four host-custody routes: list, claim-or-create, and
     ///   `{id}/rotate-token`; the fourth, `connect-token/resolve`, is allowlisted and
-    ///   lands anonymously below).
+    ///   lands anonymously below; and the four #2223 CP5 host residual routes: detail
+    ///   `GET /api/hosts/{id}`, revoke, connect-token rotate, and delete
+    ///   `DELETE /api/hosts/{id}`).
     ///   Deleting any one's `.merge(...)` flips it to `404` and reddens this gate
     ///   (delete-landed RED).
     /// * The 4 ANON-LANDED routes are mounted ahead of every perimeter → an anonymous
@@ -3244,11 +3382,13 @@ mod tests {
     ///   whose `error_code` body (asserted after the loop) proves it landed anonymously and
     ///   not behind the perimeter. Neither the guarded (bodiless) `401` nor the absent
     ///   `404`. Deleting any one's `.merge(...)` flips it to `404` and reddens this gate.
-    /// * 36 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
+    /// * 31 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
     ///   Mounting any one flips it to its perimeter's `401`/`405` and reddens this gate
     ///   (mount-residual RED).
-    /// * 3 METHOD-SHADOW residuals share a concrete path with a mounted sibling that
-    ///   answers a DIFFERENT method. Probed anonymously the perimeter's `.layer` answers
+    /// * 4 METHOD-SHADOW residuals share a concrete path with a mounted sibling that
+    ///   answers a DIFFERENT method (the three `/api/agents` methods, plus
+    ///   `PATCH /api/hosts/{id}` now that #2223 CP5 mounts GET+DELETE on that node).
+    ///   Probed anonymously the perimeter's `.layer` answers
     ///   `401` before method dispatch (indistinguishable from mounted), so this gate
     ///   probes them AUTHENTICATED (real seeded bearer): the perimeter passes and the
     ///   path's `MethodRouter` bears the truth → `405 METHOD_NOT_ALLOWED`. Mis-mounting
@@ -3267,7 +3407,7 @@ mod tests {
     /// anon-landed).
     #[tokio::test]
     async fn the_host_agent_lane_stays_a_closed_universe_of_fifty_four() {
-        // The 10 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
+        // The 14 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
         // perimeter → anon 401.
         const LANDED: &[(&str, &str)] = &[
             ("GET", "/api/agents"),
@@ -3291,6 +3431,17 @@ mod tests {
             ("GET", "/api/hosts"),
             ("POST", "/api/hosts/claim-or-create"),
             ("POST", "/api/hosts/host-1/rotate-token"),
+            // Host residual CP4, #2223: the four authority-complete host residual routes,
+            // mounted behind the human perimeter → anon 401. `GET /api/hosts/{id}` (detail)
+            // and `DELETE /api/hosts/{id}` (teardown) share the `{id}` node with disjoint
+            // methods; here each is probed anon (401, perimeter), and their GET→detail /
+            // DELETE→teardown / unregistered-method→405 dispatch is borne by the dedicated
+            // `/api/hosts/{id}` two-arm gate below. `PATCH /api/hosts/{id}` is now a
+            // method-shadow residual (the node exists for GET+DELETE only), asserted below.
+            ("GET", "/api/hosts/host-1"),
+            ("DELETE", "/api/hosts/host-1"),
+            ("POST", "/api/hosts/host-1/revoke"),
+            ("POST", "/api/hosts/host-1/connect-token/rotate"),
         ];
         // The 4 ANON-LANDED routes: mounted ahead of every perimeter, so an anonymous
         // probe reaches the handler. #2218's server/info and health answer 200; readyz
@@ -3313,17 +3464,14 @@ mod tests {
         const CLEAN_RESIDUAL: &[(&str, &str)] = &[
             // routes.ts remaining (1)
             ("POST", "/auth/embedded-bootstrap"),
-            // hosts remaining (10 of 15; list/resolve/claim-or-create/rotate-token now
-            // landed above by #2219, and `GET /api/hosts` is no longer method-shadowed)
-            ("GET", "/api/hosts/host-1"),
-            ("DELETE", "/api/hosts/host-1"),
-            ("POST", "/api/hosts/host-1/revoke"),
-            ("POST", "/api/hosts/host-1/connect-token/rotate"),
+            // hosts remaining (5 of 15; list/resolve/claim-or-create/rotate-token landed
+            // by #2219, and detail/revoke/connect-token-rotate/delete landed by #2223 CP5.
+            // `PATCH /api/hosts/{id}` is now method-shadowed by CP5's GET+DELETE node and
+            // moved to METHOD_SHADOW_RESIDUAL below)
             ("POST", "/api/hosts/host-1/disconnect"),
             ("GET", "/api/hosts/host-1/proxy-config"),
             ("PUT", "/api/hosts/host-1/proxy-config"),
             ("GET", "/api/hosts/host-1/runtime-catalog"),
-            ("PATCH", "/api/hosts/host-1"),
             ("GET", "/api/hosts/host-1/status"),
             // agents residual (16 of 20; name-availability, POST /api/agents,
             // PATCH/DELETE /api/agents/{id} are shadowed, below)
@@ -3362,18 +3510,19 @@ mod tests {
             ("POST", "/api/agents"),           // ← GET /api/agents (mounted)
             ("PATCH", "/api/agents/agent-1"),  // ← GET /api/agents/{id} (mounted)
             ("DELETE", "/api/agents/agent-1"), // ← GET /api/agents/{id} (mounted)
+            ("PATCH", "/api/hosts/host-1"),    // ← GET+DELETE /api/hosts/{id} (#2223 CP5)
         ];
         // 1 STATIC-SHADOW residual: collides with the mounted dynamic `GET
         // /api/agents/{id}`; an authenticated probe falls through to that route's absent
         // answer (asserted below), not a static handler.
         const STATIC_SHADOW_RESIDUAL: &[(&str, &str)] = &[("GET", "/api/agents/name-availability")];
 
-        // ── Mechanical checksum: (10 + 4) + (36 + 3 + 1) == 54, all unique, landed ∩
+        // ── Mechanical checksum: (14 + 4) + (31 + 4 + 1) == 54, all unique, landed ∩
         // residual = ∅ ──
-        assert_eq!(LANDED.len(), 10);
+        assert_eq!(LANDED.len(), 14);
         assert_eq!(ANON_LANDED.len(), 4);
-        assert_eq!(CLEAN_RESIDUAL.len(), 36);
-        assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 3);
+        assert_eq!(CLEAN_RESIDUAL.len(), 31);
+        assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 4);
         assert_eq!(STATIC_SHADOW_RESIDUAL.len(), 1);
         let landed: std::collections::HashSet<(&str, &str)> = LANDED
             .iter()
@@ -3386,8 +3535,8 @@ mod tests {
             .chain(STATIC_SHADOW_RESIDUAL)
             .copied()
             .collect();
-        assert_eq!(landed.len(), 14, "landed rows are unique");
-        assert_eq!(residual.len(), 40, "residual rows are unique");
+        assert_eq!(landed.len(), 18, "landed rows are unique");
+        assert_eq!(residual.len(), 36, "residual rows are unique");
         assert!(
             landed.is_disjoint(&residual),
             "landed and residual are disjoint"
@@ -3405,7 +3554,7 @@ mod tests {
         let bearer = format!("Bearer {TOKEN}");
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // ── 11 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
+        // ── 14 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
         for (method, path) in LANDED {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(
@@ -3434,7 +3583,7 @@ mod tests {
             "anon resolve reaches its own handler, not the perimeter"
         );
 
-        // ── 36 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
+        // ── 31 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
         for (method, path) in CLEAN_RESIDUAL {
             let (status, _) = request(&router, method, path, None).await;
             assert_eq!(
@@ -3444,7 +3593,7 @@ mod tests {
             );
         }
 
-        // ── 3 METHOD-SHADOW RESIDUAL → AUTHENTICATED 405 (perimeter passes, the path's
+        // ── 4 METHOD-SHADOW RESIDUAL → AUTHENTICATED 405 (perimeter passes, the path's
         // MethodRouter bears the truth). Mis-mounting the residual method reddens this. ──
         for (method, path) in METHOD_SHADOW_RESIDUAL {
             let (status, body) = request(&router, method, path, Some(&bearer)).await;
@@ -3538,40 +3687,93 @@ mod tests {
         }
     }
 
-    /// #2219 scope B: the OTHER four CP4 handlers (`GET`/`DELETE /api/hosts/{id}`,
-    /// `POST /api/hosts/{id}/revoke`, `POST /api/hosts/{id}/connect-token/rotate`) travel
-    /// in this convergence tree as compiled component code but are deliberately NOT
-    /// mounted — each awaits an effect authority with no production implementer yet.
-    /// "Component absorbed" must never be mistaken for "route landed", so this gate probes
-    /// each of the four AUTHENTICATED (a real seeded bearer that passes the human
-    /// perimeter) and asserts `404`: an unmounted path is absent to the router at BOTH the
-    /// anonymous edge (proven in the closed-universe gate) and past the perimeter here. A
-    /// mounted-but-guarded route would answer `401` anon and reach its handler
-    /// authenticated; a mounted-but-unregistered-method route would answer `405`. Only a
-    /// truly unmounted path is `404` under a valid bearer. Mounting any of the four
-    /// reddens this gate (and must move its row in the closed-universe ledger).
+    /// #2223 CP5 shared-path dispatch: `/api/hosts/{id}` now carries TWO methods on one
+    /// node — `GET` (detail) and `DELETE` (teardown). axum accumulates them into one
+    /// `MethodRouter`, so this gate proves neither clobbered the other and no catch-all
+    /// swallowed the node: over a REAL seeded owner-managed computer, authenticated `GET`
+    /// dispatches to the DETAIL handler (a `{"host":{...}}` body, no `deleted`),
+    /// authenticated `DELETE` dispatches to the TEARDOWN handler (a `{"host_id",deleted:true}`
+    /// body, no `host`), and after that teardown the row is GONE — a second `GET` collapses
+    /// to the domain `404 host_not_found`, which a no-op or shared-handler mount could never
+    /// produce. An unregistered method (`PATCH`) is `405` from the shared `MethodRouter` —
+    /// not `404` (node vanished) nor a handler status (catch-all). The detail and teardown
+    /// success bodies are key-disjoint (`host` vs `host_id`+`deleted`), so a mount that
+    /// accidentally pointed both methods at one handler reddens here.
     #[tokio::test]
-    async fn the_four_unmounted_cp4_routes_stay_absorbed_but_unrouted() {
+    async fn the_api_hosts_id_path_dispatches_get_to_detail_and_delete_to_teardown() {
         let fixture = fixture(true).await;
         seed_human(&fixture.path).await;
+        // One owner-managed (remote + user_invite), dependent-free computer owned by the
+        // seeded `user-1`: deletable through the full composed cascade with no agents to
+        // stop, no files to purge and no blobs to forget.
+        let pool = SqlitePoolOptions::new()
+            .connect(fixture.path.to_str().unwrap())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id, provisioning_source) \
+             VALUES ('h-own', 'own', 'remote', 1, 'user-1', 'user_invite')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
         let app = prepare(&config(fixture.path.clone())).await.unwrap();
         let router = app.router;
         let bearer = format!("Bearer {TOKEN}");
 
-        const UNMOUNTED: [(&str, &str); 4] = [
-            ("GET", "/api/hosts/host-1"),
-            ("DELETE", "/api/hosts/host-1"),
-            ("POST", "/api/hosts/host-1/revoke"),
-            ("POST", "/api/hosts/host-1/connect-token/rotate"),
-        ];
-        for (method, path) in UNMOUNTED {
-            let (status, body) = request(&router, method, path, Some(&bearer)).await;
-            assert_eq!(
-                status,
-                StatusCode::NOT_FOUND,
-                "{method} {path} is absorbed but must stay UNMOUNTED (404 even authenticated): {body}"
-            );
-        }
+        // Authenticated GET → the DETAIL handler: the host wire for the owned computer.
+        // The DETAIL shape carries `host` and no `deleted`.
+        let (status, body) = request(&router, "GET", "/api/hosts/h-own", Some(&bearer)).await;
+        assert_eq!(status, StatusCode::OK, "authed GET /api/hosts/h-own: {body}");
+        let detail: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            detail["host"]["id"], "h-own",
+            "GET dispatches to the detail handler: {body}"
+        );
+        assert!(
+            detail.get("deleted").is_none(),
+            "the detail arm is not the teardown arm: {body}"
+        );
+
+        // Unregistered method on the shared node → 405 from the `MethodRouter` (node
+        // present for GET+DELETE, PATCH absent), never 404 (node gone) nor a handler status.
+        let (status, body) = request(&router, "PATCH", "/api/hosts/h-own", Some(&bearer)).await;
+        assert_eq!(
+            status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "PATCH /api/hosts/{{id}} must be 405 (no clobber, no catch-all): {body}"
+        );
+
+        // Authenticated DELETE → the TEARDOWN handler: the dependent-free owner-managed
+        // computer is removed through the full composed cascade. The TEARDOWN shape carries
+        // `host_id` + `deleted:true` and no `host` array.
+        let (status, body) = request(&router, "DELETE", "/api/hosts/h-own", Some(&bearer)).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "authed DELETE /api/hosts/h-own: {body}"
+        );
+        let torn_down: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            torn_down,
+            serde_json::json!({ "host_id": "h-own", "deleted": true }),
+            "DELETE dispatches to the teardown handler: {body}"
+        );
+
+        // Real effect, not a no-op: the row is gone, so a second GET collapses to the
+        // domain 404 — proving DELETE reached the teardown, not the detail, handler.
+        let (status, body) = request(&router, "GET", "/api/hosts/h-own", Some(&bearer)).await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "post-teardown GET must be gone: {body}"
+        );
+        assert_eq!(
+            body, r#"{"error":"host not found","error_code":"host_not_found"}"#,
+            "the teardown really removed the row"
+        );
     }
 
     /// #2219 real-authority binding — the invite→resolve chain proves BOTH placement and
