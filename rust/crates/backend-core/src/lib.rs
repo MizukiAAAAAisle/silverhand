@@ -16,6 +16,7 @@ pub mod auth;
 pub mod blob_store;
 pub mod capability;
 pub mod cold_read;
+pub mod credential;
 pub mod direct_pair_read;
 pub mod host_resources_read;
 pub mod host_runtime;
