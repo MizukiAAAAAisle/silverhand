@@ -99,6 +99,13 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "workspace_metadata_write"),
     ("backend-core", "workspace_name"),
     ("backend-core", "workspace_name_availability"),
+    // #task:2193 CP2 — the human credentialed-session vertical (signup/login/
+    // logout + self profile). Core bounded contexts and their ports; the SQLite
+    // adapters and the server route surface are the sibling entries below. Not yet
+    // mounted (the app composition root is out of this task's scope).
+    ("backend-core", "credential"),
+    ("backend-core", "human_auth_flows"),
+    ("backend-core", "user_identity"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
@@ -106,11 +113,16 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "workspace_detail"),
     ("backend-server", "workspace_metadata_write"),
     ("backend-server", "workspace_name_availability"),
+    ("backend-server", "human_auth"),
     ("backend-sqlite", "agent_availability_read"),
     ("backend-sqlite", "agent_detail_read"),
     ("backend-sqlite", "agent_list_read"),
     ("backend-sqlite", "agent_presence_read"),
     ("backend-sqlite", "agent_view_acl"),
+    ("backend-sqlite", "credential"),
+    ("backend-sqlite", "handle_namespace"),
+    ("backend-sqlite", "human_registration"),
+    ("backend-sqlite", "user_identity"),
     ("backend-sqlite", "host_agent"),
     ("backend-sqlite", "host_resources_read"),
     ("backend-sqlite", "user_presence_cold_read"),
@@ -215,6 +227,7 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[("backend-core", "agents")]
 const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
+    ("backend-core", "credential"),
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
     ("backend-server", "host_agent"),
