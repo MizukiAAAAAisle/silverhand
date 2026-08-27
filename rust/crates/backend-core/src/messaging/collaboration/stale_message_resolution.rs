@@ -6,10 +6,13 @@
 //! admitted answer and the identity seal; the HTTP shape, the independent
 //! `send_messages` capability and the warning record stay with their owners.
 //!
-//! An admitted fact carries the coordinates the authority actually selected, so
-//! a consumer must bind it to the authenticated request before use. The bound
-//! value has no public constructor, which makes the seal a cross-crate
-//! guarantee rather than a convention each consumer re-implements.
+//! An admitted fact carries the coordinates the authority actually selected.
+//! The guarantee is narrower than "a consumer cannot compare them itself": an
+//! adapter must be able to mint a fact, so minting stays public. What holds is
+//! that `BoundStaleMessageResolutionAdmission` has no cross-crate constructor,
+//! so `bind` is the only way to obtain the branded value the route accepts, and
+//! `into_parts` is the only way another crate reads admitted coordinates at all.
+//! The seal is therefore about use, not creation.
 //!
 //! ```compile_fail
 //! use silverhand_backend_core::{
@@ -64,7 +67,7 @@ pub trait StaleMessageResolutionAdmissionPort {
 }
 
 /// The coordinates the authority actually admitted, still unbound.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct StaleMessageResolutionAdmissionFact {
     agent: AgentId,
     conversation: ConversationId,
@@ -92,7 +95,6 @@ impl StaleMessageResolutionAdmissionFact {
 }
 
 /// An admitted fact proven to belong to the authenticated request.
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BoundStaleMessageResolutionAdmission(StaleMessageResolutionAdmissionFact);
 
 impl BoundStaleMessageResolutionAdmission {

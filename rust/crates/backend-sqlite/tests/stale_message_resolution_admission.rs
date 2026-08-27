@@ -128,15 +128,17 @@ async fn workspace_and_live_pair_return_actual_source_coordinates() {
                 &conversation(WORKSPACE_CONVERSATION)
             )
             .await
-            .unwrap(),
-        Err(StaleMessageResolutionAdmissionRefusal::Forbidden)
+            .unwrap()
+            .err(),
+        Some(StaleMessageResolutionAdmissionRefusal::Forbidden)
     );
     assert_eq!(
         admission
             .admit(&agent(), &conversation("missing-conversation"))
             .await
-            .unwrap(),
-        Err(StaleMessageResolutionAdmissionRefusal::Forbidden)
+            .unwrap()
+            .err(),
+        Some(StaleMessageResolutionAdmissionRefusal::Forbidden)
     );
 }
 
@@ -161,8 +163,12 @@ async fn half_dead_direct_pairs_refuse_and_repairs_use_the_same_adapter() {
         .await
         .unwrap();
     assert_eq!(
-        admission.admit(&agent(), &missing_peer).await.unwrap(),
-        Err(StaleMessageResolutionAdmissionRefusal::Forbidden)
+        admission
+            .admit(&agent(), &missing_peer)
+            .await
+            .unwrap()
+            .err(),
+        Some(StaleMessageResolutionAdmissionRefusal::Forbidden)
     );
 
     db.execute(
@@ -186,8 +192,9 @@ async fn half_dead_direct_pairs_refuse_and_repairs_use_the_same_adapter() {
         admission
             .admit(&agent(), &conversation(DIRECT_PAIR))
             .await
-            .unwrap(),
-        Err(StaleMessageResolutionAdmissionRefusal::Forbidden)
+            .unwrap()
+            .err(),
+        Some(StaleMessageResolutionAdmissionRefusal::Forbidden)
     );
     db.execute("DROP TRIGGER trg_conversations_endpoint_tombstone_monotonic")
         .await

@@ -2098,7 +2098,8 @@ mod tests {
     /// untouched refusals, and the production observer's single record — is proven over the
     /// real perimeter seam by the backend-server `stale_message_resolution_mount` gate; what
     /// THIS composition test owns is that `prepare` actually placed the route in the served
-    /// chain, wired to the app-private admission bridge and the production observer.
+    /// chain, wired to the SQLite adapter answering the core admission port and to the
+    /// production observer.
     ///
     /// The discriminator is the same `route_layer`: a bad bearer on the stale path reaches
     /// the perimeter and is refused `401` (the route is mounted), while the SAME bad bearer on
