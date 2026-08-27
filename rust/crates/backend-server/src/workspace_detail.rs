@@ -35,10 +35,10 @@ use silverhand_backend_core::{
         AuthorizedWorkspaceFace, WorkspaceDetailReadUnitOfWork, WorkspaceView,
         classify_workspace_view,
     },
-    workspace_face::WorkspaceFace,
 };
 
 use crate::error;
+use crate::workspaces::ViewerWorkspaceDto;
 
 /// The product route template, in axum's `{id}` capture syntax. A request to
 /// `/api/workspaces/` (empty segment) does not match, so the TypeScript route's
@@ -128,6 +128,9 @@ where
 /// `From<&WorkspaceFace>` and no public field, so a `200` detail body cannot be
 /// built from a raw face that never passed the classifier. This is the wire half
 /// of the identity seal — the projector eats the sealed type and nothing wider.
+/// The published-workspace shape itself is the crate's one canonical
+/// [`ViewerWorkspaceDto`](crate::workspaces::ViewerWorkspaceDto); the gate lives
+/// here on THIS response type, not on the shared DTO.
 #[derive(Serialize)]
 struct WorkspaceDetailResponse {
     workspace: ViewerWorkspaceDto,
@@ -137,50 +140,6 @@ impl WorkspaceDetailResponse {
     fn from_authorized(authorized: &AuthorizedWorkspaceFace) -> Self {
         Self {
             workspace: ViewerWorkspaceDto::from(authorized.face()),
-        }
-    }
-}
-
-/// One workspace on the published face. snake_case, field-by-field in the contract
-/// order, mirroring `ViewerWorkspaceDtoSchema` / `toViewerWorkspace`: nullable
-/// strings/number serialize as JSON `null`, `dm_channel_ids` as an array,
-/// `name_key` never reaches the wire. This is the SAME published wire shape the
-/// list route emits; the cross-language parity gate against
-/// `ViewerWorkspaceDtoSchema` is what keeps the two projections from drifting.
-#[derive(Serialize)]
-struct ViewerWorkspaceDto {
-    id: String,
-    name: String,
-    description: Option<String>,
-    owner_agent_id: Option<String>,
-    owner_user_id: Option<String>,
-    dm_channel_id: Option<String>,
-    dm_channel_ids: Vec<String>,
-    archived_at: Option<i64>,
-    created_at: i64,
-    updated_at: i64,
-}
-
-impl From<&WorkspaceFace> for ViewerWorkspaceDto {
-    fn from(face: &WorkspaceFace) -> Self {
-        Self {
-            id: face.id.as_str().to_owned(),
-            name: face.name.clone(),
-            description: face.description.clone(),
-            owner_agent_id: face
-                .owner_agent_id
-                .as_ref()
-                .map(|id| id.as_str().to_owned()),
-            owner_user_id: face.owner_user_id.as_ref().map(|id| id.as_str().to_owned()),
-            dm_channel_id: face.dm_channel_id.as_ref().map(|id| id.as_str().to_owned()),
-            dm_channel_ids: face
-                .dm_channel_ids
-                .iter()
-                .map(|id| id.as_str().to_owned())
-                .collect(),
-            archived_at: face.archived_at,
-            created_at: face.created_at,
-            updated_at: face.updated_at,
         }
     }
 }
@@ -220,6 +179,7 @@ mod tests {
     use silverhand_backend_core::{
         persistence::PersistenceFailure,
         workspace_detail_read::WorkspaceDetailForViewer,
+        workspace_face::WorkspaceFace,
     };
     use tower::ServiceExt;
 

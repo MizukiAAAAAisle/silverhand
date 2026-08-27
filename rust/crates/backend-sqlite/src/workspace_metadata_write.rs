@@ -33,8 +33,8 @@ use silverhand_backend_core::{
     persistence::PersistenceFailure,
     workspace_face::WorkspaceFace,
     workspace_metadata_write::{
-        WorkspaceArchiveWrite, WorkspaceMetadataEdit, WorkspaceMetadataWrite,
-        WorkspaceMetadataWriteUnitOfWork, WorkspaceNameChange,
+        PriorWorkspaceAddress, WorkspaceArchiveWrite, WorkspaceMetadataEdit, WorkspaceMetadataWrite,
+        WorkspaceMetadataWriteUnitOfWork,
     },
 };
 use sqlx::{
@@ -50,15 +50,16 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 // The authoritative row re-read under the write lock, joined to the actor's role
 // row (human only) in the SAME statement, so existence, the home flag, the
 // current name/key the change gate compares against, and the caller's governance
-// role are one consistent read.
+// role are one consistent read. The archive path derives no `changed` flag, so the
+// pre-write archived state is not read here.
 const SELECT_WORKSPACE_FOR_WRITE_HUMAN: &str = "\
-SELECT w.owner_agent_id, w.name, w.name_key, w.archived_at, u.role \
+SELECT w.owner_agent_id, w.name, w.name_key, u.role \
   FROM workspaces w \
   LEFT JOIN workspace_users u ON u.workspace_id = w.id AND u.user_id = ? \
  WHERE w.id = ?";
 // A non-human principal holds no role row; its floor is decided without one.
 const SELECT_WORKSPACE_FOR_WRITE_NONHUMAN: &str =
-    "SELECT owner_agent_id, name, name_key, archived_at FROM workspaces WHERE id = ?";
+    "SELECT owner_agent_id, name, name_key FROM workspaces WHERE id = ?";
 
 // Collision against the REGULAR namespace only, by the pinned fold key, excluding
 // the workspace being renamed — the same partial unique index
@@ -70,39 +71,34 @@ SELECT 1 FROM workspaces \
  LIMIT 1";
 
 // The three metadata SET branches, each bumping `updated_at`, mirroring the
-// product's `updateMutableMetadata`. All return the committed face columns so the
-// write projects the fact it produced without a post-commit re-read. A regular
-// workspace has no DM channels, so those face fields are `None`/empty here.
+// product's `updateMutableMetadata`. All return the committed face columns AND the
+// committed `name_key` (the witness the core seal binds against the fold of the
+// requested name) so the write projects the fact it produced without a post-commit
+// re-read. A regular workspace has no DM channels, so those face fields are
+// `None`/empty here.
 const UPDATE_NAME_AND_DESCRIPTION: &str = "\
 UPDATE workspaces SET name = ?, name_key = ?, description = ?, updated_at = ? \
  WHERE id = ? \
- RETURNING id, name, description, owner_agent_id, owner_user_id, archived_at, created_at, updated_at";
+ RETURNING id, name, name_key, description, owner_agent_id, owner_user_id, archived_at, created_at, updated_at";
 const UPDATE_NAME: &str = "\
 UPDATE workspaces SET name = ?, name_key = ?, updated_at = ? \
  WHERE id = ? \
- RETURNING id, name, description, owner_agent_id, owner_user_id, archived_at, created_at, updated_at";
+ RETURNING id, name, name_key, description, owner_agent_id, owner_user_id, archived_at, created_at, updated_at";
 const UPDATE_DESCRIPTION: &str = "\
 UPDATE workspaces SET description = ?, updated_at = ? \
  WHERE id = ? \
- RETURNING id, name, description, owner_agent_id, owner_user_id, archived_at, created_at, updated_at";
+ RETURNING id, name, name_key, description, owner_agent_id, owner_user_id, archived_at, created_at, updated_at";
 const UPDATE_ARCHIVED_AT: &str = "\
 UPDATE workspaces SET archived_at = ?, updated_at = ? \
  WHERE id = ? \
  RETURNING id, name, description, owner_agent_id, owner_user_id, archived_at, created_at, updated_at";
 
 /// The write-locked read of a human actor: `(owner_agent_id, name, name_key,
-/// archived_at, role)` — the role column is the LEFT JOIN's, absent for a
-/// non-member.
-type LockedWorkspaceRowHuman = (
-    Option<String>,
-    String,
-    Option<String>,
-    Option<i64>,
-    Option<String>,
-);
+/// role)` — the role column is the LEFT JOIN's, absent for a non-member.
+type LockedWorkspaceRowHuman = (Option<String>, String, Option<String>, Option<String>);
 /// The write-locked read of a non-human actor: the same row without a role, since
 /// only a human holds a `workspace_users` role.
-type LockedWorkspaceRowNonHuman = (Option<String>, String, Option<String>, Option<i64>);
+type LockedWorkspaceRowNonHuman = (Option<String>, String, Option<String>);
 
 /// A pooled connection to an existing product database, offering the
 /// regular-workspace metadata/archive write. Holds no clock; `now_ms` is passed
@@ -153,14 +149,12 @@ enum MetadataWriteFailure {
 }
 
 /// The authoritative row re-read under the write lock: the current display name
-/// and fold key (the change gate compares against these), the current archived
-/// state (the archive path derives its `changed` flip from this), and the
-/// caller's governance facts. An agent-home or missing row never reaches this
-/// struct — both fold into the `None` the callers turn into `NoSuchWorkspace`.
+/// and fold key (the change gate compares against these), and the caller's
+/// governance facts. An agent-home or missing row never reaches this struct — both
+/// fold into the `None` the callers turn into `NoSuchWorkspace`.
 struct LockedWorkspace {
     current_name: String,
     current_name_key: Option<String>,
-    current_archived: Option<i64>,
     facts: WorkspaceGovernanceFacts,
 }
 
@@ -196,7 +190,7 @@ impl SqliteWorkspaceMetadataWrite {
         actor: &Principal,
         workspace_id: &WorkspaceId,
     ) -> Result<Option<LockedWorkspace>, MetadataWriteFailure> {
-        let (owner_agent_id, name, name_key, archived_at, role_token) = match actor {
+        let (owner_agent_id, name, name_key, role_token) = match actor {
             Principal::Human { user_id } => {
                 let row: Option<LockedWorkspaceRowHuman> =
                     sqlx::query_as(SELECT_WORKSPACE_FOR_WRITE_HUMAN)
@@ -205,8 +199,8 @@ impl SqliteWorkspaceMetadataWrite {
                         .fetch_optional(&mut **tx)
                         .await?;
                 match row {
-                    Some((owner_agent_id, name, name_key, archived_at, role_token)) => {
-                        (owner_agent_id, name, name_key, archived_at, role_token)
+                    Some((owner_agent_id, name, name_key, role_token)) => {
+                        (owner_agent_id, name, name_key, role_token)
                     }
                     None => return Ok(None),
                 }
@@ -218,8 +212,8 @@ impl SqliteWorkspaceMetadataWrite {
                         .fetch_optional(&mut **tx)
                         .await?;
                 match row {
-                    Some((owner_agent_id, name, name_key, archived_at)) => {
-                        (owner_agent_id, name, name_key, archived_at, None)
+                    Some((owner_agent_id, name, name_key)) => {
+                        (owner_agent_id, name, name_key, None)
                     }
                     None => return Ok(None),
                 }
@@ -239,7 +233,6 @@ impl SqliteWorkspaceMetadataWrite {
         Ok(Some(LockedWorkspace {
             current_name: name,
             current_name_key: name_key,
-            current_archived: archived_at,
             facts: WorkspaceGovernanceFacts::Regular { actor_role },
         }))
     }
@@ -278,17 +271,18 @@ impl SqliteWorkspaceMetadataWrite {
             }
         }
 
-        // The change gate: `Some` iff a name was supplied AND its display differs
-        // from the current one. It carries the true address pair the write leaves —
-        // the seal binds `new_name`/`new_key` against the request.
-        let name_change = edit.requested_name().and_then(|name| {
-            (name.name() != locked.current_name).then(|| WorkspaceNameChange {
-                old_name: locked.current_name.clone(),
-                new_name: name.name().to_owned(),
-                old_key: locked.current_name_key.clone().unwrap_or_default(),
-                new_key: name.key().to_owned(),
-            })
-        });
+        // The write's before-image WITNESS, read under this same lock: the display
+        // and fold key the workspace addressed by BEFORE the write. The core seal
+        // derives the name-change gate from this against the committed face — this
+        // adapter decides nothing. A regular workspace always carries a `name_key`;
+        // a NULL here is a corrupt row, never a silent empty key.
+        let prior = PriorWorkspaceAddress {
+            name: locked.current_name.clone(),
+            key: locked
+                .current_name_key
+                .clone()
+                .ok_or(CorruptStoredIdentifier { column: "name_key" })?,
+        };
 
         let row = match edit {
             WorkspaceMetadataEdit::NameAndDescription { name, description } => {
@@ -316,9 +310,20 @@ impl SqliteWorkspaceMetadataWrite {
                 .await?,
         };
         let face = decode_face(&row)?;
+        // The committed fold key from the write's own `RETURNING` row — the second
+        // witness the seal binds against the fold of the requested name. A regular
+        // workspace's `name_key` is NOT NULL, so a NULL here is a corrupt committed
+        // row, not a product answer.
+        let committed_name_key = row
+            .try_get::<Option<String>, _>("name_key")?
+            .ok_or(CorruptStoredIdentifier { column: "name_key" })?;
 
         tx.commit().await?;
-        Ok(WorkspaceMetadataWrite::Committed { face, name_change })
+        Ok(WorkspaceMetadataWrite::Committed {
+            face,
+            prior,
+            committed_name_key,
+        })
     }
 
     async fn write_archived(
@@ -341,13 +346,10 @@ impl SqliteWorkspaceMetadataWrite {
             return Ok(WorkspaceArchiveWrite::Forbidden);
         }
 
-        // `changed` is informational — whether the archived boolean actually moved,
-        // computed from the PRE-write state read under this lock against the
-        // request. The write commits (and bumps `updated_at`) regardless.
-        let changed = locked.current_archived.is_some() != archived;
-
         // `archived_at` is the write instant when archiving, NULL when un-archiving;
-        // `updated_at` always bumps, matching the product's `setArchived`.
+        // `updated_at` always bumps, matching the product's `setArchived`. The write
+        // commits regardless of whether the archived state actually moved — archive
+        // owes no fan-out, so no `changed` flag is derived or carried.
         let archived_at = archived.then_some(now_ms);
         let row = sqlx::query(UPDATE_ARCHIVED_AT)
             .bind(archived_at)
@@ -358,7 +360,7 @@ impl SqliteWorkspaceMetadataWrite {
         let face = decode_face(&row)?;
 
         tx.commit().await?;
-        Ok(WorkspaceArchiveWrite::Committed { face, changed })
+        Ok(WorkspaceArchiveWrite::Committed { face })
     }
 }
 
@@ -497,25 +499,29 @@ INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) VALUES ('ws
     }
 
     #[tokio::test]
-    async fn a_rename_commits_the_pair_bumps_updated_at_and_carries_the_change_gate() {
+    async fn a_rename_commits_the_pair_bumps_updated_at_and_witnesses_the_before_image() {
         let (_dir, adapter) = open_seeded().await;
         let edit = WorkspaceMetadataEdit::Name(name("Design Team"));
         let outcome = adapter
             .update_metadata(human("user-1"), &ws("ws-1"), &edit, 777)
             .await
             .unwrap();
-        let WorkspaceMetadataWrite::Committed { face, name_change } = outcome else {
+        let WorkspaceMetadataWrite::Committed {
+            face,
+            prior,
+            committed_name_key,
+        } = outcome
+        else {
             panic!("expected Committed, got {outcome:?}");
         };
         assert_eq!(face.name, "Design Team");
         assert_eq!(face.updated_at, 777);
         assert_eq!(face.owner_agent_id, None);
         assert_eq!(face.dm_channel_ids, Vec::<_>::new());
-        let change = name_change.expect("a display change carries the gate");
-        assert_eq!(change.old_name, "Original");
-        assert_eq!(change.new_name, "Design Team");
-        assert_eq!(change.old_key, "original");
-        assert_eq!(change.new_key, name("Design Team").key());
+        // The adapter reports only what it read/committed; the core derives the gate.
+        assert_eq!(prior.name, "Original");
+        assert_eq!(prior.key, "original");
+        assert_eq!(committed_name_key, name("Design Team").key());
         assert_eq!(
             stored_name_key(&adapter, "ws-1").await,
             ("Design Team".to_owned(), Some(name("Design Team").key().to_owned()))
@@ -523,38 +529,54 @@ INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) VALUES ('ws
     }
 
     #[tokio::test]
-    async fn a_description_only_edit_commits_without_a_change_gate() {
+    async fn a_description_only_edit_commits_and_leaves_the_address_untouched() {
         let (_dir, adapter) = open_seeded().await;
         let edit = WorkspaceMetadataEdit::Description(Some("second".to_owned()));
         let outcome = adapter
             .update_metadata(human("user-1"), &ws("ws-1"), &edit, 500)
             .await
             .unwrap();
-        let WorkspaceMetadataWrite::Committed { face, name_change } = outcome else {
+        let WorkspaceMetadataWrite::Committed {
+            face,
+            prior,
+            committed_name_key,
+        } = outcome
+        else {
             panic!("expected Committed");
         };
         assert_eq!(face.description.as_deref(), Some("second"));
         assert_eq!(face.name, "Original");
         assert_eq!(face.updated_at, 500);
-        assert!(name_change.is_none());
+        // A description-only edit re-addresses nothing: the committed key equals the
+        // before-image key, which is how the core seal proves no rename happened.
+        assert_eq!(prior.name, "Original");
+        assert_eq!(prior.key, "original");
+        assert_eq!(committed_name_key, "original");
     }
 
     #[tokio::test]
-    async fn a_rename_to_the_same_display_commits_but_owes_no_change_gate() {
+    async fn a_rename_to_the_same_display_commits_and_witnesses_an_unchanged_address() {
         let (_dir, adapter) = open_seeded().await;
         // NFC/trim folds to the same display "Original"; the write still commits and
-        // bumps updated_at, but no label moved so the gate is None.
+        // bumps updated_at. The before-image display equals the committed display, so
+        // the core derives no gate.
         let edit = WorkspaceMetadataEdit::Name(name("  Original  "));
         let outcome = adapter
             .update_metadata(human("user-1"), &ws("ws-1"), &edit, 600)
             .await
             .unwrap();
-        let WorkspaceMetadataWrite::Committed { face, name_change } = outcome else {
+        let WorkspaceMetadataWrite::Committed {
+            face,
+            prior,
+            committed_name_key,
+        } = outcome
+        else {
             panic!("expected Committed");
         };
         assert_eq!(face.name, "Original");
         assert_eq!(face.updated_at, 600);
-        assert!(name_change.is_none());
+        assert_eq!(prior.name, "Original");
+        assert_eq!(committed_name_key, name("Original").key());
     }
 
     #[tokio::test]
@@ -624,40 +646,37 @@ INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) VALUES ('ws
     }
 
     #[tokio::test]
-    async fn archiving_sets_the_instant_reports_the_flip_and_is_idempotent() {
+    async fn archiving_sets_the_instant_bumps_updated_at_and_is_idempotent() {
         let (_dir, adapter) = open_seeded().await;
         let first = adapter
             .set_archived(human("user-1"), &ws("ws-1"), true, 1234)
             .await
             .unwrap();
-        let WorkspaceArchiveWrite::Committed { face, changed } = first else {
+        let WorkspaceArchiveWrite::Committed { face } = first else {
             panic!("expected Committed");
         };
         assert_eq!(face.archived_at, Some(1234));
         assert_eq!(face.updated_at, 1234);
-        assert!(changed, "the state flipped from unarchived to archived");
 
-        // Archiving again commits (bumps updated_at) but reports no flip.
+        // Archiving again commits and re-stamps the instant (no flip is tracked).
         let again = adapter
             .set_archived(human("user-1"), &ws("ws-1"), true, 1300)
             .await
             .unwrap();
-        let WorkspaceArchiveWrite::Committed { face, changed } = again else {
+        let WorkspaceArchiveWrite::Committed { face } = again else {
             panic!("expected Committed");
         };
         assert_eq!(face.archived_at, Some(1300));
-        assert!(!changed, "already archived, so nothing flipped");
 
-        // Un-archiving clears archived_at and reports the flip back.
+        // Un-archiving clears archived_at and bumps updated_at.
         let cleared = adapter
             .set_archived(human("user-1"), &ws("ws-1"), false, 1400)
             .await
             .unwrap();
-        let WorkspaceArchiveWrite::Committed { face, changed } = cleared else {
+        let WorkspaceArchiveWrite::Committed { face } = cleared else {
             panic!("expected Committed");
         };
         assert_eq!(face.archived_at, None);
         assert_eq!(face.updated_at, 1400);
-        assert!(changed);
     }
 }

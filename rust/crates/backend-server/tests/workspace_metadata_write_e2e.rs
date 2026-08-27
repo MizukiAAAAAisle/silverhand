@@ -1,30 +1,29 @@
 //! Full-route behaviour for the workspace metadata-write surface (#task:2193):
 //! `PATCH /api/workspaces/{id}` and `PATCH /api/workspaces/{id}/archive`, driven
 //! through the REAL Axum router with the REAL SQLite governance-read and
-//! write-unit-of-work adapters. Only the three effects this task does not own a
-//! production adapter for yet — the `metadata_changed` viewer hint, the
-//! per-channel rename author, and the channel population read (their real
-//! adapters land with the #2215 composition) — plus the clock are fakes, and they
-//! are recording/failing spies so the route's obligations are observable.
+//! write-unit-of-work adapters. Only the two effects this task does not own a
+//! production adapter for yet — the `metadata_changed` viewer hint and the clock —
+//! are fakes; the sink is a recording/failing spy so the route's viewer-hint
+//! obligation is observable.
 //!
 //! This is the Rust-self-guarded half of the slice's evidence: the refusal
-//! ORDERING (404 → 403 → 400 → 409 → 200), the committed `200` body, and the P0
-//! best-effort INDEPENDENCE of the two post-commit rename effects. It is NOT a
-//! cross-language gate — those rungs are structural, readable straight from the
+//! ORDERING (404 → 403 → 400 → 409 → 200) and the committed `200` body. It is NOT
+//! a cross-language gate — those rungs are structural, readable straight from the
 //! TS route, not byte-drift-prone. The one drift-prone boundary (the `400`
 //! Zod-issue bytes) is pinned separately by the shared admission fixture and its
 //! TS oracle.
 //!
-//! ## The P0 (Cindy, verbatim)
+//! ## The per-channel rename message is NOT exercised here
 //!
-//! > committed rename 后的 viewer hint 与逐-channel rename message 必须彼此独立、
-//! > 都要尝试；任一失败不能把已提交的 200 变成 500，也不能阻止另一个 effect。
-//!
-//! The viewer hint fires inside the domain and its fate returns as a value; the
-//! per-channel author loop runs in the route. `a_committed_rename_survives_*`
-//! prove a failing sink, a failing author, and a failing channel read each leave
-//! the committed `200` and its body intact, and that a sink failure does not stop
-//! the author loop (nor the reverse).
+//! A committed rename owes TWO production effects: the `viewer_workspaces_changed`
+//! cache-invalidation hint (a pure id-only signal, fired inside the domain and
+//! complete on its own) and the per-channel workspace-rename SYSTEM MESSAGE. The
+//! latter — authoring PLUS delivery PLUS publication — is a composition-root
+//! concern deferred WHOLE to the [#task:2215] mount seam (see the module doc of
+//! `workspace_metadata_write`), driven off the same committed `WorkspaceNameChange`
+//! this surface seals. This suite therefore asserts only the viewer hint: that a
+//! rename fires it for exactly the renamed workspace, that a description-only edit
+//! owes none, and that a FAILING hint never downgrades the committed `200`.
 
 use std::sync::{Arc, Mutex};
 
@@ -35,13 +34,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId, WorkspaceId},
-    messaging::collaboration::workspace_rename_messaging::{
-        CommittedWorkspaceRenameMessage, WorkspaceRenameChannel, WorkspaceRenameChannels,
-        WorkspaceRenameChannelsReadPort, WorkspaceRenameMessageAuthorPort,
-        WorkspaceRenameMessageCreatedAt, WorkspaceRenameMessageDraft,
-    },
-    messaging::{MessageId, MessageSeq},
+    identity::{UserId, WorkspaceId},
     workspace_metadata_write::{WorkspaceMetadataAnnounceFailure, WorkspaceMetadataChangedSink},
 };
 use silverhand_backend_server::workspace_metadata_write::{self, WorkspaceMetadataClock};
@@ -131,99 +124,8 @@ impl WorkspaceMetadataChangedSink for RecordingSink {
     }
 }
 
-/// The channel-population read, returning a configured set of conversations for
-/// the renamed workspace or, optionally, failing outright.
-#[derive(Clone)]
-struct FakeChannels {
-    conversations: Vec<String>,
-    fail: bool,
-}
-impl FakeChannels {
-    fn of(conversations: &[&str]) -> Self {
-        Self {
-            conversations: conversations.iter().map(|c| (*c).to_owned()).collect(),
-            fail: false,
-        }
-    }
-    fn failing() -> Self {
-        Self {
-            conversations: Vec::new(),
-            fail: true,
-        }
-    }
-}
-impl WorkspaceRenameChannelsReadPort for FakeChannels {
-    type Error = FakeError;
-    async fn list_non_closed(
-        &self,
-        workspace: &WorkspaceId,
-    ) -> Result<WorkspaceRenameChannels, Self::Error> {
-        if self.fail {
-            return Err(FakeError("channel population read down"));
-        }
-        let rows = self
-            .conversations
-            .iter()
-            .map(|c| {
-                WorkspaceRenameChannel::selected(
-                    workspace.clone(),
-                    ConversationId::parse(c.as_str()).unwrap(),
-                )
-            })
-            .collect();
-        Ok(WorkspaceRenameChannels::selected(workspace.clone(), rows).unwrap())
-    }
-}
-
-/// The rename-message author, recording each `(conversation, content)` it commits
-/// and, optionally, failing for ONE named conversation so the loop's per-channel
-/// independence is observable.
-#[derive(Clone)]
-struct RecordingAuthor {
-    authored: Arc<Mutex<Vec<(String, String)>>>,
-    fail_on: Option<String>,
-}
-impl RecordingAuthor {
-    fn new() -> Self {
-        Self {
-            authored: Arc::new(Mutex::new(Vec::new())),
-            fail_on: None,
-        }
-    }
-    fn failing_on(conversation: &str) -> Self {
-        Self {
-            authored: Arc::new(Mutex::new(Vec::new())),
-            fail_on: Some(conversation.to_owned()),
-        }
-    }
-    fn commits(&self) -> Vec<(String, String)> {
-        self.authored.lock().unwrap().clone()
-    }
-}
-impl WorkspaceRenameMessageAuthorPort for RecordingAuthor {
-    type Error = FakeError;
-    async fn author(
-        &self,
-        draft: WorkspaceRenameMessageDraft,
-    ) -> Result<CommittedWorkspaceRenameMessage, Self::Error> {
-        let conversation = draft.conversation().as_str().to_owned();
-        if self.fail_on.as_deref() == Some(conversation.as_str()) {
-            return Err(FakeError("rename author down for this channel"));
-        }
-        self.authored
-            .lock()
-            .unwrap()
-            .push((conversation.clone(), draft.content().to_owned()));
-        let message = MessageId::parse(format!("msg-{conversation}")).unwrap();
-        let seq = MessageSeq::try_from(1_i64).unwrap();
-        let created_at = WorkspaceRenameMessageCreatedAt::new(1).unwrap();
-        Ok(CommittedWorkspaceRenameMessage::committed(
-            draft, message, seq, created_at,
-        ))
-    }
-}
-
-/// A seeded database plus the fakes that make the route's effects observable.
+/// A seeded database plus the clock/sink fakes that make the route's effects
+/// observable.
 struct Harness {
     _dir: tempfile::TempDir,
     path: std::path::PathBuf,
@@ -245,16 +147,10 @@ impl Harness {
     }
 
     /// Build the real router over the real stores and the given fakes.
-    async fn router(
-        &self,
-        clock: FixedClock,
-        sink: RecordingSink,
-        channels: FakeChannels,
-        author: RecordingAuthor,
-    ) -> Router {
+    async fn router(&self, clock: FixedClock, sink: RecordingSink) -> Router {
         let governance = SqliteAccessStore::open(&self.path).await.unwrap();
         let writes = SqliteWorkspaceMetadataWrite::open(&self.path).await.unwrap();
-        workspace_metadata_write::router(governance, writes, sink, clock, channels, author)
+        workspace_metadata_write::router(governance, writes, sink, clock)
     }
 
     /// The stored `(name, name_key, archived_at)` — the durable truth a committed
@@ -299,18 +195,10 @@ async fn json_body(response: axum::response::Response) -> Value {
 }
 
 #[tokio::test]
-async fn a_rename_by_the_owner_commits_and_authors_every_channel_message() {
+async fn a_rename_by_the_owner_commits_and_fires_the_viewer_hint() {
     let harness = Harness::seeded().await;
     let sink = RecordingSink::new(false);
-    let author = RecordingAuthor::new();
-    let app = harness
-        .router(
-            FixedClock(777),
-            sink.clone(),
-            FakeChannels::of(&["conv-a", "conv-b"]),
-            author.clone(),
-        )
-        .await;
+    let app = harness.router(FixedClock(777), sink.clone()).await;
 
     let response = app
         .oneshot(metadata_request("ws-1", "user-1", r#"{"name":"Design Team"}"#))
@@ -342,32 +230,13 @@ async fn a_rename_by_the_owner_commits_and_authors_every_channel_message() {
     );
     // The viewer hint fired for exactly this workspace.
     assert_eq!(sink.ids(), vec!["ws-1".to_owned()]);
-    // Every non-closed channel got the rename message with the old→new content.
-    let commits = author.commits();
-    let expected = "This workspace was renamed from `Original` to `Design Team`. \
-                    Update any references in your MEMORY.md when you next edit it.";
-    assert_eq!(
-        commits,
-        vec![
-            ("conv-a".to_owned(), expected.to_owned()),
-            ("conv-b".to_owned(), expected.to_owned()),
-        ]
-    );
 }
 
 #[tokio::test]
 async fn a_non_admin_is_forbidden_before_the_body_is_parsed() {
     let harness = Harness::seeded().await;
     let sink = RecordingSink::new(false);
-    let author = RecordingAuthor::new();
-    let app = harness
-        .router(
-            FixedClock(777),
-            sink.clone(),
-            FakeChannels::of(&["conv-a"]),
-            author.clone(),
-        )
-        .await;
+    let app = harness.router(FixedClock(777), sink.clone()).await;
 
     // A member sends a MALFORMED body. If the body were parsed first this would be
     // a 400; the 403 proves the governance floor is resolved before the body.
@@ -377,23 +246,15 @@ async fn a_non_admin_is_forbidden_before_the_body_is_parsed() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(json_body(response).await, json!({ "error": "forbidden" }));
-    // No name moved, so neither post-commit effect ran.
+    // No name moved, so the viewer hint never fired.
     assert!(sink.ids().is_empty());
-    assert!(author.commits().is_empty());
     assert_eq!(harness.stored("ws-1").await.0, "Original");
 }
 
 #[tokio::test]
 async fn an_unknown_workspace_is_not_found() {
     let harness = Harness::seeded().await;
-    let app = harness
-        .router(
-            FixedClock(777),
-            RecordingSink::new(false),
-            FakeChannels::of(&[]),
-            RecordingAuthor::new(),
-        )
-        .await;
+    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
 
     let response = app
         .oneshot(metadata_request("ws-missing", "user-1", r#"{"name":"X"}"#))
@@ -409,14 +270,7 @@ async fn an_unknown_workspace_is_not_found() {
 #[tokio::test]
 async fn an_agent_home_workspace_is_not_found_through_the_regular_door() {
     let harness = Harness::seeded().await;
-    let app = harness
-        .router(
-            FixedClock(777),
-            RecordingSink::new(false),
-            FakeChannels::of(&[]),
-            RecordingAuthor::new(),
-        )
-        .await;
+    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
 
     let response = app
         .oneshot(metadata_request("ws-home", "user-1", r#"{"name":"X"}"#))
@@ -428,14 +282,7 @@ async fn an_agent_home_workspace_is_not_found_through_the_regular_door() {
 #[tokio::test]
 async fn a_malformed_body_from_an_admin_is_invalid_input() {
     let harness = Harness::seeded().await;
-    let app = harness
-        .router(
-            FixedClock(777),
-            RecordingSink::new(false),
-            FakeChannels::of(&[]),
-            RecordingAuthor::new(),
-        )
-        .await;
+    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
 
     // user-2 is an admin, so it clears the rename floor and the body IS parsed.
     let response = app
@@ -455,14 +302,7 @@ async fn a_malformed_body_from_an_admin_is_invalid_input() {
 #[tokio::test]
 async fn a_name_held_by_another_workspace_is_conflict() {
     let harness = Harness::seeded().await;
-    let app = harness
-        .router(
-            FixedClock(777),
-            RecordingSink::new(false),
-            FakeChannels::of(&["conv-a"]),
-            RecordingAuthor::new(),
-        )
-        .await;
+    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
 
     let response = app
         .oneshot(metadata_request("ws-1", "user-1", r#"{"name":"Taken"}"#))
@@ -478,18 +318,10 @@ async fn a_name_held_by_another_workspace_is_conflict() {
 }
 
 #[tokio::test]
-async fn a_description_only_edit_owes_no_rename_effects() {
+async fn a_description_only_edit_owes_no_viewer_hint() {
     let harness = Harness::seeded().await;
     let sink = RecordingSink::new(false);
-    let author = RecordingAuthor::new();
-    let app = harness
-        .router(
-            FixedClock(500),
-            sink.clone(),
-            FakeChannels::of(&["conv-a"]),
-            author.clone(),
-        )
-        .await;
+    let app = harness.router(FixedClock(500), sink.clone()).await;
 
     let response = app
         .oneshot(metadata_request(
@@ -504,27 +336,17 @@ async fn a_description_only_edit_owes_no_rename_effects() {
     assert_eq!(body["workspace"]["description"], json!("second"));
     assert_eq!(body["workspace"]["name"], json!("Original"));
     assert_eq!(body["workspace"]["updated_at"], json!(500));
-    // No display name moved: no viewer hint, no channel messages.
+    // No display name moved: no viewer hint.
     assert!(sink.ids().is_empty());
-    assert!(author.commits().is_empty());
 }
 
 #[tokio::test]
-async fn a_committed_rename_survives_a_failing_sink_and_a_failing_author() {
+async fn a_committed_rename_survives_a_failing_viewer_hint() {
     let harness = Harness::seeded().await;
-    // Both post-commit effects are broken. The commit must still stand as 200, the
-    // body must be the committed face, and each effect must still be ATTEMPTED
-    // (independent, no first-error short-circuit).
+    // The viewer hint is broken. The commit must still stand as 200, the body must
+    // be the committed face, and the hint must still have been ATTEMPTED.
     let sink = RecordingSink::new(true);
-    let author = RecordingAuthor::failing_on("conv-a");
-    let app = harness
-        .router(
-            FixedClock(777),
-            sink.clone(),
-            FakeChannels::of(&["conv-a", "conv-b"]),
-            author.clone(),
-        )
-        .await;
+    let app = harness.router(FixedClock(777), sink.clone()).await;
 
     let response = app
         .oneshot(metadata_request("ws-1", "user-1", r#"{"name":"Design Team"}"#))
@@ -532,51 +354,16 @@ async fn a_committed_rename_survives_a_failing_sink_and_a_failing_author() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(json_body(response).await["workspace"]["name"], json!("Design Team"));
-    // The rename is durably committed regardless of the two failures.
+    // The rename is durably committed regardless of the hint failure.
     assert_eq!(harness.stored("ws-1").await.0, "Design Team");
-    // The sink WAS attempted (its failure did not stop the author loop).
-    assert_eq!(sink.ids(), vec!["ws-1".to_owned()]);
-    // conv-a failed but conv-b was still authored: one channel's failure does not
-    // block the others.
-    assert_eq!(author.commits().len(), 1);
-    assert_eq!(author.commits()[0].0, "conv-b");
-}
-
-#[tokio::test]
-async fn a_committed_rename_survives_a_failing_channel_population_read() {
-    let harness = Harness::seeded().await;
-    let sink = RecordingSink::new(false);
-    let app = harness
-        .router(
-            FixedClock(777),
-            sink.clone(),
-            FakeChannels::failing(),
-            RecordingAuthor::new(),
-        )
-        .await;
-
-    let response = app
-        .oneshot(metadata_request("ws-1", "user-1", r#"{"name":"Design Team"}"#))
-        .await
-        .unwrap();
-    // The channel read failed, but the rename is committed and the viewer hint —
-    // fired inside the domain before the route touches channels — still ran.
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(harness.stored("ws-1").await.0, "Design Team");
+    // The sink WAS attempted; its failure did not downgrade the 200.
     assert_eq!(sink.ids(), vec!["ws-1".to_owned()]);
 }
 
 #[tokio::test]
 async fn archive_requires_the_owner_floor() {
     let harness = Harness::seeded().await;
-    let app = harness
-        .router(
-            FixedClock(777),
-            RecordingSink::new(false),
-            FakeChannels::of(&[]),
-            RecordingAuthor::new(),
-        )
-        .await;
+    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
 
     // An admin clears the rename floor but NOT the archive floor.
     let response = app
@@ -590,14 +377,7 @@ async fn archive_requires_the_owner_floor() {
 #[tokio::test]
 async fn the_owner_archives_and_unarchives() {
     let harness = Harness::seeded().await;
-    let archive_app = harness
-        .router(
-            FixedClock(900),
-            RecordingSink::new(false),
-            FakeChannels::of(&[]),
-            RecordingAuthor::new(),
-        )
-        .await;
+    let archive_app = harness.router(FixedClock(900), RecordingSink::new(false)).await;
 
     let response = archive_app
         .oneshot(archive_request("ws-1", "user-1", r#"{"archived":true}"#))
@@ -609,14 +389,7 @@ async fn the_owner_archives_and_unarchives() {
     assert_eq!(harness.stored("ws-1").await.2, Some(900));
 
     // A fresh router (a new pool) clears it again.
-    let unarchive_app = harness
-        .router(
-            FixedClock(950),
-            RecordingSink::new(false),
-            FakeChannels::of(&[]),
-            RecordingAuthor::new(),
-        )
-        .await;
+    let unarchive_app = harness.router(FixedClock(950), RecordingSink::new(false)).await;
     let response = unarchive_app
         .oneshot(archive_request("ws-1", "user-1", r#"{"archived":false}"#))
         .await
@@ -629,14 +402,7 @@ async fn the_owner_archives_and_unarchives() {
 #[tokio::test]
 async fn a_missing_archived_flag_is_invalid_input() {
     let harness = Harness::seeded().await;
-    let app = harness
-        .router(
-            FixedClock(777),
-            RecordingSink::new(false),
-            FakeChannels::of(&[]),
-            RecordingAuthor::new(),
-        )
-        .await;
+    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
 
     let response = app
         .oneshot(archive_request("ws-1", "user-1", "{}"))
@@ -656,50 +422,36 @@ async fn a_missing_archived_flag_is_invalid_input() {
 }
 
 #[tokio::test]
-async fn a_body_over_the_16_kib_cap_from_a_governor_is_413() {
+async fn a_large_body_with_unknown_keys_is_accepted_no_size_cap() {
     let harness = Harness::seeded().await;
     let sink = RecordingSink::new(false);
-    let author = RecordingAuthor::new();
-    let app = harness
-        .router(
-            FixedClock(777),
-            sink.clone(),
-            FakeChannels::of(&["conv-a"]),
-            author.clone(),
-        )
-        .await;
+    let app = harness.router(FixedClock(777), sink.clone()).await;
 
-    // A syntactically valid rename body padded past 16 KiB with a huge unknown key.
-    let oversized = format!(r#"{{"name":"Design","pad":"{}"}}"#, "a".repeat(20_000));
+    // A syntactically valid rename body with a huge UNKNOWN key. The leaf imposes
+    // no size cap (a body-size perimeter is a mount-seam concern), and `z.object`
+    // strips unknown keys — so this parses to `{name:"Design"}` and renames, it is
+    // NOT a 413. This is the regression guard for the removed 16 KiB→413 cap: the
+    // product route has no such limit, so a large legitimate body must succeed.
+    let large = format!(r#"{{"name":"Design","pad":"{}"}}"#, "a".repeat(20_000));
     let response = app
-        .oneshot(metadata_request("ws-1", "user-1", &oversized))
+        .oneshot(metadata_request("ws-1", "user-1", &large))
         .await
         .unwrap();
 
-    // The transport cap fires before the body is parsed: 413, no rename effect.
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(harness.stored("ws-1").await.0, "Original");
-    assert!(sink.ids().is_empty());
-    assert!(author.commits().is_empty());
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(harness.stored("ws-1").await.0, "Design");
 }
 
 #[tokio::test]
-async fn an_oversized_body_from_a_non_governor_is_403_not_413() {
+async fn a_large_body_from_a_non_governor_is_403_before_the_body_is_read() {
     let harness = Harness::seeded().await;
-    let app = harness
-        .router(
-            FixedClock(777),
-            RecordingSink::new(false),
-            FakeChannels::of(&[]),
-            RecordingAuthor::new(),
-        )
-        .await;
+    let app = harness.router(FixedClock(777), RecordingSink::new(false)).await;
 
     // user-3 is a plain member: the floor refuses BEFORE the body is read, so the
-    // 16 KiB cap never applies — the deferred read proves the floor gates it.
-    let oversized = format!(r#"{{"name":"Design","pad":"{}"}}"#, "a".repeat(20_000));
+    // body's size is irrelevant — the deferred read proves the floor gates it.
+    let large = format!(r#"{{"name":"Design","pad":"{}"}}"#, "a".repeat(20_000));
     let response = app
-        .oneshot(metadata_request("ws-1", "user-3", &oversized))
+        .oneshot(metadata_request("ws-1", "user-3", &large))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);

@@ -32,13 +32,21 @@
 //! The returned fact is then SEALED against the request before any product outcome
 //! is minted ([`update_workspace_metadata`] / [`archive_workspace`]): a committed
 //! face carrying a foreign id, a name the caller did not ask for, a description
-//! that does not match, a claim to have renamed a workspace whose home flag is set,
-//! or a name-change record whose "new" name is not the committed display is a
-//! broken adapter — refused as [`WorkspaceMetadataWriteError::UntrustworthyWriteFact`]
-//! (a safe `500`), never trusted as a second identity/value channel. This is the
+//! that does not match, a committed `name_key` that is not the fold of the
+//! requested name, an `updated_at` that is not the sampled write instant, or a
+//! claim to have renamed a workspace whose home flag is set is a broken adapter —
+//! refused as [`WorkspaceMetadataWriteError::UntrustworthyWriteFact`] (a safe
+//! `500`), never trusted as a second identity/value channel. This is the
 //! committed-fact / single-identity discipline: the request carries the sole
 //! identity and the sole target value, and the returned projection is only ever a
 //! SECOND WITNESS of them.
+//!
+//! Crucially the name-change EFFECT gate is DERIVED here in the domain, never
+//! trusted from the adapter: the write reports only the before-image it read under
+//! its own lock ([`PriorWorkspaceAddress`]) and the `name_key` it committed, and the
+//! seal computes whether a display name actually moved. An adapter therefore cannot
+//! SUPPRESS the rename fan-out (report "no change" for a display that did move) any
+//! more than it can fabricate one — it no longer decides, it only witnesses.
 //!
 //! ## `updated_at` always bumps; the no-op is the EFFECT gate, not a skipped write
 //!
@@ -46,13 +54,13 @@
 //! ALWAYS writes (and bumps `updated_at`) whenever a field is present — there is no
 //! write-skipping no-op on the metadata path, and archive always writes too. So the
 //! "changed / no-op" distinction is NOT an `updated_at`-skipping write. It is
-//! carried as [`WorkspaceNameChange`]: `name_change` is `Some` exactly when a name
-//! was supplied AND it differs from the current display name (mirroring the route's
-//! `parsed.data.name && name.name !== workspace.name`). That is the signal a later
-//! seam needs to decide whether the workspace-channel rename system message and the
-//! `viewer_workspaces_changed` fan-out are owed — the write itself commits either
-//! way. Archive carries an analogous informational [`changed`](WorkspaceArchiveWrite)
-//! flag (whether the archived state flipped); the write commits regardless.
+//! carried as [`WorkspaceNameChange`]: the seal derives it as `Some` exactly when a
+//! name was supplied AND the committed display differs from the before-image the
+//! write read under its lock (mirroring the route's `parsed.data.name && name.name
+//! !== workspace.name`). That is the signal a later seam needs to decide whether the
+//! workspace-channel rename system message and the `viewer_workspaces_changed`
+//! fan-out are owed — the write itself commits either way. Archive owes no such gate
+//! and commits regardless of whether the archived state flipped.
 //!
 //! ## Boundary invariant: a committed rename cannot skip its announce
 //!
@@ -160,17 +168,37 @@ impl WorkspaceMetadataEdit {
 /// while folding to the same key, so a consumer that owes an address-reassignment
 /// effect must compare the keys, not the display.
 ///
-/// Fields are public because it is data the boundary reads, not a verdict; the seal
-/// binds `new_name` against the committed display AND `new_key` against the
-/// requested canonical key, so neither a fabricated record nor an adapter that
-/// wrote (or read back) the wrong key can pass. A description-only edit, or a rename
-/// to the identical display name, leaves the whole record `None` and owes no fan-out.
+/// Fields are public because it is data the boundary reads, not a verdict. The
+/// record is DERIVED by the seal from the write's witnessed before-image
+/// ([`PriorWorkspaceAddress`]) and committed `name_key`, never supplied by the
+/// adapter: `old_*` is the before-image the write read under its lock, `new_name`
+/// is the committed display (already bound to the request), and `new_key` is the
+/// committed fold key (bound to the fold of the requested name) — so neither a
+/// suppressed record nor an adapter that wrote (or read back) the wrong key can
+/// slip through. A description-only edit, or a rename to the identical display
+/// name, leaves the whole record `None` and owes no fan-out.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceNameChange {
     pub old_name: String,
     pub new_name: String,
     pub old_key: String,
     pub new_key: String,
+}
+
+/// The address a metadata write read under its OWN write lock, BEFORE it wrote —
+/// the display name the workspace carried and the fold key it addressed by.
+///
+/// This is the write's before-image WITNESS, not a verdict. The adapter reports
+/// what it read; the core seal ([`seal_metadata_write_fact`]) compares it against
+/// the committed face to DERIVE the [`WorkspaceNameChange`] gate. Deriving the gate
+/// in the domain — rather than trusting an adapter-computed `Option<WorkspaceNameChange>` —
+/// is what makes a SUPPRESSED rename impossible: an adapter cannot skip the fan-out
+/// by reporting "no change" for a display that actually moved, because it no longer
+/// decides; it only reports the before-image and the domain compares.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriorWorkspaceAddress {
+    pub name: String,
+    pub key: String,
 }
 
 /// The closed outcome of a metadata write, decided inside the write's own
@@ -200,20 +228,24 @@ pub enum WorkspaceMetadataWrite {
     /// The requested name's folded key is already held by a DIFFERENT regular
     /// workspace. A rollback; nothing was written.
     NameTaken,
-    /// The edit committed. Carries the regular workspace's projected face and the
-    /// name-change effect gate (`Some` iff the display name actually changed).
+    /// The edit committed. Carries the regular workspace's projected face, the
+    /// before-image the write read under its lock (from which the domain DERIVES
+    /// the name-change gate), and the `name_key` the write actually committed (its
+    /// `RETURNING` value, bound by the seal against the fold of the requested name).
     Committed {
         face: WorkspaceFace,
-        name_change: Option<WorkspaceNameChange>,
+        prior: PriorWorkspaceAddress,
+        committed_name_key: String,
     },
 }
 
 /// The closed outcome of an archive write, decided inside the write's own
 /// transaction — the RAW fact a [`WorkspaceMetadataWriteUnitOfWork`] returns.
 ///
-/// Archive requires the `Owner` floor (stricter than rename's `Admin`). `changed`
-/// records whether the archived state actually flipped; the write commits (and
-/// bumps `updated_at`) regardless, matching the product's `setArchived`.
+/// Archive requires the `Owner` floor (stricter than rename's `Admin`). The write
+/// commits (and bumps `updated_at`) regardless of whether the archived state
+/// actually flipped, matching the product's `setArchived`; archive owes no fan-out,
+/// so no "changed" gate is carried.
 #[allow(clippy::large_enum_variant)] // `Committed` carries the whole face; see `WorkspaceMetadataWrite`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkspaceArchiveWrite {
@@ -221,9 +253,9 @@ pub enum WorkspaceArchiveWrite {
     NoSuchWorkspace,
     /// The caller's in-lock governance ceiling did not clear the `Owner` floor.
     Forbidden,
-    /// The archive state was written. Carries the projected face and whether the
-    /// archived boolean flipped (informational — the write committed either way).
-    Committed { face: WorkspaceFace, changed: bool },
+    /// The archive state was written. Carries the projected face; the write
+    /// committed (bumping `updated_at`) whether or not the state flipped.
+    Committed { face: WorkspaceFace },
 }
 
 /// The atomic metadata write: rename/describe and archive a REGULAR workspace,
@@ -291,12 +323,11 @@ impl CommittedWorkspaceMetadata {
     }
 }
 
-/// A committed, SEALED archive write: the regular workspace's face and whether the
-/// archived state flipped. Minted only inside [`archive_workspace`] after the seal.
+/// A committed, SEALED archive write: the regular workspace's face. Minted only
+/// inside [`archive_workspace`] after the seal.
 #[derive(Debug)]
 pub struct ArchivedWorkspace {
     face: WorkspaceFace,
-    changed: bool,
 }
 
 impl ArchivedWorkspace {
@@ -305,14 +336,8 @@ impl ArchivedWorkspace {
         &self.face
     }
 
-    /// Whether the archived state actually flipped (informational; the write
-    /// committed regardless).
-    pub fn changed(&self) -> bool {
-        self.changed
-    }
-
-    pub fn into_parts(self) -> (WorkspaceFace, bool) {
-        (self.face, self.changed)
+    pub fn into_face(self) -> WorkspaceFace {
+        self.face
     }
 }
 
@@ -368,75 +393,107 @@ pub enum WorkspaceMetadataWriteError {
     UntrustworthyWriteFact,
 }
 
-/// Reject a committed metadata fact that does not belong to the request that
-/// produced it.
+/// Seal a committed metadata fact against the request that produced it AND derive
+/// the name-change fan-out gate from the write's own witnesses.
 ///
 /// The request carries the sole identity (`workspace_id`) and the sole target
 /// values (the edit's name/description). A correct adapter's guarded
 /// `WHERE id = ? AND owner_agent_id IS NULL ... RETURNING` guarantees the committed
 /// face agrees; a disagreement is a broken adapter. Sealing here — before the
 /// outcome is minted — keeps the returned face a second witness of the request
-/// rather than a second, trusted channel. The bind also refuses:
+/// rather than a second, trusted channel. The bind refuses:
 ///
-/// * a home workspace (`owner_agent_id` set) reported as a regular-metadata commit;
-/// * a name-change record whose `new_name` is not the committed display name, whose
-///   `new_key` is not the fold of the requested name, whose `old_name == new_name`
-///   (not a real display change), or that appears when the edit supplied no name at
-///   all — the fan-out gate must witness the write and carry its true address pair,
-///   not invent one.
+/// * a foreign id or a home workspace (`owner_agent_id` set) reported as a
+///   regular-metadata commit;
+/// * an `updated_at` that is not the sampled write instant `now_ms` (the write
+///   always bumps it; a fact carrying a different stamp did not come from this write);
+/// * a committed display or description that is not what the edit asked to write;
+/// * a name-bearing edit whose committed `name_key` is not the fold of the requested
+///   name (the face never publishes the key, so an adapter that wrote or read back
+///   the wrong `name_key` would otherwise slip through unnoticed);
+/// * a description-only edit whose committed display or `name_key` moved off the
+///   before-image — the adapter renamed a workspace the request never asked to rename.
+///
+/// The name-change gate is DERIVED, never trusted: the adapter reports only the
+/// before-image it read under its own lock (`prior`) and the `name_key` it
+/// committed. The seal computes `Some` exactly when a name was supplied AND the
+/// committed display differs from the before-image, carrying the true address pair
+/// (`prior.name`/`prior.key` → committed display/`committed_name_key`). An adapter
+/// therefore cannot SUPPRESS the fan-out (report "no change" for a display that
+/// moved) any more than it can fabricate one — it does not decide, it only witnesses.
 fn seal_metadata_write_fact(
     workspace_id: &WorkspaceId,
     edit: &WorkspaceMetadataEdit,
     face: &WorkspaceFace,
-    name_change: &Option<WorkspaceNameChange>,
-) -> Result<(), WorkspaceMetadataWriteError> {
-    if face.id != *workspace_id || face.owner_agent_id.is_some() {
+    prior: &PriorWorkspaceAddress,
+    committed_name_key: &str,
+    now_ms: i64,
+) -> Result<Option<WorkspaceNameChange>, WorkspaceMetadataWriteError> {
+    // Identity, home flag, and the always-bumped write instant.
+    if face.id != *workspace_id || face.owner_agent_id.is_some() || face.updated_at != now_ms {
         return Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact);
     }
-    if let Some(name) = edit.requested_name()
-        && face.name != name.name()
-    {
-        return Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact);
-    }
+    // The description the edit asked to write (when it carries one).
     if let Some(description) = edit.requested_description()
         && face.description.as_deref() != description
     {
         return Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact);
     }
-    if let Some(change) = name_change {
-        // A fan-out gate must witness a real rename: it may only appear when the edit
-        // supplied a name.
-        let Some(name) = edit.requested_name() else {
-            return Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact);
-        };
-        // Bind the committed ADDRESS PAIR to the request: the new display is the
-        // committed display (which already equals the request above), the new key is
-        // the requested canonical key (so an adapter that wrote or read back a key
-        // that is not the fold of the requested name is refused, not trusted), and
-        // the display actually moved.
-        if change.new_name != face.name
-            || change.new_key != name.key()
-            || change.old_name == change.new_name
-        {
-            return Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact);
+    match edit.requested_name() {
+        // A name-bearing edit: the committed display AND fold key must both equal the
+        // request; the gate is then derived from whether the display moved off the
+        // before-image the write read under its own lock.
+        Some(name) => {
+            if face.name != name.name() || committed_name_key != name.key() {
+                return Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact);
+            }
+            if prior.name != face.name {
+                Ok(Some(WorkspaceNameChange {
+                    old_name: prior.name.clone(),
+                    new_name: face.name.clone(),
+                    old_key: prior.key.clone(),
+                    new_key: committed_name_key.to_owned(),
+                }))
+            } else {
+                // A no-op rename to the identical display name: committed (updated_at
+                // bumped), but no label moved, so no fan-out is owed.
+                Ok(None)
+            }
+        }
+        // A description-only edit must not have moved the address at all: the
+        // committed display and fold key must equal the before-image, or the adapter
+        // renamed a workspace the request never asked to rename.
+        None => {
+            if face.name != prior.name || committed_name_key != prior.key {
+                return Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact);
+            }
+            Ok(None)
         }
     }
-    Ok(())
 }
 
 /// Reject a committed archive fact that does not belong to the request.
 ///
-/// Binds the committed face's id and home flag, and that its archived state matches
-/// the request (`archived_at.is_some() == requested`). `changed` is informational
-/// and not sealed beyond that agreement.
+/// Binds the committed face's id and home flag, that its `updated_at` is the sampled
+/// write instant `now_ms` (the write always bumps it), and that its archived state
+/// matches the request: `archived_at == Some(now_ms)` when archiving, `None` when
+/// un-archiving. A fact carrying a stale stamp or a contradictory archived state did
+/// not come from this write.
 fn seal_archive_write_fact(
     workspace_id: &WorkspaceId,
     archived: bool,
     face: &WorkspaceFace,
+    now_ms: i64,
 ) -> Result<(), WorkspaceMetadataWriteError> {
+    let archived_at_matches = if archived {
+        face.archived_at == Some(now_ms)
+    } else {
+        face.archived_at.is_none()
+    };
     if face.id != *workspace_id
         || face.owner_agent_id.is_some()
-        || face.archived_at.is_some() != archived
+        || face.updated_at != now_ms
+        || !archived_at_matches
     {
         return Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact);
     }
@@ -471,8 +528,22 @@ where
         WorkspaceMetadataWrite::NoSuchWorkspace => Ok(WorkspaceMetadataUpdate::NoSuchWorkspace),
         WorkspaceMetadataWrite::Forbidden => Ok(WorkspaceMetadataUpdate::Forbidden),
         WorkspaceMetadataWrite::NameTaken => Ok(WorkspaceMetadataUpdate::NameTaken),
-        WorkspaceMetadataWrite::Committed { face, name_change } => {
-            seal_metadata_write_fact(workspace_id, &edit, &face, &name_change)?;
+        WorkspaceMetadataWrite::Committed {
+            face,
+            prior,
+            committed_name_key,
+        } => {
+            // Seal the fact and DERIVE the name-change gate from the write's own
+            // witnesses (before-image + committed key), rather than trusting an
+            // adapter-supplied verdict.
+            let name_change = seal_metadata_write_fact(
+                workspace_id,
+                &edit,
+                &face,
+                &prior,
+                &committed_name_key,
+                now_ms,
+            )?;
             Ok(WorkspaceMetadataUpdate::Committed(
                 CommittedWorkspaceMetadata { face, name_change },
             ))
@@ -499,12 +570,9 @@ where
     match writes.set_archived(actor, workspace_id, archived, now_ms).await? {
         WorkspaceArchiveWrite::NoSuchWorkspace => Ok(WorkspaceArchiveUpdate::NoSuchWorkspace),
         WorkspaceArchiveWrite::Forbidden => Ok(WorkspaceArchiveUpdate::Forbidden),
-        WorkspaceArchiveWrite::Committed { face, changed } => {
-            seal_archive_write_fact(workspace_id, archived, &face)?;
-            Ok(WorkspaceArchiveUpdate::Committed(ArchivedWorkspace {
-                face,
-                changed,
-            }))
+        WorkspaceArchiveWrite::Committed { face } => {
+            seal_archive_write_fact(workspace_id, archived, &face, now_ms)?;
+            Ok(WorkspaceArchiveUpdate::Committed(ArchivedWorkspace { face }))
         }
     }
 }
@@ -718,6 +786,12 @@ where
 mod tests {
     use super::*;
     use crate::identity::{AgentId, UserId};
+
+    /// The write instant every committed-path test samples: a committed face's
+    /// `updated_at` (and an archived face's `archived_at`) must equal it, or the seal
+    /// refuses the fact.
+    const NOW: i64 = 1_000;
+
     fn workspace_id() -> WorkspaceId {
         WorkspaceId::parse("workspace-1").unwrap()
     }
@@ -726,8 +800,9 @@ mod tests {
         CanonicalWorkspaceName::parse(raw).unwrap()
     }
 
-    /// A regular-workspace face with a chosen id and display name; the fields the
-    /// seal inspects are explicit, the rest are inert defaults.
+    /// A regular-workspace face with a chosen id and display name, stamped at the
+    /// [`NOW`] write instant; the fields the seal inspects are explicit, the rest are
+    /// inert defaults.
     fn regular_face(id: &str, display_name: &str) -> WorkspaceFace {
         WorkspaceFace {
             id: WorkspaceId::parse(id).unwrap(),
@@ -739,7 +814,16 @@ mod tests {
             dm_channel_ids: Vec::new(),
             archived_at: None,
             created_at: 1,
-            updated_at: 2,
+            updated_at: NOW,
+        }
+    }
+
+    /// The before-image `{name, key}` an adapter reports for a workspace whose
+    /// display was `display` and whose fold key was `display`'s canonical key.
+    fn prior_of(display: &str) -> PriorWorkspaceAddress {
+        PriorWorkspaceAddress {
+            name: display.to_owned(),
+            key: name(display).key().to_owned(),
         }
     }
 
@@ -798,19 +882,18 @@ mod tests {
     async fn a_rename_commits_with_the_name_change_gate_set() {
         let writes = FakeWrites::on_metadata(WorkspaceMetadataWrite::Committed {
             face: regular_face("workspace-1", "Design Team"),
-            name_change: Some(WorkspaceNameChange {
-                old_name: "Old".to_owned(),
-                new_name: "Design Team".to_owned(),
-                old_key: "old".to_owned(),
-                new_key: name("Design Team").key().to_owned(),
-            }),
+            prior: PriorWorkspaceAddress {
+                name: "Old".to_owned(),
+                key: "old".to_owned(),
+            },
+            committed_name_key: name("Design Team").key().to_owned(),
         });
         let outcome = update_workspace_metadata(
             &writes,
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Name(name("Design Team")),
-            0,
+            NOW,
         )
         .await
         .unwrap();
@@ -820,7 +903,10 @@ mod tests {
         let (face, name_change) = committed.into_parts();
         assert_eq!(face.name, "Design Team");
         let change = name_change.expect("a real rename carries the fan-out gate");
+        // The address pair is DERIVED: old_* from the witnessed before-image, new_*
+        // from the committed face and key.
         assert_eq!(change.old_name, "Old");
+        assert_eq!(change.old_key, "old");
         assert_eq!(change.new_name, "Design Team");
         assert_eq!(change.new_key, name("Design Team").key());
     }
@@ -831,14 +917,17 @@ mod tests {
         face.description = Some("hello".to_owned());
         let writes = FakeWrites::on_metadata(WorkspaceMetadataWrite::Committed {
             face,
-            name_change: None,
+            // A description-only edit leaves the address untouched: the before-image
+            // and the committed key both equal the current "Unchanged" address.
+            prior: prior_of("Unchanged"),
+            committed_name_key: name("Unchanged").key().to_owned(),
         });
         let outcome = update_workspace_metadata(
             &writes,
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Description(Some("hello".to_owned())),
-            0,
+            NOW,
         )
         .await
         .unwrap();
@@ -856,17 +945,19 @@ mod tests {
     #[tokio::test]
     async fn a_no_op_rename_to_the_same_display_name_commits_without_a_gate() {
         // The edit supplied a name equal to the current display, so the write still
-        // committed (updated_at bumped) but the fan-out gate is None.
+        // committed (updated_at bumped) but the fan-out gate is None because the
+        // before-image display equals the committed display.
         let writes = FakeWrites::on_metadata(WorkspaceMetadataWrite::Committed {
             face: regular_face("workspace-1", "Same"),
-            name_change: None,
+            prior: prior_of("Same"),
+            committed_name_key: name("Same").key().to_owned(),
         });
         let outcome = update_workspace_metadata(
             &writes,
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Name(name("Same")),
-            0,
+            NOW,
         )
         .await
         .unwrap();
@@ -911,7 +1002,8 @@ mod tests {
         edit: WorkspaceMetadataEdit,
     ) {
         let writes = FakeWrites::on_metadata(write);
-        let result = update_workspace_metadata(&writes, system(), &workspace_id(), edit, 0).await;
+        let result =
+            update_workspace_metadata(&writes, system(), &workspace_id(), edit, NOW).await;
         assert!(
             matches!(
                 result,
@@ -926,7 +1018,8 @@ mod tests {
         assert_metadata_untrustworthy(
             WorkspaceMetadataWrite::Committed {
                 face: regular_face("workspace-2", "Design Team"),
-                name_change: None,
+                prior: prior_of("Old Name"),
+                committed_name_key: name("Design Team").key().to_owned(),
             },
             WorkspaceMetadataEdit::Name(name("Design Team")),
         )
@@ -938,7 +1031,8 @@ mod tests {
         assert_metadata_untrustworthy(
             WorkspaceMetadataWrite::Committed {
                 face: regular_face("workspace-1", "Something Else"),
-                name_change: None,
+                prior: prior_of("Old Name"),
+                committed_name_key: name("Something Else").key().to_owned(),
             },
             WorkspaceMetadataEdit::Name(name("Design Team")),
         )
@@ -952,7 +1046,8 @@ mod tests {
         assert_metadata_untrustworthy(
             WorkspaceMetadataWrite::Committed {
                 face,
-                name_change: None,
+                prior: prior_of("Unchanged"),
+                committed_name_key: name("Unchanged").key().to_owned(),
             },
             WorkspaceMetadataEdit::Description(Some("please store this".to_owned())),
         )
@@ -966,7 +1061,8 @@ mod tests {
         assert_metadata_untrustworthy(
             WorkspaceMetadataWrite::Committed {
                 face,
-                name_change: None,
+                prior: prior_of("Old Name"),
+                committed_name_key: name("Design Team").key().to_owned(),
             },
             WorkspaceMetadataEdit::Name(name("Design Team")),
         )
@@ -974,37 +1070,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_name_change_gate_whose_new_name_is_not_the_committed_display_is_sealed_off() {
-        assert_metadata_untrustworthy(
-            WorkspaceMetadataWrite::Committed {
-                face: regular_face("workspace-1", "Design Team"),
-                name_change: Some(WorkspaceNameChange {
-                    old_name: "Old".to_owned(),
-                    new_name: "A Different New Name".to_owned(),
-                    old_key: "old".to_owned(),
-                    new_key: name("Design Team").key().to_owned(),
-                }),
-            },
-            WorkspaceMetadataEdit::Name(name("Design Team")),
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn a_name_change_gate_whose_new_key_is_not_the_requested_fold_is_sealed_off() {
-        // The display agrees with the request, but the committed address key is not
-        // the fold of the requested name — an adapter that bound or read back the
-        // wrong `name_key` must be refused before the row is trusted, because the
+    async fn a_committed_name_key_that_is_not_the_requested_fold_is_sealed_off() {
+        // The committed display agrees with the request, but the committed address key
+        // is not the fold of the requested name — an adapter that bound or read back
+        // the wrong `name_key` must be refused before the row is trusted, because the
         // face never publishes the key and no other check would catch it.
         assert_metadata_untrustworthy(
             WorkspaceMetadataWrite::Committed {
                 face: regular_face("workspace-1", "Design Team"),
-                name_change: Some(WorkspaceNameChange {
-                    old_name: "Old".to_owned(),
-                    new_name: "Design Team".to_owned(),
-                    old_key: "old".to_owned(),
-                    new_key: "a-key-that-is-not-the-fold".to_owned(),
-                }),
+                prior: prior_of("Old Name"),
+                committed_name_key: "a-key-that-is-not-the-fold".to_owned(),
             },
             WorkspaceMetadataEdit::Name(name("Design Team")),
         )
@@ -1012,20 +1087,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_name_change_gate_on_a_description_only_edit_is_sealed_off() {
-        // A fan-out gate must witness a real rename; a description-only edit that
-        // came back carrying one is a fabricated fan-out signal.
+    async fn an_updated_at_that_is_not_the_write_instant_is_sealed_off() {
+        // The write always bumps `updated_at` to the sampled instant; a committed fact
+        // carrying a different stamp did not come from this write.
         let mut face = regular_face("workspace-1", "Design Team");
+        face.updated_at = NOW + 1;
+        assert_metadata_untrustworthy(
+            WorkspaceMetadataWrite::Committed {
+                face,
+                prior: prior_of("Old Name"),
+                committed_name_key: name("Design Team").key().to_owned(),
+            },
+            WorkspaceMetadataEdit::Name(name("Design Team")),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_description_only_edit_whose_committed_display_moved_is_sealed_off() {
+        // A description-only edit must leave the address alone; a committed display
+        // that moved off the before-image means the adapter renamed a workspace the
+        // request never asked to rename.
+        let mut face = regular_face("workspace-1", "Moved Away");
         face.description = Some("desc".to_owned());
         assert_metadata_untrustworthy(
             WorkspaceMetadataWrite::Committed {
                 face,
-                name_change: Some(WorkspaceNameChange {
-                    old_name: "Old".to_owned(),
-                    new_name: "Design Team".to_owned(),
-                    old_key: "old".to_owned(),
-                    new_key: name("Design Team").key().to_owned(),
-                }),
+                prior: prior_of("Original"),
+                committed_name_key: name("Original").key().to_owned(),
             },
             WorkspaceMetadataEdit::Description(Some("desc".to_owned())),
         )
@@ -1033,18 +1122,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_name_change_gate_with_equal_old_and_new_is_sealed_off() {
+    async fn a_description_only_edit_that_changed_the_committed_key_is_sealed_off() {
+        // The committed display equals the before-image, but the committed fold key
+        // moved — a description-only edit may not re-address the workspace.
+        let mut face = regular_face("workspace-1", "Same");
+        face.description = Some("desc".to_owned());
         assert_metadata_untrustworthy(
             WorkspaceMetadataWrite::Committed {
-                face: regular_face("workspace-1", "Design Team"),
-                name_change: Some(WorkspaceNameChange {
-                    old_name: "Design Team".to_owned(),
-                    new_name: "Design Team".to_owned(),
-                    old_key: name("Design Team").key().to_owned(),
-                    new_key: name("Design Team").key().to_owned(),
-                }),
+                face,
+                prior: prior_of("Same"),
+                committed_name_key: "a-different-key".to_owned(),
             },
-            WorkspaceMetadataEdit::Name(name("Design Team")),
+            WorkspaceMetadataEdit::Description(Some("desc".to_owned())),
         )
         .await;
     }
@@ -1093,30 +1182,25 @@ mod tests {
     // ---- archive seal ----
 
     #[tokio::test]
-    async fn an_archive_commits_and_reports_the_flip() {
+    async fn an_archive_commits_and_stamps_archived_at() {
         let mut face = regular_face("workspace-1", "Design Team");
-        face.archived_at = Some(999);
-        let writes = FakeWrites::on_archive(WorkspaceArchiveWrite::Committed {
-            face,
-            changed: true,
-        });
-        let outcome = archive_workspace(&writes, system(), &workspace_id(), true, 0)
+        face.archived_at = Some(NOW);
+        let writes = FakeWrites::on_archive(WorkspaceArchiveWrite::Committed { face });
+        let outcome = archive_workspace(&writes, system(), &workspace_id(), true, NOW)
             .await
             .unwrap();
         let WorkspaceArchiveUpdate::Committed(archived) = outcome else {
             panic!("expected Committed");
         };
-        assert!(archived.changed());
-        assert!(archived.face().archived_at.is_some());
+        assert_eq!(archived.face().archived_at, Some(NOW));
     }
 
     #[tokio::test]
     async fn an_unarchive_commits_with_a_null_archived_at() {
         let writes = FakeWrites::on_archive(WorkspaceArchiveWrite::Committed {
             face: regular_face("workspace-1", "Design Team"),
-            changed: true,
         });
-        let outcome = archive_workspace(&writes, system(), &workspace_id(), false, 0)
+        let outcome = archive_workspace(&writes, system(), &workspace_id(), false, NOW)
             .await
             .unwrap();
         let WorkspaceArchiveUpdate::Committed(archived) = outcome else {
@@ -1131,9 +1215,35 @@ mod tests {
         // adapter's fact contradicts the write it claimed to perform.
         let writes = FakeWrites::on_archive(WorkspaceArchiveWrite::Committed {
             face: regular_face("workspace-1", "Design Team"),
-            changed: true,
         });
-        let result = archive_workspace(&writes, system(), &workspace_id(), true, 0).await;
+        let result = archive_workspace(&writes, system(), &workspace_id(), true, NOW).await;
+        assert!(matches!(
+            result,
+            Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_committed_archive_whose_archived_at_is_not_the_write_instant_is_sealed_off() {
+        // Archived, but stamped at some other instant than the sampled write time —
+        // the fact did not come from this write.
+        let mut face = regular_face("workspace-1", "Design Team");
+        face.archived_at = Some(NOW - 1);
+        let writes = FakeWrites::on_archive(WorkspaceArchiveWrite::Committed { face });
+        let result = archive_workspace(&writes, system(), &workspace_id(), true, NOW).await;
+        assert!(matches!(
+            result,
+            Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_committed_archive_whose_updated_at_is_not_the_write_instant_is_sealed_off() {
+        let mut face = regular_face("workspace-1", "Design Team");
+        face.archived_at = Some(NOW);
+        face.updated_at = NOW + 5;
+        let writes = FakeWrites::on_archive(WorkspaceArchiveWrite::Committed { face });
+        let result = archive_workspace(&writes, system(), &workspace_id(), true, NOW).await;
         assert!(matches!(
             result,
             Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact)
@@ -1143,12 +1253,9 @@ mod tests {
     #[tokio::test]
     async fn a_committed_archive_for_a_foreign_workspace_is_sealed_off() {
         let mut face = regular_face("workspace-2", "Design Team");
-        face.archived_at = Some(999);
-        let writes = FakeWrites::on_archive(WorkspaceArchiveWrite::Committed {
-            face,
-            changed: true,
-        });
-        let result = archive_workspace(&writes, system(), &workspace_id(), true, 0).await;
+        face.archived_at = Some(NOW);
+        let writes = FakeWrites::on_archive(WorkspaceArchiveWrite::Committed { face });
+        let result = archive_workspace(&writes, system(), &workspace_id(), true, NOW).await;
         assert!(matches!(
             result,
             Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact)
@@ -1165,7 +1272,7 @@ mod tests {
             (WorkspaceArchiveWrite::Forbidden, "forbidden"),
         ] {
             let writes = FakeWrites::on_archive(raw);
-            let outcome = archive_workspace(&writes, human.clone(), &workspace_id(), true, 0)
+            let outcome = archive_workspace(&writes, human.clone(), &workspace_id(), true, NOW)
                 .await
                 .unwrap();
             let got = match outcome {
@@ -1223,12 +1330,11 @@ mod tests {
     async fn a_committed_rename_fires_the_hint_exactly_once_and_reports_delivered() {
         let writes = FakeWrites::on_metadata(WorkspaceMetadataWrite::Committed {
             face: regular_face("workspace-1", "Design Team"),
-            name_change: Some(WorkspaceNameChange {
-                old_name: "Old".to_owned(),
-                new_name: "Design Team".to_owned(),
-                old_key: "old".to_owned(),
-                new_key: name("Design Team").key().to_owned(),
-            }),
+            prior: PriorWorkspaceAddress {
+                name: "Old".to_owned(),
+                key: "old".to_owned(),
+            },
+            committed_name_key: name("Design Team").key().to_owned(),
         });
         let sink = FakeSink::new(false);
         let outcome = update_workspace_metadata_and_announce(
@@ -1237,7 +1343,7 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Name(name("Design Team")),
-            0,
+            NOW,
         )
         .await
         .unwrap();
@@ -1259,7 +1365,8 @@ mod tests {
         face.description = Some("hello".to_owned());
         let writes = FakeWrites::on_metadata(WorkspaceMetadataWrite::Committed {
             face,
-            name_change: None,
+            prior: prior_of("Unchanged"),
+            committed_name_key: name("Unchanged").key().to_owned(),
         });
         let sink = FakeSink::new(false);
         let outcome = update_workspace_metadata_and_announce(
@@ -1268,7 +1375,7 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Description(Some("hello".to_owned())),
-            0,
+            NOW,
         )
         .await
         .unwrap();
@@ -1293,7 +1400,8 @@ mod tests {
         // The write committed (updated_at bumped) but the gate is None, so no hint.
         let writes = FakeWrites::on_metadata(WorkspaceMetadataWrite::Committed {
             face: regular_face("workspace-1", "Same"),
-            name_change: None,
+            prior: prior_of("Same"),
+            committed_name_key: name("Same").key().to_owned(),
         });
         let sink = FakeSink::new(false);
         let outcome = update_workspace_metadata_and_announce(
@@ -1302,7 +1410,7 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Name(name("Same")),
-            0,
+            NOW,
         )
         .await
         .unwrap();
@@ -1319,12 +1427,11 @@ mod tests {
     async fn a_failed_hint_is_carried_as_a_value_and_never_flips_the_commit() {
         let writes = FakeWrites::on_metadata(WorkspaceMetadataWrite::Committed {
             face: regular_face("workspace-1", "Design Team"),
-            name_change: Some(WorkspaceNameChange {
-                old_name: "Old".to_owned(),
-                new_name: "Design Team".to_owned(),
-                old_key: "old".to_owned(),
-                new_key: name("Design Team").key().to_owned(),
-            }),
+            prior: PriorWorkspaceAddress {
+                name: "Old".to_owned(),
+                key: "old".to_owned(),
+            },
+            committed_name_key: name("Design Team").key().to_owned(),
         });
         let sink = FakeSink::new(true);
         let outcome = update_workspace_metadata_and_announce(
@@ -1333,7 +1440,7 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Name(name("Design Team")),
-            0,
+            NOW,
         )
         .await
         .unwrap();
@@ -1392,7 +1499,8 @@ mod tests {
         // write; the wrapper must propagate that Err and never reach the sink.
         let writes = FakeWrites::on_metadata(WorkspaceMetadataWrite::Committed {
             face: regular_face("workspace-2", "Design Team"),
-            name_change: None,
+            prior: prior_of("Old Name"),
+            committed_name_key: name("Design Team").key().to_owned(),
         });
         let sink = FakeSink::new(false);
         let result = update_workspace_metadata_and_announce(
@@ -1401,7 +1509,7 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Name(name("Design Team")),
-            0,
+            NOW,
         )
         .await;
         assert!(matches!(

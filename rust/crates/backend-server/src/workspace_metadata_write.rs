@@ -10,6 +10,21 @@
 //! admission (authenticate, resolve the workspace's existence + the caller's
 //! governance floor BEFORE the body is parsed) and the wire projection.
 //!
+//! ## The per-channel rename message is deferred to the mount seam
+//!
+//! A committed rename owes TWO production effects: the `viewer_workspaces_changed`
+//! cache-invalidation hint (a pure id-only signal, fired inside the domain and
+//! complete on its own) and the per-channel workspace-rename SYSTEM MESSAGE. The
+//! latter is NOT authored here. Authoring a message is only one third of that
+//! obligation — the message must also be DELIVERED (the daemon `delivery` port) and
+//! PUBLISHED (the channel hub), and both are composition-root concerns wired at the
+//! [#task:2215] mount seam, not this component-complete leaf. Authoring a message
+//! that is never delivered or published would be a silent half-effect, so the whole
+//! messaging fan-out is deferred as one unit. This surface instead SURFACES the
+//! sealed [`WorkspaceNameChange`] (through `into_parts`) and logs the
+//! address-reassignment audit; #2215 drives the message authoring + delivery +
+//! publication off that same committed gate.
+//!
 //! ## Refusal ORDERING is a product contract
 //!
 //! The TypeScript route answers, in this exact order:
@@ -22,12 +37,15 @@
 //! floor, archive the `Owner` floor — a distinction the collapsed governance
 //! ceiling cannot express, so the floor door is used, not the ceiling.
 //!
-//! One refusal has no TS counterpart: a body over 16 KiB is rejected with `413`
-//! ([`MAX_BODY_BYTES`]). This is a deliberate transport refinement, not parity —
-//! and it sits AFTER the floor: the body is taken as a `Request` and drained only
-//! once the caller is known to govern the workspace, so a `404`/`403` caller
-//! never has their body buffered. The full order is therefore
-//! `404 → 403 → 413 → 400 → 409 → 200`.
+//! The body is READ only after the floor passes: the handler takes a `Request`
+//! (not the eager `Bytes` extractor) and drains it once the caller is known to
+//! govern the workspace, so a `404`/`403` caller never has their body buffered.
+//! This surface imposes NO size cap of its own — a body-size perimeter (and any
+//! `413`) is an application-wide policy applied by `DefaultBodyLimit` at the mount
+//! seam, exactly like the production `viewer_workspaces_changed` sink is; the
+//! product route itself has no limit, so the leaf inventing a narrower one would be
+//! an unauthorized regression. The order is therefore `404 → 403 → 400 → 409 →
+//! 200`, matching the TypeScript route (which also reads the body after the floor).
 //!
 //! That pre-lock verdict can go stale (a demotion may commit in the seam before
 //! the write lock). Guarding that is the WRITE's job: the domain re-derives the
@@ -85,21 +103,17 @@ use serde_json::Value;
 use silverhand_backend_core::{
     access::{WorkspaceGovernanceFactsRead, WorkspaceRole, governance_floor_verdict},
     identity::{Principal, UserId, WorkspaceId},
-    messaging::collaboration::workspace_rename_messaging::{
-        WorkspaceRenameChannelsReadPort, WorkspaceRenameMessageAuthorPort,
-        WorkspaceRenameMessageDraft, author_workspace_rename_message,
-        read_workspace_rename_channels,
-    },
     workspace_face::WorkspaceFace,
     workspace_metadata_write::{
         WorkspaceArchiveUpdate, WorkspaceMetadataAnnounce, WorkspaceMetadataChangedSink,
-        WorkspaceMetadataUpdateWithAnnounce, WorkspaceMetadataWriteUnitOfWork, WorkspaceNameChange,
+        WorkspaceMetadataUpdateWithAnnounce, WorkspaceMetadataWriteUnitOfWork,
         archive_workspace, update_workspace_metadata_and_announce,
     },
 };
 use silverhand_backend_core::access::WorkspaceGovernanceFloor;
 
 use crate::error;
+use crate::workspaces::ViewerWorkspaceDto;
 
 /// The rename/describe route template, in axum's `{id}` capture syntax. An empty
 /// segment does not match, so the product's `if (!id) 400` branch is
@@ -118,16 +132,6 @@ const NAME_TAKEN: &str = "workspace name already exists";
 /// The safe-500 body: a bare `text/plain`, matching the sibling routes.
 const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
 
-/// The request-body size ceiling for both writes: 16 KiB. This is NOT a Zod/TS
-/// parity behavior — the product route reads the body unconditionally. It is a
-/// deliberate transport-layer refinement: a body larger than any legitimate
-/// rename/description payload is rejected with `413` rather than buffered. The
-/// read is DEFERRED past the governance floor (the body is a `Request`, not the
-/// eager `Bytes` extractor), so a caller who fails the `404`/`403` gate never has
-/// their body read at all — the cap only ever applies to a caller who already
-/// governs the workspace.
-const MAX_BODY_BYTES: usize = 16 * 1024;
-
 /// The metadata clock: the write instant the boundary samples, as signed Unix
 /// milliseconds (`Date.now()` parity). It is this slice's narrow time capability,
 /// mirroring the sibling per-slice clocks (`EnrollmentClock`, `RuntimeClock`, …):
@@ -140,57 +144,43 @@ pub trait WorkspaceMetadataClock: Clone + Send + Sync + 'static {
     fn now_unix_millis(&self) -> i64;
 }
 
-/// Everything the two write handlers need, assembled by the composition root.
-/// Archive uses only the governance read, the write unit of work, and the clock;
-/// rename additionally fires the viewer-hint sink and authors the per-channel
-/// rename system message through the two messaging ports.
+/// Everything the two write handlers need, assembled by the composition root: the
+/// governance read, the write unit of work, the `metadata_changed` viewer-hint
+/// sink, and the clock. The per-channel rename messaging ports are deliberately
+/// absent — that fan-out is deferred whole to the mount seam (see the module doc).
 #[derive(Clone)]
-struct WorkspaceWriteState<G, W, S, C, R, A> {
+struct WorkspaceWriteState<G, W, S, C> {
     governance: G,
     writes: W,
     sink: S,
     clock: C,
-    channels: R,
-    author: A,
 }
 
 /// Mounts both metadata-write routes generic over their ports, so tests drive
 /// driver-free fakes and the composition root wires the SQLite adapters. Route
 /// registration into the served application is a separate integration seam.
-#[allow(clippy::too_many_arguments)]
-pub fn router<G, W, S, C, R, A>(
-    governance: G,
-    writes: W,
-    sink: S,
-    clock: C,
-    channels: R,
-    author: A,
-) -> Router
+pub fn router<G, W, S, C>(governance: G, writes: W, sink: S, clock: C) -> Router
 where
     G: WorkspaceGovernanceFactsRead,
     W: WorkspaceMetadataWriteUnitOfWork,
     S: WorkspaceMetadataChangedSink,
     C: WorkspaceMetadataClock,
-    R: WorkspaceRenameChannelsReadPort + Clone + Send + Sync + 'static,
-    A: WorkspaceRenameMessageAuthorPort + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route(WORKSPACE_METADATA_PATH, patch(patch_metadata::<G, W, S, C, R, A>))
-        .route(WORKSPACE_ARCHIVE_PATH, patch(patch_archive::<G, W, S, C, R, A>))
+        .route(WORKSPACE_METADATA_PATH, patch(patch_metadata::<G, W, S, C>))
+        .route(WORKSPACE_ARCHIVE_PATH, patch(patch_archive::<G, W, S, C>))
         .with_state(WorkspaceWriteState {
             governance,
             writes,
             sink,
             clock,
-            channels,
-            author,
         })
 }
 
-async fn patch_metadata<G, W, S, C, R, A>(
+async fn patch_metadata<G, W, S, C>(
     Path(id): Path<String>,
     viewer: Option<Extension<UserId>>,
-    State(state): State<WorkspaceWriteState<G, W, S, C, R, A>>,
+    State(state): State<WorkspaceWriteState<G, W, S, C>>,
     request: Request,
 ) -> Response
 where
@@ -198,8 +188,6 @@ where
     W: WorkspaceMetadataWriteUnitOfWork,
     S: WorkspaceMetadataChangedSink,
     C: WorkspaceMetadataClock,
-    R: WorkspaceRenameChannelsReadPort + Clone + Send + Sync + 'static,
-    A: WorkspaceRenameMessageAuthorPort + Clone + Send + Sync + 'static,
 {
     let Some(Extension(viewer)) = viewer else {
         tracing::error!("workspace metadata-write route reached without its human principal fact");
@@ -220,11 +208,9 @@ where
         Err(()) => return internal_error(),
     }
 
-    // Body read is DEFERRED past the floor and capped at 16 KiB → 413.
-    let body = match read_capped_body(request).await {
-        Ok(body) => body,
-        Err(()) => return payload_too_large(),
-    };
+    // Body read is DEFERRED past the floor (no endpoint-imposed size cap; any
+    // application-wide body-size perimeter is a mount-seam policy).
+    let body = read_body(request).await;
     let edit = match wire::parse_update_body(&parse_json_or_empty(&body)) {
         Ok(edit) => edit,
         Err(issues) => return invalid_input(issues),
@@ -259,11 +245,10 @@ where
             }
 
             // A committed rename also owes the per-channel system message and the
-            // address-reassignment audit. Both are INDEPENDENT best-effort effects
-            // off the same sealed gate: neither can turn the committed 200 into a
-            // 500, and one failing must not block the other. So there is no
-            // first-error `?` chain here — failures are logged and the loop
-            // continues, exactly as the viewer hint above is a recorded value.
+            // address-reassignment audit. The audit is logged here off the sealed
+            // gate; the message authoring + delivery + publication are deferred WHOLE
+            // to the mount seam (see the module doc), which drives them off the same
+            // committed `WorkspaceNameChange` this route surfaces via `into_parts`.
             if let Some(change) = &name_change {
                 tracing::info!(
                     workspace = %workspace_id.as_str(),
@@ -272,8 +257,6 @@ where
                     new_key = %change.new_key,
                     "workspace address reassigned"
                 );
-                announce_rename_to_channels(&state.channels, &state.author, &workspace_id, change)
-                    .await;
             }
 
             ok_workspace(&face)
@@ -288,10 +271,10 @@ where
     }
 }
 
-async fn patch_archive<G, W, S, C, R, A>(
+async fn patch_archive<G, W, S, C>(
     Path(id): Path<String>,
     viewer: Option<Extension<UserId>>,
-    State(state): State<WorkspaceWriteState<G, W, S, C, R, A>>,
+    State(state): State<WorkspaceWriteState<G, W, S, C>>,
     request: Request,
 ) -> Response
 where
@@ -299,8 +282,6 @@ where
     W: WorkspaceMetadataWriteUnitOfWork,
     S: WorkspaceMetadataChangedSink,
     C: WorkspaceMetadataClock,
-    R: WorkspaceRenameChannelsReadPort + Clone + Send + Sync + 'static,
-    A: WorkspaceRenameMessageAuthorPort + Clone + Send + Sync + 'static,
 {
     let Some(Extension(viewer)) = viewer else {
         tracing::error!("workspace archive route reached without its human principal fact");
@@ -320,11 +301,8 @@ where
         Err(()) => return internal_error(),
     }
 
-    // Body read is DEFERRED past the floor and capped at 16 KiB → 413.
-    let body = match read_capped_body(request).await {
-        Ok(body) => body,
-        Err(()) => return payload_too_large(),
-    };
+    // Body read is DEFERRED past the floor (no endpoint-imposed size cap).
+    let body = read_body(request).await;
     let archived = match wire::parse_archive_body(&parse_json_or_empty(&body)) {
         Ok(archived) => archived,
         Err(issues) => return invalid_input(issues),
@@ -369,59 +347,19 @@ where
     }
 }
 
-/// Author the per-channel rename system message in every non-closed open-roster
-/// channel of the renamed workspace — INDEPENDENT best-effort. A failure to read
-/// the channel population skips the messages (the commit and the viewer hint
-/// stand); a failure to author in one channel is logged and the loop continues to
-/// the others. This function never returns an error and never touches the `200`.
-async fn announce_rename_to_channels<R, A>(
-    channels: &R,
-    author: &A,
-    workspace_id: &WorkspaceId,
-    change: &WorkspaceNameChange,
-) where
-    R: WorkspaceRenameChannelsReadPort,
-    A: WorkspaceRenameMessageAuthorPort,
-{
-    let bound = match read_workspace_rename_channels(channels, workspace_id.clone()).await {
-        Ok(bound) => bound,
-        Err(cause) => {
-            tracing::error!(
-                error_chain = %error::describe(&cause),
-                workspace = %workspace_id.as_str(),
-                "workspace rename channel population read failed; per-channel rename \
-                 messages skipped (the rename is committed regardless)"
-            );
-            return;
-        }
-    };
-
-    for channel in bound.channels() {
-        let draft = WorkspaceRenameMessageDraft::for_names(
-            workspace_id.clone(),
-            channel.conversation().clone(),
-            change.old_name.clone(),
-            change.new_name.clone(),
-        );
-        if let Err(cause) = author_workspace_rename_message(author, draft).await {
-            tracing::error!(
-                error_chain = %error::describe(&cause),
-                conversation = %channel.conversation().as_str(),
-                "workspace rename system message could not be authored in one channel; \
-                 continuing with the rest"
-            );
-        }
-    }
-}
-
-/// Drain the request body into memory, rejecting anything over
-/// [`MAX_BODY_BYTES`] with `Err(())` (the caller renders `413`). Called only
-/// AFTER the governance floor passes, so an unauthorized request is refused
-/// without its body ever being buffered.
-async fn read_capped_body(request: Request) -> Result<Bytes, ()> {
-    to_bytes(request.into_body(), MAX_BODY_BYTES)
+/// Drain the request body into memory, DEFERRED past the governance floor so an
+/// unauthorized (`404`/`403`) caller never has their body buffered. No
+/// endpoint-specific size cap is imposed here — an application-wide body-size
+/// perimeter is a mount-seam concern (a `DefaultBodyLimit` layer over the served
+/// app), never a limit this component-complete leaf invents. A body-stream read
+/// failure folds to an empty body, mirroring the product's
+/// `await c.req.json().catch(() => ({}))` (which swallows any read failure into an
+/// empty object), so the schema then reports "no fields to update" rather than the
+/// leaf surfacing a transport error as a bespoke status.
+async fn read_body(request: Request) -> Bytes {
+    to_bytes(request.into_body(), usize::MAX)
         .await
-        .map_err(|_| ())
+        .unwrap_or_default()
 }
 
 /// Read the request body as JSON, mirroring the product's
@@ -437,50 +375,11 @@ fn parse_json_or_empty(body: &Bytes) -> Value {
 }
 
 /// Success body: `{ "workspace": {ViewerWorkspaceDto} }`, mirroring
-/// `c.json({ workspace: toViewerWorkspace(updated) })`.
+/// `c.json({ workspace: toViewerWorkspace(updated) })`. The workspace shape is the
+/// crate's one canonical [`ViewerWorkspaceDto`](crate::workspaces::ViewerWorkspaceDto).
 #[derive(Serialize)]
 struct WorkspaceMutationResponse {
     workspace: ViewerWorkspaceDto,
-}
-
-/// One workspace on the published face, snake_case and field-by-field in the
-/// contract order — the SAME published wire shape the list and detail routes
-/// emit (`name_key` never reaches the wire). Redefined here rather than shared:
-/// a zero-behavior extraction of this DTO across the three routes is a candidate
-/// follow-up, but it is not this slice's change.
-#[derive(Serialize)]
-struct ViewerWorkspaceDto {
-    id: String,
-    name: String,
-    description: Option<String>,
-    owner_agent_id: Option<String>,
-    owner_user_id: Option<String>,
-    dm_channel_id: Option<String>,
-    dm_channel_ids: Vec<String>,
-    archived_at: Option<i64>,
-    created_at: i64,
-    updated_at: i64,
-}
-
-impl From<&WorkspaceFace> for ViewerWorkspaceDto {
-    fn from(face: &WorkspaceFace) -> Self {
-        Self {
-            id: face.id.as_str().to_owned(),
-            name: face.name.clone(),
-            description: face.description.clone(),
-            owner_agent_id: face.owner_agent_id.as_ref().map(|id| id.as_str().to_owned()),
-            owner_user_id: face.owner_user_id.as_ref().map(|id| id.as_str().to_owned()),
-            dm_channel_id: face.dm_channel_id.as_ref().map(|id| id.as_str().to_owned()),
-            dm_channel_ids: face
-                .dm_channel_ids
-                .iter()
-                .map(|id| id.as_str().to_owned())
-                .collect(),
-            archived_at: face.archived_at,
-            created_at: face.created_at,
-            updated_at: face.updated_at,
-        }
-    }
 }
 
 /// The flat refusal body, `{ "error": ... }`.
@@ -531,13 +430,6 @@ fn invalid_input(issues: Vec<wire::ZodIssue>) -> Response {
 
 fn internal_error() -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR_BODY).into_response()
-}
-
-/// The transport-layer `413` for an over-16-KiB body. A bare status with no
-/// envelope: this is not a product refusal (no TS counterpart), so it carries no
-/// `{ error }` JSON.
-fn payload_too_large() -> Response {
-    StatusCode::PAYLOAD_TOO_LARGE.into_response()
 }
 
 /// The Zod-3 issue compatibility projection for the `400` body.
