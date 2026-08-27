@@ -16,6 +16,8 @@
 //! [`super::custody`] like every other issuing operation, and only decides WHETHER to
 //! mint.
 
+use std::sync::{Arc, OnceLock};
+
 use thiserror::Error;
 
 use super::{
@@ -77,6 +79,43 @@ pub struct LocalClaimFacts {
     pub unclaimed_local: Option<HostId>,
 }
 
+/// The computer id a registration would need, minted lazily and at most once.
+///
+/// Minting draws OS entropy, which can fail. Only the register branch needs an id —
+/// reuse touches nothing but a stamp, and adoption binds an existing row — so drawing it
+/// up front would make a touch-only claim fail when entropy is down, even though that
+/// claim writes no new computer and no credential. The draw is deferred into
+/// [`LocalClaimAttempt::decide`]'s register arm, leaving the reuse and adopt paths
+/// entropy-free.
+///
+/// Memoized because a registration that walks the name ladder retries under ONE identity:
+/// the first register attempt mints the id, and every later candidate reuses it rather
+/// than spending a second computer's worth of entropy. Attempts run sequentially within a
+/// claim, so the mint runs once; the [`OnceLock`] only makes that structural.
+#[derive(Clone)]
+struct LazyComputerId {
+    mint: Arc<dyn Fn() -> Result<String, EntropyFailure> + Send + Sync>,
+    cache: Arc<OnceLock<String>>,
+}
+
+impl LazyComputerId {
+    fn new(mint: impl Fn() -> Result<String, EntropyFailure> + Send + Sync + 'static) -> Self {
+        Self {
+            mint: Arc::new(mint),
+            cache: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// The id, minting it on first resolve and caching it for the rest of the claim.
+    fn resolve(&self) -> Result<String, EntropyFailure> {
+        if let Some(id) = self.cache.get() {
+            return Ok(id.clone());
+        }
+        let minted = (self.mint)()?;
+        Ok(self.cache.get_or_init(|| minted).clone())
+    }
+}
+
 /// One attempt at a claim: everything the write needs, under one candidate name.
 ///
 /// Private fields, and the only source is [`ClaimLocalComputer`]: the computer's id,
@@ -92,7 +131,7 @@ pub struct LocalClaimAttempt {
     installation_id: String,
     at: i64,
     label: Option<String>,
-    fresh_id: String,
+    fresh_id: LazyComputerId,
     fresh_name: String,
 }
 
@@ -118,25 +157,28 @@ impl LocalClaimAttempt {
 
     /// Which of the three answers these facts add up to.
     ///
-    /// Pure, so the branch a claim takes is testable without a database, and the
-    /// adapter's only remaining decision is how to execute the write it is handed.
-    pub fn decide(&self, facts: &LocalClaimFacts) -> LocalClaimWrite {
+    /// Reuse and adoption are pure — the branch a claim takes is testable without a
+    /// database — but the register arm mints the fresh computer's id, the one fallible
+    /// step, so it can be spent by exactly the path that needs it and no other. A failure
+    /// here is an entropy failure, and only a claim that finds nothing to reuse or adopt
+    /// can raise it.
+    pub fn decide(&self, facts: &LocalClaimFacts) -> Result<LocalClaimWrite, EntropyFailure> {
         if let Some(claimed) = &facts.claimed {
-            return LocalClaimWrite::TouchLastSeen(TouchLocalComputer {
+            return Ok(LocalClaimWrite::TouchLastSeen(TouchLocalComputer {
                 computer: claimed.clone(),
-            });
+            }));
         }
         if let Some(unclaimed) = &facts.unclaimed_local {
-            return LocalClaimWrite::Adopt(AdoptLocalComputer {
+            return Ok(LocalClaimWrite::Adopt(AdoptLocalComputer {
                 computer: unclaimed.clone(),
                 display_label: self.label.clone(),
-            });
+            }));
         }
-        LocalClaimWrite::Register(RegisterLocalComputer {
-            id: self.fresh_id.clone(),
+        Ok(LocalClaimWrite::Register(RegisterLocalComputer {
+            id: self.fresh_id.resolve()?,
             name: self.fresh_name.clone(),
             display_label: self.label.clone(),
-        })
+        }))
     }
 }
 
@@ -246,6 +288,10 @@ pub enum LocalClaimWriteError {
     /// module's to choose.
     #[error("computer name already exists")]
     DuplicateComputerName,
+    /// The fresh computer's id could not be minted. Raised by [`LocalClaimAttempt::decide`]
+    /// only when the branch is register, so a reuse or adopt never surfaces it.
+    #[error(transparent)]
+    Entropy(#[from] EntropyFailure),
     #[error(transparent)]
     Persistence(#[from] PersistenceFailure),
 }
@@ -296,7 +342,7 @@ pub struct ClaimLocalComputer<U, I, W, R, C> {
     unit_of_work: U,
     inventory: I,
     credentials: W,
-    entropy: R,
+    entropy: Arc<R>,
     clock: C,
 }
 
@@ -305,7 +351,7 @@ where
     U: ClaimLocalComputerUnitOfWork,
     I: HostCredentialInventory,
     W: CredentialIssueUnitOfWork,
-    R: EntropySource,
+    R: EntropySource + 'static,
     C: Clock,
 {
     pub fn new(unit_of_work: U, inventory: I, credentials: W, entropy: R, clock: C) -> Self {
@@ -313,7 +359,7 @@ where
             unit_of_work,
             inventory,
             credentials,
-            entropy,
+            entropy: Arc::new(entropy),
             clock,
         }
     }
@@ -324,7 +370,7 @@ where
         request: LocalClaimRequest,
     ) -> Result<ClaimedLocalComputer, ClaimLocalComputerError> {
         let at = now_ms(&self.clock)?;
-        let fresh_id = random_base64url(&self.entropy, COMPUTER_ID_BYTES)?;
+        let fresh_id = self.lazy_computer_id();
         let prefix = installation_prefix(&request.installation_id);
         let label = request.label.as_ref().map(ComputerDisplayLabel::as_str);
         let base = normalize_computer_name(label.unwrap_or(LOCAL_COMPUTER_NAME));
@@ -351,13 +397,21 @@ where
             }
         }
         for _ in 0..NAME_SUFFIX_ATTEMPTS {
-            let suffix = random_hex(&self.entropy, NAME_SUFFIX_BYTES)?;
+            let suffix = random_hex(self.entropy.as_ref(), NAME_SUFFIX_BYTES)?;
             let name = format!("{LOCAL_COMPUTER_NAME}-{prefix}-{suffix}");
             if let Some(computer) = self.attempt(&owner, &request, at, &fresh_id, name).await? {
                 return self.finish(computer, &request, at).await;
             }
         }
         Err(ClaimLocalComputerError::NameAllocation)
+    }
+
+    /// The fresh computer's id, as a draw deferred until the register branch asks for it.
+    /// The closure holds the same entropy source every other draw in this claim uses, so
+    /// deferring changes only WHEN the id is minted, never from what.
+    fn lazy_computer_id(&self) -> LazyComputerId {
+        let entropy = Arc::clone(&self.entropy);
+        LazyComputerId::new(move || random_base64url(entropy.as_ref(), COMPUTER_ID_BYTES))
     }
 
     /// One transaction. `Ok(None)` means the attempted name was taken and the next
@@ -367,7 +421,7 @@ where
         owner: &UserId,
         request: &LocalClaimRequest,
         at: i64,
-        fresh_id: &str,
+        fresh_id: &LazyComputerId,
         fresh_name: String,
     ) -> Result<Option<ComputerRecord>, ClaimLocalComputerError> {
         let attempt = LocalClaimAttempt {
@@ -378,12 +432,13 @@ where
                 .label
                 .as_ref()
                 .map(|label| label.as_str().to_owned()),
-            fresh_id: fresh_id.to_owned(),
+            fresh_id: fresh_id.clone(),
             fresh_name,
         };
         match self.unit_of_work.claim_local_computer(attempt).await {
             Ok(computer) => Ok(Some(computer)),
             Err(LocalClaimWriteError::DuplicateComputerName) => Ok(None),
+            Err(LocalClaimWriteError::Entropy(failure)) => Err(failure.into()),
             Err(LocalClaimWriteError::Persistence(failure)) => Err(failure.into()),
         }
     }
@@ -414,7 +469,7 @@ where
             });
         }
         let (credential, host_token) =
-            mint_credential(&self.entropy, computer.id.as_str())?.into_parts();
+            mint_credential(self.entropy.as_ref(), computer.id.as_str())?.into_parts();
         match self.credentials.issue_credential(credential, None).await? {
             Ok(()) => Ok(ClaimedLocalComputer {
                 computer,
@@ -566,7 +621,7 @@ mod tests {
             assert_eq!(attempt.installation_id(), INSTALLATION);
             assert_eq!(attempt.at(), NOW);
 
-            let write = attempt.decide(&self.facts);
+            let write = attempt.decide(&self.facts)?;
             if let LocalClaimWrite::Register(register) = &write {
                 self.attempted
                     .lock()
@@ -661,6 +716,21 @@ mod tests {
                 *destination = bytes.pop_front().unwrap();
             }
             Ok(())
+        }
+    }
+
+    #[derive(Debug, Error)]
+    #[error("the secure random source is down")]
+    struct EntropyDown;
+
+    /// An entropy source that fails every draw, so a test can prove a path never reached
+    /// one.
+    struct FailingEntropy;
+
+    impl EntropySource for FailingEntropy {
+        type Error = EntropyDown;
+        fn fill(&self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+            Err(EntropyDown)
         }
     }
 
@@ -900,6 +970,43 @@ mod tests {
 
         assert!(claimed.host_token.is_none());
         assert_eq!(credentials.asked.load(Ordering::SeqCst), 1);
+        assert!(credentials.issued.lock().unwrap().is_empty());
+    }
+
+    /// Falsifier for the lazy id: a reuse that already holds a working token writes no
+    /// computer and no credential, so it must succeed even when entropy is down. Minting
+    /// the id up front — the bug — turns this deterministic reuse into a `500`.
+    #[tokio::test]
+    async fn a_reuse_with_a_working_token_succeeds_even_when_entropy_is_down() {
+        let store = RecordingStore::new(
+            LocalClaimFacts {
+                claimed: Some(computer("h-existing")),
+                unclaimed_local: None,
+            },
+            &[],
+        );
+        let credentials = RecordingCredentials::holding_an_active_credential();
+        let service = ClaimLocalComputer::new(
+            store.clone(),
+            credentials.clone(),
+            credentials.clone(),
+            FailingEntropy,
+            FixedClock,
+        );
+
+        let claimed = service
+            .execute(owner(), request(None, Some("h-existing")))
+            .await
+            .expect("a reuse that needs no token never touches entropy");
+
+        assert!(claimed.host_token.is_none());
+        assert_eq!(
+            store.only_write(),
+            LocalClaimWrite::TouchLastSeen(TouchLocalComputer {
+                computer: computer("h-existing"),
+            })
+        );
+        assert!(store.attempted().is_empty());
         assert!(credentials.issued.lock().unwrap().is_empty());
     }
 

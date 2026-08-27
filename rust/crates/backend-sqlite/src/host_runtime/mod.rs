@@ -493,7 +493,7 @@ impl ClaimLocalComputerUnitOfWork for SqliteHostRuntimeStore {
             unclaimed_local: to_host_id(unclaimed_local).map_err(claim_persistence)?,
         };
 
-        let target = match attempt.decide(&facts) {
+        let target = match attempt.decide(&facts)? {
             // Reuse touches nothing but the last-seen stamp: custody, activation and the
             // chosen name all stay as this installation already left them.
             LocalClaimWrite::TouchLastSeen(touch) => {
@@ -604,6 +604,7 @@ mod tests {
         environment::{Clock, EntropySource, OsEntropy, SystemClock},
         invite::CreateHostInvite,
         read::find_owned_computer,
+        revoke::AdmittedRevoke,
     };
     use silverhand_backend_core::identity::UserId;
     use sqlx::Connection;
@@ -1252,7 +1253,9 @@ mod tests {
         };
         let owned =
             find_owned_computer(&owner_id, Some(record)).expect("the owner is admitted the row");
-        RevokeComputerAttempt::admit(owned, at).expect("an app-managed computer is revocable")
+        AdmittedRevoke::admit(owned)
+            .expect("an app-managed computer is revocable")
+            .stamp(at)
     }
 
     /// Walks the source chain because the driver error is handed over as
@@ -1510,8 +1513,20 @@ mod tests {
             "app_install",
         )
         .await;
-        // Already inside a grace window: superseded at 50, not yet revoked.
-        insert_credential(&store, "grace", "h1", "long_lived", None, Some(50), None).await;
+        // A credential superseded once (consumed_at set) but never given a death time.
+        // This half-swept shape — NOT a genuine grace row, which carries a future
+        // revoked_at and would be excluded by the sweep's `revoked_at IS NULL` filter — is
+        // the only state the COALESCE guard can act on.
+        insert_credential(
+            &store,
+            "half_swept",
+            "h1",
+            "long_lived",
+            None,
+            Some(50),
+            None,
+        )
+        .await;
 
         let credential = mint_credential(&OsEntropy, "h1").unwrap().into_parts().0;
         store
@@ -1522,7 +1537,7 @@ mod tests {
 
         // revoked_at advances to the sweep instant; consumed_at keeps its first value.
         assert_eq!(
-            credential_state(&store, "grace").await,
+            credential_state(&store, "half_swept").await,
             (Some(900), Some(50))
         );
     }

@@ -17,10 +17,14 @@
 //! `409` even on a standalone server with no runtime, exactly as the TypeScript route
 //! decides revoked/kind before it looks for a transport.
 //!
-//! [`admit_host_token_rotation`] is that shared refusal, and the same function is
-//! re-run inside the write by the domain: the route's call is a fast pre-branch answer,
-//! the in-lock call is the authority. The human principal's ABSENCE is a composition
-//! fault, so it takes a fail-closed `500` having read nothing.
+//! [`admit_host_token_rotation`] is that shared refusal, and it runs only BEFORE the
+//! write — here as the route's fast pre-branch, and again inside `RotateHostToken::prepare`
+//! before the mint. Neither call is the in-lock authority. The one gate the write
+//! re-decides under the lock is the CUSTODY half, re-read there through
+//! `judge_credential_eligibility` — a different function with its own refusal type. The
+//! KIND half is not rechecked in-lock; it stands on this pre-lock read because a
+//! computer's `kind` never changes after it is created. The human principal's ABSENCE is
+//! a composition fault, so it takes a fail-closed `500` having read nothing.
 //!
 //! Both routers are REQUIREMENT SEAMS: the mint authority and the daemon channel are
 //! threaded through and left UNMOUNTED — the composition root binds the SQLite credential

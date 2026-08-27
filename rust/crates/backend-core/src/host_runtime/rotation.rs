@@ -339,12 +339,14 @@ where
 
     /// Mint, and decide the window. Writes nothing.
     ///
-    /// Eligibility is NOT pre-checked here beyond the door's own refusal, unlike
-    /// `prepareHostTokenRotation` in `packages/backend/src/auth/host-token.ts`. The
-    /// computer arrived owned, so it is bound to a user, and the custody refusal below
-    /// has already answered the only other question the eligibility rule asks. A second
-    /// pre-lock copy would be one more place that could disagree with the in-lock
-    /// verdict, and the in-lock verdict is the one that decides.
+    /// [`admit_host_token_rotation`] runs here as a PRE-lock refusal — the same fast
+    /// answer the route already gave — never as the in-lock authority. Beyond it, no
+    /// fuller eligibility is pre-checked, unlike `prepareHostTokenRotation` in
+    /// `packages/backend/src/auth/host-token.ts`: the computer arrived owned, so it is
+    /// bound to a user, and a second pre-lock copy of the eligibility rule would be one
+    /// more place that could disagree with the write. The authority is the host re-read
+    /// under the lock and judged by `judge_credential_eligibility` when `complete` issues
+    /// the credential; that in-lock answer is the only one committed on.
     fn prepare(
         &self,
         owned: OwnedComputer,
@@ -509,11 +511,17 @@ where
 ///
 /// Custody first, then kind, in the order the wire answers them.
 ///
-/// Pure, so the same rule answers two readers: the route's pre-branch refusal — reached
-/// before the standalone arm decides whether a runtime is even attached — and the in-lock
-/// verdict [`RotateHostToken::prepare`] re-runs under the write. Only the in-lock answer
-/// may be committed on; the route's earlier call is a fast refusal, there so a revoked or
-/// non-local computer is answered `409` rather than told there is no runtime.
+/// Pure, and called BEFORE the write by two readers: the route's pre-branch refusal —
+/// reached before the standalone arm decides whether a runtime is even attached — and
+/// [`RotateHostToken::prepare`], which re-checks it before it mints. NEITHER is the
+/// in-lock authority. What the write re-decides under the lock is narrower and lives in
+/// the credential adapter: it re-reads the host inside the write transaction and runs
+/// `judge_credential_eligibility`, refusing a computer revoked between a pre-lock read
+/// and the write — the CUSTODY half of this rule, under a different name and refusal
+/// type. The KIND half (`kind == Local`) is decided only here, before the write, and
+/// safely: no committed transition changes a computer's `kind` after creation, so its
+/// pre-lock read cannot go stale. Falsifier: add a transition that mutates `kind` and
+/// this half has to move in-lock too.
 pub fn admit_host_token_rotation(record: &ComputerRecord) -> Result<(), HostTokenRotationRefusal> {
     if lifecycle_status(&record.lifecycle()) == HostLifecycleStatus::Revoked {
         return Err(HostTokenRotationRefusal::CustodyEnded);

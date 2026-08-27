@@ -37,14 +37,64 @@ use crate::{
 #[error("revoke is not supported for user-managed computers")]
 pub struct UserManagedComputer;
 
-/// An admitted revoke: the verdict, and the instant it is stamped with.
+/// A revoke that passed the product refusal but has not been stamped with an instant.
+///
+/// The two steps are separate on purpose. [`Self::admit`] answers the one product refusal
+/// — a user-managed computer has no revoke — reading NOTHING but the record, and the
+/// instant is added afterwards by [`Self::stamp`]. So a failing clock cannot turn the
+/// deterministic `409` a user-managed computer earns into a `500`: the refusal is decided
+/// before the clock is ever consulted. This mirrors the TypeScript route, which answers
+/// `remote + user_invite` with a `409` before it calls `Date.now()`, and it encodes that
+/// order in the types rather than trusting Rust's argument-evaluation order to preserve
+/// it — `admit(owned, now_ms(clock)?)` would read the clock FIRST.
+///
+/// The record is consumed here, not carried past admission: everything the write still
+/// needs — which row — travels on the verdict via [`RevokeComputerAttempt::computer`].
+pub struct AdmittedRevoke {
+    access: ComputerAccessHeld,
+}
+
+impl AdmittedRevoke {
+    /// Decide, from an admitted computer, whether this door is the right one for it —
+    /// reading nothing but the record, and never the clock.
+    ///
+    /// The refusal is answered here and NOT re-asked inside the write lock, unlike
+    /// credential eligibility. It reads how the computer was provisioned, and no
+    /// committed transition turns an app-managed computer into a user-managed one — the
+    /// only write that touches `provisioning_source` after creation is a claim adopting
+    /// an unclaimed placeholder, which moves it to `app_install`. So the answer cannot
+    /// go stale in the direction that matters: a computer this admits stays admissible.
+    /// Falsifier: add a transition INTO user-managed and this check has to move in-lock.
+    pub fn admit(owned: OwnedComputer) -> Result<Self, UserManagedComputer> {
+        let (access, record) = owned.into_parts();
+        if record.is_user_managed() {
+            return Err(UserManagedComputer);
+        }
+        Ok(Self { access })
+    }
+
+    /// Stamp the admitted revoke with the instant every write it drives will carry.
+    ///
+    /// Read only AFTER admission, so a clock failure is reachable only for a computer this
+    /// door would otherwise revoke — never for the user-managed one it refuses.
+    pub fn stamp(self, at: i64) -> RevokeComputerAttempt {
+        RevokeComputerAttempt {
+            access: self.access,
+            at,
+        }
+    }
+}
+
+/// An admitted revoke, stamped with the instant it will write.
 ///
 /// The record is deliberately NOT carried. It was read before the lock, and the only
 /// thing the write needs from it — which row — comes from the verdict instead, via
 /// [`Self::computer`]. That is what makes it impossible for a stale record to send the
 /// write at a different row than the one authorization named.
 ///
-/// Assembling one from parts would put that back:
+/// The only source is [`AdmittedRevoke::stamp`], reached only through
+/// [`AdmittedRevoke::admit`]. Assembling one from parts would bypass the refusal and the
+/// verdict both:
 ///
 /// ```compile_fail
 /// use silverhand_backend_core::host_runtime::revoke::RevokeComputerAttempt;
@@ -63,7 +113,7 @@ pub struct UserManagedComputer;
 ///     host_runtime::{
 ///         computer::{ComputerRecord, HostKind, ProvisioningSource},
 ///         read::find_owned_computer,
-///         revoke::RevokeComputerAttempt,
+///         revoke::AdmittedRevoke,
 ///     },
 ///     identity::{HostId, UserId},
 /// };
@@ -85,7 +135,7 @@ pub struct UserManagedComputer;
 /// let Some(owned) = find_owned_computer(&owner, Some(record)) else {
 ///     panic!("the owner is admitted");
 /// };
-/// let attempt: RevokeComputerAttempt = RevokeComputerAttempt::admit(owned, 7).unwrap();
+/// let attempt = AdmittedRevoke::admit(owned).unwrap().stamp(7);
 /// assert_eq!(attempt.computer().as_str(), "h1");
 /// assert_eq!(attempt.at(), 7);
 /// ```
@@ -96,23 +146,6 @@ pub struct RevokeComputerAttempt {
 }
 
 impl RevokeComputerAttempt {
-    /// Decide, from an admitted computer, whether this door is the right one for it.
-    ///
-    /// The refusal is answered here and NOT re-asked inside the write lock, unlike
-    /// credential eligibility. It reads how the computer was provisioned, and no
-    /// committed transition turns an app-managed computer into a user-managed one — the
-    /// only write that touches `provisioning_source` after creation is a claim adopting
-    /// an unclaimed placeholder, which moves it to `app_install`. So the answer cannot
-    /// go stale in the direction that matters: a computer this admits stays admissible.
-    /// Falsifier: add a transition INTO user-managed and this check has to move in-lock.
-    pub fn admit(owned: OwnedComputer, at: i64) -> Result<Self, UserManagedComputer> {
-        let (access, record) = owned.into_parts();
-        if record.is_user_managed() {
-            return Err(UserManagedComputer);
-        }
-        Ok(Self { access, at })
-    }
-
     /// The row to write — the verdict's computer, which is the only one it can be.
     pub fn computer(&self) -> &HostId {
         self.access.computer()
@@ -254,7 +287,11 @@ where
         &self,
         owned: OwnedComputer,
     ) -> Result<EndedComputerCustody, RevokeComputerError> {
-        let attempt = RevokeComputerAttempt::admit(owned, now_ms(&self.clock)?)?;
+        // Refuse a user-managed computer BEFORE the clock is read: the product's `409` is
+        // deterministic, so a clock failure may only turn the app-managed branch into a
+        // fail-closed `500` — never this refusal into one.
+        let admitted = AdmittedRevoke::admit(owned)?;
+        let attempt = admitted.stamp(now_ms(&self.clock)?);
         let computer = attempt.computer().clone();
 
         let Some(revoked) = self.unit_of_work.revoke_computer(attempt).await? else {
@@ -303,6 +340,16 @@ mod tests {
         type Error = BrokenClock;
         fn unix_time_ms(&self) -> Result<i64, Self::Error> {
             Ok(NOW)
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    struct FailingClock;
+
+    impl Clock for FailingClock {
+        type Error = BrokenClock;
+        fn unix_time_ms(&self) -> Result<i64, Self::Error> {
+            Err(BrokenClock)
         }
     }
 
@@ -447,6 +494,49 @@ mod tests {
             .expect_err("a user-managed computer has no revoke");
 
         assert!(matches!(error, RevokeComputerError::Refused(_)));
+        let log = world.log();
+        assert!(log.writes.is_empty());
+        assert!(log.announcements.is_empty());
+        assert!(log.disconnects.is_empty());
+    }
+
+    /// Falsifier for the refusal-before-clock order: a user-managed computer earns a
+    /// deterministic `409`, and a broken clock must not upgrade it to a `500`. Reading the
+    /// clock first — `admit(owned, now_ms(clock)?)` — would turn this refusal into a fault.
+    #[tokio::test]
+    async fn a_user_managed_computer_is_refused_even_when_the_clock_is_broken() {
+        let row = record(HostKind::Remote, ProvisioningSource::UserInvite, None);
+        let world = World::holding(row.clone());
+        let revoker =
+            RevokeComputer::new(world.clone(), world.clone(), world.clone(), FailingClock);
+
+        let error = revoker
+            .execute(owned(&row))
+            .await
+            .expect_err("a user-managed computer has no revoke");
+
+        assert!(matches!(error, RevokeComputerError::Refused(_)));
+        let log = world.log();
+        assert!(log.writes.is_empty());
+        assert!(log.announcements.is_empty());
+        assert!(log.disconnects.is_empty());
+    }
+
+    /// The control: an app-managed computer DOES read the clock, so a broken clock there
+    /// is the safe `500` — reached only after admission, and still before any write.
+    #[tokio::test]
+    async fn an_app_managed_revoke_with_a_broken_clock_is_a_fault_before_any_write() {
+        let row = app_managed(None);
+        let world = World::holding(row.clone());
+        let revoker =
+            RevokeComputer::new(world.clone(), world.clone(), world.clone(), FailingClock);
+
+        let error = revoker
+            .execute(owned(&row))
+            .await
+            .expect_err("a broken clock cannot stamp a revoke");
+
+        assert!(matches!(error, RevokeComputerError::Clock(_)));
         let log = world.log();
         assert!(log.writes.is_empty());
         assert!(log.announcements.is_empty());
