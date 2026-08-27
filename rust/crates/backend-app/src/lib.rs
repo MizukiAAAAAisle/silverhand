@@ -15,8 +15,10 @@ use silverhand_backend_core::{
     access::{EnrollmentClock, unix_millis},
     auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     host_runtime::{
+        claim::ClaimLocalComputer,
         environment::{OsEntropy, SystemClock},
         invite::CreateHostInvite,
+        rotation::{RotateHostToken, RotateHostTokenThroughDaemon},
     },
     policy::presence_grace::GraceWindow,
 };
@@ -570,9 +572,55 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     let (human_writes, agent_writes) = aftermath.write_doors(messaging_store, target_address);
 
     let host = host_runtime::router(
-        CreateHostInvite::new(host_store, OsEntropy, SystemClock),
+        CreateHostInvite::new(host_store.clone(), OsEntropy, SystemClock),
         config.daemon_npm_spec.clone(),
     );
+    // #2219 CP4 host-custody batch (scope B): the FOUR routes whose production
+    // authorities already exist — read/list, connect-token resolve, claim-or-create, and
+    // token rotation. Three (list/claim/rotate) sit behind the human session perimeter;
+    // `resolve` is the one door the product ALLOWLISTS past the bearer gate (it is
+    // daemon-authenticated: the caller proves possession of its connect token in the
+    // handler, not a human session), so it mounts anonymously at the top level with the
+    // other allowlisted faces, mirroring `installPublicBearerMiddleware`'s allowlist
+    // (`health`, `server/info`, `hostConnectTokenResolve`). The other four CP4 handlers
+    // (detail/revoke/connect-token rotate/delete) travel in this convergence tree but stay
+    // UNMOUNTED: each needs an effect authority with no production implementer yet
+    // (self-reported daemon name, per-host disconnect, whole-computer availability
+    // announcement, computer-cascade teardown), tracked as follow-up seams by authority
+    // family. All four here bind the ONE `SqliteHostRuntimeStore` (its Arc pool clones
+    // cheaply), never a second store.
+    let host_list = host_runtime::list::router(host_store.clone());
+    let host_resolve =
+        host_runtime::resolve::router(host_store.clone(), host_store.clone(), SystemProcessClock);
+    let host_claim = host_runtime::claim::router(ClaimLocalComputer::new(
+        host_store.clone(),
+        host_store.clone(),
+        host_store.clone(),
+        OsEntropy,
+        SystemClock,
+    ));
+    // rotate-token's arm is the deployment profile, exactly like `runtimes_router` below.
+    // EMBEDDED mints in-process and reveals the secret in the HTTP body. REMOTE-ONLY
+    // delivers the replacement over the daemon's OWN websocket — the transport the
+    // `daemon_router` accepts in either profile — and returns no secret, matching the TS
+    // `standaloneMode` branch that drives `hostWsController.sendCommand(id,'rotate_token')`
+    // rather than refusing. So the coordinator is `Some`, bound to the live delivery
+    // registry via `host_token_rotation()`; a `transport_no_connection`/`503` is the
+    // coordinator's own answer when that daemon is offline, NOT a composition-time `None`
+    // stub (which would be a parity break — TS never categorically refuses here).
+    let host_rotate_token = match config.deployment_profile {
+        DeploymentProfile::Embedded => host_runtime::rotate_token::embedded_router(
+            host_store.clone(),
+            RotateHostToken::new(host_store.clone(), OsEntropy, SystemClock),
+        ),
+        DeploymentProfile::RemoteOnly => host_runtime::rotate_token::standalone_router(
+            host_store.clone(),
+            Some(RotateHostTokenThroughDaemon::new(
+                RotateHostToken::new(host_store.clone(), OsEntropy, SystemClock),
+                daemon_controller.host_token_rotation(),
+            )),
+        ),
+    };
     // `/api/runtimes` is the one root face that is NOT anonymous (it sits under the
     // product's `/api/*` bearer gate with no allowlist entry), so it mounts behind this
     // same human-session perimeter. The profile — not a per-request flag — decides which
@@ -657,6 +705,16 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
                 hub.clone(),
                 SystemEnrollmentClock,
             ))
+            // #2219 CP4 batch B, behind this same human perimeter. `host_list`'s
+            // `GET /api/hosts` shares the path node with the invite `POST /api/hosts`
+            // (`host` above): axum accumulates the two methods into one method router, so
+            // neither shadows the other — only a repeated *method* would panic, and
+            // GET vs POST is disjoint. `host_resolve` is NOT merged here: it is the one
+            // allowlisted (anonymous) host door and mounts at the top level below. The
+            // remaining two carry their own distinct paths.
+            .merge(host_list)
+            .merge(host_claim)
+            .merge(host_rotate_token)
             // #2218: `/api/runtimes`, behind the human perimeter — anonymous → 401,
             // exactly as the product's un-allowlisted `/api/*` bearer gate refuses it.
             .merge(runtimes_router),
@@ -722,6 +780,12 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             .merge(daemon_router)
             .merge(server_info_router)
             .merge(health_router)
+            // #2219: the connect-token resolve door is allowlisted past the bearer gate
+            // (daemon-authenticated in-handler), so it mounts here at the top level ahead
+            // of the human perimeter, alongside the other anonymous faces — never behind
+            // `require_human_session`, which would reject the daemon's connect-token bearer
+            // before the handler's own verification could run.
+            .merge(host_resolve)
             .merge(readyz_router),
         boot,
         event_controller,
@@ -2342,16 +2406,18 @@ mod tests {
 
     /// Gate 1 of the CP2 convergence closure — the composed root's COMPLETE positive
     /// mounted table. It enumerates every `(method, path)` `prepare()` mounts across
-    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195 + #2198 + #2218) as
-    /// forty-six entries — thirty-eight behind the human session perimeter (the last
-    /// being #2218's authenticated `/api/runtimes`), three behind the runtime
-    /// credential perimeter, the two authenticated WebSockets, and #2218's three
-    /// ANONYMOUS root faces — and asserts each is PRESENT: a guarded route anon → its
+    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195 + #2198 + #2218 + the
+    /// #2219 CP4 batch-B custody doors) as fifty entries — forty-one behind the human
+    /// session perimeter (including #2218's authenticated `/api/runtimes` and three of the
+    /// four #2219 host custody/credential doors), three behind the runtime
+    /// credential perimeter, the two authenticated WebSockets, and four ANONYMOUS faces
+    /// (#2218's three root faces plus #2219's allowlisted `connect-token/resolve`) — and
+    /// asserts each is PRESENT: a guarded route anon → its
     /// perimeter's `401`, a WebSocket → its upgrade surface, an anonymous face → its
     /// handler's own status, and never the `404` fallback. Removing any mounted route's
     /// `.merge(...)` from `prepare()` flips its entry to `404` and reddens this gate.
-    /// The tables are named consts with per-table `assert_eq!(len)` (38 / 3 / 2, plus
-    /// the three anon faces asserted by exact status) so a mis-added or mis-deleted row
+    /// The tables are named consts with per-table `assert_eq!(len)` (41 / 3 / 2, plus
+    /// the four anon faces asserted by exact status/body) so a mis-added or mis-deleted row
     /// reddens the count directly.
     ///
     /// This is a PRESENCE ledger, not a closed universe: black-box probing cannot
@@ -2375,11 +2441,21 @@ mod tests {
         let router = app.router;
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // The thirty-seven human-perimeter product doors. Anonymous (no bearer) → the human
+        // The forty-one human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
-        const HUMAN_PERIMETER_DOORS: [(&str, &str); 38] = [
+        const HUMAN_PERIMETER_DOORS: [(&str, &str); 41] = [
             ("POST", "/api/hosts"),
+            // #2219 CP4 host-custody batch B — the three perimeter-guarded custody doors.
+            // `GET /api/hosts` shares the path node with the invite POST above, so its anon
+            // 401 only witnesses the shared path-guard; the authenticated two-arm gate below
+            // bears that GET actually dispatches to the list handler while POST still reaches
+            // the invite. `connect-token/resolve` is NOT here — it is the allowlisted
+            // anonymous host door, asserted with the other anon faces below. The other two
+            // carry their own distinct paths.
+            ("GET", "/api/hosts"),
+            ("POST", "/api/hosts/claim-or-create"),
+            ("POST", "/api/hosts/host-1/rotate-token"),
             ("POST", "/api/channels/conv000000000001/messages"),
             ("GET", "/api/direct-pairs"),
             // Direct-pair initiation write door, Wave 3A checkpoint A6 (#2203). Distinct
@@ -2446,7 +2522,7 @@ mod tests {
             // the product's `/api/*` bearer gate with no allowlist entry). Anon → 401.
             ("GET", "/api/runtimes"),
         ];
-        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 38);
+        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 41);
         for (method, path) in HUMAN_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -2477,12 +2553,13 @@ mod tests {
             assert_ne!(status, StatusCode::NOT_FOUND, "{path} must be mounted");
         }
 
-        // #2218: the three ANONYMOUS root faces are mounted ahead of every perimeter, so
-        // an anonymous probe reaches the handler — never the 401 the guarded doors give,
-        // never the 404 an absent path gives. The exact status pins the mount: discovery
-        // and liveness always answer 200; `/readyz` on this prepared-but-not-served
-        // router answers 503 because `listen_ready` is a serving-boundary fact that
-        // `prepare()` does not mark (migrations are marked, the listener is not bound).
+        // #2218 + #2219: the FOUR ANONYMOUS faces are mounted ahead of every perimeter, so
+        // an anonymous probe reaches the handler — never the 404 an absent path gives. The
+        // three #2218 root faces self-distinguish by status (200/200/503, none of which the
+        // perimeter or the 404 fallback returns): discovery and liveness always answer 200;
+        // `/readyz` on this prepared-but-not-served router answers 503 because
+        // `listen_ready` is a serving-boundary fact that `prepare()` does not mark
+        // (migrations are marked, the listener is not bound).
         for (method, path, expected) in [
             ("GET", "/api/server/info", StatusCode::OK),
             ("GET", "/api/health", StatusCode::OK),
@@ -2491,6 +2568,27 @@ mod tests {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, expected, "anonymous {method} {path}: {body}");
         }
+
+        // #2219: `GET /api/hosts/connect-token/resolve` is the fourth anonymous face — the
+        // one host door the product allowlists past the bearer gate. An anonymous probe
+        // reaches the handler, which finds no connect-token bearer and answers its OWN
+        // `401 {"error":"unauthorized","error_code":"unauthorized"}`. Its status (401)
+        // coincides with a guarded door's, so status alone would not prove it landed
+        // anonymously — the `error_code` key is the discriminant: the human perimeter emits
+        // `{"error":"unauthorized"}` with NO `error_code`. Mounting this behind the
+        // perimeter instead would drop the `error_code` (perimeter body) and reject a real
+        // connect-token bearer, reddening this assert.
+        let (status, body) =
+            request(&router, "GET", "/api/hosts/connect-token/resolve", None).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "anonymous resolve: {body}"
+        );
+        assert_eq!(
+            body, r#"{"error":"unauthorized","error_code":"unauthorized"}"#,
+            "anonymous resolve reaches its own handler, not the perimeter"
+        );
 
         // Mounted-vs-absent discriminator: sibling paths that are NOT routes fall to
         // the top `404` fallback (no perimeter blanket-refusing), proving the `401`s
@@ -2763,28 +2861,33 @@ mod tests {
     /// Gate 2 of the CP2 convergence closure — the #2195 host-agent control-plane lane
     /// as a bidirectionally CLOSED universe of 54, every entry itemized `(method, path)`
     /// in a named table that is mechanically checksummed: the five tables' lengths are
-    /// pinned (`7`/`3`/`39`/`4`/`1`), every `(method, path)` across the union is unique,
+    /// pinned (`10`/`4`/`36`/`3`/`1`), every `(method, path)` across the union is unique,
     /// landed is disjoint from residual, and the union is exactly `54`. This is the
     /// lane's ORIGINAL owned total (it still counts the three dynamic host reads since
     /// handed to #2198). Deleting a row, or copying one between tables, breaks the
-    /// checksum — `(7 + 3) + (39 + 4 + 1) == 54` is an assertion, not prose.
+    /// checksum — `(10 + 4) + (36 + 3 + 1) == 54` is an assertion, not prose.
     ///
-    /// Every one of the 44 residual routes is FALSIFIABLE — none rests on an
+    /// Every one of the 40 residual routes is FALSIFIABLE — none rests on an
     /// unfalsifiable anon `401`:
-    /// * The 7 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
-    ///   perimeter → anon `401` (the last is #2218's authenticated `/api/runtimes`).
+    /// * The 10 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
+    ///   perimeter → anon `401` (includes #2218's authenticated `/api/runtimes` and
+    ///   three of #2219's four host-custody routes: list, claim-or-create, and
+    ///   `{id}/rotate-token`; the fourth, `connect-token/resolve`, is allowlisted and
+    ///   lands anonymously below).
     ///   Deleting any one's `.merge(...)` flips it to `404` and reddens this gate
     ///   (delete-landed RED).
-    /// * The 3 ANON-LANDED routes are #2218's anonymous root faces, mounted ahead of
-    ///   every perimeter → an anonymous probe reaches the handler: `server/info` and
-    ///   `health` answer `200`, and `/readyz` answers `503` on this prepared-but-not-
-    ///   served router (`listen_ready` is a serving-boundary fact `prepare()` does not
-    ///   mark). Neither the guarded `401` nor the absent `404`. Deleting any one's
-    ///   `.merge(...)` flips it to `404` and reddens this gate.
-    /// * 39 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
+    /// * The 4 ANON-LANDED routes are mounted ahead of every perimeter → an anonymous
+    ///   probe reaches the handler: #2218's `server/info` and `health` answer `200`, and
+    ///   `/readyz` answers `503` on this prepared-but-not-served router (`listen_ready` is
+    ///   a serving-boundary fact `prepare()` does not mark); #2219's allowlisted
+    ///   `connect-token/resolve` finds no connect-token bearer and answers its OWN `401`
+    ///   whose `error_code` body (asserted after the loop) proves it landed anonymously and
+    ///   not behind the perimeter. Neither the guarded (bodiless) `401` nor the absent
+    ///   `404`. Deleting any one's `.merge(...)` flips it to `404` and reddens this gate.
+    /// * 36 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
     ///   Mounting any one flips it to its perimeter's `401`/`405` and reddens this gate
     ///   (mount-residual RED).
-    /// * 4 METHOD-SHADOW residuals share a concrete path with a mounted sibling that
+    /// * 3 METHOD-SHADOW residuals share a concrete path with a mounted sibling that
     ///   answers a DIFFERENT method. Probed anonymously the perimeter's `.layer` answers
     ///   `401` before method dispatch (indistinguishable from mounted), so this gate
     ///   probes them AUTHENTICATED (real seeded bearer): the perimeter passes and the
@@ -2804,7 +2907,7 @@ mod tests {
     /// anon-landed).
     #[tokio::test]
     async fn the_host_agent_lane_stays_a_closed_universe_of_fifty_four() {
-        // The 7 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
+        // The 10 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
         // perimeter → anon 401.
         const LANDED: &[(&str, &str)] = &[
             ("GET", "/api/agents"),
@@ -2818,26 +2921,43 @@ mod tests {
             // the product refuses anon 401 before the handler; mounted behind the human
             // perimeter to match.
             ("GET", "/api/runtimes"),
+            // Host custody CP4, #2219: three of the four authority-complete host-custody
+            // routes, mounted behind the human perimeter → anon 401. `GET /api/hosts`
+            // shares its path with the mounted invite `POST /api/hosts`; here it is probed
+            // anon (401, perimeter), and its GET→handler / POST→invite /
+            // unregistered-method→405 dispatch is borne by the dedicated `/api/hosts`
+            // two-arm gate below. The fourth route, `connect-token/resolve`, is allowlisted
+            // (anonymous) and lands in ANON_LANDED, not here.
+            ("GET", "/api/hosts"),
+            ("POST", "/api/hosts/claim-or-create"),
+            ("POST", "/api/hosts/host-1/rotate-token"),
         ];
-        // The 3 ANON-LANDED routes, #2218: mounted ahead of every perimeter, so an
-        // anonymous probe reaches the handler. server/info and health answer 200; readyz
+        // The 4 ANON-LANDED routes: mounted ahead of every perimeter, so an anonymous
+        // probe reaches the handler. #2218's server/info and health answer 200; readyz
         // answers 503 on this prepared-but-not-served router (listen_ready unmarked).
+        // #2219's allowlisted `connect-token/resolve` finds no connect-token bearer and
+        // answers its OWN 401 — status coincides with a guarded door, so its `error_code`
+        // body (asserted after the loop) is the discriminant that proves it landed
+        // anonymously rather than behind the perimeter.
         const ANON_LANDED: &[(&str, &str, StatusCode)] = &[
             ("GET", "/api/server/info", StatusCode::OK),
             ("GET", "/api/health", StatusCode::OK),
             ("GET", "/readyz", StatusCode::SERVICE_UNAVAILABLE),
+            (
+                "GET",
+                "/api/hosts/connect-token/resolve",
+                StatusCode::UNAUTHORIZED,
+            ),
         ];
-        // 39 RESIDUAL routes whose path matches no mounted route → anon 404.
+        // 36 RESIDUAL routes whose path matches no mounted route → anon 404.
         const CLEAN_RESIDUAL: &[(&str, &str)] = &[
             // routes.ts remaining (1)
             ("POST", "/auth/embedded-bootstrap"),
-            // hosts remaining (13 of 15; `GET /api/hosts` is method-shadowed, below)
-            ("GET", "/api/hosts/connect-token/resolve"),
+            // hosts remaining (10 of 15; list/resolve/claim-or-create/rotate-token now
+            // landed above by #2219, and `GET /api/hosts` is no longer method-shadowed)
             ("GET", "/api/hosts/host-1"),
             ("DELETE", "/api/hosts/host-1"),
-            ("POST", "/api/hosts/claim-or-create"),
             ("POST", "/api/hosts/host-1/revoke"),
-            ("POST", "/api/hosts/host-1/rotate-token"),
             ("POST", "/api/hosts/host-1/connect-token/rotate"),
             ("POST", "/api/hosts/host-1/disconnect"),
             ("GET", "/api/hosts/host-1/proxy-config"),
@@ -2876,10 +2996,9 @@ mod tests {
             // diagnostic (1)
             ("POST", "/internal/agents/agent-1/cli-trace"),
         ];
-        // 4 METHOD-SHADOW residuals: the path is mounted for a DIFFERENT method, so an
+        // 3 METHOD-SHADOW residuals: the path is mounted for a DIFFERENT method, so an
         // authenticated probe of the residual method hits the `MethodRouter` → 405.
         const METHOD_SHADOW_RESIDUAL: &[(&str, &str)] = &[
-            ("GET", "/api/hosts"),             // ← POST /api/hosts (mounted)
             ("POST", "/api/agents"),           // ← GET /api/agents (mounted)
             ("PATCH", "/api/agents/agent-1"),  // ← GET /api/agents/{id} (mounted)
             ("DELETE", "/api/agents/agent-1"), // ← GET /api/agents/{id} (mounted)
@@ -2889,12 +3008,12 @@ mod tests {
         // answer (asserted below), not a static handler.
         const STATIC_SHADOW_RESIDUAL: &[(&str, &str)] = &[("GET", "/api/agents/name-availability")];
 
-        // ── Mechanical checksum: (7 + 3) + (39 + 4 + 1) == 54, all unique, landed ∩
+        // ── Mechanical checksum: (10 + 4) + (36 + 3 + 1) == 54, all unique, landed ∩
         // residual = ∅ ──
-        assert_eq!(LANDED.len(), 7);
-        assert_eq!(ANON_LANDED.len(), 3);
-        assert_eq!(CLEAN_RESIDUAL.len(), 39);
-        assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 4);
+        assert_eq!(LANDED.len(), 10);
+        assert_eq!(ANON_LANDED.len(), 4);
+        assert_eq!(CLEAN_RESIDUAL.len(), 36);
+        assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 3);
         assert_eq!(STATIC_SHADOW_RESIDUAL.len(), 1);
         let landed: std::collections::HashSet<(&str, &str)> = LANDED
             .iter()
@@ -2907,8 +3026,8 @@ mod tests {
             .chain(STATIC_SHADOW_RESIDUAL)
             .copied()
             .collect();
-        assert_eq!(landed.len(), 10, "landed rows are unique");
-        assert_eq!(residual.len(), 44, "residual rows are unique");
+        assert_eq!(landed.len(), 14, "landed rows are unique");
+        assert_eq!(residual.len(), 40, "residual rows are unique");
         assert!(
             landed.is_disjoint(&residual),
             "landed and residual are disjoint"
@@ -2926,7 +3045,7 @@ mod tests {
         let bearer = format!("Bearer {TOKEN}");
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // ── 7 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
+        // ── 11 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
         for (method, path) in LANDED {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(
@@ -2937,14 +3056,25 @@ mod tests {
             assert_eq!(body, unauthorized, "landed {method} {path}");
         }
 
-        // ── 3 ANON-LANDED → anon reaches the handler (delete-landed RED). Neither the
-        // guarded 401 nor the absent 404: server/info 200, health 200, readyz 503. ──
+        // ── 4 ANON-LANDED → anon reaches the handler (delete-landed RED). Neither the
+        // guarded 401 nor the absent 404: server/info 200, health 200, readyz 503, and
+        // resolve its own 401. ──
         for (method, path, expected) in ANON_LANDED {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, *expected, "anon-landed {method} {path}: {body}");
         }
+        // resolve's 401 status coincides with a guarded door's, so it is proved to have
+        // landed ANONYMOUSLY (reached its own handler, not the perimeter) by its body's
+        // `error_code` key — the human perimeter emits `{"error":"unauthorized"}` with
+        // none. Mounting resolve behind the perimeter would drop the key and redden this.
+        let (_, resolve_body) =
+            request(&router, "GET", "/api/hosts/connect-token/resolve", None).await;
+        assert_eq!(
+            resolve_body, r#"{"error":"unauthorized","error_code":"unauthorized"}"#,
+            "anon resolve reaches its own handler, not the perimeter"
+        );
 
-        // ── 39 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
+        // ── 36 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
         for (method, path) in CLEAN_RESIDUAL {
             let (status, _) = request(&router, method, path, None).await;
             assert_eq!(
@@ -2954,7 +3084,7 @@ mod tests {
             );
         }
 
-        // ── 4 METHOD-SHADOW RESIDUAL → AUTHENTICATED 405 (perimeter passes, the path's
+        // ── 3 METHOD-SHADOW RESIDUAL → AUTHENTICATED 405 (perimeter passes, the path's
         // MethodRouter bears the truth). Mis-mounting the residual method reddens this. ──
         for (method, path) in METHOD_SHADOW_RESIDUAL {
             let (status, body) = request(&router, method, path, Some(&bearer)).await;
@@ -2980,6 +3110,323 @@ mod tests {
         assert_eq!(
             body, r#"{"error":"agent not found"}"#,
             "static-shadow falls through to GET /api/agents/{{id}}, not a static route"
+        );
+    }
+
+    /// #2219: `/api/hosts` carries TWO methods on one path — `GET` (the newly mounted
+    /// list) and `POST` (the pre-existing invite). axum accumulates them into one
+    /// `MethodRouter`, so this gate proves neither clobbered the other and no accidental
+    /// catch-all swallowed the path: authenticated `GET` dispatches to the LIST handler
+    /// (a `{"hosts":[...]}` body with no `connect_token`), authenticated `POST` dispatches
+    /// to the INVITE handler (a `host_id` + `connect_token` body, no `hosts`), and an
+    /// unregistered method (`DELETE`/`PATCH`) is `405` from the shared `MethodRouter` — not
+    /// `404` (which would mean the path vanished) nor a handler status (which would mean a
+    /// catch-all). The two success bodies are disjoint in their keys, so a mount that
+    /// accidentally pointed both methods at one handler reddens here.
+    #[tokio::test]
+    async fn the_api_hosts_path_dispatches_get_to_list_and_post_to_invite() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bearer = format!("Bearer {TOKEN}");
+
+        // Authenticated GET → the list handler. `user-1` owns no hosts yet, so the real
+        // owner-scoped read off live SQLite is an empty list — the LIST shape, never the
+        // invite's `connect_token`.
+        let (status, body) = request(&router, "GET", "/api/hosts", Some(&bearer)).await;
+        assert_eq!(status, StatusCode::OK, "authed GET /api/hosts: {body}");
+        let listed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            listed,
+            serde_json::json!({ "hosts": [] }),
+            "GET dispatches to the list handler"
+        );
+        assert!(
+            listed.get("connect_token").is_none(),
+            "the list arm is not the invite arm"
+        );
+
+        // Authenticated POST (empty body) → the invite handler: it mints a pending
+        // user-managed computer off live SQLite and reveals the connect token. The INVITE
+        // shape carries `host_id` + `connect_token` and no `hosts` array.
+        let (status, body) = request(&router, "POST", "/api/hosts", Some(&bearer)).await;
+        assert_eq!(status, StatusCode::OK, "authed POST /api/hosts: {body}");
+        let invited: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            invited.get("host_id").is_some_and(|v| v.is_string()),
+            "POST dispatches to the invite handler: {body}"
+        );
+        assert!(
+            invited.get("connect_token").is_some_and(|v| v.is_string()),
+            "the invite arm reveals a connect token: {body}"
+        );
+        assert!(
+            invited.get("hosts").is_none(),
+            "the invite arm is not the list arm"
+        );
+
+        // Unregistered methods → 405 from the shared `MethodRouter` (path present, method
+        // absent), never 404 (path gone) nor a handler status (accidental catch-all).
+        for method in ["DELETE", "PATCH", "PUT"] {
+            let (status, body) = request(&router, method, "/api/hosts", Some(&bearer)).await;
+            assert_eq!(
+                status,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "{method} /api/hosts must be 405 (no clobber, no catch-all): {body}"
+            );
+        }
+    }
+
+    /// #2219 scope B: the OTHER four CP4 handlers (`GET`/`DELETE /api/hosts/{id}`,
+    /// `POST /api/hosts/{id}/revoke`, `POST /api/hosts/{id}/connect-token/rotate`) travel
+    /// in this convergence tree as compiled component code but are deliberately NOT
+    /// mounted — each awaits an effect authority with no production implementer yet.
+    /// "Component absorbed" must never be mistaken for "route landed", so this gate probes
+    /// each of the four AUTHENTICATED (a real seeded bearer that passes the human
+    /// perimeter) and asserts `404`: an unmounted path is absent to the router at BOTH the
+    /// anonymous edge (proven in the closed-universe gate) and past the perimeter here. A
+    /// mounted-but-guarded route would answer `401` anon and reach its handler
+    /// authenticated; a mounted-but-unregistered-method route would answer `405`. Only a
+    /// truly unmounted path is `404` under a valid bearer. Mounting any of the four
+    /// reddens this gate (and must move its row in the closed-universe ledger).
+    #[tokio::test]
+    async fn the_four_unmounted_cp4_routes_stay_absorbed_but_unrouted() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bearer = format!("Bearer {TOKEN}");
+
+        const UNMOUNTED: [(&str, &str); 4] = [
+            ("GET", "/api/hosts/host-1"),
+            ("DELETE", "/api/hosts/host-1"),
+            ("POST", "/api/hosts/host-1/revoke"),
+            ("POST", "/api/hosts/host-1/connect-token/rotate"),
+        ];
+        for (method, path) in UNMOUNTED {
+            let (status, body) = request(&router, method, path, Some(&bearer)).await;
+            assert_eq!(
+                status,
+                StatusCode::NOT_FOUND,
+                "{method} {path} is absorbed but must stay UNMOUNTED (404 even authenticated): {body}"
+            );
+        }
+    }
+
+    /// #2219 real-authority binding — the invite→resolve chain proves BOTH placement and
+    /// wiring in one shot. (1) A connect-token bearer is NOT a human session; a resolve
+    /// mounted behind the human perimeter would reject it with the perimeter body before
+    /// its own logic ran, so a 200 here proves resolve sits at the anonymous edge (matching
+    /// TS's `installPublicBearerMiddleware` allowlist). (2) Only a token this composition
+    /// just minted resolves to the host it minted — an empty no-op mount could never return
+    /// the invited `host_id`, so the round-trip proves resolve is bound to the real
+    /// credential lookup + computer read off live SQLite (the A6 no-op-mount lesson).
+    #[tokio::test]
+    async fn the_composition_resolves_a_freshly_invited_connect_token_anonymously() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bearer = format!("Bearer {TOKEN}");
+
+        // Authenticated invite mints a pending computer and reveals its connect token.
+        let (status, body) = request(&router, "POST", "/api/hosts", Some(&bearer)).await;
+        assert_eq!(status, StatusCode::OK, "invite: {body}");
+        let invited: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let host_id = invited["host_id"].as_str().unwrap().to_owned();
+        let connect_token = invited["connect_token"].as_str().unwrap().to_owned();
+
+        // The daemon presents that connect token at the ANONYMOUS resolve door (no human
+        // session). Resolve verifies the credential against live SQLite and reveals the one
+        // fact it may — the `host_id` the token was minted for.
+        let connect_bearer = format!("Bearer {connect_token}");
+        let (status, body) = request(
+            &router,
+            "GET",
+            "/api/hosts/connect-token/resolve",
+            Some(&connect_bearer),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "resolve: {body}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({ "host_id": host_id }),
+            "resolve returns the invited host_id off live SQLite"
+        );
+
+        // A garbage bearer reaches the same anonymous handler and is refused by ITS OWN
+        // logic — a 401 carrying the handler's discriminated `error_code`, never the
+        // perimeter's `{"error":"unauthorized"}` (which omits `error_code`).
+        let (status, body) = request(
+            &router,
+            "GET",
+            "/api/hosts/connect-token/resolve",
+            Some("Bearer not-a-real-connect-token"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "garbage token: {body}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({ "error": "unauthorized", "error_code": "unauthorized" }),
+            "resolve's own 401 body, not the perimeter's"
+        );
+    }
+
+    /// #2219 real-authority binding — the claim→rotate chain under the Embedded profile.
+    /// Claim mints a `kind:"local"` computer off live SQLite; rotate then re-mints that
+    /// computer's long-lived token via the embedded router's real `RotateHostToken`. A
+    /// no-op mount could not (a) return a fresh 43-char token that DIFFERS from the claim's,
+    /// nor (b) answer a byte-exact `host_not_found` for an absent id. Anti-enumeration and
+    /// the method checksum ride along so a mount that widened the door reddens here.
+    #[tokio::test]
+    async fn the_composition_claims_a_local_computer_and_rotates_its_token_embedded() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bearer = format!("Bearer {TOKEN}");
+
+        // Anonymous claim is refused at the human perimeter before any body is read.
+        let (status, _) = request(&router, "POST", "/api/hosts/claim-or-create", None).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "claim is behind the perimeter"
+        );
+
+        // A well-formed claim mints a local computer and reveals its first token.
+        let claim_body = r#"{"installation_id":"11111111-1111-4111-8111-111111111111"}"#;
+        let (status, body) = request_with_body(
+            &router,
+            "POST",
+            "/api/hosts/claim-or-create",
+            Some(&bearer),
+            Body::from(claim_body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "claim: {body}");
+        let claimed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let host_id = claimed["host_id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            claimed["host"]["kind"], "local",
+            "claim mints a local computer"
+        );
+        let first_token = claimed["host_token"].as_str().unwrap().to_owned();
+        assert_eq!(
+            first_token.len(),
+            43,
+            "claim reveals the minted token: {body}"
+        );
+
+        // A malformed installation_id is a request-classification 400, never a lookup.
+        let (status, body) = request_with_body(
+            &router,
+            "POST",
+            "/api/hosts/claim-or-create",
+            Some(&bearer),
+            Body::from(r#"{"installation_id":"not-a-uuid"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "bad uuid: {body}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()["error"],
+            "invalid input",
+            "a malformed body is invalid input, not a not-found"
+        );
+
+        // Rotate that freshly claimed local computer through the embedded router's real
+        // authority: a new 43-char token that differs from the claim's.
+        let rotate_uri = format!("/api/hosts/{host_id}/rotate-token");
+        let (status, body) = request(&router, "POST", &rotate_uri, Some(&bearer)).await;
+        assert_eq!(status, StatusCode::OK, "rotate: {body}");
+        let rotated: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let second_token = rotated["host_token"].as_str().unwrap().to_owned();
+        assert_eq!(second_token.len(), 43, "rotate re-mints a token: {body}");
+        assert_ne!(first_token, second_token, "the token was actually rotated");
+
+        // Anti-enumeration: rotating an absent computer is a byte-exact `host_not_found`
+        // from the HANDLER (proving the handler ran), never a bare unmounted-path 404.
+        let (status, body) = request(
+            &router,
+            "POST",
+            "/api/hosts/host-absent/rotate-token",
+            Some(&bearer),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "absent rotate: {body}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({ "error": "host not found", "error_code": "host_not_found" }),
+            "the handler's anti-enumeration 404, not an unmounted-path 404"
+        );
+
+        // Anon → 401 (behind the perimeter); GET → 405 (path present, method absent).
+        let (status, _) = request(&router, "POST", &rotate_uri, None).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "rotate is behind the perimeter"
+        );
+        let (status, _) = request(&router, "GET", &rotate_uri, Some(&bearer)).await;
+        assert_eq!(
+            status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "rotate is POST-only"
+        );
+    }
+
+    /// #2219 real-authority binding — the standalone (RemoteOnly) rotate arm. The key
+    /// differential: with no daemon connected, rotate answers `503 transport_no_connection`,
+    /// NOT `503 host_runtime_disabled`. The latter is the composition-time `None` stub; the
+    /// former can only come from a wired `Some(coordinator)` that attempted delivery and
+    /// found no transport. This proves `standalone_router` was composed with the real daemon
+    /// coordinator, not disabled.
+    #[tokio::test]
+    async fn the_standalone_composition_rotates_a_claimed_computer_through_the_daemon_coordinator()
+    {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let app = prepare(&remote_config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bearer = format!("Bearer {TOKEN}");
+
+        // Claim mints a local computer under RemoteOnly too — the perimeter chain mounts
+        // claim regardless of profile.
+        let (status, body) = request_with_body(
+            &router,
+            "POST",
+            "/api/hosts/claim-or-create",
+            Some(&bearer),
+            Body::from(r#"{"installation_id":"11111111-1111-4111-8111-111111111111"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "claim (standalone): {body}");
+        let host_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["host_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        // Rotate reaches the standalone coordinator, which finds no connected daemon.
+        let (status, body) = request(
+            &router,
+            "POST",
+            &format!("/api/hosts/{host_id}/rotate-token"),
+            Some(&bearer),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "standalone rotate: {body}"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({
+                "error": "host token rotation transport failed",
+                "error_code": "transport_no_connection"
+            }),
+            "a wired Some(coordinator) with no transport, NOT the None host_runtime_disabled stub"
         );
     }
 
