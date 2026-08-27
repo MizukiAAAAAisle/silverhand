@@ -81,8 +81,8 @@ use silverhand_backend_core::{
     messaging::PrincipalKind,
     user_identity::{
         DisplayName, EmailAddress, ParticipantHandle, UserChangedAnnounce, UserChangedSink,
-        UserEmailLookup, UserProfileRead, UserProfileUpdate, UserProfileWriteUnitOfWork, UserRecord,
-        read_self_profile, update_self_display_name,
+        UserEmailLookup, UserProfileRead, UserProfileUpdate, UserProfileWriteUnitOfWork,
+        UserRecord, read_self_profile, update_self_display_name,
     },
 };
 
@@ -448,8 +448,14 @@ where
     };
 
     let now_ms = deps.clock.now_unix_millis();
-    match update_self_display_name(&deps.writes, &deps.user_changed, &user_id, display_name, now_ms)
-        .await
+    match update_self_display_name(
+        &deps.writes,
+        &deps.user_changed,
+        &user_id,
+        display_name,
+        now_ms,
+    )
+    .await
     {
         Ok(UserProfileUpdate::Committed(updated)) => {
             let (user, announce) = updated.into_parts();
@@ -490,8 +496,7 @@ async fn read_body(request: Request) -> Bytes {
 /// object's job.
 fn capture_audit(headers: &HeaderMap) -> SessionAudit {
     let user_agent = header_value(headers, "user-agent");
-    let ip_first_seen =
-        first_forwarded_for(headers).or_else(|| header_value(headers, "x-real-ip"));
+    let ip_first_seen = first_forwarded_for(headers).or_else(|| header_value(headers, "x-real-ip"));
     SessionAudit::capture(user_agent.as_deref(), ip_first_seen.as_deref())
 }
 

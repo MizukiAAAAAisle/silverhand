@@ -179,7 +179,11 @@ impl DisplayName {
             collapsed.push(character);
         }
         let collapsed = trim_ecmascript(&collapsed);
-        let base = if collapsed.is_empty() { "User" } else { collapsed };
+        let base = if collapsed.is_empty() {
+            "User"
+        } else {
+            collapsed
+        };
         let cut = cut_to_utf16_units(base, DISPLAY_NAME_MAX_UTF16);
         Self(trim_ecmascript(&cut).to_owned())
     }
@@ -254,7 +258,10 @@ fn is_zod_email(candidate: &str) -> bool {
     // set, final char in the narrow set (no trailing `.` or `'`).
     if local.is_empty()
         || !local.chars().all(is_email_local_char)
-        || !local.chars().next_back().is_some_and(is_email_local_final_char)
+        || !local
+            .chars()
+            .next_back()
+            .is_some_and(is_email_local_final_char)
     {
         return false;
     }
@@ -534,8 +541,13 @@ where
             user,
             prior_display_name,
         } => {
-            let changed =
-                seal_profile_write_fact(user_id, &display_name, &user, &prior_display_name, now_ms)?;
+            let changed = seal_profile_write_fact(
+                user_id,
+                &display_name,
+                &user,
+                &prior_display_name,
+                now_ms,
+            )?;
             let announce = if changed {
                 match announce_sink.user_changed(user_id).await {
                     Ok(()) => UserChangedAnnounce::Delivered,
@@ -572,10 +584,21 @@ mod tests {
         );
         // Rejections: no `@`, leading dot, `..`, trailing-dot local, no TLD, unicode.
         for bad in [
-            "", "plainaddress", ".lead@x.com", "a..b@x.com", "a.@x.com", "a@localhost",
-            "a@x.c", "a@-x.com", "unïcode@x.com", "a@x..com",
+            "",
+            "plainaddress",
+            ".lead@x.com",
+            "a..b@x.com",
+            "a.@x.com",
+            "a@localhost",
+            "a@x.c",
+            "a@-x.com",
+            "unïcode@x.com",
+            "a@x..com",
         ] {
-            assert!(EmailAddress::parse(bad).is_err(), "{bad:?} must be rejected");
+            assert!(
+                EmailAddress::parse(bad).is_err(),
+                "{bad:?} must be rejected"
+            );
         }
         // A 1-letter TLD is rejected; two letters admitted.
         assert!(EmailAddress::parse("a@x.io").is_ok());
@@ -592,9 +615,23 @@ mod tests {
 
     #[test]
     fn handle_admits_the_ascii_regex_only() {
-        assert_eq!(ParticipantHandle::parse("Alice_9-x").unwrap().as_str(), "Alice_9-x");
-        for bad in ["", "9leads", "-leads", "has space", "dot.name", "emoji😀", &"a".repeat(65)] {
-            assert!(ParticipantHandle::parse(bad).is_err(), "{bad:?} must be rejected");
+        assert_eq!(
+            ParticipantHandle::parse("Alice_9-x").unwrap().as_str(),
+            "Alice_9-x"
+        );
+        for bad in [
+            "",
+            "9leads",
+            "-leads",
+            "has space",
+            "dot.name",
+            "emoji😀",
+            &"a".repeat(65),
+        ] {
+            assert!(
+                ParticipantHandle::parse(bad).is_err(),
+                "{bad:?} must be rejected"
+            );
         }
     }
 
@@ -733,7 +770,11 @@ mod tests {
             panic!("expected Committed");
         };
         let (user, announce) = updated.into_parts();
-        assert_eq!(user.updated_at, NOW - 100, "a no-op must not bump updated_at");
+        assert_eq!(
+            user.updated_at,
+            NOW - 100,
+            "a no-op must not bump updated_at"
+        );
         assert!(matches!(announce, UserChangedAnnounce::NotOwed));
         assert_eq!(sink.calls(), 0, "a no-op owes no announce");
     }

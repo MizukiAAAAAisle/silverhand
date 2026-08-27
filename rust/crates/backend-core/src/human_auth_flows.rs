@@ -28,7 +28,9 @@ use crate::{
         IssuedSessionSecret, SessionAudit, SessionBearer, SessionIssue, SessionMintError,
         SessionRevoke, SessionTokenMint,
     },
-    credential::{LoginCredentialLookup, PasswordHashError, PasswordHasher, PreparedPasswordCredential},
+    credential::{
+        LoginCredentialLookup, PasswordHashError, PasswordHasher, PreparedPasswordCredential,
+    },
     identity::UserId,
     persistence::PersistenceFailure,
     user_identity::{
@@ -172,7 +174,12 @@ where
     if ports.handles.is_handle_taken(&command.handle).await? {
         return Ok(Signup::HandleTaken);
     }
-    if ports.emails.find_by_email(command.email.as_str()).await?.is_some() {
+    if ports
+        .emails
+        .find_by_email(command.email.as_str())
+        .await?
+        .is_some()
+    {
         return Ok(Signup::AuthFailed);
     }
 
@@ -182,13 +189,19 @@ where
 
     match ports
         .registration
-        .register(&command.handle, &display_name, &command.email, &credential, now_ms)
+        .register(
+            &command.handle,
+            &display_name,
+            &command.email,
+            &credential,
+            now_ms,
+        )
         .await?
     {
         HumanRegistration::Registered { user } => {
             let announce = announce_user_changed(ports.user_changed, &user.id).await;
-            let secret = issue_session(ports.mint, ports.sessions, &user.id, &command.audit, now_ms)
-                .await?;
+            let secret =
+                issue_session(ports.mint, ports.sessions, &user.id, &command.audit, now_ms).await?;
             Ok(Signup::Registered {
                 user,
                 secret,
@@ -260,7 +273,10 @@ where
     Mint: SessionTokenMint,
     Iss: SessionIssue,
 {
-    let candidate = ports.credentials.lookup_login(command.email.as_str()).await?;
+    let candidate = ports
+        .credentials
+        .lookup_login(command.email.as_str())
+        .await?;
     let Some(candidate) = candidate else {
         ports.hasher.verify_dummy(&command.password).await?;
         return Ok(Login::AuthFailed);
@@ -281,9 +297,14 @@ where
         .get(&candidate.user_id)
         .await?
         .ok_or(HumanAuthError::MissingUser)?;
-    let secret =
-        issue_session(ports.mint, ports.sessions, &candidate.user_id, &command.audit, now_ms)
-            .await?;
+    let secret = issue_session(
+        ports.mint,
+        ports.sessions,
+        &candidate.user_id,
+        &command.audit,
+        now_ms,
+    )
+    .await?;
     Ok(Login::Authenticated { user, secret })
 }
 
@@ -352,9 +373,8 @@ mod tests {
         user_identity::UserChangedAnnounceFailure,
     };
     use std::sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
-        Mutex,
     };
 
     const NOW: i64 = 7_000;
@@ -422,7 +442,10 @@ mod tests {
         }
     }
     impl PasswordHasher for FakeHasher {
-        async fn hash(&self, _password: &str) -> Result<PreparedPasswordCredential, PasswordHashError> {
+        async fn hash(
+            &self,
+            _password: &str,
+        ) -> Result<PreparedPasswordCredential, PasswordHashError> {
             Ok(PreparedPasswordCredential {
                 phc: "$argon2id$fake".to_owned(),
                 params: crate::credential::PasswordHashParams {
@@ -457,7 +480,10 @@ mod tests {
     #[derive(Clone)]
     struct FailingDummyHasher;
     impl PasswordHasher for FailingDummyHasher {
-        async fn hash(&self, _password: &str) -> Result<PreparedPasswordCredential, PasswordHashError> {
+        async fn hash(
+            &self,
+            _password: &str,
+        ) -> Result<PreparedPasswordCredential, PasswordHashError> {
             Err(PasswordHashError::for_test())
         }
         async fn verify(&self, _phc: &str, _password: &str) -> Result<bool, PasswordHashError> {
@@ -491,7 +517,8 @@ mod tests {
     impl SessionTokenMint for FakeMint {
         fn mint(&self) -> Result<MintedSession, SessionMintError> {
             // Reuse the real entropy mint so MintedSession is constructed properly.
-            crate::auth::EntropySessionTokenMint::new(CountingEntropy(Arc::new(Mutex::new(1)))).mint()
+            crate::auth::EntropySessionTokenMint::new(CountingEntropy(Arc::new(Mutex::new(1))))
+                .mint()
         }
     }
 
@@ -562,8 +589,16 @@ mod tests {
         mint: &'a FakeMint,
         issue: &'a RecordingIssue,
         sink: &'a FakeSink,
-    ) -> SignupPorts<'a, FakeHandles, FakeEmails, FakeRegistration, FakeHasher, FakeMint, RecordingIssue, FakeSink>
-    {
+    ) -> SignupPorts<
+        'a,
+        FakeHandles,
+        FakeEmails,
+        FakeRegistration,
+        FakeHasher,
+        FakeMint,
+        RecordingIssue,
+        FakeSink,
+    > {
         SignupPorts {
             handles,
             emails,
@@ -588,21 +623,37 @@ mod tests {
         let sink = FakeSink(Arc::new(AtomicUsize::new(0)));
 
         let outcome = sign_up(
-            signup_ports(&handles, &emails, &hasher, &registration, &mint, &issue, &sink),
+            signup_ports(
+                &handles,
+                &emails,
+                &hasher,
+                &registration,
+                &mint,
+                &issue,
+                &sink,
+            ),
             signup_command(),
             NOW,
         )
         .await
         .unwrap();
 
-        let Signup::Registered { user, secret, announce } = outcome else {
+        let Signup::Registered {
+            user,
+            secret,
+            announce,
+        } = outcome
+        else {
             panic!("expected Registered");
         };
         assert_eq!(user.id.as_str(), "u1");
         assert!(!secret.into_wire().is_empty());
         assert!(matches!(announce, UserChangedAnnounce::Delivered));
         assert_eq!(sink.0.load(Ordering::SeqCst), 1);
-        assert_eq!(issue.issued.lock().unwrap().as_slice(), &[("u1".to_owned(), NOW)]);
+        assert_eq!(
+            issue.issued.lock().unwrap().as_slice(),
+            &[("u1".to_owned(), NOW)]
+        );
     }
 
     #[tokio::test]
@@ -618,7 +669,15 @@ mod tests {
         let sink = FakeSink(Arc::new(AtomicUsize::new(0)));
 
         let outcome = sign_up(
-            signup_ports(&handles, &emails, &hasher, &registration, &mint, &issue, &sink),
+            signup_ports(
+                &handles,
+                &emails,
+                &hasher,
+                &registration,
+                &mint,
+                &issue,
+                &sink,
+            ),
             signup_command(),
             NOW,
         )
@@ -645,7 +704,15 @@ mod tests {
         let sink = FakeSink(Arc::new(AtomicUsize::new(0)));
 
         let outcome = sign_up(
-            signup_ports(&handles, &emails, &hasher, &registration, &mint, &issue, &sink),
+            signup_ports(
+                &handles,
+                &emails,
+                &hasher,
+                &registration,
+                &mint,
+                &issue,
+                &sink,
+            ),
             signup_command(),
             NOW,
         )
@@ -713,7 +780,15 @@ mod tests {
         let sink = FakeSink(Arc::new(AtomicUsize::new(0)));
 
         let outcome = sign_up(
-            signup_ports(&handles, &emails, &hasher, &registration, &mint, &issue, &sink),
+            signup_ports(
+                &handles,
+                &emails,
+                &hasher,
+                &registration,
+                &mint,
+                &issue,
+                &sink,
+            ),
             signup_command(),
             NOW,
         )
@@ -886,7 +961,10 @@ mod tests {
         };
         assert_eq!(user.id.as_str(), "u1");
         assert!(!secret.into_wire().is_empty());
-        assert_eq!(issue.issued.lock().unwrap().as_slice(), &[("u1".to_owned(), NOW)]);
+        assert_eq!(
+            issue.issued.lock().unwrap().as_slice(),
+            &[("u1".to_owned(), NOW)]
+        );
     }
 
     #[tokio::test]

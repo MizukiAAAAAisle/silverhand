@@ -31,7 +31,7 @@ use serde_json::{Value, json};
 use silverhand_backend_core::{
     auth::{EntropySessionTokenMint, HumanSessionAuthenticator, SessionClock, SessionTtl},
     credential::{
-        Argon2idCost, PasswordHashError, PasswordHasher, PasswordHashParams,
+        Argon2idCost, PasswordHashError, PasswordHashParams, PasswordHasher,
         PreparedPasswordCredential, RustCalibration,
     },
     host_runtime::environment::OsEntropy,
@@ -44,9 +44,9 @@ use silverhand_backend_sqlite::{
     handle_namespace::SqliteHandleNamespace, human_registration::SqliteHumanRegistration,
     user_identity::SqliteUserStore,
 };
+use sqlx::Connection;
 use tempfile::TempDir;
 use tower::ServiceExt;
-use sqlx::Connection;
 
 #[path = "../../backend-sqlite/tests/support/current_schema_snapshot.rs"]
 mod current_schema;
@@ -291,7 +291,11 @@ fn token_of(body: &Value) -> String {
 async fn signup_creates_an_identity_and_returns_a_usable_session() {
     let backend = backend(true).await;
 
-    let (status, body) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
+    let (status, body) = call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // The DTO is the bare snake_case projection: no email, avatar_url null, name is
@@ -317,7 +321,11 @@ async fn signup_creates_an_identity_and_returns_a_usable_session() {
 #[tokio::test]
 async fn signup_persists_only_the_hash_while_the_response_carries_the_plaintext() {
     let backend = backend(true).await;
-    let (status, body) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
+    let (status, body) = call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let token = token_of(&body);
 
@@ -337,7 +345,11 @@ async fn signup_persists_only_the_hash_while_the_response_carries_the_plaintext(
 #[tokio::test]
 async fn signup_with_a_taken_handle_is_a_409_error_code() {
     let backend = backend(true).await;
-    let (first, _) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
+    let (first, _) = call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
     assert_eq!(first, StatusCode::OK);
 
     // Same handle, a different email — the security-ordered flow answers handle_taken.
@@ -356,7 +368,11 @@ async fn signup_with_a_taken_handle_is_a_409_error_code() {
 async fn signup_disabled_answers_a_typed_403_before_the_body() {
     let backend = backend(false).await;
     // A body that would otherwise succeed still gets the disabled answer.
-    let (status, body) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
+    let (status, body) = call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(
         body,
@@ -381,7 +397,11 @@ async fn signup_with_a_short_password_is_a_400_invalid_input() {
 #[tokio::test]
 async fn login_verifies_the_stored_credential_and_mints_a_fresh_session() {
     let backend = backend(true).await;
-    call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
+    call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
 
     let login = json!({ "email": "alice@example.com", "password": "correct-horse" });
     let (status, body) = call(&backend.app, post_json(human_auth::LOGIN_PATH, login)).await;
@@ -397,7 +417,11 @@ async fn login_verifies_the_stored_credential_and_mints_a_fresh_session() {
 #[tokio::test]
 async fn login_with_a_wrong_password_is_the_uniform_401() {
     let backend = backend(true).await;
-    call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
+    call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
 
     let login = json!({ "email": "alice@example.com", "password": "wrong-password" });
     let (status, body) = call(&backend.app, post_json(human_auth::LOGIN_PATH, login)).await;
@@ -424,7 +448,11 @@ async fn login_for_an_unknown_email_is_the_same_uniform_401() {
 #[tokio::test]
 async fn get_me_projects_a_cache_busted_avatar_url_when_the_user_has_one() {
     let backend = backend(true).await;
-    let (_, signup) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
+    let (_, signup) = call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
     let token = token_of(&signup);
     let user_id = signup["user"]["id"].as_str().unwrap().to_owned();
 
@@ -459,13 +487,21 @@ async fn get_me_without_a_bearer_is_the_perimeter_401() {
 #[tokio::test]
 async fn patch_me_updates_the_display_name_and_announces() {
     let backend = backend(true).await;
-    let (_, signup) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
+    let (_, signup) = call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
     let token = token_of(&signup);
     let announces_after_signup = backend.sink.count();
 
     let (status, body) = call(
         &backend.app,
-        authed_patch(human_auth::ME_PATH, &token, json!({ "display_name": "Renamed" })),
+        authed_patch(
+            human_auth::ME_PATH,
+            &token,
+            json!({ "display_name": "Renamed" }),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -481,14 +517,22 @@ async fn patch_me_updates_the_display_name_and_announces() {
 #[tokio::test]
 async fn patch_me_with_the_same_display_name_is_a_noop_that_emits_no_event() {
     let backend = backend(true).await;
-    let (_, signup) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
+    let (_, signup) = call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
     let token = token_of(&signup);
     let announces_after_signup = backend.sink.count();
 
     // display_name is already "Alice A" — writing the same value changes no field.
     let (status, body) = call(
         &backend.app,
-        authed_patch(human_auth::ME_PATH, &token, json!({ "display_name": "Alice A" })),
+        authed_patch(
+            human_auth::ME_PATH,
+            &token,
+            json!({ "display_name": "Alice A" }),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -503,13 +547,20 @@ async fn patch_me_with_the_same_display_name_is_a_noop_that_emits_no_event() {
 #[tokio::test]
 async fn patch_me_with_no_fields_is_the_terminal_invalid_input() {
     let backend = backend(true).await;
-    let (_, signup) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
+    let (_, signup) = call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
     let token = token_of(&signup);
 
     // The Zod `.refine` "no fields" case collapses into the one terminal 400 body
     // (ratified divergence #1), not TS's distinct "no fields to update".
-    let (status, body) =
-        call(&backend.app, authed_patch(human_auth::ME_PATH, &token, json!({}))).await;
+    let (status, body) = call(
+        &backend.app,
+        authed_patch(human_auth::ME_PATH, &token, json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body, json!({ "error": "invalid input" }));
 }
@@ -517,7 +568,11 @@ async fn patch_me_with_no_fields_is_the_terminal_invalid_input() {
 #[tokio::test]
 async fn patch_me_with_an_invalid_display_name_is_invalid_input() {
     let backend = backend(true).await;
-    let (_, signup) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
+    let (_, signup) = call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
     let token = token_of(&signup);
 
     // A non-string value for the key is malformed, not "no fields".
@@ -533,7 +588,11 @@ async fn patch_me_with_an_invalid_display_name_is_invalid_input() {
 #[tokio::test]
 async fn logout_revokes_the_session_then_the_bearer_is_dead() {
     let backend = backend(true).await;
-    let (_, signup) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
+    let (_, signup) = call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
     let token = token_of(&signup);
 
     let (status, body) = call(&backend.app, authed_post(human_auth::LOGOUT_PATH, &token)).await;

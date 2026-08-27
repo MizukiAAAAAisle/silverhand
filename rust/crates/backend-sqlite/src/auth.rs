@@ -222,8 +222,7 @@ where
 /// product uses for the session-row surrogate. No external crate: the alphabet is
 /// fixed and the only input is a fixed-width entropy buffer.
 fn base64url_no_pad(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0] as usize;
@@ -265,8 +264,8 @@ struct DanglingSessionUser;
 mod tests {
     use super::*;
     use silverhand_backend_core::auth::{SessionTokenHash, SessionTtl};
-    use std::sync::Mutex;
     use sqlx::{Connection, Executor, SqliteConnection};
+    use std::sync::Mutex;
 
     const CURRENT_SCHEMA: &str =
         include_str!("../../../../packages/backend/tests/migration-baseline/schema-current.sql");
@@ -350,12 +349,19 @@ INSERT INTO users (id, name, display_name, email, created_at, updated_at) \
         let audit = SessionAudit::capture(Some("Mozilla/5.0"), Some("203.0.113.7"));
 
         store
-            .issue(&UserId::parse("user-1").unwrap(), hash("bearer-plaintext"), &audit, 500)
+            .issue(
+                &UserId::parse("user-1").unwrap(),
+                hash("bearer-plaintext"),
+                &audit,
+                500,
+            )
             .await
             .unwrap();
 
         // The committed row carries the audit breadcrumbs and the allocated 16-char id.
-        let reopen = SqliteConnectOptions::new().filename(&path).foreign_keys(true);
+        let reopen = SqliteConnectOptions::new()
+            .filename(&path)
+            .foreign_keys(true);
         let mut db = SqliteConnection::connect_with(&reopen).await.unwrap();
         let row = sqlx::query(
             "SELECT id, user_agent, ip_first_seen, created_at, last_used_at, revoked_at \
@@ -367,8 +373,14 @@ INSERT INTO users (id, name, display_name, email, created_at, updated_at) \
         .unwrap();
         let id: String = row.try_get("id").unwrap();
         assert_eq!(id.len(), 16);
-        assert_eq!(row.try_get::<String, _>("user_agent").unwrap(), "Mozilla/5.0");
-        assert_eq!(row.try_get::<String, _>("ip_first_seen").unwrap(), "203.0.113.7");
+        assert_eq!(
+            row.try_get::<String, _>("user_agent").unwrap(),
+            "Mozilla/5.0"
+        );
+        assert_eq!(
+            row.try_get::<String, _>("ip_first_seen").unwrap(),
+            "203.0.113.7"
+        );
         assert_eq!(row.try_get::<i64, _>("created_at").unwrap(), 500);
         assert_eq!(row.try_get::<i64, _>("last_used_at").unwrap(), 500);
         assert_eq!(row.try_get::<Option<i64>, _>("revoked_at").unwrap(), None);
@@ -377,17 +389,29 @@ INSERT INTO users (id, name, display_name, email, created_at, updated_at) \
         // It validates within its window, then a revoke retires it and a second
         // revoke of the same coordinate is idempotently `false`.
         let seen = store
-            .verify_and_touch(hash("bearer-plaintext"), SessionValidation::new(1000, ttl()))
+            .verify_and_touch(
+                hash("bearer-plaintext"),
+                SessionValidation::new(1000, ttl()),
+            )
             .await
             .unwrap();
         assert_eq!(seen.unwrap().as_str(), "user-1");
 
-        assert!(store.revoke(hash("bearer-plaintext"), 2000).await.unwrap(), "a live session revokes");
-        assert!(!store.revoke(hash("bearer-plaintext"), 3000).await.unwrap(), "a second revoke is false");
+        assert!(
+            store.revoke(hash("bearer-plaintext"), 2000).await.unwrap(),
+            "a live session revokes"
+        );
+        assert!(
+            !store.revoke(hash("bearer-plaintext"), 3000).await.unwrap(),
+            "a second revoke is false"
+        );
 
         // A revoked coordinate no longer validates.
         let after = store
-            .verify_and_touch(hash("bearer-plaintext"), SessionValidation::new(4000, ttl()))
+            .verify_and_touch(
+                hash("bearer-plaintext"),
+                SessionValidation::new(4000, ttl()),
+            )
             .await
             .unwrap();
         assert!(after.is_none());
@@ -417,15 +441,16 @@ INSERT INTO users (id, name, display_name, email, created_at, updated_at) \
             )
             .await
             .unwrap();
-        let reopen = SqliteConnectOptions::new().filename(&path).foreign_keys(true);
+        let reopen = SqliteConnectOptions::new()
+            .filename(&path)
+            .foreign_keys(true);
         let mut db = SqliteConnection::connect_with(&reopen).await.unwrap();
-        let ua: Option<String> = sqlx::query_scalar(
-            "SELECT user_agent FROM auth_sessions WHERE token_hash = ?",
-        )
-        .bind(token.as_str())
-        .fetch_one(&mut db)
-        .await
-        .unwrap();
+        let ua: Option<String> =
+            sqlx::query_scalar("SELECT user_agent FROM auth_sessions WHERE token_hash = ?")
+                .bind(token.as_str())
+                .fetch_one(&mut db)
+                .await
+                .unwrap();
         assert_eq!(ua, None);
     }
 }

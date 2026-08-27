@@ -86,17 +86,13 @@ impl WorkspaceHumanAudienceReadPort for SqliteWorkspaceAudienceRead {
             })?;
         rows.into_iter()
             .map(|row| {
-                let raw: String = row
-                    .try_get("user_id")
-                    .map_err(|error| {
-                        PersistenceFailure::from_source(WorkspaceAudienceReadError::Sql(error))
-                    })?;
+                let raw: String = row.try_get("user_id").map_err(|error| {
+                    PersistenceFailure::from_source(WorkspaceAudienceReadError::Sql(error))
+                })?;
                 UserId::parse(raw).map_err(|_| {
-                    PersistenceFailure::from_source(
-                        WorkspaceAudienceReadError::MalformedIdentity {
-                            field: "workspace_users.user_id",
-                        },
-                    )
+                    PersistenceFailure::from_source(WorkspaceAudienceReadError::MalformedIdentity {
+                        field: "workspace_users.user_id",
+                    })
                 })
             })
             .collect()

@@ -159,8 +159,10 @@ pub trait PasswordHasher: Clone + Send + Sync + 'static {
         phc: &str,
         password: &str,
     ) -> impl Future<Output = Result<bool, PasswordHashError>> + Send;
-    fn verify_dummy(&self, password: &str)
-    -> impl Future<Output = Result<(), PasswordHashError>> + Send;
+    fn verify_dummy(
+        &self,
+        password: &str,
+    ) -> impl Future<Output = Result<(), PasswordHashError>> + Send;
 }
 
 /// The synchronous Argon2id computation, split from the async [`PasswordHasher`]
@@ -300,7 +302,12 @@ where
         if candidates.is_empty() {
             return Err(EmptyCandidateLadder);
         }
-        Ok(Self::from_candidates(entropy, measurer, candidates, target_millis))
+        Ok(Self::from_candidates(
+            entropy,
+            measurer,
+            candidates,
+            target_millis,
+        ))
     }
 
     /// Infallible internal constructor over an already-non-empty ladder. Only
@@ -324,9 +331,7 @@ where
 
     /// The calibrated parameters, computed once and shared thereafter.
     fn params(&self) -> PasswordHashParams {
-        *self
-            .calibrated
-            .get_or_init(|| self.calibrate())
+        *self.calibrated.get_or_init(|| self.calibrate())
     }
 
     /// Walk the candidate ladder, clamping every candidate up to the floor, and
@@ -372,7 +377,11 @@ where
     }
 
     /// Hash `password` at the calibrated cost with a fresh entropy-drawn salt.
-    fn hash_with(&self, params: &PasswordHashParams, password: &str) -> Result<String, PasswordHashError> {
+    fn hash_with(
+        &self,
+        params: &PasswordHashParams,
+        password: &str,
+    ) -> Result<String, PasswordHashError> {
         let mut salt_bytes = [0u8; SALT_BYTES];
         self.entropy
             .fill(&mut salt_bytes)
@@ -455,7 +464,8 @@ fn clamp_to_floor(cost: &Argon2idCost) -> Argon2idCost {
 
 /// A total-ish "at least as strong" comparison over the two hardness knobs.
 fn cost_is_at_least(candidate: &Argon2idCost, baseline: &Argon2idCost) -> bool {
-    candidate.memory_cost_kib >= baseline.memory_cost_kib && candidate.time_cost >= baseline.time_cost
+    candidate.memory_cost_kib >= baseline.memory_cost_kib
+        && candidate.time_cost >= baseline.time_cost
 }
 
 #[cfg(test)]
@@ -542,7 +552,9 @@ mod tests {
         let hasher = Argon2idPasswordHasher::with_measurer(
             ZeroEntropy,
             // Even the floor already exceeds target, so the weakest is selected…
-            LinearMeasurer { millis_per_mib: 100 },
+            LinearMeasurer {
+                millis_per_mib: 100,
+            },
             ladder(),
             TARGET_HASH_MILLIS,
         )
@@ -658,8 +670,7 @@ mod tests {
     /// same floor cost (m=19456, t=2, p=1, outputLen=32) over the password below.
     /// Checked-in fixture proves the shared persisted contract: an old Node row
     /// verifies under the Rust Argon2id verifier byte-for-byte.
-    const NODE_ARGON2ID_PHC: &str =
-        include_str!("../../tests/fixtures/node-argon2id-phc.txt");
+    const NODE_ARGON2ID_PHC: &str = include_str!("../../tests/fixtures/node-argon2id-phc.txt");
     const NODE_FIXTURE_PASSWORD: &str = "correct-horse-battery-staple";
 
     #[test]

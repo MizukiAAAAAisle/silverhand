@@ -118,11 +118,18 @@ mod tests {
     fn audit_fields_trim_drop_blank_and_cut_to_512_units() {
         let audit = SessionAudit::capture(Some("  Mozilla/5.0  "), Some("   "));
         assert_eq!(audit.user_agent(), Some("Mozilla/5.0"));
-        assert_eq!(audit.ip_first_seen(), None, "a blank field normalizes to None");
+        assert_eq!(
+            audit.ip_first_seen(),
+            None,
+            "a blank field normalizes to None"
+        );
 
         let long = "a".repeat(600);
         let audit = SessionAudit::capture(Some(&long), None);
-        assert_eq!(audit.user_agent().unwrap().chars().count(), AUDIT_FIELD_MAX_UTF16);
+        assert_eq!(
+            audit.user_agent().unwrap().chars().count(),
+            AUDIT_FIELD_MAX_UTF16
+        );
     }
 
     #[test]

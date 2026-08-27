@@ -182,9 +182,7 @@ where
                 .attempt(&id, handle, display_name, email, credential, now_ms)
                 .await?
             {
-                Attempt::Registered(user) => {
-                    return Ok(HumanRegistration::Registered { user })
-                }
+                Attempt::Registered(user) => return Ok(HumanRegistration::Registered { user }),
                 Attempt::HandleConflict => return Ok(HumanRegistration::HandleConflict),
                 Attempt::EmailConflict => return Ok(HumanRegistration::EmailConflict),
                 Attempt::RetryNewId => continue,
@@ -299,8 +297,8 @@ where
 mod tests {
     use super::*;
     use silverhand_backend_core::credential::{Argon2idCost, PasswordHashParams, RustCalibration};
-    use std::sync::Mutex;
     use sqlx::{Connection, Executor, SqliteConnection};
+    use std::sync::Mutex;
 
     const CURRENT_SCHEMA: &str =
         include_str!("../../../../packages/backend/tests/migration-baseline/schema-current.sql");
@@ -400,7 +398,13 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
             .await
             .unwrap();
         let outcome = store
-            .register(&handle("dave"), &display("Dave"), &email("dave@example.com"), &credential(), 500)
+            .register(
+                &handle("dave"),
+                &display("Dave"),
+                &email("dave@example.com"),
+                &credential(),
+                500,
+            )
             .await
             .unwrap();
         let HumanRegistration::Registered { user } = outcome else {
@@ -415,7 +419,9 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
 
         // The credential row committed in the SAME transaction, carrying the Rust
         // producer arm of password_hash_params.
-        let reopen = SqliteConnectOptions::new().filename(&path).foreign_keys(true);
+        let reopen = SqliteConnectOptions::new()
+            .filename(&path)
+            .foreign_keys(true);
         let mut db = SqliteConnection::connect_with(&reopen).await.unwrap();
         let params: String = sqlx::query_scalar(
             "SELECT password_hash_params FROM user_password_credentials WHERE user_id = ?",
@@ -435,13 +441,21 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
             .await
             .unwrap();
         let outcome = store
-            .register(&handle("bender"), &display("Imposter"), &email("new@example.com"), &credential(), 500)
+            .register(
+                &handle("bender"),
+                &display("Imposter"),
+                &email("new@example.com"),
+                &credential(),
+                500,
+            )
             .await
             .unwrap();
         assert!(matches!(outcome, HumanRegistration::HandleConflict));
 
         // Nothing was written: the credential table has no row for the failed id.
-        let reopen = SqliteConnectOptions::new().filename(&path).foreign_keys(true);
+        let reopen = SqliteConnectOptions::new()
+            .filename(&path)
+            .foreign_keys(true);
         let mut db = SqliteConnection::connect_with(&reopen).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_password_credentials")
             .fetch_one(&mut db)
@@ -458,7 +472,13 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
             .await
             .unwrap();
         let outcome = store
-            .register(&handle("newhandle"), &display("New"), &email("carol@example.com"), &credential(), 500)
+            .register(
+                &handle("newhandle"),
+                &display("New"),
+                &email("carol@example.com"),
+                &credential(),
+                500,
+            )
             .await
             .unwrap();
         assert!(matches!(outcome, HumanRegistration::EmailConflict));
@@ -469,7 +489,9 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
         let (_dir, path) = seed_db().await;
         // Pre-occupy the id the FIRST draw produces, so attempt #1 trips users.id
         // and attempt #2 (a fresh draw) succeeds.
-        let reopen = SqliteConnectOptions::new().filename(&path).foreign_keys(true);
+        let reopen = SqliteConnectOptions::new()
+            .filename(&path)
+            .foreign_keys(true);
         let mut db = SqliteConnection::connect_with(&reopen).await.unwrap();
         db.execute(sqlx::raw_sql(
             "INSERT INTO users (id, name, display_name, created_at, updated_at) \
@@ -489,7 +511,13 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
             .await
             .unwrap();
         let outcome = store
-            .register(&handle("erin"), &display("Erin"), &email("erin@example.com"), &credential(), 500)
+            .register(
+                &handle("erin"),
+                &display("Erin"),
+                &email("erin@example.com"),
+                &credential(),
+                500,
+            )
             .await
             .unwrap();
         let HumanRegistration::Registered { user } = outcome else {

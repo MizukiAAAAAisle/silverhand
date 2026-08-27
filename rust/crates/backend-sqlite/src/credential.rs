@@ -19,12 +19,12 @@
 
 use std::{path::Path, time::Duration};
 
+use serde::Serialize;
 use silverhand_backend_core::{
     credential::{LoginCandidate, LoginCredentialLookup, PasswordHashParams, RUST_PRODUCER},
     identity::UserId,
     persistence::PersistenceFailure,
 };
-use serde::Serialize;
 use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
@@ -105,11 +105,14 @@ impl LoginCredentialLookup for SqliteCredentialStore {
         let Some(row) = row else {
             return Ok(None);
         };
-        let raw_user_id: String = row.try_get("user_id").map_err(PersistenceFailure::from_source)?;
+        let raw_user_id: String = row
+            .try_get("user_id")
+            .map_err(PersistenceFailure::from_source)?;
         let user_id = UserId::parse(raw_user_id)
             .map_err(|_| PersistenceFailure::from_source(CorruptStoredUserId))?;
-        let password_hash: Option<String> =
-            row.try_get("password_hash").map_err(PersistenceFailure::from_source)?;
+        let password_hash: Option<String> = row
+            .try_get("password_hash")
+            .map_err(PersistenceFailure::from_source)?;
         Ok(Some(LoginCandidate {
             user_id,
             password_hash,
@@ -221,7 +224,10 @@ INSERT INTO user_password_credentials (user_id, password_hash, password_hash_par
             .unwrap()
             .expect("a row for a known email");
         assert_eq!(candidate.user_id.as_str(), "user-1");
-        assert_eq!(candidate.password_hash.as_deref(), Some("$argon2id$v=19$stored"));
+        assert_eq!(
+            candidate.password_hash.as_deref(),
+            Some("$argon2id$v=19$stored")
+        );
     }
 
     #[tokio::test]
@@ -246,7 +252,13 @@ INSERT INTO user_password_credentials (user_id, password_hash, password_hash_par
     #[tokio::test]
     async fn an_unknown_email_resolves_to_none() {
         let (_dir, store) = open_seeded().await;
-        assert!(store.lookup_login("nobody@example.com").await.unwrap().is_none());
+        assert!(
+            store
+                .lookup_login("nobody@example.com")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
