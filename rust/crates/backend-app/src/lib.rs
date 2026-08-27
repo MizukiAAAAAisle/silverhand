@@ -168,7 +168,10 @@ impl AppConfig {
             "remote-only" => DeploymentProfile::RemoteOnly,
             other => return Err(ConfigError::InvalidDeploymentProfile(other.to_owned())),
         };
-        let signup_enabled = !truthy_env(DISABLE_SIGNUP_ENV);
+        let signup_enabled = parse_signup_enabled(
+            deployment_profile,
+            env::var(DISABLE_SIGNUP_ENV).ok().as_deref(),
+        )?;
         Self::new(
             database_path,
             listen_addr,
@@ -191,16 +194,35 @@ fn required_env(name: &'static str) -> Result<String, ConfigError> {
         .ok_or(ConfigError::MissingEnvironment(name))
 }
 
-/// A boolean env flag: set to `1` or `true` (case-insensitive) means on; anything
-/// else, including unset, means off.
-fn truthy_env(name: &'static str) -> bool {
-    env::var(name)
-        .ok()
-        .map(|value| {
-            let value = value.trim().to_ascii_lowercase();
-            value == "1" || value == "true"
-        })
-        .unwrap_or(false)
+/// Signup admission is parsed PER PROFILE, because the two launchers ship two
+/// different contracts for `SILVERHAND_DISABLE_SIGNUP` and a generic truthy helper
+/// would invent a silent third one that neither honours.
+///
+/// - `Embedded` (`packages/backend/src/auth/config.ts`: `signupEnabled = env !== '1'`):
+///   no trim, case-sensitive, ONLY the exact string `"1"` disables signup. Every other
+///   value — unset, `"0"`, `"true"`, `" 1 "`, garbage, empty — enables it, and nothing
+///   fails to start.
+/// - `RemoteOnly` (`packages/server/src/config.ts`): unset or the exactly-empty string
+///   default to enabled; any other value is trimmed and only `"0"` (enable) and `"1"`
+///   (disable) are legal — everything else (including whitespace-only, `"true"`,
+///   garbage) is a hard startup failure, matching `parseBoolean01`.
+fn parse_signup_enabled(
+    profile: DeploymentProfile,
+    raw: Option<&str>,
+) -> Result<bool, ConfigError> {
+    match profile {
+        DeploymentProfile::Embedded => Ok(raw != Some("1")),
+        DeploymentProfile::RemoteOnly => match raw {
+            // `resolveValue` short-circuits `undefined`/`''` to the default BEFORE the
+            // parser runs; a whitespace-only value is NOT empty and does reach it.
+            None | Some("") => Ok(true),
+            Some(value) => match value.trim() {
+                "0" => Ok(true),
+                "1" => Ok(false),
+                _ => Err(ConfigError::InvalidDisableSignup(value.to_owned())),
+            },
+        },
+    }
 }
 
 #[derive(Debug, Error)]
@@ -217,6 +239,8 @@ pub enum ConfigError {
     InvalidOrigin(#[source] silverhand_backend_server::scope_events::InvalidAllowedOrigin),
     #[error("deployment profile {0:?} is not one of: embedded, remote-only")]
     InvalidDeploymentProfile(String),
+    #[error("SILVERHAND_DISABLE_SIGNUP {0:?} must be 0 or 1")]
+    InvalidDisableSignup(String),
 }
 
 #[derive(Debug, Error)]
@@ -269,8 +293,8 @@ impl EnrollmentClock for SystemEnrollmentClock {
 pub struct PreparedApp {
     pub router: Router,
     /// The live boot facts the `/readyz` router reads. Carried out of `prepare()` so
-    /// the serving boundary — never `prepare()`, never a handler — can mark
-    /// `listen_ready` once the listener is actually bound.
+    /// [`serve`] — which holds the already-bound `TcpListener` — can mark `listen_ready`
+    /// as a witnessed consequence of serving, never `prepare()` and never a handler.
     boot: BootProgress,
     event_controller: EventWebSocketController,
     daemon_controller: DaemonDeliveryController,
@@ -285,14 +309,6 @@ impl PreparedApp {
             &self.presence_timers,
         )
         .await;
-    }
-
-    /// Mark the serving boundary: the listener is bound and this process is now serving.
-    /// The `/readyz` router shares this exact holder, so the flip is visible to the next
-    /// probe. Called by [`run`] after `TcpListener::bind` succeeds — a prepared but
-    /// not-yet-served app deliberately still reports `listen_ready: false`.
-    pub fn mark_listen_ready(&self) {
-        self.boot.mark_listen_ready();
     }
 }
 
@@ -768,11 +784,9 @@ pub async fn run(config: AppConfig) -> Result<(), StartupError> {
     let listener = TcpListener::bind(config.listen_addr)
         .await
         .map_err(StartupError::Bind)?;
-    // The serving boundary: the listener is bound, so this process is now serving and
-    // `/readyz` may report `listen_ready`. Marked here — after a successful bind, before
-    // `serve` — never in `prepare()` (which can succeed and then have the bind fail) and
-    // never inferred from a handler receiving a request.
-    app.mark_listen_ready();
+    // `run` only binds; the bound listener is the witness, and `serve` establishes
+    // `listen_ready` from it. So `run` cannot report readiness a caller-less `serve`
+    // would miss, and a bind that fails here never reaches a `mark`.
     serve(listener, app, shutdown_signal()).await
 }
 
@@ -787,11 +801,17 @@ where
 {
     let PreparedApp {
         router,
-        boot: _,
+        boot,
         event_controller,
         daemon_controller,
         presence_timers,
     } = app;
+    // The serving boundary, witnessed by the already-bound `TcpListener` this function
+    // was handed: reaching here means a listener exists, so `/readyz` may now report
+    // `listen_ready`. Marked from the listener rather than by a public `PreparedApp`
+    // method, so EVERY caller that serves a bound listener establishes the fact and no
+    // caller can fake it without one — a prepared-but-unserved app stays 503.
+    boot.mark_listen_ready();
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     let server = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
@@ -930,6 +950,23 @@ mod tests {
             // `/api/runtimes` is the detecting router (still anon → 401 behind the
             // perimeter) and `/readyz` omits the fanout key.
             DeploymentProfile::Embedded,
+            true,
+        )
+        .unwrap()
+    }
+
+    /// The same config as [`config`] but under the standalone launcher's profile, so a
+    /// composition differential can drive the RemoteOnly half of the ONE product:
+    /// `ServerMode::Remote` + `DeploymentMode::Standalone`, the control-plane runtimes
+    /// router (no detector), and a `/readyz` whose Standalone shape carries the
+    /// (uninstalled) fanout key.
+    fn remote_config(path: PathBuf) -> AppConfig {
+        AppConfig::new(
+            path,
+            "127.0.0.1:0".parse().unwrap(),
+            vec![AllowedOrigin::parse("http://localhost:5173".to_owned()).unwrap()],
+            Some("@silverhand-ai/daemon@test".to_owned()),
+            DeploymentProfile::RemoteOnly,
             true,
         )
         .unwrap()
@@ -2943,18 +2980,20 @@ mod tests {
         );
     }
 
-    /// P0-1: `listen_ready` is a SERVING-boundary fact, not a `prepare()` one. The
-    /// prepared router — migrations applied, db writable, but not yet bound — answers
-    /// `/readyz` 503 with `listen_ready:false`; the fact flips ONLY when `run()` marks it
-    /// after `TcpListener::bind` succeeds. This test drives that boundary directly:
-    /// `PreparedApp::mark_listen_ready` (the same call `run()` makes) flips the SAME
-    /// shared `BootProgress` the router holds, so a second probe of the SAME router turns
-    /// 200. If `prepare()` ever marked listen-ready itself, the first probe would already
-    /// be 200 and this reddens.
+    /// P0-1: `listen_ready` is a SERVING-boundary fact witnessed by the bound listener,
+    /// not a flag anyone can flip. There is no public `mark_listen_ready`; the ONLY way
+    /// to establish it is to hand a bound `TcpListener` to [`serve`], which marks the
+    /// holder the `/readyz` router shares. So this test binds a real listener and
+    /// actually starts `serve`, then watches that SAME shared holder go 503 → 200. A
+    /// prepared-but-unserved app stays 503; if `prepare()` marked it, or if the mark
+    /// were a caller-callable method independent of a listener, the first probe would be
+    /// 200 and this reddens.
     #[tokio::test]
-    async fn readyz_reports_listen_ready_only_after_the_serving_boundary() {
+    async fn readyz_reports_listen_ready_only_after_serve_receives_the_bound_listener() {
         let fixture = fixture(true).await;
         let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        // The router shares the SAME `BootProgress` handle `serve` will mark, so probing
+        // this clone observes the real serving-boundary flip — not a copy.
         let router = app.router.clone();
 
         // Prepared but not served: migrations + db green, listen_ready false → 503.
@@ -2962,7 +3001,7 @@ mod tests {
         assert_eq!(
             status,
             StatusCode::SERVICE_UNAVAILABLE,
-            "before bind: {body}"
+            "before serve: {body}"
         );
         let before: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(before["ok"], serde_json::json!(false));
@@ -2972,15 +3011,134 @@ mod tests {
         );
         assert_eq!(before["checks"]["listen_ready"], serde_json::json!(false));
 
-        // The serving boundary: the same mark `run()` makes after bind succeeds.
-        app.mark_listen_ready();
+        // Bind a REAL listener and actually start serving. `serve` marks `listen_ready`
+        // from the bound listener it now holds — nothing else in the process can.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        // The receiver IS the shutdown future (`Output = Result<(), RecvError>`), so it
+        // satisfies `serve`'s bound directly.
+        let served = tokio::spawn(serve(listener, app, shutdown_rx));
 
-        // Same router, same shared BootProgress → now all green → 200.
+        // Poll the SAME holder until the serve task's mark lands. `serve` marks before
+        // its first await, so a bounded yield loop is enough; we never flip the holder
+        // ourselves.
+        let mut ready = false;
+        for _ in 0..100 {
+            let (status, _) = request(&router, "GET", "/readyz", None).await;
+            if status == StatusCode::OK {
+                ready = true;
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            ready,
+            "serve must establish listen_ready from the bound listener"
+        );
+
         let (status, body) = request(&router, "GET", "/readyz", None).await;
-        assert_eq!(status, StatusCode::OK, "after bind: {body}");
+        assert_eq!(status, StatusCode::OK, "after serve: {body}");
         let after: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(after["ok"], serde_json::json!(true));
         assert_eq!(after["checks"]["listen_ready"], serde_json::json!(true));
+
+        let _ = shutdown_tx.send(());
+        let _ = served.await;
+    }
+
+    /// P0-2: `SILVERHAND_DISABLE_SIGNUP` has TWO launcher contracts, so the parser is
+    /// profile×input — never a generic truthy helper. Embedded disables ONLY on the
+    /// exact `"1"` and never fails; RemoteOnly trims, accepts only `0`/`1`, defaults
+    /// unset/empty to enabled, and hard-fails on anything else. This pins both against
+    /// the TS authorities (`packages/backend/src/auth/config.ts`,
+    /// `packages/server/src/config.ts`), including the values where they DIVERGE.
+    #[test]
+    fn signup_admission_matches_each_launchers_contract() {
+        use DeploymentProfile::{Embedded, RemoteOnly};
+
+        // Embedded: only exact "1" disables; every other value enables; nothing fails.
+        assert!(parse_signup_enabled(Embedded, None).unwrap()); // unset → enabled
+        assert!(parse_signup_enabled(Embedded, Some("0")).unwrap());
+        assert!(!parse_signup_enabled(Embedded, Some("1")).unwrap()); // disabled
+        assert!(parse_signup_enabled(Embedded, Some("true")).unwrap()); // NOT "1" → enabled
+        assert!(parse_signup_enabled(Embedded, Some(" 1 ")).unwrap()); // no trim → enabled
+        assert!(parse_signup_enabled(Embedded, Some("garbage")).unwrap());
+        assert!(parse_signup_enabled(Embedded, Some("")).unwrap());
+
+        // RemoteOnly: unset/empty default enabled; only trimmed 0/1 legal; else fails.
+        assert!(parse_signup_enabled(RemoteOnly, None).unwrap());
+        assert!(parse_signup_enabled(RemoteOnly, Some("")).unwrap());
+        assert!(parse_signup_enabled(RemoteOnly, Some("0")).unwrap());
+        assert!(!parse_signup_enabled(RemoteOnly, Some("1")).unwrap()); // disabled
+        assert!(!parse_signup_enabled(RemoteOnly, Some(" 1 ")).unwrap()); // trimmed → disabled
+        for fails in ["true", "TRUE", "garbage", " "] {
+            assert!(
+                matches!(
+                    parse_signup_enabled(RemoteOnly, Some(fails)),
+                    Err(ConfigError::InvalidDisableSignup(_))
+                ),
+                "RemoteOnly {fails:?} must fail startup, not silently enable"
+            );
+        }
+    }
+
+    /// P0-3: the RemoteOnly half of the ONE product is a real `prepare()` composition,
+    /// not just an enum arm — so this differential drives it end-to-end and would redden
+    /// if composition swapped the runtimes arms, mis-projected a mode axis, or dropped a
+    /// root face. Under the SAME profile it asserts: `/api/health` reports
+    /// `mode:"remote"`; `/readyz` reports `mode:"remote"` + `deployment_mode:"standalone"`
+    /// + an uninstalled fanout key + 503; and `/api/runtimes` is the control-plane
+    /// refusal (503 `host_runtime_disabled` when authenticated, still 401 anonymous
+    /// behind the perimeter — never a detection pass).
+    #[tokio::test]
+    async fn the_remote_only_profile_composes_a_control_plane_backend() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let app = prepare(&remote_config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bearer = format!("Bearer {TOKEN}");
+
+        // `/api/health` — anonymous, remote mode.
+        let (status, body) = request(&router, "GET", "/api/health", None).await;
+        assert_eq!(status, StatusCode::OK, "remote health: {body}");
+        let health: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(health["ok"], serde_json::json!(true));
+        assert_eq!(health["mode"], serde_json::json!("remote"));
+
+        // `/readyz` — anonymous, standalone shape, fanout uninstalled → honest 503.
+        let (status, body) = request(&router, "GET", "/readyz", None).await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "remote readyz: {body}"
+        );
+        let ready: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(ready["ok"], serde_json::json!(false));
+        assert_eq!(ready["mode"], serde_json::json!("remote"));
+        assert_eq!(ready["deployment_mode"], serde_json::json!("standalone"));
+        assert_eq!(
+            ready["checks"]["outbound_event_fanout_installed"],
+            serde_json::json!(false),
+            "no fanout call site in RemoteOnly → honestly uninstalled"
+        );
+
+        // `/api/runtimes` — anonymous still 401 (behind the perimeter)…
+        let (status, _) = request(&router, "GET", "/api/runtimes", None).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "remote runtimes anon → 401"
+        );
+
+        // …and authenticated, the control-plane refusal, never a detection pass.
+        let (status, body) = request(&router, "GET", "/api/runtimes", Some(&bearer)).await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "remote runtimes: {body}"
+        );
+        let refusal: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(refusal["code"], serde_json::json!("host_runtime_disabled"));
     }
     /// one host with DISTINCT `created_at`, so the list's `created_at ASC` order is
     /// defined, plus a registered STRANGER (`user-stranger`, its own seeded session over

@@ -68,11 +68,18 @@ impl DeploymentMode {
 /// run, or an embedded backend would gate readiness on a transport it does not use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeploymentProfile {
-    /// The Desktop launcher: a co-located daemon host, an embedded transport, and
-    /// local runtime detection. Projects `ServerMode::Embedded` + `DeploymentMode::Embedded`.
+    /// The Desktop launcher's profile. Locks `ServerMode::Embedded` +
+    /// `DeploymentMode::Embedded`. The profile is a packaging INTENT, not a claim about
+    /// what is wired today: it is the profile under which a co-located daemon host, an
+    /// embedded transport, and local runtime detection are REQUIRED to be constructed.
+    /// Local runtime detection is wired (this build mounts the detecting runtimes
+    /// router); the co-located host and embedded transport are named migration
+    /// residuals this tag commits the profile to, not capabilities it asserts exist.
     Embedded,
-    /// The standalone server launcher: control-plane only, with no machine of its own
-    /// for an agent to run on. Projects `ServerMode::Remote` + `DeploymentMode::Standalone`.
+    /// The standalone server launcher's profile. Locks `ServerMode::Remote` +
+    /// `DeploymentMode::Standalone`: control-plane only, with no machine of its own for
+    /// an agent to run on, so it constructs no runtime detector and `/api/runtimes`
+    /// refuses.
     RemoteOnly,
 }
 

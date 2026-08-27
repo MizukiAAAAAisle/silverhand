@@ -3,9 +3,11 @@
 //! Whether there is a machine to ask about at all is a DEPLOYMENT fact, and it is
 //! decided ONCE, at composition, by which router is mounted — not per request:
 //!
-//!  - An embedded backend has a co-located daemon host, so its machine is a machine
-//!    agents run on. It mounts [`detecting_router`], which holds the process's one
-//!    runtime detector and projects a detection pass.
+//!  - The embedded profile REQUIRES a co-located daemon host, so under it the machine
+//!    this process runs on is a machine agents run on. It mounts [`detecting_router`],
+//!    which holds the process's one runtime detector and projects a detection pass.
+//!    (That the co-located host itself is a migration residual does not change this
+//!    router's contract: the embedded profile is where a detector belongs.)
 //!  - A standalone backend is control-plane only: it has no co-located host, so the
 //!    machine it runs on is not one any agent runs on. It mounts
 //!    [`control_plane_router`], which has no detector to hold and can only refuse with
