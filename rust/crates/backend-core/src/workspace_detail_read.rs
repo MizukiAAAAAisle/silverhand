@@ -36,10 +36,21 @@
 //! for some OTHER workspace B still only returns raw data, and the boundary
 //! classifies it under the authentic request A — where B's coordinate fails the
 //! bind. There is no untrusted, pre-classified fact to re-check at the wire because
-//! the mint happens at the authenticated request itself. [`AuthorizedWorkspaceFace`]
-//! has no public constructor and is not `Clone`, so a `Visible` cannot be forged or
-//! duplicated outside this minter: an unauthorized face is unrepresentable, not
-//! merely untested.
+//! the mint happens at the authenticated request itself.
+//!
+//! The load-bearing guarantee is that guarantee about WHERE the value is minted,
+//! not any property of the value's copyability. [`AuthorizedWorkspaceFace`] has no
+//! public constructor, so the ONLY way to obtain one is through
+//! [`classify_workspace_view`], which mints it bound to the requested workspace and
+//! the authenticated viewer. When the wire boundary accepts nothing but this sealed
+//! type, every `200` it can serve was necessarily minted under an authentic
+//! `(viewer, workspace_id)` — an unauthorized face is unconstructable, so it cannot
+//! be handed to the projector at all. That the type is not `Clone` is a minimal-
+//! capability choice, NOT a security root: the classifier can be re-invoked and
+//! [`AuthorizedWorkspaceFace::face`] borrows a `WorkspaceFace` the caller may itself
+//! clone, so non-`Clone` does not — and is not relied upon to — make the binding
+//! unduplicable. The server factory carries the complementary gate that the wire
+//! projector's input is this sealed type and nothing wider.
 
 use std::future::Future;
 
@@ -75,17 +86,23 @@ pub struct WorkspaceDetailForViewer {
 /// fact's workspace coordinate is the requested workspace and its membership
 /// subject is the authenticated viewer. A handler holding this value therefore
 /// KNOWS the face it is about to serialize belongs to the very workspace the
-/// caller asked for and the very viewer the perimeter authenticated — the `200`
-/// path cannot serve another tenant's face. It is deliberately NOT `Clone`: the
-/// seal cannot be duplicated and stashed, only borrowed once for the DTO build.
+/// caller asked for and the very viewer the perimeter authenticated — because the
+/// wire boundary accepts nothing but this sealed type, the `200` path cannot serve
+/// another tenant's face. It is deliberately NOT `Clone`, but only as a minimal-
+/// capability choice: non-`Clone` is NOT what makes the binding trustworthy (the
+/// classifier is re-invokable and [`face`](Self::face) borrows a clonable
+/// `WorkspaceFace`). The guarantee rests entirely on the sealed constructor plus
+/// the wire boundary's sealed-type-only input, not on copyability.
 #[derive(Debug, Eq, PartialEq)]
 pub struct AuthorizedWorkspaceFace(WorkspaceFace);
 
 impl AuthorizedWorkspaceFace {
     /// The published face, BORROWED for projection. Borrow rather than consume so
-    /// the seal outlives the DTO build; there is deliberately no accessor that
-    /// hands out an owned [`AuthorizedWorkspaceFace`], so the identity binding
-    /// cannot be duplicated and passed on as another authorized value.
+    /// the seal outlives the DTO build. There is deliberately no accessor that
+    /// hands out an owned [`AuthorizedWorkspaceFace`]; note this does not make the
+    /// underlying face uncopyable — the returned `WorkspaceFace` is itself
+    /// `Clone` — it only keeps the SEAL (the authorized wrapper) from being minted
+    /// anywhere but [`classify_workspace_view`].
     pub fn face(&self) -> &WorkspaceFace {
         &self.0
     }
