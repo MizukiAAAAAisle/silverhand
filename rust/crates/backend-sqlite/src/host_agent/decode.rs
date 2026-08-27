@@ -13,10 +13,10 @@
 
 use silverhand_backend_core::{
     agent_lifecycle::MaterializationStatus,
+    host_runtime::computer::{HostKind, ProvisioningSource},
     identity::{AgentId, ConversationId, HostId, UserId},
     runtime_credential::RuntimeGeneration,
     runtime_event::RuntimeObservedStatus,
-    teardown::facts::{HostKind, ProvisioningSource},
 };
 use thiserror::Error;
 

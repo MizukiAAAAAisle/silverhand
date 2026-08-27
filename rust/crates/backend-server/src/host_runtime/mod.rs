@@ -14,14 +14,26 @@ use serde::{
 };
 use silverhand_backend_core::{
     host_runtime::{
-        Clock, CreateHostInvite, CreatedUserInviteHost, EntropySource, HostInviteError,
-        HostInviteUnitOfWork,
+        environment::{Clock, EntropySource},
+        invite::{CreateHostInvite, HostInviteError, HostInviteUnitOfWork},
     },
     identity::UserId,
     persistence::PersistenceFailure,
 };
 
 use crate::error;
+
+pub mod claim;
+pub mod delete;
+pub mod detail;
+mod host_wire;
+pub mod list;
+pub mod resolve;
+pub mod revoke;
+pub mod rotate_connect_token;
+pub mod rotate_token;
+
+use host_wire::HostDto;
 
 pub const HOSTS_PATH: &str = "/api/hosts";
 pub const DEFAULT_DAEMON_NPM_SPEC: &str = "@silverhand-ai/daemon@latest";
@@ -48,10 +60,7 @@ where
     R: EntropySource + 'static,
     C: Clock + 'static,
 {
-    let daemon_npm_spec = daemon_npm_spec
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_DAEMON_NPM_SPEC.to_owned());
+    let daemon_npm_spec = resolve_daemon_npm_spec(daemon_npm_spec);
     let state = HostRuntimeState(Arc::new(StateInner {
         create_host_invite,
         daemon_npm_spec,
@@ -59,6 +68,17 @@ where
     Router::new()
         .route(HOSTS_PATH, post(create_host::<U, R, C>))
         .with_state(state)
+}
+
+/// Resolve the daemon package spec the connect-command card shows: a configured value,
+/// trimmed, or the default when it is absent or blank. Pinned to `daemonNpmSpec()` in
+/// `packages/backend/src/routes/hosts.ts`, and shared by the create-invite response and
+/// the connect-token rotation response so the two can never show a different spec.
+pub(super) fn resolve_daemon_npm_spec(configured: Option<String>) -> String {
+    configured
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_DAEMON_NPM_SPEC.to_owned())
 }
 
 async fn create_host<U, R, C>(
@@ -118,7 +138,7 @@ fn validate_empty_object(body: &[u8]) -> Option<Response> {
     }
 }
 
-fn unrecognized_keys_message(keys: &[String]) -> String {
+pub(super) fn unrecognized_keys_message(keys: &[String]) -> String {
     let quoted = keys
         .iter()
         .map(|key| format!("'{key}'"))
@@ -206,7 +226,7 @@ impl<'de> Visitor<'de> for TopLevelJsonVisitor {
     }
 }
 
-fn js_object_keys(keys: Vec<String>) -> Vec<String> {
+pub(super) fn js_object_keys(keys: Vec<String>) -> Vec<String> {
     let mut indexes = Vec::new();
     let mut named = Vec::new();
     for key in keys {
@@ -231,7 +251,7 @@ fn js_array_index(key: &str) -> Option<u32> {
     (index != u32::MAX && index.to_string() == key).then_some(index)
 }
 
-fn invalid_input(issues: Vec<ZodIssue>) -> Response {
+pub(super) fn invalid_input(issues: Vec<ZodIssue>) -> Response {
     (
         StatusCode::BAD_REQUEST,
         Json(InvalidInputResponse {
@@ -250,7 +270,7 @@ struct InvalidInputResponse {
 
 #[derive(Serialize)]
 #[serde(untagged)]
-enum ZodIssue {
+pub(super) enum ZodIssue {
     UnrecognizedKeys {
         code: &'static str,
         keys: Vec<String>,
@@ -264,6 +284,68 @@ enum ZodIssue {
         path: Vec<String>,
         message: String,
     },
+    InvalidString {
+        validation: &'static str,
+        code: &'static str,
+        message: &'static str,
+        path: Vec<String>,
+    },
+    TooSmall {
+        code: &'static str,
+        minimum: i64,
+        #[serde(rename = "type")]
+        value_type: &'static str,
+        inclusive: bool,
+        exact: bool,
+        message: &'static str,
+        path: Vec<String>,
+    },
+    TooBig {
+        code: &'static str,
+        maximum: i64,
+        #[serde(rename = "type")]
+        value_type: &'static str,
+        inclusive: bool,
+        exact: bool,
+        message: &'static str,
+        path: Vec<String>,
+    },
+}
+
+/// The anti-enumeration refusal shared by every host route that names a computer: an
+/// absent computer and one the requester does not own collapse to the same `404`, so
+/// no surface becomes an existence oracle for computer ids. Pinned to the TypeScript
+/// handlers (`{ error: 'host not found', error_code: 'host_not_found' }`), so a drift
+/// shows here rather than route by route.
+pub(super) const HOST_NOT_FOUND: &str = "host not found";
+pub(super) const HOST_NOT_FOUND_CODE: &str = "host_not_found";
+
+/// The unmapped-failure body: these routes register no error handler, so an
+/// unexpected failure falls to the framework default — a plain-text `500`, never a
+/// JSON envelope.
+pub(super) const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
+
+/// A refusal that carries a machine-readable `error_code` beside its message. Shared
+/// by the host routes whose refusals the renderer branches on.
+#[derive(Serialize)]
+pub(super) struct ErrorBody {
+    pub error: &'static str,
+    pub error_code: &'static str,
+}
+
+pub(super) fn host_not_found() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ErrorBody {
+            error: HOST_NOT_FOUND,
+            error_code: HOST_NOT_FOUND_CODE,
+        }),
+    )
+        .into_response()
+}
+
+pub(super) fn internal_error() -> Response {
+    (StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR_BODY).into_response()
 }
 
 #[derive(Serialize)]
@@ -272,45 +354,6 @@ struct HostCreateResponse {
     host: HostDto,
     connect_token: String,
     daemon_npm_spec: String,
-}
-
-#[derive(Serialize)]
-struct HostDto {
-    id: String,
-    name: String,
-    kind: &'static str,
-    created_at: i64,
-    revoked_at: Option<i64>,
-    last_seen_at: Option<i64>,
-    activated_at: Option<i64>,
-    finalized_at: Option<i64>,
-    connected_host_name: Option<String>,
-    provisioning_source: &'static str,
-    status: &'static str,
-    placeable: bool,
-    creator_user_id: String,
-    display_label: Option<String>,
-}
-
-impl From<CreatedUserInviteHost> for HostDto {
-    fn from(host: CreatedUserInviteHost) -> Self {
-        Self {
-            id: host.id().to_owned(),
-            name: host.name().to_owned(),
-            kind: "remote",
-            created_at: host.created_at(),
-            revoked_at: None,
-            last_seen_at: None,
-            activated_at: None,
-            finalized_at: None,
-            connected_host_name: None,
-            provisioning_source: "user_invite",
-            status: "pending",
-            placeable: false,
-            creator_user_id: host.user_id().as_str().to_owned(),
-            display_label: None,
-        }
-    }
 }
 
 struct BoundaryError(Box<dyn std::error::Error + Send + Sync>);
@@ -354,7 +397,8 @@ mod tests {
         http::Request,
     };
     use silverhand_backend_core::host_runtime::{
-        HostInviteWriteError, NewLongLivedCredential, NewUserInviteHost,
+        custody::NewLongLivedCredential,
+        invite::{HostInviteWriteError, NewUserInviteHost},
     };
     use tower::ServiceExt;
     use tracing_subscriber::fmt::MakeWriter;

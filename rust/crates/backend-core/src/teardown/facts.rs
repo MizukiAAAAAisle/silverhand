@@ -6,6 +6,7 @@
 
 use crate::{
     agent_lifecycle::MaterializationStatus,
+    host_runtime::computer::{HostKind, ProvisioningSource},
     identity::{AgentId, ConversationId, HostId},
     runtime_credential::{RuntimeGeneration, RuntimeScope},
     runtime_event::RuntimeObservedStatus,
@@ -87,25 +88,6 @@ pub struct AgentTeardownCapture {
     /// home.
     pub dm_channel_id: Option<ConversationId>,
     pub regular_workspace_count: u32,
-}
-
-/// Where a computer record came from.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProvisioningSource {
-    /// The app installed itself on this machine.
-    AppInstall,
-    /// A user invited this machine and holds its lifecycle.
-    UserInvite,
-    /// The platform created it.
-    System,
-}
-
-/// Whether a computer is the machine the control plane runs on or one attached to
-/// it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HostKind {
-    Local,
-    Remote,
 }
 
 /// The computer facts the LIFECYCLE rule reads: the two halves of "is this

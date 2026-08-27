@@ -236,10 +236,11 @@ pub enum AgentTeardownCommit {
 /// ```
 /// use silverhand_backend_core::{
 ///     capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
+///     host_runtime::computer::{HostKind, ProvisioningSource},
 ///     identity::{HostId, UserId},
 ///     teardown::{
 ///         cascade::{CascadeAdmission, CascadeConsent, ComputerLifecycle, admit_cascade, hold_computer_lifecycle},
-///         facts::{ComputerTeardownFacts, HostKind, ProvisioningSource},
+///         facts::ComputerTeardownFacts,
 ///         write::{ComputerCascade, ComputerTeardownKey},
 ///     },
 /// };
@@ -418,6 +419,7 @@ mod tests {
         capability::computer_access::{
             ComputerAccess, ComputerOwnershipFacts, can_access_computer,
         },
+        host_runtime::computer::{HostKind, ProvisioningSource},
         runtime_credential::{RuntimeGeneration, RuntimeScope},
         runtime_event::RuntimeObservedStatus,
         teardown::{
@@ -425,10 +427,7 @@ mod tests {
                 CascadeAdmission, ComputerLifecycle, admit_cascade, hold_computer_lifecycle,
             },
             eligibility::{EligibilityVerdict, hold_eligibility},
-            facts::{
-                AgentRuntimeSessionFacts, ComputerTeardownFacts, HostKind, ProvisioningSource,
-                StoredBlobRef,
-            },
+            facts::{AgentRuntimeSessionFacts, ComputerTeardownFacts, StoredBlobRef},
         },
     };
 
