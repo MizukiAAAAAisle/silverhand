@@ -135,7 +135,11 @@ mod tests {
         // Five bytes under an eight-byte ceiling: the wrap is transparent and the raw
         // drain receives the full payload.
         let response = router_with_ceiling(8)
-            .oneshot(HttpRequest::post("/drain").body(Body::from("hello")).unwrap())
+            .oneshot(
+                HttpRequest::post("/drain")
+                    .body(Body::from("hello"))
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

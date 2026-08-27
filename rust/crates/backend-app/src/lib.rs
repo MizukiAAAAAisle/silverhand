@@ -13,7 +13,8 @@ use std::{
 use axum::Router;
 use silverhand_backend_core::{
     access::{EnrollmentClock, unix_millis},
-    auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
+    auth::{EntropySessionTokenMint, HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
+    credential::Argon2idPasswordHasher,
     host_runtime::{
         claim::ClaimLocalComputer,
         environment::{OsEntropy, SystemClock},
@@ -32,6 +33,7 @@ use silverhand_backend_server::{
     host_agent::{agent_detail, agent_list, agent_presence, availability},
     host_agent_background::presence_grace_timer::PresenceGraceTimers,
     host_resources, host_runtime,
+    human_auth::{self, HumanAuthDeps},
     messaging::{
         TargetAddressRefusalLog,
         collaboration::{
@@ -54,11 +56,16 @@ use silverhand_backend_server::{
         runtimes,
         server_info::{self, ServerAdvertisement},
     },
+    password_hasher::SpawnBlockingHasher,
     runtime_credential::{RuntimeCredentialAuthority, require_runtime_credential},
     scope_events::{
         AllowedOrigin, EventWebSocketConfig, EventWebSocketController, HubPresenceSink,
         ScopeEventHub, SystemDisconnectClock, compose_presence_vertical,
     },
+    workspace_detail,
+    workspace_metadata_write::{self, WorkspaceMetadataClock},
+    workspace_name_availability,
+    workspace_rename_fanout::WorkspaceRenameFanoutAdapter,
     workspaces,
 };
 use silverhand_backend_sqlite::{
@@ -68,17 +75,25 @@ use silverhand_backend_sqlite::{
     agent_list_read::SqliteAgentListColdRead,
     agent_presence_read::SqliteAgentPresenceColdRead,
     auth::SqliteSessionStore,
+    credential::SqliteCredentialStore,
     direct_pair_read::SqliteDirectPairReadModel,
+    handle_namespace::SqliteHandleNamespace,
     host_resources_read::SqliteHostResourcesColdRead,
     host_runtime::SqliteHostRuntimeStore,
+    human_registration::SqliteHumanRegistration,
     messaging::{MessagingStore, task::SqliteTaskStore},
     runtime_credential::SqliteRuntimeCustodyStore,
     runtime_delivery::SqliteRuntimeDeliveryStore,
     scope_event::SqliteEventScopeAuthority,
     unread_read::SqliteUnreadReadModel,
+    user_identity::SqliteUserStore,
     user_presence_cold_read::SqliteUserPresenceColdRead,
     user_presence_last_seen::SqliteLastSeenSink,
+    workspace_audience_read::SqliteWorkspaceAudienceRead,
     workspace_cold_read::SqliteWorkspaceColdRead,
+    workspace_detail_read::SqliteWorkspaceDetailRead,
+    workspace_metadata_write::SqliteWorkspaceMetadataWrite,
+    workspace_name_availability::SqliteRegularWorkspaceNamespace,
 };
 use sqlx::{Row, sqlite::SqlitePoolOptions};
 use thiserror::Error;
@@ -297,6 +312,22 @@ impl EnrollmentClock for SystemEnrollmentClock {
     }
 }
 
+/// The production [`WorkspaceMetadataClock`]. The workspace-metadata write leaf
+/// states the clock as its narrow time capability and deliberately ships no
+/// production or no-op adapter, so this composition root supplies the trivial
+/// wrapper the leaf's own doc names — the same `unix_millis(SystemTime::now())`
+/// wall-clock read as [`SystemEnrollmentClock`], with the signed `Date.now()`-parity
+/// conversion staying in the domain ([`unix_millis`]). Injecting it lets a test pin
+/// the stamped `updated_at`/`archived_at`; production reads the real clock here.
+#[derive(Clone, Copy, Debug, Default)]
+struct SystemWorkspaceMetadataClock;
+
+impl WorkspaceMetadataClock for SystemWorkspaceMetadataClock {
+    fn now_unix_millis(&self) -> i64 {
+        unix_millis(SystemTime::now())
+    }
+}
+
 pub struct PreparedApp {
     pub router: Router,
     /// The live boot facts the `/readyz` router reads. Carried out of `prepare()` so
@@ -454,6 +485,52 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         SqliteHostResourcesColdRead::open(&config.database_path),
     )
     .await?;
+    // #2223 CP3 workspace-write + human-auth store handles. Each is a read-only-or-
+    // scoped snapshot pool on the SAME product database file, opened by path exactly
+    // like every sibling `*ColdRead`/store above — no second authority, no shared god
+    // object. The user store answers three human-auth capabilities (email lookup,
+    // profile read, profile write) off one handle; the audience read feeds the
+    // workspace `metadata_changed` publisher's per-viewer human enumeration.
+    let workspace_detail_read = open(
+        "workspace detail read",
+        SqliteWorkspaceDetailRead::open(&config.database_path),
+    )
+    .await?;
+    let workspace_metadata_writes = open(
+        "workspace metadata write",
+        SqliteWorkspaceMetadataWrite::open(&config.database_path),
+    )
+    .await?;
+    let workspace_namespace = open(
+        "workspace name availability",
+        SqliteRegularWorkspaceNamespace::open(&config.database_path),
+    )
+    .await?;
+    let workspace_audience_read = open(
+        "workspace human audience read",
+        SqliteWorkspaceAudienceRead::open(&config.database_path),
+    )
+    .await?;
+    let handle_namespace = open(
+        "handle namespace",
+        SqliteHandleNamespace::open(&config.database_path),
+    )
+    .await?;
+    let user_store = open(
+        "user identity",
+        SqliteUserStore::open(&config.database_path),
+    )
+    .await?;
+    let human_registration = open(
+        "human registration",
+        SqliteHumanRegistration::open(&config.database_path),
+    )
+    .await?;
+    let credential_store = open(
+        "login credential",
+        SqliteCredentialStore::open(&config.database_path),
+    )
+    .await?;
 
     let hub = ScopeEventHub::production().map_err(|source| StartupError::Composition {
         name: "scope event hub",
@@ -475,6 +552,14 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         SystemDisconnectClock,
         GraceWindow::from_millis_or_default(None),
     );
+    // #2223 CP3: the human-auth issue/revoke writes ride the SAME session store the
+    // read authenticator holds — cloned as shared-pool handles (the store is an `Arc`
+    // pool), captured before `HumanSessionAuthenticator::new` moves the original just
+    // below. Not a second authority: the same `auth_sessions` table backs the issue
+    // that login/signup performs, the revoke that logout performs, and the read the
+    // `/api/me` perimeter performs.
+    let session_issue = session_store.clone();
+    let session_revoke = session_store.clone();
     let sessions =
         HumanSessionAuthenticator::new(session_store, SystemSessionClock, SessionTtl::default());
     let runtime_credentials = RuntimeCredentialAuthority::production(custody_store);
@@ -541,6 +626,12 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // mutation port; `thread_follow` is the follow/unfollow write door.
     let saved_store = messaging_store.saved();
     let thread_follow_store = messaging_store.thread_follow();
+    // #2223 CP3: the workspace-rename fan-out's three read/author ports (channel
+    // population, per-channel system-message author, per-channel agent audience) are
+    // answered by the SAME `MessagingStore` — one `&self` builder handle, captured
+    // before `write_doors` moves the store below. The adapter that wraps this with the
+    // daemon delivery effect and the hub publication is assembled just before the merge.
+    let workspace_rename_messaging = messaging_store.workspace_rename_messaging();
     // `/readyz`'s live write probe rides the SAME `MessagingStore` pool handle the send
     // door holds — it does NOT reopen SQLite by path. Captured before `write_doors`
     // moves the store below. The probe is the one thing readiness cannot answer from
@@ -636,6 +727,46 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         }
         DeploymentProfile::RemoteOnly => runtimes::control_plane_router(),
     };
+    // #2223 CP3: assemble the two workspace-metadata-write outbound authorities and the
+    // human-auth deps from real production adapters, BEFORE `hub`/`sessions` are moved
+    // into the event transport below. The rename fan-out is ONE whole effect — author +
+    // daemon delivery + conversation-scope publication — never a half-effect: the
+    // messaging store answers author/read, `daemon_runtime.effects()` is the per-agent
+    // runtime push, and the hub is the conversation-scope `message` publication. The
+    // `metadata_changed` viewer hint routes through the SAME hub over the audience read.
+    let workspace_rename_fanout = WorkspaceRenameFanoutAdapter::new(
+        workspace_rename_messaging,
+        daemon_runtime.effects(),
+        hub.clone(),
+    );
+    let workspace_metadata_sink = hub.workspace_metadata_changed_sink(workspace_audience_read);
+    // The five human identity/session routes, generic over each capability. In
+    // production several resolve to one store: the user store answers email lookup +
+    // profile read + profile write, and the session store answers issue + revoke. The
+    // hasher is the real spawn-blocking Argon2id KDF; the mint is the real CSPRNG bearer
+    // mint; `user_changed` is the production hub sink (signup + profile edit announce).
+    // The router self-applies `require_human_session` to only its `me` pair, so it must
+    // mount at the TOP LEVEL — inside `human_products` the anonymous signup/login/logout
+    // trio would be gated before a session can exist. It is handed the SAME session-read
+    // authority the outer perimeter uses.
+    let human_auth_router = human_auth::router(
+        HumanAuthDeps {
+            handles: handle_namespace,
+            emails: user_store.clone(),
+            hasher: SpawnBlockingHasher::new(Argon2idPasswordHasher::production(OsEntropy)),
+            registration: human_registration,
+            mint: EntropySessionTokenMint::new(OsEntropy),
+            sessions: session_issue,
+            revoke: session_revoke,
+            credentials: credential_store,
+            reads: user_store.clone(),
+            writes: user_store,
+            user_changed: hub.clone(),
+            clock: SystemSessionClock,
+            signup_enabled: config.signup_enabled,
+        },
+        sessions.clone(),
+    );
     let human_products = require_human_session(
         host.merge(human_writes)
             // Wave 3A checkpoint A6 (#2203): `POST /api/agents/{id}/direct-messages`, the
@@ -645,6 +776,23 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             // neither shadows the other.
             .merge(direct_pairs::router(direct_pair_read_model))
             .merge(workspaces::router(workspace_cold_read))
+            // #2223 CP3: the three authenticated workspace-metadata routes, behind this
+            // same human perimeter. `workspace_detail` GET and `workspace_metadata_write`
+            // PATCH share the `/api/workspaces/{id}` node — axum accumulates the disjoint
+            // methods into one method router, so neither shadows the other, and both share
+            // the parent `/api/workspaces` with the static `name-availability` GET and the
+            // list GET already merged above. The metadata-write door binds the governance
+            // read (`access_store`), the write UoW, the `metadata_changed` viewer-hint sink
+            // and the whole rename fan-out assembled above, and the production wall clock.
+            .merge(workspace_detail::router(workspace_detail_read))
+            .merge(workspace_name_availability::router(workspace_namespace))
+            .merge(workspace_metadata_write::router(
+                access_store.clone(),
+                workspace_metadata_writes,
+                workspace_metadata_sink,
+                workspace_rename_fanout,
+                SystemWorkspaceMetadataClock,
+            ))
             .merge(availability::router(
                 agent_availability_cold_read,
                 daemon_controller.clone(),
@@ -777,6 +925,13 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     Ok(PreparedApp {
         router: Router::new()
             .merge(human_products)
+            // #2223 CP3: the five human identity/session routes mount at the top level,
+            // NOT inside `human_products`. The router self-wraps `require_human_session`
+            // around only its `me` pair; the anonymous signup/login/logout trio is merged
+            // outside any perimeter, exactly as the product allowlists them past the
+            // bearer gate — placing it behind the outer perimeter would make login
+            // unreachable before a session exists.
+            .merge(human_auth_router)
             .merge(agent_products)
             .merge(event_router)
             .merge(daemon_router)
