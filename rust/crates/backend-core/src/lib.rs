@@ -30,6 +30,7 @@ pub mod runtime_delivery;
 pub mod runtime_event;
 pub mod scope_event;
 pub mod teardown;
+pub mod user_identity;
 pub mod user_presence_cold_read;
 pub mod user_presence_last_seen;
 pub mod viewer_workspace_sort;

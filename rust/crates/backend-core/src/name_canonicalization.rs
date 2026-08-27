@@ -182,7 +182,12 @@ fn in_ranges(ranges: &[(u32, u32)], point: u32) -> bool {
 
 // ECMA-262 WhiteSpace + LineTerminator. This deliberately differs from Rust's
 // Unicode White_Space: FEFF is included and U+0085 is excluded.
-fn is_ecmascript_trim_whitespace(character: char) -> bool {
+//
+// Exposed so any bounded context whose admission mirrors a Zod `.trim()` (the
+// display-name value object, for one) folds against the SAME whitespace set the
+// name envelope uses, rather than minting a second trim authority that could
+// drift from `String.prototype.trim()`.
+pub fn is_ecmascript_trim_whitespace(character: char) -> bool {
     matches!(
         character,
         '\u{0009}' | '\u{000B}' | '\u{000C}' | '\u{0020}' | '\u{00A0}' | '\u{1680}' | '\u{2000}'
