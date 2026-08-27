@@ -33,15 +33,16 @@
 //!
 //! ## Two deliberate, reachability-priced wire divergences (flagged for review)
 //!
-//! 1. The `400` body is `{ "error": "invalid input" }` (and, for the empty
-//!    `PATCH /api/me` object, the faithful `{ "error": "no fields to update" }`),
-//!    WITHOUT the Zod `issues` array the TS route also emits. No shared response
-//!    schema pins `issues`, and no consumer branches on it (unlike the sibling
-//!    workspace-metadata surface, whose issue CODES a client can act on and which
-//!    therefore reproduces them under a shared parity fixture). Reproducing the
-//!    full Zod issue projection here would be a large, drift-prone surface with no
-//!    reachable consumer, so the observable `error` string is preserved and the
-//!    unconsumed `issues` array is dropped.
+//! 1. The `400` body is terminally `{ "error": "invalid input" }`, WITHOUT the
+//!    Zod `issues` array the TS route also emits, AND the empty `PATCH /api/me`
+//!    object (the Zod `.refine` "no fields to update") collapses to the same body
+//!    rather than TS's distinct `{ "error": "no fields to update" }`. No shared
+//!    response schema pins `issues`, and no consumer branches on it or on the
+//!    refine string (unlike the sibling workspace-metadata surface, whose issue
+//!    CODES a client can act on and which therefore reproduces them under a shared
+//!    parity fixture). Reproducing the full Zod issue projection here would be a
+//!    large, drift-prone surface with no reachable consumer, so the observable
+//!    `error` string is preserved as one terminal `invalid input`.
 //! 2. Under the bearer perimeter, an authenticated session that resolves to no
 //!    `users` row is a dangling pointer — persistence corruption — so `GET`/`PATCH
 //!    /api/me` take the lane's safe-500 (bare `text/plain`), NOT the TS `404
@@ -77,6 +78,7 @@ use silverhand_backend_core::{
         SignupCommand, SignupPorts, log_in, log_out, sign_up,
     },
     identity::UserId,
+    messaging::PrincipalKind,
     user_identity::{
         DisplayName, EmailAddress, ParticipantHandle, UserChangedAnnounce, UserChangedSink,
         UserEmailLookup, UserProfileRead, UserProfileUpdate, UserProfileWriteUnitOfWork, UserRecord,
@@ -87,6 +89,7 @@ use silverhand_backend_core::{
 use crate::auth::{PublicJsonUnauthorized, require_human_session};
 use crate::bearer::strict_bearer_credential;
 use crate::error;
+use crate::messaging::author_wire::principal_avatar_url;
 
 /// `authPaths.signup`.
 pub const SIGNUP_PATH: &str = "/auth/signup";
@@ -439,7 +442,8 @@ where
     let body = read_body(request).await;
     let display_name = match parse_profile_patch(&body) {
         ProfilePatch::DisplayName(display_name) => display_name,
-        ProfilePatch::NoFields => return no_fields(),
+        // A malformed body, an invalid `display_name`, AND the empty/no-fields
+        // object all collapse to the one terminal 400 (ratified divergence #1).
         ProfilePatch::Invalid => return invalid_input(),
     };
 
@@ -555,15 +559,15 @@ fn parse_login_body(body: &Bytes, audit: SessionAudit) -> Option<LoginCommand> {
     })
 }
 
-/// The three admission verdicts for `PATCH /api/me`'s body, mirroring
+/// The two admission verdicts for `PATCH /api/me`'s body, mirroring
 /// `UpdateUserProfileInputSchema` (`{ display_name?: DisplayNameSchema }` with a
-/// `.refine(keys > 0)`).
+/// `.refine(keys > 0)`). The refine's "no fields" case is NOT a distinct verdict:
+/// it collapses into [`Invalid`](ProfilePatch::Invalid) with every other malformed
+/// body, since the ratified `400` is one terminal `invalid input`.
 enum ProfilePatch {
     /// A valid `display_name` was supplied.
     DisplayName(DisplayName),
-    /// The object carried no `display_name` — the `.refine` "no fields to update".
-    NoFields,
-    /// Malformed body or an invalid `display_name` value.
+    /// Malformed body, an invalid `display_name` value, OR no fields at all.
     Invalid,
 }
 
@@ -575,7 +579,8 @@ fn parse_profile_patch(body: &Bytes) -> ProfilePatch {
         return ProfilePatch::Invalid;
     };
     match object.get("display_name") {
-        None => ProfilePatch::NoFields,
+        // No `display_name` key is the refine's "no fields" — one terminal 400.
+        None => ProfilePatch::Invalid,
         Some(Value::String(raw)) => match DisplayName::parse(raw) {
             Ok(display_name) => ProfilePatch::DisplayName(display_name),
             Err(_) => ProfilePatch::Invalid,
@@ -595,8 +600,10 @@ fn within_utf16(value: &str, min: usize, max: usize) -> bool {
 // ===========================================================================
 
 /// The `UserDto` both `me` routes and the signup/login `user` field project.
-/// snake_case on the wire; `email` is NEVER returned; `avatar_url` is out of this
-/// vertical's scope and always `null`.
+/// snake_case on the wire; `email` is NEVER returned. `avatar_url` is the
+/// cache-busted `/api/users/:id/avatar?v=:updated_at` projected from the user's
+/// stored avatar revision (the shared [`principal_avatar_url`] human arm), or
+/// `null` when no avatar is stored — a freshly signed-up user has none.
 #[derive(Serialize)]
 struct UserDto {
     id: String,
@@ -613,7 +620,7 @@ impl UserDto {
             id: user.id.as_str().to_owned(),
             name: user.handle.clone(),
             display_name: user.display_name.clone(),
-            avatar_url: None,
+            avatar_url: principal_avatar_url(PrincipalKind::Human, user.id.as_str(), user.avatar),
             created_at: user.created_at,
             updated_at: user.updated_at,
         }
@@ -715,16 +722,6 @@ fn invalid_input() -> Response {
         StatusCode::BAD_REQUEST,
         Json(ErrorBody {
             error: "invalid input",
-        }),
-    )
-        .into_response()
-}
-
-fn no_fields() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ErrorBody {
-            error: "no fields to update",
         }),
     )
         .into_response()

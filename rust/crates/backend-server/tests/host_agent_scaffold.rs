@@ -114,6 +114,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "workspace_metadata_write"),
     ("backend-server", "workspace_name_availability"),
     ("backend-server", "human_auth"),
+    ("backend-server", "password_hasher"),
     ("backend-sqlite", "agent_availability_read"),
     ("backend-sqlite", "agent_detail_read"),
     ("backend-sqlite", "agent_list_read"),

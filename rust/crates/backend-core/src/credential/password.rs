@@ -1,4 +1,5 @@
 use std::{
+    future::Future,
     sync::{Arc, OnceLock},
     time::Instant,
 };
@@ -103,18 +104,80 @@ impl PasswordHashError {
             source: Box::new(Message(message.into())),
         }
     }
+
+    /// A blocking-offload join failure — the KDF task panicked or the runtime is
+    /// shutting down. An infrastructure fault the server adapter surfaces so the
+    /// flow takes the safe-500, never a product answer. Public so the server's
+    /// single offload adapter (the only thing that runs the KDF off-reactor) can
+    /// construct it without a second error home.
+    pub fn offload_join_failed<E>(source: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self::from_source(source)
+    }
+
+    /// A test-only fault value, so a fake KDF in another module can prove the
+    /// dummy-verify failure path propagates rather than silently no-ops.
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        Self::message("test-induced password hash failure")
+    }
 }
 
-/// The credential context's hashing port.
+/// A hasher authority was asked to calibrate against an empty candidate ladder.
+/// That is a construction/configuration fault the public constructor reports
+/// rather than panicking on — a hasher with nothing to select from could never
+/// produce an honest `candidateCount`.
+#[derive(Debug, thiserror::Error)]
+#[error("the argon2 candidate ladder is empty")]
+pub struct EmptyCandidateLadder;
+
+/// The credential context's hashing port — **async so the synchronous Argon2id
+/// KDF can be offloaded off the request reactor**. Argon2id is a deliberately
+/// ~250ms CPU computation; the production adapter (the server's single
+/// [`SpawnBlockingHasher`](../../../silverhand_backend_server/index.html)) runs it
+/// on a blocking pool so concurrent signup/login cannot starve unrelated
+/// health/readiness/WS futures. Fakes implement this directly with immediate
+/// futures; core never offloads (it must not depend on any runtime).
 ///
-/// `verify` and `verify_dummy` never surface an error: a malformed stored PHC
-/// verifies as `false` (matching the TS `try/catch → false`), and the dummy
-/// path exists purely to spend the same cost on a missing account so login
-/// timing cannot distinguish "unknown email" from "wrong password".
+/// `verify` returns `Ok(false)` for a malformed *stored* PHC (matching the TS
+/// `try/catch → false`) — that is a product "wrong credential", not a fault. It
+/// Errs ONLY on an infrastructure fault (a blocking-pool join failure).
+/// `verify_dummy` spends the same cost on a missing account so login timing cannot
+/// distinguish "unknown email" from "wrong password"; it Errs if the dummy PHC
+/// itself cannot be produced (entropy/KDF fault) — the login flow must take the
+/// safe-500 there, never silently skip the uniform-timing cost. Every Err is a
+/// safe-500 seam, never a product answer.
 pub trait PasswordHasher: Clone + Send + Sync + 'static {
+    fn hash(
+        &self,
+        password: &str,
+    ) -> impl Future<Output = Result<PreparedPasswordCredential, PasswordHashError>> + Send;
+    fn verify(
+        &self,
+        phc: &str,
+        password: &str,
+    ) -> impl Future<Output = Result<bool, PasswordHashError>> + Send;
+    fn verify_dummy(&self, password: &str)
+    -> impl Future<Output = Result<(), PasswordHashError>> + Send;
+}
+
+/// The synchronous Argon2id computation, split from the async [`PasswordHasher`]
+/// port so the CPU work has ONE home and the offload boundary has ONE home.
+/// Production wires a [`PasswordKdf`] into the server's single offload adapter,
+/// which is the sole thing that turns these blocking calls into the async port;
+/// core defines the computation and lets the packaging layer own where it runs.
+///
+/// Same answer contract as the async port, minus the offload fault: `verify`
+/// returns `false` for a malformed stored PHC (never an error — a product "wrong
+/// credential"), and `verify_dummy` Errs only when the dummy PHC cannot be
+/// produced (an entropy/KDF fault), so the login flow can take the safe-500 rather
+/// than silently skipping the uniform-timing cost.
+pub trait PasswordKdf: Clone + Send + Sync + 'static {
     fn hash(&self, password: &str) -> Result<PreparedPasswordCredential, PasswordHashError>;
     fn verify(&self, phc: &str, password: &str) -> bool;
-    fn verify_dummy(&self, password: &str);
+    fn verify_dummy(&self, password: &str) -> Result<(), PasswordHashError>;
 }
 
 /// Measures how long one hash costs at a given candidate. Injected so tests can
@@ -206,7 +269,11 @@ where
                 output_len: OUTPUT_LEN,
             })
             .collect();
-        Self::with_measurer(entropy, RealArgon2Measurer, candidates, TARGET_HASH_MILLIS)
+        // The production ladder is a fixed non-empty literal, so this bypasses
+        // the empty-ladder check by construction rather than unwrapping a Result
+        // (no panic path). `production_ladder_is_never_empty` is the positive gate
+        // that keeps `candidateCount >= 1` a by-construction persistent property.
+        Self::from_candidates(entropy, RealArgon2Measurer, candidates, TARGET_HASH_MILLIS)
     }
 }
 
@@ -218,7 +285,28 @@ where
     /// Full constructor with an injected measurer and candidate ladder. Tests
     /// use this with a deterministic measurer so calibration is reproducible
     /// and never touches the wall clock.
+    ///
+    /// **Fallible**: an empty candidate ladder is a construction/configuration
+    /// fault, not a process panic — a hasher with nothing to select from could
+    /// never produce an honest `candidateCount`. Callers that supply their own
+    /// ladder handle [`EmptyCandidateLadder`]; the production ladder is a fixed
+    /// non-empty literal and takes the infallible internal path.
     pub fn with_measurer(
+        entropy: E,
+        measurer: M,
+        candidates: Vec<Argon2idCost>,
+        target_millis: u64,
+    ) -> Result<Self, EmptyCandidateLadder> {
+        if candidates.is_empty() {
+            return Err(EmptyCandidateLadder);
+        }
+        Ok(Self::from_candidates(entropy, measurer, candidates, target_millis))
+    }
+
+    /// Infallible internal constructor over an already-non-empty ladder. Only
+    /// [`with_measurer`](Self::with_measurer) (after its emptiness check) and
+    /// [`production`](Self::production) (with its fixed literal ladder) reach it.
+    fn from_candidates(
         entropy: E,
         measurer: M,
         candidates: Vec<Argon2idCost>,
@@ -301,22 +389,32 @@ where
     }
 
     /// The memoized dummy PHC, hashed once at the calibrated cost from an
-    /// entropy-drawn dummy password (mirrors the TS `getDummyHash`).
-    fn dummy_phc(&self) -> Option<&str> {
+    /// entropy-drawn dummy password (mirrors the TS `getDummyHash`). Fallible:
+    /// an entropy or KDF fault here must propagate so the login flow takes the
+    /// safe-500 rather than silently skipping the uniform-timing cost.
+    fn dummy_phc(&self) -> Result<&str, PasswordHashError> {
         if let Some(existing) = self.dummy_phc.get() {
-            return Some(existing.as_str());
+            return Ok(existing.as_str());
         }
         let params = self.params();
         let mut dummy_bytes = [0u8; DUMMY_PASSWORD_BYTES];
-        self.entropy.fill(&mut dummy_bytes).ok()?;
+        self.entropy
+            .fill(&mut dummy_bytes)
+            .map_err(PasswordHashError::from_source)?;
         let dummy_password = URL_SAFE_NO_PAD.encode(dummy_bytes);
-        let phc = self.hash_with(&params, &dummy_password).ok()?;
+        let phc = self.hash_with(&params, &dummy_password)?;
         let _ = self.dummy_phc.set(phc);
-        self.dummy_phc.get().map(String::as_str)
+        // `set` raced-lost only if another thread just filled it; either way the
+        // cell now holds a valid dummy PHC.
+        Ok(self
+            .dummy_phc
+            .get()
+            .map(String::as_str)
+            .expect("the dummy PHC cell was just populated"))
     }
 }
 
-impl<E, M> PasswordHasher for Argon2idPasswordHasher<E, M>
+impl<E, M> PasswordKdf for Argon2idPasswordHasher<E, M>
 where
     E: EntropySource + 'static,
     M: CostMeasurer,
@@ -338,10 +436,10 @@ where
             .is_ok()
     }
 
-    fn verify_dummy(&self, password: &str) {
-        if let Some(phc) = self.dummy_phc() {
-            let _ = self.verify(phc, password);
-        }
+    fn verify_dummy(&self, password: &str) -> Result<(), PasswordHashError> {
+        let phc = self.dummy_phc()?;
+        let _ = self.verify(phc, password);
+        Ok(())
     }
 }
 
@@ -408,7 +506,8 @@ mod tests {
             LinearMeasurer { millis_per_mib: 10 },
             ladder(),
             TARGET_HASH_MILLIS,
-        );
+        )
+        .unwrap();
         let params = hasher.params();
         assert_eq!(params.cost.memory_cost_kib, FLOOR_MEMORY_COST_KIB * 2);
         assert_eq!(params.cost.time_cost, FLOOR_TIME_COST);
@@ -429,7 +528,8 @@ mod tests {
             LinearMeasurer { millis_per_mib: 100 },
             ladder(),
             TARGET_HASH_MILLIS,
-        );
+        )
+        .unwrap();
         let params = hasher.params();
         assert!(params.cost.memory_cost_kib >= FLOOR_MEMORY_COST_KIB);
         assert!(params.cost.time_cost >= FLOOR_TIME_COST);
@@ -442,7 +542,8 @@ mod tests {
             LinearMeasurer { millis_per_mib: 0 },
             ladder(),
             TARGET_HASH_MILLIS,
-        );
+        )
+        .unwrap();
         let prepared = hasher.hash("correct horse").unwrap();
         assert!(hasher.verify(&prepared.phc, "correct horse"));
         assert!(!hasher.verify(&prepared.phc, "wrong horse"));
@@ -455,7 +556,8 @@ mod tests {
             LinearMeasurer { millis_per_mib: 10 },
             ladder(),
             TARGET_HASH_MILLIS,
-        );
+        )
+        .unwrap();
         let prepared = hasher.hash("pw").unwrap();
         let parsed = PasswordHash::new(&prepared.phc).unwrap();
         assert_eq!(parsed.algorithm.as_str(), ARGON2ID_ALGORITHM);
@@ -472,7 +574,8 @@ mod tests {
             LinearMeasurer { millis_per_mib: 0 },
             ladder(),
             TARGET_HASH_MILLIS,
-        );
+        )
+        .unwrap();
         assert!(!hasher.verify("not-a-phc-string", "pw"));
     }
 
@@ -483,8 +586,60 @@ mod tests {
             LinearMeasurer { millis_per_mib: 0 },
             ladder(),
             TARGET_HASH_MILLIS,
+        )
+        .unwrap();
+        // Its only observable effect is spending hash cost; with sound entropy
+        // and KDF it succeeds rather than silently no-opping.
+        hasher.verify_dummy("some password").unwrap();
+    }
+
+    #[test]
+    fn with_measurer_rejects_an_empty_candidate_ladder() {
+        // An empty ladder is a construction fault reported as an error, never a
+        // panic and never a hasher that would fabricate `candidateCount = 0`.
+        let outcome = Argon2idPasswordHasher::with_measurer(
+            ZeroEntropy,
+            LinearMeasurer { millis_per_mib: 0 },
+            Vec::new(),
+            TARGET_HASH_MILLIS,
         );
-        // Must not panic; its only observable effect is spending hash cost.
-        hasher.verify_dummy("some password");
+        assert!(matches!(outcome, Err(EmptyCandidateLadder)));
+    }
+
+    #[test]
+    fn production_ladder_is_never_empty() {
+        // The positive gate behind `production`'s infallible construction: the
+        // fixed ladder yields a real selection, so `candidateCount >= 1` holds by
+        // construction for every shipped hasher.
+        let hasher = Argon2idPasswordHasher::production(ZeroEntropy);
+        assert!(hasher.params().calibration.candidate_count >= 1);
+    }
+
+    /// A PHC string produced by the Node `@node-rs/argon2` implementation at the
+    /// same floor cost (m=19456, t=2, p=1, outputLen=32) over the password below.
+    /// Checked-in fixture proves the shared persisted contract: an old Node row
+    /// verifies under the Rust Argon2id verifier byte-for-byte.
+    const NODE_ARGON2ID_PHC: &str =
+        include_str!("../../tests/fixtures/node-argon2id-phc.txt");
+    const NODE_FIXTURE_PASSWORD: &str = "correct-horse-battery-staple";
+
+    #[test]
+    fn verifies_a_node_produced_phc_for_the_shared_persisted_contract() {
+        let hasher = Argon2idPasswordHasher::with_measurer(
+            ZeroEntropy,
+            LinearMeasurer { millis_per_mib: 0 },
+            ladder(),
+            TARGET_HASH_MILLIS,
+        )
+        .unwrap();
+        let node_phc = NODE_ARGON2ID_PHC.trim();
+        assert!(
+            hasher.verify(node_phc, NODE_FIXTURE_PASSWORD),
+            "a Node-produced PHC must verify under the Rust verifier"
+        );
+        assert!(
+            !hasher.verify(node_phc, "the-wrong-password"),
+            "the same PHC must reject a wrong password"
+        );
     }
 }

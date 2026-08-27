@@ -243,6 +243,9 @@ fn decode_user(row: &sqlx::sqlite::SqliteRow) -> Result<UserRecord, Registration
         email: row.try_get("email")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
+        // A freshly registered user never has an avatar; the write does not
+        // return the column and the row's key is always empty at this point.
+        avatar: None,
     })
 }
 

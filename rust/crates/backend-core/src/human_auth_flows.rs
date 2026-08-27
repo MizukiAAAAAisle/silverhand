@@ -166,7 +166,7 @@ where
     // Cost floor FIRST, before any identity branch: every attempt that reaches
     // here pays one Argon2id hash whatever the outcome, so neither answer below is
     // a cheap probe.
-    let credential = ports.hasher.hash(&command.password)?;
+    let credential = ports.hasher.hash(&command.password).await?;
 
     // Decided on the handle alone, across both halves of the mention namespace.
     if ports.handles.is_handle_taken(&command.handle).await? {
@@ -262,15 +262,15 @@ where
 {
     let candidate = ports.credentials.lookup_login(command.email.as_str()).await?;
     let Some(candidate) = candidate else {
-        ports.hasher.verify_dummy(&command.password);
+        ports.hasher.verify_dummy(&command.password).await?;
         return Ok(Login::AuthFailed);
     };
     let Some(phc) = candidate.password_hash else {
         // A profile-only user: spend the dummy cost, then the uniform failure.
-        ports.hasher.verify_dummy(&command.password);
+        ports.hasher.verify_dummy(&command.password).await?;
         return Ok(Login::AuthFailed);
     };
-    if !ports.hasher.verify(&phc, &command.password) {
+    if !ports.hasher.verify(&phc, &command.password).await? {
         return Ok(Login::AuthFailed);
     }
 
@@ -365,6 +365,7 @@ mod tests {
             handle: "alice".to_owned(),
             display_name: "Alice".to_owned(),
             email: Some("alice@example.com".to_owned()),
+            avatar: None,
             created_at: 10,
             updated_at: 10,
         }
@@ -421,7 +422,7 @@ mod tests {
         }
     }
     impl PasswordHasher for FakeHasher {
-        fn hash(&self, _password: &str) -> Result<PreparedPasswordCredential, PasswordHashError> {
+        async fn hash(&self, _password: &str) -> Result<PreparedPasswordCredential, PasswordHashError> {
             Ok(PreparedPasswordCredential {
                 phc: "$argon2id$fake".to_owned(),
                 params: crate::credential::PasswordHashParams {
@@ -441,11 +442,29 @@ mod tests {
                 },
             })
         }
-        fn verify(&self, _phc: &str, _password: &str) -> bool {
-            self.verify_ok
+        async fn verify(&self, _phc: &str, _password: &str) -> Result<bool, PasswordHashError> {
+            Ok(self.verify_ok)
         }
-        fn verify_dummy(&self, _password: &str) {
+        async fn verify_dummy(&self, _password: &str) -> Result<(), PasswordHashError> {
             self.dummy_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// A hasher whose dummy-verify path faults — so a test can prove the login
+    /// flow propagates the fault to a safe-500 rather than silently returning the
+    /// uniform failure without spending (and honestly failing) the cost.
+    #[derive(Clone)]
+    struct FailingDummyHasher;
+    impl PasswordHasher for FailingDummyHasher {
+        async fn hash(&self, _password: &str) -> Result<PreparedPasswordCredential, PasswordHashError> {
+            Err(PasswordHashError::for_test())
+        }
+        async fn verify(&self, _phc: &str, _password: &str) -> Result<bool, PasswordHashError> {
+            Ok(false)
+        }
+        async fn verify_dummy(&self, _password: &str) -> Result<(), PasswordHashError> {
+            Err(PasswordHashError::for_test())
         }
     }
 
@@ -799,6 +818,38 @@ mod tests {
         .unwrap();
         assert!(matches!(outcome, Login::AuthFailed));
         assert_eq!(hasher.dummy_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn login_with_a_faulting_dummy_verify_is_a_safe_500_not_auth_failed() {
+        // An unknown email must still spend the dummy verify; if THAT faults
+        // (entropy/KDF failure), the flow must surface the fault as a safe-500,
+        // never swallow it and answer the uniform failure without paying the cost.
+        let lookup = FakeLookup(None);
+        let reads = FakeReads(None);
+        let hasher = FailingDummyHasher;
+        let mint = FakeMint;
+        let issue = RecordingIssue {
+            issued: Arc::new(Mutex::new(Vec::new())),
+        };
+        let result = log_in(
+            LoginPorts {
+                credentials: &lookup,
+                users: &reads,
+                hasher: &hasher,
+                mint: &mint,
+                sessions: &issue,
+            },
+            LoginCommand {
+                email: EmailAddress::parse("nobody@example.com").unwrap(),
+                password: "x".to_owned(),
+                audit: SessionAudit::default(),
+            },
+            NOW,
+        )
+        .await;
+        assert!(matches!(result, Err(HumanAuthError::Hash(_))));
+        assert!(issue.issued.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

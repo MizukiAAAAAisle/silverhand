@@ -92,7 +92,7 @@ impl FakeHasher {
 }
 
 impl PasswordHasher for FakeHasher {
-    fn hash(&self, password: &str) -> Result<PreparedPasswordCredential, PasswordHashError> {
+    async fn hash(&self, password: &str) -> Result<PreparedPasswordCredential, PasswordHashError> {
         Ok(PreparedPasswordCredential {
             phc: Self::phc_for(password),
             params: PasswordHashParams {
@@ -113,12 +113,13 @@ impl PasswordHasher for FakeHasher {
         })
     }
 
-    fn verify(&self, phc: &str, password: &str) -> bool {
-        phc == Self::phc_for(password)
+    async fn verify(&self, phc: &str, password: &str) -> Result<bool, PasswordHashError> {
+        Ok(phc == Self::phc_for(password))
     }
 
-    fn verify_dummy(&self, _password: &str) {
+    async fn verify_dummy(&self, _password: &str) -> Result<(), PasswordHashError> {
         self.dummy_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -227,6 +228,25 @@ async fn stored_token_hashes(path: &std::path::Path) -> Vec<String> {
         .unwrap();
     connection.close().await.unwrap();
     rows.into_iter().map(|(hash,)| hash).collect()
+}
+
+/// Stamp an avatar onto a `users` row (the test tempfile), leaving `updated_at`
+/// untouched so the cache-buster the projection appends is known. The schema's
+/// CHECK pairs the storage key with a content type, so both are written. No route
+/// sets an avatar, so this simulates a user who already has one.
+async fn set_avatar_storage_key(path: &std::path::Path, user_id: &str, key: &str) {
+    let mut connection = sqlx::SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE users SET avatar_storage_key = ?, avatar_content_type = 'image/png' WHERE id = ?",
+    )
+    .bind(key)
+    .bind(user_id)
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    connection.close().await.unwrap();
 }
 
 async fn call(app: &Router, request: Request<Body>) -> (StatusCode, Value) {
@@ -402,6 +422,28 @@ async fn login_for_an_unknown_email_is_the_same_uniform_401() {
 }
 
 #[tokio::test]
+async fn get_me_projects_a_cache_busted_avatar_url_when_the_user_has_one() {
+    let backend = backend(true).await;
+    let (_, signup) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
+    let token = token_of(&signup);
+    let user_id = signup["user"]["id"].as_str().unwrap().to_owned();
+
+    // A freshly signed-up user has no avatar — the DTO projects null.
+    assert_eq!(signup["user"]["avatar_url"], Value::Null);
+
+    // Give the user an avatar, then read the profile back: the projection folds the
+    // storage key into `/api/users/:id/avatar?v=:updated_at`, cache-busted by the
+    // row's fixed `updated_at` (NOW_MS, untouched by the stamp).
+    set_avatar_storage_key(&backend.path, &user_id, "avatars/alice.png").await;
+    let (status, me) = call(&backend.app, authed_get(human_auth::ME_PATH, &token)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        me["avatar_url"],
+        json!(format!("/api/users/{user_id}/avatar?v={NOW_MS}"))
+    );
+}
+
+#[tokio::test]
 async fn get_me_without_a_bearer_is_the_perimeter_401() {
     let backend = backend(true).await;
     let request = Request::builder()
@@ -459,15 +501,17 @@ async fn patch_me_with_the_same_display_name_is_a_noop_that_emits_no_event() {
 }
 
 #[tokio::test]
-async fn patch_me_with_no_fields_is_the_refine_400() {
+async fn patch_me_with_no_fields_is_the_terminal_invalid_input() {
     let backend = backend(true).await;
     let (_, signup) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, signup_body())).await;
     let token = token_of(&signup);
 
+    // The Zod `.refine` "no fields" case collapses into the one terminal 400 body
+    // (ratified divergence #1), not TS's distinct "no fields to update".
     let (status, body) =
         call(&backend.app, authed_patch(human_auth::ME_PATH, &token, json!({}))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body, json!({ "error": "no fields to update" }));
+    assert_eq!(body, json!({ "error": "invalid input" }));
 }
 
 #[tokio::test]

@@ -293,8 +293,9 @@ fn is_email_local_final_char(character: char) -> bool {
 ///
 /// Fields are public because this is a read model the boundary projects to the
 /// wire, not a verdict. `GET /api/me` projects `{id, name, display_name,
-/// avatar_url: null, created_at, updated_at}` from it (email is never returned;
-/// avatar is out of this vertical's scope and always projected null).
+/// avatar_url, created_at, updated_at}` from it (email is never returned;
+/// `avatar_url` is the cache-busted `/api/users/:id/avatar?v=:updated_at`
+/// projection, or null when the user has no stored avatar).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserRecord {
     pub id: UserId,
@@ -304,6 +305,10 @@ pub struct UserRecord {
     /// `users.email` (nullable — a profile-only user has none; a signup user
     /// always does).
     pub email: Option<String>,
+    /// The avatar revision (from `users.avatar_storage_key` + `updated_at`), or
+    /// `None` when no avatar is stored. The boundary projects the cache-busted
+    /// URL from it; a freshly signed-up user has none.
+    pub avatar: Option<crate::messaging::AvatarRevision>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -631,6 +636,7 @@ mod tests {
             email: Some("alice@example.com".to_owned()),
             created_at: 1,
             updated_at,
+            avatar: None,
         }
     }
 

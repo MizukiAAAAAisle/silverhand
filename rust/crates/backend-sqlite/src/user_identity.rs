@@ -18,6 +18,7 @@ use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
     identity::UserId,
+    messaging::AvatarRevision,
     persistence::PersistenceFailure,
     user_identity::{
         DisplayName, UserEmailLookup, UserProfileRead, UserProfileWrite,
@@ -35,12 +36,12 @@ const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 const SELECT_PROFILE: &str = "\
-SELECT id, name, display_name, email, created_at, updated_at FROM users WHERE id = ?";
+SELECT id, name, display_name, email, avatar_storage_key, created_at, updated_at FROM users WHERE id = ?";
 const SELECT_ID_BY_EMAIL: &str = "SELECT id FROM users WHERE email = ? COLLATE NOCASE";
 const UPDATE_DISPLAY_NAME: &str = "\
 UPDATE users SET display_name = ?, updated_at = ? \
  WHERE id = ? \
- RETURNING id, name, display_name, email, created_at, updated_at";
+ RETURNING id, name, display_name, email, avatar_storage_key, created_at, updated_at";
 
 /// A pooled connection to an existing product database offering the
 /// user-identity reads and the self-profile write. Holds no clock; `now_ms` is
@@ -152,13 +153,23 @@ impl SqliteUserStore {
 fn decode_user(row: &sqlx::sqlite::SqliteRow) -> Result<UserRecord, CorruptStoredUserId> {
     let id = UserId::parse(row.try_get::<String, _>("id").map_err(|_| CorruptStoredUserId)?)
         .map_err(|_| CorruptStoredUserId)?;
+    let updated_at: i64 = row.try_get("updated_at").map_err(|_| CorruptStoredUserId)?;
+    // The avatar URL is cache-busted by `updated_at`; an absent or empty storage
+    // key means "no avatar", exactly as the messaging author projection folds it.
+    let avatar_storage_key: Option<String> =
+        row.try_get("avatar_storage_key").map_err(|_| CorruptStoredUserId)?;
+    let avatar = match avatar_storage_key.as_deref() {
+        None | Some("") => None,
+        Some(_) => Some(AvatarRevision::at(updated_at)),
+    };
     Ok(UserRecord {
         id,
         handle: row.try_get("name").map_err(|_| CorruptStoredUserId)?,
         display_name: row.try_get("display_name").map_err(|_| CorruptStoredUserId)?,
         email: row.try_get("email").map_err(|_| CorruptStoredUserId)?,
+        avatar,
         created_at: row.try_get("created_at").map_err(|_| CorruptStoredUserId)?,
-        updated_at: row.try_get("updated_at").map_err(|_| CorruptStoredUserId)?,
+        updated_at,
     })
 }
 
@@ -218,7 +229,9 @@ mod tests {
 INSERT INTO users (id, name, display_name, email, created_at, updated_at) \
   VALUES ('user-1', 'alice', 'Alice', 'alice@example.com', 10, 100); \
 INSERT INTO users (id, name, display_name, email, created_at, updated_at) \
-  VALUES ('user-2', 'bob', 'Bob', NULL, 10, 100);";
+  VALUES ('user-2', 'bob', 'Bob', NULL, 10, 100); \
+INSERT INTO users (id, name, display_name, email, avatar_storage_key, avatar_content_type, created_at, updated_at) \
+  VALUES ('user-3', 'carol', 'Carol', 'carol@example.com', 'avatars/carol.png', 'image/png', 10, 250);";
 
     async fn open_seeded() -> (tempfile::TempDir, SqliteUserStore) {
         let directory = tempfile::tempdir().unwrap();
@@ -247,8 +260,18 @@ INSERT INTO users (id, name, display_name, email, created_at, updated_at) \
         assert_eq!(record.handle, "alice");
         assert_eq!(record.display_name, "Alice");
         assert_eq!(record.email.as_deref(), Some("alice@example.com"));
+        assert_eq!(record.avatar, None, "no stored avatar key projects no revision");
         assert_eq!(record.created_at, 10);
         assert_eq!(record.updated_at, 100);
+    }
+
+    #[tokio::test]
+    async fn get_folds_a_stored_avatar_key_into_a_cache_busted_revision() {
+        let (_dir, store) = open_seeded().await;
+        let record = store.get(&uid("user-3")).await.unwrap().expect("a row");
+        // A non-empty storage key yields a revision cache-busted by updated_at.
+        assert_eq!(record.avatar, Some(AvatarRevision::at(250)));
+        assert_eq!(record.avatar.unwrap().cache_buster(), 250);
     }
 
     #[tokio::test]
