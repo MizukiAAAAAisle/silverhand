@@ -447,9 +447,11 @@ impl ScopeEventHub {
     /// Both hub-shaped components come from `&self`: the publication authority is this hub,
     /// and so is the one the unread publisher routes through. Assembled by hand the
     /// statement took two independent hub arguments that merely happened to be the same
-    /// value; here there is no hub argument at all, and
-    /// [`HubUnreadPublisher::new`] is crate-private so a composition root cannot route the
-    /// unread axis through a second transport:
+    /// value; here there is no hub argument at all, and [`HubUnreadPublisher::new`] is
+    /// crate-private, so every aftermath this seam builds has its unread axis on the hub it
+    /// publishes on. A second transport is not impossible — it takes an explicit second hub
+    /// and a second call, a visible assembly rather than one component quietly pointed
+    /// elsewhere:
     ///
     /// ```compile_fail
     /// use silverhand_backend_server::scope_events::{HubUnreadPublisher, ScopeEventHub};
@@ -887,9 +889,10 @@ fn latest_unread_wire(latest: &CoreLatestUnread) -> LatestUnread {
 /// model decides placement, audience, and every count — so the placement fork below is a
 /// total match over [`UnreadAudience`]'s two arms and cannot silently drop one.
 ///
-/// Built only by [`ScopeEventHub::messaging_aftermath`], which supplies the hub from its
-/// own `&self`. It needs no `Clone`: the aftermath that owns it is an `Arc` handle, so the
-/// second door shares this publisher rather than duplicating it.
+/// Outside the crate it comes only from [`ScopeEventHub::messaging_aftermath`], which
+/// supplies the hub from its own `&self`; the constructor stays crate-private, and in-crate
+/// tests call it directly as substrate. It needs no `Clone`: the aftermath that owns it is
+/// an `Arc` handle, so the second door shares this publisher rather than duplicating it.
 pub struct HubUnreadPublisher<R> {
     hub: ScopeEventHub,
     read_model: R,

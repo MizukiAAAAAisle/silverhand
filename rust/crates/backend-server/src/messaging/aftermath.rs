@@ -6,9 +6,12 @@
 //! effects, then exactly one of main-line or reply effects. Every component of the
 //! concrete production composition is required at construction; none is optional.
 //!
-//! It is also the only source of the messaging write doors. Every door reads the
+//! It is also the seam the production write doors come from: ONE call yields the complete
+//! human and agent write sets, already bound to this aftermath. Every door reads the
 //! aftermath from `&self` instead of taking it as a parameter, so the composition
-//! statements that mount them have no fan-out argument to get wrong.
+//! statements that mount them have no fan-out argument to get wrong. The raw router
+//! factories stay public as the component/spy substrate, so this is not a claim that no
+//! other set can be built — only that building one is an explicit, visible act.
 
 use std::{future::Future, sync::Arc};
 
@@ -61,13 +64,17 @@ pub trait SendAftermath {
 /// of copying components — it states the sharing itself rather than describing today's
 /// components.
 ///
-/// The constructor is crate-private and [`crate::scope_events::ScopeEventHub::messaging_aftermath`]
-/// is the only public source, so a composition crate cannot mint a second aftermath at all:
+/// The constructor is crate-private, so [`crate::scope_events::ScopeEventHub::messaging_aftermath`]
+/// is the only way a composition crate can obtain one. That does NOT make a second fan-out
+/// impossible — the factory can be called twice, and a second hub is still reachable through
+/// the public `ScopeEventHub::production`. What it removes is the quiet version: forking
+/// requires explicitly constructing a second hub and a second aftermath, which is a
+/// review-visible assembly rather than a swapped argument:
 ///
 /// ```compile_fail
 /// use silverhand_backend_server::messaging::aftermath::MessagingAftermath;
 ///
-/// // Crate-private. A composition root has no way to assemble a second fan-out.
+/// // Crate-private: a composition root cannot assemble a fan-out component by component.
 /// let _ = MessagingAftermath::new((), (), (), ());
 /// ```
 ///
