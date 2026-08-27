@@ -10,7 +10,7 @@ use argon2::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
-use crate::host_runtime::EntropySource;
+use crate::host_runtime::environment::EntropySource;
 
 /// The one algorithm this backend issues and accepts.
 pub const ARGON2ID_ALGORITHM: &str = "argon2id";

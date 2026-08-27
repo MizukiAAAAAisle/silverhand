@@ -77,7 +77,7 @@ mod tests {
             Argon2idCost, Argon2idPasswordHasher, CostMeasurer, FLOOR_MEMORY_COST_KIB,
             FLOOR_TIME_COST, OUTPUT_LEN, TARGET_HASH_MILLIS,
         },
-        host_runtime::OsEntropy,
+        host_runtime::environment::OsEntropy,
     };
     use std::sync::{
         Arc, Mutex,

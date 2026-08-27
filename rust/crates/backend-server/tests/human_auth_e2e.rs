@@ -34,7 +34,7 @@ use silverhand_backend_core::{
         Argon2idCost, PasswordHashError, PasswordHasher, PasswordHashParams,
         PreparedPasswordCredential, RustCalibration,
     },
-    host_runtime::OsEntropy,
+    host_runtime::environment::OsEntropy,
     identity::UserId,
     user_identity::{UserChangedAnnounceFailure, UserChangedSink},
 };

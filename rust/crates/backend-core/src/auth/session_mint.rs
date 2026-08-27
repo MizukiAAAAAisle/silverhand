@@ -3,7 +3,7 @@ use std::{fmt, sync::Arc};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use thiserror::Error;
 
-use crate::{auth::session::SessionTokenHash, host_runtime::EntropySource};
+use crate::{auth::session::SessionTokenHash, host_runtime::environment::EntropySource};
 
 /// Number of CSPRNG bytes behind one session bearer, matching the TS
 /// `randomBytes(32)` issue precedent.

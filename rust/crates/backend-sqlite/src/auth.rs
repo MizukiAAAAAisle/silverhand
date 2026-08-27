@@ -20,7 +20,7 @@ use silverhand_backend_core::{
         SessionAudit, SessionIssue, SessionRevoke, SessionTokenHash, SessionValidation,
         SessionValidationPort,
     },
-    host_runtime::{EntropySource, OsEntropy},
+    host_runtime::environment::{EntropySource, OsEntropy},
     identity::UserId,
     persistence::PersistenceFailure,
 };

@@ -20,7 +20,7 @@ use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
     credential::PreparedPasswordCredential,
-    host_runtime::{EntropySource, OsEntropy},
+    host_runtime::environment::{EntropySource, OsEntropy},
     human_auth_flows::{HumanRegistration, HumanRegistrationUnitOfWork},
     identity::UserId,
     persistence::PersistenceFailure,

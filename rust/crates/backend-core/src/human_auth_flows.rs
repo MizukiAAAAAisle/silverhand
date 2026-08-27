@@ -348,7 +348,7 @@ mod tests {
     use crate::{
         auth::{MintedSession, SessionTokenHash},
         credential::LoginCandidate,
-        host_runtime::EntropySource,
+        host_runtime::environment::EntropySource,
         user_identity::UserChangedAnnounceFailure,
     };
     use std::sync::{
