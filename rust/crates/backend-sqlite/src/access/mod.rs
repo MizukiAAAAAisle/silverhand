@@ -35,8 +35,8 @@ use silverhand_backend_core::access::{
     AddHumanMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
     AgentWorkspaceMembership, Capability, EnrollmentKey, HumanEnrollmentCommit, HumanEnrollmentKey,
     HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, HumanUser, WorkspaceAccessPolicy,
-    WorkspaceGovernance, WorkspaceGovernanceFacts, WorkspaceRole, WorkspaceUserMembership,
-    governance_ceiling, human_enrollment_authorized,
+    WorkspaceGovernance, WorkspaceGovernanceFacts, WorkspaceGovernanceFactsRead, WorkspaceRole,
+    WorkspaceUserMembership, governance_ceiling, human_enrollment_authorized,
 };
 use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
@@ -414,6 +414,21 @@ impl WorkspaceAccessPolicy for SqliteAccessStore {
             .await
             .map_err(PersistenceFailure::from_source)?;
         Ok(governance_ceiling(principal, facts))
+    }
+}
+
+impl WorkspaceGovernanceFactsRead for SqliteAccessStore {
+    async fn read_governance_facts(
+        &self,
+        principal: &Principal,
+        workspace_id: &WorkspaceId,
+    ) -> Result<WorkspaceGovernanceFacts, PersistenceFailure> {
+        // The raw facts, off the SAME read the ceiling door consumes. The floor
+        // rule (`governance_floor_verdict`) is applied by the metadata surfaces
+        // with owner-fidelity; this adapter derives nothing.
+        self.governance_facts(principal, workspace_id)
+            .await
+            .map_err(PersistenceFailure::from_source)
     }
 }
 

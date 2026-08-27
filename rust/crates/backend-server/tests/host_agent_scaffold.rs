@@ -104,6 +104,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "host_control"),
     ("backend-server", "host_resources"),
     ("backend-server", "workspace_detail"),
+    ("backend-server", "workspace_metadata_write"),
     ("backend-server", "workspace_name_availability"),
     ("backend-sqlite", "agent_availability_read"),
     ("backend-sqlite", "agent_detail_read"),
@@ -115,6 +116,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-sqlite", "user_presence_cold_read"),
     ("backend-sqlite", "user_presence_last_seen"),
     ("backend-sqlite", "workspace_detail_read"),
+    ("backend-sqlite", "workspace_metadata_write"),
     ("backend-sqlite", "workspace_name_availability"),
 ];
 

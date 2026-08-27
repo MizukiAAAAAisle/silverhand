@@ -231,18 +231,23 @@ pub enum WorkspaceArchiveWrite {
 ///
 /// The unit re-reads the authoritative row and the caller's role under the lock,
 /// applies the pure governance floor (`Admin` for [`update_metadata`], `Owner` for
-/// [`set_archived`]) via the shared [`governance_ceiling`](crate::access::governance_ceiling),
-/// decides name collision against the regular namespace, writes, and returns the
-/// fact its own write produced. The `actor` is passed in so the adapter re-derives
-/// authority under the same lock a pre-lock boundary verdict cannot guarantee is
-/// still current. The `edit` is borrowed: the use case keeps ownership to seal the
-/// returned fact against it.
+/// [`set_archived`]) via the shared
+/// [`governance_floor_verdict`](crate::access::governance_floor_verdict), decides
+/// name collision against the regular namespace, writes, and returns the fact its
+/// own write produced. The `actor` is passed in so the adapter re-derives authority
+/// under the same lock a pre-lock boundary verdict cannot guarantee is still
+/// current. `now_ms` is the write instant the application sampled — the value the
+/// always-bumped `updated_at` takes (and, for an archive, the `archived_at`
+/// timestamp): this crate owns no clock, so the time source stays in the
+/// application exactly as the enrollment join time does. The `edit` is borrowed:
+/// the use case keeps ownership to seal the returned fact against it.
 pub trait WorkspaceMetadataWriteUnitOfWork: Clone + Send + Sync + 'static {
     fn update_metadata(
         &self,
         actor: Principal,
         workspace_id: &WorkspaceId,
         edit: &WorkspaceMetadataEdit,
+        now_ms: i64,
     ) -> impl Future<Output = Result<WorkspaceMetadataWrite, PersistenceFailure>> + Send;
 
     fn set_archived(
@@ -250,6 +255,7 @@ pub trait WorkspaceMetadataWriteUnitOfWork: Clone + Send + Sync + 'static {
         actor: Principal,
         workspace_id: &WorkspaceId,
         archived: bool,
+        now_ms: i64,
     ) -> impl Future<Output = Result<WorkspaceArchiveWrite, PersistenceFailure>> + Send;
 }
 
@@ -456,11 +462,12 @@ pub(crate) async fn update_workspace_metadata<W>(
     actor: Principal,
     workspace_id: &WorkspaceId,
     edit: WorkspaceMetadataEdit,
+    now_ms: i64,
 ) -> Result<WorkspaceMetadataUpdate, WorkspaceMetadataWriteError>
 where
     W: WorkspaceMetadataWriteUnitOfWork,
 {
-    match writes.update_metadata(actor, workspace_id, &edit).await? {
+    match writes.update_metadata(actor, workspace_id, &edit, now_ms).await? {
         WorkspaceMetadataWrite::NoSuchWorkspace => Ok(WorkspaceMetadataUpdate::NoSuchWorkspace),
         WorkspaceMetadataWrite::Forbidden => Ok(WorkspaceMetadataUpdate::Forbidden),
         WorkspaceMetadataWrite::NameTaken => Ok(WorkspaceMetadataUpdate::NameTaken),
@@ -484,11 +491,12 @@ pub async fn archive_workspace<W>(
     actor: Principal,
     workspace_id: &WorkspaceId,
     archived: bool,
+    now_ms: i64,
 ) -> Result<WorkspaceArchiveUpdate, WorkspaceMetadataWriteError>
 where
     W: WorkspaceMetadataWriteUnitOfWork,
 {
-    match writes.set_archived(actor, workspace_id, archived).await? {
+    match writes.set_archived(actor, workspace_id, archived, now_ms).await? {
         WorkspaceArchiveWrite::NoSuchWorkspace => Ok(WorkspaceArchiveUpdate::NoSuchWorkspace),
         WorkspaceArchiveWrite::Forbidden => Ok(WorkspaceArchiveUpdate::Forbidden),
         WorkspaceArchiveWrite::Committed { face, changed } => {
@@ -586,26 +594,44 @@ pub enum WorkspaceMetadataAnnounce {
 /// A committed metadata update together with the fate of its `metadata_changed`
 /// announce.
 ///
-/// The two travel together because they are one request's outcome: the committed
-/// face is the product answer (the `200` body), and the announce is a side
-/// obligation that was either not owed, met, or lost. The fields are SEALED and
-/// reachable only through [`into_parts`](Self::into_parts), which yields both at
-/// once — so a boundary cannot take the face to serve the wire while letting the
-/// announce fate fall on the floor unrecorded, the same discipline as
+/// The three travel together because they are one request's outcome: the committed
+/// face is the product answer (the `200` body), the announce is the id-only
+/// cache-invalidation side obligation THIS context owns and already discharged
+/// (not owed, met, or lost), and the [`WorkspaceNameChange`] is the sealed address
+/// pair a rename left. The name-change gate is surfaced — not consumed here — so
+/// the boundary that owns the SEPARATE messaging context (the per-channel rename
+/// system message) and the audit (`logWorkspaceAddressAssignment`) can drive them
+/// off the same committed fact: this context fires the viewer hint it owns and
+/// hands the gate onward rather than reaching across into messaging. It is `Some`
+/// exactly when the display name moved (and then the announce is `Delivered` or
+/// `Failed`); a description-only or same-name edit leaves it `None` (and the
+/// announce `NotOwed`). The fields are SEALED and reachable only through
+/// [`into_parts`](Self::into_parts), which yields all three at once — so a boundary
+/// cannot take the face to serve the wire while letting the announce fate fall on
+/// the floor unrecorded or the rename fan-out go undone, the same discipline as
 /// [`crate::access::HumanEnrollmentOutcome`].
 #[derive(Debug)]
-#[must_use = "a committed metadata update carries an announce outcome that must be recorded"]
+#[must_use = "a committed metadata update carries an announce outcome and a rename gate that must be handled"]
 pub struct AnnouncedWorkspaceMetadata {
     face: WorkspaceFace,
+    name_change: Option<WorkspaceNameChange>,
     announce: WorkspaceMetadataAnnounce,
 }
 
 impl AnnouncedWorkspaceMetadata {
-    /// Split into the committed face (for the wire) and the fate of its announce
-    /// (to record) at once — the only door in, so a caller that wants the face
-    /// necessarily receives the announce in the same move.
-    pub fn into_parts(self) -> (WorkspaceFace, WorkspaceMetadataAnnounce) {
-        (self.face, self.announce)
+    /// Split into the committed face (for the wire), the sealed name-change gate
+    /// (the address pair a rename left, for the messaging fan-out and the audit —
+    /// `None` when no display name moved), and the fate of the viewer hint (to
+    /// record) at once — the only door in, so a caller that wants the face
+    /// necessarily receives the gate and the announce in the same move.
+    pub fn into_parts(
+        self,
+    ) -> (
+        WorkspaceFace,
+        Option<WorkspaceNameChange>,
+        WorkspaceMetadataAnnounce,
+    ) {
+        (self.face, self.name_change, self.announce)
     }
 }
 
@@ -649,12 +675,13 @@ pub async fn update_workspace_metadata_and_announce<W, S>(
     actor: Principal,
     workspace_id: &WorkspaceId,
     edit: WorkspaceMetadataEdit,
+    now_ms: i64,
 ) -> Result<WorkspaceMetadataUpdateWithAnnounce, WorkspaceMetadataWriteError>
 where
     W: WorkspaceMetadataWriteUnitOfWork,
     S: WorkspaceMetadataChangedSink,
 {
-    match update_workspace_metadata(writes, actor, workspace_id, edit).await? {
+    match update_workspace_metadata(writes, actor, workspace_id, edit, now_ms).await? {
         WorkspaceMetadataUpdate::NoSuchWorkspace => {
             Ok(WorkspaceMetadataUpdateWithAnnounce::NoSuchWorkspace)
         }
@@ -664,7 +691,7 @@ where
             // Take the sealed face and its name-change gate together; the gate is
             // the sole authority on whether the fan-out is owed.
             let (face, name_change) = committed.into_parts();
-            let announce = match name_change {
+            let announce = match &name_change {
                 // A real rename: the hint is owed. Fire it against the request's
                 // own workspace id (which the seal already bound to `face.id`), and
                 // carry the delivery fate — a failure is recorded, never a rollback.
@@ -677,7 +704,11 @@ where
                 None => WorkspaceMetadataAnnounce::NotOwed,
             };
             Ok(WorkspaceMetadataUpdateWithAnnounce::Committed(
-                AnnouncedWorkspaceMetadata { face, announce },
+                AnnouncedWorkspaceMetadata {
+                    face,
+                    name_change,
+                    announce,
+                },
             ))
         }
     }
@@ -741,6 +772,7 @@ mod tests {
             _actor: Principal,
             _workspace_id: &WorkspaceId,
             _edit: &WorkspaceMetadataEdit,
+            _now_ms: i64,
         ) -> Result<WorkspaceMetadataWrite, PersistenceFailure> {
             Ok(self.metadata.clone())
         }
@@ -750,6 +782,7 @@ mod tests {
             _actor: Principal,
             _workspace_id: &WorkspaceId,
             _archived: bool,
+            _now_ms: i64,
         ) -> Result<WorkspaceArchiveWrite, PersistenceFailure> {
             Ok(self.archive.clone())
         }
@@ -777,6 +810,7 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Name(name("Design Team")),
+            0,
         )
         .await
         .unwrap();
@@ -804,6 +838,7 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Description(Some("hello".to_owned())),
+            0,
         )
         .await
         .unwrap();
@@ -831,6 +866,7 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Name(name("Same")),
+            0,
         )
         .await
         .unwrap();
@@ -854,6 +890,7 @@ mod tests {
                 system(),
                 &workspace_id(),
                 WorkspaceMetadataEdit::Name(name("Anything")),
+                0,
             )
             .await
             .unwrap();
@@ -874,7 +911,7 @@ mod tests {
         edit: WorkspaceMetadataEdit,
     ) {
         let writes = FakeWrites::on_metadata(write);
-        let result = update_workspace_metadata(&writes, system(), &workspace_id(), edit).await;
+        let result = update_workspace_metadata(&writes, system(), &workspace_id(), edit, 0).await;
         assert!(
             matches!(
                 result,
@@ -1025,6 +1062,7 @@ mod tests {
                 _actor: Principal,
                 _workspace_id: &WorkspaceId,
                 _edit: &WorkspaceMetadataEdit,
+                _now_ms: i64,
             ) -> Result<WorkspaceMetadataWrite, PersistenceFailure> {
                 Err(PersistenceFailure::from_source(StubFault))
             }
@@ -1033,6 +1071,7 @@ mod tests {
                 _actor: Principal,
                 _workspace_id: &WorkspaceId,
                 _archived: bool,
+                _now_ms: i64,
             ) -> Result<WorkspaceArchiveWrite, PersistenceFailure> {
                 Err(PersistenceFailure::from_source(StubFault))
             }
@@ -1042,6 +1081,7 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Name(name("Design Team")),
+            0,
         )
         .await;
         assert!(matches!(
@@ -1060,7 +1100,7 @@ mod tests {
             face,
             changed: true,
         });
-        let outcome = archive_workspace(&writes, system(), &workspace_id(), true)
+        let outcome = archive_workspace(&writes, system(), &workspace_id(), true, 0)
             .await
             .unwrap();
         let WorkspaceArchiveUpdate::Committed(archived) = outcome else {
@@ -1076,7 +1116,7 @@ mod tests {
             face: regular_face("workspace-1", "Design Team"),
             changed: true,
         });
-        let outcome = archive_workspace(&writes, system(), &workspace_id(), false)
+        let outcome = archive_workspace(&writes, system(), &workspace_id(), false, 0)
             .await
             .unwrap();
         let WorkspaceArchiveUpdate::Committed(archived) = outcome else {
@@ -1093,7 +1133,7 @@ mod tests {
             face: regular_face("workspace-1", "Design Team"),
             changed: true,
         });
-        let result = archive_workspace(&writes, system(), &workspace_id(), true).await;
+        let result = archive_workspace(&writes, system(), &workspace_id(), true, 0).await;
         assert!(matches!(
             result,
             Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact)
@@ -1108,7 +1148,7 @@ mod tests {
             face,
             changed: true,
         });
-        let result = archive_workspace(&writes, system(), &workspace_id(), true).await;
+        let result = archive_workspace(&writes, system(), &workspace_id(), true, 0).await;
         assert!(matches!(
             result,
             Err(WorkspaceMetadataWriteError::UntrustworthyWriteFact)
@@ -1125,7 +1165,7 @@ mod tests {
             (WorkspaceArchiveWrite::Forbidden, "forbidden"),
         ] {
             let writes = FakeWrites::on_archive(raw);
-            let outcome = archive_workspace(&writes, human.clone(), &workspace_id(), true)
+            let outcome = archive_workspace(&writes, human.clone(), &workspace_id(), true, 0)
                 .await
                 .unwrap();
             let got = match outcome {
@@ -1197,14 +1237,18 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Name(name("Design Team")),
+            0,
         )
         .await
         .unwrap();
         let WorkspaceMetadataUpdateWithAnnounce::Committed(announced) = outcome else {
             panic!("expected Committed");
         };
-        let (face, announce) = announced.into_parts();
+        let (face, name_change, announce) = announced.into_parts();
         assert_eq!(face.name, "Design Team");
+        let change = name_change.expect("a real rename surfaces its address pair for the fan-out");
+        assert_eq!(change.old_name, "Old");
+        assert_eq!(change.new_name, "Design Team");
         assert!(matches!(announce, WorkspaceMetadataAnnounce::Delivered));
         assert_eq!(sink.calls(), 1, "a real rename fires the hint exactly once");
     }
@@ -1224,13 +1268,18 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Description(Some("hello".to_owned())),
+            0,
         )
         .await
         .unwrap();
         let WorkspaceMetadataUpdateWithAnnounce::Committed(announced) = outcome else {
             panic!("expected Committed");
         };
-        let (_face, announce) = announced.into_parts();
+        let (_face, name_change, announce) = announced.into_parts();
+        assert!(
+            name_change.is_none(),
+            "a description-only edit surfaces no address pair"
+        );
         assert!(matches!(announce, WorkspaceMetadataAnnounce::NotOwed));
         assert_eq!(
             sink.calls(),
@@ -1253,13 +1302,15 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Name(name("Same")),
+            0,
         )
         .await
         .unwrap();
         let WorkspaceMetadataUpdateWithAnnounce::Committed(announced) = outcome else {
             panic!("expected Committed");
         };
-        let (_face, announce) = announced.into_parts();
+        let (_face, name_change, announce) = announced.into_parts();
+        assert!(name_change.is_none());
         assert!(matches!(announce, WorkspaceMetadataAnnounce::NotOwed));
         assert_eq!(sink.calls(), 0);
     }
@@ -1282,6 +1333,7 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Name(name("Design Team")),
+            0,
         )
         .await
         .unwrap();
@@ -1290,8 +1342,12 @@ mod tests {
         let WorkspaceMetadataUpdateWithAnnounce::Committed(announced) = outcome else {
             panic!("a failed announce must not turn the commit into a refusal");
         };
-        let (face, announce) = announced.into_parts();
+        let (face, name_change, announce) = announced.into_parts();
         assert_eq!(face.name, "Design Team");
+        assert!(
+            name_change.is_some(),
+            "the rename committed, so its address pair is still surfaced even when the hint failed"
+        );
         assert!(matches!(announce, WorkspaceMetadataAnnounce::Failed(_)));
         assert_eq!(sink.calls(), 1);
     }
@@ -1311,6 +1367,7 @@ mod tests {
                 system(),
                 &workspace_id(),
                 WorkspaceMetadataEdit::Name(name("Anything")),
+                0,
             )
             .await
             .unwrap();
@@ -1344,6 +1401,7 @@ mod tests {
             system(),
             &workspace_id(),
             WorkspaceMetadataEdit::Name(name("Design Team")),
+            0,
         )
         .await;
         assert!(matches!(

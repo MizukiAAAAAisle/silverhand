@@ -15,7 +15,9 @@ pub use agent_enrollment::{
 };
 pub use clock::{EnrollmentClock, unix_millis};
 pub use governance::{
-    WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceGovernanceFacts, governance_ceiling,
+    WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceGovernanceFacts,
+    WorkspaceGovernanceFactsRead, WorkspaceGovernanceFloor, governance_ceiling,
+    governance_floor_verdict,
 };
 pub use human_enrollment::{
     AddHumanMemberError, HumanEnrollmentCommit, HumanEnrollmentKey, HumanEnrollmentOutcome,

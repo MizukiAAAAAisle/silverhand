@@ -103,6 +103,77 @@ pub fn governance_ceiling(
     }
 }
 
+/// A floor-parametric verdict over the SAME facts [`governance_ceiling`] reads,
+/// for the surfaces whose floor the collapsed ceiling cannot express.
+///
+/// The ceiling folds `admin` and `owner` into one `Admin` rung because its two
+/// consumers (the agent and people rosters) need only the member and admin
+/// floors. The workspace-metadata surfaces need MORE resolution: rename requires
+/// `admin`, but archive/delete require `owner`, and `Admin` cannot tell an admin
+/// from an owner. So this door answers the floor question directly — is the
+/// caller's standing at least `min_role`? — rather than reporting a rung a
+/// consumer must then re-interpret.
+///
+/// It is the SAME door pattern, sampled at the SAME point (pre-lock, so it can go
+/// stale — the write re-derives under its own lock), over the SAME facts and the
+/// SAME role axis ([`WorkspaceRole::meets_floor`]); only the question's shape
+/// differs. Mirrors the product's `canGovernWorkspace(ctx, principal, id, minRole)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceGovernanceFloor {
+    /// No such regular workspace — missing, or an agent-home — so `404`.
+    WorkspaceNotFound,
+    /// The workspace exists but the caller does not clear `min_role` — `403`.
+    Denied,
+    /// The caller clears `min_role` and may perform the operation.
+    Governs,
+}
+
+/// The pure floor-door rule: does `principal` govern this workspace at least at
+/// `min_role`?
+///
+/// Existence is resolved FIRST and for every principal, exactly like
+/// [`governance_ceiling`], so a caller who could otherwise govern anything still
+/// learns only `404` about a workspace that is not there. Above that: `system`
+/// governs at every floor, an agent principal is never a governance actor, and a
+/// human clears the floor iff their stored role [`meets_floor`](WorkspaceRole::meets_floor)
+/// — a `None` role is not membership and clears nothing.
+pub fn governance_floor_verdict(
+    principal: &Principal,
+    facts: WorkspaceGovernanceFacts,
+    min_role: WorkspaceRole,
+) -> WorkspaceGovernanceFloor {
+    let WorkspaceGovernanceFacts::Regular { actor_role } = facts else {
+        return WorkspaceGovernanceFloor::WorkspaceNotFound;
+    };
+    let governs = match principal {
+        Principal::System => true,
+        Principal::Agent { .. } => false,
+        Principal::Human { .. } => actor_role.is_some_and(|role| role.meets_floor(min_role)),
+    };
+    if governs {
+        WorkspaceGovernanceFloor::Governs
+    } else {
+        WorkspaceGovernanceFloor::Denied
+    }
+}
+
+/// The request-boundary read the floor door consumes: the caller's governance
+/// facts over one workspace, resolved in a single read, before any write lock.
+///
+/// It is the driver-free twin of [`WorkspaceAccessPolicy`]: that door returns the
+/// collapsed ceiling for the roster surfaces, this one returns the RAW facts so a
+/// surface can apply its own floor via [`governance_floor_verdict`] with
+/// owner-fidelity. An adapter serves both off the same read and never
+/// re-implements the role axis. Sampled pre-lock — it can go stale, and the write
+/// path re-derives authority under its own lock.
+pub trait WorkspaceGovernanceFactsRead: Clone + Send + Sync + 'static {
+    fn read_governance_facts(
+        &self,
+        principal: &Principal,
+        workspace_id: &WorkspaceId,
+    ) -> impl Future<Output = Result<WorkspaceGovernanceFacts, PersistenceFailure>> + Send;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +256,95 @@ mod tests {
                 governance_ceiling(&agent, regular(role)),
                 WorkspaceGovernance::Denied
             );
+        }
+    }
+
+    // ---- the floor door ----
+
+    #[test]
+    fn the_floor_door_resolves_existence_before_grading_any_principal() {
+        for principal in [
+            human(),
+            Principal::System,
+            Principal::Agent {
+                agent_id: AgentId::parse("agent-1").unwrap(),
+            },
+        ] {
+            for floor in [WorkspaceRole::Member, WorkspaceRole::Admin, WorkspaceRole::Owner] {
+                assert_eq!(
+                    governance_floor_verdict(
+                        &principal,
+                        WorkspaceGovernanceFacts::NoSuchWorkspace,
+                        floor,
+                    ),
+                    WorkspaceGovernanceFloor::WorkspaceNotFound,
+                    "existence is resolved before the floor is applied"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_human_clears_a_floor_iff_their_stored_role_meets_it() {
+        // Owner clears every floor; admin clears admin but not owner; member
+        // clears only member. This is the resolution the collapsed ceiling loses,
+        // and it is exactly what the owner-floored archive surface needs.
+        assert_eq!(
+            governance_floor_verdict(&human(), regular(Some(WorkspaceRole::Owner)), WorkspaceRole::Owner),
+            WorkspaceGovernanceFloor::Governs
+        );
+        assert_eq!(
+            governance_floor_verdict(&human(), regular(Some(WorkspaceRole::Admin)), WorkspaceRole::Owner),
+            WorkspaceGovernanceFloor::Denied,
+            "an admin does not clear the owner floor — the distinction Admin cannot express"
+        );
+        assert_eq!(
+            governance_floor_verdict(&human(), regular(Some(WorkspaceRole::Admin)), WorkspaceRole::Admin),
+            WorkspaceGovernanceFloor::Governs
+        );
+        assert_eq!(
+            governance_floor_verdict(&human(), regular(Some(WorkspaceRole::Member)), WorkspaceRole::Admin),
+            WorkspaceGovernanceFloor::Denied
+        );
+        assert_eq!(
+            governance_floor_verdict(&human(), regular(Some(WorkspaceRole::Member)), WorkspaceRole::Member),
+            WorkspaceGovernanceFloor::Governs
+        );
+    }
+
+    #[test]
+    fn a_human_with_no_role_row_clears_no_floor() {
+        for floor in [WorkspaceRole::Member, WorkspaceRole::Admin, WorkspaceRole::Owner] {
+            assert_eq!(
+                governance_floor_verdict(&human(), regular(None), floor),
+                WorkspaceGovernanceFloor::Denied
+            );
+        }
+    }
+
+    #[test]
+    fn the_system_principal_clears_every_floor_of_an_existing_workspace() {
+        for floor in [WorkspaceRole::Member, WorkspaceRole::Admin, WorkspaceRole::Owner] {
+            assert_eq!(
+                governance_floor_verdict(&Principal::System, regular(None), floor),
+                WorkspaceGovernanceFloor::Governs
+            );
+        }
+    }
+
+    #[test]
+    fn an_agent_principal_clears_no_floor_regardless_of_role_token() {
+        let agent = Principal::Agent {
+            agent_id: AgentId::parse("agent-1").unwrap(),
+        };
+        for role in [None, Some(WorkspaceRole::Owner)] {
+            for floor in [WorkspaceRole::Member, WorkspaceRole::Admin, WorkspaceRole::Owner] {
+                assert_eq!(
+                    governance_floor_verdict(&agent, regular(role), floor),
+                    WorkspaceGovernanceFloor::Denied,
+                    "governance is a human surface; an agent principal never governs"
+                );
+            }
         }
     }
 }
