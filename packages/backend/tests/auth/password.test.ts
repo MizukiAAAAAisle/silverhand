@@ -12,6 +12,7 @@ import {
 import { openTestDb } from '../utils/db.js';
 import {
   parsePasswordHashParams,
+  serializePasswordHashParams,
   SqliteAuthCredentialsRepo,
 } from '../../src/repos/auth-credentials-repo.js';
 
@@ -300,5 +301,31 @@ describe('persisted password_hash_params producer union', () => {
       benchmark: { ...TEST_PARAMS.benchmark, flooredFrom: { memoryCostKiB: 256, timeCost: 1 } },
     };
     expect(parsePasswordHashParams(JSON.stringify(floored)).library).toBe('@node-rs/argon2');
+  });
+
+  // Producer↔reader differential: the Node producer records `measuredMs` as a
+  // wall-clock duration (`performance.now()` delta), so a legitimate row can
+  // carry a NON-integer `measuredMs`. The value is produced by the real
+  // `benchmarkPasswordHashParams` (not a hand-authored reader-only sample), then
+  // serialized and parsed. An integer guard on `measuredMs` would reject it.
+  it('admits a Node arm whose benchmarked measuredMs is a legitimate non-integer', async () => {
+    const produced = await benchmarkPasswordHashParams({
+      targetMs: 25,
+      candidates: [
+        { memoryCostKiB: 64, timeCost: 1, parallelism: 1, outputLen: 16 },
+        { memoryCostKiB: 128, timeCost: 1, parallelism: 1, outputLen: 16 },
+      ],
+      measureCandidate: async () => 12.5,
+    });
+    expect(produced.library).toBe('@node-rs/argon2');
+    expect(produced.benchmark.measuredMs).toBe(12.5);
+    expect(Number.isInteger(produced.benchmark.measuredMs)).toBe(false);
+
+    const parsed = parsePasswordHashParams(serializePasswordHashParams(produced));
+    expect(parsed.library).toBe('@node-rs/argon2');
+    if (parsed.library !== '@node-rs/argon2') {
+      throw new Error('expected the Node arm');
+    }
+    expect(parsed.benchmark.measuredMs).toBe(12.5);
   });
 });

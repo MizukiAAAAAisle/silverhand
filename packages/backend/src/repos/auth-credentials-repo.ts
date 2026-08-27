@@ -112,7 +112,19 @@ function positiveInteger(value: unknown): value is number {
 }
 
 /**
- * The Node arm's `benchmark` provenance: six required positive-integer fields
+ * A finite positive real. The Node producer's `benchmark.measuredMs` is a wall-
+ * clock duration (`performance.now()` delta), so it is legitimately a
+ * non-integer — validating it as an integer would reject the very rows the Node
+ * backend writes. Every OTHER benchmark/calibration field is an honest count or
+ * cost and stays integer-validated.
+ */
+function positiveFinite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * The Node arm's `benchmark` provenance: five required positive-integer fields
+ * plus `measuredMs` (a finite positive duration, non-integer by construction),
  * plus an OPTIONAL `flooredFrom` that, when present, must itself carry two
  * positive-integer costs. Mirrors `Argon2idPasswordHashParams['benchmark']`.
  */
@@ -120,7 +132,7 @@ function validNodeBenchmark(value: unknown): boolean {
   if (!isObject(value)) return false;
   if (
     !positiveInteger(value.targetMs)
-    || !positiveInteger(value.measuredMs)
+    || !positiveFinite(value.measuredMs)
     || !positiveInteger(value.candidateCount)
     || !positiveInteger(value.selectedAt)
     || !positiveInteger(value.cpuCount)
