@@ -1,0 +1,750 @@
+//! The human credentialed-session HTTP surface — the #2192 "closed set" of five
+//! routes, ported one-to-one from `packages/backend/src/routes/auth.ts`
+//! (`createAuthApp`) and `packages/backend/src/routes/users.ts`
+//! (`createUsersApp`, the `me` pair):
+//!
+//! * `POST /auth/signup`  — public creator of an email+password identity.
+//! * `POST /auth/login`   — public credential verification.
+//! * `POST /auth/logout`  — public bearer revocation.
+//! * `GET  /api/me`       — the caller's own profile (behind the session perimeter).
+//! * `PATCH /api/me`      — the caller's own `display_name` (behind the perimeter).
+//!
+//! These handlers are thin transports over the application flows in
+//! [`silverhand_backend_core::human_auth_flows`] and
+//! [`silverhand_backend_core::user_identity`]: the domain owns the security
+//! ordering (hash → handle → email), the uniform credential answer, the
+//! committed-fact seal, the change gate, and the `user_changed` announce fate.
+//! This module's only jobs are request-boundary admission (parse the body into
+//! value objects, enforce the transport length bounds Zod imposes) and the wire
+//! projection.
+//!
+//! ## Token delivery is BEARER, never a cookie
+//!
+//! The TS contract returns the freshly minted session token in the JSON body as
+//! `user_token` on signup/login, and reads `Authorization: Bearer <token>` on the
+//! authenticated routes. There is no `Set-Cookie` anywhere in this surface, so the
+//! port replicates exactly that: `user_token` in the body, and the shared
+//! [`crate::auth::require_human_session`] perimeter (which reads the same bearer
+//! grammar as logout) guards `GET`/`PATCH /api/me`. Logout is NOT behind the
+//! perimeter — it must read the raw bearer itself to revoke unknown/expired
+//! bearers with the same `401` a missing bearer gets — so it derives the bearer
+//! through the one canonical [`crate::bearer::strict_bearer_credential`] the
+//! perimeter uses, never a second grammar.
+//!
+//! ## Two deliberate, reachability-priced wire divergences (flagged for review)
+//!
+//! 1. The `400` body is terminally `{ "error": "invalid input" }`, WITHOUT the
+//!    Zod `issues` array the TS route also emits, AND the empty `PATCH /api/me`
+//!    object (the Zod `.refine` "no fields to update") collapses to the same body
+//!    rather than TS's distinct `{ "error": "no fields to update" }`. No shared
+//!    response schema pins `issues`, and no consumer branches on it or on the
+//!    refine string (unlike the sibling workspace-metadata surface, whose issue
+//!    CODES a client can act on and which therefore reproduces them under a shared
+//!    parity fixture). Reproducing the full Zod issue projection here would be a
+//!    large, drift-prone surface with no reachable consumer, so the observable
+//!    `error` string is preserved as one terminal `invalid input`.
+//! 2. Under the bearer perimeter, an authenticated session that resolves to no
+//!    `users` row is a dangling pointer — persistence corruption — so `GET`/`PATCH
+//!    /api/me` take the lane's safe-500 (bare `text/plain`), NOT the TS `404
+//!    user_not_found`. The core deliberately models this as the corruption seam
+//!    (`read_self_profile`/`UserProfileUpdate::NoSuchUser` doc comments): a 404
+//!    would dress corruption as a product answer a client could probe.
+//!
+//! ## Faults take the lane's safe `500`, never a JSON envelope
+//!
+//! Every [`HumanAuthError`](silverhand_backend_core::human_auth_flows::HumanAuthError)
+//! arm, a revoke persistence fault, and an untrustworthy committed row take the
+//! crate-wide bare `text/plain` `Internal Server Error`, so no adapter detail can
+//! leak and a misconfiguration is never dressed as a product answer.
+
+use axum::{
+    Json, Router,
+    body::{Bytes, to_bytes},
+    extract::{Extension, Request, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use serde::Serialize;
+use serde_json::Value;
+use silverhand_backend_core::{
+    auth::{
+        AuthenticateHumanSession, IssuedSessionSecret, SessionAudit, SessionBearer, SessionClock,
+        SessionIssue, SessionRevoke, SessionTokenMint,
+    },
+    credential::{LoginCredentialLookup, PasswordHasher},
+    human_auth_flows::{
+        HandleNamespaceRead, HumanRegistrationUnitOfWork, Login, LoginCommand, LoginPorts, Signup,
+        SignupCommand, SignupPorts, log_in, log_out, sign_up,
+    },
+    identity::UserId,
+    messaging::PrincipalKind,
+    user_identity::{
+        DisplayName, EmailAddress, ParticipantHandle, UserChangedAnnounce, UserChangedSink,
+        UserEmailLookup, UserProfileRead, UserProfileUpdate, UserProfileWriteUnitOfWork,
+        UserRecord, read_self_profile, update_self_display_name,
+    },
+};
+
+use crate::auth::{PublicJsonUnauthorized, require_human_session};
+use crate::bearer::strict_bearer_credential;
+use crate::error;
+use crate::messaging::author_wire::principal_avatar_url;
+
+/// `authPaths.signup`.
+pub const SIGNUP_PATH: &str = "/auth/signup";
+/// `authPaths.login`.
+pub const LOGIN_PATH: &str = "/auth/login";
+/// `authPaths.logout`.
+pub const LOGOUT_PATH: &str = "/auth/logout";
+/// `apiPaths.me` — one path, `GET` and `PATCH`.
+pub const ME_PATH: &str = "/api/me";
+
+/// The transport length bounds Zod imposes at the route, in UTF-16 code units
+/// (JS `.length`). The value objects enforce the identity rules (email grammar,
+/// handle regex, display-name charset); these two are the raw-password bounds Zod
+/// owns and the domain deliberately does not (`sign_up`/`log_in` take an
+/// unvalidated password string).
+const SIGNUP_PASSWORD_MIN_UTF16: usize = 8;
+const LOGIN_PASSWORD_MIN_UTF16: usize = 1;
+const PASSWORD_MAX_UTF16: usize = 1024;
+
+/// The safe-500 body, a bare `text/plain`, matching the crate's other routes.
+const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
+
+// ===========================================================================
+// Composition: the ports the five handlers need, generic per capability.
+// ===========================================================================
+
+/// Everything the human-auth routes need, assembled by the composition root. It
+/// is generic over each collaborator INDEPENDENTLY — one type per bounded-context
+/// capability — so a test drives driver-free fakes and the composition root wires
+/// the SQLite adapters (in production several of these resolve to one store, but
+/// the router depends only on the capability, never the concrete). Used directly
+/// as the axum state; it is `Clone` because every port is.
+///
+/// The session-read authority for the `/api/me` perimeter is passed separately to
+/// [`router`] (it is applied as a middleware layer, not read by a handler).
+#[derive(Clone)]
+pub struct HumanAuthDeps<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk> {
+    /// The @-handle existence read (both halves of the mention namespace).
+    pub handles: Ha,
+    /// The `users.getByEmail` existence read signup consults.
+    pub emails: El,
+    /// The Argon2id hasher (verify + dummy-verify + hash).
+    pub hasher: Hr,
+    /// The registration unit of work (atomic `users` + credential insert).
+    pub registration: Reg,
+    /// The session token mint (CSPRNG bearer + its lookup coordinate).
+    pub mint: Mint,
+    /// The session issue write (persist a fresh coordinate).
+    pub sessions: Iss,
+    /// The session revoke write (logout).
+    pub revoke: Rev,
+    /// The login credential lookup (email → user + PHC).
+    pub credentials: Cred,
+    /// The profile read (`GET /api/me`, and login's post-verify user fetch).
+    pub reads: Rd,
+    /// The `display_name` write unit of work (`PATCH /api/me`).
+    pub writes: Wr,
+    /// The `user_changed` announce sink (signup + profile edit). No production
+    /// adapter ships in this vertical — the #2215 integration residual wires it.
+    pub user_changed: Sink,
+    /// The request-instant clock. Reuses the auth context's [`SessionClock`]
+    /// rather than minting a second time authority.
+    pub clock: Clk,
+    /// Whether `POST /auth/signup` is enabled. `false` answers the typed `403`
+    /// before the body is read, so Desktop/ops can tell disabled signup from a
+    /// missing route.
+    pub signup_enabled: bool,
+}
+
+/// Mounts all five routes generic over their ports. The public trio
+/// (signup/login/logout) is merged OUTSIDE the session perimeter; the `me` pair is
+/// wrapped by [`require_human_session`] so its handlers receive the sole core-wide
+/// [`UserId`] in their extensions. Route registration into the served application
+/// is a separate integration seam (this crate never touches the composition root).
+#[allow(clippy::too_many_arguments)]
+pub fn router<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk, A>(
+    deps: HumanAuthDeps<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>,
+    session_authority: A,
+) -> Router
+where
+    Ha: HandleNamespaceRead,
+    El: UserEmailLookup,
+    Hr: PasswordHasher,
+    Reg: HumanRegistrationUnitOfWork,
+    Mint: SessionTokenMint,
+    Iss: SessionIssue,
+    Rev: SessionRevoke,
+    Cred: LoginCredentialLookup,
+    Rd: UserProfileRead,
+    Wr: UserProfileWriteUnitOfWork,
+    Sink: UserChangedSink,
+    Clk: SessionClock,
+    A: AuthenticateHumanSession,
+{
+    let public = Router::new()
+        .route(
+            SIGNUP_PATH,
+            post(signup::<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>),
+        )
+        .route(
+            LOGIN_PATH,
+            post(login::<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>),
+        )
+        .route(
+            LOGOUT_PATH,
+            post(logout::<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>),
+        )
+        .with_state(deps.clone());
+
+    let protected = Router::new()
+        .route(
+            ME_PATH,
+            get(me_get::<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>)
+                .patch(me_patch::<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>),
+        )
+        .with_state(deps);
+    let protected = require_human_session(protected, session_authority, PublicJsonUnauthorized);
+
+    public.merge(protected)
+}
+
+// ===========================================================================
+// POST /auth/signup
+// ===========================================================================
+
+#[allow(clippy::type_complexity)]
+async fn signup<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>(
+    State(deps): State<HumanAuthDeps<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>>,
+    request: Request,
+) -> Response
+where
+    Ha: HandleNamespaceRead,
+    El: UserEmailLookup,
+    Hr: PasswordHasher,
+    Reg: HumanRegistrationUnitOfWork,
+    Mint: SessionTokenMint,
+    Iss: SessionIssue,
+    Rev: SessionRevoke,
+    Cred: LoginCredentialLookup,
+    Rd: UserProfileRead,
+    Wr: UserProfileWriteUnitOfWork,
+    Sink: UserChangedSink,
+    Clk: SessionClock,
+{
+    // The typed 403 is decided BEFORE the body is read: disabled signup must not
+    // let a caller probe body shape.
+    if !deps.signup_enabled {
+        return signup_disabled();
+    }
+
+    // Audit breadcrumbs are captured from the headers before the body moves.
+    let audit = capture_audit(request.headers());
+    let body = read_body(request).await;
+    let Some(command) = parse_signup_body(&body, audit) else {
+        return invalid_input();
+    };
+
+    let now_ms = deps.clock.now_unix_millis();
+    let ports = SignupPorts {
+        handles: &deps.handles,
+        emails: &deps.emails,
+        hasher: &deps.hasher,
+        registration: &deps.registration,
+        mint: &deps.mint,
+        sessions: &deps.sessions,
+        user_changed: &deps.user_changed,
+    };
+    match sign_up(ports, command, now_ms).await {
+        Ok(Signup::Registered {
+            user,
+            secret,
+            announce,
+        }) => {
+            log_lost_announce(&announce, "signup");
+            session_response(secret, &user)
+        }
+        Ok(Signup::HandleTaken) => handle_taken(),
+        Ok(Signup::AuthFailed) => auth_failed(),
+        Err(cause) => {
+            tracing::error!(error_chain = %error::describe(&cause), "signup flow failed");
+            internal_error()
+        }
+    }
+}
+
+// ===========================================================================
+// POST /auth/login
+// ===========================================================================
+
+#[allow(clippy::type_complexity)]
+async fn login<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>(
+    State(deps): State<HumanAuthDeps<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>>,
+    request: Request,
+) -> Response
+where
+    Ha: HandleNamespaceRead,
+    El: UserEmailLookup,
+    Hr: PasswordHasher,
+    Reg: HumanRegistrationUnitOfWork,
+    Mint: SessionTokenMint,
+    Iss: SessionIssue,
+    Rev: SessionRevoke,
+    Cred: LoginCredentialLookup,
+    Rd: UserProfileRead,
+    Wr: UserProfileWriteUnitOfWork,
+    Sink: UserChangedSink,
+    Clk: SessionClock,
+{
+    let audit = capture_audit(request.headers());
+    let body = read_body(request).await;
+    let Some(command) = parse_login_body(&body, audit) else {
+        return invalid_input();
+    };
+
+    let now_ms = deps.clock.now_unix_millis();
+    let ports = LoginPorts {
+        credentials: &deps.credentials,
+        users: &deps.reads,
+        hasher: &deps.hasher,
+        mint: &deps.mint,
+        sessions: &deps.sessions,
+    };
+    match log_in(ports, command, now_ms).await {
+        Ok(Login::Authenticated { user, secret }) => session_response(secret, &user),
+        Ok(Login::AuthFailed) => auth_failed(),
+        Err(cause) => {
+            tracing::error!(error_chain = %error::describe(&cause), "login flow failed");
+            internal_error()
+        }
+    }
+}
+
+// ===========================================================================
+// POST /auth/logout
+// ===========================================================================
+
+#[allow(clippy::type_complexity)]
+async fn logout<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>(
+    State(deps): State<HumanAuthDeps<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>>,
+    headers: HeaderMap,
+) -> Response
+where
+    Ha: HandleNamespaceRead,
+    El: UserEmailLookup,
+    Hr: PasswordHasher,
+    Reg: HumanRegistrationUnitOfWork,
+    Mint: SessionTokenMint,
+    Iss: SessionIssue,
+    Rev: SessionRevoke,
+    Cred: LoginCredentialLookup,
+    Rd: UserProfileRead,
+    Wr: UserProfileWriteUnitOfWork,
+    Sink: UserChangedSink,
+    Clk: SessionClock,
+{
+    // Logout reads the raw bearer itself (it lives outside the perimeter so it can
+    // revoke unknown/expired bearers), through the ONE canonical grammar the
+    // perimeter uses. A missing bearer and a non-revocable one both answer 401.
+    let Some(bearer) =
+        strict_bearer_credential(&headers).and_then(|token| SessionBearer::parse(token.to_owned()))
+    else {
+        return unauthorized();
+    };
+
+    let now_ms = deps.clock.now_unix_millis();
+    match log_out(&deps.revoke, &bearer, now_ms).await {
+        Ok(true) => logout_ok(),
+        Ok(false) => unauthorized(),
+        Err(cause) => {
+            tracing::error!(error_chain = %error::describe(&cause), "session revoke failed");
+            internal_error()
+        }
+    }
+}
+
+// ===========================================================================
+// GET /api/me
+// ===========================================================================
+
+#[allow(clippy::type_complexity)]
+async fn me_get<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>(
+    viewer: Option<Extension<UserId>>,
+    State(deps): State<HumanAuthDeps<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>>,
+) -> Response
+where
+    Ha: HandleNamespaceRead,
+    El: UserEmailLookup,
+    Hr: PasswordHasher,
+    Reg: HumanRegistrationUnitOfWork,
+    Mint: SessionTokenMint,
+    Iss: SessionIssue,
+    Rev: SessionRevoke,
+    Cred: LoginCredentialLookup,
+    Rd: UserProfileRead,
+    Wr: UserProfileWriteUnitOfWork,
+    Sink: UserChangedSink,
+    Clk: SessionClock,
+{
+    let Some(Extension(user_id)) = viewer else {
+        tracing::error!("GET /api/me reached without its human principal fact");
+        return internal_error();
+    };
+    match read_self_profile(&deps.reads, &user_id).await {
+        Ok(Some(user)) => profile_ok(&user),
+        // A validated session resolving to no user row is a dangling pointer:
+        // corruption, the safe-500 seam, never a product 404.
+        Ok(None) => {
+            tracing::error!(
+                user_id = %user_id.as_str(),
+                "an authenticated session resolves to no user row"
+            );
+            internal_error()
+        }
+        Err(cause) => {
+            tracing::error!(error_chain = %error::describe(&cause), "read self profile failed");
+            internal_error()
+        }
+    }
+}
+
+// ===========================================================================
+// PATCH /api/me
+// ===========================================================================
+
+#[allow(clippy::type_complexity)]
+async fn me_patch<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>(
+    viewer: Option<Extension<UserId>>,
+    State(deps): State<HumanAuthDeps<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>>,
+    request: Request,
+) -> Response
+where
+    Ha: HandleNamespaceRead,
+    El: UserEmailLookup,
+    Hr: PasswordHasher,
+    Reg: HumanRegistrationUnitOfWork,
+    Mint: SessionTokenMint,
+    Iss: SessionIssue,
+    Rev: SessionRevoke,
+    Cred: LoginCredentialLookup,
+    Rd: UserProfileRead,
+    Wr: UserProfileWriteUnitOfWork,
+    Sink: UserChangedSink,
+    Clk: SessionClock,
+{
+    let Some(Extension(user_id)) = viewer else {
+        tracing::error!("PATCH /api/me reached without its human principal fact");
+        return internal_error();
+    };
+
+    let body = read_body(request).await;
+    let display_name = match parse_profile_patch(&body) {
+        ProfilePatch::DisplayName(display_name) => display_name,
+        // A malformed body, an invalid `display_name`, AND the empty/no-fields
+        // object all collapse to the one terminal 400 (ratified divergence #1).
+        ProfilePatch::Invalid => return invalid_input(),
+    };
+
+    let now_ms = deps.clock.now_unix_millis();
+    match update_self_display_name(
+        &deps.writes,
+        &deps.user_changed,
+        &user_id,
+        display_name,
+        now_ms,
+    )
+    .await
+    {
+        Ok(UserProfileUpdate::Committed(updated)) => {
+            let (user, announce) = updated.into_parts();
+            log_lost_announce(&announce, "profile edit");
+            profile_ok(&user)
+        }
+        // As with GET, a dangling session pointer is corruption → safe-500.
+        Ok(UserProfileUpdate::NoSuchUser) => {
+            tracing::error!(
+                user_id = %user_id.as_str(),
+                "an authenticated session resolves to no user row on profile write"
+            );
+            internal_error()
+        }
+        Err(cause) => {
+            tracing::error!(error_chain = %error::describe(&cause), "self profile write failed");
+            internal_error()
+        }
+    }
+}
+
+// ===========================================================================
+// Request-boundary admission
+// ===========================================================================
+
+/// Drain the request body into memory. A stream-read failure folds to an empty
+/// body (mirroring the product's `c.req.json().catch(...)`), which the parsers
+/// then refuse as malformed input rather than surfacing a transport error.
+async fn read_body(request: Request) -> Bytes {
+    to_bytes(request.into_body(), usize::MAX)
+        .await
+        .unwrap_or_default()
+}
+
+/// Capture the forensic breadcrumbs a session records, mirroring the TS
+/// `authSessionMetadata`: the `user-agent` header, and the first `x-forwarded-for`
+/// hop else `x-real-ip`. Normalization (trim/drop-blank/512-unit cut) is the value
+/// object's job.
+fn capture_audit(headers: &HeaderMap) -> SessionAudit {
+    let user_agent = header_value(headers, "user-agent");
+    let ip_first_seen = first_forwarded_for(headers).or_else(|| header_value(headers, "x-real-ip"));
+    SessionAudit::capture(user_agent.as_deref(), ip_first_seen.as_deref())
+}
+
+fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+/// `value?.split(',')[0]?.trim()`, empty → `None`.
+fn first_forwarded_for(headers: &HeaderMap) -> Option<String> {
+    let raw = header_value(headers, "x-forwarded-for")?;
+    let first = raw.split(',').next()?.trim();
+    (!first.is_empty()).then(|| first.to_owned())
+}
+
+/// Admit a signup body exactly as `AuthSignupInputSchema` does: `email`
+/// (`z.string().trim().email().max(320)`), `password`
+/// (`z.string().min(8).max(1024)`), `name` (the participant-handle regex), and an
+/// OPTIONAL `display_name`. Any missing/mistyped/failing field collapses to
+/// `None` (the route's `400`); the domain never sees an unadmitted value.
+fn parse_signup_body(body: &Bytes, audit: SessionAudit) -> Option<SignupCommand> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let object = value.as_object()?;
+
+    let email = EmailAddress::parse(object.get("email")?.as_str()?).ok()?;
+    let password = object.get("password")?.as_str()?.to_owned();
+    if !within_utf16(&password, SIGNUP_PASSWORD_MIN_UTF16, PASSWORD_MAX_UTF16) {
+        return None;
+    }
+    let handle = ParticipantHandle::parse(object.get("name")?.as_str()?).ok()?;
+    let display_name = match object.get("display_name") {
+        // `.optional()` admits an absent key, not a `null` or non-string value.
+        None => None,
+        Some(Value::String(raw)) => Some(DisplayName::parse(raw).ok()?),
+        Some(_) => return None,
+    };
+
+    Some(SignupCommand {
+        email,
+        handle,
+        password,
+        display_name,
+        audit,
+    })
+}
+
+/// Admit a login body exactly as `AuthLoginInputSchema` does: `email` and
+/// `password` (`z.string().min(1).max(1024)` — note `min(1)`, not signup's 8).
+fn parse_login_body(body: &Bytes, audit: SessionAudit) -> Option<LoginCommand> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let object = value.as_object()?;
+
+    let email = EmailAddress::parse(object.get("email")?.as_str()?).ok()?;
+    let password = object.get("password")?.as_str()?.to_owned();
+    if !within_utf16(&password, LOGIN_PASSWORD_MIN_UTF16, PASSWORD_MAX_UTF16) {
+        return None;
+    }
+
+    Some(LoginCommand {
+        email,
+        password,
+        audit,
+    })
+}
+
+/// The two admission verdicts for `PATCH /api/me`'s body, mirroring
+/// `UpdateUserProfileInputSchema` (`{ display_name?: DisplayNameSchema }` with a
+/// `.refine(keys > 0)`). The refine's "no fields" case is NOT a distinct verdict:
+/// it collapses into [`Invalid`](ProfilePatch::Invalid) with every other malformed
+/// body, since the ratified `400` is one terminal `invalid input`.
+enum ProfilePatch {
+    /// A valid `display_name` was supplied.
+    DisplayName(DisplayName),
+    /// Malformed body, an invalid `display_name` value, OR no fields at all.
+    Invalid,
+}
+
+fn parse_profile_patch(body: &Bytes) -> ProfilePatch {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return ProfilePatch::Invalid;
+    };
+    let Some(object) = value.as_object() else {
+        return ProfilePatch::Invalid;
+    };
+    match object.get("display_name") {
+        // No `display_name` key is the refine's "no fields" — one terminal 400.
+        None => ProfilePatch::Invalid,
+        Some(Value::String(raw)) => match DisplayName::parse(raw) {
+            Ok(display_name) => ProfilePatch::DisplayName(display_name),
+            Err(_) => ProfilePatch::Invalid,
+        },
+        Some(_) => ProfilePatch::Invalid,
+    }
+}
+
+/// `z.string().min(min).max(max)` on the UTF-16 code-unit length (JS `.length`).
+fn within_utf16(value: &str, min: usize, max: usize) -> bool {
+    let units = value.encode_utf16().count();
+    (min..=max).contains(&units)
+}
+
+// ===========================================================================
+// Wire projection
+// ===========================================================================
+
+/// The `UserDto` both `me` routes and the signup/login `user` field project.
+/// snake_case on the wire; `email` is NEVER returned. `avatar_url` is the
+/// cache-busted `/api/users/:id/avatar?v=:updated_at` projected from the user's
+/// stored avatar revision (the shared [`principal_avatar_url`] human arm), or
+/// `null` when no avatar is stored — a freshly signed-up user has none.
+#[derive(Serialize)]
+struct UserDto {
+    id: String,
+    name: String,
+    display_name: String,
+    avatar_url: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl UserDto {
+    fn from_record(user: &UserRecord) -> Self {
+        Self {
+            id: user.id.as_str().to_owned(),
+            name: user.handle.clone(),
+            display_name: user.display_name.clone(),
+            avatar_url: principal_avatar_url(PrincipalKind::Human, user.id.as_str(), user.avatar),
+            created_at: user.created_at,
+            updated_at: user.updated_at,
+        }
+    }
+}
+
+/// `AuthSessionResponseSchema`: `{ user_token, user }`.
+#[derive(Serialize)]
+struct AuthSessionResponse {
+    user_token: String,
+    user: UserDto,
+}
+
+/// `AuthLogoutResponseSchema`: `{ ok: true }`.
+#[derive(Serialize)]
+struct LogoutResponse {
+    ok: bool,
+}
+
+/// The flat `{ error }` refusal body.
+#[derive(Serialize)]
+struct ErrorBody {
+    error: &'static str,
+}
+
+/// The `{ error_code }` refusal body (the uniform credential answer + taken handle).
+#[derive(Serialize)]
+struct ErrorCodeBody {
+    error_code: &'static str,
+}
+
+/// The typed disabled-signup body, `{ error, code }`.
+#[derive(Serialize)]
+struct SignupDisabledBody {
+    error: &'static str,
+    code: &'static str,
+}
+
+/// `c.json({ user_token, user })` at `200`, consuming the one-time secret.
+fn session_response(secret: IssuedSessionSecret, user: &UserRecord) -> Response {
+    Json(AuthSessionResponse {
+        user_token: secret.into_wire(),
+        user: UserDto::from_record(user),
+    })
+    .into_response()
+}
+
+fn profile_ok(user: &UserRecord) -> Response {
+    Json(UserDto::from_record(user)).into_response()
+}
+
+fn logout_ok() -> Response {
+    Json(LogoutResponse { ok: true }).into_response()
+}
+
+fn handle_taken() -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(ErrorCodeBody {
+            error_code: "handle_taken",
+        }),
+    )
+        .into_response()
+}
+
+fn auth_failed() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(ErrorCodeBody {
+            error_code: "auth_failed",
+        }),
+    )
+        .into_response()
+}
+
+fn signup_disabled() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(SignupDisabledBody {
+            error: "signup is disabled on this backend",
+            code: "signup_disabled",
+        }),
+    )
+        .into_response()
+}
+
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(ErrorBody {
+            error: "unauthorized",
+        }),
+    )
+        .into_response()
+}
+
+fn invalid_input() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorBody {
+            error: "invalid input",
+        }),
+    )
+        .into_response()
+}
+
+fn internal_error() -> Response {
+    (StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR_BODY).into_response()
+}
+
+/// A committed identity change owes a best-effort `user_changed` hint; a lost hint
+/// never downgrades the committed `200`, so it is only recorded.
+fn log_lost_announce(announce: &UserChangedAnnounce, origin: &str) {
+    if let UserChangedAnnounce::Failed(failure) = announce {
+        tracing::error!(
+            error_chain = %error::describe(failure),
+            origin,
+            "user_changed announce could not be delivered; \
+             affected readers stay stale until they refetch"
+        );
+    }
+}

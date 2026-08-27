@@ -7,6 +7,7 @@ mod clock;
 mod governance;
 mod human_enrollment;
 mod role;
+mod workspace_audience;
 
 pub use agent_enrollment::{
     AddAgentMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
@@ -15,7 +16,9 @@ pub use agent_enrollment::{
 };
 pub use clock::{EnrollmentClock, unix_millis};
 pub use governance::{
-    WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceGovernanceFacts, governance_ceiling,
+    WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceGovernanceFacts,
+    WorkspaceGovernanceFactsRead, WorkspaceGovernanceFloor, governance_ceiling,
+    governance_floor_verdict,
 };
 pub use human_enrollment::{
     AddHumanMemberError, HumanEnrollmentCommit, HumanEnrollmentKey, HumanEnrollmentOutcome,
@@ -24,3 +27,4 @@ pub use human_enrollment::{
     add_workspace_human_member, human_enrollment_authorized,
 };
 pub use role::{WorkspaceRole, role_governs_workspace};
+pub use workspace_audience::WorkspaceHumanAudienceReadPort;

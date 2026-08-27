@@ -31,6 +31,7 @@
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::messaging::{
     CreatedMessage, FromKind, ThreadReplyFact, attachments::AttachmentSnapshot,
+    collaboration::workspace_rename_messaging::BoundWorkspaceRenameMessage,
     mention_cc::CommittedMentionCopy,
 };
 
@@ -167,6 +168,46 @@ pub(crate) fn copy_dto(copy: &CommittedMentionCopy) -> Value {
     })
 }
 
+/// A committed workspace-rename system message, projected as the `message` frame it is
+/// published to its conversation as. Like [`copy_dto`], it is a SYSTEM message whose
+/// `metadata` is a FLAT rename envelope — `subtype`/`old_name`/`new_name`/`scope` — not
+/// the attachments wrapper [`message_dto`] builds; and every principal-bearing member
+/// (`author`, both `from_*` ids) plus `attachments`/`reactions`/`thread_root_id`/
+/// `linked_task` is structurally null.
+///
+/// It is its own projector, not a call into [`message_dto`], for the same reason
+/// [`copy_dto`] is: the two disagree on exactly one member, `metadata`, and that member
+/// is the whole point of a rename card — it is what lets a reader render "renamed from X
+/// to Y" without another fetch. The committed rename fact
+/// ([`BoundWorkspaceRenameMessage`]) is a different type from [`CreatedMessage`] and
+/// carries no `attachments`, so its structured metadata cannot flow through the
+/// attachments wrapper. The `content` is the already-rendered body the store wrote; it is
+/// not re-rendered here, so the frame and the stored row stay one projection of one fact.
+pub(crate) fn rename_dto(message: &BoundWorkspaceRenameMessage) -> Value {
+    let draft = message.draft();
+    json!({
+        "id": message.message().as_str(),
+        "conversation_id": draft.conversation().as_str(),
+        "from_kind": from_kind_word(FromKind::System),
+        "from_agent_id": Value::Null,
+        "from_user_id": Value::Null,
+        "author": Value::Null,
+        "content": draft.content(),
+        "metadata": json!({
+            "subtype": draft.subtype(),
+            "old_name": draft.old_name(),
+            "new_name": draft.new_name(),
+            "scope": draft.scope(),
+        }),
+        "attachments": Value::Null,
+        "reactions": Value::Null,
+        "seq": message.seq().get(),
+        "created_at": message.created_at().get(),
+        "thread_root_id": Value::Null,
+        "linked_task": Value::Null,
+    })
+}
+
 pub(crate) fn from_kind_word(kind: FromKind) -> &'static str {
     match kind {
         FromKind::User => "user",
@@ -225,9 +266,16 @@ fn snapshots(attachments: &[AttachmentSnapshot]) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use silverhand_backend_core::messaging::{
-        AttachmentId,
-        attachments::{AttachmentLabel, AttachmentSnapshot},
+    use silverhand_backend_core::{
+        identity::{ConversationId, WorkspaceId},
+        messaging::{
+            AttachmentId, MessageId, MessageSeq,
+            attachments::{AttachmentLabel, AttachmentSnapshot},
+            collaboration::workspace_rename_messaging::{
+                CommittedWorkspaceRenameMessage, WorkspaceRenameMessageCreatedAt,
+                WorkspaceRenameMessageDraft,
+            },
+        },
     };
 
     use super::*;
@@ -290,6 +338,65 @@ mod tests {
                 "filename": "notes.txt",
                 "size": 12,
                 "content_type": "text/plain",
+            })
+        );
+    }
+
+    fn bound_rename() -> silverhand_backend_core::messaging::collaboration::workspace_rename_messaging::BoundWorkspaceRenameMessage{
+        let draft = WorkspaceRenameMessageDraft::for_names(
+            WorkspaceId::parse("w").unwrap(),
+            ConversationId::parse("active-a").unwrap(),
+            "Old Workspace",
+            "New Workspace",
+        );
+        CommittedWorkspaceRenameMessage::committed(
+            draft.clone(),
+            MessageId::parse("msg-1").unwrap(),
+            MessageSeq::try_from(7).unwrap(),
+            WorkspaceRenameMessageCreatedAt::new(77).unwrap(),
+        )
+        .bind(&draft)
+        .unwrap()
+    }
+
+    /// The rename frame is a SYSTEM row with a FLAT rename `metadata` envelope, and its key
+    /// set may never drift toward [`message_dto`]'s attachments wrapper.
+    ///
+    /// Asserted as whole JSON over a closed key set — top level and `metadata` both — because
+    /// the failure this guards is a member quietly appearing or a `null` becoming a value a
+    /// field probe would miss: `metadata` carrying an `attachments` key, `author` or a
+    /// `from_*` id gaining a principal, or `content` being re-rendered rather than the stored
+    /// body. `content` is exactly the draft's rendered body, not a second projection.
+    #[test]
+    fn rename_frame_is_a_flat_system_envelope_and_carries_nothing_else() {
+        assert_eq!(
+            rename_dto(&bound_rename()),
+            json!({
+                "id": "msg-1",
+                "conversation_id": "active-a",
+                "from_kind": "system",
+                "from_agent_id": Value::Null,
+                "from_user_id": Value::Null,
+                "author": Value::Null,
+                "content": WorkspaceRenameMessageDraft::for_names(
+                    WorkspaceId::parse("w").unwrap(),
+                    ConversationId::parse("active-a").unwrap(),
+                    "Old Workspace",
+                    "New Workspace",
+                )
+                .content(),
+                "metadata": {
+                    "subtype": "rename",
+                    "old_name": "Old Workspace",
+                    "new_name": "New Workspace",
+                    "scope": "workspace",
+                },
+                "attachments": Value::Null,
+                "reactions": Value::Null,
+                "seq": 7,
+                "created_at": 77,
+                "thread_root_id": Value::Null,
+                "linked_task": Value::Null,
             })
         );
     }

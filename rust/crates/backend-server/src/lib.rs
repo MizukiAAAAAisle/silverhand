@@ -14,10 +14,16 @@ pub mod host_agent_background;
 pub mod host_control;
 pub mod host_resources;
 pub mod host_runtime;
+pub mod human_auth;
 pub mod messaging;
 pub mod ops;
+pub mod password_hasher;
 pub mod runtime_credential;
 pub mod scope_events;
+pub mod workspace_detail;
+pub mod workspace_metadata_write;
+pub mod workspace_name_availability;
+pub mod workspace_rename_fanout;
 pub mod workspaces;
 
 #[cfg(test)]
