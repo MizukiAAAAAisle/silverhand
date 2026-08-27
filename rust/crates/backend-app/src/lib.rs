@@ -29,19 +29,17 @@ use silverhand_backend_server::{
     host_resources, host_runtime,
     messaging::{
         TargetAddressRefusalLog,
-        aftermath::MessagingAftermath,
         collaboration::{
             activity, attention_projection, channel_directory, channel_lifecycle,
             conversation_agent_activity, conversation_agent_directory, conversation_agent_runtime,
             conversation_message_window, conversation_ref, conversation_threads,
-            conversation_unread, direct_pair_initiation, human_search, message_unread,
+            conversation_unread, human_search, message_unread,
             stale_message_resolution::{
                 StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
                 StaleMessageResolutionAdmissionRefusal, TracingStaleMessageResolutionObserver,
                 router as stale_message_resolution_router,
             },
         },
-        router::{SendState, send_routers},
         task::{TaskListState, task_list_router},
     },
     runtime_credential::{
@@ -49,7 +47,7 @@ use silverhand_backend_server::{
     },
     scope_events::{
         AllowedOrigin, EventWebSocketConfig, EventWebSocketController, HubPresenceSink,
-        HubUnreadPublisher, ScopeEventHub, SystemDisconnectClock, compose_presence_vertical,
+        ScopeEventHub, SystemDisconnectClock, compose_presence_vertical,
     },
     workspaces,
 };
@@ -476,49 +474,37 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // viewer summary, per-conversation).
     let message_unread_read = messaging_store.message_unread();
     let attention_projection_read = messaging_store.attention_projection();
-    let aftermath = MessagingAftermath::new(
-        hub.clone(),
+    // The one post-commit fan-out, built by the hub over itself: the publication authority
+    // and the hub the unread axis routes through are both `hub`, and this statement has no
+    // hub argument that could name a second transport.
+    let aftermath = hub.messaging_aftermath(
         daemon_runtime.effects(),
         messaging_store.clone(),
-        HubUnreadPublisher::new(hub.clone(), unread_read_model),
+        unread_read_model,
     );
-    // Wave 3A checkpoint A6 (#2203): the human direct-pair initiation door — the sole
-    // write checkpoint of this wave — rides the SAME `MessagingStore` the ordinary send
-    // door holds, in three roles: the get-or-create initiation authority (which publishes
-    // the winner-only pair-opened fact through the SAME `ScopeEventHub`), the direct-line
-    // authority, and the send unit-of-work. It runs the SAME required `MessagingAftermath`.
-    // All four are captured here, before `send_routers` moves the store and the aftermath,
-    // so the door opens no second authority, write unit, or aftermath.
-    let direct_pair_initiation_port = messaging_store.direct_pair_initiation(hub.clone());
-    let direct_pair_direct_lines = messaging_store.clone();
-    let direct_pair_unit_of_work = messaging_store.clone();
-    let direct_pair_aftermath = aftermath.clone();
-    let (human_send, agent_send) = send_routers(SendState {
-        channel_access: messaging_store.clone(),
-        target_address,
-        capability: messaging_store.clone(),
-        authority: messaging_store.clone(),
-        unit_of_work: messaging_store,
-        aftermath,
-    });
+    // Wave 3A checkpoint A6 (#2203) + #2205: every authenticated write door — the two
+    // ordinary sends and the human direct-pair initiation — rides the SAME
+    // `MessagingStore`, in every write role it needs: channel access, send capability,
+    // direct-line authority, send unit-of-work, and the get-or-create initiation source.
+    // One statement, one store, and no argument for the transport the winner-only
+    // pair-opened fact leaves on: the seam binds the initiation port to the one aftermath
+    // above, which is itself that transport. So this mount cannot announce a pair-open on
+    // one hub while the pair's first message publishes on another — there is no parameter
+    // to say it in.
+    let (human_writes, agent_writes) = aftermath.write_doors(messaging_store, target_address);
 
     let host = host_runtime::router(
         CreateHostInvite::new(host_store, OsEntropy, SystemClock),
         config.daemon_npm_spec.clone(),
     );
     let human_products = require_human_session(
-        host.merge(human_send)
+        host.merge(human_writes)
+            // Wave 3A checkpoint A6 (#2203): `POST /api/agents/{id}/direct-messages`, the
+            // human direct-pair initiation write door, is not merged here — it arrives
+            // inside `human_writes`, bound to the aftermath by the seam above. Its
+            // method/path is distinct from the direct-pair read door merged next, so
+            // neither shadows the other.
             .merge(direct_pairs::router(direct_pair_read_model))
-            // Wave 3A checkpoint A6 (#2203): the human direct-pair initiation write door.
-            // `POST /api/agents/{id}/direct-messages` — get-or-create the pair, then send
-            // its first message through the same send use-case. Distinct method/path from
-            // the direct-pair read door merged just above, so neither shadows the other.
-            .merge(direct_pair_initiation::router(
-                direct_pair_initiation_port,
-                direct_pair_direct_lines,
-                direct_pair_unit_of_work,
-                direct_pair_aftermath,
-            ))
             .merge(workspaces::router(workspace_cold_read))
             .merge(availability::router(
                 agent_availability_cold_read,
@@ -549,7 +535,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             .merge(conversation_ref::router(conversation_ref_read))
             .merge(conversation_unread::router(conversation_unread_read))
             .merge(conversation_threads::router(conversation_threads_read))
-            // Same path as the send POST already merged via `human_send`. axum
+            // Same path as the send POST already merged via `human_writes`. axum
             // accumulates the GET and the POST into one method router on the
             // shared path node, so neither shadows the other; only a repeated
             // *method* would panic, and GET vs POST is disjoint.
@@ -577,7 +563,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         PublicJsonUnauthorized,
     );
     let agent_products = require_runtime_credential(
-        agent_send
+        agent_writes
             .merge(task_list_router(TaskListState {
                 boards: task_list_boards,
                 fetch: task_store,

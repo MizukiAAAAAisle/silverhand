@@ -46,6 +46,7 @@ use silverhand_backend_core::{
 };
 
 use crate::host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers};
+use crate::messaging::aftermath::MessagingAftermath;
 use crate::messaging::message_wire::{copy_dto, message_event_payload};
 use tokio::{
     sync::{Notify, broadcast, mpsc, oneshot, watch},
@@ -439,6 +440,48 @@ impl ScopeEventHub {
 
     pub fn epoch(&self) -> &str {
         self.epoch.as_str()
+    }
+
+    /// The one post-commit fan-out for a process, built over THIS hub.
+    ///
+    /// Both hub-shaped components come from `&self`: the publication authority is this hub,
+    /// and so is the one the unread publisher routes through. Assembled by hand the
+    /// statement took two independent hub arguments that merely happened to be the same
+    /// value; here there is no hub argument at all, and [`HubUnreadPublisher::new`] is
+    /// crate-private, so every aftermath this seam builds has its unread axis on the hub it
+    /// publishes on. A second transport is not impossible — it takes an explicit second hub
+    /// and a second call, a visible assembly rather than one component quietly pointed
+    /// elsewhere:
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_server::scope_events::{HubUnreadPublisher, ScopeEventHub};
+    ///
+    /// let hub = ScopeEventHub::production().unwrap();
+    /// let _ = HubUnreadPublisher::new(hub, ());
+    /// ```
+    ///
+    /// The control for that gate, since a `compile_fail` block passes on ANY error
+    /// including a stale path: the sanctioned seam, on the same public paths, builds the
+    /// same shape.
+    ///
+    /// ```
+    /// use silverhand_backend_server::scope_events::ScopeEventHub;
+    ///
+    /// let hub = ScopeEventHub::production().unwrap();
+    /// let _ = hub.messaging_aftermath((), (), ());
+    /// ```
+    pub fn messaging_aftermath<D, M, R>(
+        &self,
+        daemon: D,
+        mentions: M,
+        unread_read_model: R,
+    ) -> MessagingAftermath<ScopeEventHub, D, M, HubUnreadPublisher<R>> {
+        MessagingAftermath::new(
+            self.clone(),
+            daemon,
+            mentions,
+            HubUnreadPublisher::new(self.clone(), unread_read_model),
+        )
     }
 
     pub fn publish_direct_pairs_changed(
@@ -846,16 +889,17 @@ fn latest_unread_wire(latest: &CoreLatestUnread) -> LatestUnread {
 /// model decides placement, audience, and every count — so the placement fork below is a
 /// total match over [`UnreadAudience`]'s two arms and cannot silently drop one.
 ///
-/// `Clone` (when `R: Clone`) so the `MessagingAftermath` that owns it can be cloned for
-/// the second send door; it holds only a Clone hub and the injected read model.
-#[derive(Clone)]
+/// Outside the crate it comes only from [`ScopeEventHub::messaging_aftermath`], which
+/// supplies the hub from its own `&self`; the constructor stays crate-private, and in-crate
+/// tests call it directly as substrate. It needs no `Clone`: the aftermath that owns it is
+/// an `Arc` handle, so the second door shares this publisher rather than duplicating it.
 pub struct HubUnreadPublisher<R> {
     hub: ScopeEventHub,
     read_model: R,
 }
 
 impl<R> HubUnreadPublisher<R> {
-    pub fn new(hub: ScopeEventHub, read_model: R) -> Self {
+    pub(crate) fn new(hub: ScopeEventHub, read_model: R) -> Self {
         Self { hub, read_model }
     }
 }

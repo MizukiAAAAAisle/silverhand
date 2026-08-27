@@ -24,8 +24,8 @@ use silverhand_backend_core::{
         collaboration::direct_pair_initiation::{
             AuthorizedDirectPairInitiation, DirectPairFirstSendError,
             DirectPairInitiationAuthority, DirectPairInitiationDecision,
-            DirectPairInitiationGrantFact, DirectPairInitiationPort, OpenedDirectPairFirstMessage,
-            open_and_send_direct_pair,
+            DirectPairInitiationGrantFact, DirectPairInitiationPort, DirectPairInitiationSource,
+            OpenedDirectPairFirstMessage, open_and_send_direct_pair,
         },
         post_commit::{DeliveryPlan, MainDeliveryPlan, PostCommitPlan},
     },
@@ -633,7 +633,7 @@ async fn production_sqlite_route_keeps_a_minted_pair_when_the_existing_send_unit
     let (_directory, path, store) = seeded_store().await;
     let opened = Opened(Arc::new(AtomicUsize::new(0)));
     let app = router(
-        store.direct_pair_initiation(opened.clone()),
+        store.clone().bind_initiation(opened.clone()),
         store.clone(),
         store.clone(),
         NoAftermath,
@@ -737,7 +737,7 @@ async fn production_sqlite_router_consumes_every_typescript_signed_wire_cell() {
         let (_directory, path, store) = seeded_store().await;
         let opened = Opened(Arc::new(AtomicUsize::new(0)));
         let app = router(
-            store.direct_pair_initiation(opened.clone()),
+            store.clone().bind_initiation(opened.clone()),
             store.clone(),
             store,
             NoAftermath,
