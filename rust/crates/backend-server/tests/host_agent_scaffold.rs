@@ -91,22 +91,49 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "teardown"),
     ("backend-core", "user_presence_cold_read"),
     ("backend-core", "user_presence_last_seen"),
+    // #task:2193 — the workspace metadata/read vertical. Core primitives and ports;
+    // their SQLite adapters and server routes are the sibling entries below. Not yet
+    // mounted (the app composition root is out of this task's scope).
+    ("backend-core", "name_canonicalization"),
+    ("backend-core", "workspace_detail_read"),
+    ("backend-core", "workspace_metadata_write"),
+    ("backend-core", "workspace_name"),
+    ("backend-core", "workspace_name_availability"),
+    // #task:2193 CP2 — the human credentialed-session vertical (signup/login/
+    // logout + self profile). Core bounded contexts and their ports; the SQLite
+    // adapters and the server route surface are the sibling entries below. Not yet
+    // mounted (the app composition root is out of this task's scope).
+    ("backend-core", "credential"),
+    ("backend-core", "human_auth_flows"),
+    ("backend-core", "user_identity"),
     ("backend-filesystem", "runtime_detection"),
     ("backend-server", "clock"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
     ("backend-server", "host_resources"),
+    ("backend-server", "human_auth"),
     ("backend-server", "ops"),
+    ("backend-server", "password_hasher"),
+    ("backend-server", "workspace_detail"),
+    ("backend-server", "workspace_metadata_write"),
+    ("backend-server", "workspace_name_availability"),
     ("backend-sqlite", "agent_availability_read"),
     ("backend-sqlite", "agent_detail_read"),
     ("backend-sqlite", "agent_list_read"),
     ("backend-sqlite", "agent_presence_read"),
     ("backend-sqlite", "agent_view_acl"),
+    ("backend-sqlite", "credential"),
+    ("backend-sqlite", "handle_namespace"),
+    ("backend-sqlite", "human_registration"),
+    ("backend-sqlite", "user_identity"),
     ("backend-sqlite", "host_agent"),
     ("backend-sqlite", "host_resources_read"),
     ("backend-sqlite", "user_presence_cold_read"),
     ("backend-sqlite", "user_presence_last_seen"),
+    ("backend-sqlite", "workspace_detail_read"),
+    ("backend-sqlite", "workspace_metadata_write"),
+    ("backend-sqlite", "workspace_name_availability"),
     ("backend-sqlite", "write_probe"),
 ];
 
@@ -205,6 +232,7 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[("backend-core", "agents")]
 const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
+    ("backend-core", "credential"),
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
     ("backend-filesystem", "runtime_detection"),

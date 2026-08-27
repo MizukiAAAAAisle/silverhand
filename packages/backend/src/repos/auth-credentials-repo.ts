@@ -4,6 +4,7 @@ import { prepareObserved } from '../observability/observed-statement.js';
 import type {
   Argon2idPasswordHashParams,
   PasswordHashResult,
+  PersistedPasswordHashParams,
 } from '../auth/credential-types.js';
 import type { AuthCredentialsPort } from '../auth/ports.js';
 
@@ -67,23 +68,102 @@ export function serializePasswordHashParams(
   return JSON.stringify(params);
 }
 
-export function parsePasswordHashParams(raw: string): Argon2idPasswordHashParams {
-  const parsed = JSON.parse(raw) as Partial<Argon2idPasswordHashParams>;
+/**
+ * Read the persisted `password_hash_params`, admitting BOTH producer arms. The
+ * shared cost fields are validated once; then `library` discriminates the arm and
+ * fully validates its required provenance block (`benchmark` for Node,
+ * `calibration` for Rust) down to each field's type and range. Any other
+ * `library`, a missing block, or a block with a missing/mistyped/out-of-range
+ * field is invalid — a truthy `{}` provenance object never passes.
+ */
+export function parsePasswordHashParams(raw: string): PersistedPasswordHashParams {
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
   if (
     parsed.algorithm !== 'argon2id'
-    || parsed.library !== '@node-rs/argon2'
     || parsed.version !== '0x13'
     || !positiveInteger(parsed.memoryCostKiB)
     || !positiveInteger(parsed.timeCost)
     || !positiveInteger(parsed.parallelism)
     || !positiveInteger(parsed.outputLen)
-    || !parsed.benchmark
   ) {
     throw new Error('invalid password_hash_params');
   }
-  return parsed as Argon2idPasswordHashParams;
+  if (parsed.library === '@node-rs/argon2') {
+    if (!validNodeBenchmark(parsed.benchmark)) {
+      throw new Error('invalid password_hash_params');
+    }
+    return parsed as unknown as Argon2idPasswordHashParams;
+  }
+  if (parsed.library === 'silverhand/argon2-rustcrypto') {
+    if (!validRustCalibration(parsed.calibration)) {
+      throw new Error('invalid password_hash_params');
+    }
+    return parsed as unknown as PersistedPasswordHashParams;
+  }
+  throw new Error('invalid password_hash_params');
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function positiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+/**
+ * A finite positive real. The Node producer's `benchmark.measuredMs` is a wall-
+ * clock duration (`performance.now()` delta), so it is legitimately a
+ * non-integer — validating it as an integer would reject the very rows the Node
+ * backend writes. Every OTHER benchmark/calibration field is an honest count or
+ * cost and stays integer-validated.
+ */
+function positiveFinite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * The Node arm's `benchmark` provenance: five required positive-integer fields
+ * plus `measuredMs` (a finite positive duration, non-integer by construction),
+ * plus an OPTIONAL `flooredFrom` that, when present, must itself carry two
+ * positive-integer costs. Mirrors `Argon2idPasswordHashParams['benchmark']`.
+ */
+function validNodeBenchmark(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  if (
+    !positiveInteger(value.targetMs)
+    || !positiveFinite(value.measuredMs)
+    || !positiveInteger(value.candidateCount)
+    || !positiveInteger(value.selectedAt)
+    || !positiveInteger(value.cpuCount)
+    || !positiveInteger(value.totalMemoryMiB)
+  ) {
+    return false;
+  }
+  if (value.flooredFrom !== undefined) {
+    if (!isObject(value.flooredFrom)) return false;
+    if (
+      !positiveInteger(value.flooredFrom.memoryCostKiB)
+      || !positiveInteger(value.flooredFrom.timeCost)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The Rust arm's `calibration` provenance: five required positive-integer
+ * fields. Mirrors `Argon2idRustCalibration`; it never carries the Node-only
+ * `selectedAt`/`cpuCount`/`totalMemoryMiB`.
+ */
+function validRustCalibration(value: unknown): boolean {
+  return (
+    isObject(value)
+    && positiveInteger(value.targetMs)
+    && positiveInteger(value.measuredMs)
+    && positiveInteger(value.candidateCount)
+    && positiveInteger(value.floorMemoryCostKiB)
+    && positiveInteger(value.floorTimeCost)
+  );
 }

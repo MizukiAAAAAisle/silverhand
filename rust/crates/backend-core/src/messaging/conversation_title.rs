@@ -23,13 +23,18 @@
 //! ```
 
 use thiserror::Error;
-use unicode_normalization::UnicodeNormalization;
 
-const MAX_CODE_POINTS: usize = 128;
+use crate::name_canonicalization::{NameCanonicalizationIssue, canonicalize_name};
 
-mod pinned_unicode {
-    include!(concat!(env!("OUT_DIR"), "/name_charset.rs"));
-}
+// The shared Unicode capability — NFC, the ECMAScript trim set, the forbidden
+// code-point domain, and the pinned case fold — lives in
+// [`crate::name_canonicalization`], the ONE table/normalizer/fold in the backend.
+// These primitives are re-exported here so every sibling that has always resolved
+// them through `messaging::conversation_title` keeps working unchanged; the
+// implementation is not owned here, only surfaced under this historical path.
+pub use crate::name_canonicalization::{
+    fold_name_key, is_space_separator, name_character_is_forbidden, name_is_nfc,
+};
 
 /// A canonical display title and the uniqueness key derived from it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,30 +44,14 @@ pub struct CanonicalConversationTitle {
 }
 
 impl CanonicalConversationTitle {
-    /// NFC-normalizes, ECMAScript-trims, validates, and derives the pinned key.
+    /// Runs the shared base name envelope (NFC, ECMAScript trim, empty check, the
+    /// 128-code-point cap, the forbidden-scalar scan, and the pinned fold) and
+    /// brands the neutral result as a conversation title. A conversation title IS
+    /// the full base envelope — it applies no narrower cap — so it simply brands
+    /// the neutral verdict.
     pub fn parse(raw: &str) -> Result<Self, ConversationTitleIssue> {
-        let normalized: String = raw.nfc().collect();
-        let title = normalized
-            .trim_matches(is_ecmascript_trim_whitespace)
-            .to_owned();
-        let code_points = title.chars().count();
-        if code_points == 0 {
-            return Err(ConversationTitleIssue::Empty);
-        }
-        if code_points > MAX_CODE_POINTS {
-            return Err(ConversationTitleIssue::TooLong { code_points });
-        }
-        if let Some((index, character)) = title
-            .chars()
-            .enumerate()
-            .find(|(_, character)| name_character_is_forbidden(*character))
-        {
-            return Err(ConversationTitleIssue::ForbiddenCodePoint {
-                code_point: character as u32,
-                index,
-            });
-        }
-        let key = fold_name_key(&title);
+        let canonical = canonicalize_name(raw)?;
+        let (title, key) = canonical.into_parts();
         Ok(Self { title, key })
     }
 
@@ -85,83 +74,16 @@ pub enum ConversationTitleIssue {
     ForbiddenCodePoint { code_point: u32, index: usize },
 }
 
-/// The pinned Unicode 16 full case fold followed by NFC.
-///
-/// This is public for sibling persistence adapters that resolve already-
-/// canonical name/address segments. It is the same primitive used by
-/// [`CanonicalConversationTitle::parse`], not a second canonicalizer.
-pub fn fold_name_key(raw: &str) -> String {
-    let mut folded = String::with_capacity(raw.len());
-    for character in raw.chars() {
-        if let Ok(index) =
-            pinned_unicode::CASE_FOLD.binary_search_by_key(&character, |(key, _)| *key)
-        {
-            folded.push_str(pinned_unicode::CASE_FOLD[index].1);
-        } else {
-            folded.push(character);
+impl From<NameCanonicalizationIssue> for ConversationTitleIssue {
+    fn from(issue: NameCanonicalizationIssue) -> Self {
+        match issue {
+            NameCanonicalizationIssue::Empty => Self::Empty,
+            NameCanonicalizationIssue::TooLong { code_points } => Self::TooLong { code_points },
+            NameCanonicalizationIssue::ForbiddenCodePoint { code_point, index } => {
+                Self::ForbiddenCodePoint { code_point, index }
+            }
         }
     }
-    folded.nfc().collect()
-}
-
-/// Whether a persisted/display name is already in NFC.
-///
-/// Address decoders use this check without importing a second normalization
-/// engine or owning a parallel canonicalization rule.
-pub fn name_is_nfc(raw: &str) -> bool {
-    raw.nfc().eq(raw.chars())
-}
-
-/// Whether a code point is outside the pinned human-visible name domain or is a
-/// sequence-forming emoji part.
-pub fn name_character_is_forbidden(character: char) -> bool {
-    let point = character as u32;
-    !in_ranges(pinned_unicode::NAME_RENDERABLE_RANGES, point)
-        || in_ranges(pinned_unicode::NAME_DEFAULT_IGNORABLE_RANGES, point)
-        || in_ranges(pinned_unicode::NAME_ENCLOSING_MARK_RANGES, point)
-        || in_ranges(pinned_unicode::NAME_EMOJI_MODIFIER_RANGES, point)
-        || in_ranges(pinned_unicode::NAME_REGIONAL_INDICATOR_RANGES, point)
-}
-
-/// The pinned `Zs` set used by the canonical address-segment codec.
-pub fn is_space_separator(character: char) -> bool {
-    matches!(
-        character,
-        '\u{20}' | '\u{a0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}'
-    )
-}
-
-fn in_ranges(ranges: &[(u32, u32)], point: u32) -> bool {
-    ranges
-        .binary_search_by(|(first, last)| {
-            if point < *first {
-                std::cmp::Ordering::Greater
-            } else if point > *last {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Equal
-            }
-        })
-        .is_ok()
-}
-
-// ECMA-262 WhiteSpace + LineTerminator. This deliberately differs from Rust's
-// Unicode White_Space: FEFF is included and U+0085 is excluded.
-fn is_ecmascript_trim_whitespace(character: char) -> bool {
-    matches!(
-        character,
-        '\u{0009}' | '\u{000B}' | '\u{000C}' | '\u{0020}' | '\u{00A0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200A}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202F}'
-                | '\u{205F}'
-                | '\u{3000}'
-                | '\u{FEFF}'
-                | '\u{000A}'
-                | '\u{000D}'
-    )
 }
 
 #[cfg(test)]
