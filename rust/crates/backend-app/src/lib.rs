@@ -31,10 +31,11 @@ use silverhand_backend_server::{
             activity, attention_projection, channel_directory, channel_lifecycle,
             conversation_agent_activity, conversation_agent_directory, conversation_agent_runtime,
             conversation_message_window, conversation_ref, conversation_threads,
-            conversation_unread, human_search, message_unread,
+            conversation_unread, human_search, message_unread, saved,
             stale_message_resolution::{
                 TracingStaleMessageResolutionObserver, router as stale_message_resolution_router,
             },
+            thread_follow,
         },
         task::{TaskListState, task_list_router},
     },
@@ -432,6 +433,18 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // viewer summary, per-conversation).
     let message_unread_read = messaging_store.message_unread();
     let attention_projection_read = messaging_store.attention_projection();
+    // #2217: the two viewer-owned message-state lanes ride the SAME `MessagingStore`
+    // (each `&self` builder clones only the shared pool, no second authority), captured
+    // before `write_doors` moves the store below. `saved` serves both the read and the
+    // mutation port; `thread_follow` is the follow/unfollow write door.
+    let saved_store = messaging_store.saved();
+    let thread_follow_store = messaging_store.thread_follow();
+    // The thread-follow post-commit unread axis reuses the ONE unread publisher over the
+    // ONE read model: the model is cloned (a shared-pool handle, no second audience
+    // authority) before the messaging aftermath moves the original just below. This
+    // factory does not touch `messaging_aftermath`'s signature — the two events thread
+    // through separate hub factories by design (#2205 seam left untouched).
+    let thread_follow_aftermath = hub.thread_follow_aftermath(unread_read_model.clone());
     // The one post-commit fan-out, built by the hub over itself: the publication authority
     // and the hub the unread axis routes through are both `hub`, and this statement has no
     // hub argument that could name a second transport.
@@ -493,6 +506,15 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             .merge(conversation_ref::router(conversation_ref_read))
             .merge(conversation_unread::router(conversation_unread_read))
             .merge(conversation_threads::router(conversation_threads_read))
+            // #2217: the two viewer-owned message-state lanes, mounted behind this same
+            // authenticated human perimeter. Thread follow/unfollow rides its store and
+            // the reused unread aftermath; saved read+mutation ride the one saved store,
+            // with the hub itself as the scope-addressed `saved_changed` aftermath.
+            .merge(thread_follow::router(
+                thread_follow_store,
+                thread_follow_aftermath,
+            ))
+            .merge(saved::router(saved_store.clone(), saved_store, hub.clone()))
             // Same path as the send POST already merged via `human_writes`. axum
             // accumulates the GET and the POST into one method router on the
             // shared path node, so neither shadows the other; only a repeated
@@ -2139,21 +2161,29 @@ mod tests {
 
     /// Gate 1 of the CP2 convergence closure — the composed root's COMPLETE positive
     /// mounted table. It enumerates every `(method, path)` `prepare()` mounts across
-    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195 + #2198) as thirty-five
-    /// entries — thirty behind the human session perimeter, three behind the runtime
+    /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195 + #2198) as forty-two
+    /// entries — thirty-seven behind the human session perimeter, three behind the runtime
     /// credential perimeter, the two authenticated WebSockets — and asserts each is PRESENT
     /// (anon → its perimeter's `401`, or the WS upgrade surface, never the `404`
     /// fallback). Removing any mounted route's `.merge(...)` from `prepare()` flips its
-    /// entry to `404` and reddens this gate.
+    /// entry to `404` and reddens this gate. The three tables are named consts with a
+    /// per-table `assert_eq!(len)` (37 / 3 / 2) so a mis-added or mis-deleted row reddens
+    /// the count directly; 42 is their sum, not any one length (the WS table is path-only).
     ///
     /// This is a PRESENCE ledger, not a closed universe: black-box probing cannot
-    /// prove "no thirty-seventh route was silently added" (axum exposes no route
-    /// introspection), so this gate makes no such claim. A new registrar mounted into
+    /// prove "no forty-third route was silently added" (axum exposes no route
+    /// introspection), so this gate makes no such claim; the length asserts guard the
+    /// table rows against mis-add/mis-delete, they make no closed-universe claim (that is
+    /// gate 2's property). A new registrar mounted into
     /// `prepare()` MUST add its route here (and, if in the #2195 lane, move it from
     /// residual to landed in gate 2). Each door's per-path method surface and adapter
     /// wiring stays pinned by that route's own mount/unit test — the composed `.layer`
     /// perimeter answers `401` before method dispatch, so per-method surface is not
-    /// observable here.
+    /// observable here. F3 (#2217): the six thread-follow/saved methods collapse onto four
+    /// distinct paths (`.../follow` and `/api/messages/{id}/save` each carry POST+DELETE),
+    /// so anonymous presence here witnesses only those four path-guards; the six methods'
+    /// routing truth rides the authenticated per-method gate
+    /// `the_message_state_lane_dispatches_every_method_behind_the_perimeter` below.
     #[tokio::test]
     async fn the_composition_mounts_every_declared_route() {
         let fixture = fixture(true).await;
@@ -2161,10 +2191,10 @@ mod tests {
         let router = app.router;
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // The thirty-one human-perimeter product doors. Anonymous (no bearer) → the human
+        // The thirty-seven human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
-        for (method, path) in [
+        const HUMAN_PERIMETER_DOORS: [(&str, &str); 37] = [
             ("POST", "/api/hosts"),
             ("POST", "/api/channels/conv000000000001/messages"),
             ("GET", "/api/direct-pairs"),
@@ -2209,7 +2239,28 @@ mod tests {
             ("GET", "/api/attention/modes"),
             // Host-resources read lane, Wave 3A checkpoint A5 (#2198).
             ("GET", "/api/hosts/host-1/resources"),
-        ] {
+            // #2194 viewer-owned message-state lane (#2217). Six methods on four paths:
+            // `.../follow` and `/api/messages/{id}/save` each carry POST+DELETE, so anon
+            // presence witnesses only the four path-guards — the authenticated per-method
+            // gate below bears which of the six methods actually dispatch.
+            (
+                "GET",
+                "/api/channels/conv000000000001/threads/msg000000000000001/followers",
+            ),
+            (
+                "POST",
+                "/api/channels/conv000000000001/threads/msg000000000000001/follow",
+            ),
+            (
+                "DELETE",
+                "/api/channels/conv000000000001/threads/msg000000000000001/follow",
+            ),
+            ("GET", "/api/saved"),
+            ("POST", "/api/messages/msg000000000000001/save"),
+            ("DELETE", "/api/messages/msg000000000000001/save"),
+        ];
+        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 37);
+        for (method, path) in HUMAN_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
             assert_eq!(body, unauthorized, "{method} {path}");
@@ -2217,19 +2268,24 @@ mod tests {
 
         // The three runtime-perimeter internal doors. Anonymous → the runtime
         // credential perimeter's `401` on the matched route, never `404`.
-        for (method, path) in [
+        const RUNTIME_PERIMETER_DOORS: [(&str, &str); 3] = [
             ("POST", "/internal/agents/agent-1/send-message"),
             ("GET", "/internal/agents/agent-1/tasks"),
             ("POST", "/internal/agents/agent-1/stale-message-resolution"),
-        ] {
+        ];
+        assert_eq!(RUNTIME_PERIMETER_DOORS.len(), 3);
+        for (method, path) in RUNTIME_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
             assert_eq!(body, unauthorized, "{method} {path}");
         }
 
         // The two authenticated WebSockets are mounted: a plain (non-upgrade) GET is
-        // refused by the upgrade/auth surface, never falling to the `404` fallback.
-        for path in [EVENT_WEBSOCKET_PATH, HOST_WEBSOCKET_PATH] {
+        // refused by the upgrade/auth surface, never falling to the `404` fallback. This
+        // table is path-only — the upgrade surface, not a method router, answers here.
+        const AUTHENTICATED_WEBSOCKETS: [&str; 2] = [EVENT_WEBSOCKET_PATH, HOST_WEBSOCKET_PATH];
+        assert_eq!(AUTHENTICATED_WEBSOCKETS.len(), 2);
+        for path in AUTHENTICATED_WEBSOCKETS {
             let (status, _) = request(&router, "GET", path, None).await;
             assert_ne!(status, StatusCode::NOT_FOUND, "{path} must be mounted");
         }
@@ -2251,6 +2307,255 @@ mod tests {
                 "{method} {path} must be absent"
             );
         }
+    }
+
+    /// Seed one message authored by `user-1` in `CONVERSATION_ID` (a valid thread root:
+    /// `thread_root_id` is NULL). Enough for the viewer to save it and to follow its
+    /// thread through the composed root. Requires `seed_workspace_conversation` first (it
+    /// establishes the conversation and the viewer's participation).
+    async fn seed_message(path: &Path, message_id: &str) {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        // `seed_workspace_conversation` stores `status = 'open'`, which the message-send
+        // path never decodes but the saved/thread-follow authorization does. Normalize to
+        // a published status so the conversation-participation snapshot decodes.
+        sqlx::query("UPDATE conversations SET status = 'idle' WHERE id = ?")
+            .bind(CONVERSATION_ID)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq, created_at, thread_root_id, author_id, author_name, author_display_name) VALUES (?, ?, 'user', 'user-1', 'hello', 1, 1, NULL, 'user-1', 'user-1', 'User One')",
+        )
+        .bind(message_id)
+        .bind(CONVERSATION_ID)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    /// #2217 F3 — per-METHOD dispatch truth for the two shared-path pairs, which the
+    /// presence ledger above cannot bear. The perimeter `.layer` answers `401` before
+    /// method dispatch, so anonymous presence witnesses only the four path-guards; a
+    /// dropped sibling method (e.g. `DELETE .../follow`) would stay green there under
+    /// `assert_eq!(len)`. Here an AUTHENTICATED probe passes the perimeter and reaches the
+    /// path's `MethodRouter`: each of the six mounted methods reaches handler-level
+    /// behavior (never `405`), and an UNREGISTERED method (`PATCH` — follow/save are
+    /// POST/DELETE toggles with no PATCH semantics and no lane plans to mount it) returns
+    /// `405`, proving method dispatch actually happened and no catch-all swallows the path.
+    #[tokio::test]
+    async fn the_message_state_lane_dispatches_every_method_behind_the_perimeter() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router;
+        let bearer = format!("Bearer {TOKEN}");
+
+        // Clearly-absent coordinates: every id parses (non-empty) but resolves to nothing,
+        // so each registered method reaches its handler's domain refusal — never `405`.
+        let followers = "/api/channels/conv-absent/threads/root-absent/followers";
+        let follow = "/api/channels/conv-absent/threads/root-absent/follow";
+        let save = "/api/messages/msg-absent/save";
+        let saved_list = "/api/saved";
+
+        // The six REGISTERED methods → handler behavior (asserted exact), never `405`.
+        for (method, path, expected) in [
+            ("GET", saved_list, StatusCode::OK),
+            ("POST", save, StatusCode::NOT_FOUND),
+            ("DELETE", save, StatusCode::NOT_FOUND),
+            ("GET", followers, StatusCode::NOT_FOUND),
+            ("POST", follow, StatusCode::NOT_FOUND),
+            ("DELETE", follow, StatusCode::NOT_FOUND),
+        ] {
+            let (status, body) = request(&router, method, path, Some(&bearer)).await;
+            assert_ne!(
+                status,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "{method} {path} must dispatch to a handler, not 405: {body}"
+            );
+            assert_eq!(status, expected, "{method} {path}: {body}");
+        }
+
+        // The UNREGISTERED method on each shared path → `405`. Falsifier: a dropped
+        // registered sibling would ALSO be 405 (caught above); a catch-all accepting any
+        // method would NOT be 405 here.
+        for path in [follow, save] {
+            let (status, _) = request(&router, "PATCH", path, Some(&bearer)).await;
+            assert_eq!(
+                status,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "PATCH {path} is unregistered and must be 405"
+            );
+        }
+    }
+
+    /// #2217 cut 2 — DUAL proof that `prepare()` wires the REAL hub as the saved
+    /// aftermath (not a no-op / second hub) AND addresses the WRITER's own viewer scope.
+    /// A committed save/unsave publishes exactly one `saved_changed` frame to
+    /// `viewer:<writer>`, projected by the saved context's sole wire authority. A no-op
+    /// aftermath would leave the subscription silent; a wrong scope would land the frame
+    /// off `viewer:user-1`; a re-typed shape would drift the payload. The frame is read off
+    /// a real event-WS subscription opened BEFORE the mutation, so `seq` is deterministic.
+    #[tokio::test]
+    async fn the_composition_publishes_saved_changed_to_the_writer_on_the_real_hub() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_workspace_conversation(&fixture.path).await;
+        seed_message(&fixture.path, "message00000001").await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+        let bearer = format!("Bearer {TOKEN}");
+        let mut socket = subscribe_own_viewer(address).await;
+
+        // Save → one `saved_changed { action: "save" }` on the writer's own viewer scope.
+        let save = http_over_tcp(
+            address,
+            "POST",
+            "/api/messages/message00000001/save",
+            Some(&bearer),
+            "",
+        )
+        .await;
+        assert!(save.starts_with("HTTP/1.1 201 Created\r\n"), "{save}");
+        let saved = next_socket_json(&mut socket).await;
+        assert_eq!(saved["scope"], "viewer:user-1");
+        assert_eq!(saved["kind"], "saved_changed");
+        assert_eq!(saved["seq"], 1);
+        assert_eq!(
+            saved["payload"],
+            serde_json::json!({"message_id":"message00000001","action":"save"})
+        );
+
+        // Unsave → one `saved_changed { action: "unsave" }` on the SAME scope.
+        let unsave = http_over_tcp(
+            address,
+            "DELETE",
+            "/api/messages/message00000001/save",
+            Some(&bearer),
+            "",
+        )
+        .await;
+        assert!(
+            unsave.starts_with("HTTP/1.1 204 No Content\r\n"),
+            "{unsave}"
+        );
+        let unsaved = next_socket_json(&mut socket).await;
+        assert_eq!(unsaved["scope"], "viewer:user-1");
+        assert_eq!(unsaved["kind"], "saved_changed");
+        assert_eq!(unsaved["seq"], 2);
+        assert_eq!(
+            unsaved["payload"],
+            serde_json::json!({"message_id":"message00000001","action":"unsave"})
+        );
+
+        socket.close(None).await.unwrap();
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+    }
+
+    /// #2217 cut 1 — proof that `prepare()` wires the thread-follow post-commit seam to
+    /// the REAL `HubUnreadPublisher` over the REAL `SqliteUnreadReadModel` (not a no-op /
+    /// second audience path). A committed follow republishes the conversation's unread
+    /// through the ONE unread publisher, which co-emits `unread_updated` +
+    /// `attention_badge_updated` to each seated viewer — here the follower on
+    /// `viewer:user-1`. A no-op aftermath would leave the subscription silent; a second,
+    /// unrelated hub would not reach this subscription. The audience and counts come from
+    /// the real read model, so this also proves the reuse (no duplicate calculation).
+    #[tokio::test]
+    async fn the_composition_republishes_thread_follow_unread_through_the_real_publisher() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_workspace_conversation(&fixture.path).await;
+        seed_message(&fixture.path, "message00000001").await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+        let bearer = format!("Bearer {TOKEN}");
+        let mut socket = subscribe_own_viewer(address).await;
+
+        // Follow the seeded thread root → the real publisher republishes this viewer's
+        // unread as the `unread_updated` + `attention_badge_updated` co-emit.
+        let follow = http_over_tcp(
+            address,
+            "POST",
+            &format!("/api/channels/{CONVERSATION_ID}/threads/message00000001/follow"),
+            Some(&bearer),
+            "",
+        )
+        .await;
+        assert!(follow.starts_with("HTTP/1.1 200 OK\r\n"), "{follow}");
+
+        let unread = next_socket_json(&mut socket).await;
+        assert_eq!(unread["scope"], "viewer:user-1");
+        assert_eq!(unread["kind"], "unread_updated");
+        assert_eq!(unread["seq"], 1);
+        assert_eq!(unread["payload"]["conversation_id"], CONVERSATION_ID);
+        assert_eq!(unread["payload"]["workspace_id"], WORKSPACE_ID);
+
+        // The batch's second frame — proving it is the one unread publisher's co-emit, not
+        // a bespoke single frame.
+        let badge = next_socket_json(&mut socket).await;
+        assert_eq!(badge["scope"], "viewer:user-1");
+        assert_eq!(badge["kind"], "attention_badge_updated");
+        assert_eq!(badge["seq"], 2);
+        assert_eq!(badge["payload"]["workspace_id"], WORKSPACE_ID);
+
+        socket.close(None).await.unwrap();
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+    }
+
+    /// Open the event WebSocket as `user-1` (the seeded `TOKEN`), authenticate, subscribe
+    /// to the caller's own viewer scope, and return the live socket positioned to read the
+    /// first post-subscription frame. `subscribed.seq` is asserted so the caller's frame
+    /// sequence numbers start from a known baseline.
+    async fn subscribe_own_viewer(
+        address: std::net::SocketAddr,
+    ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>
+    {
+        let mut request = format!("ws://{address}{EVENT_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert(ORIGIN, "http://localhost:5173".parse().unwrap());
+        request.headers_mut().insert(
+            COOKIE,
+            format!("{EVENT_WS_SESSION_COOKIE}={TOKEN}")
+                .parse()
+                .unwrap(),
+        );
+        request
+            .headers_mut()
+            .insert(DESKTOP_API_EPOCH_HEADER, MINIMUM_CLIENT_API_EPOCH.into());
+        let (mut socket, _) = connect_async(request).await.unwrap();
+        assert_eq!(next_socket_json(&mut socket).await["type"], "authenticated");
+        socket
+            .send(ClientMessage::Text(
+                serde_json::json!({ "type": "subscribe", "scope": "viewer:self" })
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let subscribed = next_socket_json(&mut socket).await;
+        assert_eq!(subscribed["type"], "subscribed", "{subscribed}");
+        assert_eq!(subscribed["seq"], 0, "fresh viewer scope baseline");
+        socket
     }
 
     /// Gate 2 of the CP2 convergence closure — the #2195 host-agent control-plane lane

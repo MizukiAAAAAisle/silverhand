@@ -31,6 +31,12 @@ use silverhand_backend_core::{
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         CommittedMessageView, DirectPairOpenedFact, DirectPairOpenedPort, PrincipalIdentity,
+        collaboration::{
+            saved::{SavedAftermath, SavedChangeFact, SavedPublicationFailure},
+            thread_follow::{
+                ThreadFollowAftermath, ThreadFollowChangedFact, ThreadFollowPublicationFailure,
+            },
+        },
         mention_cc::CommittedMentionCopy,
         post_commit::{
             CommittedMentionRow, CommittedMessagePublication, CopyNotification,
@@ -47,6 +53,7 @@ use silverhand_backend_core::{
 
 use crate::host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers};
 use crate::messaging::aftermath::MessagingAftermath;
+use crate::messaging::collaboration::saved::changed_event as saved_changed_payload;
 use crate::messaging::message_wire::{copy_dto, message_event_payload};
 use tokio::{
     sync::{Notify, broadcast, mpsc, oneshot, watch},
@@ -285,6 +292,14 @@ enum ProductEvent {
         /// `WorkspaceRole::as_str` — never spelled again at this boundary.
         role: &'static str,
     },
+    /// A viewer's saved-message set changed, so their `['saved']` list is stale. Rides
+    /// the WRITER's own viewer scope — a private toggle, seen by no one else — mirroring
+    /// the TypeScript `publishToScope(viewer:<id>, 'saved_changed', …)`. Carried as an
+    /// opaque `Value` for the same reason [`Message`](ProductEvent::Message) is: the
+    /// `{message_id, action}` shape is already projected by the saved context's sole wire
+    /// authority ([`crate::messaging::collaboration::saved::changed_event`]); this
+    /// transport routes that projection and re-decides nothing.
+    SavedChanged(Value),
     #[cfg(test)]
     Test {
         value: String,
@@ -484,6 +499,20 @@ impl ScopeEventHub {
         )
     }
 
+    /// The thread-follow context's post-commit seam, built over THIS hub.
+    ///
+    /// A committed follow/unfollow changes which replies a viewer is owed, so the
+    /// conversation's unread must be republished — the SAME fact a new message publishes.
+    /// This factory therefore composes the one [`HubUnreadPublisher`] rather than opening a
+    /// second unread path: it supplies the hub from `&self` and keeps
+    /// [`HubUnreadPublisher::new`] crate-private, so the follow lane's unread axis is on the
+    /// hub it publishes on, decides no audience of its own, and re-counts nothing. It does
+    /// NOT touch [`messaging_aftermath`](ScopeEventHub::messaging_aftermath)'s signature —
+    /// the two events thread through separate factories by design.
+    pub fn thread_follow_aftermath<R>(&self, unread_read_model: R) -> HubThreadFollowUnread<R> {
+        HubThreadFollowUnread::new(HubUnreadPublisher::new(self.clone(), unread_read_model))
+    }
+
     pub fn publish_direct_pairs_changed(
         &self,
         viewer: &UserId,
@@ -494,6 +523,20 @@ impl ScopeEventHub {
             ProductEvent::DirectPairsChanged {
                 conversation_id: conversation.as_str().to_owned(),
             },
+        )
+    }
+
+    /// Route one viewer's saved-set change to THAT viewer's own scope — a private
+    /// toggle no one else sees. The `{message_id, action}` payload is projected by the
+    /// saved context's sole wire authority ([`saved_changed_payload`]); this method
+    /// re-decides nothing and spells no shape of its own.
+    pub(crate) fn publish_saved_changed(
+        &self,
+        fact: &SavedChangeFact,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(fact.viewer().clone()),
+            ProductEvent::SavedChanged(saved_changed_payload(fact)),
         )
     }
 
@@ -867,6 +910,21 @@ impl ViewerWorkspacesChangedSink for ScopeEventHub {
     }
 }
 
+/// The saved-message context's post-commit announce, over the real transport.
+///
+/// The hub IS the aftermath: a save/unsave is a single scope-addressed frame to the
+/// writer's own viewer scope, with no audience to compute — so, like the other
+/// hub-borne effects above, there is nothing to route through a separate adapter. The
+/// use case decided WHAT is true (this viewer saved/unsaved this message); this seam
+/// only publishes that fact and maps the transport's own error into the saved
+/// context's failure, keeping the concrete cause as the chain's tail.
+impl SavedAftermath for ScopeEventHub {
+    async fn announce(&self, fact: &SavedChangeFact) -> Result<(), SavedPublicationFailure> {
+        self.publish_saved_changed(fact)
+            .map_err(SavedPublicationFailure::from_source)
+    }
+}
+
 /// The wire projection of one unread anchor. `None` upstream stays `None`; a present
 /// anchor is spelled out coordinate by coordinate, never a stale carry-over.
 fn latest_unread_wire(latest: &CoreLatestUnread) -> LatestUnread {
@@ -957,6 +1015,40 @@ impl<R: UnreadReadModel + Send + Sync> UnreadPublication for HubUnreadPublisher<
             }
         }
         Ok(())
+    }
+}
+
+/// The thread-follow lane's [`ThreadFollowAftermath`], built ONLY over the one unread
+/// publisher. It holds a [`HubUnreadPublisher`] and forwards the committed change to its
+/// `publish_unread` — the same read-model audience oracle and per-viewer count the
+/// committed-message door uses. It owns no hub of its own, no second audience path, and
+/// no count: a follow toggle republishes the conversation's unread and nothing more.
+/// Constructed only by [`ScopeEventHub::thread_follow_aftermath`]; the wrapped
+/// publisher's constructor stays crate-private, so this cannot point its unread axis at a
+/// hub other than the one it publishes on.
+pub struct HubThreadFollowUnread<R> {
+    publisher: HubUnreadPublisher<R>,
+}
+
+impl<R> HubThreadFollowUnread<R> {
+    pub(crate) fn new(publisher: HubUnreadPublisher<R>) -> Self {
+        Self { publisher }
+    }
+}
+
+impl<R: UnreadReadModel + Send + Sync> ThreadFollowAftermath for HubThreadFollowUnread<R> {
+    async fn unread_changed(
+        &self,
+        fact: ThreadFollowChangedFact<'_>,
+    ) -> Result<(), ThreadFollowPublicationFailure> {
+        // The follow changed which replies this conversation owes its viewers, so the
+        // conversation's unread is republished through the one publisher. The viewer on
+        // the fact is already part of that audience — recomputed against the committed
+        // record, never trusted from here.
+        self.publisher
+            .publish_unread(fact.conversation())
+            .await
+            .map_err(ThreadFollowPublicationFailure::from_source)
     }
 }
 
@@ -5599,6 +5691,7 @@ mod tests {
             ProductEvent::UnreadUpdated(_) => "unread_updated",
             ProductEvent::AttentionBadgeUpdated(_) => "attention_badge_updated",
             ProductEvent::ViewerWorkspacesChanged { .. } => "viewer_workspaces_changed",
+            ProductEvent::SavedChanged(_) => "saved_changed",
             ProductEvent::Test { .. } => "test",
         }
     }
