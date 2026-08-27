@@ -3,6 +3,7 @@
 
 pub mod access;
 pub mod auth;
+pub mod avatar_blob;
 mod bearer;
 pub mod clock;
 pub mod daemon_delivery;

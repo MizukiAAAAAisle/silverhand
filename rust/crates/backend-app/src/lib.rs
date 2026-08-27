@@ -14,6 +14,7 @@ use axum::Router;
 use silverhand_backend_core::{
     access::{EnrollmentClock, unix_millis},
     auth::{EntropySessionTokenMint, HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
+    blob_store::StorageKind,
     credential::Argon2idPasswordHasher,
     host_runtime::{
         claim::ClaimLocalComputer,
@@ -23,10 +24,13 @@ use silverhand_backend_core::{
     },
     policy::presence_grace::GraceWindow,
 };
-use silverhand_backend_filesystem::runtime_detection::MachineRuntimeDetector;
+use silverhand_backend_filesystem::{
+    blob_store::LocalBlobStore, runtime_detection::MachineRuntimeDetector,
+};
 use silverhand_backend_server::{
     access,
     auth::{PublicJsonUnauthorized, require_human_session},
+    avatar_blob::SingleKindAvatarBlobs,
     clock::SystemProcessClock,
     daemon_delivery::{DaemonDeliveryController, DaemonDeliveryRuntime},
     direct_pairs,
@@ -62,6 +66,7 @@ use silverhand_backend_server::{
         AllowedOrigin, EventWebSocketConfig, EventWebSocketController, HubPresenceSink,
         ScopeEventHub, SystemDisconnectClock, compose_presence_vertical,
     },
+    users::{self, UsersDeps},
     workspace_detail,
     workspace_metadata_write::{self, WorkspaceMetadataClock},
     workspace_name_availability,
@@ -102,6 +107,13 @@ use tokio::{net::TcpListener, sync::oneshot};
 mod request_perimeter;
 
 const DATABASE_PATH_ENV: &str = "SILVERHAND_DATABASE_PATH";
+/// The local blob-storage root. Required and launcher-provided, exactly like the
+/// database path: the shared app-data resolver hands the backend an EXPLICIT blobs
+/// directory (`packages/shared/src/app-data-layout.ts`, #task:1598 — the overloaded
+/// `silverhandDir` root is retired), separate from the database file, for BOTH the
+/// embedded and standalone profiles. The filesystem blob store ensures it exists on
+/// open (its own `create_dir_all`, mirroring the product's `ensureReady`).
+const BLOBS_ROOT_ENV: &str = "SILVERHAND_BLOBS_ROOT";
 const LISTEN_ADDR_ENV: &str = "SILVERHAND_LISTEN_ADDR";
 const ALLOWED_ORIGINS_ENV: &str = "SILVERHAND_ALLOWED_ORIGINS";
 const DAEMON_NPM_SPEC_ENV: &str = "SILVERHAND_DAEMON_NPM_SPEC";
@@ -132,6 +144,7 @@ const fn const_parse_i64(value: &str) -> i64 {
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     database_path: PathBuf,
+    blobs_root: PathBuf,
     listen_addr: SocketAddr,
     allowed_origins: Vec<AllowedOrigin>,
     daemon_npm_spec: Option<String>,
@@ -146,6 +159,7 @@ pub struct AppConfig {
 impl AppConfig {
     pub fn new(
         database_path: PathBuf,
+        blobs_root: PathBuf,
         listen_addr: SocketAddr,
         allowed_origins: Vec<AllowedOrigin>,
         daemon_npm_spec: Option<String>,
@@ -155,6 +169,9 @@ impl AppConfig {
         if database_path.as_os_str().is_empty() {
             return Err(ConfigError::EmptyDatabasePath);
         }
+        if blobs_root.as_os_str().is_empty() {
+            return Err(ConfigError::EmptyBlobsRoot);
+        }
         if allowed_origins.is_empty() {
             return Err(ConfigError::EmptyAllowedOrigins);
         }
@@ -163,6 +180,7 @@ impl AppConfig {
             .filter(|value| !value.is_empty());
         Ok(Self {
             database_path,
+            blobs_root,
             listen_addr,
             allowed_origins,
             daemon_npm_spec,
@@ -173,6 +191,7 @@ impl AppConfig {
 
     pub fn from_env() -> Result<Self, ConfigError> {
         let database_path = required_env(DATABASE_PATH_ENV)?.into();
+        let blobs_root = required_env(BLOBS_ROOT_ENV)?.into();
         let listen_addr = required_env(LISTEN_ADDR_ENV)?
             .parse()
             .map_err(ConfigError::InvalidListenAddress)?;
@@ -196,6 +215,7 @@ impl AppConfig {
         )?;
         Self::new(
             database_path,
+            blobs_root,
             listen_addr,
             allowed_origins,
             daemon_npm_spec,
@@ -253,6 +273,8 @@ pub enum ConfigError {
     MissingEnvironment(&'static str),
     #[error("database path must not be empty")]
     EmptyDatabasePath,
+    #[error("blob storage root must not be empty")]
+    EmptyBlobsRoot,
     #[error("event websocket origin allowlist must not be empty")]
     EmptyAllowedOrigins,
     #[error("listen address is invalid")]
@@ -531,6 +553,13 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         SqliteCredentialStore::open(&config.database_path),
     )
     .await?;
+    // #2223 CP4: the ONE local blob backend, opened at the launcher-provided blobs
+    // root (its `open` runs `create_dir_all`, the parity of the product's
+    // `ensureReady`). It is the single filesystem store for every blob vertical: the
+    // avatar routes wrap it below as their narrow `AvatarBlobStore`, and the host
+    // computer-cascade blob purge (a later checkpoint) will clone this same handle
+    // rather than open a second root.
+    let blob_store = open("blob store", LocalBlobStore::open(&config.blobs_root)).await?;
 
     let hub = ScopeEventHub::production().map_err(|source| StartupError::Composition {
         name: "scope event hub",
@@ -760,10 +789,34 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             revoke: session_revoke,
             credentials: credential_store,
             reads: user_store.clone(),
-            writes: user_store,
+            writes: user_store.clone(),
             user_changed: hub.clone(),
             clock: SystemSessionClock,
             signup_enabled: config.signup_enabled,
+        },
+        sessions.clone(),
+    );
+    // #2223 CP4: the human-directory + avatar family. All four routes (`GET /api/users`,
+    // `POST`/`DELETE /api/me/avatar`, `GET /api/users/{id}/avatar`) resolve every
+    // identity capability — directory read, avatar serve-ref read, profile read, and the
+    // avatar pointer write unit-of-work — off the SAME `SqliteUserStore` handle, share
+    // the production `user_changed` hub sink (the avatar upload/clear announce), and the
+    // production wall clock. The blob capability is the ONE `LocalBlobStore` opened
+    // above, wrapped by the `SingleKindAvatarBlobs` adapter under its ambient
+    // `StorageKind::Local` — the composition-root pairing the adapter's construction
+    // contract names. Like `human_auth`, `users::router` self-applies
+    // `require_human_session` (all four routes are behind it), so it mounts at the TOP
+    // LEVEL, not inside `human_products`.
+    let avatar_blobs = SingleKindAvatarBlobs::new(blob_store, StorageKind::Local);
+    let users_router = users::router(
+        UsersDeps {
+            directory: user_store.clone(),
+            avatar_refs: user_store.clone(),
+            reads: user_store.clone(),
+            avatar_writes: user_store,
+            blobs: avatar_blobs,
+            user_changed: hub.clone(),
+            clock: SystemSessionClock,
         },
         sessions.clone(),
     );
@@ -932,6 +985,14 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             // bearer gate — placing it behind the outer perimeter would make login
             // unreachable before a session exists.
             .merge(human_auth_router)
+            // #2223 CP4: the human-directory + avatar family also mounts at the top level.
+            // `users::router` self-wraps `require_human_session` around all four of its
+            // routes, so it is merged here rather than inside `human_products` (a second
+            // outer perimeter would double-authenticate). Its paths are disjoint from every
+            // sibling: `/api/users` and `/api/users/{id}/avatar` share no method node with
+            // any mounted route, and `/api/me/avatar` is a child path of `human_auth`'s
+            // `/api/me`, never the same node.
+            .merge(users_router)
             .merge(agent_products)
             .merge(event_router)
             .merge(daemon_router)
@@ -1172,8 +1233,11 @@ mod tests {
     }
 
     fn config(path: PathBuf) -> AppConfig {
+        // A sibling blobs dir inside the fixture's tempdir, created on blob-store open.
+        let blobs_root = path.parent().unwrap().join("blobs");
         AppConfig::new(
             path,
+            blobs_root,
             "127.0.0.1:0".parse().unwrap(),
             vec![AllowedOrigin::parse("http://localhost:5173".to_owned()).unwrap()],
             Some("@silverhand-ai/daemon@test".to_owned()),
@@ -1193,8 +1257,10 @@ mod tests {
     /// router (no detector), and a `/readyz` whose Standalone shape carries the
     /// (uninstalled) fanout key.
     fn remote_config(path: PathBuf) -> AppConfig {
+        let blobs_root = path.parent().unwrap().join("blobs");
         AppConfig::new(
             path,
+            blobs_root,
             "127.0.0.1:0".parse().unwrap(),
             vec![AllowedOrigin::parse("http://localhost:5173".to_owned()).unwrap()],
             Some("@silverhand-ai/daemon@test".to_owned()),
@@ -1453,6 +1519,7 @@ mod tests {
         assert!(matches!(
             AppConfig::new(
                 PathBuf::new(),
+                "blobs".into(),
                 "127.0.0.1:0".parse().unwrap(),
                 vec![AllowedOrigin::parse("http://localhost:5173".to_owned()).unwrap()],
                 None,
@@ -1464,6 +1531,19 @@ mod tests {
         assert!(matches!(
             AppConfig::new(
                 "database.sqlite".into(),
+                PathBuf::new(),
+                "127.0.0.1:0".parse().unwrap(),
+                vec![AllowedOrigin::parse("http://localhost:5173".to_owned()).unwrap()],
+                None,
+                DeploymentProfile::Embedded,
+                true,
+            ),
+            Err(ConfigError::EmptyBlobsRoot)
+        ));
+        assert!(matches!(
+            AppConfig::new(
+                "database.sqlite".into(),
+                "blobs".into(),
                 "127.0.0.1:0".parse().unwrap(),
                 Vec::new(),
                 None,
@@ -1551,6 +1631,121 @@ mod tests {
             Err(SchemaAdmissionError::LedgerMismatch)
         ));
         pool.close().await;
+    }
+
+    /// #2223 CP4: the composed avatar body-limit proof. It drives the avatar upload
+    /// route through the FULLY composed production router — the real 128 MiB request
+    /// perimeter (a `Limited` stream-wrap plus `DefaultBodyLimit::disable()`, NOT a
+    /// `DefaultBodyLimit::max`) over the real `users::router`, the real `SqliteUserStore`,
+    /// and the real `LocalBlobStore` at the configured blobs root. It proves the two size
+    /// tiers stay observably separate at composition: a 5 MiB avatar at the cap is
+    /// admitted (the perimeter wrap never truncates it below its own ceiling), one byte
+    /// over yields the LEAF's exact `avatar_too_large` 413 (the domain's own bounded read
+    /// — not the envelope — is the sub-128-MiB authority), and a request DECLARING more
+    /// than 128 MiB is refused by the perimeter with its distinct uniform body before any
+    /// route is matched. All three hit the SAME method/path, so only the body size
+    /// distinguishes the outcomes.
+    #[tokio::test]
+    async fn composed_avatar_upload_separates_the_five_mib_cap_from_the_perimeter_ceiling() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let bearer = format!("Bearer {TOKEN}");
+
+        let boundary = "XBOUNDARY223";
+        let content_type = format!("multipart/form-data; boundary={boundary}");
+        let upload = |bytes: &[u8]| -> Body {
+            let mut body: Vec<u8> = Vec::new();
+            body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+            body.extend_from_slice(
+                b"Content-Disposition: form-data; name=\"file\"; filename=\"a.png\"\r\n",
+            );
+            body.extend_from_slice(b"Content-Type: image/png\r\n\r\n");
+            body.extend_from_slice(bytes);
+            body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+            Body::from(body)
+        };
+
+        // Tier 1 — exactly AVATAR_MAX_BYTES: admitted through the real perimeter (200),
+        // and the row's cache-busted avatar_url is set (proving the bytes reached the blob
+        // store, not truncated by the 128 MiB stream wrap).
+        let cap = silverhand_backend_core::avatar::AVATAR_MAX_BYTES as usize;
+        let response = app
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(users::ME_AVATAR_PATH)
+                    .header("authorization", &bearer)
+                    .header("content-type", &content_type)
+                    .body(upload(&vec![0x21u8; cap]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "a 5 MiB avatar at the cap is admitted through the real composed perimeter"
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            text.contains("/api/users/user-1/avatar?v="),
+            "the 200 body carries the cache-busted avatar_url: {text}"
+        );
+
+        // Tier 2 — one byte over the cap: the leaf's EXACT `avatar_too_large` 413, never
+        // the perimeter body and never a silent truncation to success.
+        let response = app
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(users::ME_AVATAR_PATH)
+                    .header("authorization", &bearer)
+                    .header("content-type", &content_type)
+                    .body(upload(&vec![0x21u8; cap + 1]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            &body[..],
+            br#"{"error":"Avatar must be 5 MB or smaller.","code":"avatar_too_large"}"#,
+            "5 MiB+1 is the domain 413, observably distinct from the perimeter body"
+        );
+
+        // Tier 3 — a request DECLARING more than 128 MiB: the perimeter's uniform 413,
+        // returned from its declared-Content-Length short-circuit before any byte is read
+        // or any route matched. A one-byte actual body proves the HEADER alone drives it.
+        let over_ceiling = request_perimeter::MAX_REQUEST_BODY_BYTES as u64 + 1;
+        let response = app
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(users::ME_AVATAR_PATH)
+                    .header("authorization", &bearer)
+                    .header("content-type", &content_type)
+                    .header("content-length", over_ceiling.to_string())
+                    .body(Body::from("x"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            &body[..],
+            br#"{"error":"payload too large"}"#,
+            "128 MiB+1 is the perimeter's uniform 413, distinct from the avatar 413"
+        );
     }
 
     #[tokio::test]
