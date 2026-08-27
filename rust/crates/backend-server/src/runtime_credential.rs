@@ -6,7 +6,6 @@ use std::{
     fmt,
     future::Future,
     sync::{Arc, Weak},
-    time::SystemTime,
 };
 
 use axum::{
@@ -32,7 +31,11 @@ use silverhand_backend_core::{
 };
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
-use crate::{bearer::strict_bearer_credential, error};
+use crate::{
+    bearer::strict_bearer_credential,
+    clock::{ProcessClock, SystemProcessClock},
+    error,
+};
 
 const TOKEN_BYTES: usize = 32;
 const TOKEN_GENERATION_ATTEMPTS: usize = 8;
@@ -213,19 +216,6 @@ impl RuntimeEntropy for SystemRuntimeEntropy {
     }
 }
 
-pub trait RuntimeClock: Clone + Send + Sync + 'static {
-    fn now(&self) -> RuntimeEventTime;
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SystemRuntimeClock;
-
-impl RuntimeClock for SystemRuntimeClock {
-    fn now(&self) -> RuntimeEventTime {
-        RuntimeEventTime::from_unix_millis(signed_unix_millis(SystemTime::now()))
-    }
-}
-
 #[derive(Debug)]
 pub enum PrepareRuntimeCredentialError {
     Entropy(Box<dyn Error + Send + Sync + 'static>),
@@ -296,11 +286,13 @@ impl fmt::Debug for RuntimeStartHandoff {
 }
 
 #[derive(Clone)]
-pub struct RuntimeCredentialAuthority<C, E = SystemRuntimeEntropy, K = SystemRuntimeClock> {
+pub struct RuntimeCredentialAuthority<C, E = SystemRuntimeEntropy, K = SystemProcessClock> {
     custody: C,
     tokens: Arc<RwLock<ProcessTokenStore>>,
     scope_guards: Arc<ScopeGuards>,
     entropy: E,
+    /// Neutral wall clock. Custody stamps are runtime-event instants, so the branding
+    /// happens here — where a stamp means something — rather than in the shared clock.
     clock: K,
 }
 
@@ -309,7 +301,7 @@ where
     C: RuntimeCustodyPort,
 {
     pub fn production(custody: C) -> Self {
-        Self::new(custody, SystemRuntimeEntropy, SystemRuntimeClock)
+        Self::new(custody, SystemRuntimeEntropy, SystemProcessClock)
     }
 }
 
@@ -317,7 +309,7 @@ impl<C, E, K> RuntimeCredentialAuthority<C, E, K>
 where
     C: RuntimeCustodyPort,
     E: RuntimeEntropy,
-    K: RuntimeClock,
+    K: ProcessClock,
 {
     pub fn new(custody: C, entropy: E, clock: K) -> Self {
         Self {
@@ -327,6 +319,11 @@ where
             entropy,
             clock,
         }
+    }
+
+    /// This process's reading, branded as the runtime-event instant custody stores.
+    fn event_time(&self) -> RuntimeEventTime {
+        RuntimeEventTime::from_unix_millis(self.clock.now_unix_millis())
     }
 
     async fn prepare(
@@ -340,7 +337,7 @@ where
             .claim_or_current(ClaimRuntimeCustody::new(
                 scope,
                 daemon_instance,
-                self.clock.now(),
+                self.event_time(),
             ))
             .await;
         let claimed = match claim {
@@ -367,7 +364,7 @@ where
                     .finalize(FinalizeRuntimeCustody::new(
                         principal,
                         RuntimeFinalStatus::Crashed,
-                        self.clock.now(),
+                        self.event_time(),
                     ))
                     .await;
                 match compensated {
@@ -444,7 +441,7 @@ where
             .finalize(FinalizeRuntimeCustody::new(
                 principal.clone(),
                 status,
-                self.clock.now(),
+                self.event_time(),
             ))
             .await?;
         if finalized {
@@ -690,7 +687,7 @@ impl<C, E, K> AuthenticateRuntimeCredential for RuntimeCredentialAuthority<C, E,
 where
     C: RuntimeCustodyPort,
     E: RuntimeEntropy,
-    K: RuntimeClock,
+    K: ProcessClock,
 {
     async fn authenticate_runtime(
         &self,
@@ -777,20 +774,6 @@ fn unauthorized() -> Response {
         Json(serde_json::json!({ "error": "unauthorized" })),
     )
         .into_response()
-}
-
-fn signed_unix_millis(time: SystemTime) -> i64 {
-    let millis = match time.duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(duration) => i128::try_from(duration.as_millis()).unwrap_or(i128::MAX),
-        Err(error) => -i128::try_from(error.duration().as_millis()).unwrap_or(i128::MAX),
-    };
-    i64::try_from(millis).unwrap_or_else(|_| {
-        if millis.is_negative() {
-            i64::MIN
-        } else {
-            i64::MAX
-        }
-    })
 }
 
 #[cfg(test)]

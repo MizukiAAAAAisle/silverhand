@@ -25,7 +25,7 @@
 //! [`silverhand_backend_core::policy::agent_presence`] policy the runtime-delivery
 //! writer also uses, so a write that calls an agent present and this read that reports
 //! it away agree by construction. `server_now` is a SEPARATE emit-only stamp the route
-//! reads from its injected [`RuntimeClock`] so the renderer can calibrate client↔server
+//! reads from its injected [`ProcessClock`] so the renderer can calibrate client↔server
 //! skew; it is not a stored fact and never enters the deadline arithmetic. The clock is
 //! injected (not read from `SystemTime` here) so a test pins a fixed `server_now`.
 //!
@@ -48,7 +48,7 @@ use silverhand_backend_core::{
     identity::{AgentId, Principal, UserId},
 };
 
-use crate::{error, runtime_credential::RuntimeClock};
+use crate::{clock::ProcessClock, error};
 
 /// The product route template, in axum's `{id}` capture syntax.
 pub const AGENT_PRESENCE_PATH: &str = "/api/agents/{id}/presence";
@@ -71,7 +71,7 @@ struct PresenceState<R, C> {
 pub fn router<R, C>(cold_read: R, clock: C) -> Router
 where
     R: AgentPresenceReadModel + Clone + Send + Sync + 'static,
-    C: RuntimeClock,
+    C: ProcessClock,
 {
     Router::new()
         .route(AGENT_PRESENCE_PATH, get(agent_presence::<R, C>))
@@ -85,7 +85,7 @@ async fn agent_presence<R, C>(
 ) -> Response
 where
     R: AgentPresenceReadModel,
-    C: RuntimeClock,
+    C: ProcessClock,
 {
     let Some(Extension(viewer)) = viewer else {
         tracing::error!("agent-presence route reached without its human principal fact");
@@ -141,7 +141,7 @@ where
 
     Json(AgentPresenceResponse {
         away_at: presence.away_at(),
-        server_now: state.clock.now().as_unix_millis(),
+        server_now: state.clock.now_unix_millis(),
     })
     .into_response()
 }
@@ -197,11 +197,10 @@ mod tests {
         identity::{AgentId, UserId},
         persistence::PersistenceFailure,
         policy::agent_presence,
-        runtime_credential::RuntimeEventTime,
     };
     use tower::ServiceExt;
 
-    use super::{RuntimeClock, router};
+    use super::{ProcessClock, router};
 
     /// The fixed `server_now` a test pins so the emitted value proves the route reads
     /// its injected clock, never a wall clock.
@@ -220,9 +219,9 @@ mod tests {
     #[derive(Clone, Copy)]
     struct FixedClock;
 
-    impl RuntimeClock for FixedClock {
-        fn now(&self) -> RuntimeEventTime {
-            RuntimeEventTime::from_unix_millis(FIXED_NOW)
+    impl ProcessClock for FixedClock {
+        fn now_unix_millis(&self) -> i64 {
+            FIXED_NOW
         }
     }
 

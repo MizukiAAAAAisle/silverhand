@@ -91,10 +91,13 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "teardown"),
     ("backend-core", "user_presence_cold_read"),
     ("backend-core", "user_presence_last_seen"),
+    ("backend-filesystem", "runtime_detection"),
+    ("backend-server", "clock"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
     ("backend-server", "host_resources"),
+    ("backend-server", "ops"),
     ("backend-sqlite", "agent_availability_read"),
     ("backend-sqlite", "agent_detail_read"),
     ("backend-sqlite", "agent_list_read"),
@@ -104,6 +107,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-sqlite", "host_resources_read"),
     ("backend-sqlite", "user_presence_cold_read"),
     ("backend-sqlite", "user_presence_last_seen"),
+    ("backend-sqlite", "write_probe"),
 ];
 
 /// The declarations this lane did NOT add, across EVERY root in `CRATE_ROOTS`.
@@ -203,9 +207,11 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
+    ("backend-filesystem", "runtime_detection"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
+    ("backend-server", "ops"),
     ("backend-sqlite", "host_agent"),
 ];
 
@@ -231,8 +237,14 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// `host_agent` leaf: the read port `host_resources_read` and the surface
 /// `host_resources`. The `/api/agents` list vertical adds one on the same
 /// grounds once more: the read port `agent_list_read`; its route surface and the DTO
-/// projector it shares with detail are both submodules of `host_agent`. G0 keeps it
-/// a subset of the seam ledger.
+/// projector it shares with detail are both submodules of `host_agent`. The root
+/// operational read cluster (#task:2195) adds exactly one, and it is the surface
+/// `ops`: none of its four faces reads a domain fact, so it declares no crate-root
+/// read port at all — the runtime catalogue's detector port is a leaf of the `agents`
+/// vocabulary namespace, and the readiness write probe is a store capability added to
+/// the INHERITED core namespace `persistence`, which this ledger never claimed —
+/// while its two adapters are excluded on the same grounds every other adapter here
+/// is. G0 keeps it a subset of the seam ledger.
 const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "agent_availability_read"),
     ("backend-core", "agent_detail_read"),
@@ -248,6 +260,7 @@ const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
     ("backend-server", "host_resources"),
+    ("backend-server", "ops"),
 ];
 
 fn rust_root() -> PathBuf {
@@ -766,18 +779,20 @@ fn g0_every_lane_module_sits_in_the_inventory_that_guards_it() {
     );
 
     // The fifth workspace crate `backend-filesystem` is now in `CRATE_ROOTS`, so the
-    // loop above scans its one declaration. Prove that classification is load-bearing
-    // rather than trusting a reader: driven against the REAL filesystem root with its
-    // entry removed, `blob_store` is reported — so deleting the classification turns
-    // G0 red. Without filesystem in the scan range, that entry would be dead and its
-    // deletion silent, which is the second-layer false-green this closes.
+    // loop above scans both of its declarations. Prove those classifications are
+    // load-bearing rather than trusting a reader: driven against the REAL filesystem
+    // root with the registry emptied, BOTH names are reported — the inherited
+    // `blob_store` and this lane's seam entry `runtime_detection` — so deleting either
+    // classification turns G0 red. Without filesystem in the scan range, those entries
+    // would be dead and their deletion silent, which is the second-layer false-green
+    // this closes.
     assert_eq!(
         classification_gaps(
             &root_module_declarations("backend-filesystem"),
             &BTreeSet::new(),
         )
         .0,
-        vec!["blob_store".to_owned()],
+        vec!["blob_store".to_owned(), "runtime_detection".to_owned()],
         "deleting backend-filesystem's root classification must turn G0 red"
     );
 
