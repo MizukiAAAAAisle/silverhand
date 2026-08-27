@@ -42,11 +42,18 @@
 //! SECOND WITNESS of them.
 //!
 //! Crucially the name-change EFFECT gate is DERIVED here in the domain, never
-//! trusted from the adapter: the write reports only the before-image it read under
+//! supplied by the adapter: the write reports only the before-image it read under
 //! its own lock ([`PriorWorkspaceAddress`]) and the `name_key` it committed, and the
-//! seal computes whether a display name actually moved. An adapter therefore cannot
-//! SUPPRESS the rename fan-out (report "no change" for a display that did move) any
-//! more than it can fabricate one — it no longer decides, it only witnesses.
+//! seal computes whether a display name actually moved. So the adapter can no longer
+//! OMIT the verdict (hand back a pre-computed "no change" to skip the fan-out) or
+//! fabricate one — it does not decide, it only witnesses, and the domain derives.
+//! What the seal CANNOT catch by itself is a dishonest before-image: an adapter that
+//! reports `prior.name` equal to the committed name would derive `None` for a rename
+//! that did happen. That honesty is not a type guarantee — it is enforced by the
+//! production SQLite adapter reading the before-image and committing under ONE
+//! `BEGIN IMMEDIATE` transaction (so `prior` is the row's true pre-write address) and
+//! by its adapter tests, exactly as the truthfulness of any committed value the seal
+//! binds rests on the adapter's guarded write.
 //!
 //! ## `updated_at` always bumps; the no-op is the EFFECT gate, not a skipped write
 //!
@@ -173,10 +180,14 @@ impl WorkspaceMetadataEdit {
 /// ([`PriorWorkspaceAddress`]) and committed `name_key`, never supplied by the
 /// adapter: `old_*` is the before-image the write read under its lock, `new_name`
 /// is the committed display (already bound to the request), and `new_key` is the
-/// committed fold key (bound to the fold of the requested name) — so neither a
-/// suppressed record nor an adapter that wrote (or read back) the wrong key can
-/// slip through. A description-only edit, or a rename to the identical display
-/// name, leaves the whole record `None` and owes no fan-out.
+/// committed fold key (bound to the fold of the requested name) — so an adapter that
+/// wrote (or read back) the wrong committed key cannot slip a bogus record through,
+/// and the adapter cannot OMIT the record for a rename it committed. The one thing
+/// the derivation cannot catch is a dishonest before-image (an adapter reporting a
+/// `prior.name` that was never the row's address); that rests on the production
+/// adapter reading `prior` in the SAME write transaction, not on this type. A
+/// description-only edit, or a rename to the identical display name, leaves the whole
+/// record `None` and owes no fan-out.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceNameChange {
     pub old_name: String,
@@ -192,9 +203,14 @@ pub struct WorkspaceNameChange {
 /// what it read; the core seal ([`seal_metadata_write_fact`]) compares it against
 /// the committed face to DERIVE the [`WorkspaceNameChange`] gate. Deriving the gate
 /// in the domain — rather than trusting an adapter-computed `Option<WorkspaceNameChange>` —
-/// is what makes a SUPPRESSED rename impossible: an adapter cannot skip the fan-out
-/// by reporting "no change" for a display that actually moved, because it no longer
-/// decides; it only reports the before-image and the domain compares.
+/// is what stops an adapter from OMITTING the fan-out decision: it can no longer
+/// hand back "no change" as a verdict, because it no longer produces a verdict; it
+/// reports the before-image and the domain compares. That closes the omitted-verdict
+/// channel, not every lie: an adapter that reports a `name` it never read (a
+/// before-image equal to the committed display) would still derive `None`. The
+/// production SQLite adapter forecloses that by reading this before-image and
+/// committing under ONE `BEGIN IMMEDIATE` transaction — so `name`/`key` are the
+/// row's true pre-write address — with adapter tests that pin it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PriorWorkspaceAddress {
     pub name: String,
@@ -208,10 +224,12 @@ pub struct PriorWorkspaceAddress {
 /// `Forbidden`, `NameTaken`, and `NoSuchWorkspace` are product answers (a `403`,
 /// `409`, and `404` at the wire), decided under the write lock; they are `Ok`
 /// values here, not faults. `Committed` carries the projected regular
-/// [`WorkspaceFace`] the write left (with the bumped `updated_at`) and the
-/// [`WorkspaceNameChange`] effect gate. Because a lying adapter could put anything
-/// in `Committed`, the use case never trusts it directly — it seals it against the
-/// request first.
+/// [`WorkspaceFace`] the write left (with the bumped `updated_at`), the before-image
+/// the write witnessed under its lock ([`PriorWorkspaceAddress`]), and the committed
+/// `name_key` — the raw witnesses from which the use case DERIVES the
+/// [`WorkspaceNameChange`] gate; the adapter does not decide it. Because a lying
+/// adapter could put anything in `Committed`, the use case never trusts it directly —
+/// it seals it against the request first.
 // The `Committed` arm dwarfs the unit refusal arms because it carries the whole
 // committed face plus its effect gate — that payload IS the outcome, the same
 // result-or-refusal shape as `WorkspaceView`. Boxing it would add heap indirection
@@ -376,13 +394,16 @@ pub enum WorkspaceArchiveUpdate {
 /// * [`Persistence`](Self::Persistence) — the write port itself faulted (driver
 ///   error, corrupt committed row). Surfaced, never folded into a product `4xx`.
 /// * [`UntrustworthyWriteFact`](Self::UntrustworthyWriteFact) — the port returned a
-///   committed fact whose identity, name, description, home flag, or name-change
-///   record does NOT match the write it was asked to perform. That is the only
-///   channel by which a broken adapter could splice one workspace's write onto
-///   another, hand back a foreign face, or drive the rename fan-out for a change
-///   that did not happen, so the use case SEALS same-origin before minting any
-///   outcome and fails closed here — not a `debug_assert` (a release build must
-///   fail closed too).
+///   committed fact whose identity, name, description, home flag, committed
+///   `name_key`, or write instant does NOT match the write it was asked to perform.
+///   That is the channel by which a broken adapter could splice one workspace's
+///   write onto another, hand back a foreign face, or commit a name/key the request
+///   never asked for, so the use case SEALS same-origin before minting any outcome
+///   and fails closed here — not a `debug_assert` (a release build must fail closed
+///   too). This binds the COMMITTED fact to the request; the honesty of the
+///   before-image the fan-out gate derives from is a separate guarantee the
+///   production adapter provides (reading it in the write's own transaction), not
+///   one this seal can enforce.
 #[derive(Debug, Error)]
 pub enum WorkspaceMetadataWriteError {
     #[error(transparent)]
@@ -414,13 +435,16 @@ pub enum WorkspaceMetadataWriteError {
 /// * a description-only edit whose committed display or `name_key` moved off the
 ///   before-image — the adapter renamed a workspace the request never asked to rename.
 ///
-/// The name-change gate is DERIVED, never trusted: the adapter reports only the
+/// The name-change gate is DERIVED, never supplied: the adapter reports only the
 /// before-image it read under its own lock (`prior`) and the `name_key` it
 /// committed. The seal computes `Some` exactly when a name was supplied AND the
 /// committed display differs from the before-image, carrying the true address pair
 /// (`prior.name`/`prior.key` → committed display/`committed_name_key`). An adapter
-/// therefore cannot SUPPRESS the fan-out (report "no change" for a display that
-/// moved) any more than it can fabricate one — it does not decide, it only witnesses.
+/// therefore cannot OMIT the fan-out decision (hand back a "no change" verdict) or
+/// fabricate one — it does not decide, it only witnesses. The seal cannot, on its
+/// own, catch a dishonest before-image; that the before-image is the row's true
+/// pre-write address rests on the production adapter reading it in the same write
+/// transaction, not on this function.
 fn seal_metadata_write_fact(
     workspace_id: &WorkspaceId,
     edit: &WorkspaceMetadataEdit,

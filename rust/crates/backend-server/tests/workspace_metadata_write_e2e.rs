@@ -1,10 +1,11 @@
 //! Full-route behaviour for the workspace metadata-write surface (#task:2193):
 //! `PATCH /api/workspaces/{id}` and `PATCH /api/workspaces/{id}/archive`, driven
 //! through the REAL Axum router with the REAL SQLite governance-read and
-//! write-unit-of-work adapters. Only the two effects this task does not own a
-//! production adapter for yet — the `metadata_changed` viewer hint and the clock —
-//! are fakes; the sink is a recording/failing spy so the route's viewer-hint
-//! obligation is observable.
+//! write-unit-of-work adapters. Only the three effects this task does not own a
+//! production adapter for yet — the `metadata_changed` viewer hint, the per-channel
+//! rename fan-out, and the clock — are fakes; the hint and fan-out are
+//! recording/failing spies so the route's two committed-rename obligations are
+//! observable.
 //!
 //! This is the Rust-self-guarded half of the slice's evidence: the refusal
 //! ORDERING (404 → 403 → 400 → 409 → 200) and the committed `200` body. It is NOT
@@ -13,17 +14,19 @@
 //! Zod-issue bytes) is pinned separately by the shared admission fixture and its
 //! TS oracle.
 //!
-//! ## The per-channel rename message is NOT exercised here
+//! ## Both committed-rename effects are exercised here as REQUIREMENTS
 //!
-//! A committed rename owes TWO production effects: the `viewer_workspaces_changed`
-//! cache-invalidation hint (a pure id-only signal, fired inside the domain and
-//! complete on its own) and the per-channel workspace-rename SYSTEM MESSAGE. The
-//! latter — authoring PLUS delivery PLUS publication — is a composition-root
-//! concern deferred WHOLE to the [#task:2215] mount seam (see the module doc of
-//! `workspace_metadata_write`), driven off the same committed `WorkspaceNameChange`
-//! this surface seals. This suite therefore asserts only the viewer hint: that a
-//! rename fires it for exactly the renamed workspace, that a description-only edit
-//! owes none, and that a FAILING hint never downgrades the committed `200`.
+//! A committed rename owes TWO outward effects, and this route DRIVES both off the
+//! one sealed `WorkspaceNameChange`: the `viewer_workspaces_changed` cache hint (a
+//! pure id-only signal the domain fires) and the per-channel rename SYSTEM MESSAGE
+//! (a messaging-context whole fan-out this route calls as a narrow requirement,
+//! `WorkspaceRenameFanout`). Neither ships a production adapter in this leaf — the
+//! #2215 residual is to implement the one complete fan-out adapter + its
+//! catalogue/hub and mount it — so here both are recording spies. This suite pins
+//! that a rename drives BOTH exactly once for the renamed workspace, that a
+//! description-only edit drives NEITHER, and — the discriminating grid — that with
+//! BOTH the hint AND the fan-out failing, each is still attempted exactly once and
+//! the committed `200` never downgrades.
 
 use std::sync::{Arc, Mutex};
 
@@ -35,9 +38,13 @@ use axum::{
 use serde_json::{Value, json};
 use silverhand_backend_core::{
     identity::{UserId, WorkspaceId},
-    workspace_metadata_write::{WorkspaceMetadataAnnounceFailure, WorkspaceMetadataChangedSink},
+    workspace_metadata_write::{
+        WorkspaceMetadataAnnounceFailure, WorkspaceMetadataChangedSink, WorkspaceNameChange,
+    },
 };
-use silverhand_backend_server::workspace_metadata_write::{self, WorkspaceMetadataClock};
+use silverhand_backend_server::workspace_metadata_write::{
+    self, WorkspaceMetadataClock, WorkspaceRenameFanout, WorkspaceRenameFanoutFailure,
+};
 use silverhand_backend_sqlite::{
     access::SqliteAccessStore, workspace_metadata_write::SqliteWorkspaceMetadataWrite,
 };
@@ -124,6 +131,45 @@ impl WorkspaceMetadataChangedSink for RecordingSink {
     }
 }
 
+/// The rename fan-out requirement, recording every `(workspace_id, new_name)` it
+/// was asked to fan out and, optionally, refusing — so a lost fan-out can be
+/// observed to NOT affect the 200, and so "fires iff the display name moved" is
+/// load-bearing.
+#[derive(Clone)]
+struct RecordingFanout {
+    fanned: Arc<Mutex<Vec<(String, String)>>>,
+    fail: bool,
+}
+impl RecordingFanout {
+    fn new(fail: bool) -> Self {
+        Self {
+            fanned: Arc::new(Mutex::new(Vec::new())),
+            fail,
+        }
+    }
+    fn calls(&self) -> Vec<(String, String)> {
+        self.fanned.lock().unwrap().clone()
+    }
+}
+impl WorkspaceRenameFanout for RecordingFanout {
+    async fn fan_out_rename(
+        &self,
+        workspace_id: &WorkspaceId,
+        change: &WorkspaceNameChange,
+    ) -> Result<(), WorkspaceRenameFanoutFailure> {
+        self.fanned
+            .lock()
+            .unwrap()
+            .push((workspace_id.as_str().to_owned(), change.new_name.clone()));
+        if self.fail {
+            return Err(WorkspaceRenameFanoutFailure::from_source(FakeError(
+                "rename fan-out transport down",
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// A seeded database plus the clock/sink fakes that make the route's effects
 /// observable.
 struct Harness {
@@ -146,11 +192,25 @@ impl Harness {
         Self { _dir: dir, path }
     }
 
-    /// Build the real router over the real stores and the given fakes.
+    /// Build the real router over the real stores and the given fakes, with a
+    /// silent (non-recording, non-failing) rename fan-out — for the tests that only
+    /// care about ordering / the 200 body / the viewer hint.
     async fn router(&self, clock: FixedClock, sink: RecordingSink) -> Router {
+        self.router_with_fanout(clock, sink, RecordingFanout::new(false))
+            .await
+    }
+
+    /// Build the real router with an explicit rename fan-out spy, for the tests that
+    /// assert the fan-out obligation.
+    async fn router_with_fanout(
+        &self,
+        clock: FixedClock,
+        sink: RecordingSink,
+        fanout: RecordingFanout,
+    ) -> Router {
         let governance = SqliteAccessStore::open(&self.path).await.unwrap();
         let writes = SqliteWorkspaceMetadataWrite::open(&self.path).await.unwrap();
-        workspace_metadata_write::router(governance, writes, sink, clock)
+        workspace_metadata_write::router(governance, writes, sink, fanout, clock)
     }
 
     /// The stored `(name, name_key, archived_at)` — the durable truth a committed
@@ -195,10 +255,13 @@ async fn json_body(response: axum::response::Response) -> Value {
 }
 
 #[tokio::test]
-async fn a_rename_by_the_owner_commits_and_fires_the_viewer_hint() {
+async fn a_rename_by_the_owner_commits_and_drives_both_the_hint_and_the_fanout() {
     let harness = Harness::seeded().await;
     let sink = RecordingSink::new(false);
-    let app = harness.router(FixedClock(777), sink.clone()).await;
+    let fanout = RecordingFanout::new(false);
+    let app = harness
+        .router_with_fanout(FixedClock(777), sink.clone(), fanout.clone())
+        .await;
 
     let response = app
         .oneshot(metadata_request("ws-1", "user-1", r#"{"name":"Design Team"}"#))
@@ -228,8 +291,13 @@ async fn a_rename_by_the_owner_commits_and_fires_the_viewer_hint() {
         harness.stored("ws-1").await,
         ("Design Team".to_owned(), Some("design team".to_owned()), None)
     );
-    // The viewer hint fired for exactly this workspace.
+    // BOTH committed-rename effects fired for exactly this workspace, off the one
+    // sealed gate: the viewer hint and the per-channel rename fan-out.
     assert_eq!(sink.ids(), vec!["ws-1".to_owned()]);
+    assert_eq!(
+        fanout.calls(),
+        vec![("ws-1".to_owned(), "Design Team".to_owned())]
+    );
 }
 
 #[tokio::test]
@@ -318,10 +386,13 @@ async fn a_name_held_by_another_workspace_is_conflict() {
 }
 
 #[tokio::test]
-async fn a_description_only_edit_owes_no_viewer_hint() {
+async fn a_description_only_edit_owes_neither_the_hint_nor_the_fanout() {
     let harness = Harness::seeded().await;
     let sink = RecordingSink::new(false);
-    let app = harness.router(FixedClock(500), sink.clone()).await;
+    let fanout = RecordingFanout::new(false);
+    let app = harness
+        .router_with_fanout(FixedClock(500), sink.clone(), fanout.clone())
+        .await;
 
     let response = app
         .oneshot(metadata_request(
@@ -336,17 +407,23 @@ async fn a_description_only_edit_owes_no_viewer_hint() {
     assert_eq!(body["workspace"]["description"], json!("second"));
     assert_eq!(body["workspace"]["name"], json!("Original"));
     assert_eq!(body["workspace"]["updated_at"], json!(500));
-    // No display name moved: no viewer hint.
+    // No display name moved: neither committed-rename effect is owed.
     assert!(sink.ids().is_empty());
+    assert!(fanout.calls().is_empty());
 }
 
 #[tokio::test]
-async fn a_committed_rename_survives_a_failing_viewer_hint() {
+async fn a_committed_rename_survives_both_a_failing_hint_and_a_failing_fanout() {
     let harness = Harness::seeded().await;
-    // The viewer hint is broken. The commit must still stand as 200, the body must
-    // be the committed face, and the hint must still have been ATTEMPTED.
+    // BOTH committed-rename effects are broken. The commit must still stand as a
+    // 200 with the committed face, and — the discriminating grid — each effect must
+    // still have been ATTEMPTED exactly once and independently: a failing hint does
+    // not stop the fan-out, a failing fan-out does not downgrade the 200.
     let sink = RecordingSink::new(true);
-    let app = harness.router(FixedClock(777), sink.clone()).await;
+    let fanout = RecordingFanout::new(true);
+    let app = harness
+        .router_with_fanout(FixedClock(777), sink.clone(), fanout.clone())
+        .await;
 
     let response = app
         .oneshot(metadata_request("ws-1", "user-1", r#"{"name":"Design Team"}"#))
@@ -354,10 +431,14 @@ async fn a_committed_rename_survives_a_failing_viewer_hint() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(json_body(response).await["workspace"]["name"], json!("Design Team"));
-    // The rename is durably committed regardless of the hint failure.
+    // The rename is durably committed regardless of both failures.
     assert_eq!(harness.stored("ws-1").await.0, "Design Team");
-    // The sink WAS attempted; its failure did not downgrade the 200.
+    // Each effect was attempted exactly once; neither failure downgraded the 200.
     assert_eq!(sink.ids(), vec!["ws-1".to_owned()]);
+    assert_eq!(
+        fanout.calls(),
+        vec![("ws-1".to_owned(), "Design Team".to_owned())]
+    );
 }
 
 #[tokio::test]

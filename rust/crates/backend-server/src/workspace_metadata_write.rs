@@ -10,20 +10,34 @@
 //! admission (authenticate, resolve the workspace's existence + the caller's
 //! governance floor BEFORE the body is parsed) and the wire projection.
 //!
-//! ## The per-channel rename message is deferred to the mount seam
+//! ## A committed rename owes TWO effects; both are DRIVEN here, off one gate
 //!
-//! A committed rename owes TWO production effects: the `viewer_workspaces_changed`
-//! cache-invalidation hint (a pure id-only signal, fired inside the domain and
-//! complete on its own) and the per-channel workspace-rename SYSTEM MESSAGE. The
-//! latter is NOT authored here. Authoring a message is only one third of that
-//! obligation — the message must also be DELIVERED (the daemon `delivery` port) and
-//! PUBLISHED (the channel hub), and both are composition-root concerns wired at the
-//! [#task:2215] mount seam, not this component-complete leaf. Authoring a message
-//! that is never delivered or published would be a silent half-effect, so the whole
-//! messaging fan-out is deferred as one unit. This surface instead SURFACES the
-//! sealed [`WorkspaceNameChange`] (through `into_parts`) and logs the
-//! address-reassignment audit; #2215 drives the message authoring + delivery +
-//! publication off that same committed gate.
+//! A committed rename owes two outward effects, and BOTH are driven off the single
+//! sealed [`WorkspaceNameChange`] the domain surfaces, so the committed fact is
+//! never dropped at this boundary:
+//!
+//! 1. The `viewer_workspaces_changed { metadata_changed }` cache-invalidation hint
+//!    — a pure id-only signal the workspace context OWNS, fired inside the domain
+//!    (its fate carried back here as a value).
+//! 2. The per-channel workspace-rename SYSTEM MESSAGE — a MESSAGING-context effect.
+//!    This route holds it as ONE narrow outbound requirement,
+//!    [`WorkspaceRenameFanout`], whose input is the sealed [`WorkspaceNameChange`]
+//!    and which on a committed rename this handler MUST call. It is a single
+//!    WHOLE-fan-out requirement (author PLUS deliver PLUS publish), never three
+//!    separate ports the leaf could satisfy by authoring a message that is never
+//!    delivered or published — that half-effect stays unrepresentable. The route
+//!    does not author anything itself; it hands the committed gate to the messaging
+//!    context's adapter.
+//!
+//! The messaging fan-out ships NO production implementation in this leaf: the
+//! [#task:2215] integration residual is to implement that ONE complete adapter
+//! (message author + daemon delivery + channel-hub publication) plus its event
+//! catalogue/hub and mount it — NOT to reopen this handler's contract, which
+//! already exposes the requirement the mount fills. The two effects are
+//! INDEPENDENT and both best-effort: a failing viewer hint does not stop the
+//! fan-out, a failing fan-out does not downgrade the committed `200`, and each
+//! records its own error chain. A description-only edit, a no-op rename to the same
+//! display, and an archive drive neither.
 //!
 //! ## Refusal ORDERING is a product contract
 //!
@@ -98,6 +112,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::patch,
 };
+use std::future::Future;
+
 use serde::Serialize;
 use serde_json::Value;
 use silverhand_backend_core::{
@@ -106,7 +122,7 @@ use silverhand_backend_core::{
     workspace_face::WorkspaceFace,
     workspace_metadata_write::{
         WorkspaceArchiveUpdate, WorkspaceMetadataAnnounce, WorkspaceMetadataChangedSink,
-        WorkspaceMetadataUpdateWithAnnounce, WorkspaceMetadataWriteUnitOfWork,
+        WorkspaceMetadataUpdateWithAnnounce, WorkspaceMetadataWriteUnitOfWork, WorkspaceNameChange,
         archive_workspace, update_workspace_metadata_and_announce,
     },
 };
@@ -144,49 +160,127 @@ pub trait WorkspaceMetadataClock: Clone + Send + Sync + 'static {
     fn now_unix_millis(&self) -> i64;
 }
 
+/// The messaging fan-out a committed workspace rename owes: the per-channel
+/// workspace-rename SYSTEM MESSAGE, as ONE whole effect — authoring it AND
+/// delivering it AND publishing it. It is deliberately a single requirement, not
+/// three author/deliver/publish ports, so this leaf can never satisfy it by
+/// authoring a message that is then never delivered or published (a silent
+/// half-effect). Its input is the sealed [`WorkspaceNameChange`] the domain
+/// surfaces, so the messaging context receives the committed address pair (old/new
+/// display + fold key) and the workspace id, and re-derives nothing.
+///
+/// This is an OUTBOUND requirement of the workspace-metadata boundary owned by the
+/// MESSAGING bounded context, not an effect this context implements — mirroring the
+/// per-slice clock, the trait states the dependency here and the production adapter
+/// is assembled at the mount seam. There is deliberately NO production or no-op
+/// implementation in this crate: the [#task:2215] residual is to implement the one
+/// complete adapter (author + daemon delivery + channel-hub publication), give it a
+/// wire event catalogue/hub, and mount it. The handler contract already exposes the
+/// requirement, so the mount fills it without reopening this leaf.
+///
+/// Best-effort and INDEPENDENT of the `metadata_changed` viewer hint: a failure
+/// never downgrades the committed `200` (the route records the error chain and the
+/// channels simply do not get the message), and it is attempted regardless of
+/// whether the viewer hint succeeded. It fires iff the commit carried a
+/// [`WorkspaceNameChange`] — a description-only edit, a no-op rename to the same
+/// display, and an archive fire it zero times.
+pub trait WorkspaceRenameFanout: Clone + Send + Sync + 'static {
+    fn fan_out_rename(
+        &self,
+        workspace_id: &WorkspaceId,
+        change: &WorkspaceNameChange,
+    ) -> impl Future<Output = Result<(), WorkspaceRenameFanoutFailure>> + Send;
+}
+
+/// The per-channel rename fan-out could not be completed (a message could not be
+/// authored, delivered, or published). Opaque like the domain's announce failure
+/// and for the same reason — the transport's concrete error stays available as the
+/// `source` for the boundary that records it, while no messaging/transport type
+/// leaks into this route. The rename is committed regardless; a failure here means
+/// the channels were simply not told.
+///
+/// `Display`/`Error` are implemented by hand rather than derived, because this
+/// module imports the `crate::error` module, which shadows `thiserror`'s `#[error]`
+/// derive helper in attribute position.
+#[derive(Debug)]
+pub struct WorkspaceRenameFanoutFailure {
+    source: Box<dyn std::error::Error + Send + Sync + 'static>,
+}
+
+impl std::fmt::Display for WorkspaceRenameFanoutFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("workspace rename fan-out could not be completed")
+    }
+}
+
+impl std::error::Error for WorkspaceRenameFanoutFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.source)
+    }
+}
+
+impl WorkspaceRenameFanoutFailure {
+    pub fn from_source<E>(source: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self {
+            source: Box::new(source),
+        }
+    }
+}
+
 /// Everything the two write handlers need, assembled by the composition root: the
 /// governance read, the write unit of work, the `metadata_changed` viewer-hint
-/// sink, and the clock. The per-channel rename messaging ports are deliberately
-/// absent — that fan-out is deferred whole to the mount seam (see the module doc).
+/// sink, the per-channel rename fan-out requirement, and the clock. The viewer hint
+/// is owned by the domain and fired there; the rename fan-out is the messaging
+/// context's outbound requirement this route drives off the committed gate.
 #[derive(Clone)]
-struct WorkspaceWriteState<G, W, S, C> {
+struct WorkspaceWriteState<G, W, S, F, C> {
     governance: G,
     writes: W,
     sink: S,
+    fanout: F,
     clock: C,
 }
 
 /// Mounts both metadata-write routes generic over their ports, so tests drive
 /// driver-free fakes and the composition root wires the SQLite adapters. Route
 /// registration into the served application is a separate integration seam.
-pub fn router<G, W, S, C>(governance: G, writes: W, sink: S, clock: C) -> Router
+pub fn router<G, W, S, F, C>(governance: G, writes: W, sink: S, fanout: F, clock: C) -> Router
 where
     G: WorkspaceGovernanceFactsRead,
     W: WorkspaceMetadataWriteUnitOfWork,
     S: WorkspaceMetadataChangedSink,
+    F: WorkspaceRenameFanout,
     C: WorkspaceMetadataClock,
 {
     Router::new()
-        .route(WORKSPACE_METADATA_PATH, patch(patch_metadata::<G, W, S, C>))
-        .route(WORKSPACE_ARCHIVE_PATH, patch(patch_archive::<G, W, S, C>))
+        .route(
+            WORKSPACE_METADATA_PATH,
+            patch(patch_metadata::<G, W, S, F, C>),
+        )
+        .route(WORKSPACE_ARCHIVE_PATH, patch(patch_archive::<G, W, S, F, C>))
         .with_state(WorkspaceWriteState {
             governance,
             writes,
             sink,
+            fanout,
             clock,
         })
 }
 
-async fn patch_metadata<G, W, S, C>(
+async fn patch_metadata<G, W, S, F, C>(
     Path(id): Path<String>,
     viewer: Option<Extension<UserId>>,
-    State(state): State<WorkspaceWriteState<G, W, S, C>>,
+    State(state): State<WorkspaceWriteState<G, W, S, F, C>>,
     request: Request,
 ) -> Response
 where
     G: WorkspaceGovernanceFactsRead,
     W: WorkspaceMetadataWriteUnitOfWork,
     S: WorkspaceMetadataChangedSink,
+    F: WorkspaceRenameFanout,
     C: WorkspaceMetadataClock,
 {
     let Some(Extension(viewer)) = viewer else {
@@ -244,11 +338,14 @@ where
                 );
             }
 
-            // A committed rename also owes the per-channel system message and the
-            // address-reassignment audit. The audit is logged here off the sealed
-            // gate; the message authoring + delivery + publication are deferred WHOLE
-            // to the mount seam (see the module doc), which drives them off the same
-            // committed `WorkspaceNameChange` this route surfaces via `into_parts`.
+            // A committed rename owes the per-channel system message. This route
+            // DRIVES that whole fan-out off the sealed gate (it does not author
+            // anything itself): the messaging context's adapter receives the
+            // committed `WorkspaceNameChange`. It is independent of the viewer hint
+            // above — attempted whether or not the hint succeeded — and best-effort:
+            // a failure is recorded and the channels stay un-notified, but the
+            // committed 200 never downgrades. The address-reassignment audit is
+            // logged off the same gate.
             if let Some(change) = &name_change {
                 tracing::info!(
                     workspace = %workspace_id.as_str(),
@@ -257,6 +354,14 @@ where
                     new_key = %change.new_key,
                     "workspace address reassigned"
                 );
+                if let Err(failure) = state.fanout.fan_out_rename(&workspace_id, change).await {
+                    tracing::error!(
+                        error_chain = %error::describe(&failure),
+                        workspace = %workspace_id.as_str(),
+                        "workspace rename fan-out could not be completed; \
+                         the affected channels were not sent the rename system message"
+                    );
+                }
             }
 
             ok_workspace(&face)
@@ -271,16 +376,17 @@ where
     }
 }
 
-async fn patch_archive<G, W, S, C>(
+async fn patch_archive<G, W, S, F, C>(
     Path(id): Path<String>,
     viewer: Option<Extension<UserId>>,
-    State(state): State<WorkspaceWriteState<G, W, S, C>>,
+    State(state): State<WorkspaceWriteState<G, W, S, F, C>>,
     request: Request,
 ) -> Response
 where
     G: WorkspaceGovernanceFactsRead,
     W: WorkspaceMetadataWriteUnitOfWork,
     S: WorkspaceMetadataChangedSink,
+    F: WorkspaceRenameFanout,
     C: WorkspaceMetadataClock,
 {
     let Some(Extension(viewer)) = viewer else {
