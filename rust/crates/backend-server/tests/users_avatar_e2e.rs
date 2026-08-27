@@ -23,14 +23,18 @@ use std::sync::{
 use axum::{
     Router,
     body::{Body, to_bytes},
+    extract::DefaultBodyLimit,
     http::{Request, StatusCode, header::HeaderName},
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    auth::{EntropySessionTokenMint, HumanSessionAuthenticator, SessionClock, SessionTtl},
+    auth::{
+        AuthenticateHumanSession, EntropySessionTokenMint, HumanSessionAuthenticator,
+        SessionBearer, SessionClock, SessionTtl,
+    },
     avatar::{
-        AvatarBlobPointer, AvatarBlobReadOutcome, AvatarBlobStore, AvatarContentType,
-        AvatarStorageFailure,
+        AVATAR_MAX_BYTES, AvatarBlobPointer, AvatarBlobReadOutcome, AvatarBlobStore,
+        AvatarContentType, AvatarStorageFailure,
     },
     credential::{
         Argon2idCost, PasswordHashError, PasswordHashParams, PasswordHasher,
@@ -38,6 +42,7 @@ use silverhand_backend_core::{
     },
     host_runtime::environment::OsEntropy,
     identity::UserId,
+    persistence::PersistenceFailure,
     user_identity::{UserChangedAnnounceFailure, UserChangedSink},
 };
 use silverhand_backend_server::{
@@ -273,6 +278,74 @@ async fn backend() -> Backend {
         blobs,
         app: auth_app.merge(users_app),
     }
+}
+
+/// A perimeter double that resolves ANY presented bearer to a fixed principal id.
+/// Paired with a database that has no such `users` row, it produces the
+/// dangling-session state — a valid session principal whose row is gone — that a
+/// real signup-then-delete cannot reach, because `auth_sessions` is
+/// `ON DELETE CASCADE` on `users` (deleting the user takes the session with it,
+/// yielding a perimeter 401 instead). It lets the real `users::router` exercise
+/// the refusal PRECEDENCE the `me` routes ratified: authenticated principal →
+/// transport decode → existence.
+#[derive(Clone)]
+struct DanglingSessionAuth {
+    principal: UserId,
+}
+impl AuthenticateHumanSession for DanglingSessionAuth {
+    async fn authenticate_session(
+        &self,
+        _bearer: SessionBearer,
+    ) -> Result<Option<UserId>, PersistenceFailure> {
+        Ok(Some(self.principal.clone()))
+    }
+}
+
+/// The real `users::router` over a real `SqliteUserStore` whose database has NO
+/// users row, behind the [`DanglingSessionAuth`] double, so every authenticated
+/// request resolves to a principal that does not exist.
+async fn dangling_backend() -> Backend {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("users-avatar-dangling.sqlite");
+    current_schema::create_current_schema(&path)
+        .await
+        .close()
+        .await
+        .unwrap();
+
+    let users_store = SqliteUserStore::open(&path).await.unwrap();
+    let sink = CountingSink::new();
+    let blobs = MemoryBlobStore::default();
+    let users_deps: UsersDepsT = UsersDeps {
+        directory: users_store.clone(),
+        avatar_refs: users_store.clone(),
+        reads: users_store.clone(),
+        avatar_writes: users_store,
+        blobs: blobs.clone(),
+        user_changed: sink.clone(),
+        clock: FixedClock,
+    };
+    let app = users::router(
+        users_deps,
+        DanglingSessionAuth {
+            principal: UserId::parse("ghost-user").unwrap(),
+        },
+    );
+    Backend {
+        _directory: directory,
+        sink,
+        blobs,
+        app,
+    }
+}
+
+/// Wrap an app in the served application's global 128 MiB/request body limit — the
+/// ratified integration seam this unmounted leaf does NOT install itself. axum's
+/// per-route default is 2 MiB, which would truncate a valid 5 MiB avatar before
+/// the domain's own size check ran; the mount raises it so the file's own bounded
+/// read (`AVATAR_MAX_BYTES + 1`) is the sole size authority.
+fn mounted(app: &Router) -> Router {
+    app.clone().layer(DefaultBodyLimit::max(128 * 1024 * 1024))
 }
 
 // ===========================================================================
@@ -632,4 +705,121 @@ async fn fetch_of_an_unknown_user_id_is_404_not_found() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(json_of(&bytes), json!({ "error": "avatar not found" }));
+}
+
+// ===========================================================================
+// Size boundary under the mounted global body limit (P0-2)
+// ===========================================================================
+
+#[tokio::test]
+async fn a_five_mib_avatar_at_the_cap_succeeds_under_the_mounted_body_limit() {
+    let backend = backend().await;
+    let (token, user_id) = signed_up(&backend.app).await;
+    let app = mounted(&backend.app);
+    // Exactly AVATAR_MAX_BYTES: admitted (the check is `> cap`, not `>= cap`).
+    let bytes = vec![0x21u8; AVATAR_MAX_BYTES as usize];
+    let (status, _, body) = call(
+        &app,
+        upload(&token, "file", Some("big.png"), Some("image/png"), &bytes),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a 5 MiB file at the cap is admitted"
+    );
+    assert_eq!(
+        json_of(&body)["avatar_url"],
+        json!(format!("/api/users/{user_id}/avatar?v={NOW_MS}"))
+    );
+    assert_eq!(backend.blobs.live_count(), 1);
+}
+
+#[tokio::test]
+async fn one_byte_over_the_cap_is_the_exact_413_not_a_truncation_or_envelope_error() {
+    let backend = backend().await;
+    let (token, _) = signed_up(&backend.app).await;
+    let app = mounted(&backend.app);
+    // AVATAR_MAX_BYTES + 1: the file's own bounded read holds exactly one byte past
+    // the cap — enough for the domain to return the precise `avatar_too_large`,
+    // never axum's default 2 MiB envelope error nor a silent truncation to success.
+    let bytes = vec![0x21u8; AVATAR_MAX_BYTES as usize + 1];
+    let (status, _, body) = call(
+        &app,
+        upload(
+            &token,
+            "file",
+            Some("toobig.png"),
+            Some("image/png"),
+            &bytes,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        json_of(&body),
+        json!({ "error": "Avatar must be 5 MB or smaller.", "code": "avatar_too_large" })
+    );
+    assert_eq!(
+        backend.blobs.live_count(),
+        0,
+        "an over-cap upload writes no blob"
+    );
+}
+
+// ===========================================================================
+// Dangling-session refusal precedence (P0-1 lock)
+// ===========================================================================
+
+#[tokio::test]
+async fn dangling_session_with_a_well_formed_upload_is_a_safe_500_and_writes_no_blob() {
+    let backend = dangling_backend().await;
+    let png = vec![0x89, b'P', b'N', b'G', 1, 2, 3];
+    // Well-formed multipart, a valid principal token, but no user row: the domain's
+    // existence pre-check (which follows a successful transport decode) yields the
+    // dangling-pointer safe-500 — a bare text/plain 500, never a product body.
+    let (status, _, body) = call(
+        &backend.app,
+        upload(
+            "any-bearer",
+            "file",
+            Some("me.png"),
+            Some("image/png"),
+            &png,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body, b"Internal Server Error");
+    assert_eq!(
+        backend.blobs.live_count(),
+        0,
+        "existence precedes the put: a dangling session writes no blob"
+    );
+    assert_eq!(backend.blobs.deleted().len(), 0);
+    assert_eq!(backend.sink.count(), 0, "no announce on a non-commit");
+}
+
+#[tokio::test]
+async fn dangling_session_with_a_malformed_body_is_the_multipart_400_before_existence() {
+    let backend = dangling_backend().await;
+    // A non-multipart body with the same dangling principal: transport decode fails
+    // FIRST, so the response is the 400 multipart refusal — the existence check
+    // (which would 500) never runs. This locks the ratified precedence: authenticated
+    // principal → transport decode → existence (not authority-first).
+    let request = Request::builder()
+        .method("POST")
+        .uri(users::ME_AVATAR_PATH)
+        .header("authorization", "Bearer any-bearer")
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let (status, _, bytes) = call(&backend.app, request).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_of(&bytes),
+        json!({ "error": "multipart/form-data required" })
+    );
+    assert_eq!(backend.blobs.live_count(), 0);
+    assert_eq!(backend.sink.count(), 0);
 }

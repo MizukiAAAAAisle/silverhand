@@ -242,8 +242,10 @@ pub trait AvatarBlobStore: Clone + Send + Sync + 'static {
         pointer: &AvatarBlobPointer,
     ) -> impl Future<Output = Result<AvatarBlobReadOutcome, AvatarStorageFailure>> + Send;
 
-    /// Best-effort delete. The orchestration ignores the outcome (an orphaned
-    /// previous blob is annoying, never fatal — the DB pointer is authoritative).
+    /// Best-effort delete. A failure never flips the already-committed pointer
+    /// write (an orphaned previous blob is annoying, never fatal — the DB pointer
+    /// is authoritative), but the orchestration CARRIES its fate as a
+    /// [`BlobCleanup`] for the boundary to log rather than dropping it.
     fn delete(
         &self,
         pointer: &AvatarBlobPointer,
@@ -333,29 +335,65 @@ pub enum AvatarUploadOutcome {
     /// the session, so a missing row is a dangling session pointer the route maps
     /// to a safe-500 — never a product 404 (the same rule `GET`/`PATCH /api/me`
     /// use). It is a distinct arm, not folded into the write error, because the
-    /// mid-flight row-vanished case must first clean up the orphaned new blob.
-    NoSuchUser,
+    /// mid-flight row-vanished case must first clean up the orphaned new blob;
+    /// `orphan_cleanup` carries that delete's fate to the boundary (the existence
+    /// pre-check path had nothing to clean → [`BlobCleanup::NothingToClean`]).
+    NoSuchUser { orphan_cleanup: BlobCleanup },
     /// The payload was refused before any blob was written.
     Rejected(AvatarRejection),
     /// The blob backend could not store the bytes — the product's
-    /// `avatar_storage_failed`.
-    StorageFailed,
+    /// `avatar_storage_failed`. Carries the underlying fault so the boundary can
+    /// log the cause chain before serving the stable, detail-free wire message.
+    StorageFailed(AvatarStorageFailure),
 }
 
 /// A committed avatar change together with the fate of its `user_changed`
-/// announce. Reachable only through [`into_parts`](Self::into_parts), so a
-/// boundary taking the profile for the wire receives the announce fate in the
-/// same move and cannot drop it.
+/// announce AND of its post-commit blob cleanup. Reachable only through
+/// [`into_parts`](Self::into_parts), so a boundary taking the profile for the
+/// wire receives both residues in the same move and cannot drop them.
 #[derive(Debug)]
-#[must_use = "a committed avatar change carries an announce outcome that must be handled"]
+#[must_use = "a committed avatar change carries an announce and a blob-cleanup outcome that must be handled"]
 pub struct CommittedAvatar {
     user: UserRecord,
     announce: UserChangedAnnounce,
+    blob_cleanup: BlobCleanup,
 }
 
 impl CommittedAvatar {
-    pub fn into_parts(self) -> (UserRecord, UserChangedAnnounce) {
-        (self.user, self.announce)
+    pub fn into_parts(self) -> (UserRecord, UserChangedAnnounce, BlobCleanup) {
+        (self.user, self.announce, self.blob_cleanup)
+    }
+}
+
+/// The fate of a best-effort blob delete performed AFTER the `users` row was
+/// already committed — the replaced previous blob on a successful set/clear, or
+/// the orphaned new blob on a mid-flight row-vanish. The DB pointer is
+/// authoritative, so a failed delete never flips the committed write; but a leaked
+/// blob is a real (if benign) storage residue, so its fate is carried to the
+/// boundary as a named, loggable value rather than silently dropped — the same
+/// carried-failure discipline [`UserChangedAnnounce`] uses for the announce hint.
+#[derive(Debug)]
+#[must_use = "a post-commit blob cleanup can leak storage and must be logged at the boundary"]
+pub enum BlobCleanup {
+    /// There was no previous or orphaned blob to delete.
+    NothingToClean,
+    /// The delete succeeded.
+    Deleted,
+    /// The delete failed; the blob is orphaned in storage. Carries the fault for
+    /// the boundary log.
+    Failed(AvatarStorageFailure),
+}
+
+/// Run the best-effort post-commit delete and fold its result into a
+/// [`BlobCleanup`] (a failure is carried, never propagated — the pointer is
+/// already authoritative).
+async fn cleanup_blob<B>(blobs: &B, pointer: &AvatarBlobPointer) -> BlobCleanup
+where
+    B: AvatarBlobStore,
+{
+    match blobs.delete(pointer).await {
+        Ok(()) => BlobCleanup::Deleted,
+        Err(failure) => BlobCleanup::Failed(failure),
     }
 }
 
@@ -396,7 +434,9 @@ where
 
     // Existence pre-check: user_not_found precedes validation and any blob write.
     if reads.get(user_id).await?.is_none() {
-        return Ok(AvatarUploadOutcome::NoSuchUser);
+        return Ok(AvatarUploadOutcome::NoSuchUser {
+            orphan_cleanup: BlobCleanup::NothingToClean,
+        });
     }
 
     let content_type = match validate_avatar(bytes.len() as u64, &declared_content_type) {
@@ -406,7 +446,7 @@ where
 
     let pointer = match blobs.put(user_id, content_type, bytes).await {
         Ok(pointer) => pointer,
-        Err(_failure) => return Ok(AvatarUploadOutcome::StorageFailed),
+        Err(failure) => return Ok(AvatarUploadOutcome::StorageFailed(failure)),
     };
 
     match writes
@@ -415,21 +455,25 @@ where
     {
         AvatarPointerWrite::NoSuchUser => {
             // The row vanished between the pre-check and the repoint. Clean up the
-            // orphaned new blob (best-effort) before reporting the dangling pointer.
-            let _ = blobs.delete(&pointer).await;
-            Ok(AvatarUploadOutcome::NoSuchUser)
+            // orphaned new blob (best-effort) and carry that delete's fate before
+            // reporting the dangling pointer.
+            let orphan_cleanup = cleanup_blob(blobs, &pointer).await;
+            Ok(AvatarUploadOutcome::NoSuchUser { orphan_cleanup })
         }
         AvatarPointerWrite::Committed { user, prior_key } => {
             seal_avatar_set(user_id, &user, now_ms)?;
             // Best-effort cleanup of the replaced blob; the pointer is already
-            // updated, so a lingering previous blob is harmless.
-            if let Some(prior_key) = prior_key {
-                let _ = blobs.delete(&prior_key).await;
-            }
+            // updated, so a lingering previous blob is harmless (but its delete
+            // fate is carried, not dropped).
+            let blob_cleanup = match prior_key {
+                Some(prior_key) => cleanup_blob(blobs, &prior_key).await,
+                None => BlobCleanup::NothingToClean,
+            };
             let announce = announce(announce_sink, user_id).await;
             Ok(AvatarUploadOutcome::Committed(CommittedAvatar {
                 user,
                 announce,
+                blob_cleanup,
             }))
         }
     }
@@ -468,17 +512,20 @@ where
     S: UserChangedSink,
 {
     match writes.clear_avatar(user_id, now_ms).await? {
-        AvatarPointerWrite::NoSuchUser => Ok(AvatarUploadOutcome::NoSuchUser),
+        AvatarPointerWrite::NoSuchUser => Ok(AvatarUploadOutcome::NoSuchUser {
+            orphan_cleanup: BlobCleanup::NothingToClean,
+        }),
         AvatarPointerWrite::Committed { user, prior_key } => {
             match prior_key {
                 // A genuine clear: the row now has no avatar and `updated_at` moved.
                 Some(prior_key) => {
                     seal_avatar_clear(user_id, &user, true, now_ms)?;
-                    let _ = blobs.delete(&prior_key).await;
+                    let blob_cleanup = cleanup_blob(blobs, &prior_key).await;
                     let announce = announce(announce_sink, user_id).await;
                     Ok(AvatarUploadOutcome::Committed(CommittedAvatar {
                         user,
                         announce,
+                        blob_cleanup,
                     }))
                 }
                 // Already clear: no bump, no blob delete, no announce.
@@ -487,6 +534,7 @@ where
                     Ok(AvatarUploadOutcome::Committed(CommittedAvatar {
                         user,
                         announce: UserChangedAnnounce::NotOwed,
+                        blob_cleanup: BlobCleanup::NothingToClean,
                     }))
                 }
             }
@@ -539,10 +587,13 @@ pub enum AvatarFetchOutcome {
     },
     /// No such user, or the user has no avatar — the product's 404.
     NotFound,
-    /// The row points at an avatar but the blob is gone — a storage inconsistency
-    /// the route maps to a safe-500 (the product's `serve` throws on a missing
-    /// file).
-    StorageUnavailable,
+    /// The row points at an avatar but the blob could not be served — a storage
+    /// inconsistency the route maps to a safe-500 (the product's `serve` throws on
+    /// a missing file). `cause` distinguishes a hard blob-backend read fault
+    /// (`Some`) from a clean "the pointer resolved to nothing" (`None`); both are
+    /// the same safe-500 on the wire, but the fault is carried so the boundary can
+    /// log its cause chain instead of collapsing the two into a bare log line.
+    StorageUnavailable { cause: Option<AvatarStorageFailure> },
 }
 
 /// Fetch a user's avatar bytes by id (public to any authenticated viewer).
@@ -559,14 +610,20 @@ where
         return Ok(AvatarFetchOutcome::NotFound);
     };
     // A blob read failure is a storage fault; the route maps both it and a
-    // Missing outcome to a safe-500 (never a product answer).
+    // Missing outcome to a safe-500 (never a product answer). The read fault's
+    // cause is carried so the boundary can log it; a clean Missing carries none.
     match blobs.read(&reference.pointer).await {
         Ok(AvatarBlobReadOutcome::Found(bytes)) => Ok(AvatarFetchOutcome::Found {
             bytes,
             content_type: reference.content_type,
             filename: reference.content_type.download_filename(),
         }),
-        Ok(AvatarBlobReadOutcome::Missing) | Err(_) => Ok(AvatarFetchOutcome::StorageUnavailable),
+        Ok(AvatarBlobReadOutcome::Missing) => {
+            Ok(AvatarFetchOutcome::StorageUnavailable { cause: None })
+        }
+        Err(failure) => Ok(AvatarFetchOutcome::StorageUnavailable {
+            cause: Some(failure),
+        }),
     }
 }
 
@@ -682,7 +739,9 @@ mod tests {
     struct RecordingBlobs {
         put_key: String,
         fail_put: bool,
+        fail_delete: bool,
         read: Option<AvatarBlobReadOutcome>,
+        read_err: bool,
         deleted: Arc<Mutex<Vec<String>>>,
         puts: Arc<AtomicUsize>,
     }
@@ -707,6 +766,12 @@ mod tests {
             &self,
             _pointer: &AvatarBlobPointer,
         ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
+            if self.read_err {
+                #[derive(Debug, Error)]
+                #[error("read fault")]
+                struct ReadFault;
+                return Err(AvatarStorageFailure::from_source(ReadFault));
+            }
             Ok(self.read.clone().unwrap_or(AvatarBlobReadOutcome::Missing))
         }
         async fn delete(&self, pointer: &AvatarBlobPointer) -> Result<(), AvatarStorageFailure> {
@@ -714,6 +779,12 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(pointer.as_str().to_owned());
+            if self.fail_delete {
+                #[derive(Debug, Error)]
+                #[error("unlink failed")]
+                struct UnlinkFailed;
+                return Err(AvatarStorageFailure::from_source(UnlinkFailed));
+            }
             Ok(())
         }
     }
@@ -779,9 +850,10 @@ mod tests {
         let AvatarUploadOutcome::Committed(committed) = outcome else {
             panic!("expected Committed");
         };
-        let (user, ann) = committed.into_parts();
+        let (user, ann, cleanup) = committed.into_parts();
         assert!(user.avatar.is_some());
         assert!(matches!(ann, UserChangedAnnounce::Delivered));
+        assert!(matches!(cleanup, BlobCleanup::Deleted));
         assert_eq!(blobs.puts.load(Ordering::SeqCst), 1);
         assert_eq!(
             *blobs.deleted.lock().unwrap(),
@@ -842,7 +914,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(matches!(outcome, AvatarUploadOutcome::NoSuchUser));
+        assert!(matches!(
+            outcome,
+            AvatarUploadOutcome::NoSuchUser {
+                orphan_cleanup: BlobCleanup::NothingToClean
+            }
+        ));
         assert_eq!(
             blobs.puts.load(Ordering::SeqCst),
             0,
@@ -905,7 +982,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(matches!(outcome, AvatarUploadOutcome::StorageFailed));
+        assert!(matches!(outcome, AvatarUploadOutcome::StorageFailed(_)));
         assert_eq!(sink.calls(), 0);
     }
 
@@ -932,7 +1009,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(matches!(outcome, AvatarUploadOutcome::NoSuchUser));
+        assert!(matches!(
+            outcome,
+            AvatarUploadOutcome::NoSuchUser {
+                orphan_cleanup: BlobCleanup::Deleted
+            }
+        ));
         assert_eq!(
             blobs.puts.load(Ordering::SeqCst),
             1,
@@ -1007,8 +1089,82 @@ mod tests {
         let AvatarUploadOutcome::Committed(committed) = outcome else {
             panic!("a failed announce must not turn the commit into a refusal");
         };
-        let (_user, ann) = committed.into_parts();
+        let (_user, ann, _cleanup) = committed.into_parts();
         assert!(matches!(ann, UserChangedAnnounce::Failed(_)));
+    }
+
+    #[tokio::test]
+    async fn upload_carries_a_failed_prior_blob_cleanup_without_flipping_the_commit() {
+        let reads = FakeReads(Some(record(Some(1), 1)));
+        let writes = FakeWrites(AvatarPointerWrite::Committed {
+            user: record(Some(NOW), NOW),
+            prior_key: Some(AvatarBlobPointer::parse("old/key.png").unwrap()),
+        });
+        let blobs = RecordingBlobs {
+            put_key: "new/key.png".to_owned(),
+            fail_delete: true,
+            ..Default::default()
+        };
+        let sink = FakeSink::new(false);
+        let outcome = upload_avatar(
+            &reads,
+            &writes,
+            &blobs,
+            &sink,
+            &user_id(),
+            CandidateAvatar {
+                bytes: vec![1],
+                declared_content_type: "image/png".to_owned(),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
+        let AvatarUploadOutcome::Committed(committed) = outcome else {
+            panic!("a failed prior-blob delete must not turn the commit into a refusal");
+        };
+        let (user, ann, cleanup) = committed.into_parts();
+        assert!(user.avatar.is_some());
+        assert!(matches!(ann, UserChangedAnnounce::Delivered));
+        assert!(
+            matches!(cleanup, BlobCleanup::Failed(_)),
+            "the leaked previous blob is carried as a named residue, not dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_row_vanished_carries_a_failed_orphan_cleanup() {
+        let reads = FakeReads(Some(record(None, 1)));
+        let writes = FakeWrites(AvatarPointerWrite::NoSuchUser);
+        let blobs = RecordingBlobs {
+            put_key: "new/key.png".to_owned(),
+            fail_delete: true,
+            ..Default::default()
+        };
+        let sink = FakeSink::new(false);
+        let outcome = upload_avatar(
+            &reads,
+            &writes,
+            &blobs,
+            &sink,
+            &user_id(),
+            CandidateAvatar {
+                bytes: vec![1],
+                declared_content_type: "image/png".to_owned(),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                outcome,
+                AvatarUploadOutcome::NoSuchUser {
+                    orphan_cleanup: BlobCleanup::Failed(_)
+                }
+            ),
+            "the orphaned new blob's failed cleanup is a named residue on the dangling-pointer arm"
+        );
     }
 
     // ---- clear ----
@@ -1027,9 +1183,10 @@ mod tests {
         let AvatarUploadOutcome::Committed(committed) = outcome else {
             panic!("expected Committed");
         };
-        let (user, ann) = committed.into_parts();
+        let (user, ann, cleanup) = committed.into_parts();
         assert!(user.avatar.is_none());
         assert!(matches!(ann, UserChangedAnnounce::Delivered));
+        assert!(matches!(cleanup, BlobCleanup::Deleted));
         assert_eq!(
             *blobs.deleted.lock().unwrap(),
             vec!["old/key.png".to_owned()]
@@ -1051,13 +1208,14 @@ mod tests {
         let AvatarUploadOutcome::Committed(committed) = outcome else {
             panic!("expected Committed");
         };
-        let (user, ann) = committed.into_parts();
+        let (user, ann, cleanup) = committed.into_parts();
         assert_eq!(
             user.updated_at,
             NOW - 100,
             "a no-op must not bump updated_at"
         );
         assert!(matches!(ann, UserChangedAnnounce::NotOwed));
+        assert!(matches!(cleanup, BlobCleanup::NothingToClean));
         assert!(blobs.deleted.lock().unwrap().is_empty());
         assert_eq!(sink.calls(), 0);
     }
@@ -1070,7 +1228,12 @@ mod tests {
         let outcome = clear_avatar(&writes, &blobs, &sink, &user_id(), NOW)
             .await
             .unwrap();
-        assert!(matches!(outcome, AvatarUploadOutcome::NoSuchUser));
+        assert!(matches!(
+            outcome,
+            AvatarUploadOutcome::NoSuchUser {
+                orphan_cleanup: BlobCleanup::NothingToClean
+            }
+        ));
         assert_eq!(sink.calls(), 0);
     }
 
@@ -1130,6 +1293,29 @@ mod tests {
             ..Default::default()
         };
         let outcome = fetch_avatar(&refs, &blobs, &user_id()).await.unwrap();
-        assert!(matches!(outcome, AvatarFetchOutcome::StorageUnavailable));
+        assert!(matches!(
+            outcome,
+            AvatarFetchOutcome::StorageUnavailable { cause: None }
+        ));
+    }
+
+    #[tokio::test]
+    async fn fetch_storage_unavailable_carries_the_read_fault_cause() {
+        let refs = FakeRefs(Some(AvatarStorageRef {
+            pointer: AvatarBlobPointer::parse("users/u/avatars/k.png").unwrap(),
+            content_type: AvatarContentType::Png,
+        }));
+        let blobs = RecordingBlobs {
+            read_err: true,
+            ..Default::default()
+        };
+        let outcome = fetch_avatar(&refs, &blobs, &user_id()).await.unwrap();
+        assert!(
+            matches!(
+                outcome,
+                AvatarFetchOutcome::StorageUnavailable { cause: Some(_) }
+            ),
+            "a hard blob-read fault carries its cause distinct from a clean Missing"
+        );
     }
 }

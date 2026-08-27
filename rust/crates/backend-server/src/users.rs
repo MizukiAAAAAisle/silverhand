@@ -53,9 +53,9 @@ use serde::Serialize;
 use silverhand_backend_core::{
     auth::{AuthenticateHumanSession, SessionClock},
     avatar::{
-        AvatarBlobStore, AvatarContentType, AvatarFetchOutcome, AvatarPointerWriteUnitOfWork,
-        AvatarRejection, AvatarStorageRefRead, AvatarUploadOutcome, CandidateAvatar,
-        CommittedAvatar, clear_avatar, fetch_avatar, upload_avatar,
+        AVATAR_MAX_BYTES, AvatarBlobStore, AvatarContentType, AvatarFetchOutcome,
+        AvatarPointerWriteUnitOfWork, AvatarRejection, AvatarStorageRefRead, AvatarUploadOutcome,
+        BlobCleanup, CandidateAvatar, CommittedAvatar, clear_avatar, fetch_avatar, upload_avatar,
     },
     identity::UserId,
     user_identity::{UserChangedSink, UserDirectoryRead, UserProfileRead},
@@ -227,9 +227,22 @@ where
     match outcome {
         Ok(AvatarUploadOutcome::Committed(committed)) => avatar_committed_upload(committed),
         // The caller's own session id resolved to no row: dangling pointer → 500.
-        Ok(AvatarUploadOutcome::NoSuchUser) => dangling_session(&user_id, "avatar upload"),
+        // A new blob may have been written and then orphaned by the vanish; its
+        // cleanup fate is logged before the safe-500.
+        Ok(AvatarUploadOutcome::NoSuchUser { orphan_cleanup }) => {
+            log_blob_cleanup(&orphan_cleanup, "avatar upload orphan");
+            dangling_session(&user_id, "avatar upload")
+        }
         Ok(AvatarUploadOutcome::Rejected(rejection)) => avatar_rejected(rejection),
-        Ok(AvatarUploadOutcome::StorageFailed) => avatar_storage_failed(),
+        // The blob backend could not store the bytes: log the cause chain, then
+        // serve the stable, detail-free `avatar_storage_failed`.
+        Ok(AvatarUploadOutcome::StorageFailed(failure)) => {
+            tracing::error!(
+                error_chain = %error::describe(&failure),
+                "avatar blob store put failed"
+            );
+            avatar_storage_failed()
+        }
         Err(cause) => {
             tracing::error!(error_chain = %error::describe(&cause), "avatar upload failed");
             internal_error()
@@ -272,14 +285,15 @@ where
     {
         // The clear route returns the bare profile DTO (no `avatar_url` mirror).
         Ok(AvatarUploadOutcome::Committed(committed)) => {
-            let (user, announce) = committed.into_parts();
+            let (user, announce, blob_cleanup) = committed.into_parts();
             log_lost_announce(&announce, "avatar clear");
+            log_blob_cleanup(&blob_cleanup, "avatar clear");
             Json(UserDto::from_record(&user)).into_response()
         }
-        Ok(AvatarUploadOutcome::NoSuchUser) => dangling_session(&user_id, "avatar clear"),
+        Ok(AvatarUploadOutcome::NoSuchUser { .. }) => dangling_session(&user_id, "avatar clear"),
         // Clear never validates a payload or writes a blob, so these arms are
         // unreachable; they still take the safe-500 rather than inventing a body.
-        Ok(AvatarUploadOutcome::Rejected(_)) | Ok(AvatarUploadOutcome::StorageFailed) => {
+        Ok(AvatarUploadOutcome::Rejected(_)) | Ok(AvatarUploadOutcome::StorageFailed(_)) => {
             tracing::error!("avatar clear produced an upload-only outcome");
             internal_error()
         }
@@ -321,10 +335,21 @@ where
             filename,
         }) => serve_avatar(bytes, content_type, &filename),
         Ok(AvatarFetchOutcome::NotFound) => avatar_not_found(),
-        // The row points at a blob that is gone: storage inconsistency → the
-        // product's `serve` throws on a missing file → safe-500.
-        Ok(AvatarFetchOutcome::StorageUnavailable) => {
-            tracing::error!(user_id = %user_id.as_str(), "avatar row points at a missing blob");
+        // The row points at a blob that could not be served: storage inconsistency
+        // → the product's `serve` throws → safe-500. A hard read fault carries its
+        // cause chain to the log; a clean "missing bytes" carries none.
+        Ok(AvatarFetchOutcome::StorageUnavailable { cause }) => {
+            match &cause {
+                Some(failure) => tracing::error!(
+                    user_id = %user_id.as_str(),
+                    error_chain = %error::describe(failure),
+                    "avatar blob read failed"
+                ),
+                None => tracing::error!(
+                    user_id = %user_id.as_str(),
+                    "avatar row points at a missing blob"
+                ),
+            }
             internal_error()
         }
         Err(cause) => {
@@ -366,13 +391,41 @@ async fn first_file_field(
             .filter(|value| !value.is_empty())
             .unwrap_or(DEFAULT_UPLOAD_CONTENT_TYPE)
             .to_owned();
-        let bytes = field.bytes().await?.to_vec();
+        let bytes = read_field_bounded(field).await?;
         return Ok(Some(UploadedFile {
             bytes,
             content_type,
         }));
     }
     Ok(None)
+}
+
+/// Read a multipart file part into memory, bounded at `AVATAR_MAX_BYTES + 1`.
+///
+/// axum's [`Multipart`] applies no envelope cap of its own (the served app owns
+/// the global 128 MiB/request limit — a later integration seam this leaf does not
+/// mount), and the domain's size check runs on the buffered bytes, so an unbounded
+/// `field.bytes()` would aggregate an arbitrarily large body into memory before
+/// the `413` ever fired. Instead we stream chunks and stop the instant we hold one
+/// byte past the cap: that single extra byte is exactly enough for
+/// [`validate_avatar`] to return the precise `avatar_too_large` (a `5 MiB` file
+/// succeeds; `5 MiB + 1` — or anything larger — yields the exact `413`), while the
+/// buffer never exceeds `AVATAR_MAX_BYTES + 1`.
+async fn read_field_bounded(
+    mut field: axum::extract::multipart::Field<'_>,
+) -> Result<Vec<u8>, axum::extract::multipart::MultipartError> {
+    // Read at most cap + 1 bytes: enough to detect "over the cap", never more.
+    let limit = AVATAR_MAX_BYTES as usize + 1;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = field.chunk().await? {
+        let room = limit - bytes.len();
+        if chunk.len() >= room {
+            bytes.extend_from_slice(&chunk[..room]);
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 // ===========================================================================
@@ -407,14 +460,29 @@ struct ErrorCodeBody {
 }
 
 fn avatar_committed_upload(committed: CommittedAvatar) -> Response {
-    let (user, announce) = committed.into_parts();
+    let (user, announce, blob_cleanup) = committed.into_parts();
     log_lost_announce(&announce, "avatar upload");
+    log_blob_cleanup(&blob_cleanup, "avatar upload");
     let dto = UserDto::from_record(&user);
     Json(AvatarUploadResponse {
         avatar_url: dto.avatar_url(),
         user: dto,
     })
     .into_response()
+}
+
+/// Log a post-commit blob cleanup that failed — a benign but real storage leak
+/// carried out of the domain as a named [`BlobCleanup`] residue. Only the failure
+/// arm logs; a clean delete or a nothing-to-clean is silent. Mirrors
+/// [`log_lost_announce`]'s carried-failure boundary logging.
+fn log_blob_cleanup(cleanup: &BlobCleanup, origin: &str) {
+    if let BlobCleanup::Failed(failure) = cleanup {
+        tracing::error!(
+            error_chain = %error::describe(failure),
+            origin,
+            "avatar blob cleanup failed; a storage blob is orphaned"
+        );
+    }
 }
 
 /// Serve the found bytes with the same header set as the product's blob `serve`:
