@@ -1144,7 +1144,6 @@ impl Error for CascadeDaemonError {
 
 enum ConnectionControl {
     Command(CommandRequest),
-    CommandTimedOut(String),
     Hydrated(Result<AttachedDaemon, DaemonDeliveryError>),
 }
 
@@ -1157,8 +1156,12 @@ struct ConnectionClose {
 struct CommandRequest {
     kind: &'static str,
     params: Value,
-    timeout: Duration,
+    deadline: Instant,
     response: oneshot::Sender<Result<Value, CommandDispatchError>>,
+}
+
+fn command_expired_before_send(command: &CommandRequest) -> bool {
+    command.response.is_closed() || Instant::now() >= command.deadline
 }
 
 type PendingCommand = (
@@ -1298,16 +1301,23 @@ impl DaemonAttachment {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, CommandDispatchError> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(CommandDispatchError::TimedOut)?;
         let (response, receive) = oneshot::channel();
         self.commands
             .try_send(ConnectionControl::Command(CommandRequest {
                 kind,
                 params,
-                timeout,
+                deadline,
                 response,
             }))
             .map_err(|_| CommandDispatchError::ProvenNotDispatched)?;
-        receive.await.map_err(|_| CommandDispatchError::Ambiguous)?
+        match tokio::time::timeout_at(deadline, receive).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(CommandDispatchError::Ambiguous),
+            Err(_) => Err(CommandDispatchError::TimedOut),
+        }
     }
 }
 
@@ -1992,6 +2002,7 @@ enum ConnectionInput {
 
 enum InterruptibleSend {
     Sent,
+    Expired,
     TransportFailed,
     Close(ConnectionClose),
     Terminated,
@@ -2045,6 +2056,7 @@ async fn send_command_interruptibly(
     close: &mut watch::Receiver<Option<ConnectionClose>>,
     connection_id: &str,
     message: Message,
+    deadline: Instant,
 ) -> InterruptibleSend {
     let send = socket.send(message);
     tokio::pin!(send);
@@ -2053,6 +2065,7 @@ async fn send_command_interruptibly(
         requested = matching_connection_close(close, connection_id) => requested
             .map(InterruptibleSend::Close)
             .unwrap_or(InterruptibleSend::Terminated),
+        _ = tokio::time::sleep_until(deadline) => InterruptibleSend::Expired,
         result = &mut send => if result.is_ok() {
             InterruptibleSend::Sent
         } else {
@@ -2143,6 +2156,7 @@ async fn connection<C, D, H>(
     H: HostCredentialLookup,
 {
     let mut pending: HashMap<String, PendingCommand> = HashMap::new();
+    let (timeout_control, mut timed_out_commands) = mpsc::unbounded_channel();
     let mut next_command = 0_u64;
     let mut compatible: Option<AttachedDaemon> = None;
     let mut attached: Option<DaemonInstanceId> = None;
@@ -2154,12 +2168,21 @@ async fn connection<C, D, H>(
     let mut awaiting_pong: Option<(i64, Instant)> = None;
     loop {
         tokio::select! {
+            Some(id) = timed_out_commands.recv() => {
+                if let Some((_, response)) = pending.remove(&id) {
+                    let _ = response.send(Err(CommandDispatchError::TimedOut));
+                }
+            }
             received_control = next_connection_input(&mut close, &connection_id, &mut commands) => match received_control {
                 ConnectionInput::Close(requested) => {
                     send_connection_close(&mut socket, requested).await;
                     break;
                 }
                 ConnectionInput::Control(ConnectionControl::Command(command)) if compatible.is_some() => {
+                    if command_expired_before_send(&command) {
+                        let _ = command.response.send(Err(CommandDispatchError::TimedOut));
+                        continue;
+                    }
                     next_command = match next_command.checked_add(1) {
                         Some(next) => next,
                         None => {
@@ -2180,8 +2203,13 @@ async fn connection<C, D, H>(
                         &mut close,
                         &connection_id,
                         Message::Text(frame.to_string().into()),
+                        command.deadline,
                     ).await {
                         InterruptibleSend::Sent => {}
+                        InterruptibleSend::Expired => {
+                            let _ = command.response.send(Err(CommandDispatchError::TimedOut));
+                            break;
+                        }
                         InterruptibleSend::TransportFailed => {
                             let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
                             break;
@@ -2197,22 +2225,15 @@ async fn connection<C, D, H>(
                         }
                     }
                     let timeout_id = id.clone();
-                    let timeout_control = control.clone();
+                    let timeout_sender = timeout_control.clone();
                     tokio::spawn(async move {
-                        tokio::time::sleep(command.timeout).await;
-                        let _ = timeout_control
-                            .send(ConnectionControl::CommandTimedOut(timeout_id))
-                            .await;
+                        tokio::time::sleep_until(command.deadline).await;
+                        let _ = timeout_sender.send(timeout_id);
                     });
                     pending.insert(id, (command.kind, command.response));
                 }
                 ConnectionInput::Control(ConnectionControl::Command(command)) => {
                     let _ = command.response.send(Err(CommandDispatchError::ProvenNotDispatched));
-                }
-                ConnectionInput::Control(ConnectionControl::CommandTimedOut(id)) => {
-                    if let Some((_, response)) = pending.remove(&id) {
-                        let _ = response.send(Err(CommandDispatchError::TimedOut));
-                    }
                 }
                 ConnectionInput::Control(ConnectionControl::Hydrated(Ok(ready))) => {
                     if compatible
@@ -3699,6 +3720,54 @@ mod tests {
 
     use super::*;
 
+    #[tokio::test(start_paused = true)]
+    async fn queued_command_budget_starts_at_admission_and_cancellation_prevents_late_send() {
+        let (commands, mut receive) = mpsc::channel(32);
+        let attachment = DaemonAttachment {
+            host_id: "host-1".to_owned(),
+            connection_id: "connection-1".to_owned(),
+            daemon_instance: DaemonInstanceId::parse("instance-1").unwrap(),
+            host_name: "host".to_owned(),
+            commands,
+        };
+
+        let first_attachment = attachment.clone();
+        let first = tokio::spawn(async move {
+            first_attachment
+                .command("host_status", json!({}), Duration::from_secs(60))
+                .await
+        });
+        let blocked_write = match receive.recv().await.unwrap() {
+            ConnectionControl::Command(command) => command,
+            ConnectionControl::Hydrated(_) => panic!("expected command"),
+        };
+
+        let second_attachment = attachment.clone();
+        let second = tokio::spawn(async move {
+            second_attachment
+                .command(
+                    "host_proxy_config_set",
+                    json!({ "proxy_url": "http://proxy" }),
+                    Duration::from_secs(10),
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert!(matches!(second.await.unwrap(), Err(CommandDispatchError::TimedOut)));
+
+        // Releasing the stalled first write lets the FIFO advance. The second
+        // request is already expired and its receiver is cancelled, so the exact
+        // production pre-wire gate discards it rather than emitting a late SET.
+        drop(blocked_write);
+        let late = match receive.recv().await.unwrap() {
+            ConnectionControl::Command(command) => command,
+            ConnectionControl::Hydrated(_) => panic!("expected command"),
+        };
+        assert!(command_expired_before_send(&late));
+        first.abort();
+    }
+
     #[tokio::test]
     async fn disconnect_outranks_a_saturated_command_fifo_and_stays_generation_bound() {
         let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
@@ -3712,7 +3781,7 @@ mod tests {
             .try_send(ConnectionControl::Command(CommandRequest {
                 kind: "host_status",
                 params: json!({}),
-                timeout: DEFAULT_COMMAND_TIMEOUT,
+                deadline: Instant::now() + DEFAULT_COMMAND_TIMEOUT,
                 response: blocked_response,
             }))
             .unwrap();
