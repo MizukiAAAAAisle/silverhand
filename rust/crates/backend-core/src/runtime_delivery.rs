@@ -5,7 +5,7 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    agents::runtime::RuntimeKind,
+    agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{AddressedPrincipals, FromKind, MessageContent, PrincipalKind, ReferencePositions},
     persistence::PersistenceFailure,
@@ -339,16 +339,52 @@ pub fn runtime_scope_for(
     conversation: ConversationId,
     session_scope: &str,
 ) -> Result<RuntimeScope, InvalidRuntimeSessionScope> {
-    match session_scope {
-        "conversation" => Ok(RuntimeScope::ConversationSlot {
+    match AgentSessionScope::parse(session_scope).ok_or(InvalidRuntimeSessionScope)? {
+        AgentSessionScope::Conversation => Ok(RuntimeScope::ConversationSlot {
             agent,
             source: conversation,
         }),
-        "agent" => Ok(RuntimeScope::AgentSlot { agent }),
-        _ => Err(InvalidRuntimeSessionScope),
+        AgentSessionScope::Agent => Ok(RuntimeScope::AgentSlot { agent }),
     }
 }
 
 #[derive(Debug, Error)]
 #[error("persisted runtime session scope is unsupported")]
 pub struct InvalidRuntimeSessionScope;
+
+#[cfg(test)]
+mod runtime_scope_for_tests {
+    use super::*;
+
+    fn agent() -> AgentId {
+        AgentId::parse("a1").unwrap()
+    }
+
+    fn conversation() -> ConversationId {
+        ConversationId::parse("c1").unwrap()
+    }
+
+    #[test]
+    fn each_declared_scope_routes_to_its_seat_coordinate() {
+        assert_eq!(
+            runtime_scope_for(agent(), conversation(), "conversation").unwrap(),
+            RuntimeScope::ConversationSlot {
+                agent: agent(),
+                source: conversation(),
+            }
+        );
+        assert_eq!(
+            runtime_scope_for(agent(), conversation(), "agent").unwrap(),
+            RuntimeScope::AgentSlot { agent: agent() }
+        );
+    }
+
+    #[test]
+    fn an_unknown_token_is_a_fault_not_a_default_seat() {
+        // The decoder owns no grammar of its own: any token the sole
+        // `AgentSessionScope::parse` authority rejects must surface as a fault
+        // rather than latch a default seat.
+        assert!(runtime_scope_for(agent(), conversation(), "workspace").is_err());
+        assert!(runtime_scope_for(agent(), conversation(), "").is_err());
+    }
+}

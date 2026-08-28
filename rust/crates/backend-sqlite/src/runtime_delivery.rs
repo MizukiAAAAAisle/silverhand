@@ -4,7 +4,7 @@ use std::{collections::HashSet, path::Path, time::Duration};
 
 use serde::Serialize;
 use silverhand_backend_core::{
-    agents::runtime::RuntimeKind,
+    agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
     identity::{AgentId, ConversationId, DaemonInstanceId, UserId, WorkspaceId},
     messaging::{FromKind, MessageContent, ReferencePositions},
     persistence::PersistenceFailure,
@@ -545,17 +545,21 @@ impl RuntimeDispatchReadPort for SqliteRuntimeDeliveryStore {
                     .transpose()
                     .map_err(PersistenceFailure::from_source)?;
                 let session_scope: String = row.try_get("session_scope").map_err(persistence)?;
-                let scope = match (session_scope.as_str(), conversation) {
-                    ("conversation", Some(source)) => {
-                        RuntimeScope::ConversationSlot { agent, source }
-                    }
-                    ("agent", None) => RuntimeScope::AgentSlot { agent },
-                    _ => {
-                        return Err(PersistenceFailure::from_source(
-                            InvalidPersistedRuntimeTarget,
-                        ));
-                    }
-                };
+                let invalid_target =
+                    || PersistenceFailure::from_source(InvalidPersistedRuntimeTarget);
+                let scope =
+                    match AgentSessionScope::parse(&session_scope).ok_or_else(invalid_target)? {
+                        AgentSessionScope::Conversation => {
+                            let source = conversation.ok_or_else(invalid_target)?;
+                            RuntimeScope::ConversationSlot { agent, source }
+                        }
+                        AgentSessionScope::Agent => {
+                            if conversation.is_some() {
+                                return Err(invalid_target());
+                            }
+                            RuntimeScope::AgentSlot { agent }
+                        }
+                    };
                 let generation =
                     RuntimeGeneration::new(row.try_get("generation").map_err(persistence)?)
                         .map_err(PersistenceFailure::from_source)?;

@@ -2,6 +2,7 @@
 
 use serde_json::json;
 use silverhand_backend_core::{
+    agents::session_scope::AgentSessionScope,
     identity::{AgentId, ConversationId, UserId},
     messaging::{
         PrincipalIdentity,
@@ -264,17 +265,28 @@ async fn load_runtime_rows(
             .transpose()
             .map_err(|_| ConversationAgentRuntimeStoreError::SlotIdentity)?;
         let session_scope: String = row.try_get("session_scope")?;
-        let slot = match (session_scope.as_str(), slot_conversation) {
-            ("agent", None) => RuntimeScope::AgentSlot {
-                agent: stored_agent.clone(),
-            },
-            ("conversation", Some(source)) if &source == requested => {
+        let slot = match AgentSessionScope::parse(&session_scope)
+            .ok_or(ConversationAgentRuntimeStoreError::SlotScope)?
+        {
+            AgentSessionScope::Agent => {
+                if slot_conversation.is_some() {
+                    return Err(ConversationAgentRuntimeStoreError::SlotScope);
+                }
+                RuntimeScope::AgentSlot {
+                    agent: stored_agent.clone(),
+                }
+            }
+            AgentSessionScope::Conversation => {
+                let source =
+                    slot_conversation.ok_or(ConversationAgentRuntimeStoreError::SlotScope)?;
+                if &source != requested {
+                    return Err(ConversationAgentRuntimeStoreError::SlotScope);
+                }
                 RuntimeScope::ConversationSlot {
                     agent: stored_agent.clone(),
                     source,
                 }
             }
-            _ => return Err(ConversationAgentRuntimeStoreError::SlotScope),
         };
         let generation = RuntimeGeneration::new(row.try_get("generation")?)
             .map_err(|_| ConversationAgentRuntimeStoreError::Generation)?;
