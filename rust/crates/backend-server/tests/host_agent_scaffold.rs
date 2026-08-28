@@ -92,8 +92,8 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "user_presence_cold_read"),
     ("backend-core", "user_presence_last_seen"),
     // #task:2193 — the workspace metadata/read vertical. Core primitives and ports;
-    // their SQLite adapters and server routes are the sibling entries below. Not yet
-    // mounted (the app composition root is out of this task's scope).
+    // their SQLite adapters and server routes are the sibling entries below. Mounted at
+    // the app composition root by the #task:2223 integration.
     ("backend-core", "name_canonicalization"),
     ("backend-core", "workspace_detail_read"),
     ("backend-core", "workspace_metadata_write"),
@@ -101,8 +101,8 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "workspace_name_availability"),
     // #task:2193 CP2 — the human credentialed-session vertical (signup/login/
     // logout + self profile). Core bounded contexts and their ports; the SQLite
-    // adapters and the server route surface are the sibling entries below. Not yet
-    // mounted (the app composition root is out of this task's scope).
+    // adapters and the server route surface are the sibling entries below. Mounted at
+    // the app composition root by the #task:2223 integration.
     ("backend-core", "credential"),
     ("backend-core", "human_auth_flows"),
     ("backend-core", "user_identity"),
@@ -126,7 +126,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "human_auth"),
     // #task:2222 — the human-directory and avatar route surface (GET /api/users,
     // POST/DELETE /api/me/avatar, GET /api/users/{id}/avatar). Sibling of the core
-    // `avatar` entry above; not yet mounted.
+    // `avatar` entry above; mounted by the #task:2223 integration.
     ("backend-server", "users"),
     ("backend-server", "ops"),
     ("backend-server", "password_hasher"),
@@ -135,7 +135,8 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "workspace_name_availability"),
     // #task:2220 — the workspace-rename fan-out production adapter, wiring the core
     // rename orchestrator over the messaging store, daemon delivery, and scope-event
-    // hub. Not yet mounted (the app composition root is out of this task's scope).
+    // hub. Assembled into the workspace-metadata-write mount by the #task:2223
+    // integration (best-effort after commit), not a standalone route.
     ("backend-server", "workspace_rename_fanout"),
     ("backend-sqlite", "agent_availability_read"),
     ("backend-sqlite", "agent_detail_read"),

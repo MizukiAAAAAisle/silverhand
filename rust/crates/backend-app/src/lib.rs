@@ -69,9 +69,7 @@ use silverhand_backend_server::{
         ScopeEventHub, SystemDisconnectClock, compose_presence_vertical,
     },
     users::{self, UsersDeps},
-    workspace_detail,
-    workspace_metadata_write::{self, WorkspaceMetadataClock},
-    workspace_name_availability,
+    workspace_detail, workspace_metadata_write, workspace_name_availability,
     workspace_rename_fanout::WorkspaceRenameFanoutAdapter,
     workspaces,
 };
@@ -333,22 +331,6 @@ pub enum SchemaAdmissionError {
 struct SystemEnrollmentClock;
 
 impl EnrollmentClock for SystemEnrollmentClock {
-    fn now_unix_millis(&self) -> i64 {
-        unix_millis(SystemTime::now())
-    }
-}
-
-/// The production [`WorkspaceMetadataClock`]. The workspace-metadata write leaf
-/// states the clock as its narrow time capability and deliberately ships no
-/// production or no-op adapter, so this composition root supplies the trivial
-/// wrapper the leaf's own doc names — the same `unix_millis(SystemTime::now())`
-/// wall-clock read as [`SystemEnrollmentClock`], with the signed `Date.now()`-parity
-/// conversion staying in the domain ([`unix_millis`]). Injecting it lets a test pin
-/// the stamped `updated_at`/`archived_at`; production reads the real clock here.
-#[derive(Clone, Copy, Debug, Default)]
-struct SystemWorkspaceMetadataClock;
-
-impl WorkspaceMetadataClock for SystemWorkspaceMetadataClock {
     fn now_unix_millis(&self) -> i64 {
         unix_millis(SystemTime::now())
     }
@@ -900,7 +882,9 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             // the parent `/api/workspaces` with the static `name-availability` GET and the
             // list GET already merged above. The metadata-write door binds the governance
             // read (`access_store`), the write UoW, the `metadata_changed` viewer-hint sink
-            // and the whole rename fan-out assembled above, and the production wall clock.
+            // and the whole rename fan-out assembled above, and the one shared process
+            // clock (`SystemProcessClock`) — the same wall-clock owner every other
+            // signed-millis consumer holds, never a second reader minted here.
             .merge(workspace_detail::router(workspace_detail_read))
             .merge(workspace_name_availability::router(workspace_namespace))
             .merge(workspace_metadata_write::router(
@@ -908,7 +892,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
                 workspace_metadata_writes,
                 workspace_metadata_sink,
                 workspace_rename_fanout,
-                SystemWorkspaceMetadataClock,
+                SystemProcessClock,
             ))
             .merge(availability::router(
                 agent_availability_cold_read,
@@ -1079,7 +1063,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             // before the handler's own verification could run.
             .merge(host_resolve)
             .merge(readyz_router)
-            // The one app/proxy request-body ceiling (128 MiB, uniform 413), applied
+            // The one app/proxy request-body ceiling (128 MiB resource cap), applied
             // as the OUTERMOST layer over the fully-composed router — ahead of every
             // auth perimeter and domain check, and covering both deployment arms since
             // they are already merged into this single router. Product routes keep their
@@ -1767,8 +1751,11 @@ mod tests {
     /// admitted (the perimeter wrap never truncates it below its own ceiling), one byte
     /// over yields the LEAF's exact `avatar_too_large` 413 (the domain's own bounded read
     /// — not the envelope — is the sub-128-MiB authority), and a request DECLARING more
-    /// than 128 MiB is refused by the perimeter with its distinct uniform body before any
-    /// route is matched. All three hit the SAME method/path, so only the body size
+    /// than 128 MiB is refused by the perimeter with its own distinct body before any
+    /// route is matched. The ceiling is a resource cap, not a uniform-response contract:
+    /// an UNDECLARED oversize body is bounded (never aggregated without limit) but its
+    /// wire error is the downstream reader's, so this proof drives the declared-length
+    /// short-circuit. All three hit the SAME method/path, so only the body size
     /// distinguishes the outcomes.
     #[tokio::test]
     async fn composed_avatar_upload_separates_the_five_mib_cap_from_the_perimeter_ceiling() {
@@ -1845,7 +1832,7 @@ mod tests {
             "5 MiB+1 is the domain 413, observably distinct from the perimeter body"
         );
 
-        // Tier 3 — a request DECLARING more than 128 MiB: the perimeter's uniform 413,
+        // Tier 3 — a request DECLARING more than 128 MiB: the perimeter's own 413,
         // returned from its declared-Content-Length short-circuit before any byte is read
         // or any route matched. A one-byte actual body proves the HEADER alone drives it.
         let over_ceiling = request_perimeter::MAX_REQUEST_BODY_BYTES as u64 + 1;
@@ -1869,7 +1856,7 @@ mod tests {
         assert_eq!(
             &body[..],
             br#"{"error":"payload too large"}"#,
-            "128 MiB+1 is the perimeter's uniform 413, distinct from the avatar 413"
+            "a declared 128 MiB+1 is the perimeter's own 413, distinct from the avatar 413"
         );
     }
 
@@ -2934,7 +2921,7 @@ mod tests {
         let router = app.router;
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // The forty-one human-perimeter product doors. Anonymous (no bearer) → the human
+        // The fifty-five human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
         const HUMAN_PERIMETER_DOORS: [(&str, &str); 55] = [
