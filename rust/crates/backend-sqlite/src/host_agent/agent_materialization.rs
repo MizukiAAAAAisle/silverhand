@@ -338,8 +338,9 @@ mod tests {
             reopen_failed_materialization, reserve_agent,
         },
         agents::runtime::RuntimeKind,
+        agents::session_scope::AgentSessionScope,
         identity::HostId,
-        messaging::freshness::RuntimeScope,
+        user_identity::ParticipantHandle,
     };
     use tempfile::TempDir;
 
@@ -403,14 +404,14 @@ mod tests {
     fn input(id: &str, key: &str) -> ReserveAgentInput {
         ReserveAgentInput {
             agent_id: agent(id),
-            name: id.to_string(),
+            name: ParticipantHandle::parse(id).unwrap(),
             runtime: RuntimeKind::Codex,
             model: Some("gpt".to_string()),
             reasoning_effort: Some("high".to_string()),
             fast_mode: Some(true),
             host_id: HostId::parse("h1").unwrap(),
             description: Some("d".to_string()),
-            session_scope: RuntimeScope::Conversation,
+            session_scope: AgentSessionScope::Conversation,
             created_by_user_id: user("u1"),
             idempotency_key: idem(key),
         }
@@ -447,7 +448,7 @@ mod tests {
         assert_eq!(hit.runtime(), RuntimeKind::Codex);
         assert_eq!(hit.name(), "a1");
         assert_eq!(hit.host_id(), &HostId::parse("h1").unwrap());
-        assert_eq!(hit.session_scope(), RuntimeScope::Conversation);
+        assert_eq!(hit.session_scope(), AgentSessionScope::Conversation);
     }
 
     #[tokio::test]

@@ -47,9 +47,9 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    agent_lifecycle::MaterializationStatus, agents::runtime::RuntimeKind, identity::AgentId,
-    identity::HostId, identity::UserId, messaging::freshness::RuntimeScope,
-    persistence::PersistenceFailure,
+    agent_lifecycle::MaterializationStatus, agents::runtime::RuntimeKind,
+    agents::session_scope::AgentSessionScope, identity::AgentId, identity::HostId,
+    identity::UserId, persistence::PersistenceFailure, user_identity::ParticipantHandle,
 };
 
 /// The canonical `materialization_failed_code` the crash-recovery sweep stamps on a row a
@@ -99,15 +99,17 @@ impl IdempotencyKey {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReserveAgentInput {
     pub agent_id: AgentId,
-    /// The `@`-handle; the reserve seeds `display_name` from it, mirroring the TypeScript.
-    pub name: String,
+    /// The `@`-handle, already validated at the request boundary; the reserve seeds
+    /// `display_name` from it, mirroring the TypeScript. Typed so a raw string can
+    /// never reopen an illegal-handle entry point into the write.
+    pub name: ParticipantHandle,
     pub runtime: RuntimeKind,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub fast_mode: Option<bool>,
     pub host_id: HostId,
     pub description: Option<String>,
-    pub session_scope: RuntimeScope,
+    pub session_scope: AgentSessionScope,
     pub created_by_user_id: UserId,
     pub idempotency_key: IdempotencyKey,
 }
@@ -156,8 +158,10 @@ pub enum ReserveOutcome {
 /// A sealed reservation: the pending row proven, column by column, to carry exactly what
 /// the reserve requested. Minted only by [`reserve_agent`], so holding one is proof the
 /// reserve durably inserted a `pending_materialization` row whose every persisted column
-/// replays the request. The committed values it carries are read back from the write's own
-/// `RETURNING` row (the database's truth), not reassembled from the request struct.
+/// replays the request. Every committed column it carries is read back from the write's own
+/// `RETURNING` row (the database's truth) — including its timestamps — except the
+/// idempotency key, which is the already-validated request key this seal proved equal to
+/// the persisted one, kept as its typed newtype rather than re-parsed from the row string.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReservedAgent {
     agent_id: AgentId,
@@ -169,7 +173,7 @@ pub struct ReservedAgent {
     fast_mode: Option<bool>,
     host_id: HostId,
     description: Option<String>,
-    session_scope: RuntimeScope,
+    session_scope: AgentSessionScope,
     created_by_user_id: UserId,
     idempotency_key: IdempotencyKey,
     created_at: i64,
@@ -197,14 +201,14 @@ impl ReservedAgent {
                 reason: "reserve witness is not pending_materialization",
             });
         }
-        if row.name != input.name {
+        if row.name != input.name.as_str() {
             return Err(MaterializationFault::ReserveWitnessMismatch {
                 reason: "reserve witness names a different handle than the request",
             });
         }
         // The reserve seeds display_name from the handle; a divergence means the write
         // stopped mirroring it.
-        if row.display_name != input.name {
+        if row.display_name != input.name.as_str() {
             return Err(MaterializationFault::ReserveWitnessMismatch {
                 reason: "reserve witness did not seed display_name from the handle",
             });
@@ -254,7 +258,7 @@ impl ReservedAgent {
                 reason: "reserve witness description differs from the request",
             });
         }
-        let session_scope = RuntimeScope::parse_session_scope(&row.session_scope).ok_or({
+        let session_scope = AgentSessionScope::parse(&row.session_scope).ok_or({
             MaterializationFault::ReserveWitnessMismatch {
                 reason: "reserve witness carries an unknown session scope",
             }
@@ -297,8 +301,8 @@ impl ReservedAgent {
             session_scope,
             created_by_user_id,
             idempotency_key: input.idempotency_key.clone(),
-            created_at: now_ms,
-            updated_at: now_ms,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         })
     }
 
@@ -338,7 +342,7 @@ impl ReservedAgent {
         self.description.as_deref()
     }
 
-    pub fn session_scope(&self) -> RuntimeScope {
+    pub fn session_scope(&self) -> AgentSessionScope {
         self.session_scope
     }
 
@@ -557,7 +561,7 @@ pub struct IdempotentReservation {
     model: Option<String>,
     description: Option<String>,
     host_id: HostId,
-    session_scope: RuntimeScope,
+    session_scope: AgentSessionScope,
 }
 
 impl IdempotentReservation {
@@ -595,7 +599,7 @@ impl IdempotentReservation {
                 reason: "idempotency witness carries an empty host",
             }
         })?;
-        let session_scope = RuntimeScope::parse_session_scope(&row.session_scope).ok_or({
+        let session_scope = AgentSessionScope::parse(&row.session_scope).ok_or({
             MaterializationFault::LookupWitnessMismatch {
                 reason: "idempotency witness carries an unknown session scope",
             }
@@ -660,7 +664,7 @@ impl IdempotentReservation {
         &self.host_id
     }
 
-    pub fn session_scope(&self) -> RuntimeScope {
+    pub fn session_scope(&self) -> AgentSessionScope {
         self.session_scope
     }
 }
@@ -859,14 +863,14 @@ mod tests {
     fn input() -> ReserveAgentInput {
         ReserveAgentInput {
             agent_id: agent("a1"),
-            name: "a1".to_string(),
+            name: ParticipantHandle::parse("a1").unwrap(),
             runtime: RuntimeKind::Codex,
             model: Some("gpt".to_string()),
             reasoning_effort: Some("high".to_string()),
             fast_mode: Some(true),
             host_id: host("h1"),
             description: Some("d".to_string()),
-            session_scope: RuntimeScope::Conversation,
+            session_scope: AgentSessionScope::Conversation,
             created_by_user_id: user("u1"),
             idempotency_key: key(),
         }
@@ -968,7 +972,7 @@ mod tests {
         assert_eq!(reserved.fast_mode(), Some(true));
         assert_eq!(reserved.host_id(), &host("h1"));
         assert_eq!(reserved.description(), Some("d"));
-        assert_eq!(reserved.session_scope(), RuntimeScope::Conversation);
+        assert_eq!(reserved.session_scope(), AgentSessionScope::Conversation);
         assert_eq!(reserved.created_by_user_id(), &user("u1"));
         assert_eq!(reserved.idempotency_key(), &key());
         assert_eq!(reserved.created_at(), 7);
@@ -1327,7 +1331,7 @@ mod tests {
         assert_eq!(hit.created_by_user_id(), &user("u1"));
         assert_eq!(hit.materialization_status(), MaterializationStatus::Active);
         assert_eq!(hit.runtime(), RuntimeKind::Codex);
-        assert_eq!(hit.session_scope(), RuntimeScope::Conversation);
+        assert_eq!(hit.session_scope(), AgentSessionScope::Conversation);
         assert_eq!(hit.host_id(), &host("h1"));
     }
 

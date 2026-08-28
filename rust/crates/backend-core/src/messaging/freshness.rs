@@ -7,35 +7,6 @@
 
 use super::{AgentId, ConversationId, EnvironmentUnavailable, SendActor, SendEntropy};
 
-/// The delivery scope a runtime's freshness is judged in. It is the agent's own
-/// declared session scope, not a property of the send.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RuntimeScope {
-    /// Judged against the conversation the runtime is bound to.
-    Conversation,
-    /// Judged against every conversation the agent has undelivered input in.
-    Agent,
-}
-
-impl RuntimeScope {
-    pub fn parse_session_scope(raw: &str) -> Option<Self> {
-        match raw {
-            "conversation" => Some(Self::Conversation),
-            "agent" => Some(Self::Agent),
-            _ => None,
-        }
-    }
-
-    /// The persisted `session_scope` token — the inverse of [`Self::parse_session_scope`],
-    /// so a writer binding this and a reader parsing it round-trip through one authority.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Conversation => "conversation",
-            Self::Agent => "agent",
-        }
-    }
-}
-
 /// Whether this send is subject to the guard at all.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FreshnessGate {
@@ -140,20 +111,6 @@ mod tests {
 
         assert_eq!(freshness_gate(&actor, false), FreshnessGate::Check(agent()));
         assert_eq!(freshness_gate(&actor, true), FreshnessGate::Bypassed);
-    }
-
-    #[test]
-    fn only_the_two_declared_session_scopes_are_understood() {
-        assert_eq!(
-            RuntimeScope::parse_session_scope("conversation"),
-            Some(RuntimeScope::Conversation)
-        );
-        assert_eq!(
-            RuntimeScope::parse_session_scope("agent"),
-            Some(RuntimeScope::Agent)
-        );
-        assert_eq!(RuntimeScope::parse_session_scope("workspace"), None);
-        assert_eq!(RuntimeScope::parse_session_scope(""), None);
     }
 
     #[test]

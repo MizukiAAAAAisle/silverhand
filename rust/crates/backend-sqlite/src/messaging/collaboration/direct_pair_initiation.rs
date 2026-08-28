@@ -7,6 +7,7 @@
 use std::{error::Error, future::Future};
 
 use silverhand_backend_core::{
+    agents::session_scope::AgentSessionScope,
     identity::{AgentId, UserId},
     messaging::{
         DirectPairOpenedPort, SendClock, SendEntropy,
@@ -16,7 +17,6 @@ use silverhand_backend_core::{
             DirectPairInitiationGrantFact, DirectPairInitiationPort, DirectPairInitiationSource,
             OpenedDirectPairFirstMessage, open_and_send_direct_pair,
         },
-        freshness::RuntimeScope,
     },
     persistence::PersistenceFailure,
 };
@@ -66,7 +66,7 @@ where
         else {
             return Ok(DirectPairInitiationDecision::NotFound);
         };
-        if candidate.scope != RuntimeScope::Agent {
+        if candidate.scope != AgentSessionScope::Agent {
             return Ok(DirectPairInitiationDecision::Forbidden);
         }
         Ok(DirectPairInitiationDecision::Granted(

@@ -18,6 +18,7 @@ use std::{
 
 use std::collections::HashSet;
 
+use silverhand_backend_core::agents::session_scope::AgentSessionScope;
 use silverhand_backend_core::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 use silverhand_backend_core::messaging::{
     self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationRefusal,
@@ -29,7 +30,7 @@ use silverhand_backend_core::messaging::{
     SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, ThreadFollowerSource,
     ThreadListEntry, ThreadReplyFact, ThreadRootId, ThreadRootRefusal,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
-    freshness::{FreshnessGate, FreshnessGuardInvariant, RuntimeScope, StaleEventId},
+    freshness::{FreshnessGate, FreshnessGuardInvariant, StaleEventId},
     mention_cc::{self, MentionCopyOutcome, MentionCopySkip},
     mint_conversation_id, open_direct_pair,
     post_commit::{
@@ -1250,7 +1251,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         let declared = declared.ok_or_else(|| FreshnessGuardInvariant::AgentAbsent {
             agent: agent.clone(),
         })?;
-        let scope = RuntimeScope::parse_session_scope(&declared).ok_or_else(|| {
+        let scope = AgentSessionScope::parse(&declared).ok_or_else(|| {
             FreshnessGuardInvariant::UnknownSessionScope {
                 agent: agent.clone(),
             }
@@ -1259,13 +1260,15 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         // The conversation arm keys on the SOURCE conversation: freshness is about
         // what this runtime has not yet consumed, not about where it is writing.
         let undelivered: Option<i64> = match scope {
-            RuntimeScope::Conversation => sqlx::query_scalar(SELECT_UNDELIVERED_IN_CONVERSATION)
-                .bind(command.source_conversation().as_str())
-                .bind(agent.as_str())
-                .fetch_optional(&mut *self.tx)
-                .await
-                .map_err(driver)?,
-            RuntimeScope::Agent => sqlx::query_scalar(SELECT_UNDELIVERED_FOR_AGENT)
+            AgentSessionScope::Conversation => {
+                sqlx::query_scalar(SELECT_UNDELIVERED_IN_CONVERSATION)
+                    .bind(command.source_conversation().as_str())
+                    .bind(agent.as_str())
+                    .fetch_optional(&mut *self.tx)
+                    .await
+                    .map_err(driver)?
+            }
+            AgentSessionScope::Agent => sqlx::query_scalar(SELECT_UNDELIVERED_FOR_AGENT)
                 .bind(agent.as_str())
                 .fetch_optional(&mut *self.tx)
                 .await
