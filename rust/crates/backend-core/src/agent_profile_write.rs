@@ -26,14 +26,16 @@
 //! `agent-service.ts`'s `normalizeRuntimeTuning`. A refusal is a product `400`
 //! carried in [`TuningRejection`], not a write attempt.
 //!
-//! ## The committed fact is NARROW; the DTO is composed post-commit
+//! ## The committed fact is NARROW; the announce and DTO sit ABOVE it
 //!
-//! The write seals only what it actually committed — the agent id, the write
-//! instant, and the touched column values — and returns the announce fate. It does
-//! NOT carry the host `LEFT JOIN` label or the avatar-URL derivation: those are wire
-//! projections the server layer composes by re-reading through the canonical
-//! `agent_detail` read projector after the commit. A response field is not a write
-//! fact.
+//! The committed fact ([`CommittedAgentRow`]) seals only what the write actually
+//! committed — the agent id, the write instant, and the touched column values — and
+//! ends there. It carries NO announce fate and NO host `LEFT JOIN` label or avatar
+//! URL. The `agent_changed` announce is a post-commit effect whose fate lives in the
+//! OUTER orchestration outcome ([`AnnouncedAgentProfileUpdate`]), above the durable
+//! commit; the wire DTO is a projection the server layer composes by re-reading
+//! through the canonical `agent_detail` read projector after the commit. A response
+//! field is not a write fact, and an effect's fate is not a committed fact.
 
 use std::future::Future;
 
@@ -109,23 +111,53 @@ pub struct AgentTuningContext {
 }
 
 /// Why a tuning edit was refused at admission — the product's two runtime-legality
-/// `400`s. No blob or row was touched.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// `400`s. No blob or row was touched. Each arm carries the values its user-facing
+/// message renders, so the refusal is a fully-formed domain fact (code + message)
+/// exactly as `agent-service.ts` throws `AgentServiceError(code, message)` — the
+/// server layer only copies the pair onto the wire, it composes no text.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TuningRejection {
     /// The post-edit `reasoning_effort` is not legal for the stored runtime/model —
-    /// the product's `reasoning_effort_invalid_for_runtime`.
-    ReasoningEffortInvalidForRuntime,
+    /// the product's `reasoning_effort_invalid_for_runtime`. Carries the offending
+    /// post-edit token and the post-edit model (a left-alone field resolved to its
+    /// stored value) so the message renders the same values the product does.
+    ReasoningEffortInvalidForRuntime {
+        runtime: RuntimeKind,
+        reasoning_effort: String,
+        model: Option<String>,
+    },
     /// `fast_mode` was set on a runtime that does not support it — the product's
     /// `fast_mode_invalid_for_runtime`.
-    FastModeInvalidForRuntime,
+    FastModeInvalidForRuntime { runtime: RuntimeKind },
 }
 
 impl TuningRejection {
     /// The stable public error code, unchanged from the product's `AgentServiceError`.
-    pub const fn code(self) -> &'static str {
+    pub const fn code(&self) -> &'static str {
         match self {
-            Self::ReasoningEffortInvalidForRuntime => "reasoning_effort_invalid_for_runtime",
-            Self::FastModeInvalidForRuntime => "fast_mode_invalid_for_runtime",
+            Self::ReasoningEffortInvalidForRuntime { .. } => "reasoning_effort_invalid_for_runtime",
+            Self::FastModeInvalidForRuntime { .. } => "fast_mode_invalid_for_runtime",
+        }
+    }
+
+    /// The byte-exact user-facing message, mirroring `normalizeRuntimeTuning`'s two
+    /// `throw new AgentServiceError(...)` strings — including the `??  'driver default'`
+    /// fallback for an absent model. This is a BEHAVIOR contract, verified against the
+    /// literal product text.
+    pub fn message(&self) -> String {
+        match self {
+            Self::ReasoningEffortInvalidForRuntime {
+                runtime,
+                reasoning_effort,
+                model,
+            } => format!(
+                "reasoning_effort '{reasoning_effort}' is not valid for runtime '{}' and model '{}'",
+                runtime.as_str(),
+                model.as_deref().unwrap_or("driver default"),
+            ),
+            Self::FastModeInvalidForRuntime { runtime } => {
+                format!("fast_mode is not valid for runtime '{}'", runtime.as_str())
+            }
         }
     }
 }
@@ -201,7 +233,13 @@ pub fn admit_public_tuning_edit(
     if (request.reasoning_effort.is_present() || request.model.is_present())
         && !reasoning_effort_valid_for_runtime(context.runtime, next_reasoning, next_model)
     {
-        return Err(TuningRejection::ReasoningEffortInvalidForRuntime);
+        // `reasoning_effort_valid_for_runtime` only fails on a present token, so
+        // `next_reasoning` is `Some` here; render exactly the offending pair.
+        return Err(TuningRejection::ReasoningEffortInvalidForRuntime {
+            runtime: context.runtime,
+            reasoning_effort: next_reasoning.unwrap_or_default().to_owned(),
+            model: next_model.map(str::to_owned),
+        });
     }
 
     // A `fast_mode` SET (present, non-null) demands runtime support; a clear/leave
@@ -209,7 +247,9 @@ pub fn admit_public_tuning_edit(
     if matches!(request.fast_mode, FieldEdit::Set(_))
         && !runtime_supports_fast_mode(context.runtime)
     {
-        return Err(TuningRejection::FastModeInvalidForRuntime);
+        return Err(TuningRejection::FastModeInvalidForRuntime {
+            runtime: context.runtime,
+        });
     }
 
     Ok(AdmittedAgentProfileEdit {
@@ -269,8 +309,10 @@ pub trait AgentProfileWriteUnitOfWork: Clone + Send + Sync + 'static {
 // ===========================================================================
 
 /// A mutating agent write owes the app-scope `agent_changed` announce carrying
-/// `{ agent_id }`. The production sink is a mount-time integration residual; this
-/// module defines the port and drives it as a best-effort, carried hint.
+/// `{ agent_id }`. This module defines the port and drives it as a best-effort,
+/// carried hint; its production adapter is a narrow hub-backed sink over
+/// `ScopeEventHub::publish_agent_changed` (the accepted producer), constructible in
+/// the server component — NOT a mount-time residual and NOT a test-only fake.
 pub trait AgentChangedSink: Clone + Send + Sync + 'static {
     fn agent_changed(
         &self,
@@ -319,22 +361,26 @@ pub enum AgentProfileUpdateOutcome {
     NoSuchAgent,
     /// The tuning was committed; carries the agent id (for the post-commit DTO
     /// re-read) and the announce fate.
-    Committed(CommittedAgentProfile),
+    Committed(AnnouncedAgentProfileUpdate),
 }
 
-/// A committed tuning change together with the fate of its `agent_changed` announce.
-/// Reachable only through [`into_parts`](Self::into_parts), so a boundary taking the
-/// id for the wire re-read receives the announce residue in the same move and cannot
-/// drop it. It deliberately carries only the id: the full/narrow DTO is composed by
-/// re-reading through the canonical `agent_detail` projector, not from this fact.
+/// The OUTER orchestration outcome of a committed tuning: the committed agent id
+/// paired with the fate of the `agent_changed` announce fired AFTER the row was
+/// already durable. It is deliberately NOT the committed fact — the committed fact
+/// ([`CommittedAgentRow`], the sealed write witness) ends before any effect and
+/// carries no announce. This value exists only in the effect layer, above the
+/// commit. Reachable only through [`into_parts`](Self::into_parts), so a boundary
+/// taking the id for the wire re-read receives the announce residue in the same move
+/// and cannot drop it. It carries only the id: the full/narrow DTO is composed by
+/// re-reading through the canonical `agent_detail` projector, not from this outcome.
 #[derive(Debug)]
 #[must_use = "a committed agent tuning carries an announce fate that must be handled"]
-pub struct CommittedAgentProfile {
+pub struct AnnouncedAgentProfileUpdate {
     agent_id: AgentId,
     announce: AgentChangedAnnounce,
 }
 
-impl CommittedAgentProfile {
+impl AnnouncedAgentProfileUpdate {
     pub fn into_parts(self) -> (AgentId, AgentChangedAnnounce) {
         (self.agent_id, self.announce)
     }
@@ -371,7 +417,7 @@ where
             seal_profile_write(subject, edit, &committed, now_ms)?;
             let announce = announce(announce_sink, subject).await;
             Ok(AgentProfileUpdateOutcome::Committed(
-                CommittedAgentProfile {
+                AnnouncedAgentProfileUpdate {
                     agent_id: committed.id,
                     announce,
                 },
@@ -478,7 +524,11 @@ mod tests {
         };
         assert_eq!(
             admit_public_tuning_edit(&ctx(RuntimeKind::Claude), request),
-            Err(TuningRejection::ReasoningEffortInvalidForRuntime)
+            Err(TuningRejection::ReasoningEffortInvalidForRuntime {
+                runtime: RuntimeKind::Claude,
+                reasoning_effort: "high".to_owned(),
+                model: None,
+            })
         );
     }
 
@@ -498,7 +548,11 @@ mod tests {
         };
         assert_eq!(
             admit_public_tuning_edit(&context, request),
-            Err(TuningRejection::ReasoningEffortInvalidForRuntime)
+            Err(TuningRejection::ReasoningEffortInvalidForRuntime {
+                runtime: RuntimeKind::Codex,
+                reasoning_effort: "ultra".to_owned(),
+                model: None,
+            })
         );
     }
 
@@ -529,7 +583,9 @@ mod tests {
         // non-null).
         assert_eq!(
             admit_public_tuning_edit(&ctx(RuntimeKind::Qoder), request),
-            Err(TuningRejection::FastModeInvalidForRuntime)
+            Err(TuningRejection::FastModeInvalidForRuntime {
+                runtime: RuntimeKind::Qoder,
+            })
         );
     }
 
@@ -553,8 +609,43 @@ mod tests {
         };
         assert_eq!(
             admit_public_tuning_edit(&ctx(RuntimeKind::Claude), request),
-            Err(TuningRejection::ReasoningEffortInvalidForRuntime)
+            Err(TuningRejection::ReasoningEffortInvalidForRuntime {
+                runtime: RuntimeKind::Claude,
+                reasoning_effort: "high".to_owned(),
+                model: None,
+            })
         );
+    }
+
+    #[test]
+    fn the_two_rejection_messages_render_the_product_text_byte_for_byte() {
+        // reasoning: absent model renders the `?? 'driver default'` fallback.
+        let reasoning = TuningRejection::ReasoningEffortInvalidForRuntime {
+            runtime: RuntimeKind::Codex,
+            reasoning_effort: "ultra".to_owned(),
+            model: None,
+        };
+        assert_eq!(reasoning.code(), "reasoning_effort_invalid_for_runtime");
+        assert_eq!(
+            reasoning.message(),
+            "reasoning_effort 'ultra' is not valid for runtime 'codex' and model 'driver default'"
+        );
+        // reasoning: a present model is rendered verbatim.
+        let reasoning_with_model = TuningRejection::ReasoningEffortInvalidForRuntime {
+            runtime: RuntimeKind::Codex,
+            reasoning_effort: "max".to_owned(),
+            model: Some("gpt-5.6-nova".to_owned()),
+        };
+        assert_eq!(
+            reasoning_with_model.message(),
+            "reasoning_effort 'max' is not valid for runtime 'codex' and model 'gpt-5.6-nova'"
+        );
+        // fast_mode: just the runtime.
+        let fast = TuningRejection::FastModeInvalidForRuntime {
+            runtime: RuntimeKind::Qoder,
+        };
+        assert_eq!(fast.code(), "fast_mode_invalid_for_runtime");
+        assert_eq!(fast.message(), "fast_mode is not valid for runtime 'qoder'");
     }
 
     #[test]

@@ -134,7 +134,9 @@ mod tests {
         http::Request,
     };
     use serde_json::{Value, json};
-    use silverhand_backend_core::{persistence::PersistenceFailure, user_identity::ParticipantHandle};
+    use silverhand_backend_core::{
+        persistence::PersistenceFailure, user_identity::ParticipantHandle,
+    };
     use tower::ServiceExt;
 
     #[derive(Clone)]

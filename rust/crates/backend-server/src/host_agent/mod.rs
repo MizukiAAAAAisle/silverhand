@@ -17,6 +17,7 @@
 
 pub mod agent_detail;
 pub mod agent_list;
+pub mod agent_patch;
 pub mod agent_presence;
 mod agent_wire;
 pub mod availability;
