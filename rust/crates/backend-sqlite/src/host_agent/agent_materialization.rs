@@ -5,11 +5,15 @@
 //! This adapter WITNESSES; it never mints the domain verdict. Every write projects the
 //! row it actually touched from its own `RETURNING` clause and hands it back for the core
 //! free functions to bind and seal. A guarded compare-and-set that changed no row returns
-//! `None` (→ `Lost`); the reserve reports a unique-index violation as
-//! [`ReserveRecord::ConstraintConflict`], detected by the driver's error *kind* — never by
-//! parsing the message or the index name, so the two unique constraints that can fire (the
-//! `name` uniqueness and the per-creator `idempotency_key` index) fold into one honest
-//! fact. There is no activate write here — see the core module docs.
+//! `None` (→ `Lost`); the reserve reports [`ReserveRecord::ConstraintConflict`] from an
+//! in-transaction preflight — under the store's single-writer reservation, before the
+//! INSERT — of the shared @-handle namespace and the per-creator idempotency key. The
+//! preflight, not a driver error kind, is the conflict authority: the two collisions the
+//! reserve could hit (the handle uniqueness — including the cross-namespace user/agent
+//! trigger that surfaces as an opaque `SQLITE_CONSTRAINT_TRIGGER`, not a unique violation —
+//! and the per-creator `idempotency_key` index) both fold into one honest fact, and any
+//! error the INSERT itself raises after a clean preflight is a hard fault, not a product
+//! answer. There is no activate write here — see the core module docs.
 
 use silverhand_backend_core::{
     agent_materialization::{
@@ -32,8 +36,16 @@ const RESERVE_INSERT: &str = "INSERT INTO agents \
          host_id, description, session_scope, created_by_user_id, \
          materialization_status, idempotency_key, created_at, updated_at) \
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_materialization', ?, ?, ?) \
-    RETURNING id, materialization_status, created_by_user_id, idempotency_key, \
-              created_at, updated_at";
+    RETURNING id, name, display_name, runtime, model, reasoning_effort, fast_mode, \
+              host_id, description, session_scope, created_by_user_id, \
+              materialization_status, idempotency_key, created_at, updated_at";
+
+/// Whether a reservation already exists for this `(creator, idempotency_key)` pair — the
+/// per-creator half of the reserve preflight, mirroring the partial unique index
+/// `idx_agents_idempotency_key_per_user`. Bound with a concrete non-null key, so it never
+/// matches the `WHERE idempotency_key IS NOT NULL` rows the index ignores.
+const IDEMPOTENCY_TAKEN: &str = "SELECT EXISTS(SELECT 1 FROM agents \
+     WHERE created_by_user_id = ? AND idempotency_key = ?)";
 
 /// `pending|failed → failed`, stamping the typed code and timestamp. The status guard is
 /// the sole eligibility gate; `active` is deliberately unmatched (a live row's failure
@@ -89,21 +101,24 @@ fn fast_mode_column(fast_mode: Option<bool>) -> Option<i64> {
     fast_mode.map(|on| if on { 1 } else { 0 })
 }
 
-/// True when a driver error is a unique-constraint violation, decided by the error *kind*
-/// the driver reports — never by inspecting the message or the offending index name.
-fn is_unique_violation(error: &sqlx::Error) -> bool {
-    error
-        .as_database_error()
-        .is_some_and(|db| db.is_unique_violation())
-}
-
-/// Project the reserve after-image from its `RETURNING` row. The `AgentId` is decoded from
-/// the row's OWN `id`, never the query parameter.
+/// Project the reserve after-image from its `RETURNING` row covering every inserted
+/// column. The `AgentId` is decoded from the row's OWN `id`, never the query parameter;
+/// the typed columns (runtime, host, session scope, creator, fast_mode) ride back raw for
+/// the domain to parse and bind.
 fn reserved_agent_row(row: &SqliteRow) -> Result<ReservedAgentRow, sqlx::Error> {
     Ok(ReservedAgentRow {
         agent_id: super::decode::agent_id(row.try_get::<String, _>("id")?)?,
-        materialization_status: row.try_get::<String, _>("materialization_status")?,
+        name: row.try_get::<String, _>("name")?,
+        display_name: row.try_get::<String, _>("display_name")?,
+        runtime: row.try_get::<String, _>("runtime")?,
+        model: row.try_get::<Option<String>, _>("model")?,
+        reasoning_effort: row.try_get::<Option<String>, _>("reasoning_effort")?,
+        fast_mode: row.try_get::<Option<i64>, _>("fast_mode")?,
+        host_id: row.try_get::<String, _>("host_id")?,
+        description: row.try_get::<Option<String>, _>("description")?,
+        session_scope: row.try_get::<String, _>("session_scope")?,
         created_by_user_id: row.try_get::<String, _>("created_by_user_id")?,
+        materialization_status: row.try_get::<String, _>("materialization_status")?,
         idempotency_key: row.try_get::<Option<String>, _>("idempotency_key")?,
         created_at: row.try_get::<i64, _>("created_at")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
@@ -174,6 +189,26 @@ impl AgentMaterializationWrite for SqliteHostAgentStore {
             .await
             .map_err(PersistenceFailure::from_source)?;
 
+        // Preflight both uniqueness axes under the write reservation, before the INSERT.
+        // The shared-handle check reuses the one canonical namespace predicate, so it also
+        // catches the cross-namespace user/agent collision the trigger would otherwise
+        // raise as an opaque constraint error. A hit rolls back as the transaction drops.
+        if crate::handle_namespace::handle_taken(&mut *tx, input.name.as_str())
+            .await
+            .map_err(PersistenceFailure::from_source)?
+        {
+            return Ok(ReserveRecord::ConstraintConflict);
+        }
+        let idempotency_taken: i64 = sqlx::query_scalar(IDEMPOTENCY_TAKEN)
+            .bind(input.created_by_user_id.as_str())
+            .bind(input.idempotency_key.as_str())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        if idempotency_taken != 0 {
+            return Ok(ReserveRecord::ConstraintConflict);
+        }
+
         let attempted = sqlx::query(RESERVE_INSERT)
             .bind(input.agent_id.as_str())
             .bind(input.name.as_str())
@@ -196,13 +231,14 @@ impl AgentMaterializationWrite for SqliteHostAgentStore {
             Ok(Some(row)) => {
                 let witness = reserved_agent_row(&row).map_err(PersistenceFailure::from_source)?;
                 tx.commit().await.map_err(PersistenceFailure::from_source)?;
-                Ok(ReserveRecord::Inserted(witness))
+                Ok(ReserveRecord::Inserted(Box::new(witness)))
             }
             // An `INSERT ... RETURNING` that inserts a row always returns it; no row means
             // a broken invariant, not a product answer.
             Ok(None) => Err(PersistenceFailure::from_source(ReserveReturnedNoRow)),
-            // The conflict rolls back as the transaction drops; nothing was written.
-            Err(error) if is_unique_violation(&error) => Ok(ReserveRecord::ConstraintConflict),
+            // The preflight already folded the two honest conflicts into
+            // `ConstraintConflict`; any error the INSERT raises now is a hard fault, never a
+            // product answer, and the transaction drops without a commit.
             Err(error) => Err(PersistenceFailure::from_source(error)),
         }
     }
@@ -303,6 +339,7 @@ mod tests {
         },
         agents::runtime::RuntimeKind,
         identity::HostId,
+        messaging::freshness::RuntimeScope,
     };
     use tempfile::TempDir;
 
@@ -314,6 +351,10 @@ mod tests {
 
     fn user(id: &str) -> UserId {
         UserId::parse(id).expect("user id")
+    }
+
+    fn idem(key: &str) -> IdempotencyKey {
+        IdempotencyKey::parse(key).expect("idempotency key")
     }
 
     async fn seed_schema(dir: &TempDir, name: &str, seed: &[String]) -> PathBuf {
@@ -369,9 +410,9 @@ mod tests {
             fast_mode: Some(true),
             host_id: HostId::parse("h1").unwrap(),
             description: Some("d".to_string()),
-            session_scope: "conversation".to_string(),
+            session_scope: RuntimeScope::Conversation,
             created_by_user_id: user("u1"),
-            idempotency_key: IdempotencyKey::new(key),
+            idempotency_key: idem(key),
         }
     }
 
@@ -389,13 +430,13 @@ mod tests {
         };
         assert_eq!(reserved.agent_id(), &agent("a1"));
         assert_eq!(reserved.created_by_user_id(), &user("u1"));
-        assert_eq!(reserved.idempotency_key(), &IdempotencyKey::new("idem-1"));
+        assert_eq!(reserved.idempotency_key(), &idem("idem-1"));
         assert_eq!(reserved.created_at(), 42);
         assert_eq!(reserved.updated_at(), 42);
 
         // The lookup sees the pending row with the metadata the seal proved and the handle
         // mirrored into display_name.
-        let hit = find_idempotent_reservation(&store, &user("u1"), &IdempotencyKey::new("idem-1"))
+        let hit = find_idempotent_reservation(&store, &user("u1"), &idem("idem-1"))
             .await
             .unwrap()
             .expect("a hit");
@@ -405,8 +446,33 @@ mod tests {
         );
         assert_eq!(hit.runtime(), RuntimeKind::Codex);
         assert_eq!(hit.name(), "a1");
-        assert_eq!(hit.host_id(), "h1");
-        assert_eq!(hit.session_scope(), "conversation");
+        assert_eq!(hit.host_id(), &HostId::parse("h1").unwrap());
+        assert_eq!(hit.session_scope(), RuntimeScope::Conversation);
+    }
+
+    #[tokio::test]
+    async fn reserve_reports_a_handle_held_by_a_user_as_a_constraint_conflict() {
+        // The cross-namespace collision: a user already holds `clash`. The name UNIQUE on
+        // `agents` would not fire (no agent holds it), but the `agents_name_unique_against_
+        // users_insert` trigger would `RAISE(ABORT)` as an opaque `SQLITE_CONSTRAINT_TRIGGER`
+        // — not a unique violation. The preflight catches it as an honest conflict instead
+        // of letting it drift to a 500.
+        let dir = tempfile::tempdir().unwrap();
+        let mut seed = base_seed();
+        seed.push(
+            "INSERT INTO users (id, name, display_name, created_at, updated_at) \
+             VALUES ('u2', 'clash', 'Clash', 1, 1)"
+                .to_string(),
+        );
+        let path = seed_schema(&dir, "reserve-user-clash.db", &seed).await;
+        let store = SqliteHostAgentStore::open(&path).await.unwrap();
+
+        assert_eq!(
+            reserve_agent(&store, &input("clash", "fresh-key"), 42)
+                .await
+                .unwrap(),
+            ReserveOutcome::ConstraintConflict
+        );
     }
 
     #[tokio::test]
@@ -532,7 +598,7 @@ mod tests {
         };
         assert_eq!(reopened.updated_at(), 30);
 
-        let hit = find_idempotent_reservation(&store, &user("u1"), &IdempotencyKey::new("idem-1"))
+        let hit = find_idempotent_reservation(&store, &user("u1"), &idem("idem-1"))
             .await
             .unwrap()
             .expect("a hit");
@@ -598,22 +664,20 @@ mod tests {
         assert_eq!(swept, vec![agent("old-pending")]);
 
         // The new pending row is untouched.
-        let new_hit =
-            find_idempotent_reservation(&store, &user("u1"), &IdempotencyKey::new("k-new"))
-                .await
-                .unwrap()
-                .expect("a hit");
+        let new_hit = find_idempotent_reservation(&store, &user("u1"), &idem("k-new"))
+            .await
+            .unwrap()
+            .expect("a hit");
         assert_eq!(
             new_hit.materialization_status(),
             MaterializationStatus::PendingMaterialization
         );
 
         // The swept row carries the canonical code.
-        let old_hit =
-            find_idempotent_reservation(&store, &user("u1"), &IdempotencyKey::new("k-old"))
-                .await
-                .unwrap()
-                .expect("a hit");
+        let old_hit = find_idempotent_reservation(&store, &user("u1"), &idem("k-old"))
+            .await
+            .unwrap()
+            .expect("a hit");
         assert_eq!(
             old_hit.materialization_status(),
             MaterializationStatus::Failed
@@ -631,7 +695,7 @@ mod tests {
         let path = seed_schema(&dir, "lookup-miss.db", &base_seed()).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
         assert!(
-            find_idempotent_reservation(&store, &user("u1"), &IdempotencyKey::new("nope"))
+            find_idempotent_reservation(&store, &user("u1"), &idem("nope"))
                 .await
                 .unwrap()
                 .is_none()

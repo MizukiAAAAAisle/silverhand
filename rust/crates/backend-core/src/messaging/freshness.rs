@@ -25,6 +25,15 @@ impl RuntimeScope {
             _ => None,
         }
     }
+
+    /// The persisted `session_scope` token — the inverse of [`Self::parse_session_scope`],
+    /// so a writer binding this and a reader parsing it round-trip through one authority.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Conversation => "conversation",
+            Self::Agent => "agent",
+        }
+    }
 }
 
 /// Whether this send is subject to the guard at all.

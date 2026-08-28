@@ -48,7 +48,8 @@ use thiserror::Error;
 
 use crate::{
     agent_lifecycle::MaterializationStatus, agents::runtime::RuntimeKind, identity::AgentId,
-    identity::HostId, identity::UserId, persistence::PersistenceFailure,
+    identity::HostId, identity::UserId, messaging::freshness::RuntimeScope,
+    persistence::PersistenceFailure,
 };
 
 /// The canonical `materialization_failed_code` the crash-recovery sweep stamps on a row a
@@ -56,15 +57,35 @@ use crate::{
 /// token, and it never drifts into an adapter literal.
 pub const STALE_MATERIALIZATION_FAILED_CODE: &str = "backend_crash_during_materialize";
 
-/// A client-supplied idempotency token for a create attempt. Opaque: it is a dedup key,
-/// not an identity coordinate, so any non-null string the client sent is a legal key (the
-/// partial unique index keys on it only `WHERE idempotency_key IS NOT NULL`).
+/// A client-supplied idempotency token for a create attempt. It is a dedup key, not an
+/// identity coordinate, but it is not arbitrary: it carries the same envelope the create
+/// route admits (`/^[A-Za-z0-9_-]{1,64}$/`), so an illegal key is unconstructable rather
+/// than a value that reaches the per-creator unique index. The partial index keys on it
+/// only `WHERE idempotency_key IS NOT NULL`; a sealed key is always non-null.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IdempotencyKey(String);
 
+/// A create request whose idempotency key is outside the admitted envelope. A request
+/// classification failure at admission, never a persisted fact — the key never reaches a
+/// write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Error)]
+#[error("idempotency key must be 1-64 characters of [A-Za-z0-9_-]")]
+pub struct InvalidIdempotencyKey;
+
 impl IdempotencyKey {
-    pub fn new(raw: impl Into<String>) -> Self {
-        Self(raw.into())
+    /// Parse a client-supplied key against the admitted envelope. The bound is on the
+    /// character class first, so any multi-byte input is rejected before the length check
+    /// and byte length equals character length for every legal key.
+    pub fn parse(raw: impl AsRef<str>) -> Result<Self, InvalidIdempotencyKey> {
+        let raw = raw.as_ref();
+        let legal_chars = raw
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+        if legal_chars && (1..=64).contains(&raw.len()) {
+            Ok(Self(raw.to_string()))
+        } else {
+            Err(InvalidIdempotencyKey)
+        }
     }
 
     pub fn as_str(&self) -> &str {
@@ -86,43 +107,69 @@ pub struct ReserveAgentInput {
     pub fast_mode: Option<bool>,
     pub host_id: HostId,
     pub description: Option<String>,
-    pub session_scope: String,
+    pub session_scope: RuntimeScope,
     pub created_by_user_id: UserId,
     pub idempotency_key: IdempotencyKey,
 }
 
-/// The raw witness the reserve INSERT returns, decoded from its `RETURNING` clause. The
-/// domain — not the adapter — decides whether the persisted status/creator/key match the
-/// request.
+/// The raw witness the reserve INSERT returns, decoded from its `RETURNING` clause covering
+/// every column the INSERT wrote. Identity/typed columns are carried raw (as the database
+/// stored them) so the domain — not the adapter — parses and binds them against the
+/// request; a column that disagrees with the input is a broken write, not a product answer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReservedAgentRow {
     /// Decoded from the `RETURNING id`, never the query parameter.
     pub agent_id: AgentId,
-    pub materialization_status: String,
+    pub name: String,
+    pub display_name: String,
+    pub runtime: String,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    /// The stored `0`/`1`/null boolean column, decoded by the domain.
+    pub fast_mode: Option<i64>,
+    pub host_id: String,
+    pub description: Option<String>,
+    pub session_scope: String,
     pub created_by_user_id: String,
+    pub materialization_status: String,
     pub idempotency_key: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
-/// What a reserve observed. `ConstraintConflict` is a unique-index violation the adapter
-/// detected by the driver's error *kind* — never by parsing an index name or message — so
-/// it says only "some unique constraint rejected the row" (the agent handle or the
-/// per-user idempotency key). The single consumer folds it into its `nameTaken` answer;
-/// splitting the two would force the adapter to claim which constraint fired, which it
-/// cannot honestly do without canonical re-reads it has no reason to run.
+/// What a reserve observed. `ConstraintConflict` means the adapter's in-transaction
+/// preflight — under the write reservation, before the INSERT — found the requested handle
+/// already held in the shared @-namespace OR the `(creator, idempotency_key)` pair already
+/// present. It says only "some uniqueness the reserve would collide with already holds",
+/// never which one: the single consumer folds it into its `nameTaken` answer, and the
+/// preflight covers exactly the two collisions the write could hit (the handle uniqueness —
+/// including the cross-namespace user/agent trigger — and the per-creator idempotency
+/// index).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReserveOutcome {
-    Reserved(ReservedAgent),
+    /// Boxed to keep the enum small: the sealed reservation is wide, the conflict arm
+    /// carries nothing.
+    Reserved(Box<ReservedAgent>),
     ConstraintConflict,
 }
 
-/// A sealed reservation: the pending row proven to carry the requested creator and key.
-/// Minted only by [`reserve_agent`], so holding one is proof the reserve durably inserted
-/// a `pending_materialization` row for this exact agent, creator, and idempotency key.
+/// A sealed reservation: the pending row proven, column by column, to carry exactly what
+/// the reserve requested. Minted only by [`reserve_agent`], so holding one is proof the
+/// reserve durably inserted a `pending_materialization` row whose every persisted column
+/// replays the request. The committed values it carries are read back from the write's own
+/// `RETURNING` row (the database's truth), not reassembled from the request struct.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReservedAgent {
     agent_id: AgentId,
+    name: String,
+    display_name: String,
+    runtime: RuntimeKind,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    fast_mode: Option<bool>,
+    host_id: HostId,
+    description: Option<String>,
+    session_scope: RuntimeScope,
     created_by_user_id: UserId,
     idempotency_key: IdempotencyKey,
     created_at: i64,
@@ -150,6 +197,73 @@ impl ReservedAgent {
                 reason: "reserve witness is not pending_materialization",
             });
         }
+        if row.name != input.name {
+            return Err(MaterializationFault::ReserveWitnessMismatch {
+                reason: "reserve witness names a different handle than the request",
+            });
+        }
+        // The reserve seeds display_name from the handle; a divergence means the write
+        // stopped mirroring it.
+        if row.display_name != input.name {
+            return Err(MaterializationFault::ReserveWitnessMismatch {
+                reason: "reserve witness did not seed display_name from the handle",
+            });
+        }
+        let runtime = RuntimeKind::parse(&row.runtime).ok_or(
+            MaterializationFault::ReserveWitnessMismatch {
+                reason: "reserve witness carries an unknown runtime",
+            },
+        )?;
+        if runtime != input.runtime {
+            return Err(MaterializationFault::ReserveWitnessMismatch {
+                reason: "reserve witness runtime differs from the request",
+            });
+        }
+        if row.model != input.model {
+            return Err(MaterializationFault::ReserveWitnessMismatch {
+                reason: "reserve witness model differs from the request",
+            });
+        }
+        if row.reasoning_effort != input.reasoning_effort {
+            return Err(MaterializationFault::ReserveWitnessMismatch {
+                reason: "reserve witness reasoning_effort differs from the request",
+            });
+        }
+        let fast_mode = decode_fast_mode(row.fast_mode).ok_or(
+            MaterializationFault::ReserveWitnessMismatch {
+                reason: "reserve witness carries a non-boolean fast_mode column",
+            },
+        )?;
+        if fast_mode != input.fast_mode {
+            return Err(MaterializationFault::ReserveWitnessMismatch {
+                reason: "reserve witness fast_mode differs from the request",
+            });
+        }
+        let host_id = HostId::parse(row.host_id).map_err(|_| {
+            MaterializationFault::ReserveWitnessMismatch {
+                reason: "reserve witness carries an empty host",
+            }
+        })?;
+        if host_id != input.host_id {
+            return Err(MaterializationFault::ReserveWitnessMismatch {
+                reason: "reserve witness names a different host than the request",
+            });
+        }
+        if row.description != input.description {
+            return Err(MaterializationFault::ReserveWitnessMismatch {
+                reason: "reserve witness description differs from the request",
+            });
+        }
+        let session_scope = RuntimeScope::parse_session_scope(&row.session_scope).ok_or({
+            MaterializationFault::ReserveWitnessMismatch {
+                reason: "reserve witness carries an unknown session scope",
+            }
+        })?;
+        if session_scope != input.session_scope {
+            return Err(MaterializationFault::ReserveWitnessMismatch {
+                reason: "reserve witness session scope differs from the request",
+            });
+        }
         let created_by_user_id = UserId::parse(row.created_by_user_id).map_err(|_| {
             MaterializationFault::ReserveWitnessMismatch {
                 reason: "reserve witness carries an empty creator",
@@ -171,7 +285,16 @@ impl ReservedAgent {
             });
         }
         Ok(Self {
-            agent_id: input.agent_id.clone(),
+            agent_id: row.agent_id,
+            name: row.name,
+            display_name: row.display_name,
+            runtime,
+            model: row.model,
+            reasoning_effort: row.reasoning_effort,
+            fast_mode,
+            host_id,
+            description: row.description,
+            session_scope,
             created_by_user_id,
             idempotency_key: input.idempotency_key.clone(),
             created_at: now_ms,
@@ -181,6 +304,42 @@ impl ReservedAgent {
 
     pub fn agent_id(&self) -> &AgentId {
         &self.agent_id
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    pub fn runtime(&self) -> RuntimeKind {
+        self.runtime
+    }
+
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    pub fn reasoning_effort(&self) -> Option<&str> {
+        self.reasoning_effort.as_deref()
+    }
+
+    pub fn fast_mode(&self) -> Option<bool> {
+        self.fast_mode
+    }
+
+    pub fn host_id(&self) -> &HostId {
+        &self.host_id
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    pub fn session_scope(&self) -> RuntimeScope {
+        self.session_scope
     }
 
     pub fn created_by_user_id(&self) -> &UserId {
@@ -197,6 +356,18 @@ impl ReservedAgent {
 
     pub fn updated_at(&self) -> i64 {
         self.updated_at
+    }
+}
+
+/// Decode the stored `fast_mode` column: `0`/`1`/null → `Some(false)`/`Some(true)`/`None`,
+/// matching the `fast_mode === undefined ? null : fast_mode ? 1 : 0` the reserve writes.
+/// Any other integer is a corrupt column, surfaced to the caller as a witness mismatch.
+fn decode_fast_mode(raw: Option<i64>) -> Option<Option<bool>> {
+    match raw {
+        None => Some(None),
+        Some(0) => Some(Some(false)),
+        Some(1) => Some(Some(true)),
+        Some(_) => None,
     }
 }
 
@@ -385,8 +556,8 @@ pub struct IdempotentReservation {
     runtime: RuntimeKind,
     model: Option<String>,
     description: Option<String>,
-    host_id: String,
-    session_scope: String,
+    host_id: HostId,
+    session_scope: RuntimeScope,
 }
 
 impl IdempotentReservation {
@@ -419,6 +590,16 @@ impl IdempotentReservation {
                 reason: "idempotency witness carries an unknown runtime",
             }
         })?;
+        let host_id = HostId::parse(row.host_id).map_err(|_| {
+            MaterializationFault::LookupWitnessMismatch {
+                reason: "idempotency witness carries an empty host",
+            }
+        })?;
+        let session_scope = RuntimeScope::parse_session_scope(&row.session_scope).ok_or({
+            MaterializationFault::LookupWitnessMismatch {
+                reason: "idempotency witness carries an unknown session scope",
+            }
+        })?;
         Ok(Self {
             agent_id: row.agent_id,
             created_by_user_id,
@@ -430,8 +611,8 @@ impl IdempotentReservation {
             runtime,
             model: row.model,
             description: row.description,
-            host_id: row.host_id,
-            session_scope: row.session_scope,
+            host_id,
+            session_scope,
         })
     }
 
@@ -475,12 +656,12 @@ impl IdempotentReservation {
         self.description.as_deref()
     }
 
-    pub fn host_id(&self) -> &str {
+    pub fn host_id(&self) -> &HostId {
         &self.host_id
     }
 
-    pub fn session_scope(&self) -> &str {
-        &self.session_scope
+    pub fn session_scope(&self) -> RuntimeScope {
+        self.session_scope
     }
 }
 
@@ -553,10 +734,11 @@ pub trait AgentMaterializationWrite: Send + Sync {
 }
 
 /// What a reserve write observed at the adapter, before the domain seals it: either the
-/// inserted row or a unique-constraint conflict the driver reported by error *kind*.
+/// inserted row or the conflict the adapter's in-transaction preflight detected. The
+/// inserted arm is boxed to keep the enum small against the empty conflict arm.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReserveRecord {
-    Inserted(ReservedAgentRow),
+    Inserted(Box<ReservedAgentRow>),
     ConstraintConflict,
 }
 
@@ -584,7 +766,7 @@ pub async fn reserve_agent<W: AgentMaterializationWrite>(
 ) -> Result<ReserveOutcome, MaterializationFault> {
     Ok(match port.reserve(input, now_ms).await? {
         ReserveRecord::Inserted(row) => {
-            ReserveOutcome::Reserved(ReservedAgent::seal(input, now_ms, row)?)
+            ReserveOutcome::Reserved(Box::new(ReservedAgent::seal(input, now_ms, *row)?))
         }
         ReserveRecord::ConstraintConflict => ReserveOutcome::ConstraintConflict,
     })
@@ -671,7 +853,7 @@ mod tests {
     }
 
     fn key() -> IdempotencyKey {
-        IdempotencyKey::new("idem-1")
+        IdempotencyKey::parse("idem-1").expect("idempotency key")
     }
 
     fn input() -> ReserveAgentInput {
@@ -684,7 +866,7 @@ mod tests {
             fast_mode: Some(true),
             host_id: host("h1"),
             description: Some("d".to_string()),
-            session_scope: "conversation".to_string(),
+            session_scope: RuntimeScope::Conversation,
             created_by_user_id: user("u1"),
             idempotency_key: key(),
         }
@@ -693,8 +875,17 @@ mod tests {
     fn faithful_reserved_row(now_ms: i64) -> ReservedAgentRow {
         ReservedAgentRow {
             agent_id: agent("a1"),
-            materialization_status: "pending_materialization".to_string(),
+            name: "a1".to_string(),
+            display_name: "a1".to_string(),
+            runtime: "codex".to_string(),
+            model: Some("gpt".to_string()),
+            reasoning_effort: Some("high".to_string()),
+            fast_mode: Some(1),
+            host_id: "h1".to_string(),
+            description: Some("d".to_string()),
+            session_scope: "conversation".to_string(),
             created_by_user_id: "u1".to_string(),
+            materialization_status: "pending_materialization".to_string(),
             idempotency_key: Some("idem-1".to_string()),
             created_at: now_ms,
             updated_at: now_ms,
@@ -761,7 +952,7 @@ mod tests {
     #[tokio::test]
     async fn reserve_seals_a_faithful_pending_row() {
         let port = ScriptedWrite {
-            reserve: Some(ReserveRecord::Inserted(faithful_reserved_row(7))),
+            reserve: Some(ReserveRecord::Inserted(Box::new(faithful_reserved_row(7)))),
             ..Default::default()
         };
         let ReserveOutcome::Reserved(reserved) = reserve_agent(&port, &input(), 7).await.unwrap()
@@ -769,6 +960,15 @@ mod tests {
             panic!("expected a reserved agent");
         };
         assert_eq!(reserved.agent_id(), &agent("a1"));
+        assert_eq!(reserved.name(), "a1");
+        assert_eq!(reserved.display_name(), "a1");
+        assert_eq!(reserved.runtime(), RuntimeKind::Codex);
+        assert_eq!(reserved.model(), Some("gpt"));
+        assert_eq!(reserved.reasoning_effort(), Some("high"));
+        assert_eq!(reserved.fast_mode(), Some(true));
+        assert_eq!(reserved.host_id(), &host("h1"));
+        assert_eq!(reserved.description(), Some("d"));
+        assert_eq!(reserved.session_scope(), RuntimeScope::Conversation);
         assert_eq!(reserved.created_by_user_id(), &user("u1"));
         assert_eq!(reserved.idempotency_key(), &key());
         assert_eq!(reserved.created_at(), 7);
@@ -789,11 +989,58 @@ mod tests {
 
     #[tokio::test]
     async fn reserve_rejects_a_witness_that_disagrees() {
+        // Every load-bearing column the reserve wrote must replay against the request; a
+        // liar-writer that drifts on any one of them is a fault, not a sealed reservation.
         let mut wrong_agent = faithful_reserved_row(7);
         wrong_agent.agent_id = agent("other");
 
         let mut not_pending = faithful_reserved_row(7);
         not_pending.materialization_status = "active".to_string();
+
+        let mut unknown_status = faithful_reserved_row(7);
+        unknown_status.materialization_status = "smuggled".to_string();
+
+        let mut wrong_name = faithful_reserved_row(7);
+        wrong_name.name = "other".to_string();
+
+        let mut unmirrored_display = faithful_reserved_row(7);
+        unmirrored_display.display_name = "Other".to_string();
+
+        let mut unknown_runtime = faithful_reserved_row(7);
+        unknown_runtime.runtime = "smuggled".to_string();
+
+        let mut wrong_runtime = faithful_reserved_row(7);
+        wrong_runtime.runtime = "claude".to_string();
+
+        let mut wrong_model = faithful_reserved_row(7);
+        wrong_model.model = Some("other".to_string());
+
+        let mut wrong_reasoning = faithful_reserved_row(7);
+        wrong_reasoning.reasoning_effort = Some("low".to_string());
+
+        let mut corrupt_fast_mode = faithful_reserved_row(7);
+        corrupt_fast_mode.fast_mode = Some(2);
+
+        let mut wrong_fast_mode = faithful_reserved_row(7);
+        wrong_fast_mode.fast_mode = Some(0);
+
+        let mut empty_host = faithful_reserved_row(7);
+        empty_host.host_id = String::new();
+
+        let mut wrong_host = faithful_reserved_row(7);
+        wrong_host.host_id = "h2".to_string();
+
+        let mut wrong_description = faithful_reserved_row(7);
+        wrong_description.description = None;
+
+        let mut unknown_scope = faithful_reserved_row(7);
+        unknown_scope.session_scope = "smuggled".to_string();
+
+        let mut wrong_scope = faithful_reserved_row(7);
+        wrong_scope.session_scope = "agent".to_string();
+
+        let mut empty_creator = faithful_reserved_row(7);
+        empty_creator.created_by_user_id = String::new();
 
         let mut wrong_creator = faithful_reserved_row(7);
         wrong_creator.created_by_user_id = "u2".to_string();
@@ -804,19 +1051,38 @@ mod tests {
         let mut missing_key = faithful_reserved_row(7);
         missing_key.idempotency_key = None;
 
-        let mut wrong_stamp = faithful_reserved_row(7);
-        wrong_stamp.updated_at = 8;
+        let mut wrong_created_at = faithful_reserved_row(7);
+        wrong_created_at.created_at = 8;
+
+        let mut wrong_updated_at = faithful_reserved_row(7);
+        wrong_updated_at.updated_at = 8;
 
         for row in [
             wrong_agent,
             not_pending,
+            unknown_status,
+            wrong_name,
+            unmirrored_display,
+            unknown_runtime,
+            wrong_runtime,
+            wrong_model,
+            wrong_reasoning,
+            corrupt_fast_mode,
+            wrong_fast_mode,
+            empty_host,
+            wrong_host,
+            wrong_description,
+            unknown_scope,
+            wrong_scope,
+            empty_creator,
             wrong_creator,
             wrong_key,
             missing_key,
-            wrong_stamp,
+            wrong_created_at,
+            wrong_updated_at,
         ] {
             let port = ScriptedWrite {
-                reserve: Some(ReserveRecord::Inserted(row)),
+                reserve: Some(ReserveRecord::Inserted(Box::new(row))),
                 ..Default::default()
             };
             assert!(matches!(
@@ -824,6 +1090,20 @@ mod tests {
                 MaterializationFault::ReserveWitnessMismatch { .. }
             ));
         }
+    }
+
+    #[test]
+    fn idempotency_key_admits_only_the_route_envelope() {
+        assert!(IdempotencyKey::parse("idem-1").is_ok());
+        assert!(IdempotencyKey::parse("A_z0-9").is_ok());
+        assert!(IdempotencyKey::parse("a".repeat(64)).is_ok());
+        // Empty, over-length, illegal punctuation, whitespace, and multi-byte are all out
+        // of the `/^[A-Za-z0-9_-]{1,64}$/` envelope.
+        assert!(IdempotencyKey::parse("").is_err());
+        assert!(IdempotencyKey::parse("a".repeat(65)).is_err());
+        assert!(IdempotencyKey::parse("has space").is_err());
+        assert!(IdempotencyKey::parse("dots.not.ok").is_err());
+        assert!(IdempotencyKey::parse("café").is_err());
     }
 
     #[tokio::test]
@@ -1047,8 +1327,8 @@ mod tests {
         assert_eq!(hit.created_by_user_id(), &user("u1"));
         assert_eq!(hit.materialization_status(), MaterializationStatus::Active);
         assert_eq!(hit.runtime(), RuntimeKind::Codex);
-        assert_eq!(hit.session_scope(), "conversation");
-        assert_eq!(hit.host_id(), "h1");
+        assert_eq!(hit.session_scope(), RuntimeScope::Conversation);
+        assert_eq!(hit.host_id(), &host("h1"));
     }
 
     #[tokio::test]
@@ -1073,7 +1353,19 @@ mod tests {
         let mut unknown_runtime = faithful_lookup_row();
         unknown_runtime.runtime = "smuggled".to_string();
 
-        for row in [wrong_creator, wrong_key, unknown_runtime] {
+        let mut empty_host = faithful_lookup_row();
+        empty_host.host_id = String::new();
+
+        let mut unknown_scope = faithful_lookup_row();
+        unknown_scope.session_scope = "smuggled".to_string();
+
+        for row in [
+            wrong_creator,
+            wrong_key,
+            unknown_runtime,
+            empty_host,
+            unknown_scope,
+        ] {
             let port = ScriptedLookup(Some(row));
             assert!(matches!(
                 find_idempotent_reservation(&port, &user("u1"), &key())

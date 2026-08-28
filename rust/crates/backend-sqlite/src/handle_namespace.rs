@@ -32,6 +32,23 @@ const HANDLE_TAKEN: &str = "\
 SELECT EXISTS(SELECT 1 FROM users WHERE name = ?) \
     OR EXISTS(SELECT 1 FROM agents WHERE name = ?)";
 
+/// Whether the shared @-handle namespace already holds `handle`, over any executor so the
+/// pooled availability read and an in-flight write transaction ask the one canonical
+/// question. A create reserve preflights this under its write reservation, before its
+/// INSERT, so the cross-namespace user/agent collision surfaces as an honest conflict
+/// rather than a trigger `RAISE(ABORT)` the driver reports as an opaque constraint error.
+pub(crate) async fn handle_taken<'e, E>(executor: E, handle: &str) -> Result<bool, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let taken: i64 = sqlx::query_scalar(HANDLE_TAKEN)
+        .bind(handle)
+        .bind(handle)
+        .fetch_one(executor)
+        .await?;
+    Ok(taken != 0)
+}
+
 /// A pooled connection to an existing product database answering the shared
 /// @-handle availability question. Read-only; holds no clock.
 #[derive(Clone)]
@@ -75,13 +92,9 @@ impl HandleNamespaceRead for SqliteHandleNamespace {
         &self,
         handle: &ParticipantHandle,
     ) -> Result<bool, PersistenceFailure> {
-        let taken: i64 = sqlx::query_scalar(HANDLE_TAKEN)
-            .bind(handle.as_str())
-            .bind(handle.as_str())
-            .fetch_one(&self.pool)
+        handle_taken(&self.pool, handle.as_str())
             .await
-            .map_err(PersistenceFailure::from_source)?;
-        Ok(taken != 0)
+            .map_err(PersistenceFailure::from_source)
     }
 }
 
