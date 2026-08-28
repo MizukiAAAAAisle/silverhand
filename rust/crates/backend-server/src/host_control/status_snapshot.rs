@@ -45,42 +45,12 @@ use super::wire_number::js_safe_integer;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct StatusSnapshotRequest {
-    custody: StatusSnapshotCustody,
-}
-
-enum StatusSnapshotCustody {
-    Resolved(HostDataPlaneCustody),
-    Expected {
-        host: HostId,
-        instance: DaemonInstanceId,
-    },
+    custody: HostDataPlaneCustody,
 }
 
 impl StatusSnapshotRequest {
     pub fn new(custody: HostDataPlaneCustody) -> Self {
-        Self {
-            custody: StatusSnapshotCustody::Resolved(custody),
-        }
-    }
-
-    pub(crate) fn expected(host: HostId, instance: DaemonInstanceId) -> Self {
-        Self {
-            custody: StatusSnapshotCustody::Expected { host, instance },
-        }
-    }
-
-    pub(crate) fn host(&self) -> &HostId {
-        match &self.custody {
-            StatusSnapshotCustody::Resolved(custody) => custody.host(),
-            StatusSnapshotCustody::Expected { host, .. } => host,
-        }
-    }
-
-    pub(crate) fn daemon_instance(&self) -> &DaemonInstanceId {
-        match &self.custody {
-            StatusSnapshotCustody::Resolved(custody) => custody.daemon_instance(),
-            StatusSnapshotCustody::Expected { instance, .. } => instance,
-        }
+        Self { custody }
     }
 }
 
@@ -225,9 +195,7 @@ pub async fn probe(
     dispatch: &OwningHostDataPlane,
     request: StatusSnapshotRequest,
 ) -> StatusSnapshotOutcome {
-    let StatusSnapshotCustody::Resolved(custody) = &request.custody else {
-        return StatusSnapshotOutcome::TransportContractViolation;
-    };
+    let custody = &request.custody;
     let answer = match dispatch
         .dispatch(HostDataPlaneRequest {
             custody: custody.clone(),

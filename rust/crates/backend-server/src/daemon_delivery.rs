@@ -838,20 +838,16 @@ impl DaemonCustody for OwningHostDataPlane {
 
     fn probe_status<'a>(
         &'a self,
-        request: StatusSnapshotRequest,
+        host: HostId,
+        custody: AttachedStatusCustody,
     ) -> Pin<Box<dyn Future<Output = StatusSnapshotOutcome> + Send + 'a>> {
-        let host = request.host().clone();
-        let instance = request.daemon_instance().clone();
         Box::pin(async move {
-            match self.resolve(&host) {
-                Ok(Some(custody)) if custody.daemon_instance() == &instance => {
-                    status_snapshot::probe(self, StatusSnapshotRequest::new(custody)).await
-                }
-                Ok(_) => StatusSnapshotOutcome::Disconnected,
-                Err(_) => StatusSnapshotOutcome::Unreachable(
-                    crate::host_control::status_snapshot::UnreachableReason::DaemonUnreachable,
-                ),
-            }
+            let custody = HostDataPlaneCustody {
+                host,
+                instance: custody.daemon_instance,
+                connection_id: custody.connection_id,
+            };
+            status_snapshot::probe(self, StatusSnapshotRequest::new(custody)).await
         })
     }
 }
@@ -1178,6 +1174,78 @@ struct CommandRequest {
 
 fn command_expired_before_send(command: &CommandRequest) -> bool {
     command.response.is_closed() || Instant::now() >= command.deadline
+}
+
+trait CommandWireSink {
+    async fn send(&mut self, message: Message, deadline: Instant) -> InterruptibleSend;
+}
+
+enum DequeuedCommandSend {
+    Skipped,
+    Sent {
+        id: String,
+        kind: &'static str,
+        deadline: Instant,
+        response: oneshot::Sender<Result<Value, CommandDispatchError>>,
+    },
+    Terminate,
+    Close(ConnectionClose),
+}
+
+/// The sole dequeue-to-wire decision for a business command. The caller has
+/// removed `command` from the FIFO, but this function alone decides whether it is
+/// still admissible at the wire boundary. Tests drive the same branch through a
+/// controlled sink, so removing the expiry/cancellation gate makes a late command
+/// observable as a sink write.
+async fn send_dequeued_command<S: CommandWireSink>(
+    command: CommandRequest,
+    next_command: &mut u64,
+    sink: &mut S,
+) -> DequeuedCommandSend {
+    if command_expired_before_send(&command) {
+        let _ = command.response.send(Err(CommandDispatchError::TimedOut));
+        return DequeuedCommandSend::Skipped;
+    }
+    *next_command = match next_command.checked_add(1) {
+        Some(next) => next,
+        None => {
+            let _ = command
+                .response
+                .send(Err(CommandDispatchError::ProvenNotDispatched));
+            return DequeuedCommandSend::Skipped;
+        }
+    };
+    let id = format!("rust-daemon-{next_command}");
+    let frame = json!({
+        "direction": "server_to_daemon",
+        "type": "command",
+        "id": id,
+        "kind": command.kind,
+        "params": command.params,
+    });
+    match sink
+        .send(Message::Text(frame.to_string().into()), command.deadline)
+        .await
+    {
+        InterruptibleSend::Sent => DequeuedCommandSend::Sent {
+            id,
+            kind: command.kind,
+            deadline: command.deadline,
+            response: command.response,
+        },
+        InterruptibleSend::Expired => {
+            let _ = command.response.send(Err(CommandDispatchError::TimedOut));
+            DequeuedCommandSend::Terminate
+        }
+        InterruptibleSend::TransportFailed | InterruptibleSend::Terminated => {
+            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
+            DequeuedCommandSend::Terminate
+        }
+        InterruptibleSend::Close(requested) => {
+            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
+            DequeuedCommandSend::Close(requested)
+        }
+    }
 }
 
 type PendingCommand = (
@@ -2090,6 +2158,25 @@ async fn send_command_interruptibly(
     }
 }
 
+struct WebSocketCommandSink<'a> {
+    socket: &'a mut WebSocket,
+    close: &'a mut watch::Receiver<Option<ConnectionClose>>,
+    connection_id: &'a str,
+}
+
+impl CommandWireSink for WebSocketCommandSink<'_> {
+    async fn send(&mut self, message: Message, deadline: Instant) -> InterruptibleSend {
+        send_command_interruptibly(
+            self.socket,
+            self.close,
+            self.connection_id,
+            message,
+            deadline,
+        )
+        .await
+    }
+}
+
 async fn send_connection_close(socket: &mut WebSocket, close: ConnectionClose) {
     let _ = socket
         .send(Message::Close(Some(CloseFrame {
@@ -2210,58 +2297,30 @@ async fn connection<C, D, H>(
                     break;
                 }
                 ConnectionInput::Control(ConnectionControl::Command(command)) if compatible.is_some() => {
-                    if command_expired_before_send(&command) {
-                        let _ = command.response.send(Err(CommandDispatchError::TimedOut));
-                        continue;
-                    }
-                    next_command = match next_command.checked_add(1) {
-                        Some(next) => next,
-                        None => {
-                            let _ = command.response.send(Err(CommandDispatchError::ProvenNotDispatched));
-                            continue;
-                        }
+                    let mut sink = WebSocketCommandSink {
+                        socket: &mut socket,
+                        close: &mut close,
+                        connection_id: &connection_id,
                     };
-                    let id = format!("rust-daemon-{next_command}");
-                    let frame = json!({
-                        "direction": "server_to_daemon",
-                        "type": "command",
-                        "id": id,
-                        "kind": command.kind,
-                        "params": command.params,
-                    });
-                    match send_command_interruptibly(
-                        &mut socket,
-                        &mut close,
-                        &connection_id,
-                        Message::Text(frame.to_string().into()),
-                        command.deadline,
-                    ).await {
-                        InterruptibleSend::Sent => {}
-                        InterruptibleSend::Expired => {
-                            let _ = command.response.send(Err(CommandDispatchError::TimedOut));
-                            break;
+                    let sent = send_dequeued_command(command, &mut next_command, &mut sink).await;
+                    let (id, kind, deadline, response) = match sent {
+                        DequeuedCommandSend::Skipped => continue,
+                        DequeuedCommandSend::Sent { id, kind, deadline, response } => {
+                            (id, kind, deadline, response)
                         }
-                        InterruptibleSend::TransportFailed => {
-                            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
-                            break;
-                        }
-                        InterruptibleSend::Close(requested) => {
-                            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
+                        DequeuedCommandSend::Terminate => break,
+                        DequeuedCommandSend::Close(requested) => {
                             send_connection_close(&mut socket, requested).await;
                             break;
                         }
-                        InterruptibleSend::Terminated => {
-                            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
-                            break;
-                        }
-                    }
+                    };
                     let timeout_id = id.clone();
                     let timeout_sender = timeout_control.clone();
                     tokio::spawn(async move {
-                        tokio::time::sleep_until(command.deadline).await;
+                        tokio::time::sleep_until(deadline).await;
                         let _ = timeout_sender.send(timeout_id);
                     });
-                    pending.insert(id, (command.kind, command.response));
+                    pending.insert(id, (kind, response));
                 }
                 ConnectionInput::Control(ConnectionControl::Command(command)) => {
                     let _ = command.response.send(Err(CommandDispatchError::ProvenNotDispatched));
@@ -3841,8 +3900,33 @@ mod tests {
 
     use super::*;
 
+    struct ControlledCommandSink {
+        entered_first_write: Arc<Notify>,
+        release_first_write: Arc<Notify>,
+        frames: Arc<Mutex<Vec<Value>>>,
+        sends: usize,
+    }
+
+    impl CommandWireSink for ControlledCommandSink {
+        async fn send(&mut self, message: Message, _deadline: Instant) -> InterruptibleSend {
+            self.sends += 1;
+            if self.sends == 1 {
+                self.entered_first_write.notify_one();
+                self.release_first_write.notified().await;
+            }
+            let Message::Text(frame) = message else {
+                panic!("business command sink received a non-text frame");
+            };
+            self.frames
+                .lock()
+                .unwrap()
+                .push(serde_json::from_str(&frame).unwrap());
+            InterruptibleSend::Sent
+        }
+    }
+
     #[tokio::test(start_paused = true)]
-    async fn queued_command_budget_starts_at_admission_and_cancellation_prevents_late_send() {
+    async fn production_dequeue_to_wire_gate_drops_a_queued_set_after_its_budget_expires() {
         let (commands, mut receive) = mpsc::channel(32);
         let attachment = DaemonAttachment {
             host_id: "host-1".to_owned(),
@@ -3852,16 +3936,48 @@ mod tests {
             commands,
         };
 
+        let entered_first_write = Arc::new(Notify::new());
+        let release_first_write = Arc::new(Notify::new());
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let wire = tokio::spawn({
+            let entered_first_write = Arc::clone(&entered_first_write);
+            let release_first_write = Arc::clone(&release_first_write);
+            let frames = Arc::clone(&frames);
+            async move {
+                let mut sink = ControlledCommandSink {
+                    entered_first_write,
+                    release_first_write,
+                    frames,
+                    sends: 0,
+                };
+                let mut next_command = 0;
+                let mut pending_responses = Vec::new();
+                for _ in 0..2 {
+                    let command = match receive.recv().await.unwrap() {
+                        ConnectionControl::Command(command) => command,
+                        ConnectionControl::Hydrated(_) => panic!("expected command"),
+                    };
+                    match send_dequeued_command(command, &mut next_command, &mut sink).await {
+                        DequeuedCommandSend::Skipped => {}
+                        DequeuedCommandSend::Sent { response, .. } => {
+                            pending_responses.push(response);
+                        }
+                        DequeuedCommandSend::Terminate | DequeuedCommandSend::Close(_) => {
+                            panic!("controlled sink cannot terminate the command loop")
+                        }
+                    }
+                }
+                pending_responses
+            }
+        });
+
         let first_attachment = attachment.clone();
         let first = tokio::spawn(async move {
             first_attachment
                 .command("host_status", json!({}), Duration::from_secs(60))
                 .await
         });
-        let blocked_write = match receive.recv().await.unwrap() {
-            ConnectionControl::Command(command) => command,
-            ConnectionControl::Hydrated(_) => panic!("expected command"),
-        };
+        entered_first_write.notified().await;
 
         let second_attachment = attachment.clone();
         let second = tokio::spawn(async move {
@@ -3880,15 +3996,17 @@ mod tests {
             Err(CommandDispatchError::TimedOut)
         ));
 
-        // Releasing the stalled first write lets the FIFO advance. The second
-        // request is already expired and its receiver is cancelled, so the exact
-        // production pre-wire gate discards it rather than emitting a late SET.
-        drop(blocked_write);
-        let late = match receive.recv().await.unwrap() {
-            ConnectionControl::Command(command) => command,
-            ConnectionControl::Hydrated(_) => panic!("expected command"),
-        };
-        assert!(command_expired_before_send(&late));
+        // The controlled sink is the socket-write seam used by the same production
+        // dequeue function. Once the first write resumes, the late SET is dequeued
+        // but must be rejected before this sink can observe it. Removing the
+        // production expiry/cancellation branch records a second frame and kills the
+        // assertion below.
+        release_first_write.notify_one();
+        let pending_responses = wire.await.unwrap();
+        assert_eq!(pending_responses.len(), 1);
+        let frames = frames.lock().unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["kind"], "host_status");
         first.abort();
     }
 

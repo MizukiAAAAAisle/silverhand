@@ -53,9 +53,7 @@ use std::{
 use silverhand_backend_core::identity::{AgentId, DaemonInstanceId, HostId};
 use tokio::time::Instant;
 
-use crate::host_control::status_snapshot::{
-    StatusSnapshot, StatusSnapshotOutcome, StatusSnapshotRequest,
-};
+use crate::host_control::status_snapshot::{StatusSnapshot, StatusSnapshotOutcome};
 
 /// The deployed ladder. Six attempts, five waits, ~48s of patience, and then this
 /// custody stays unseeded for the rest of its connection generation: a bounded
@@ -93,7 +91,8 @@ pub(crate) trait DaemonCustody: Send + Sync {
     /// attachment.
     fn probe_status<'a>(
         &'a self,
-        request: StatusSnapshotRequest,
+        host: HostId,
+        custody: AttachedStatusCustody,
     ) -> Pin<Box<dyn Future<Output = StatusSnapshotOutcome> + Send + 'a>>;
 }
 
@@ -336,6 +335,13 @@ struct AttemptGuard {
 }
 
 impl AttemptGuard {
+    fn custody(&self) -> AttachedStatusCustody {
+        AttachedStatusCustody {
+            daemon_instance: self.instance.clone(),
+            connection_id: self.connection_id.clone(),
+        }
+    }
+
     /// Clears this attempt's claim in an already-locked store and hands back the entry
     /// it belongs to, or nothing at all if the claim is no longer this attempt's.
     fn release_in<'a>(
@@ -523,12 +529,10 @@ impl HostStatusSeeds {
             Admission::Settled(attempt) => return Ok(attempt),
             Admission::Probe(guard) => guard,
         };
+        let admitted_custody = guard.custody();
         let outcome = self
             .custody
-            .probe_status(StatusSnapshotRequest::expected(
-                host.clone(),
-                instance.clone(),
-            ))
+            .probe_status(host.clone(), admitted_custody)
             .await;
         self.settle(host, instance, guard, outcome)
     }
@@ -782,14 +786,17 @@ mod tests {
 
         fn probe_status<'a>(
             &'a self,
-            request: StatusSnapshotRequest,
+            host: HostId,
+            custody: AttachedStatusCustody,
         ) -> Pin<Box<dyn Future<Output = StatusSnapshotOutcome> + Send + 'a>> {
             Box::pin(async move {
-                let instance = request.daemon_instance().clone();
-                self.frames
-                    .lock()
-                    .unwrap()
-                    .push((request.host().clone(), instance.clone()));
+                let instance = custody.daemon_instance;
+                if self.attached.lock().unwrap().as_ref() != Some(&instance)
+                    || self.connection.lock().unwrap().as_ref() != Some(&custody.connection_id)
+                {
+                    return StatusSnapshotOutcome::Disconnected;
+                }
+                self.frames.lock().unwrap().push((host, instance.clone()));
                 // Bounded on purpose. A frame that should never have left is sent at a
                 // custody whose hold no test releases, and an unbounded spin would
                 // report that as a hung suite rather than as the defect it is. The
@@ -1082,6 +1089,36 @@ mod tests {
             Ok(SeedAttempt::Sealed)
         );
         assert_eq!(seeded(seeds.read(&host()).unwrap()).os, "generation-b");
+    }
+
+    #[tokio::test]
+    async fn same_instance_replacement_after_admission_cannot_receive_the_old_attempts_frame() {
+        let (seeds, daemon) = seeds(Some("instance-1"));
+        let instance = instance_id("instance-1");
+
+        // Pause the real attempt sequence at its exact seam: admission already
+        // captured connection A, but no probe future has been created or polled.
+        let guard = admitted(seeds.admit(&host(), &instance, None).unwrap());
+        assert_eq!(guard.connection_id, "connection:instance-1");
+
+        // The same daemon process reconnects on connection B inside that window.
+        // The probe must consume A's captured custody, not resolve the host again.
+        daemon.set_generation("instance-1", "connection-b");
+        let outcome = seeds.custody.probe_status(host(), guard.custody()).await;
+        assert!(matches!(outcome, StatusSnapshotOutcome::Disconnected));
+        assert_eq!(daemon.frames(), 0, "connection B received the old attempt");
+        assert_eq!(
+            seeds.settle(&host(), &instance, guard, outcome),
+            Ok(SeedAttempt::Superseded)
+        );
+
+        // B remains silent until its own attach chain admits a fresh attempt.
+        daemon.answer("instance-1", answered("instance-1"), WhenServed::Unchanged);
+        assert_eq!(
+            seeds.seed_on_attach(&host(), &instance).await,
+            Ok(SeedAttempt::Sealed)
+        );
+        assert_eq!(daemon.frames(), 1);
     }
 
     #[tokio::test]
