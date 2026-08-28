@@ -1,20 +1,23 @@
-//! SQLite adapter for the canonical `agents`-row tuning write behind
-//! `PATCH /api/agents/{id}`.
+//! SQLite adapter for the canonical, capability-NEUTRAL `agents`-row write behind the
+//! public agent-lifecycle routes (`PATCH /api/agents/{id}` today; avatar and
+//! internal-profile next).
 //!
 //! Like the other write stores, this is a **pure consumer** of an existing product
 //! database: it opens a pool against a schema that already exists and migrates or
-//! seeds nothing. It owns no product *rules* — the runtime tuning gate lives in
-//! [`silverhand_backend_core::agent_profile_write::admit_public_tuning_edit`] and
-//! there is only one copy of it. This port is where that gate is read against the
-//! fact it will write — it takes the RAW [`AgentTuningEdit`] request and, inside its
-//! own write lock, reads the LOCKED current `runtime`/`model`/`reasoning_effort` to
-//! decide WHETHER to write — but it does NOT mint the product verdict. A verdict is
-//! the domain's to derive: this adapter reports only DB-observable WITNESSES (the
-//! before-image it read, and the committed row on a write), and the core use case
-//! replays the same gate against that witness. Reading under the lock makes the fact
-//! the gate judged the same fact the row commits, so two concurrent PATCHes can never
-//! compose an illegal final runtime state; reporting a witness (not a verdict) keeps a
-//! buggy adapter from fabricating a refusal the core cannot replay.
+//! seeds nothing. It owns no product *rules* — this port names no capability's gate.
+//! Inside its own write lock it reads the LOCKED current `runtime`/`model`/
+//! `reasoning_effort` into an identity-bound before-image and hands it to the
+//! caller-supplied DECISION closure, which decides WHETHER to write: the public tuning
+//! route injects
+//! [`silverhand_backend_core::agent_profile_write::admit_public_tuning_edit`] (the one
+//! copy of the runtime tuning gate) against the locked before-context. The adapter does
+//! NOT mint the product verdict. A verdict is the domain's to derive: this adapter
+//! reports only DB-observable WITNESSES (the before-image it read, and the committed row
+//! on a write), and the core use case replays the same decision against that witness.
+//! Reading under the lock makes the fact the decision judged the same fact the row
+//! commits, so two concurrent PATCHes can never compose an illegal final runtime state;
+//! reporting a witness (not a verdict) keeps a buggy adapter from fabricating a refusal
+//! the core cannot replay.
 //!
 //! The whole write is one `BEGIN IMMEDIATE` transaction. First a locked
 //! `SELECT id, runtime, model, reasoning_effort WHERE id = ?`: no row →
@@ -23,14 +26,13 @@
 //! witness binds its `agent_id` to the SELECTED row's OWN `id` column — decoded through
 //! the domain's fallible parser, never back-filled from the query parameter — so the
 //! core can confirm the witness was read for the request subject before it replays the
-//! rule. Then `admit_public_tuning_edit` against that locked context decides only the
-//! branch: a refusal returns [`AgentProfileRowWrite::Unchanged`] carrying that
-//! before-image, with zero `UPDATE` — NOT the rejection itself, which the core
-//! re-derives; an admitted edit drives the `UPDATE`. Only the columns the admitted edit names are placed in
-//! the `SET` clause — a `Leave` is omitted, a `Clear` writes `NULL`, a `Set` binds the
-//! value — and `updated_at` is always stamped to `now_ms`, so a committed tuning write
-//! always bumps the row's instant (matching `agent-service.ts`'s always-touch update).
-//! The committed columns are projected from the write's OWN `RETURNING` row — never a
+//! decision. Then the injected `decide(&before)` chooses the branch: `None` returns
+//! [`AgentProfileRowWrite::Unchanged`] carrying that before-image, with zero `UPDATE`;
+//! `Some(edit)` drives the `UPDATE`. Only the columns the admitted edit names are placed
+//! in the `SET` clause — a `Leave` is omitted, a `Clear` writes `NULL`, a `Set` binds the
+//! value — and `updated_at` is always stamped to `now_ms`, so a committed write always
+//! bumps the row's instant (matching `agent-service.ts`'s always-touch update). The
+//! committed columns are projected from the write's OWN `RETURNING` row — never a
 //! post-commit re-read — and returned alongside the before-image as
 //! [`AgentProfileRowWrite::Committed`], so the core replay can re-derive the admitted
 //! intent and seal the fact this write produced.
@@ -44,8 +46,8 @@ use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
     agent_profile_write::{
-        AgentProfileRowWrite, AgentProfileWriteUnitOfWork, AgentTuningBefore, AgentTuningContext,
-        AgentTuningEdit, CommittedAgentRow, FieldEdit, RequiredEdit, admit_public_tuning_edit,
+        AdmittedAgentProfileEdit, AgentProfileRowWrite, AgentProfileWriteUnitOfWork,
+        AgentRowBefore, AgentTuningContext, CommittedAgentRow, FieldEdit, RequiredEdit,
     },
     agents::runtime::RuntimeKind,
     identity::AgentId,
@@ -144,12 +146,15 @@ impl SqliteAgentProfileWrite {
         Self { pool }
     }
 
-    async fn write_profile_edit(
+    async fn write_row<D>(
         &self,
         agent: &AgentId,
-        request: &AgentTuningEdit,
+        decide: D,
         now_ms: i64,
-    ) -> Result<AgentProfileRowWrite, ProfileWriteFailure> {
+    ) -> Result<AgentProfileRowWrite, ProfileWriteFailure>
+    where
+        D: FnOnce(&AgentRowBefore) -> Option<AdmittedAgentProfileEdit>,
+    {
         let mut tx = self.pool.begin_with(ROOT_WRITE_BEGIN).await?;
 
         // Under the write lock, read the row's CURRENT tuning state. This is both the
@@ -175,7 +180,7 @@ impl SqliteAgentProfileWrite {
         let runtime_raw: String = current.try_get("runtime")?;
         let runtime =
             RuntimeKind::parse(&runtime_raw).ok_or(CorruptStoredRuntime { value: runtime_raw })?;
-        let before = AgentTuningBefore {
+        let before = AgentRowBefore {
             agent_id: before_id,
             context: AgentTuningContext {
                 runtime,
@@ -184,14 +189,14 @@ impl SqliteAgentProfileWrite {
             },
         };
 
-        // Replay the ONE pure rule against the locked context to decide the branch. A
-        // rejection leaves the row untouched: no UPDATE is issued, so `updated_at` does
-        // not move. This adapter does NOT return the rejection — the product verdict is
-        // the domain's to re-derive from the before-image witness; it returns only the
-        // WITNESS it read.
-        let admitted = match admit_public_tuning_edit(&before.context, request.clone()) {
-            Ok(admitted) => admitted,
-            Err(_rejection) => {
+        // Hand the LOCKED before-image to the caller-supplied decision. The adapter
+        // names no capability's rule: `None` means the capability refuses this write, so
+        // no UPDATE is issued and `updated_at` does not move; `Some(edit)` is the sealed
+        // intent that drives the SET. This adapter never returns the product verdict —
+        // that stays the domain's to re-derive from the before-image witness.
+        let admitted = match decide(&before) {
+            Some(admitted) => admitted,
+            None => {
                 tx.commit().await?;
                 return Ok(AgentProfileRowWrite::Unchanged { before });
             }
@@ -318,13 +323,16 @@ fn decode_committed_row(row: &SqliteRow) -> Result<CommittedAgentRow, ProfileWri
 }
 
 impl AgentProfileWriteUnitOfWork for SqliteAgentProfileWrite {
-    async fn admit_and_apply_tuning_edit(
+    async fn write_agent_row<D>(
         &self,
         agent: &AgentId,
-        request: &AgentTuningEdit,
+        decide: D,
         now_ms: i64,
-    ) -> Result<AgentProfileRowWrite, PersistenceFailure> {
-        self.write_profile_edit(agent, request, now_ms)
+    ) -> Result<AgentProfileRowWrite, PersistenceFailure>
+    where
+        D: FnOnce(&AgentRowBefore) -> Option<AdmittedAgentProfileEdit> + Send,
+    {
+        self.write_row(agent, decide, now_ms)
             .await
             .map_err(PersistenceFailure::from_source)
     }
@@ -333,7 +341,28 @@ impl AgentProfileWriteUnitOfWork for SqliteAgentProfileWrite {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use silverhand_backend_core::agent_profile_write::{AgentTuningEdit, admit_public_tuning_edit};
     use sqlx::{Connection, Executor, SqliteConnection};
+
+    /// Drive the canonical writer exactly as the production PATCH route does: inject the
+    /// public-tuning decision (`admit_public_tuning_edit` against the LOCKED
+    /// before-context) as the `decide` closure. A refusal collapses to `None` (write
+    /// nothing → `Unchanged`); an admit is the sealed edit that drives the `UPDATE`.
+    async fn admit_and_apply(
+        adapter: &SqliteAgentProfileWrite,
+        agent: &AgentId,
+        request: &AgentTuningEdit,
+        now_ms: i64,
+    ) -> Result<AgentProfileRowWrite, PersistenceFailure> {
+        let request = request.clone();
+        adapter
+            .write_agent_row(
+                agent,
+                move |before| admit_public_tuning_edit(&before.context, request).ok(),
+                now_ms,
+            )
+            .await
+    }
 
     const CURRENT_SCHEMA: &str =
         include_str!("../../../../packages/backend/tests/migration-baseline/schema-current.sql");
@@ -424,8 +453,7 @@ INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, ho
             ..leave_all()
         };
 
-        let outcome = adapter
-            .admit_and_apply_tuning_edit(&agent("agent-1"), &request, 777)
+        let outcome = admit_and_apply(&adapter, &agent("agent-1"), &request, 777)
             .await
             .unwrap();
         let AgentProfileRowWrite::Committed { before, row } = outcome else {
@@ -466,8 +494,7 @@ INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, ho
             ..leave_all()
         };
 
-        let outcome = adapter
-            .admit_and_apply_tuning_edit(&agent("agent-1"), &request, 900)
+        let outcome = admit_and_apply(&adapter, &agent("agent-1"), &request, 900)
             .await
             .unwrap();
         let AgentProfileRowWrite::Committed { row, .. } = outcome else {
@@ -487,8 +514,7 @@ INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, ho
         let (_dir, adapter) = open_seeded().await;
         // An all-Leave request (the route forbids an empty body, but the adapter is
         // defensive): the SET clause is `updated_at = ?` alone.
-        let outcome = adapter
-            .admit_and_apply_tuning_edit(&agent("agent-1"), &leave_all(), 1234)
+        let outcome = admit_and_apply(&adapter, &agent("agent-1"), &leave_all(), 1234)
             .await
             .unwrap();
         let AgentProfileRowWrite::Committed { row, .. } = outcome else {
@@ -508,8 +534,7 @@ INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, ho
             fast_mode: FieldEdit::Set(false),
             ..leave_all()
         };
-        let outcome = adapter
-            .admit_and_apply_tuning_edit(&agent("agent-1"), &request, 1500)
+        let outcome = admit_and_apply(&adapter, &agent("agent-1"), &request, 1500)
             .await
             .unwrap();
         let AgentProfileRowWrite::Committed { row, .. } = outcome else {
@@ -526,8 +551,7 @@ INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, ho
             display_name: RequiredEdit::Set("Ghost".to_owned()),
             ..leave_all()
         };
-        let outcome = adapter
-            .admit_and_apply_tuning_edit(&agent("agent-missing"), &request, 2000)
+        let outcome = admit_and_apply(&adapter, &agent("agent-missing"), &request, 2000)
             .await
             .unwrap();
         assert!(matches!(outcome, AgentProfileRowWrite::NoSuchAgent));
@@ -545,17 +569,17 @@ INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, ho
         // must be re-rejected with zero UPDATE, never composing a `terra + ultra` row.
         let (_dir, adapter) = open_seeded().await;
 
-        let a = adapter
-            .admit_and_apply_tuning_edit(
-                &agent("agent-3"),
-                &AgentTuningEdit {
-                    model: FieldEdit::Set("gpt-5.6-terra".to_owned()),
-                    ..leave_all()
-                },
-                500,
-            )
-            .await
-            .unwrap();
+        let a = admit_and_apply(
+            &adapter,
+            &agent("agent-3"),
+            &AgentTuningEdit {
+                model: FieldEdit::Set("gpt-5.6-terra".to_owned()),
+                ..leave_all()
+            },
+            500,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(a, AgentProfileRowWrite::Committed { .. }),
             "A: {a:?}"
@@ -566,17 +590,17 @@ INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, ho
         assert_eq!(updated_a, 500);
 
         // The stale-admitted attacker: `ultra` was legal against `sol`.
-        let b = adapter
-            .admit_and_apply_tuning_edit(
-                &agent("agent-3"),
-                &AgentTuningEdit {
-                    reasoning_effort: FieldEdit::Set("ultra".to_owned()),
-                    ..leave_all()
-                },
-                900,
-            )
-            .await
-            .unwrap();
+        let b = admit_and_apply(
+            &adapter,
+            &agent("agent-3"),
+            &AgentTuningEdit {
+                reasoning_effort: FieldEdit::Set("ultra".to_owned()),
+                ..leave_all()
+            },
+            900,
+        )
+        .await
+        .unwrap();
         // Refused under the lock → the adapter writes nothing and reports the LOCKED
         // before-image it read (codex + `terra` + `high`), NOT a verdict, bound to the
         // agent id decoded from the SELECTED row. The domain replays the rule against

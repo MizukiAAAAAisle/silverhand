@@ -507,9 +507,8 @@ mod tests {
         agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
         agent_lifecycle::MaterializationStatus,
         agent_profile_write::{
-            AgentProfileRowWrite, AgentProfileWriteUnitOfWork, AgentTuningBefore,
-            AgentTuningContext, CommittedAgentRow, FieldEdit, RequiredEdit,
-            admit_public_tuning_edit,
+            AdmittedAgentProfileEdit, AgentProfileRowWrite, AgentProfileWriteUnitOfWork,
+            AgentRowBefore, AgentTuningContext, CommittedAgentRow, FieldEdit, RequiredEdit,
         },
         agents::runtime::RuntimeKind,
         identity::{AgentId, UserId},
@@ -586,15 +585,15 @@ mod tests {
         ReadOutcome::Present(Box::new(facts))
     }
 
-    /// A write unit of work that models the real adapter: it admits the RAW request
-    /// UNDER the lock against a configured current tuning `context` (defaulting to the
-    /// codex/`gpt-5.6-sol` full state) to decide the branch, then reports only the
-    /// WITNESSES the real port does — the before-image it read, plus, on an admit, a
-    /// base row sealed so every touched column, the id, and `updated_at = now` match the
-    /// core replay's seal. It never returns a product verdict; the core re-derives that
-    /// from the before-image. The authoritative under-lock enforcement (and its
-    /// concurrent falsifier) lives in the sqlite adapter's tests; here we only need a
-    /// faithful outcome to check the handler's response mapping.
+    /// A write unit of work that models the real adapter: under the lock it hands the
+    /// configured current tuning `context` (defaulting to the codex/`gpt-5.6-sol` full
+    /// state) to the core-supplied DECISION to choose the branch, then reports only the
+    /// WITNESSES the real port does — the before-image it read, plus, on an admit, a base
+    /// row sealed so every touched column, the id, and `updated_at = now` match the core
+    /// replay's seal. It never returns a product verdict; the core re-derives that from
+    /// the before-image. The authoritative under-lock enforcement (and its concurrent
+    /// falsifier) lives in the sqlite adapter's tests; here we only need a faithful
+    /// outcome to check the handler's response mapping.
     #[derive(Clone)]
     struct SealingWrites {
         outcome: WriteOutcome,
@@ -618,7 +617,7 @@ mod tests {
             }
         }
 
-        /// Set the locked current context the fake admits against — e.g. a claude agent
+        /// Set the locked current context the fake decides against — e.g. a claude agent
         /// so a `fast_mode` edit is re-rejected under the lock.
         fn with_context(mut self, context: AgentTuningContext) -> Self {
             self.context = context;
@@ -627,12 +626,15 @@ mod tests {
     }
 
     impl AgentProfileWriteUnitOfWork for SealingWrites {
-        async fn admit_and_apply_tuning_edit(
+        async fn write_agent_row<D>(
             &self,
             agent: &AgentId,
-            request: &AgentTuningEdit,
+            decide: D,
             now_ms: i64,
-        ) -> Result<AgentProfileRowWrite, PersistenceFailure> {
+        ) -> Result<AgentProfileRowWrite, PersistenceFailure>
+        where
+            D: FnOnce(&AgentRowBefore) -> Option<AdmittedAgentProfileEdit> + Send,
+        {
             self.calls.fetch_add(1, SeqCst);
             match self.outcome {
                 WriteOutcome::NoSuchAgent => Ok(AgentProfileRowWrite::NoSuchAgent),
@@ -640,18 +642,18 @@ mod tests {
                     "write boom",
                 ))),
                 WriteOutcome::Commits => {
-                    // The lock is held: admit against the current context to decide the
-                    // branch, then report only the WITNESS — the before-image, plus the
-                    // committed row on an admit. The verdict itself is the core's to
-                    // re-derive from `before`; this fake never returns it.
-                    match admit_public_tuning_edit(&self.context, request.clone()) {
-                        Err(_rejection) => Ok(AgentProfileRowWrite::Unchanged {
-                            before: AgentTuningBefore {
-                                agent_id: agent.clone(),
-                                context: self.context.clone(),
-                            },
-                        }),
-                        Ok(edit) => {
+                    // The lock is held: hand the configured before-image to the
+                    // core-supplied decision to choose the branch, then report only the
+                    // WITNESS — the before-image, plus the committed row on an admit. The
+                    // verdict itself is the core's to re-derive from `before`; this fake
+                    // never returns it.
+                    let before = AgentRowBefore {
+                        agent_id: agent.clone(),
+                        context: self.context.clone(),
+                    };
+                    match decide(&before) {
+                        None => Ok(AgentProfileRowWrite::Unchanged { before }),
+                        Some(edit) => {
                             let display_name = match edit.display_name() {
                                 RequiredEdit::Leave => "Base Name".to_owned(),
                                 RequiredEdit::Set(value) => value.clone(),
@@ -665,13 +667,7 @@ mod tests {
                                 fast_mode: apply_bool(edit.fast_mode(), Some(true)),
                                 updated_at: now_ms,
                             };
-                            Ok(AgentProfileRowWrite::Committed {
-                                before: AgentTuningBefore {
-                                    agent_id: agent.clone(),
-                                    context: self.context.clone(),
-                                },
-                                row,
-                            })
+                            Ok(AgentProfileRowWrite::Committed { before, row })
                         }
                     }
                 }

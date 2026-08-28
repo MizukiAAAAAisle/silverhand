@@ -16,10 +16,14 @@
 //! That scoping does NOT come from a wide, freely constructible edit struct — that
 //! would let any caller hand-craft a write that silently changes `model` alongside an
 //! avatar. It comes from a per-capability REQUEST type admitted UNDER THE WRITE LOCK:
-//! the public tuning route hands its [`AgentTuningEdit`] (which can express only the
-//! tuning columns) to the port, and the port mints the opaque
-//! [`AdmittedAgentProfileEdit`] — the only thing the `SET` builder reads — inside its
-//! own write transaction, never before. A caller cannot express a column its
+//! the canonical writer ([`AgentProfileWriteUnitOfWork::write_agent_row`]) reads the
+//! row's before-image and hands it to a caller-supplied DECISION closure; the public
+//! tuning route's decision admits its [`AgentTuningEdit`] (which can express only the
+//! tuning columns) via [`admit_public_tuning_edit`], minting the opaque
+//! [`AdmittedAgentProfileEdit`] — the only thing the `SET` builder reads — against the
+//! locked before-context, never before. The writer names no capability's rule, so no
+//! second capability-specific writer is needed: avatar and internal-profile supply
+//! their own decisions to the SAME port. A caller cannot express a column its
 //! capability may not touch (its request type has no such field). Separately, that the
 //! production adapter writes ONLY the columns the sealed edit names — never a stray
 //! `Leave` column — is a property of the adapter's `SET` builder, proven by the SQLite
@@ -306,7 +310,7 @@ pub struct CommittedAgentRow {
 /// adapter cannot pass agent-B's current state as agent-A's before-image (minting a
 /// refusal that is really B's, or laundering A's write past B's legality).
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AgentTuningBefore {
+pub struct AgentRowBefore {
     pub agent_id: AgentId,
     pub context: AgentTuningContext,
 }
@@ -329,7 +333,7 @@ pub enum AgentProfileRowWrite {
     /// `before.agent_id` to the subject) replays the rule against `before.context`: a
     /// refusal mints the typed product `400`; anything the rule would ADMIT means a
     /// warranted write was withheld — an untrustworthy fact.
-    Unchanged { before: AgentTuningBefore },
+    Unchanged { before: AgentRowBefore },
     /// The row was updated and `updated_at` stamped to `now_ms`. Carries the
     /// identity-bound before-image the port judged against AND the committed columns —
     /// both WITNESSES. The domain binds `before.agent_id` to the subject, replays the
@@ -337,30 +341,43 @@ pub enum AgentProfileRowWrite {
     /// the admitted intent it seals `row` against; the adapter never hands over an
     /// admitted intent of its own.
     Committed {
-        before: AgentTuningBefore,
+        before: AgentRowBefore,
         row: CommittedAgentRow,
     },
 }
 
-/// The atomic `agents`-row tuning write. The adapter, under ONE write lock: reads the
-/// row's current runtime/model/effort into a before-image, re-admits `request` against
-/// it through the canonical [`admit_public_tuning_edit`] to decide WHETHER to write
-/// (a refusal writes nothing), then, on an admit, applies the `SET` columns, stamps
-/// `updated_at = now_ms`, and returns the committed columns via `RETURNING`. It reports
-/// only WITNESSES — [`AgentProfileRowWrite::Unchanged`] carries the before-image it read,
-/// [`AgentProfileRowWrite::Committed`] carries that before-image and the committed row —
-/// never the product verdict and never an admitted intent of its own. The domain
-/// re-derives both by replaying the rule against the witnessed before-image, so a buggy
-/// or lying adapter can neither mint a refusal nor seal an unwarranted write. Because the
-/// port takes the RAW request, there is nothing a caller could admit against a stale
-/// snapshot; the only legality read is the one taken inside the lock.
+/// The atomic, capability-NEUTRAL `agents`-row write. This is the SINGLE canonical
+/// writer for the `agents` row: it names no capability's rule of its own. Under ONE
+/// write lock it reads the row's current runtime/model/effort into an identity-bound
+/// before-image, hands that before-image to the caller-supplied `decide` closure, and:
+/// - `decide` returns `None` → the capability refuses this write → nothing is written
+///   and [`AgentProfileRowWrite::Unchanged`] carries the before-image it read;
+/// - `decide` returns `Some(edit)` → the sealed [`AdmittedAgentProfileEdit`] is applied
+///   (only its named columns), `updated_at` is stamped to `now_ms`, and the committed
+///   columns come back via `RETURNING` in [`AgentProfileRowWrite::Committed`].
+///
+/// Each capability supplies its own decision — public tuning replays
+/// [`admit_public_tuning_edit`] against the locked before-context (today's only caller),
+/// avatar/internal-profile will supply theirs — so no second capability-specific writer
+/// is ever needed. The decision runs INSIDE the lock, against the row the write lands
+/// on, closing the tuning TOCTOU window: there is no pre-read snapshot a caller could
+/// have admitted against.
+///
+/// The port still reports only WITNESSES — never the product verdict and never an
+/// admitted intent of its own; the sealed edit `decide` yields is the caller's, minted
+/// by a core admission fn the adapter cannot invoke to fabricate one. The domain
+/// re-derives both the verdict and the sealing intent by replaying the same decision
+/// against the witnessed before-image (see [`update_agent_profile_and_announce`]), so a
+/// buggy or lying adapter can neither mint a refusal nor seal an unwarranted write.
 pub trait AgentProfileWriteUnitOfWork: Clone + Send + Sync + 'static {
-    fn admit_and_apply_tuning_edit(
+    fn write_agent_row<D>(
         &self,
         agent: &AgentId,
-        request: &AgentTuningEdit,
+        decide: D,
         now_ms: i64,
-    ) -> impl Future<Output = Result<AgentProfileRowWrite, PersistenceFailure>> + Send;
+    ) -> impl Future<Output = Result<AgentProfileRowWrite, PersistenceFailure>> + Send
+    where
+        D: FnOnce(&AgentRowBefore) -> Option<AdmittedAgentProfileEdit> + Send;
 }
 
 // ===========================================================================
@@ -490,8 +507,17 @@ where
     W: AgentProfileWriteUnitOfWork,
     S: AgentChangedSink,
 {
+    // The write is capability-neutral; PUBLIC TUNING is the decision we inject: replay
+    // the canonical admission against the before-image the port reads UNDER its lock, so
+    // the verdict is always against the row the write lands on. `.ok()` collapses a
+    // refusal to `None` (write nothing); the domain re-derives the typed 400 below.
+    let decision_request = request.clone();
     match writes
-        .admit_and_apply_tuning_edit(subject, request, now_ms)
+        .write_agent_row(
+            subject,
+            move |before| admit_public_tuning_edit(&before.context, decision_request).ok(),
+            now_ms,
+        )
         .await?
     {
         AgentProfileRowWrite::NoSuchAgent => Ok(AgentProfileUpdateOutcome::NoSuchAgent),
@@ -780,12 +806,18 @@ mod tests {
     #[derive(Clone)]
     struct FakeWrites(AgentProfileRowWrite);
     impl AgentProfileWriteUnitOfWork for FakeWrites {
-        async fn admit_and_apply_tuning_edit(
+        async fn write_agent_row<D>(
             &self,
             _agent: &AgentId,
-            _request: &AgentTuningEdit,
+            _decide: D,
             _now_ms: i64,
-        ) -> Result<AgentProfileRowWrite, PersistenceFailure> {
+        ) -> Result<AgentProfileRowWrite, PersistenceFailure>
+        where
+            D: FnOnce(&AgentRowBefore) -> Option<AdmittedAgentProfileEdit> + Send,
+        {
+            // The liar/witness tests supply the raw outcome directly; the decision is
+            // irrelevant here because the DOMAIN replays it against the witnessed
+            // before-image regardless of what the adapter chose.
             Ok(self.0.clone())
         }
     }
@@ -844,8 +876,8 @@ mod tests {
 
     /// A before-image witness bound to `agent()` (the default subject). The mismatch
     /// tests build one bound to a different id directly.
-    fn before(runtime: RuntimeKind) -> AgentTuningBefore {
-        AgentTuningBefore {
+    fn before(runtime: RuntimeKind) -> AgentRowBefore {
+        AgentRowBefore {
             agent_id: agent(),
             context: ctx(runtime),
         }
@@ -953,7 +985,7 @@ mod tests {
         // really the other agent's. The subject bind fires first, so the domain refuses
         // to attribute it. Zero announce. Deleting the id bind would let this mint a
         // spurious 400.
-        let before = AgentTuningBefore {
+        let before = AgentRowBefore {
             agent_id: AgentId::parse("agent-other").unwrap(),
             context: ctx(RuntimeKind::Claude),
         };
@@ -979,7 +1011,7 @@ mod tests {
         // agent, so its legality is not the subject's to borrow. The subject bind fires
         // before the seal, so the write cannot be laundered. Deleting the id bind would
         // let this seal and succeed wrongly.
-        let before = AgentTuningBefore {
+        let before = AgentRowBefore {
             agent_id: AgentId::parse("agent-other").unwrap(),
             context: ctx(RuntimeKind::Codex), // request() is legal here
         };

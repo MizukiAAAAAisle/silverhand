@@ -156,7 +156,6 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.asked.lock().unwrap().push(handle.as_str().to_owned());
             self.answer
-                .clone()
                 .map_err(|()| PersistenceFailure::from_source(io::Error::other("namespace down")))
         }
     }
