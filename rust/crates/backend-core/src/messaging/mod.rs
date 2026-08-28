@@ -69,6 +69,7 @@ mod principal;
 
 pub(crate) use crate::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 
+pub mod agent_onboarding;
 pub mod attachments;
 pub mod collaboration;
 pub mod conversation_title;

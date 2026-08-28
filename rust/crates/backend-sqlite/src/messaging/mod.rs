@@ -578,6 +578,161 @@ fn decode_direct_pair_endpoint(
     }
 }
 
+/// The ordinal allocation invariant, as one tx-composable writer: advance the
+/// conversation's global counter and read back what it reserved. Every writer that
+/// appends a message shares it — the send unit of work, a mention copy, and
+/// provisioning's onboarding message — so `(conversation, ordinal)` has exactly one
+/// allocator and cannot fork into a second grammar. A value the domain rejects is a
+/// broken database, reported with the value that broke it rather than defaulted.
+pub(crate) async fn reserve_next_seq_on(
+    conn: &mut SqliteConnection,
+    conversation: &ConversationId,
+) -> Result<MessageSeq, ReserveSeqFault> {
+    sqlx::query(RESERVE_NEXT_SEQ)
+        .bind(conversation.as_str())
+        .execute(&mut *conn)
+        .await
+        .map_err(ReserveSeqFault::Driver)?;
+    let reserved: i64 = sqlx::query_scalar(SELECT_LATEST_SEQ)
+        .bind(conversation.as_str())
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(ReserveSeqFault::Driver)?;
+    MessageSeq::try_from(reserved).map_err(ReserveSeqFault::Ordinal)
+}
+
+/// A reserve that could not complete. The two failures are kept apart because they
+/// answer to different owners: a driver error is infrastructure, an out-of-range
+/// ordinal is a broken invariant in the store's own column.
+pub(crate) enum ReserveSeqFault {
+    Driver(sqlx::Error),
+    Ordinal(InvalidSeq),
+}
+
+/// The stream-head advance invariant, as one tx-composable writer. Update-then-insert
+/// rather than upsert because the head table's uniqueness is two PARTIAL indexes,
+/// which cannot be named as a conflict target; the key compares with `IS` because the
+/// main line's head is the row whose root is NULL. Shared by every append path, so no
+/// second head writer exists to disagree.
+pub(crate) async fn bump_stream_head_on(
+    conn: &mut SqliteConnection,
+    conversation: &ConversationId,
+    thread_root: Option<&ThreadRootId>,
+    seq: MessageSeq,
+) -> Result<(), sqlx::Error> {
+    let root = thread_root.map(ThreadRootId::as_str);
+    let updated = sqlx::query(UPDATE_STREAM_HEAD)
+        .bind(seq.get())
+        .bind(conversation.as_str())
+        .bind(root)
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
+
+    if updated == 0 {
+        sqlx::query(INSERT_STREAM_HEAD)
+            .bind(conversation.as_str())
+            .bind(root)
+            .bind(seq.get())
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Append the onboarding system message as one complete invariant cluster: reserve
+/// the conversation's next ordinal, insert the row in the fixed system shape, and
+/// advance the main-line stream head — the same three facts every send writes.
+///
+/// This is provisioning's message writer, NOT a generic insert seam. The intent
+/// decides only WHERE the message lands and WHAT it says; the kind is always
+/// `system`, there is no author and no thread root, and the metadata carries only the
+/// onboarding subtype. A caller cannot reach through it to write an agent- or
+/// user-authored row, or to stamp a different subtype.
+pub(crate) async fn append_onboarding_system_message_on(
+    conn: &mut SqliteConnection,
+    intent: &messaging::agent_onboarding::OnboardingSystemMessage,
+) -> Result<(), PersistenceFailure> {
+    let seq = reserve_next_seq_on(conn, intent.conversation())
+        .await
+        .map_err(|fault| match fault {
+            ReserveSeqFault::Driver(error) => driver(error),
+            ReserveSeqFault::Ordinal(error) => {
+                PersistenceFailure::from_source(MessagingStoreError::Ordinal(error))
+            }
+        })?;
+    let metadata = serde_json::to_string(&serde_json::json!({ "subtype": intent.subtype() }))
+        .map_err(|error| {
+            PersistenceFailure::from_source(MessagingStoreError::Serialization(error))
+        })?;
+
+    sqlx::query(INSERT_MESSAGE)
+        .bind(intent.id().as_str())
+        .bind(intent.conversation().as_str())
+        .bind(FROM_KIND_SYSTEM)
+        .bind(None::<&str>)
+        .bind(None::<&str>)
+        .bind(intent.content())
+        .bind(metadata)
+        .bind(seq.get())
+        .bind(intent.created_at_ms())
+        .bind(None::<&str>)
+        .bind(None::<&str>)
+        .bind(None::<&str>)
+        .bind(None::<&str>)
+        .bind(None::<&str>)
+        .execute(&mut *conn)
+        .await
+        .map_err(driver)?;
+
+    bump_stream_head_on(conn, intent.conversation(), None, seq)
+        .await
+        .map_err(driver)?;
+    Ok(())
+}
+
+/// Open a direct pair on a caller-provided connection, composing the get-or-create mint
+/// and the identity check WITHOUT opening or committing a transaction of its own. A caller
+/// can therefore make it one step of a larger atomic unit of work — agent provisioning
+/// writes the activation flip, this direct line, and the onboarding message under a SINGLE
+/// transaction, so a dependent-write failure rolls the whole thing back. The candidate id
+/// seeds the row only if this open wins the get-or-create; `opened` is announced only on a
+/// fresh mint, exactly as [`open_direct_pair`] specifies, so `pair_created` is observable to
+/// the caller as whether the recorder captured a fact.
+pub(crate) async fn open_direct_pair_on<O: DirectPairOpenedPort>(
+    conn: &mut SqliteConnection,
+    candidate: ConversationId,
+    opened: &O,
+    participants: DirectPairParticipants,
+    now_unix_ms: i64,
+) -> Result<ConversationId, OpenDirectPairError<PersistenceFailure, O::Error>> {
+    let mut mint = ConnectionDirectPairMint { conn, candidate };
+    open_direct_pair(&mut mint, opened, participants, now_unix_ms).await
+}
+
+/// A [`DirectPairMint`] that mints on a borrowed connection using a candidate id the caller
+/// already holds, so the get-or-create runs inside the caller's transaction rather than one
+/// of its own. Unlike [`AutocommitDirectPairMint`], it never opens or commits — that is the
+/// whole point: it composes into a wider unit of work.
+struct ConnectionDirectPairMint<'connection> {
+    conn: &'connection mut SqliteConnection,
+    candidate: ConversationId,
+}
+
+impl DirectPairMint for ConnectionDirectPairMint<'_> {
+    type Error = PersistenceFailure;
+
+    async fn mint_direct_pair(
+        &mut self,
+        participants: &DirectPairParticipants,
+        now_unix_ms: i64,
+    ) -> Result<DirectPairMinted, Self::Error> {
+        mint_direct_pair_on(self.conn, self.candidate.clone(), participants, now_unix_ms)
+            .await
+            .map_err(PersistenceFailure::from_source)
+    }
+}
+
 async fn mint_direct_pair_on(
     conn: &mut SqliteConnection,
     minted: ConversationId,
@@ -1292,21 +1447,14 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         &mut self,
         conversation: &ConversationId,
     ) -> Result<MessageSeq, SendMessageError> {
-        sqlx::query(RESERVE_NEXT_SEQ)
-            .bind(conversation.as_str())
-            .execute(&mut *self.tx)
+        reserve_next_seq_on(&mut self.tx, conversation)
             .await
-            .map_err(driver)?;
-        let reserved: i64 = sqlx::query_scalar(SELECT_LATEST_SEQ)
-            .bind(conversation.as_str())
-            .fetch_one(&mut *self.tx)
-            .await
-            .map_err(driver)?;
-
-        // The column is this store's own, so a value the domain rejects is a
-        // broken database and is reported with the value that broke it.
-        MessageSeq::try_from(reserved)
-            .map_err(|error| infrastructure(MessagingStoreError::Ordinal(error)))
+            .map_err(|fault| match fault {
+                ReserveSeqFault::Driver(error) => driver(error).into(),
+                ReserveSeqFault::Ordinal(error) => {
+                    infrastructure(MessagingStoreError::Ordinal(error))
+                }
+            })
     }
 
     /// The author the message reports, resolved through the adapter's one author
@@ -1413,26 +1561,9 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
         thread_root: Option<&ThreadRootId>,
         seq: MessageSeq,
     ) -> Result<(), SendMessageError> {
-        let root = thread_root.map(ThreadRootId::as_str);
-        let updated = sqlx::query(UPDATE_STREAM_HEAD)
-            .bind(seq.get())
-            .bind(conversation.as_str())
-            .bind(root)
-            .execute(&mut *self.tx)
+        bump_stream_head_on(&mut self.tx, conversation, thread_root, seq)
             .await
-            .map_err(driver)?
-            .rows_affected();
-
-        if updated == 0 {
-            sqlx::query(INSERT_STREAM_HEAD)
-                .bind(conversation.as_str())
-                .bind(root)
-                .bind(seq.get())
-                .execute(&mut *self.tx)
-                .await
-                .map_err(driver)?;
-        }
-        Ok(())
+            .map_err(|error| driver(error).into())
     }
 
     /// Copies this message to each agent it addressed that cannot read the
@@ -2575,6 +2706,93 @@ mod tests {
             Some("5"), // SQLITE_BUSY
         );
         held.rollback().await.unwrap();
+    }
+
+    /// The onboarding writer lands one complete invariant cluster: the row is a
+    /// system message carrying only the onboarding subtype, it has no author and no
+    /// thread root, it takes the conversation's next ordinal, and the main-line
+    /// stream head advances to it. These are the same three facts every send writes,
+    /// which is why provisioning reuses this writer rather than opening a second
+    /// grammar for `(conversation, ordinal)` or for the stream head.
+    #[tokio::test]
+    async fn the_onboarding_writer_appends_one_complete_system_cluster() {
+        use silverhand_backend_core::messaging::agent_onboarding::OnboardingSystemMessage;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("onboarding.sqlite");
+        let mut conn = crate::current_schema::create_current_schema(&path).await;
+
+        let conversation = ConversationId::parse("pair-1").unwrap();
+        for statement in [
+            "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
+            "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-1', \
+             'human', 'Human', 0, 0)",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+             created_by_user_id) VALUES ('agent-1', 'alice', 'claude', 'host-1', 0, 0, 'Alice', \
+             'user-1')",
+            "INSERT INTO conversations (id, placement_kind, roster_policy, title, status, \
+             endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, created_at, \
+             updated_at) VALUES ('pair-1', 'direct_pair', 'fixed', 'DM', 'open', 'agent', \
+             'agent-1', 'human', 'user-1', 0, 0)",
+        ] {
+            sqlx::query(statement).execute(&mut conn).await.unwrap();
+        }
+
+        let intent = OnboardingSystemMessage::new(
+            conversation.clone(),
+            MessageId::parse("msg-onboard").unwrap(),
+            "welcome".to_owned(),
+            2_000,
+        );
+        append_onboarding_system_message_on(&mut conn, &intent)
+            .await
+            .unwrap();
+
+        let row = sqlx::query(
+            "SELECT from_kind, metadata, seq, created_at, content, thread_root_id, from_agent_id, \
+             from_user_id, author_id, author_name, author_display_name, cc_source_message_id \
+             FROM messages WHERE id = ?",
+        )
+        .bind("msg-onboard")
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+
+        assert_eq!(row.get::<String, _>("from_kind"), "system");
+        assert_eq!(row.get::<String, _>("content"), "welcome");
+        assert_eq!(row.get::<i64, _>("created_at"), 2_000);
+        // First ordinal in a freshly minted line.
+        assert_eq!(row.get::<i64, _>("seq"), 1);
+        // The subtype is the whole of the metadata — no author or thread facts leak in.
+        let metadata: serde_json::Value =
+            serde_json::from_str(&row.get::<String, _>("metadata")).unwrap();
+        assert_eq!(metadata, serde_json::json!({ "subtype": "onboarding" }));
+        for null_column in [
+            "thread_root_id",
+            "from_agent_id",
+            "from_user_id",
+            "author_id",
+            "author_name",
+            "author_display_name",
+            "cc_source_message_id",
+        ] {
+            assert_eq!(
+                row.get::<Option<String>, _>(null_column),
+                None,
+                "a system onboarding message carries no {null_column}"
+            );
+        }
+
+        // The main line's stream head (root IS NULL) advanced to the message.
+        let head: i64 = sqlx::query_scalar(
+            "SELECT latest_seq FROM conversation_stream_heads WHERE conversation_id = ? \
+             AND thread_root_id IS NULL",
+        )
+        .bind(conversation.as_str())
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(head, 1);
     }
 
     /// The entitlement read must stay bounded by the NAMES A BODY USED. It runs while

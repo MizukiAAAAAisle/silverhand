@@ -48,14 +48,23 @@ use thiserror::Error;
 
 use crate::{
     agent_lifecycle::MaterializationStatus, agents::runtime::RuntimeKind,
-    agents::session_scope::AgentSessionScope, identity::AgentId, identity::HostId,
-    identity::UserId, persistence::PersistenceFailure, user_identity::ParticipantHandle,
+    agents::session_scope::AgentSessionScope, identity::AgentId, identity::ConversationId,
+    identity::HostId, identity::UserId, messaging::MessageId, persistence::PersistenceFailure,
+    user_identity::ParticipantHandle,
 };
 
 /// The canonical `materialization_failed_code` the crash-recovery sweep stamps on a row a
 /// boot found still pending. Pinned here so the reconciler and any reader agree on the one
 /// token, and it never drifts into an adapter literal.
 pub const STALE_MATERIALIZATION_FAILED_CODE: &str = "backend_crash_during_materialize";
+
+/// The canonical `materialization_failed_code` a provisioning attempt stamps when the row
+/// won the activation flip but its dependent graph could not be written. The compensating
+/// fail runs in a SEPARATE transaction after the provisioning transaction — flip and graph
+/// together — rolled back, so this code names "activated then could not finish the graph",
+/// distinct from the crash-recovery sweep's. Pinned here so the code never drifts into an
+/// adapter literal.
+pub const DEPENDENT_GRAPH_FAILED_CODE: &str = "dependent_row_insert_failed";
 
 /// A client-supplied idempotency token for a create attempt. It is a dedup key, not an
 /// identity coordinate, but it is not arbitrary: it carries the same envelope the create
@@ -494,6 +503,175 @@ impl ReopenedReservation {
     }
 }
 
+/// The raw witness the activation flip (`pending_materialization → active`) returns,
+/// decoded from its `RETURNING` clause. It carries at least the columns the dependent
+/// graph is provisioned against — the row's OWN id, handle, session scope, and creator —
+/// so the graph names subjects the write proved, never values a caller recited. Typed
+/// columns ride back raw for the domain to parse and bind.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActivationFlipRow {
+    /// Decoded from the `RETURNING id`, never the query parameter.
+    pub agent_id: AgentId,
+    pub name: String,
+    pub materialization_status: String,
+    pub session_scope: String,
+    pub created_by_user_id: String,
+    pub updated_at: i64,
+}
+
+/// A sealed activation: the row proven to read `active`, bound to the requested agent, with
+/// its handle, session scope, and creator parsed from the flip's own after-image. Minted
+/// only by [`ActivatedAgent::seal`], so holding one is proof the guarded
+/// `pending_materialization → active` flip changed the row and that every identity the
+/// dependent graph needs was read from the write's `RETURNING` row — not recited by the
+/// caller. It is the input the provisioning unit of work reads to name the direct line's
+/// participants and read the creator's handle in the same transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActivatedAgent {
+    agent_id: AgentId,
+    name: ParticipantHandle,
+    session_scope: AgentSessionScope,
+    created_by_user_id: UserId,
+    updated_at: i64,
+}
+
+impl ActivatedAgent {
+    /// Bind the flip after-image against the requested agent and seal its identity columns.
+    /// A row that names a different agent, is not `active`, or carries an unusable handle,
+    /// scope, or creator is a fault — never a sealed activation the graph would build on.
+    pub fn seal(
+        agent: &AgentId,
+        now_ms: i64,
+        row: ActivationFlipRow,
+    ) -> Result<Self, MaterializationFault> {
+        if &row.agent_id != agent {
+            return Err(MaterializationFault::ActivationWitnessMismatch {
+                reason: "activation witness names a different agent than the request",
+            });
+        }
+        let status = MaterializationStatus::parse(&row.materialization_status).map_err(|_| {
+            MaterializationFault::ActivationWitnessMismatch {
+                reason: "activation witness carries an unknown materialization status",
+            }
+        })?;
+        if status != MaterializationStatus::Active {
+            return Err(MaterializationFault::ActivationWitnessMismatch {
+                reason: "activation witness is not active",
+            });
+        }
+        let name = ParticipantHandle::parse(&row.name).map_err(|_| {
+            MaterializationFault::ActivationWitnessMismatch {
+                reason: "activation witness carries an unusable handle",
+            }
+        })?;
+        let session_scope = AgentSessionScope::parse(&row.session_scope).ok_or({
+            MaterializationFault::ActivationWitnessMismatch {
+                reason: "activation witness carries an unknown session scope",
+            }
+        })?;
+        let created_by_user_id = UserId::parse(row.created_by_user_id).map_err(|_| {
+            MaterializationFault::ActivationWitnessMismatch {
+                reason: "activation witness carries an empty creator",
+            }
+        })?;
+        if row.updated_at != now_ms {
+            return Err(MaterializationFault::ActivationWitnessMismatch {
+                reason: "activation witness updated_at differs from the request clock",
+            });
+        }
+        Ok(Self {
+            agent_id: row.agent_id,
+            name,
+            session_scope,
+            created_by_user_id,
+            updated_at: now_ms,
+        })
+    }
+
+    pub fn agent_id(&self) -> &AgentId {
+        &self.agent_id
+    }
+
+    pub fn name(&self) -> &ParticipantHandle {
+        &self.name
+    }
+
+    pub fn session_scope(&self) -> AgentSessionScope {
+        self.session_scope
+    }
+
+    pub fn created_by_user_id(&self) -> &UserId {
+        &self.created_by_user_id
+    }
+
+    pub fn updated_at(&self) -> i64 {
+        self.updated_at
+    }
+}
+
+/// The committed fact of an agent-scoped provisioning: the row is `active` AND its dependent
+/// graph — the direct line between the agent and its creator, and the onboarding system
+/// message on that line — is written in the same transaction. It carries the minimal
+/// post-commit ids that prove the graph, no more: a reader that needs the full agent
+/// projection re-reads it through the projection authority. `pair_created` distinguishes a
+/// freshly minted line from a get-or-create that resolved an existing one; it is derived
+/// from whether the open announced, never from a second read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentArmProvisioned {
+    agent_id: AgentId,
+    direct_line: ConversationId,
+    onboarding_message_id: MessageId,
+    pair_created: bool,
+}
+
+impl AgentArmProvisioned {
+    /// Record the committed graph. Minted by the provisioning unit of work after it has
+    /// sealed the activation and written the direct line and onboarding message under one
+    /// transaction; the ids are the ones it durably wrote.
+    pub fn committed(
+        agent_id: AgentId,
+        direct_line: ConversationId,
+        onboarding_message_id: MessageId,
+        pair_created: bool,
+    ) -> Self {
+        Self {
+            agent_id,
+            direct_line,
+            onboarding_message_id,
+            pair_created,
+        }
+    }
+
+    pub fn agent_id(&self) -> &AgentId {
+        &self.agent_id
+    }
+
+    pub fn direct_line(&self) -> &ConversationId {
+        &self.direct_line
+    }
+
+    pub fn onboarding_message_id(&self) -> &MessageId {
+        &self.onboarding_message_id
+    }
+
+    pub fn pair_created(&self) -> bool {
+        self.pair_created
+    }
+}
+
+/// What an in-transaction activation-and-provision observed. `Lost` means the guarded
+/// `pending_materialization → active` flip changed no row (the reservation was absent,
+/// already `active`, or `failed`): NOTHING was written, so the caller rolls the transaction
+/// back and does NOT compensate. `Provisioned` means the flip won and the dependent graph is
+/// staged in the same transaction, ready to commit. A dependent-write FAILURE is neither arm
+/// — it surfaces as a [`MaterializationFault`], so a win-then-fail is structurally distinct
+/// from a lost flip and only the former lets the caller stamp the compensating fail.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AgentArmActivation {
+    Provisioned(AgentArmProvisioned),
+    Lost,
+}
+
 /// The subject/status/stamp checks every flip after-image shares: same agent as the
 /// request, the expected post-image status, and the request's clock on `updated_at`.
 fn seal_flip_subject(
@@ -681,6 +859,14 @@ pub enum MaterializationFault {
     ReserveWitnessMismatch { reason: &'static str },
     #[error("materialization flip after-image disagreed with the request: {reason}")]
     FlipWitnessMismatch { reason: &'static str },
+    #[error("activation flip after-image disagreed with the request: {reason}")]
+    ActivationWitnessMismatch { reason: &'static str },
+    /// A provisioning-stage invariant the dependent graph depends on was broken: the sealed
+    /// reservation's creator names no user row, or the arm reached a reservation of the wrong
+    /// session scope. Neither is a caller mistake — the reservation is the store's own prior
+    /// fact — so it surfaces as a safe `500`, never a product answer.
+    #[error("agent provisioning invariant broken: {reason}")]
+    ProvisioningInvariant { reason: &'static str },
     #[error("idempotency lookup witness disagreed with the request: {reason}")]
     LookupWitnessMismatch { reason: &'static str },
 }
@@ -1301,6 +1487,69 @@ mod tests {
                 .unwrap_err(),
             MaterializationFault::FlipWitnessMismatch { .. }
         ));
+    }
+
+    fn faithful_activation_row(now_ms: i64) -> ActivationFlipRow {
+        ActivationFlipRow {
+            agent_id: agent("a1"),
+            name: "a1".to_string(),
+            materialization_status: "active".to_string(),
+            session_scope: "agent".to_string(),
+            created_by_user_id: "u1".to_string(),
+            updated_at: now_ms,
+        }
+    }
+
+    #[test]
+    fn activation_seals_a_bound_active_row() {
+        let sealed = ActivatedAgent::seal(&agent("a1"), 7, faithful_activation_row(7)).unwrap();
+        assert_eq!(sealed.agent_id(), &agent("a1"));
+        assert_eq!(sealed.name(), &ParticipantHandle::parse("a1").unwrap());
+        assert_eq!(sealed.session_scope(), AgentSessionScope::Agent);
+        assert_eq!(sealed.created_by_user_id(), &user("u1"));
+        assert_eq!(sealed.updated_at(), 7);
+    }
+
+    #[test]
+    fn activation_rejects_a_witness_that_disagrees() {
+        // The activation is the ONLY reader that binds the graph's subjects; a flip
+        // after-image that drifts on the agent, status, handle, scope, creator, or clock is
+        // a fault, never a sealed activation the dependent graph would build on.
+        let mut wrong_agent = faithful_activation_row(7);
+        wrong_agent.agent_id = agent("other");
+
+        let mut not_active = faithful_activation_row(7);
+        not_active.materialization_status = "pending_materialization".to_string();
+
+        let mut unknown_status = faithful_activation_row(7);
+        unknown_status.materialization_status = "smuggled".to_string();
+
+        let mut unusable_handle = faithful_activation_row(7);
+        unusable_handle.name = String::new();
+
+        let mut unknown_scope = faithful_activation_row(7);
+        unknown_scope.session_scope = "smuggled".to_string();
+
+        let mut empty_creator = faithful_activation_row(7);
+        empty_creator.created_by_user_id = String::new();
+
+        let mut wrong_stamp = faithful_activation_row(7);
+        wrong_stamp.updated_at = 8;
+
+        for row in [
+            wrong_agent,
+            not_active,
+            unknown_status,
+            unusable_handle,
+            unknown_scope,
+            empty_creator,
+            wrong_stamp,
+        ] {
+            assert!(matches!(
+                ActivatedAgent::seal(&agent("a1"), 7, row).unwrap_err(),
+                MaterializationFault::ActivationWitnessMismatch { .. }
+            ));
+        }
     }
 
     fn faithful_lookup_row() -> IdempotentReservationRow {
