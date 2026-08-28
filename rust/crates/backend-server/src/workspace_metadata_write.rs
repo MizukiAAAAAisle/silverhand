@@ -153,12 +153,13 @@ const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
 
 /// The metadata clock: the write instant the boundary samples, as signed Unix
 /// milliseconds (`Date.now()` parity). It is this slice's narrow time capability,
-/// mirroring the sibling per-slice clocks (`EnrollmentClock`, `RuntimeClock`, …):
-/// the pure `Date.now()` conversion lives in the domain
-/// ([`silverhand_backend_core::access::unix_millis`]), and the production adapter
-/// is the trivial `unix_millis(SystemTime::now())` wrapper assembled in the app
-/// layer. Injecting it lets a test pin the `updated_at`/`archived_at` the write
-/// stamps, so the `200` body is deterministic.
+/// mirroring the sibling per-slice clocks (`EnrollmentClock`, `RuntimeClock`, …).
+/// Its production owner is not a bespoke app-layer wrapper: this contract is the
+/// same signed-`Date.now()`-millis answer the process-clock port already gives, so
+/// the existing [`crate::clock::SystemProcessClock`] implements this trait directly
+/// and the composition injects that one owner. Injecting the capability lets a test
+/// pin the `updated_at`/`archived_at` the write stamps, so the `200` body is
+/// deterministic.
 pub trait WorkspaceMetadataClock: Clone + Send + Sync + 'static {
     fn now_unix_millis(&self) -> i64;
 }
