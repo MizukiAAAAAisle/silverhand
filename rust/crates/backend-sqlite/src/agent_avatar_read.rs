@@ -1,20 +1,26 @@
 //! SQLite adapter for the agent-avatar serve-ref read (`GET /api/agents/{id}/avatar`).
 //!
-//! It reads the agents row's `(avatar_storage_key, avatar_content_type)` pair and
-//! hands it to the core decoder ([`decode_agent_avatar_serve_ref`]), which enforces
-//! the strict four-state contract: both-absent → [`AgentAvatarServeRef::Absent`],
-//! both-present-and-valid → [`AgentAvatarServeRef::Present`], and any half-populated
-//! or malformed pair → an [`AgentAvatarRowCorruption`] this adapter surfaces as a
+//! It reads the agents row's own `id` plus its `(avatar_storage_key,
+//! avatar_content_type)` pair and hands them to the core decoder
+//! ([`decode_agent_avatar_row`]), which enforces the strict four-state contract:
+//! both-absent → [`AgentAvatarRow::Absent`], both-present-and-valid →
+//! [`AgentAvatarRow::Present`], and any half-populated or malformed pair (or an
+//! unreadable row id) → an [`AgentAvatarRowCorruption`] this adapter surfaces as a
 //! [`PersistenceFailure`] (a safe `500`), never a silent `avatar not found`.
 //!
-//! A missing row is the same absent state as a both-`NULL` pair: the caller has
-//! already cleared the visibility authority, so a row that vanished between the gate
-//! and this read is simply "no avatar", not an existence signal.
+//! The `id` column is read BACK — not trusted from the `WHERE id = ?` bind — so the
+//! serve fact carries the source id the core binds to the request before touching the
+//! blob. A missing row is [`AgentAvatarServeRef::NoRow`]: the caller has already cleared
+//! the visibility authority, so a row that vanished between the gate and this read is
+//! simply "no avatar", not an existence signal.
+//!
+//! [`AgentAvatarRow`]: silverhand_backend_core::agent_avatar::AgentAvatarRow
+//! [`AgentAvatarRowCorruption`]: silverhand_backend_core::agent_avatar::AgentAvatarRowCorruption
 
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agent_avatar::{AgentAvatarServeRef, AgentAvatarServeRefRead, decode_agent_avatar_serve_ref},
+    agent_avatar::{AgentAvatarServeRef, AgentAvatarServeRefRead, decode_agent_avatar_row},
     identity::AgentId,
     persistence::PersistenceFailure,
 };
@@ -26,11 +32,12 @@ use sqlx::{
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The serve-ref read: only the two avatar columns, narrowed to ONE id. It is
-/// deliberately NOT the full detail projection — the byte fetch needs only the
-/// pointer and its content type, never the wire DTO.
+/// The serve-ref read: the row's own id (read back so the serve fact is source-bound
+/// to the request, never trusting `WHERE id = ?`) plus the two avatar columns. It is
+/// deliberately NOT the full detail projection — the byte fetch needs only the source
+/// id, the pointer and its content type, never the wire DTO.
 const SELECT_AGENT_AVATAR_REF: &str =
-    "SELECT avatar_storage_key, avatar_content_type FROM agents WHERE id = ?";
+    "SELECT id, avatar_storage_key, avatar_content_type FROM agents WHERE id = ?";
 
 #[derive(Clone)]
 pub struct SqliteAgentAvatarRead {
@@ -68,20 +75,22 @@ impl AgentAvatarServeRefRead for SqliteAgentAvatarRead {
             .fetch_optional(&self.pool)
             .await
             .map_err(PersistenceFailure::from_source)?;
-        // No row is the same "no avatar" as a both-NULL pair: visibility was already
-        // settled, so a vanished row is not an existence oracle.
+        // No row is the `NoRow` race state: visibility was already settled, so a row
+        // that vanished between the gate and this read is not an existence oracle.
         let Some(row) = row else {
-            return Ok(AgentAvatarServeRef::Absent);
+            return Ok(AgentAvatarServeRef::NoRow);
         };
+        let row_id: String = row.try_get("id").map_err(PersistenceFailure::from_source)?;
         let storage_key: Option<String> = row
             .try_get("avatar_storage_key")
             .map_err(PersistenceFailure::from_source)?;
         let content_type: Option<String> = row
             .try_get("avatar_content_type")
             .map_err(PersistenceFailure::from_source)?;
-        // The two columns are decoded as ONE typed shape; corruption becomes a
-        // safe-500 carrying its cause, never folded into `avatar not found`.
-        decode_agent_avatar_serve_ref(storage_key.as_deref(), content_type.as_deref())
+        // The row id and the two columns are decoded as ONE typed shape; the serve fact
+        // carries the read-back source id, and corruption becomes a safe-500 carrying
+        // its cause, never folded into `avatar not found`.
+        decode_agent_avatar_row(&row_id, storage_key.as_deref(), content_type.as_deref())
             .map_err(PersistenceFailure::from_source)
     }
 }
@@ -89,7 +98,7 @@ impl AgentAvatarServeRefRead for SqliteAgentAvatarRead {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::avatar::AvatarContentType;
+    use silverhand_backend_core::{agent_avatar::AgentAvatarRow, avatar::AvatarContentType};
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =
@@ -136,44 +145,52 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     }
 
     #[tokio::test]
-    async fn a_valid_pair_decodes_to_the_serve_coordinate() {
+    async fn a_valid_pair_decodes_to_the_source_bound_serve_coordinate() {
         let (_dir, adapter) = open_seeded().await;
         let decoded = adapter
             .read_agent_avatar_serve_ref(&agent("a-present"))
             .await
             .unwrap();
-        let AgentAvatarServeRef::Present {
-            pointer,
-            content_type,
+        let AgentAvatarServeRef::Row {
+            source,
+            avatar:
+                AgentAvatarRow::Present {
+                    pointer,
+                    content_type,
+                },
         } = decoded
         else {
-            panic!("expected Present");
+            panic!("expected Row/Present");
         };
+        assert_eq!(source, agent("a-present"), "the row id is read back, not the bind");
         assert_eq!(pointer.as_str(), "agents/a-present/avatars/blob-0.png");
         assert_eq!(content_type, AvatarContentType::Png);
     }
 
     #[tokio::test]
-    async fn both_null_columns_are_absent() {
+    async fn both_null_columns_are_a_source_bound_absent_row() {
         let (_dir, adapter) = open_seeded().await;
         assert_eq!(
             adapter
                 .read_agent_avatar_serve_ref(&agent("a-absent"))
                 .await
                 .unwrap(),
-            AgentAvatarServeRef::Absent
+            AgentAvatarServeRef::Row {
+                source: agent("a-absent"),
+                avatar: AgentAvatarRow::Absent,
+            }
         );
     }
 
     #[tokio::test]
-    async fn a_missing_row_is_absent_not_an_error() {
+    async fn a_missing_row_is_no_row_not_an_error() {
         let (_dir, adapter) = open_seeded().await;
         assert_eq!(
             adapter
                 .read_agent_avatar_serve_ref(&agent("nobody"))
                 .await
                 .unwrap(),
-            AgentAvatarServeRef::Absent
+            AgentAvatarServeRef::NoRow
         );
     }
 

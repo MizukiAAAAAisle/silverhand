@@ -1,80 +1,149 @@
 //! The public agent-avatar byte fetch — `GET /api/agents/{id}/avatar`.
 //!
-//! This is the agent analog of the `users` avatar fetch ([`crate::avatar`]), and it
-//! reuses that leaf's avatar VOCABULARY wholesale: the content-type allowlist
-//! ([`AvatarContentType`]), the opaque blob pointer ([`AvatarBlobPointer`]), and the
-//! narrow read capability ([`AvatarBlobRead`]). What it does NOT reuse is the user
-//! path's serve-ref read: the agents row is decoded under a STRICTER four-state
-//! contract, so its own narrow read authority is defined here.
+//! This is the agent analog of the `users` avatar fetch ([`crate::avatar`]). It
+//! reuses the STORAGE-GENERIC avatar vocabulary — the content-type allowlist
+//! ([`AvatarContentType`]), the blob read outcome ([`AvatarBlobReadOutcome`]) and the
+//! storage-fault type ([`AvatarStorageFailure`]) — because none of those name a
+//! custody. It does NOT reuse the user path's blob POINTER: `users.avatar_storage_key`
+//! and `agents.avatar_storage_key` are two distinct custodies (one minted per
+//! [`crate::identity::UserId`], one per [`AgentId`]), so this bounded context owns its
+//! own opaque [`AgentAvatarBlobPointer`] and its own read capability
+//! ([`AgentAvatarBlobRead`]). The two pointers never share a domain type; only the
+//! production adapter's private key→bytes plumbing is shared.
 //!
 //! ## The four states of the stored `(avatar_storage_key, avatar_content_type)` pair
 //!
 //! The two columns are decoded as ONE typed row shape — never each on its own — so a
 //! below-write-path corruption can never masquerade as "no avatar":
 //!
-//!  1. BOTH absent (`NULL`/`NULL`, or no row at all) → [`AgentAvatarServeRef::Absent`],
-//!     which the fetch reports as the product `avatar not found` (404).
-//!  2. BOTH present, the key non-empty and the content type a member of the allowlist
-//!     → [`AgentAvatarServeRef::Present`], the serve coordinate.
-//!  3. ANY other combination — exactly one side present, an empty key, or a stored
-//!     content type outside the allowlist — is [`AgentAvatarRowCorruption`]: a
-//!     below-write-path integrity fault the adapter surfaces as a
-//!     [`PersistenceFailure`] (a safe `500` carrying its cause), NEVER folded into
-//!     the `avatar not found` of state 1. The schema CHECK couples the two columns'
-//!     NULL-ness, so a half-populated pair is unreachable through the write path; it
-//!     is treated as corruption precisely because only corruption could produce it.
+//!  1. NO ROW (the agents row was deleted between the visibility gate and this read)
+//!     → [`AgentAvatarServeRef::NoRow`], reported as `avatar not found` (404).
+//!  2. A ROW with BOTH columns `NULL` → [`AgentAvatarRow::Absent`], also reported as
+//!     `avatar not found` (404). A legitimately avatar-less agent carries a clear
+//!     both-`NULL`, never an empty string.
+//!  3. A ROW with BOTH present, the key non-empty and the content type an allowlist
+//!     member → [`AgentAvatarRow::Present`], the serve coordinate.
+//!  4. ANY other combination — exactly one side present, an empty key, a content type
+//!     outside the allowlist, or an unreadable row id — is [`AgentAvatarRowCorruption`]:
+//!     a below-write-path integrity fault surfaced as a [`PersistenceFailure`] (a safe
+//!     `500` carrying its cause), NEVER folded into the `avatar not found` of states 1
+//!     and 2. The schema CHECK couples the two columns' NULL-ness, so a half-populated
+//!     pair is unreachable through the write path; it is treated as corruption
+//!     precisely because only corruption could produce it.
 //!
-//! The only production writer of these columns stores a non-empty admitted key and an
-//! allowlisted content type together, so a legitimately avatar-less agent carries
-//! BOTH columns `NULL` (a clear NULLs both) — never an empty string. That is why an
-//! empty key is corruption here, unlike the `users` DTO's cosmetic `avatar_url` fold,
-//! which merely omits a link.
+//! ## Every row fact is source-bound before the blob is touched
 //!
-//! ## The blob is not touched until visibility is settled
+//! The visibility gate ([`crate::capability::agent_view`]) binds the DETAIL facts to
+//! the requested id. This serve-ref read is a SEPARATE port, so it carries its OWN
+//! read-back source id ([`AgentAvatarServeRef::Row`]'s `source`), and
+//! [`fetch_agent_avatar`] binds `source == requested` BEFORE any blob read. A
+//! cross-wired adapter that let request `A` clear visibility and then handed back `B`'s
+//! pointer would otherwise splice `B`'s bytes onto an `A`-authorized response; the bind
+//! makes that a safe `500` with the blob untouched. `WHERE id = ?` in the adapter does
+//! not discharge this — the PORT contract must carry the identity, not the SQL.
 //!
-//! Access precedes product: the server route runs the agent VISIBILITY authority
-//! FIRST (an absent, invisible, or hidden-stage agent is one anti-enumeration `404`),
-//! and only an admitted caller reaches this read at all. A clean blob `Missing` —
-//! the row points at bytes that are gone — collapses to the SAME `avatar not found`
-//! as an absent pointer; only a hard blob-backend read FAULT is the safe `500`, with
-//! its cause carried to the boundary log.
+//! ## A dangling pointer is a storage inconsistency, not "no avatar"
+//!
+//! Access precedes product: an admitted caller reaches this read only after the
+//! visibility authority passed. Once a `Present` row is bound, its bytes MUST exist —
+//! the row asserts they do. A blob that resolves to [`AvatarBlobReadOutcome::Missing`]
+//! is therefore a storage inconsistency (the DB says the avatar exists), reported as
+//! [`AgentAvatarFetchOutcome::StorageUnavailable`] → a safe `500` with cause, exactly
+//! as the TypeScript route's uncaught `blobStorage.serve` fails when `stat` hits
+//! `ENOENT`. Only states 1 and 2 (no row / both-`NULL`) are the product `avatar not
+//! found`.
 
 use std::future::Future;
 
 use thiserror::Error;
 
 use crate::{
-    avatar::{
-        AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome, AvatarContentType,
-        AvatarStorageFailure, EmptyAvatarBlobPointer,
-    },
+    avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
     identity::AgentId,
     persistence::PersistenceFailure,
 };
 
-/// The agent-row avatar coordinate for the byte fetch, decoded as ONE typed shape.
-/// Corruption is NOT an arm: a half-populated or malformed pair is an
-/// [`AgentAvatarRowCorruption`] the read surfaces as a [`PersistenceFailure`], so a
-/// value of this type is always a trustworthy clean state.
+/// The opaque pointer to an AGENT avatar blob (`agents.avatar_storage_key`).
+///
+/// A distinct custody from the user avatar pointer ([`crate::avatar::AvatarBlobPointer`]):
+/// same underlying storage backend, different namespace and different lifecycle owner.
+/// This is the canonical agent-avatar pointer #2225 publishes for downstream consumers;
+/// it stays a domain newtype rather than a bare string so the two custodies can never
+/// be passed for one another. Parsing rejects only the empty string — the stored key is
+/// otherwise opaque.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AgentAvatarServeRef {
-    /// Both columns are absent (or there is no row). The agent carries no avatar;
-    /// the fetch reports `avatar not found`.
+pub struct AgentAvatarBlobPointer(String);
+
+/// The empty-string rejection from [`AgentAvatarBlobPointer::parse`].
+#[derive(Debug, Error)]
+#[error("agent avatar blob pointer must not be empty")]
+pub struct EmptyAgentAvatarBlobPointer;
+
+impl AgentAvatarBlobPointer {
+    pub fn parse(raw: impl Into<String>) -> Result<Self, EmptyAgentAvatarBlobPointer> {
+        let raw = raw.into();
+        if raw.is_empty() {
+            return Err(EmptyAgentAvatarBlobPointer);
+        }
+        Ok(Self(raw))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The narrow READ capability for agent avatar blobs, keyed by the agent-owned
+/// [`AgentAvatarBlobPointer`]. It is deliberately read-only and agent-specific: the
+/// byte fetch never mints or deletes, and never sees the user pointer. The
+/// production adapter shares its key→bytes plumbing with the user read, but the
+/// domain capability is its own.
+pub trait AgentAvatarBlobRead: Clone + Send + Sync + 'static {
+    fn read(
+        &self,
+        pointer: &AgentAvatarBlobPointer,
+    ) -> impl Future<Output = Result<AvatarBlobReadOutcome, AvatarStorageFailure>> + Send;
+}
+
+/// The avatar coordinate held by an EXISTING agents row, decoded as one typed shape.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AgentAvatarRow {
+    /// Both columns are `NULL`: the agent carries no avatar.
     Absent,
     /// Both columns are present, the key non-empty and the content type an allowlist
     /// member: the serve coordinate.
     Present {
-        pointer: AvatarBlobPointer,
+        pointer: AgentAvatarBlobPointer,
         content_type: AvatarContentType,
     },
 }
 
-/// A stored agent avatar pair that could not have come from the write path: exactly
-/// one column present, an empty storage key, or a content type outside the
-/// allowlist. Each arm names the specific integrity violation for the boundary log;
-/// all map to the same safe `500`.
+/// The serve-ref read result, decoded under the strict four-state contract. A row that
+/// exists is always source-bound; a row that does not is [`Self::NoRow`]. Corruption is
+/// NOT an arm — it is a [`PersistenceFailure`] — so a value of this type is always a
+/// trustworthy clean state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AgentAvatarServeRef {
+    /// No agents row for the id — a race where the row was deleted after the
+    /// visibility gate. The product result is `avatar not found`.
+    NoRow,
+    /// A row exists, carrying its read-back source id for the pre-blob bind and its
+    /// decoded avatar state. `source` present iff a row exists — the invariant is
+    /// unrepresentable when violated.
+    Row {
+        source: AgentId,
+        avatar: AgentAvatarRow,
+    },
+}
+
+/// A stored agent avatar pair that could not have come from the write path: an
+/// unreadable row id, exactly one column present, an empty storage key, or a content
+/// type outside the allowlist. Each arm names the specific integrity violation for the
+/// boundary log; all map to the same safe `500`.
 #[derive(Debug, Error)]
 pub enum AgentAvatarRowCorruption {
+    #[error("agents row has an unreadable id")]
+    UnreadableRowId,
     #[error("agents row has an avatar_content_type but no avatar_storage_key")]
     ContentTypeWithoutKey,
     #[error("agents row has an avatar_storage_key but no avatar_content_type")]
@@ -85,40 +154,47 @@ pub enum AgentAvatarRowCorruption {
     UnknownContentType,
 }
 
-impl From<EmptyAvatarBlobPointer> for AgentAvatarRowCorruption {
-    fn from(_: EmptyAvatarBlobPointer) -> Self {
+impl From<EmptyAgentAvatarBlobPointer> for AgentAvatarRowCorruption {
+    fn from(_: EmptyAgentAvatarBlobPointer) -> Self {
         Self::EmptyStorageKey
     }
 }
 
-/// Decode the stored `(avatar_storage_key, avatar_content_type)` pair as ONE typed
-/// shape under the strict four-state contract (see the module docs). The two columns
-/// arrive exactly as the row holds them: `None` for SQL `NULL`, `Some` otherwise.
-pub fn decode_agent_avatar_serve_ref(
+/// Decode ONE existing agents row: its read-back `id` plus the stored
+/// `(avatar_storage_key, avatar_content_type)` pair, under the strict four-state
+/// contract (see the module docs). The columns arrive exactly as the row holds them:
+/// `None` for SQL `NULL`, `Some` otherwise. A caller with NO row must report
+/// [`AgentAvatarServeRef::NoRow`] directly rather than calling this.
+pub fn decode_agent_avatar_row(
+    row_id: &str,
     storage_key: Option<&str>,
     content_type: Option<&str>,
 ) -> Result<AgentAvatarServeRef, AgentAvatarRowCorruption> {
-    match (storage_key, content_type) {
-        (None, None) => Ok(AgentAvatarServeRef::Absent),
-        (Some(_), None) => Err(AgentAvatarRowCorruption::KeyWithoutContentType),
-        (None, Some(_)) => Err(AgentAvatarRowCorruption::ContentTypeWithoutKey),
+    // The row id is read back so the serve fact can be bound to the request; an id
+    // that no longer parses is corruption, never a silent unbound serve.
+    let source = AgentId::parse(row_id).map_err(|_| AgentAvatarRowCorruption::UnreadableRowId)?;
+    let avatar = match (storage_key, content_type) {
+        (None, None) => AgentAvatarRow::Absent,
+        (Some(_), None) => return Err(AgentAvatarRowCorruption::KeyWithoutContentType),
+        (None, Some(_)) => return Err(AgentAvatarRowCorruption::ContentTypeWithoutKey),
         (Some(key), Some(content_type)) => {
             // An empty key never came from the writer (a clear NULLs both columns), so
-            // it is corruption — not the user path's "no avatar" fold.
-            let pointer = AvatarBlobPointer::parse(key)?;
+            // it is corruption — not the user path's cosmetic "no avatar" fold.
+            let pointer = AgentAvatarBlobPointer::parse(key)?;
             let content_type = AvatarContentType::parse(content_type)
                 .ok_or(AgentAvatarRowCorruption::UnknownContentType)?;
-            Ok(AgentAvatarServeRef::Present {
+            AgentAvatarRow::Present {
                 pointer,
                 content_type,
-            })
+            }
         }
-    }
+    };
+    Ok(AgentAvatarServeRef::Row { source, avatar })
 }
 
 /// Resolve an agent's avatar serve ref by id, decoded under the strict four-state
-/// contract. A missing row is [`AgentAvatarServeRef::Absent`] (the same as a both-NULL
-/// pair); corruption is a [`PersistenceFailure`], never a clean arm.
+/// contract. A missing row is [`AgentAvatarServeRef::NoRow`]; an existing row is always
+/// source-bound; corruption is a [`PersistenceFailure`], never a clean arm.
 pub trait AgentAvatarServeRefRead: Clone + Send + Sync + 'static {
     fn read_agent_avatar_serve_ref(
         &self,
@@ -135,19 +211,40 @@ pub enum AgentAvatarFetchOutcome {
         content_type: AvatarContentType,
         filename: String,
     },
-    /// The agent carries no avatar, OR the row's pointer resolved to no stored bytes
-    /// (a clean blob `Missing`): both are the product `avatar not found` (404). A
-    /// clean Missing is NOT a safe-500 here — that is the deliberate divergence from
-    /// the `users` fetch, which treats a Missing blob as a storage inconsistency.
+    /// The agent has no row, or the row carries no avatar (both columns `NULL`): the
+    /// product `avatar not found` (404). A dangling pointer is NOT here — that is a
+    /// storage inconsistency, below.
     NotFound,
-    /// A hard blob-backend read FAULT — the read itself failed, distinct from a
-    /// pointer that cleanly resolved to nothing. The route maps it to a safe `500`
-    /// and logs `cause`; it is never a product answer.
+    /// A `Present` row's bytes could not be served: either the blob backend read
+    /// FAULTED, or the pointer cleanly resolved to [`AvatarBlobReadOutcome::Missing`]
+    /// while the row asserts the avatar exists. Both are storage inconsistencies the
+    /// route maps to a safe `500` with `cause` logged; never a product answer.
     StorageUnavailable { cause: AvatarStorageFailure },
 }
 
-/// Fetch an agent's avatar bytes by id. The caller must already have passed the
-/// agent visibility authority; this touches the blob only for an admitted request.
+/// A serve fact whose read-back source id does not match the requested agent: a
+/// cross-wired serve-ref adapter. Surfaced as a [`PersistenceFailure`] (safe `500`)
+/// with the blob left untouched.
+#[derive(Debug, Error)]
+#[error(
+    "agent avatar serve ref resolved for {} but {} was requested",
+    .served.as_str(),
+    .requested.as_str()
+)]
+struct AgentAvatarSourceMismatch {
+    requested: AgentId,
+    served: AgentId,
+}
+
+/// A `Present` row whose blob resolved to no stored bytes: the DB asserts the avatar
+/// exists but the backend has none. Carries the pointer for the boundary log.
+#[derive(Debug, Error)]
+#[error("agent avatar pointer {0} resolved to no stored bytes")]
+struct DanglingAgentAvatarBlob(String);
+
+/// Fetch an agent's avatar bytes by id. The caller must already have passed the agent
+/// visibility authority; this touches the blob only for an admitted request whose
+/// serve-ref row is source-bound to the request.
 pub async fn fetch_agent_avatar<R, B>(
     refs: &R,
     blobs: &B,
@@ -155,24 +252,42 @@ pub async fn fetch_agent_avatar<R, B>(
 ) -> Result<AgentAvatarFetchOutcome, PersistenceFailure>
 where
     R: AgentAvatarServeRefRead,
-    B: AvatarBlobRead,
+    B: AgentAvatarBlobRead,
 {
-    match refs.read_agent_avatar_serve_ref(agent).await? {
-        AgentAvatarServeRef::Absent => Ok(AgentAvatarFetchOutcome::NotFound),
-        AgentAvatarServeRef::Present {
+    let (source, avatar) = match refs.read_agent_avatar_serve_ref(agent).await? {
+        AgentAvatarServeRef::NoRow => return Ok(AgentAvatarFetchOutcome::NotFound),
+        AgentAvatarServeRef::Row { source, avatar } => (source, avatar),
+    };
+    // Bind the read-back row id to the request BEFORE any blob read: a serve fact for
+    // another agent is a resolver defect (safe-500), never B's bytes on A's response.
+    if &source != agent {
+        return Err(PersistenceFailure::from_source(AgentAvatarSourceMismatch {
+            requested: agent.clone(),
+            served: source,
+        }));
+    }
+    let (pointer, content_type) = match avatar {
+        AgentAvatarRow::Absent => return Ok(AgentAvatarFetchOutcome::NotFound),
+        AgentAvatarRow::Present {
             pointer,
             content_type,
-        } => match blobs.read(&pointer).await {
-            Ok(AvatarBlobReadOutcome::Found(bytes)) => Ok(AgentAvatarFetchOutcome::Found {
-                bytes,
-                content_type,
-                filename: content_type.download_filename(),
-            }),
-            // A clean Missing collapses to `avatar not found`, exactly like an absent
-            // pointer; only a hard read fault is the safe-500.
-            Ok(AvatarBlobReadOutcome::Missing) => Ok(AgentAvatarFetchOutcome::NotFound),
-            Err(cause) => Ok(AgentAvatarFetchOutcome::StorageUnavailable { cause }),
-        },
+        } => (pointer, content_type),
+    };
+    match blobs.read(&pointer).await {
+        Ok(AvatarBlobReadOutcome::Found(bytes)) => Ok(AgentAvatarFetchOutcome::Found {
+            bytes,
+            content_type,
+            filename: content_type.download_filename(),
+        }),
+        // A present row asserts its bytes exist; a clean Missing is therefore a storage
+        // inconsistency (safe-500), matching the TS route's uncaught serve() ENOENT —
+        // NOT the product 404 an absent pointer gets.
+        Ok(AvatarBlobReadOutcome::Missing) => Ok(AgentAvatarFetchOutcome::StorageUnavailable {
+            cause: AvatarStorageFailure::from_source(DanglingAgentAvatarBlob(
+                pointer.as_str().to_owned(),
+            )),
+        }),
+        Err(cause) => Ok(AgentAvatarFetchOutcome::StorageUnavailable { cause }),
     }
 }
 
@@ -187,50 +302,54 @@ mod tests {
     // ---- the four-state decode ----
 
     #[test]
-    fn both_absent_is_the_absent_ref() {
+    fn a_row_with_both_columns_null_is_absent_and_source_bound() {
+        let decoded = decode_agent_avatar_row("agent-1", None, None).unwrap();
         assert_eq!(
-            decode_agent_avatar_serve_ref(None, None).unwrap(),
-            AgentAvatarServeRef::Absent
+            decoded,
+            AgentAvatarServeRef::Row {
+                source: agent_id(),
+                avatar: AgentAvatarRow::Absent,
+            }
         );
     }
 
     #[test]
     fn both_present_and_valid_is_the_serve_coordinate() {
-        let decoded = decode_agent_avatar_serve_ref(
-            Some("agents/a1/avatars/blob-0.png"),
-            Some("image/png"),
-        )
-        .unwrap();
-        let AgentAvatarServeRef::Present {
-            pointer,
-            content_type,
+        let decoded =
+            decode_agent_avatar_row("agent-1", Some("agents/a1/avatars/blob-0.png"), Some("image/png"))
+                .unwrap();
+        let AgentAvatarServeRef::Row {
+            source,
+            avatar:
+                AgentAvatarRow::Present {
+                    pointer,
+                    content_type,
+                },
         } = decoded
         else {
-            panic!("expected Present");
+            panic!("expected Row/Present");
         };
+        assert_eq!(source, agent_id());
         assert_eq!(pointer.as_str(), "agents/a1/avatars/blob-0.png");
         assert_eq!(content_type, AvatarContentType::Png);
     }
 
     #[test]
     fn a_half_populated_pair_is_corruption_not_missing() {
-        // Only one column present, either way, is corruption — never folded into the
-        // both-absent `avatar not found`.
         assert!(matches!(
-            decode_agent_avatar_serve_ref(Some("agents/a1/avatars/blob-0.png"), None),
+            decode_agent_avatar_row("agent-1", Some("agents/a1/avatars/blob-0.png"), None),
             Err(AgentAvatarRowCorruption::KeyWithoutContentType)
         ));
         assert!(matches!(
-            decode_agent_avatar_serve_ref(None, Some("image/png")),
+            decode_agent_avatar_row("agent-1", None, Some("image/png")),
             Err(AgentAvatarRowCorruption::ContentTypeWithoutKey)
         ));
     }
 
     #[test]
     fn an_empty_key_is_corruption_unlike_the_users_no_avatar_fold() {
-        // A clear NULLs both columns, so an empty key never came from the writer.
         assert!(matches!(
-            decode_agent_avatar_serve_ref(Some(""), Some("image/png")),
+            decode_agent_avatar_row("agent-1", Some(""), Some("image/png")),
             Err(AgentAvatarRowCorruption::EmptyStorageKey)
         ));
     }
@@ -238,13 +357,24 @@ mod tests {
     #[test]
     fn a_content_type_outside_the_allowlist_is_corruption() {
         assert!(matches!(
-            decode_agent_avatar_serve_ref(Some("agents/a1/avatars/blob-0.svg"), Some("image/svg+xml")),
+            decode_agent_avatar_row(
+                "agent-1",
+                Some("agents/a1/avatars/blob-0.svg"),
+                Some("image/svg+xml")
+            ),
             Err(AgentAvatarRowCorruption::UnknownContentType)
         ));
-        // A present-but-empty content type is equally out of the set.
         assert!(matches!(
-            decode_agent_avatar_serve_ref(Some("agents/a1/avatars/blob-0"), Some("")),
+            decode_agent_avatar_row("agent-1", Some("agents/a1/avatars/blob-0"), Some("")),
             Err(AgentAvatarRowCorruption::UnknownContentType)
+        ));
+    }
+
+    #[test]
+    fn an_unreadable_row_id_is_corruption() {
+        assert!(matches!(
+            decode_agent_avatar_row("", None, None),
+            Err(AgentAvatarRowCorruption::UnreadableRowId)
         ));
     }
 
@@ -267,12 +397,26 @@ mod tests {
     struct FakeBlob {
         outcome: Option<AvatarBlobReadOutcome>,
         fail: bool,
+        read: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
-    impl AvatarBlobRead for FakeBlob {
+    impl FakeBlob {
+        fn new(outcome: Option<AvatarBlobReadOutcome>, fail: bool) -> Self {
+            Self {
+                outcome,
+                fail,
+                read: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
+        fn reads(&self) -> usize {
+            self.read.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+    impl AgentAvatarBlobRead for FakeBlob {
         async fn read(
             &self,
-            _pointer: &AvatarBlobPointer,
+            _pointer: &AgentAvatarBlobPointer,
         ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
+            self.read.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if self.fail {
                 #[derive(Debug, Error)]
                 #[error("read fault")]
@@ -286,20 +430,20 @@ mod tests {
         }
     }
 
-    fn present_ref() -> AgentAvatarServeRef {
-        AgentAvatarServeRef::Present {
-            pointer: AvatarBlobPointer::parse("agents/a1/avatars/blob-0.jpeg").unwrap(),
-            content_type: AvatarContentType::Jpeg,
+    fn present_row_for(source: &str) -> AgentAvatarServeRef {
+        AgentAvatarServeRef::Row {
+            source: AgentId::parse(source).unwrap(),
+            avatar: AgentAvatarRow::Present {
+                pointer: AgentAvatarBlobPointer::parse("agents/a1/avatars/blob-0.jpeg").unwrap(),
+                content_type: AvatarContentType::Jpeg,
+            },
         }
     }
 
     #[tokio::test]
     async fn fetch_serves_found_bytes_with_the_stored_type_and_filename() {
-        let refs = FakeRefs(Ok(present_ref()));
-        let blobs = FakeBlob {
-            outcome: Some(AvatarBlobReadOutcome::Found(vec![7, 8, 9])),
-            fail: false,
-        };
+        let refs = FakeRefs(Ok(present_row_for("agent-1")));
+        let blobs = FakeBlob::new(Some(AvatarBlobReadOutcome::Found(vec![7, 8, 9])), false);
         let AgentAvatarFetchOutcome::Found {
             bytes,
             content_type,
@@ -314,41 +458,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_is_not_found_when_the_ref_is_absent() {
-        let refs = FakeRefs(Ok(AgentAvatarServeRef::Absent));
-        let blobs = FakeBlob {
-            outcome: None,
-            fail: false,
-        };
+    async fn fetch_is_not_found_for_no_row() {
+        let refs = FakeRefs(Ok(AgentAvatarServeRef::NoRow));
+        let blobs = FakeBlob::new(None, false);
         assert!(matches!(
             fetch_agent_avatar(&refs, &blobs, &agent_id()).await.unwrap(),
             AgentAvatarFetchOutcome::NotFound
         ));
+        assert_eq!(blobs.reads(), 0);
     }
 
     #[tokio::test]
-    async fn a_clean_blob_missing_is_not_found_not_a_safe_500() {
-        let refs = FakeRefs(Ok(present_ref()));
-        let blobs = FakeBlob {
-            outcome: Some(AvatarBlobReadOutcome::Missing),
-            fail: false,
-        };
+    async fn fetch_is_not_found_when_the_row_carries_no_avatar() {
+        let refs = FakeRefs(Ok(AgentAvatarServeRef::Row {
+            source: agent_id(),
+            avatar: AgentAvatarRow::Absent,
+        }));
+        let blobs = FakeBlob::new(None, false);
+        assert!(matches!(
+            fetch_agent_avatar(&refs, &blobs, &agent_id()).await.unwrap(),
+            AgentAvatarFetchOutcome::NotFound
+        ));
+        assert_eq!(blobs.reads(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_clean_blob_missing_is_a_storage_inconsistency_not_a_404() {
+        let refs = FakeRefs(Ok(present_row_for("agent-1")));
+        let blobs = FakeBlob::new(Some(AvatarBlobReadOutcome::Missing), false);
         assert!(
             matches!(
                 fetch_agent_avatar(&refs, &blobs, &agent_id()).await.unwrap(),
-                AgentAvatarFetchOutcome::NotFound
+                AgentAvatarFetchOutcome::StorageUnavailable { .. }
             ),
-            "a clean Missing collapses to `avatar not found`, the agent-face divergence"
+            "a present row asserts its bytes exist; a Missing blob is a safe-500, not `avatar not found`"
         );
     }
 
     #[tokio::test]
     async fn a_hard_blob_read_fault_is_storage_unavailable_with_a_cause() {
-        let refs = FakeRefs(Ok(present_ref()));
-        let blobs = FakeBlob {
-            outcome: None,
-            fail: true,
-        };
+        let refs = FakeRefs(Ok(present_row_for("agent-1")));
+        let blobs = FakeBlob::new(None, true);
         assert!(matches!(
             fetch_agent_avatar(&refs, &blobs, &agent_id()).await.unwrap(),
             AgentAvatarFetchOutcome::StorageUnavailable { .. }
@@ -356,12 +506,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_serve_ref_for_another_agent_is_a_safe_500_with_the_blob_untouched() {
+        // Request agent-1, serve fact source=agent-2: the source-bind refuses it before
+        // any blob read, so B's bytes never splice onto A's response.
+        let refs = FakeRefs(Ok(present_row_for("agent-2")));
+        let blobs = FakeBlob::new(Some(AvatarBlobReadOutcome::Found(vec![9, 9, 9])), false);
+        fetch_agent_avatar(&refs, &blobs, &agent_id())
+            .await
+            .expect_err("a serve fact resolved for another agent has no product answer");
+        assert_eq!(blobs.reads(), 0, "the blob must not be touched on a source mismatch");
+    }
+
+    #[tokio::test]
     async fn a_ref_read_failure_propagates_as_a_persistence_failure() {
         let refs = FakeRefs(Err(()));
-        let blobs = FakeBlob {
-            outcome: None,
-            fail: false,
-        };
+        let blobs = FakeBlob::new(None, false);
         fetch_agent_avatar(&refs, &blobs, &agent_id())
             .await
             .expect_err("a corrupt/failed ref read has no product answer");

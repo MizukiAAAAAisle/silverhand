@@ -1,7 +1,13 @@
-//! The production avatar blob adapter: satisfy the avatar route's narrow
-//! [`AvatarBlobStore`] capability by driving the generic content-addressed
-//! [`BlobStore`] (in production, the filesystem `LocalBlobStore` from #2221)
-//! under one ambient storage kind.
+//! The production avatar blob adapter: satisfy the avatar routes' narrow blob
+//! capabilities by driving the generic content-addressed [`BlobStore`] (in production,
+//! the filesystem `LocalBlobStore` from #2221) under one ambient storage kind.
+//!
+//! It serves the full user capability ([`AvatarBlobStore`]: put/read/delete keyed by
+//! [`UserId`]) and the read-only agent capability ([`AgentAvatarBlobRead`], keyed by the
+//! agent-owned [`AgentAvatarBlobPointer`]). The two pointer custodies are DISTINCT
+//! domain types; only this adapter's private key→bytes plumbing
+//! ([`SingleKindAvatarBlobs::read_stored_key`]) is shared, because physical resolution
+//! under the ambient kind is identical.
 //!
 //! The avatar leaf ships no blob backend of its own and depends only on the
 //! narrow [`AvatarBlobStore`] capability; the storage KIND is the adapter's,
@@ -22,6 +28,7 @@
 //! rebuilt under the wrong kind finds no bytes), never silent data corruption.
 
 use silverhand_backend_core::{
+    agent_avatar::{AgentAvatarBlobPointer, AgentAvatarBlobRead},
     avatar::{
         AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome, AvatarBlobStore,
         AvatarContentType, AvatarStorageFailure,
@@ -56,25 +63,24 @@ impl<B> SingleKindAvatarBlobs<B> {
 }
 
 impl<B: BlobStore> SingleKindAvatarBlobs<B> {
-    /// Rebuild the physical [`StoredBlob`] coordinate from a stored pointer under the
-    /// ambient kind. A pointer that is not a valid key (a corrupt DB row) is a
-    /// storage fault, not a product answer.
-    fn stored_from_pointer(
-        &self,
-        pointer: &AvatarBlobPointer,
-    ) -> Result<StoredBlob, AvatarStorageFailure> {
-        let key =
-            BlobStorageKey::parse(pointer.as_str()).map_err(AvatarStorageFailure::from_source)?;
+    /// Rebuild the physical [`StoredBlob`] coordinate from a stored key under the
+    /// ambient kind. A key that is not valid (a corrupt DB row) is a storage fault,
+    /// not a product answer. Shared by both custody pointers — the domain types differ,
+    /// but the physical key resolution is identical.
+    fn stored_from_key(&self, key: &str) -> Result<StoredBlob, AvatarStorageFailure> {
+        let key = BlobStorageKey::parse(key).map_err(AvatarStorageFailure::from_source)?;
         Ok(StoredBlob::new(self.kind, key))
     }
-}
 
-impl<B: BlobStore> AvatarBlobRead for SingleKindAvatarBlobs<B> {
-    async fn read(
+    /// Read the bytes at a stored key under the ambient kind. The private plumbing both
+    /// the user ([`AvatarBlobRead`]) and agent ([`AgentAvatarBlobRead`]) read
+    /// capabilities delegate to; the custody distinction lives in the pointer types,
+    /// never here.
+    async fn read_stored_key(
         &self,
-        pointer: &AvatarBlobPointer,
+        key: &str,
     ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
-        let stored = self.stored_from_pointer(pointer)?;
+        let stored = self.stored_from_key(key)?;
         match self
             .blobs
             .read(&stored)
@@ -84,6 +90,24 @@ impl<B: BlobStore> AvatarBlobRead for SingleKindAvatarBlobs<B> {
             BlobReadOutcome::Found(read) => Ok(AvatarBlobReadOutcome::Found(read.into_bytes())),
             BlobReadOutcome::Missing => Ok(AvatarBlobReadOutcome::Missing),
         }
+    }
+}
+
+impl<B: BlobStore> AvatarBlobRead for SingleKindAvatarBlobs<B> {
+    async fn read(
+        &self,
+        pointer: &AvatarBlobPointer,
+    ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
+        self.read_stored_key(pointer.as_str()).await
+    }
+}
+
+impl<B: BlobStore> AgentAvatarBlobRead for SingleKindAvatarBlobs<B> {
+    async fn read(
+        &self,
+        pointer: &AgentAvatarBlobPointer,
+    ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
+        self.read_stored_key(pointer.as_str()).await
     }
 }
 
@@ -105,7 +129,7 @@ impl<B: BlobStore> AvatarBlobStore for SingleKindAvatarBlobs<B> {
     }
 
     async fn delete(&self, pointer: &AvatarBlobPointer) -> Result<(), AvatarStorageFailure> {
-        let stored = self.stored_from_pointer(pointer)?;
+        let stored = self.stored_from_key(pointer.as_str())?;
         self.blobs
             .delete(&stored)
             .await
@@ -212,13 +236,13 @@ mod tests {
             .unwrap();
         assert_eq!(backend.live(), 1);
 
-        let read = adapter.read(&pointer).await.unwrap();
+        let read = AvatarBlobRead::read(&adapter, &pointer).await.unwrap();
         assert!(matches!(read, AvatarBlobReadOutcome::Found(bytes) if bytes == vec![1, 2, 3]));
 
         adapter.delete(&pointer).await.unwrap();
         assert_eq!(backend.live(), 0);
         assert!(matches!(
-            adapter.read(&pointer).await.unwrap(),
+            AvatarBlobRead::read(&adapter, &pointer).await.unwrap(),
             AvatarBlobReadOutcome::Missing
         ));
     }
@@ -242,5 +266,32 @@ mod tests {
             second.as_str(),
             "identical re-upload bytes must mint a distinct physical key"
         );
+    }
+
+    #[tokio::test]
+    async fn the_agent_read_capability_resolves_bytes_through_the_shared_plumbing() {
+        // The two custody pointers are distinct domain types but resolve identically at
+        // the physical layer: bytes stored under a key are readable through the agent
+        // read capability given the agent-owned pointer for that key.
+        let backend = MemoryBlobs::new(StorageKind::Local);
+        let adapter = SingleKindAvatarBlobs::new(backend.clone(), StorageKind::Local);
+        let user = UserId::parse("agent-owner").unwrap();
+        let user_pointer = adapter
+            .put(&user, AvatarContentType::Png, vec![4, 5, 6])
+            .await
+            .unwrap();
+
+        let agent_pointer = AgentAvatarBlobPointer::parse(user_pointer.as_str()).unwrap();
+        let read = AgentAvatarBlobRead::read(&adapter, &agent_pointer)
+            .await
+            .unwrap();
+        assert!(matches!(read, AvatarBlobReadOutcome::Found(bytes) if bytes == vec![4, 5, 6]));
+
+        // A pointer to no stored bytes is a clean Missing, left for the core to price.
+        let dangling = AgentAvatarBlobPointer::parse("agents/ghost/avatars/blob-0.png").unwrap();
+        assert!(matches!(
+            AgentAvatarBlobRead::read(&adapter, &dangling).await.unwrap(),
+            AvatarBlobReadOutcome::Missing
+        ));
     }
 }

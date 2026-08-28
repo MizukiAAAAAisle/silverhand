@@ -9,19 +9,24 @@
 //!     `404 {"error":"agent not found"}`. The avatar serve-ref read and the blob are
 //!     NOT touched until this passes: a refused caller learns nothing, not even
 //!     whether the agent has an avatar.
-//!  2. SERVE — only for an admitted caller: read the `(storage_key, content_type)`
-//!     pair as one typed shape and serve the bytes. An agent with no avatar, and a
-//!     row whose blob has gone Missing, are BOTH the distinct `404
-//!     {"error":"avatar not found"}` (the caller is allowed to know the agent exists,
-//!     so this second 404 is not an oracle). A below-write-path corruption or a hard
-//!     blob-backend read fault is the lane's safe `500`, with its cause logged.
+//!  2. SERVE — only for an admitted caller: read the row's own id plus the
+//!     `(storage_key, content_type)` pair as one typed shape, bind the read-back id to
+//!     the request (a SECOND source-bind, over the separate serve-ref port), and serve
+//!     the bytes. An agent with no row and a row with no avatar are BOTH the distinct
+//!     `404 {"error":"avatar not found"}` (the caller is allowed to know the agent
+//!     exists, so this second 404 is not an oracle). A below-write-path corruption, a
+//!     serve fact resolved for another agent, a DANGLING pointer (the row asserts bytes
+//!     that the backend no longer holds), or a hard blob-backend read fault are all the
+//!     lane's safe `500`, with the cause logged — matching the TypeScript route, whose
+//!     uncaught `blobStorage.serve` throws on a missing file rather than answering 404.
 //!
 //! Unlike the `users` avatar fetch this route runs the visibility authority, so it
 //! reads TWICE — the detail facts for the gate, then the narrow serve-ref for the
 //! bytes — exactly as the TypeScript route calls `canViewAgent` then
-//! `getAvatarStorageRef`. There is no ETag/304: the response is `Cache-Control:
-//! private, no-store`, and the wire cache-buster lives in the DTO's `avatar_url`
-//! query, not here.
+//! `getAvatarStorageRef`. Each read is INDEPENDENTLY source-bound to the request so a
+//! cross-wired adapter can never splice one agent's bytes onto another's authorized
+//! response. There is no ETag/304: the response is `Cache-Control: private, no-store`,
+//! and the wire cache-buster lives in the DTO's `avatar_url` query, not here.
 //!
 //! As in the sibling read routes the human principal is proof the authenticating
 //! perimeter ran; its ABSENCE is a composition fault (a fail-closed `500` that reads
@@ -37,9 +42,11 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_avatar::{AgentAvatarFetchOutcome, AgentAvatarServeRefRead, fetch_agent_avatar},
+    agent_avatar::{
+        AgentAvatarBlobRead, AgentAvatarFetchOutcome, AgentAvatarServeRefRead, fetch_agent_avatar,
+    },
     agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
-    avatar::{AvatarBlobRead, AvatarContentType},
+    avatar::AvatarContentType,
     capability::agent_view::{VisibleStages, can_view_agent},
     identity::{AgentId, Principal, UserId},
 };
@@ -71,7 +78,7 @@ pub fn router<R, S, B>(cold_read: R, serve_ref: S, blobs: B) -> Router
 where
     R: AgentDetailReadModel + Clone + Send + Sync + 'static,
     S: AgentAvatarServeRefRead,
-    B: AvatarBlobRead,
+    B: AgentAvatarBlobRead,
 {
     Router::new()
         .route(AGENT_AVATAR_PATH, get(agent_avatar::<R, S, B>))
@@ -90,7 +97,7 @@ async fn agent_avatar<R, S, B>(
 where
     R: AgentDetailReadModel,
     S: AgentAvatarServeRefRead,
-    B: AvatarBlobRead,
+    B: AgentAvatarBlobRead,
 {
     let Some(Extension(viewer)) = viewer else {
         tracing::error!("agent-avatar route reached without its human principal fact");
@@ -153,14 +160,14 @@ where
         Ok(AgentAvatarFetchOutcome::StorageUnavailable { cause }) => {
             tracing::error!(
                 error_chain = %error::describe(&cause),
-                "agent-avatar blob read failed"
+                "agent-avatar blob unavailable (dangling pointer or read fault)"
             );
             internal_error()
         }
         Err(cause) => {
             tracing::error!(
                 error_chain = %error::describe(&cause),
-                "agent-avatar serve-ref read failed"
+                "agent-avatar serve-ref read or source-bind failed"
             );
             internal_error()
         }
@@ -232,11 +239,13 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_avatar::AgentAvatarServeRef,
+        agent_avatar::{
+            AgentAvatarBlobPointer, AgentAvatarBlobRead, AgentAvatarRow, AgentAvatarServeRef,
+        },
         agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         agent_lifecycle::MaterializationStatus,
         agents::runtime::RuntimeKind,
-        avatar::{AvatarBlobPointer, AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
+        avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
         identity::{AgentId, UserId},
         persistence::PersistenceFailure,
     };
@@ -390,10 +399,10 @@ mod tests {
             }
         }
     }
-    impl AvatarBlobRead for FakeBlob {
+    impl AgentAvatarBlobRead for FakeBlob {
         async fn read(
             &self,
-            _pointer: &AvatarBlobPointer,
+            _pointer: &AgentAvatarBlobPointer,
         ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
             self.calls.fetch_add(1, SeqCst);
             if self.fail {
@@ -409,11 +418,22 @@ mod tests {
         }
     }
 
-    fn present_ref() -> AgentAvatarServeRef {
-        AgentAvatarServeRef::Present {
-            pointer: AvatarBlobPointer::parse("agents/a1/avatars/blob-0.png").unwrap(),
-            content_type: AvatarContentType::Png,
+    /// A present, source-bound serve fact: the row read back its own id (`source`) and
+    /// carries a valid agent-owned pointer + content type. The `source` is the identity
+    /// the core binds against the requested id before it touches the blob.
+    fn serve_row(source: &str) -> AgentAvatarServeRef {
+        AgentAvatarServeRef::Row {
+            source: agent(source),
+            avatar: AgentAvatarRow::Present {
+                pointer: AgentAvatarBlobPointer::parse("agents/a1/avatars/blob-0.png").unwrap(),
+                content_type: AvatarContentType::Png,
+            },
         }
+    }
+
+    /// The common case: the serve fact's read-back source matches the requested `a1`.
+    fn present_ref() -> AgentAvatarServeRef {
+        serve_row("a1")
     }
 
     struct Reply {
@@ -490,7 +510,10 @@ mod tests {
     async fn an_admitted_caller_with_no_avatar_is_avatar_not_found() {
         let reply = get(
             present("a1", Arm::Creator),
-            Ok(AgentAvatarServeRef::Absent),
+            Ok(AgentAvatarServeRef::Row {
+                source: agent("a1"),
+                avatar: AgentAvatarRow::Absent,
+            }),
             FakeBlob::idle(),
             "a1",
             true,
@@ -502,7 +525,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_clean_missing_blob_is_avatar_not_found_not_a_500() {
+    async fn a_clean_missing_blob_is_a_storage_inconsistency_not_a_404() {
+        // A present row asserts its bytes exist (parity with TS: a present ref calls
+        // `blobStorage.serve` directly, and `stat`/`readFile` ENOENT throws uncaught →
+        // 500). A dangling pointer is storage inconsistency, never `avatar not found`.
         let reply = get(
             present("a1", Arm::Creator),
             Ok(present_ref()),
@@ -511,8 +537,32 @@ mod tests {
             true,
         )
         .await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND);
-        assert_eq!(json_body(&reply), json!({ "error": "avatar not found" }));
+        assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(reply.body, b"Internal Server Error");
+        assert_eq!(reply.blob_calls, 1, "the present row was resolved against the blob");
+    }
+
+    #[tokio::test]
+    async fn a_serve_ref_for_another_agent_is_a_safe_500_with_the_blob_untouched() {
+        // P0-1 liar-reader guard: the URL asks about `a1` and the ACL admits `a1`, but a
+        // cross-wired serve-ref adapter hands back a fact whose read-back source is `a2`.
+        // The core binds `source == requested` BEFORE the blob, so this is a safe-500 and
+        // the blob is never read — no ACL-A / bytes-B splice.
+        let reply = get(
+            present("a1", Arm::Creator),
+            Ok(serve_row("a2")),
+            FakeBlob::found(vec![7, 7, 7]),
+            "a1",
+            true,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(reply.body, b"Internal Server Error");
+        assert_eq!(reply.serve_ref_calls, 1, "the serve-ref read did run");
+        assert_eq!(
+            reply.blob_calls, 0,
+            "the source-bind refuses before the mismatched bytes are served"
+        );
     }
 
     #[tokio::test]
