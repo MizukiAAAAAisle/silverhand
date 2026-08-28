@@ -27,24 +27,26 @@
 //!  - Acquiring returns [`RuntimeTransitionLockRow`] with the `AgentId` decoded from the
 //!    RETURNING row (never back-filled from the query parameter). [`begin_runtime_transition`]
 //!    refuses to mint a lock whose witnessed agent/target/started-at disagree with the
-//!    request — a liar or withheld-write adapter yields a fault, not a [`RuntimeTransitionLock`],
-//!    so no clear or spawn ever runs off an unproven lock.
+//!    request — a witness that is synthetic or inconsistent with the request yields a
+//!    fault, not a [`RuntimeTransitionLock`], so no clear or spawn ever runs off an
+//!    unproven lock.
 //!  - Committing returns the [`RuntimeTransitionAfterImage`] the write left behind, and
-//!    [`complete_runtime_transition`] seals it field by field against the request
-//!    (`runtime`, all three tuning columns, `updated_at`, and that the lock pair is
-//!    cleared) before minting [`CommittedRuntimeTransition`]. A wrong-agent, missed-tuning,
-//!    or mis-stamped write is a fault the boundary surfaces as a safe `500`, never a
-//!    success the caller acts on.
+//!    [`complete_runtime_transition`] seals it field by field (all three tuning columns,
+//!    `updated_at`, and that the lock pair is cleared) before minting
+//!    [`CommittedRuntimeTransition`]. The committed `runtime` is NOT a free coordinate:
+//!    it is derived solely from the sealed lock's `target`, and the after-image `runtime`
+//!    must equal that target — the request carries no separate runtime to disagree with
+//!    it. A wrong-agent, wrong-runtime, missed-tuning, or mis-stamped write is a fault the
+//!    boundary surfaces as a safe `500`, never a success the caller acts on.
 //!
 //! [`RuntimeTransitionLock`] is a private-ctor ownership token minted only by a sealed
-//! acquire, and [`RuntimeTransitionWrite::abort`] / [`RuntimeTransitionWrite::complete`]
-//! consume it — a caller cannot re-assemble a bare `(agent, target)` and act on a lock
-//! it never acquired. The token carries `started_at`, and the adapter folds it into the
-//! release/commit compare-and-set, so a *new* attempt that reacquires the same target
-//! gives the *old* attempt's token a different `started_at`: the old token can no longer
-//! abort or complete the new lock. That is the structural defense against the ABA the
-//! TypeScript target-only CAS is racy about — a deliberate internal strengthening with
-//! no change to observable non-ABA behavior.
+//! acquire — a caller cannot re-assemble a bare `(agent, target)` and act on a lock it
+//! never acquired. The token carries `started_at`, and the adapter folds it into the
+//! release/commit compare-and-set, so a *new* attempt that reacquires the same target at
+//! a *different* instant gives the *old* attempt's token a different `started_at`: the
+//! old token can no longer abort or complete the new lock. This is a different-started-at
+//! fence, not a full ABA defense — a reacquire that lands on the *same* millisecond
+//! stamp is out of scope, because `started_at` is a wall clock, not a unique attempt id.
 
 use std::future::Future;
 
@@ -53,15 +55,15 @@ use thiserror::Error;
 use crate::{agents::runtime::RuntimeKind, identity::AgentId, persistence::PersistenceFailure};
 
 /// The runtime change committed in one write, mirroring the TypeScript
-/// `completeRuntimeTransition` input. `runtime` is both the new `runtime` column AND the
-/// lock target the commit is guarded by, so the two can never disagree. Tuning legality
-/// (model/effort against the target runtime) is the upstream admission schema's job and
-/// the daemon spawn is the final guard; this value is the already-validated request
-/// carried verbatim to the write and sealed against the after-image.
+/// `completeRuntimeTransition` input MINUS its runtime: the committed runtime is derived
+/// solely from the sealed lock's target, never a field of this value, so the two can
+/// never disagree. This carries only the tuning the commit writes alongside the runtime.
+/// Tuning legality (model/effort against the target runtime) is the upstream admission
+/// schema's job and the daemon spawn is the final guard; this value is the
+/// already-validated request carried verbatim to the write and sealed against the
+/// after-image.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeTransitionCommit {
-    /// The runtime being committed — also the lock target this commit owns.
-    pub runtime: RuntimeKind,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub fast_mode: Option<bool>,
@@ -195,10 +197,11 @@ pub struct CommittedRuntimeTransition {
 }
 
 impl CommittedRuntimeTransition {
-    /// Bind the subject and seal the after-image field by field against the request. The
-    /// committed agent must be the lock's, the lock pair must read cleared, and every
-    /// written column (`runtime`, all three tuning fields, `updated_at`) must equal what
-    /// the request asked to write.
+    /// Bind the subject and seal the after-image field by field. The committed agent must
+    /// be the lock's, the lock pair must read cleared, the committed `runtime` must equal
+    /// the sealed lock's `target` (the only source of the committed runtime — the request
+    /// carries none), and every tuning column plus `updated_at` must equal what the
+    /// request asked to write.
     fn seal(
         lock: &RuntimeTransitionLock,
         commit: &RuntimeTransitionCommit,
@@ -220,9 +223,9 @@ impl CommittedRuntimeTransition {
                 reason: "committed after-image carries an unknown runtime token",
             }
         })?;
-        if runtime != commit.runtime {
+        if runtime != lock.target() {
             return Err(RuntimeTransitionFault::CommitWitnessMismatch {
-                reason: "committed runtime differs from the requested runtime",
+                reason: "committed runtime differs from the sealed lock target",
             });
         }
         if after.model != commit.model {
@@ -422,7 +425,6 @@ mod tests {
 
     fn commit() -> RuntimeTransitionCommit {
         RuntimeTransitionCommit {
-            runtime: RuntimeKind::Codex,
             model: Some("gpt".to_string()),
             reasoning_effort: Some("high".to_string()),
             fast_mode: Some(true),
@@ -603,8 +605,10 @@ mod tests {
         assert_eq!(sealed.updated_at(), 42);
     }
 
-    /// Every way the after-image can disagree with the request is a fault, not a success:
-    /// wrong agent, any wrong tuning column, a wrong stamp, or an uncleared lock.
+    /// Every way the after-image can disagree is a fault, not a success: wrong agent, a
+    /// committed runtime that is not the sealed lock target (the adapter cannot smuggle a
+    /// different runtime past the lock), any wrong tuning column, a wrong stamp, or an
+    /// uncleared lock.
     #[tokio::test]
     async fn complete_rejects_an_after_image_that_disagrees() {
         let (_p, lock) = a_sealed_lock().await;

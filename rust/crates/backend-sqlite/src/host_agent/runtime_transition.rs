@@ -13,10 +13,13 @@
 //! out from under the lock changes nothing and surfaces as a lost serialized CAS rather
 //! than a silent no-op. `abort` and `complete` are keyed on the ownership token minted
 //! at `begin`: the guard is the token's target AND its `started_at`, so a row a *new*
-//! attempt reacquired (same target, fresh `started_at`) matches nothing for the *old*
-//! token — the structural defense against ABA. `complete` writes the `runtime` + tuning
-//! and clears the lock in the SAME statement, so the ownership guard gates the tuning
-//! write itself.
+//! attempt reacquired at a *different* instant (same target, fresh `started_at`) matches
+//! nothing for the *old* token — a different-started-at fence, not a full ABA defense
+//! (a same-millisecond reacquire is out of scope, as `started_at` is a wall clock).
+//! `complete` writes the `runtime` + tuning and clears the lock in the SAME statement,
+//! so the ownership guard gates the tuning write itself. The committed `runtime` is bound
+//! from the token's own `target`, the same value the `WHERE` guards on, so the SET and
+//! the guard can never name two different runtimes.
 //!
 //! The `(runtime_transition_target, runtime_transition_started_at)` pair is set and
 //! cleared together in every statement, satisfying the schema's paired CHECK and its
@@ -63,9 +66,9 @@ const ABORT_TRANSITION_CAS: &str = "UPDATE agents \
         AND runtime_transition_started_at = ?";
 
 /// Commit runtime + tuning and release the lock, guarded by the owned target AND
-/// started-at, returning the after-image core seals field by field. The target column
-/// and the new `runtime` value are the same string, so the pair CHECK and the ownership
-/// guard cannot disagree.
+/// started-at, returning the after-image core seals field by field. The `runtime` set and
+/// the target guarded are bound from the SAME lock-sourced string, so the pair CHECK, the
+/// ownership guard, and the committed runtime cannot disagree.
 const COMPLETE_TRANSITION_CAS: &str = "UPDATE agents \
         SET runtime = ?, model = ?, reasoning_effort = ?, fast_mode = ?, \
             runtime_transition_target = NULL, runtime_transition_started_at = NULL, \
@@ -209,7 +212,7 @@ impl RuntimeTransitionWrite for SqliteHostAgentStore {
             .await
             .map_err(PersistenceFailure::from_source)?;
         let returned = sqlx::query(COMPLETE_TRANSITION_CAS)
-            .bind(commit.runtime.as_str())
+            .bind(lock.target().as_str())
             .bind(commit.model.as_deref())
             .bind(commit.reasoning_effort.as_deref())
             .bind(fast_mode_column(commit.fast_mode))
@@ -450,11 +453,13 @@ mod tests {
         );
     }
 
-    /// The ownership discriminator (no-ABA proof). A new attempt reacquires the same
-    /// target with a fresh started-at; the OLD token can neither abort nor complete the
-    /// new lock, because its guard binds the started-at it acquired.
+    /// The different-started-at fence. A new attempt reacquires the same target with a
+    /// fresh started-at; the OLD token can neither abort nor complete the new lock,
+    /// because its guard binds the started-at it acquired. This fences a reacquire at a
+    /// *different* instant only — a same-millisecond reacquire is out of scope, since
+    /// `started_at` is a wall clock, not a unique attempt id.
     #[tokio::test]
-    async fn a_reacquired_lock_is_not_the_old_tokens_to_touch() {
+    async fn a_reacquired_lock_at_a_different_started_at_is_not_the_old_tokens_to_touch() {
         let dir = tempfile::tempdir().unwrap();
         let path = seed_schema(&dir, "aba.db", &[USER, HOST, ACTIVE_A1]).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
@@ -471,7 +476,6 @@ mod tests {
             AbortTransition::NotHeld
         );
         let commit = RuntimeTransitionCommit {
-            runtime: RuntimeKind::Codex,
             model: None,
             reasoning_effort: None,
             fast_mode: None,
@@ -497,7 +501,6 @@ mod tests {
 
         let lock = acquire(&store, RuntimeKind::Codex, 5).await;
         let commit = RuntimeTransitionCommit {
-            runtime: RuntimeKind::Codex,
             model: Some("gpt".to_string()),
             reasoning_effort: Some("high".to_string()),
             fast_mode: Some(true),
@@ -524,6 +527,8 @@ mod tests {
         .fetch_one(store.pool())
         .await
         .unwrap();
+        // The committed runtime is the lock target (`codex`), not the row's prior runtime
+        // (`claude`) and not any commit field — the commit carries no runtime at all.
         assert_eq!(row.get::<String, _>("runtime"), "codex");
         assert_eq!(
             row.get::<Option<String>, _>("model"),
@@ -560,7 +565,6 @@ mod tests {
 
         let lock = acquire(&store, RuntimeKind::Codex, 5).await;
         let commit = RuntimeTransitionCommit {
-            runtime: RuntimeKind::Codex,
             model: None,
             reasoning_effort: None,
             fast_mode: None,
