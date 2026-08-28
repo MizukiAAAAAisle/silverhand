@@ -71,7 +71,7 @@ use crate::clock::ProcessClock;
 use crate::error;
 
 use super::agent_avatar::AGENT_AVATAR_PATH;
-use super::agent_wire::{AgentDto, agent_dto};
+use super::agent_wire::{AgentDto, reproject_committed_agent};
 
 /// The anti-enumeration refusal string, pinned to the TypeScript handler.
 const AGENT_NOT_FOUND: &str = "agent not found";
@@ -172,16 +172,13 @@ where
             let (id, announce, blob_cleanup) = effect.into_parts();
             log_lost_announce(&announce, "agent-avatar upload");
             log_blob_cleanup(&blob_cleanup, "agent-avatar upload replaced blob");
-            match project(&state.reads, &id).await {
-                Some(detail) => {
-                    let dto = agent_dto(&detail);
-                    Json(AvatarUploadResponse {
-                        avatar_url: dto.avatar_url(),
-                        agent: dto,
-                    })
-                    .into_response()
-                }
-                None => internal_error(),
+            match reproject_committed_agent(&state.reads, &id).await {
+                Ok(dto) => Json(AvatarUploadResponse {
+                    avatar_url: dto.avatar_url(),
+                    agent: dto,
+                })
+                .into_response(),
+                Err(fault) => fault.into_safe_500("agent-avatar upload", &id),
             }
         }
         // The row vanished between the gate and the repoint; the fresh blob was
@@ -283,12 +280,9 @@ where
         AgentAvatarClearOutcome::NoSuchAgent => return agent_not_found(),
     };
 
-    match project(&state.reads, &id).await {
-        Some(detail) => Json(AgentEnvelope {
-            agent: agent_dto(&detail),
-        })
-        .into_response(),
-        None => internal_error(),
+    match reproject_committed_agent(&state.reads, &id).await {
+        Ok(dto) => Json(AgentEnvelope { agent: dto }).into_response(),
+        Err(fault) => fault.into_safe_500("agent-avatar clear", &id),
     }
 }
 
@@ -359,41 +353,6 @@ where
         return Some(forbidden());
     }
     None
-}
-
-/// Re-read the committed row through the canonical projector and source-bind it. A row
-/// gone before it could be projected (a concurrent delete) or resolved for another agent
-/// is honest post-commit residue — the write is durable, but no trustworthy DTO exists.
-/// Every failure is that one shape, so `None` maps to the lane's safe `500` at the caller.
-async fn project<R>(reads: &R, id: &AgentId) -> Option<AgentDetailFacts>
-where
-    R: AgentDetailReadModel,
-{
-    match reads.read_agent_detail(id).await {
-        Ok(Some(detail)) if detail.source() == id => Some(detail),
-        Ok(Some(detail)) => {
-            tracing::error!(
-                requested = id.as_str(),
-                resolved = detail.source().as_str(),
-                "agent-avatar write projection resolved for the wrong agent"
-            );
-            None
-        }
-        Ok(None) => {
-            tracing::error!(
-                agent_id = id.as_str(),
-                "agent-avatar write committed but the row was gone before it could be projected"
-            );
-            None
-        }
-        Err(cause) => {
-            tracing::error!(
-                error_chain = %error::describe(&cause),
-                "agent-avatar write post-commit projection read failed"
-            );
-            None
-        }
-    }
 }
 
 /// Log a lost best-effort `agent_changed` hint; a delivered hint is silent.
