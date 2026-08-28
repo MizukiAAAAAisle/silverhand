@@ -103,6 +103,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "workspace_metadata_write"),
     ("backend-core", "workspace_name"),
     ("backend-core", "workspace_name_availability"),
+    // Shared binary64-exact integer primitive. #task:2227's runtime-stop codec is
+    // the first migration consumer; domain positivity remains outside this module.
+    ("backend-core", "wire_number"),
     // #task:2193 CP2 — the human credentialed-session vertical (signup/login/
     // logout + self profile). Core bounded contexts and their ports; the SQLite
     // adapters and the server route surface are the sibling entries below. Mounted at

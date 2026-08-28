@@ -7,7 +7,6 @@
 
 use std::{error::Error, fmt, time::Duration};
 
-use serde_json::{Value, json};
 use silverhand_backend_core::{
     host_runtime::{
         lifecycle::{HostLifecycleStatus, lifecycle_status},
@@ -15,7 +14,6 @@ use silverhand_backend_core::{
     },
     identity::HostId,
     persistence::PersistenceFailure,
-    runtime_credential::{RuntimeGeneration, RuntimeScope},
     scope_runtime_stop::{
         ScopeRuntimeStopOutcome, ScopeRuntimeStopPort, ScopeRuntimeStopRefusal,
         ScopeRuntimeStopTarget,
@@ -24,7 +22,8 @@ use silverhand_backend_core::{
 
 use crate::daemon_delivery::{
     HostDataPlaneAnswerMismatch, HostDataPlaneCommandKind, HostDataPlaneCustody,
-    HostDataPlaneFailure, HostDataPlaneRequest, OwningHostDataPlane, scope_wire,
+    HostDataPlaneFailure, HostDataPlaneRequest, OwningHostDataPlane,
+    runtime_stop_codec::{RuntimeStopCommand, valid_result},
 };
 
 #[derive(Clone)]
@@ -48,6 +47,7 @@ impl<H> ProductionScopeRuntimeStop<H> {
 pub enum ScopeRuntimeStopFailure {
     HostRead(PersistenceFailure),
     HostFactsMismatch { expected: HostId, actual: HostId },
+    GenerationOutOfWireRange { generation: i64 },
     RegistryUnavailable,
     NotDispatched,
     Ambiguous,
@@ -63,6 +63,9 @@ impl fmt::Display for ScopeRuntimeStopFailure {
             Self::HostRead(_) => "runtime stop host facts could not be read",
             Self::HostFactsMismatch { .. } => {
                 "runtime stop host facts did not match the requested host"
+            }
+            Self::GenerationOutOfWireRange { .. } => {
+                "runtime stop generation is outside the daemon wire range"
             }
             Self::RegistryUnavailable => "runtime stop attachment registry is unavailable",
             Self::NotDispatched => "runtime stop was proven not dispatched",
@@ -120,6 +123,15 @@ where
             HostLifecycleStatus::Active => {}
         }
 
+        // Encode before resolving the live registry. A generation the daemon cannot
+        // represent must not observe an attachment, much less enter its FIFO.
+        let command =
+            RuntimeStopCommand::encode(target.scope(), target.generation()).map_err(|source| {
+                ScopeRuntimeStopFailure::GenerationOutOfWireRange {
+                    generation: source.generation(),
+                }
+            })?;
+
         let custody = self
             .data_plane
             .resolve(target.host())
@@ -127,14 +139,7 @@ where
         let Some(custody) = custody else {
             return Ok(Err(ScopeRuntimeStopRefusal::HostAttachPending));
         };
-        stop_captured(
-            &self.data_plane,
-            custody,
-            target.scope(),
-            target.generation(),
-            self.timeout,
-        )
-        .await
+        stop_captured(&self.data_plane, custody, command, self.timeout).await
     }
 }
 
@@ -143,8 +148,7 @@ where
 pub(crate) async fn stop_captured(
     data_plane: &OwningHostDataPlane,
     custody: HostDataPlaneCustody,
-    scope: &RuntimeScope,
-    generation: RuntimeGeneration,
+    command: RuntimeStopCommand,
     timeout: Duration,
 ) -> Result<Result<ScopeRuntimeStopOutcome, ScopeRuntimeStopRefusal>, ScopeRuntimeStopFailure> {
     let expected = custody.clone();
@@ -152,11 +156,7 @@ pub(crate) async fn stop_captured(
         .dispatch(HostDataPlaneRequest {
             custody,
             kind: HostDataPlaneCommandKind::RuntimeStop,
-            params: json!({
-                "runtime_scope": scope_wire(scope),
-                "runtime_generation": generation.as_i64(),
-                "mode": "hard",
-            }),
+            params: command.into_params(),
             timeout,
         })
         .await;
@@ -194,16 +194,4 @@ pub(crate) async fn stop_captured(
         return Err(ScopeRuntimeStopFailure::ProtocolCorruption);
     }
     Ok(Ok(ScopeRuntimeStopOutcome))
-}
-
-pub(crate) fn valid_result(result: &Value) -> bool {
-    let Some(object) = result.as_object() else {
-        return false;
-    };
-    object.len() == 3
-        && object.get("mode").and_then(Value::as_str) == Some("hard")
-        && object.get("stopped").and_then(Value::as_bool).is_some()
-        && object
-            .get("exit_code")
-            .is_some_and(|value| value.is_null() || value.as_i64().is_some())
 }

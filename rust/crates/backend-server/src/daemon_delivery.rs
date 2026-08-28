@@ -1,5 +1,7 @@
 //! Authenticated daemon attachment, delivery custody and Messaging effect adapters.
 
+pub(crate) mod runtime_stop_codec;
+
 use std::{
     collections::HashMap,
     error::Error,
@@ -79,6 +81,10 @@ use crate::{
     },
     scope_events::ScopeEventHub,
     scope_runtime_stop::ProductionScopeRuntimeStop,
+};
+
+use self::runtime_stop_codec::{
+    KIND as RUNTIME_STOP_KIND, RuntimeStopCodecError, RuntimeStopCommand,
 };
 
 include!(concat!(env!("OUT_DIR"), "/daemon_admission.rs"));
@@ -1078,24 +1084,26 @@ impl DaemonCascadeEffects {
         computer: &HostId,
         seat: &AgentRuntimeSessionFacts,
     ) -> Result<(), CustodyEffectFailure> {
+        let command =
+            RuntimeStopCommand::encode(&seat.scope, seat.generation).map_err(|source| {
+                CustodyEffectFailure::from_source(CascadeDaemonError::InvalidRuntimeStopRequest(
+                    source,
+                ))
+            })?;
         let attachment = self
             .attachment(computer)
             .map_err(CustodyEffectFailure::from_source)?;
         let result = attachment
             .command(
-                "runtime_stop",
-                json!({
-                    "runtime_scope": scope_wire(&seat.scope),
-                    "runtime_generation": seat.generation.as_i64(),
-                    "mode": "hard",
-                }),
+                RUNTIME_STOP_KIND,
+                command.into_params(),
                 DEFAULT_COMMAND_TIMEOUT,
             )
             .await
             .map_err(|source| {
                 CustodyEffectFailure::from_source(CascadeDaemonError::Command(source))
             })?;
-        if !crate::scope_runtime_stop::valid_result(&result) {
+        if !runtime_stop_codec::valid_result(&result) {
             return Err(CustodyEffectFailure::from_source(
                 CascadeDaemonError::InvalidRuntimeStopResponse,
             ));
@@ -1142,6 +1150,7 @@ enum CascadeDaemonError {
     Registry(DaemonRegistryError),
     NoCurrentDaemon,
     Command(CommandDispatchError),
+    InvalidRuntimeStopRequest(RuntimeStopCodecError),
     InvalidRuntimeStopResponse,
     InvalidAgentFilesPurgeResponse,
 }
@@ -1152,6 +1161,7 @@ impl fmt::Display for CascadeDaemonError {
             Self::Registry(_) => "daemon attachment registry is unavailable",
             Self::NoCurrentDaemon => "host has no attached daemon",
             Self::Command(_) => "daemon cascade command failed",
+            Self::InvalidRuntimeStopRequest(_) => "daemon runtime_stop target is not wire-safe",
             Self::InvalidRuntimeStopResponse => "daemon returned an invalid runtime_stop response",
             Self::InvalidAgentFilesPurgeResponse => {
                 "daemon returned an invalid agent_files_purge response"
@@ -1165,6 +1175,7 @@ impl Error for CascadeDaemonError {
         match self {
             Self::Registry(source) => Some(source),
             Self::Command(source) => Some(source),
+            Self::InvalidRuntimeStopRequest(source) => Some(source),
             Self::NoCurrentDaemon
             | Self::InvalidRuntimeStopResponse
             | Self::InvalidAgentFilesPurgeResponse => None,
@@ -1368,7 +1379,8 @@ impl RuntimeRefusalCode {
 /// stay closed sets and each `parse` is still what admits a token for a kind, but
 /// the admitted value is not carried: nothing reads which code arrived, while the
 /// vocabulary decides everything — a response-level code is a refusal, and a
-/// runtime-scoped code on a host-control kind is a frame in the wrong language.
+/// runtime-scoped code on a kind without that vocabulary is a frame in the wrong
+/// language.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CommandRefusal {
     Response,
@@ -1452,7 +1464,7 @@ impl HostDataPlaneCommandKind {
         match self {
             Self::HostStatus => "host_status",
             Self::RuntimeCatalog => "host_runtime_catalog",
-            Self::RuntimeStop => "runtime_stop",
+            Self::RuntimeStop => RUNTIME_STOP_KIND,
             Self::ProxyConfigGet => "host_proxy_config_get",
             Self::ProxyConfigSet => "host_proxy_config_set",
             Self::RotateToken => "rotate_token",
@@ -1553,9 +1565,9 @@ pub(crate) enum HostDataPlaneFailure {
     TimedOut,
     /// The daemon answered with a code the closed set admits for this kind. Which
     /// code it was is deliberately not carried: no reader in this crate — and no
-    /// mapper in the TS contract for either host-control operation — distinguishes
-    /// them. What the closed set is load-bearing for is the arm itself: a refusal
-    /// leaves the connection alive, and anything outside the set does not.
+    /// consumer in this crate distinguishes them. What the closed set is
+    /// load-bearing for is the arm itself: a refusal leaves the connection alive,
+    /// and anything outside the set does not.
     Refused,
     ProtocolCorruption,
     RegistryUnavailable,
@@ -1568,9 +1580,9 @@ impl HostDataPlaneFailure {
             CommandDispatchError::Ambiguous => Self::Ambiguous,
             CommandDispatchError::TimedOut => Self::TimedOut,
             CommandDispatchError::DaemonRefused(CommandRefusal::Response) => Self::Refused,
-            // A runtime-scoped code is not admitted for a host-control kind, so
-            // reaching this arm means the frame decoded as something no
-            // host-control command can be refused with.
+            // No command admitted through this data plane accepts runtime-scoped
+            // or purge-scoped codes: runtime_stop has only response-level daemon
+            // refusals. Reaching either arm is therefore the wrong vocabulary.
             CommandDispatchError::DaemonRefused(
                 CommandRefusal::RuntimeScoped | CommandRefusal::AgentFilesPurgeScoped,
             )
@@ -1887,20 +1899,15 @@ impl RuntimeStopTransport for StopTransport {
     type Error = StopTransportError;
 
     async fn stop_exact(&self, principal: &RuntimePrincipal) -> Result<(), Self::Error> {
+        let command =
+            RuntimeStopCommand::encode(&principal.scope(), principal.custody().generation())
+                .map_err(StopTransportError::InvalidRequest)?;
         let result = self
             .attachment
-            .command(
-                "runtime_stop",
-                json!({
-                    "runtime_scope": scope_wire(&principal.scope()),
-                    "runtime_generation": principal.custody().generation().as_i64(),
-                    "mode": "hard",
-                }),
-                self.timeout,
-            )
+            .command(RUNTIME_STOP_KIND, command.into_params(), self.timeout)
             .await
             .map_err(StopTransportError::Command)?;
-        if !crate::scope_runtime_stop::valid_result(&result) {
+        if !runtime_stop_codec::valid_result(&result) {
             return Err(StopTransportError::InvalidResponse);
         }
         Ok(())
@@ -1926,6 +1933,7 @@ fn valid_agent_files_purge_result(result: &Value) -> bool {
 #[derive(Debug)]
 enum StopTransportError {
     Command(CommandDispatchError),
+    InvalidRequest(RuntimeStopCodecError),
     InvalidResponse,
 }
 
@@ -1933,6 +1941,7 @@ impl fmt::Display for StopTransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Command(_) => "runtime_stop transport failed",
+            Self::InvalidRequest(_) => "runtime_stop target is not wire-safe",
             Self::InvalidResponse => "daemon returned an invalid runtime_stop response",
         })
     }
@@ -1942,6 +1951,7 @@ impl Error for StopTransportError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Command(source) => Some(source),
+            Self::InvalidRequest(source) => Some(source),
             Self::InvalidResponse => None,
         }
     }
@@ -3387,10 +3397,8 @@ fn valid_command_response_envelope(value: &Value) -> bool {
             .get("kind")
             .and_then(Value::as_str)
             .is_some_and(|kind| {
-                matches!(
-                    kind,
-                    "runtime_start" | "runtime_stop" | "runtime_deliver" | "runtime_status"
-                ) || HostDataPlaneCommandKind::sends_wire(kind)
+                matches!(kind, "runtime_start" | "runtime_deliver" | "runtime_status")
+                    || HostDataPlaneCommandKind::sends_wire(kind)
                     || kind == "agent_files_purge"
             })
 }
@@ -3732,7 +3740,7 @@ fn spawn_options(plan: &RuntimeSpawnPlan, token: &str) -> Value {
     Value::Object(object)
 }
 
-pub(crate) fn scope_wire(scope: &RuntimeScope) -> Value {
+fn scope_wire(scope: &RuntimeScope) -> Value {
     match scope {
         RuntimeScope::ConversationSlot { agent, source } => json!({
             "kind": "conversation", "conversation_id": source.as_str(), "agent_id": agent.as_str()
@@ -4103,8 +4111,10 @@ mod tests {
                 ScopeRuntimeStopOutcome, ScopeRuntimeStopPort, ScopeRuntimeStopRefusal,
                 ScopeRuntimeStopTarget,
             },
+            wire_number::JsSafeInteger,
         };
 
+        use crate::daemon_delivery::runtime_stop_codec::RuntimeStopCommand;
         use crate::scope_runtime_stop::{
             ProductionScopeRuntimeStop, ScopeRuntimeStopFailure, stop_captured,
         };
@@ -4269,7 +4279,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn agent_slot_keeps_its_exact_shape_and_generation() {
+        async fn agent_slot_keeps_max_safe_generation_exact_on_the_wire() {
             let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
             let host = HostId::parse("host-a").unwrap();
             let (_connection, mut receive) = attach(
@@ -4284,7 +4294,7 @@ mod tests {
                 RuntimeScope::AgentSlot {
                     agent: AgentId::parse("agent-a").unwrap(),
                 },
-                23,
+                JsSafeInteger::MAX,
             );
 
             let call = tokio::spawn(async move { stop.hard_stop(&exact).await });
@@ -4293,7 +4303,7 @@ mod tests {
                 command.params,
                 json!({
                     "runtime_scope": { "kind": "agent", "agent_id": "agent-a" },
-                    "runtime_generation": 23,
+                    "runtime_generation": JsSafeInteger::MAX,
                     "mode": "hard",
                 })
             );
@@ -4365,19 +4375,18 @@ mod tests {
             let (connection_a, _receive_a) = attach(&registry, &host, instance.clone(), 4);
             let data_plane = plane(&registry);
             let captured_a = data_plane.resolve(&host).unwrap().unwrap();
-
-            registry.remove(host.as_str(), &connection_a);
-            let (_connection_b, mut receive_b) = attach(&registry, &host, instance, 4);
-            let outcome = stop_captured(
-                &data_plane,
-                captured_a,
+            let command = RuntimeStopCommand::encode(
                 &RuntimeScope::AgentSlot {
                     agent: AgentId::parse("agent-a").unwrap(),
                 },
                 silverhand_backend_core::runtime_credential::RuntimeGeneration::new(31).unwrap(),
-                Duration::from_secs(10),
             )
-            .await;
+            .unwrap();
+
+            registry.remove(host.as_str(), &connection_a);
+            let (_connection_b, mut receive_b) = attach(&registry, &host, instance, 4);
+            let outcome =
+                stop_captured(&data_plane, captured_a, command, Duration::from_secs(10)).await;
 
             assert_eq!(
                 outcome.unwrap(),
@@ -4452,6 +4461,49 @@ mod tests {
                     .unwrap(),
                 Err(ScopeRuntimeStopRefusal::HostAttachPending)
             );
+        }
+
+        #[tokio::test]
+        async fn zero_and_max_safe_plus_one_fail_before_registry_and_fifo() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host = HostId::parse("host-a").unwrap();
+            let (_connection, mut receive) = attach(
+                &registry,
+                &host,
+                DaemonInstanceId::parse("instance-a").unwrap(),
+                4,
+            );
+            let poisoned = Arc::clone(&registry.state);
+            let _ = thread::spawn(move || {
+                let _guard = poisoned.lock().unwrap();
+                panic!("poison registry after attachment for the generation discriminator");
+            })
+            .join();
+
+            for generation in [0, JsSafeInteger::MAX + 1] {
+                let exact = target(
+                    "host-a",
+                    RuntimeScope::AgentSlot {
+                        agent: AgentId::parse("agent-a").unwrap(),
+                    },
+                    generation,
+                );
+                assert!(matches!(
+                    adapter(
+                        Some(computer("host-a", Some(1), Some(2), None)),
+                        &registry
+                    )
+                    .hard_stop(&exact)
+                    .await,
+                    Err(ScopeRuntimeStopFailure::GenerationOutOfWireRange {
+                        generation: actual
+                    }) if actual == generation
+                ));
+                assert!(matches!(
+                    receive.try_recv(),
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                ));
+            }
         }
 
         #[tokio::test]
@@ -5049,7 +5101,12 @@ mod tests {
     #[test]
     fn refusal_codes_are_admitted_per_kind_and_never_invented() {
         let error = |code: &str| json!({ "code": code, "message": "why" });
-        for kind in ["runtime_start", "runtime_deliver", "host_runtime_catalog"] {
+        for kind in [
+            "runtime_start",
+            "runtime_deliver",
+            RUNTIME_STOP_KIND,
+            "host_runtime_catalog",
+        ] {
             assert_eq!(
                 CommandRefusal::decode(kind, &error("shutting_down")),
                 Some(CommandRefusal::Response)
@@ -5081,6 +5138,13 @@ mod tests {
                 CommandRefusal::decode("host_runtime_catalog", &error(code)),
                 None
             );
+            // runtime_stop has no operation-scoped refusal vocabulary. The real
+            // connection loop therefore classifies this `None` as InvalidResponse,
+            // which the owning-host data plane carries as ProtocolCorruption.
+            assert_eq!(
+                CommandRefusal::decode(RUNTIME_STOP_KIND, &error(code)),
+                None
+            );
         }
         assert_eq!(
             CommandRefusal::decode("runtime_start", &json!({ "code": "internal_error" })),
@@ -5101,6 +5165,29 @@ mod tests {
             None
         );
         assert_eq!(CommandRefusal::decode("runtime_start", &json!("why")), None);
+    }
+
+    #[test]
+    fn runtime_stop_refusal_vocabulary_stays_on_the_hard_fault_side() {
+        let error = |code: &str| json!({ "code": code, "message": "why" });
+        let response = CommandRefusal::decode(RUNTIME_STOP_KIND, &error("shutting_down"))
+            .expect("response-level refusal is admitted for runtime_stop");
+        assert!(matches!(
+            HostDataPlaneFailure::from_dispatch(CommandDispatchError::DaemonRefused(response)),
+            HostDataPlaneFailure::Refused
+        ));
+
+        // runtime_stop has no operation-scoped refusal arm. The real connection
+        // loop turns this failed decode into InvalidResponse; the shared data plane
+        // then preserves it as protocol corruption, never a placement refusal.
+        assert_eq!(
+            CommandRefusal::decode(RUNTIME_STOP_KIND, &error("agent_deleting")),
+            None
+        );
+        assert!(matches!(
+            HostDataPlaneFailure::from_dispatch(CommandDispatchError::InvalidResponse),
+            HostDataPlaneFailure::ProtocolCorruption
+        ));
     }
 
     #[test]
