@@ -49,7 +49,8 @@ use thiserror::Error;
 use crate::{
     agent_lifecycle::MaterializationStatus, agents::runtime::RuntimeKind,
     agents::session_scope::AgentSessionScope, identity::AgentId, identity::ConversationId,
-    identity::HostId, identity::UserId, messaging::MessageId, persistence::PersistenceFailure,
+    identity::HostId, identity::UserId, messaging::MessageId,
+    messaging::agent_onboarding::OnboardingWritten, persistence::PersistenceFailure,
     user_identity::ParticipantHandle,
 };
 
@@ -516,6 +517,11 @@ pub struct ActivationFlipRow {
     pub materialization_status: String,
     pub session_scope: String,
     pub created_by_user_id: String,
+    /// The row's OWN creation moment, decoded from `RETURNING created_at`. The direct
+    /// line the dependent graph opens rides THIS clock, not the activation clock, so a
+    /// retried activation resolves the same durable pair timestamp the first attempt
+    /// wrote — matching the row that authored it.
+    pub created_at: i64,
     pub updated_at: i64,
 }
 
@@ -532,6 +538,7 @@ pub struct ActivatedAgent {
     name: ParticipantHandle,
     session_scope: AgentSessionScope,
     created_by_user_id: UserId,
+    created_at: i64,
     updated_at: i64,
 }
 
@@ -584,6 +591,7 @@ impl ActivatedAgent {
             name,
             session_scope,
             created_by_user_id,
+            created_at: row.created_at,
             updated_at: now_ms,
         })
     }
@@ -602,6 +610,11 @@ impl ActivatedAgent {
 
     pub fn created_by_user_id(&self) -> &UserId {
         &self.created_by_user_id
+    }
+
+    /// The row's own `created_at`, the clock the direct line is opened on.
+    pub fn created_at(&self) -> i64 {
+        self.created_at
     }
 
     pub fn updated_at(&self) -> i64 {
@@ -625,21 +638,30 @@ pub struct AgentArmProvisioned {
 }
 
 impl AgentArmProvisioned {
-    /// Record the committed graph. Minted by the provisioning unit of work after it has
-    /// sealed the activation and written the direct line and onboarding message under one
-    /// transaction; the ids are the ones it durably wrote.
-    pub fn committed(
-        agent_id: AgentId,
+    /// Seal the committed graph from its sealed sub-facts: the activation (which names the
+    /// agent), the direct line the same transaction opened and whether that open minted it,
+    /// and the onboarding message's own sealed after-image. This is the ONLY mint — a caller
+    /// cannot recite an `active`-and-graph-complete verdict, because each sub-fact is itself
+    /// a sealed witness the adapter could not forge, and this function re-checks that the
+    /// onboarding message actually landed on the line the provisioning opened. The agent id
+    /// and message id are read from those sealed facts, never from parameters.
+    pub fn seal(
+        activated: &ActivatedAgent,
         direct_line: ConversationId,
-        onboarding_message_id: MessageId,
         pair_created: bool,
-    ) -> Self {
-        Self {
-            agent_id,
-            direct_line,
-            onboarding_message_id,
-            pair_created,
+        onboarding: OnboardingWritten,
+    ) -> Result<Self, MaterializationFault> {
+        if onboarding.conversation() != &direct_line {
+            return Err(MaterializationFault::OnboardingWitnessMismatch {
+                reason: "onboarding message landed on a line other than the opened direct line",
+            });
         }
+        Ok(Self {
+            agent_id: activated.agent_id().clone(),
+            direct_line,
+            onboarding_message_id: onboarding.id().clone(),
+            pair_created,
+        })
     }
 
     pub fn agent_id(&self) -> &AgentId {
@@ -869,6 +891,12 @@ pub enum MaterializationFault {
     ProvisioningInvariant { reason: &'static str },
     #[error("idempotency lookup witness disagreed with the request: {reason}")]
     LookupWitnessMismatch { reason: &'static str },
+    /// The onboarding message's sealed after-image landed on a conversation other than the
+    /// direct line the same unit of work opened. The graph is internally inconsistent — the
+    /// write proved a message on a line the provisioning did not name — so it surfaces as a
+    /// safe `500`, never a product answer.
+    #[error("agent onboarding witness disagreed with the provisioned graph: {reason}")]
+    OnboardingWitnessMismatch { reason: &'static str },
 }
 
 /// The creator-scoped idempotency lookup. A read, not a write, so it takes no writer
@@ -1496,6 +1524,7 @@ mod tests {
             materialization_status: "active".to_string(),
             session_scope: "agent".to_string(),
             created_by_user_id: "u1".to_string(),
+            created_at: 10,
             updated_at: now_ms,
         }
     }
@@ -1508,6 +1537,9 @@ mod tests {
         assert_eq!(sealed.session_scope(), AgentSessionScope::Agent);
         assert_eq!(sealed.created_by_user_id(), &user("u1"));
         assert_eq!(sealed.updated_at(), 7);
+        // The row's own created_at (10) rides the seal independent of the activation clock (7),
+        // so the dependent direct line can be opened on the row's durable timestamp.
+        assert_eq!(sealed.created_at(), 10);
     }
 
     #[test]
@@ -1550,6 +1582,67 @@ mod tests {
                 MaterializationFault::ActivationWitnessMismatch { .. }
             ));
         }
+    }
+
+    fn onboarding_written_on(
+        line: &ConversationId,
+        id: &str,
+    ) -> crate::messaging::agent_onboarding::OnboardingWritten {
+        use crate::messaging::agent_onboarding::{OnboardingSystemMessage, OnboardingWriteWitness};
+        let intent = OnboardingSystemMessage::agent_direct_line(
+            line.clone(),
+            crate::messaging::MessageId::parse(id).unwrap(),
+            &crate::messaging::ParticipantHandle::parse("a1").unwrap(),
+            &crate::messaging::ParticipantHandle::parse("u1").unwrap(),
+            7,
+        );
+        intent
+            .seal_written(OnboardingWriteWitness {
+                id: id.to_string(),
+                conversation: line.as_str().to_string(),
+                from_kind: "system".to_string(),
+                subtype: Some("onboarding".to_string()),
+                seq: 1,
+                head_latest_seq: 1,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn provisioned_seal_mints_from_sealed_sub_facts() {
+        let activated = ActivatedAgent::seal(&agent("a1"), 7, faithful_activation_row(7)).unwrap();
+        let line = ConversationId::parse("pair-1").unwrap();
+        let onboarding = onboarding_written_on(&line, "msg-1");
+
+        let provisioned =
+            AgentArmProvisioned::seal(&activated, line.clone(), true, onboarding).unwrap();
+        // The ids ride the sealed facts, never a parameter: the agent from the activation, the
+        // message from the onboarding write, the line from the opened pair.
+        assert_eq!(provisioned.agent_id(), &agent("a1"));
+        assert_eq!(provisioned.direct_line(), &line);
+        assert_eq!(
+            provisioned.onboarding_message_id(),
+            &crate::messaging::MessageId::parse("msg-1").unwrap()
+        );
+        assert!(provisioned.pair_created());
+    }
+
+    #[test]
+    fn provisioned_seal_rejects_an_onboarding_message_on_a_foreign_line() {
+        let activated = ActivatedAgent::seal(&agent("a1"), 7, faithful_activation_row(7)).unwrap();
+        // The message was sealed as written on `pair-1`, but the pair the provisioning opened is
+        // `pair-2`: the graph is internally inconsistent and must not mint a verdict.
+        let onboarding = onboarding_written_on(&ConversationId::parse("pair-1").unwrap(), "msg-1");
+        assert!(matches!(
+            AgentArmProvisioned::seal(
+                &activated,
+                ConversationId::parse("pair-2").unwrap(),
+                true,
+                onboarding,
+            )
+            .unwrap_err(),
+            MaterializationFault::OnboardingWitnessMismatch { .. }
+        ));
     }
 
     fn faithful_lookup_row() -> IdempotentReservationRow {

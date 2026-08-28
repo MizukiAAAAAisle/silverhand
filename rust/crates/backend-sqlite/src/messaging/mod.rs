@@ -284,6 +284,15 @@ const UPDATE_STREAM_HEAD: &str = "UPDATE conversation_stream_heads SET latest_se
 const INSERT_STREAM_HEAD: &str = "INSERT INTO conversation_stream_heads (conversation_id, \
      thread_root_id, latest_seq) VALUES (?, ?, ?)";
 
+/// Read the onboarding message's stored after-image back by id, so its shape is witnessed
+/// from the row as persisted rather than from the values bound to the INSERT.
+const READ_ONBOARDING_MESSAGE_BACK: &str =
+    "SELECT id, conversation_id, from_kind, metadata, seq FROM messages WHERE id = ?";
+/// Read the main line's stream-head ordinal (the row whose thread root is NULL), so the
+/// domain can confirm the onboarding message is at the head of its stream.
+const READ_MAIN_STREAM_HEAD_SEQ: &str = "SELECT latest_seq FROM conversation_stream_heads \
+     WHERE conversation_id = ? AND thread_root_id IS NULL";
+
 /// The cluster's list entry: the root's provenance and preview columns, alongside
 /// the same authoritative `(reply_count, last_reply_*)` aggregate the badge uses
 /// (`from_kind != 'system'`). The `agg` subquery is empty when no participant has
@@ -652,7 +661,7 @@ pub(crate) async fn bump_stream_head_on(
 pub(crate) async fn append_onboarding_system_message_on(
     conn: &mut SqliteConnection,
     intent: &messaging::agent_onboarding::OnboardingSystemMessage,
-) -> Result<(), PersistenceFailure> {
+) -> Result<messaging::agent_onboarding::OnboardingWriteWitness, PersistenceFailure> {
     let seq = reserve_next_seq_on(conn, intent.conversation())
         .await
         .map_err(|fault| match fault {
@@ -688,7 +697,48 @@ pub(crate) async fn append_onboarding_system_message_on(
     bump_stream_head_on(conn, intent.conversation(), None, seq)
         .await
         .map_err(driver)?;
-    Ok(())
+
+    // Witness the write from the DB's own after-image — the row as stored and the main-line
+    // stream head as bumped — rather than re-asserting what we bound. The metadata's JSON
+    // encoding is this layer's concern (it serialized it on the way in), so it decodes the
+    // subtype here and hands the domain the discriminator, not the blob. The domain
+    // (`OnboardingSystemMessage::seal_written`) re-derives the message's shape and head
+    // position from these raw facts; this adapter mints no verdict.
+    let message_row = sqlx::query(READ_ONBOARDING_MESSAGE_BACK)
+        .bind(intent.id().as_str())
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(driver)?;
+    let head_latest_seq = sqlx::query_scalar::<_, i64>(READ_MAIN_STREAM_HEAD_SEQ)
+        .bind(intent.conversation().as_str())
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(driver)?;
+
+    let subtype = message_row
+        .try_get::<Option<String>, _>("metadata")
+        .map_err(driver)?
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|value| {
+            value
+                .get("subtype")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        });
+
+    Ok(messaging::agent_onboarding::OnboardingWriteWitness {
+        id: message_row.try_get::<String, _>("id").map_err(driver)?,
+        conversation: message_row
+            .try_get::<String, _>("conversation_id")
+            .map_err(driver)?,
+        from_kind: message_row
+            .try_get::<String, _>("from_kind")
+            .map_err(driver)?,
+        subtype,
+        seq: message_row.try_get::<i64, _>("seq").map_err(driver)?,
+        head_latest_seq,
+    })
 }
 
 /// Open a direct pair on a caller-provided connection, composing the get-or-create mint
@@ -2716,6 +2766,7 @@ mod tests {
     /// grammar for `(conversation, ordinal)` or for the stream head.
     #[tokio::test]
     async fn the_onboarding_writer_appends_one_complete_system_cluster() {
+        use silverhand_backend_core::messaging::ParticipantHandle;
         use silverhand_backend_core::messaging::agent_onboarding::OnboardingSystemMessage;
 
         let directory = tempfile::tempdir().unwrap();
@@ -2738,13 +2789,18 @@ mod tests {
             sqlx::query(statement).execute(&mut conn).await.unwrap();
         }
 
-        let intent = OnboardingSystemMessage::new(
+        let agent_handle = ParticipantHandle::parse("Alice").unwrap();
+        let creator_handle = ParticipantHandle::parse("shiki").unwrap();
+        let intent = OnboardingSystemMessage::agent_direct_line(
             conversation.clone(),
             MessageId::parse("msg-onboard").unwrap(),
-            "welcome".to_owned(),
+            &agent_handle,
+            &creator_handle,
             2_000,
         );
-        append_onboarding_system_message_on(&mut conn, &intent)
+        // The constructor renders the body; the row must store exactly what the intent holds.
+        let expected_body = intent.content().to_owned();
+        let witness = append_onboarding_system_message_on(&mut conn, &intent)
             .await
             .unwrap();
 
@@ -2759,7 +2815,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(row.get::<String, _>("from_kind"), "system");
-        assert_eq!(row.get::<String, _>("content"), "welcome");
+        assert_eq!(row.get::<String, _>("content"), expected_body);
         assert_eq!(row.get::<i64, _>("created_at"), 2_000);
         // First ordinal in a freshly minted line.
         assert_eq!(row.get::<i64, _>("seq"), 1);
@@ -2793,6 +2849,18 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(head, 1);
+
+        // The returned witness is the row's own after-image, and it seals into the written
+        // fact — proof the adapter handed back what the domain needs to mint the verdict.
+        assert_eq!(witness.id, "msg-onboard");
+        assert_eq!(witness.conversation, "pair-1");
+        assert_eq!(witness.from_kind, "system");
+        assert_eq!(witness.subtype.as_deref(), Some("onboarding"));
+        assert_eq!(witness.seq, 1);
+        assert_eq!(witness.head_latest_seq, 1);
+        let written = intent.seal_written(witness).unwrap();
+        assert_eq!(written.id().as_str(), "msg-onboard");
+        assert_eq!(written.conversation().as_str(), "pair-1");
     }
 
     /// The entitlement read must stay bounded by the NAMES A BODY USED. It runs while

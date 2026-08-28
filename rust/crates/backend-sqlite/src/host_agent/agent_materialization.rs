@@ -27,8 +27,7 @@ use silverhand_backend_core::{
     messaging::{
         DirectPairMintIdentityMismatch, DirectPairOpenedFact, DirectPairOpenedPort,
         DirectPairParticipants, MessageId, OpenDirectPairError, ParticipantHandle,
-        PrincipalIdentity,
-        agent_onboarding::{OnboardingSystemMessage, render_direct_line_body},
+        PrincipalIdentity, agent_onboarding::OnboardingSystemMessage,
     },
     persistence::PersistenceFailure,
 };
@@ -345,7 +344,7 @@ const FLIP_TO_ACTIVE: &str = "UPDATE agents \
             updated_at = ? \
       WHERE id = ? \
         AND materialization_status = 'pending_materialization' \
-    RETURNING id, name, session_scope, created_by_user_id, materialization_status, updated_at";
+    RETURNING id, name, session_scope, created_by_user_id, materialization_status, created_at, updated_at";
 
 /// Read the creator's handle from its OWN `users` row, bound to the id the activation flip
 /// proved. Reads `name`, the canonical @-handle every principal is addressed by; an absent
@@ -362,6 +361,7 @@ fn activation_flip_row(row: &SqliteRow) -> Result<ActivationFlipRow, sqlx::Error
         materialization_status: row.try_get::<String, _>("materialization_status")?,
         session_scope: row.try_get::<String, _>("session_scope")?,
         created_by_user_id: row.try_get::<String, _>("created_by_user_id")?,
+        created_at: row.try_get::<i64, _>("created_at")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
     })
 }
@@ -499,12 +499,15 @@ async fn provision_agent_arm_on(
     })?;
 
     let recorder = RecordingDirectPairOpened::default();
+    // The direct line rides the agent row's OWN created_at — the durable, retry-stable
+    // clock the authoring row carries — so a re-activation resolves the same pair timestamp
+    // the first attempt wrote. The activation clock (`now_ms`) is only the row's updated_at.
     let direct_line = crate::messaging::open_direct_pair_on(
         conn,
         candidate_conversation,
         &recorder,
         participants,
-        now_ms,
+        activated.created_at(),
     )
     .await
     .map_err(|error| match error {
@@ -517,19 +520,33 @@ async fn provision_agent_arm_on(
         OpenDirectPairError::Announcement(never) => match never {},
     })?;
 
-    let body = render_direct_line_body(&agent_handle, &creator_handle);
-    let intent =
-        OnboardingSystemMessage::new(direct_line.clone(), onboarding_message_id, body, now_ms);
-    crate::messaging::append_onboarding_system_message_on(conn, &intent).await?;
+    // The onboarding message rides the transaction clock, not the row's created_at: it is a
+    // freshly authored event, distinct from the durable line it lands on. The intent renders
+    // its own body from the two typed handles, so no caller prose can ride the onboarding
+    // shape.
+    let intent = OnboardingSystemMessage::agent_direct_line(
+        direct_line.clone(),
+        onboarding_message_id,
+        &agent_handle,
+        &creator_handle,
+        now_ms,
+    );
+    let witness = crate::messaging::append_onboarding_system_message_on(conn, &intent).await?;
+    // The adapter only WITNESSED the write; the onboarding domain re-derives that the message
+    // landed under the system/onboarding shape at the head of the stream before it becomes a
+    // fact this unit of work will build the provisioned verdict from.
+    let onboarding = intent.seal_written(witness).map_err(|mismatch| {
+        MaterializationFault::OnboardingWitnessMismatch {
+            reason: mismatch.reason(),
+        }
+    })?;
 
-    Ok(AgentArmActivation::Provisioned(
-        AgentArmProvisioned::committed(
-            activated.agent_id().clone(),
-            direct_line,
-            intent.id().clone(),
-            recorder.pair_created(),
-        ),
-    ))
+    Ok(AgentArmActivation::Provisioned(AgentArmProvisioned::seal(
+        &activated,
+        direct_line,
+        recorder.pair_created(),
+        onboarding,
+    )?))
 }
 
 #[cfg(test)]
@@ -909,13 +926,16 @@ mod tests {
         );
     }
 
-    /// A pending agent-scoped row of the given id, seeded so the activation flip can win it.
-    fn seed_scoped_agent(id: &str, status: &str, scope: &str) -> String {
+    /// A pending agent-scoped row of the given id, seeded with the given create timestamp so
+    /// the activation flip can win it and the direct line it opens can ride the row's OWN
+    /// `created_at`.
+    fn seed_scoped_agent(id: &str, status: &str, scope: &str, created_at: i64) -> String {
         format!(
             "INSERT INTO agents \
              (id, name, display_name, runtime, host_id, created_by_user_id, created_at, \
               updated_at, materialization_status, session_scope) \
-             VALUES ('{id}', '{id}', '{id}', 'claude', 'h1', 'u1', 1, 1, '{status}', '{scope}')"
+             VALUES ('{id}', '{id}', '{id}', 'claude', 'h1', 'u1', {created_at}, {created_at}, \
+                     '{status}', '{scope}')"
         )
     }
 
@@ -946,6 +966,33 @@ mod tests {
         onboarding_message_id: MessageId,
         now_ms: i64,
     ) -> Result<AgentArmActivation, MaterializationFault> {
+        provision_and_activate_with_rollback_hook(
+            store,
+            agent,
+            candidate,
+            onboarding_message_id,
+            now_ms,
+            || async {},
+        )
+        .await
+    }
+
+    /// The same policy, with a hook fired in the window BETWEEN the graph-fault rollback and
+    /// the compensating fail. Production has no such hook — it is the falsifier's only seam to
+    /// stage a concurrent winner that commits the row to `active` while the loser is between
+    /// rolling back and stamping its fail, proving the compensating CAS cannot clobber it.
+    async fn provision_and_activate_with_rollback_hook<F, Fut>(
+        store: &SqliteHostAgentStore,
+        agent: &AgentId,
+        candidate: ConversationId,
+        onboarding_message_id: MessageId,
+        now_ms: i64,
+        after_rollback: F,
+    ) -> Result<AgentArmActivation, MaterializationFault>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
         let mut tx = store
             .begin_root_write()
             .await
@@ -962,6 +1009,7 @@ mod tests {
             }
             Err(fault) => {
                 drop(tx);
+                after_rollback().await;
                 fail_materialization(store, agent, DEPENDENT_GRAPH_FAILED_CODE, now_ms, now_ms)
                     .await?;
                 Err(fault)
@@ -973,7 +1021,15 @@ mod tests {
     async fn activation_provisions_the_agent_arm_atomically() {
         let dir = tempfile::tempdir().unwrap();
         let mut seed = base_seed();
-        seed.push(seed_scoped_agent("a1", "pending_materialization", "agent"));
+        // Reserve clock 10, activation clock 99 — the discriminator that pins WHICH clock each
+        // dependent fact rides: the direct line is the row's own artefact (created_at 10), the
+        // activation is the flip's stamp (updated_at 99).
+        seed.push(seed_scoped_agent(
+            "a1",
+            "pending_materialization",
+            "agent",
+            10,
+        ));
         let path = seed_schema(&dir, "activate.db", &seed).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
@@ -1014,6 +1070,25 @@ mod tests {
             .unwrap();
         assert_eq!(updated_at, 99);
 
+        // P0-2 discriminator: the freshly minted direct line rides the agent row's OWN
+        // created_at (10), NOT the activation clock (99). Both pair timestamps are the row's
+        // created_at — the line is a durable artefact of the row, retry-stable — while the
+        // agent row's updated_at alone carries the activation stamp.
+        let (pair_created_at, pair_updated_at): (i64, i64) = sqlx::query_as(
+            "SELECT created_at, updated_at FROM conversations WHERE id = 'pair-new'",
+        )
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            pair_created_at, 10,
+            "direct line rides the row's created_at, not the flip clock"
+        );
+        assert_eq!(
+            pair_updated_at, 10,
+            "direct line updated_at is the row's created_at too"
+        );
+
         // The onboarding system message landed on the freshly minted line as its first ordinal.
         let from_kind: String =
             sqlx::query_scalar("SELECT from_kind FROM messages WHERE id = 'msg-onboard'")
@@ -1021,6 +1096,14 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(from_kind, "system");
+        // The onboarding message, by contrast, rides the activation clock (99): it is a freshly
+        // authored event, not an artefact of the row, so its created_at is the flip's now_ms.
+        let message_created_at: i64 =
+            sqlx::query_scalar("SELECT created_at FROM messages WHERE id = 'msg-onboard'")
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(message_created_at, 99);
         let seq: i64 = sqlx::query_scalar("SELECT seq FROM messages WHERE id = 'msg-onboard'")
             .fetch_one(store.pool())
             .await
@@ -1039,7 +1122,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         for status in ["active", "failed"] {
             let mut seed = base_seed();
-            seed.push(seed_scoped_agent("a1", status, "agent"));
+            seed.push(seed_scoped_agent("a1", status, "agent", 1));
             let path = seed_schema(&dir, &format!("lost-{status}.db"), &seed).await;
             let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
@@ -1095,7 +1178,12 @@ mod tests {
     async fn a_dependent_graph_failure_rolls_back_and_stamps_a_separate_fail() {
         let dir = tempfile::tempdir().unwrap();
         let mut seed = base_seed();
-        seed.push(seed_scoped_agent("a1", "pending_materialization", "agent"));
+        seed.push(seed_scoped_agent(
+            "a1",
+            "pending_materialization",
+            "agent",
+            1,
+        ));
         // The line already exists and already holds the id the onboarding write will mint, so the
         // dependent insert collides only after the flip has won.
         seed.push(EXISTING_PAIR.to_string());
@@ -1148,5 +1236,72 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(candidate, 0);
+    }
+
+    #[tokio::test]
+    async fn a_concurrent_winner_is_never_clobbered_by_the_compensating_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut seed = base_seed();
+        seed.push(seed_scoped_agent(
+            "a1",
+            "pending_materialization",
+            "agent",
+            1,
+        ));
+        // Same graph fault as the rollback test: the line exists and already holds the id the
+        // onboarding write will mint, so the dependent insert collides after the flip wins.
+        seed.push(EXISTING_PAIR.to_string());
+        seed.push(CLASH_MESSAGE.to_string());
+        let path = seed_schema(&dir, "winner-not-clobbered.db", &seed).await;
+        let store = SqliteHostAgentStore::open(&path).await.unwrap();
+
+        // The graph fault rolls the flip back (row returns to pending). In the window before the
+        // loser stamps its compensating fail, a concurrent winner activates the row afresh —
+        // stamping its OWN clock (200) and leaving the failure code clean.
+        let fault = provision_and_activate_with_rollback_hook(
+            &store,
+            &agent("a1"),
+            ConversationId::parse("pair-new").unwrap(),
+            MessageId::parse("msg-onboard").unwrap(),
+            99,
+            || async {
+                sqlx::query(
+                    "UPDATE agents \
+                        SET materialization_status = 'active', \
+                            materialization_failed_code = NULL, \
+                            updated_at = 200 \
+                      WHERE id = 'a1' AND materialization_status = 'pending_materialization'",
+                )
+                .execute(store.pool())
+                .await
+                .expect("stage the concurrent winner");
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(fault, MaterializationFault::Persistence(_)),
+            "expected a dependent-write persistence fault, got {fault:?}"
+        );
+
+        // The compensating fail is guarded to pending|failed, so it found no row to flip: the
+        // winner's `active` status, its own clock, and its clean failure code all survive. The
+        // loser's DEPENDENT_GRAPH_FAILED_CODE never overwrote them.
+        let (status, code, updated_at): (String, Option<String>, i64) = sqlx::query_as(
+            "SELECT materialization_status, materialization_failed_code, updated_at \
+               FROM agents WHERE id = 'a1'",
+        )
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            status, "active",
+            "the winner's status must not be clobbered"
+        );
+        assert_eq!(
+            code, None,
+            "the loser's dependent code must not overwrite the winner"
+        );
+        assert_eq!(updated_at, 200, "the winner's clock must survive");
     }
 }
