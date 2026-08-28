@@ -82,15 +82,41 @@ pub struct McpProbeOutcome {
 /// A transport-neutral fault from the owning-host MCP data plane (the host is
 /// not attached, or the RPC itself failed).
 ///
-/// The concrete code taxonomy and its HTTP-status mapping are owned by #2224's
-/// data-plane root and the `backend-server` adapter; this port carries only the
-/// stable `code` and redacted `message` a handler echoes as `{error, code}`. It
-/// is a CROSS-LANE interface: the #2224 adapter must be able to produce this
-/// value directly, without a translation wrapper.
+/// The `code` is a CLOSED taxonomy: the CLI's `{error, code}` union is a stable
+/// contract, so the port can never leak an arbitrary upstream string — every
+/// unknown/transport/protocol error the #2224 adapter cannot classify collapses
+/// to [`McpDataPlaneFaultCode::DaemonInternalError`] (mirroring TS
+/// `mapDataPlaneError`, which rewrites any unrecognized failure to
+/// `daemon_internal_error`). The `backend-server` adapter maps each variant
+/// exhaustively to an HTTP status and its stable wire token. This is a
+/// CROSS-LANE interface: the #2224 adapter produces it directly, no wrapper.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct McpDataPlaneFault {
-    pub code: String,
+    pub code: McpDataPlaneFaultCode,
     pub message: String,
+}
+
+/// The closed set of MCP data-plane fault codes actually reachable on these
+/// three routes. A code outside this set does not exist on the wire: the #2224
+/// adapter folds any raw/transport/protocol error it cannot classify into
+/// [`Self::DaemonInternalError`], so the CLI's stable `code` union stays closed
+/// and no adapter can widen it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum McpDataPlaneFaultCode {
+    /// The owning host is not (yet) attached — a retriable transport gap.
+    HostAttachPending,
+    /// The RPC to the daemon timed out.
+    DaemonTimeout,
+    /// An unclassified daemon/transport/protocol failure — the closed default
+    /// for anything the adapter cannot map to a more specific code.
+    DaemonInternalError,
+    /// The daemon could not reach the agent's config filesystem.
+    FsUnavailable,
+    /// The daemon re-validated the config and rejected it (the backend is the
+    /// primary validator, but the daemon is authoritative on its own store).
+    InvalidConfig,
+    /// The agent is being deleted; its data plane is quiescing.
+    AgentDeleting,
 }
 
 /// The narrow requirement the MCP handlers consume. One agent's owning host is
@@ -139,10 +165,7 @@ mod tests {
     }
 
     impl AgentProfileMcpDataPlane for FakeDataPlane {
-        async fn read_config(
-            &self,
-            agent: &AgentId,
-        ) -> Result<Option<String>, McpDataPlaneFault> {
+        async fn read_config(&self, agent: &AgentId) -> Result<Option<String>, McpDataPlaneFault> {
             Ok(self.files.get(agent.as_str()).cloned())
         }
 

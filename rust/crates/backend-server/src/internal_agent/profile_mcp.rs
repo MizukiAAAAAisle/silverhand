@@ -41,8 +41,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
     agent_profile_mcp::{
-        AgentProfileMcpDataPlane, McpDataPlaneFault, McpProbeCommand, McpProbeOutcome,
-        McpProbePhase, McpProbeServerInfo, McpProbeTool,
+        AgentProfileMcpDataPlane, McpDataPlaneFault, McpDataPlaneFaultCode, McpProbeCommand,
+        McpProbeOutcome, McpProbePhase, McpProbeServerInfo, McpProbeTool,
     },
     mcp_config::parse_mcp_config,
     runtime_credential::RuntimePrincipal,
@@ -90,37 +90,47 @@ fn missing_credential(route: &str) -> Response {
 }
 
 /// Render a data-plane fault as the product's `{ error, code }` envelope at the
-/// status its final code maps to. The `code` is already the data-plane taxonomy's
-/// FINAL code (the adapter translated the host/daemon error into it); this maps that
-/// code to an HTTP status, the piece the port assigns to `backend-server`.
+/// status its code maps to. `code` is a CLOSED taxonomy (#2224's adapter already
+/// folded any unclassified upstream error into `DaemonInternalError`), so both
+/// the status and the stable wire token are exhaustive matches — nothing an
+/// adapter produces can widen the CLI's `code` union or leak a raw upstream string.
 fn data_plane_error(fault: McpDataPlaneFault) -> Response {
-    let status = data_plane_status(&fault.code);
     (
-        status,
-        Json(serde_json::json!({ "error": fault.message, "code": fault.code })),
+        data_plane_status(fault.code),
+        Json(serde_json::json!({
+            "error": fault.message,
+            "code": data_plane_wire_code(fault.code),
+        })),
     )
         .into_response()
 }
 
-/// Map a FINAL data-plane failure code to its HTTP status, mirroring the product's
-/// `mapDataPlaneError` result statuses (`workspace-data-plane.ts`). An unrecognized
-/// code is a `502` — the same bad-gateway default the product's mapper falls back to
-/// (`daemon_internal_error`) — because an uninterpretable fault came from upstream,
-/// not from this request. The canonical exception→code translation stays #2224's;
-/// this is only the code→status tail.
-fn data_plane_status(code: &str) -> StatusCode {
+/// The HTTP status for each closed fault code, matching the product's
+/// `mapDataPlaneError` result statuses (`workspace-data-plane.ts`). Exhaustive by
+/// construction: a new code forces a new arm here, so the code→status tail can
+/// never silently fall through.
+fn data_plane_status(code: McpDataPlaneFaultCode) -> StatusCode {
     match code {
-        "invalid_config" | "forbidden_path" | "unsupported_template" => StatusCode::BAD_REQUEST,
-        "not_found" => StatusCode::NOT_FOUND,
-        "agent_deleting" => StatusCode::CONFLICT,
-        "host_attach_pending"
-        | "registry_unavailable"
-        | "fs_unavailable"
-        | "partial_purge"
-        | "quiesce_failed" => StatusCode::SERVICE_UNAVAILABLE,
-        "daemon_timeout" => StatusCode::GATEWAY_TIMEOUT,
-        "daemon_internal_error" => StatusCode::BAD_GATEWAY,
-        _ => StatusCode::BAD_GATEWAY,
+        McpDataPlaneFaultCode::InvalidConfig => StatusCode::BAD_REQUEST,
+        McpDataPlaneFaultCode::AgentDeleting => StatusCode::CONFLICT,
+        McpDataPlaneFaultCode::HostAttachPending | McpDataPlaneFaultCode::FsUnavailable => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        McpDataPlaneFaultCode::DaemonTimeout => StatusCode::GATEWAY_TIMEOUT,
+        McpDataPlaneFaultCode::DaemonInternalError => StatusCode::BAD_GATEWAY,
+    }
+}
+
+/// The stable wire token echoed in the CLI's `{ error, code }`, matching the TS
+/// data-plane code strings. Exhaustive: the token union is the contract.
+fn data_plane_wire_code(code: McpDataPlaneFaultCode) -> &'static str {
+    match code {
+        McpDataPlaneFaultCode::HostAttachPending => "host_attach_pending",
+        McpDataPlaneFaultCode::DaemonTimeout => "daemon_timeout",
+        McpDataPlaneFaultCode::DaemonInternalError => "daemon_internal_error",
+        McpDataPlaneFaultCode::FsUnavailable => "fs_unavailable",
+        McpDataPlaneFaultCode::InvalidConfig => "invalid_config",
+        McpDataPlaneFaultCode::AgentDeleting => "agent_deleting",
     }
 }
 
@@ -233,8 +243,19 @@ where
     // `{ error, code }` envelope WITHOUT the Zod `issues[]` array — the same
     // deliberate simplification the sibling internal routes adopted; the `code`
     // discriminator is preserved.
-    let request = match serde_json::from_slice::<ProbeRequest>(&body) {
-        Ok(request) if !request.server_name.is_empty() => request,
+    //
+    // We parse to `serde_json::Value` FIRST, then strict-decode: the product's
+    // `JSON.parse` is last-wins on a duplicate key, and `Value` decoding matches it
+    // (a later key overwrites the earlier in its object map). Decoding the struct
+    // directly from the bytes would instead REJECT a duplicate field, so
+    // `{"server_name":"a","server_name":"b"}` — admitted as `b` by TS — would be a
+    // spurious 400. `deny_unknown_fields` and the non-empty check still apply on the
+    // second decode.
+    let request = match serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|value| serde_json::from_value::<ProbeRequest>(value).ok())
+    {
+        Some(request) if !request.server_name.is_empty() => request,
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -474,7 +495,7 @@ mod tests {
 
     fn clone_fault(fault: &McpDataPlaneFault) -> McpDataPlaneFault {
         McpDataPlaneFault {
-            code: fault.code.clone(),
+            code: fault.code,
             message: fault.message.clone(),
         }
     }
@@ -510,10 +531,10 @@ mod tests {
         }
     }
 
-    fn fault(code: &str) -> McpDataPlaneFault {
+    fn fault(code: McpDataPlaneFaultCode) -> McpDataPlaneFault {
         McpDataPlaneFault {
-            code: code.to_string(),
-            message: format!("{code} happened"),
+            code,
+            message: format!("{code:?} happened"),
         }
     }
 
@@ -593,7 +614,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_read_transport_fault_is_the_mapped_status_and_envelope() {
-        let data_plane = FakeDataPlane::new().on_read(Err(fault("host_attach_pending")));
+        let data_plane =
+            FakeDataPlane::new().on_read(Err(fault(McpDataPlaneFaultCode::HostAttachPending)));
         let response = injected(
             data_plane,
             "GET",
@@ -605,7 +627,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             body_json(response).await,
-            json!({ "error": "host_attach_pending happened", "code": "host_attach_pending" })
+            json!({ "error": "HostAttachPending happened", "code": "host_attach_pending" })
         );
     }
 
@@ -671,7 +693,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_write_daemon_fault_is_the_mapped_status() {
-        let data_plane = FakeDataPlane::new().on_write(Err(fault("agent_deleting")));
+        let data_plane =
+            FakeDataPlane::new().on_write(Err(fault(McpDataPlaneFaultCode::AgentDeleting)));
         let response = injected(
             data_plane,
             "POST",
@@ -787,7 +810,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_probe_transport_fault_is_the_mapped_status() {
-        let data_plane = FakeDataPlane::new().on_probe(Err(fault("daemon_timeout")));
+        let data_plane =
+            FakeDataPlane::new().on_probe(Err(fault(McpDataPlaneFaultCode::DaemonTimeout)));
         let response = injected(
             data_plane,
             "POST",
@@ -798,6 +822,29 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
         assert_eq!(body_json(response).await["code"], "daemon_timeout");
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_server_name_is_last_wins_matching_js() {
+        // The product's JSON.parse is last-wins on a duplicate key, so a body with
+        // two `server_name`s admits the LAST. Decoding the struct directly would
+        // reject the duplicate as a 400; parsing to Value first reproduces JS. The
+        // raw JSON is hand-written because `json!` cannot express a duplicate key.
+        let data_plane = FakeDataPlane::new();
+        let response = injected(
+            data_plane.clone(),
+            "POST",
+            "/internal/agents/a1/profile/mcp/probe",
+            Some(principal("a1")),
+            Body::from(r#"{"server_name":"first","server_name":"second"}"#),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        // The LAST value is what reached the port.
+        assert_eq!(
+            data_plane.probed_command(),
+            Some(("second".to_string(), false))
+        );
     }
 
     #[tokio::test]
@@ -921,39 +968,37 @@ mod tests {
         assert_eq!(data_plane.asked_for(), vec!["a1".to_string()]);
     }
 
-    // ---- status mapping ----
+    // ---- status + wire mapping ----
 
+    /// Every closed fault code maps to its product HTTP status AND its stable wire
+    /// token. Exhaustive over the enum: a new variant forces a new row here, so a
+    /// code can never fall through to a wildcard or leak a raw upstream string.
     #[test]
-    fn the_data_plane_status_mapping_matches_the_product_table() {
-        assert_eq!(data_plane_status("invalid_config"), StatusCode::BAD_REQUEST);
-        assert_eq!(data_plane_status("forbidden_path"), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            data_plane_status("unsupported_template"),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(data_plane_status("not_found"), StatusCode::NOT_FOUND);
-        assert_eq!(data_plane_status("agent_deleting"), StatusCode::CONFLICT);
-        assert_eq!(
-            data_plane_status("host_attach_pending"),
-            StatusCode::SERVICE_UNAVAILABLE
-        );
-        assert_eq!(
-            data_plane_status("registry_unavailable"),
-            StatusCode::SERVICE_UNAVAILABLE
-        );
-        assert_eq!(
-            data_plane_status("fs_unavailable"),
-            StatusCode::SERVICE_UNAVAILABLE
-        );
-        assert_eq!(
-            data_plane_status("daemon_timeout"),
-            StatusCode::GATEWAY_TIMEOUT
-        );
-        assert_eq!(
-            data_plane_status("daemon_internal_error"),
-            StatusCode::BAD_GATEWAY
-        );
-        // An unrecognized upstream code is the bad-gateway default.
-        assert_eq!(data_plane_status("nonsense_code"), StatusCode::BAD_GATEWAY);
+    fn every_fault_code_maps_to_its_status_and_wire_token() {
+        use McpDataPlaneFaultCode::*;
+        let table = [
+            (InvalidConfig, StatusCode::BAD_REQUEST, "invalid_config"),
+            (AgentDeleting, StatusCode::CONFLICT, "agent_deleting"),
+            (
+                HostAttachPending,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "host_attach_pending",
+            ),
+            (
+                FsUnavailable,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "fs_unavailable",
+            ),
+            (DaemonTimeout, StatusCode::GATEWAY_TIMEOUT, "daemon_timeout"),
+            (
+                DaemonInternalError,
+                StatusCode::BAD_GATEWAY,
+                "daemon_internal_error",
+            ),
+        ];
+        for (code, status, wire) in table {
+            assert_eq!(data_plane_status(code), status, "status for {code:?}");
+            assert_eq!(data_plane_wire_code(code), wire, "wire token for {code:?}");
+        }
     }
 }

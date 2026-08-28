@@ -232,7 +232,9 @@ mod tests {
     #[tokio::test]
     async fn a_present_row_binds_and_a_missing_row_is_none() {
         let mut profiles = FakeProfiles::default();
-        profiles.rows.insert("a1".to_string(), fact("a1", "agent-one"));
+        profiles
+            .rows
+            .insert("a1".to_string(), fact("a1", "agent-one"));
 
         let bound = read_self_profile(&profiles, &agent("a1"))
             .await
@@ -254,7 +256,10 @@ mod tests {
         };
         let outcome = read_self_profile(&liar, &agent("a1")).await;
         match outcome {
-            Err(ProfileReadFault::Source(ProfileSourceViolation::Id { requested, returned })) => {
+            Err(ProfileReadFault::Source(ProfileSourceViolation::Id {
+                requested,
+                returned,
+            })) => {
                 assert_eq!(requested, "a1");
                 assert_eq!(returned, "someone-else");
             }

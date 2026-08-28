@@ -233,7 +233,9 @@ where
 
     // 3. Horizon — only when the target is a DIFFERENT workspace than the source.
     if source_workspace.as_ref() != Some(&target_workspace)
-        && !horizon.can_access_workspace(caller, &target_workspace).await?
+        && !horizon
+            .can_access_workspace(caller, &target_workspace)
+            .await?
     {
         return Ok(PeerProfileOutcome::HorizonForbidden);
     }
@@ -679,8 +681,14 @@ mod tests {
         .await
         .expect("no fault");
         assert_eq!(outcome, PeerProfileOutcome::Profile(fact("t1", "target")));
-        assert!(!horizon.consulted(), "same-workspace target skips the horizon");
-        assert!(capability.consulted(), "the capability gate is always consulted");
+        assert!(
+            !horizon.consulted(),
+            "same-workspace target skips the horizon"
+        );
+        assert!(
+            capability.consulted(),
+            "the capability gate is always consulted"
+        );
     }
 
     /// Cross-workspace target outside the caller's horizon → `HorizonForbidden`, and
@@ -736,7 +744,10 @@ mod tests {
         .expect("no fault");
         assert_eq!(outcome, PeerProfileOutcome::CapabilityDenied);
         assert!(capability.consulted());
-        assert!(!reader.consulted(), "a capability refusal never reaches the reader");
+        assert!(
+            !reader.consulted(),
+            "a capability refusal never reaches the reader"
+        );
         assert!(!membership.consulted());
     }
 
@@ -763,7 +774,10 @@ mod tests {
         .await
         .expect("no fault");
         assert_eq!(outcome, PeerProfileOutcome::Profile(fact("t1", "target")));
-        assert!(horizon.consulted(), "an AgentSlot target always differs from a null source");
+        assert!(
+            horizon.consulted(),
+            "an AgentSlot target always differs from a null source"
+        );
         assert!(capability.consulted());
     }
 
@@ -791,6 +805,9 @@ mod tests {
         .expect("no fault");
         assert_eq!(outcome, PeerProfileOutcome::NotFound);
         assert!(reader.consulted());
-        assert!(!membership.consulted(), "an unknown handle has nothing to check");
+        assert!(
+            !membership.consulted(),
+            "an unknown handle has nothing to check"
+        );
     }
 }

@@ -163,18 +163,16 @@ fn validate_config(json: &Value) -> Result<McpConfig, ConfigIssue> {
     // `mcpServers` defaults to `{}` only when ABSENT; an explicit `null` is a
     // value the record rejects, so it is not treated as the default.
     if let Some(raw_servers) = object.get("mcpServers") {
-        let entries = raw_servers.as_object().ok_or_else(|| {
-            ConfigIssue::at(vec!["mcpServers".to_string()], "expected an object")
-        })?;
+        let entries = raw_servers
+            .as_object()
+            .ok_or_else(|| ConfigIssue::at(vec!["mcpServers".to_string()], "expected an object"))?;
         for (name, value) in entries {
             let name_path = vec!["mcpServers".to_string(), name.clone()];
             if !is_valid_server_name(name) {
                 // The one product-authored message, reproduced verbatim.
                 return Err(ConfigIssue::at(
                     name_path,
-                    format!(
-                        "invalid MCP server name \"{name}\": use 1-64 chars of [A-Za-z0-9_-]"
-                    ),
+                    format!("invalid MCP server name \"{name}\": use 1-64 chars of [A-Za-z0-9_-]"),
                 ));
             }
             let server =
@@ -412,7 +410,10 @@ mod tests {
             panic!("expected stdio");
         };
         assert_eq!(command, "run");
-        assert_eq!(args.as_deref(), Some(["a".to_string(), "b".to_string()].as_slice()));
+        assert_eq!(
+            args.as_deref(),
+            Some(["a".to_string(), "b".to_string()].as_slice())
+        );
         assert_eq!(env.as_ref().unwrap().get("K"), Some(&"V".to_string()));
     }
 
@@ -491,8 +492,10 @@ mod tests {
     #[test]
     fn remote_rejects_unknown_keys() {
         assert_eq!(
-            parse(r#"{"mcpServers": {"a": {"type": "http", "url": "https://x", "command": "run"}}}"#)
-                .unwrap_err(),
+            parse(
+                r#"{"mcpServers": {"a": {"type": "http", "url": "https://x", "command": "run"}}}"#
+            )
+            .unwrap_err(),
             "invalid MCP config at mcpServers.a: unexpected key \"command\""
         );
     }
