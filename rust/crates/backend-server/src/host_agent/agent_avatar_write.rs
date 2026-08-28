@@ -429,53 +429,85 @@ struct UploadedFile {
     content_type: String,
 }
 
-/// Find the FIRST multipart part named `file`, mirroring `form.get('file')`. The part
-/// must be a file (carry a filename) to be a `File` in the product's sense; a same-named
-/// non-file part yields `Ok(None)` (→ `file field required`). A stream/decoding fault
-/// yields `Err` (→ the `formData()` throw's 400).
+/// Decode the WHOLE multipart envelope, mirroring `await c.req.formData()` followed by
+/// `form.get('file')`. `formData()` parses EVERY part before any field is inspected, so a
+/// malformed/truncated part ANYWHERE is the transport `400` — even after a valid `file`
+/// part, and even past the domain size cap. We therefore keep the first `file`-named slot's
+/// decision (first-wins, like `form.get`) but still drain every remaining part (and the file
+/// part's own bytes past `cap + 1`) to completion, so a trailing fault refuses at transport
+/// before the domain validator ever runs. `Ok(Some)` is that first file; `Ok(None)` is
+/// `file field required` (no `file` part, or a same-named non-file part); `Err` is the
+/// `formData()` throw's `400`.
 async fn first_file_field(
     multipart: &mut Multipart,
 ) -> Result<Option<UploadedFile>, axum::extract::multipart::MultipartError> {
-    while let Some(field) = multipart.next_field().await? {
-        if field.name() != Some("file") {
-            continue;
+    // Outer `Some` = the first `file`-named slot has been claimed; inner `Option` = it was a
+    // file (`Some`) or a same-named non-file (`None`). The claim is made on the first match
+    // but the loop runs to the end regardless, so `?` still surfaces a later part's fault.
+    let mut claimed: Option<Option<UploadedFile>> = None;
+    while let Some(mut field) = multipart.next_field().await? {
+        if claimed.is_none() && field.name() == Some("file") {
+            if field.file_name().is_none() {
+                // A non-file `file` slot is `file field required`, but only AFTER the whole
+                // envelope decodes cleanly — so drain it and keep parsing the rest.
+                drain_field(&mut field).await?;
+                claimed = Some(None);
+            } else {
+                // `input.contentType.toLowerCase()`: media types are ASCII; lowercase so a
+                // cased type cannot slip past the domain allowlist. No trim, no parameter
+                // stripping — the domain validator owns those.
+                let content_type = field
+                    .content_type()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(DEFAULT_UPLOAD_CONTENT_TYPE)
+                    .to_ascii_lowercase();
+                let bytes = read_field_bounded(&mut field).await?;
+                claimed = Some(Some(UploadedFile {
+                    bytes,
+                    content_type,
+                }));
+            }
+        } else {
+            // Not the claimed slot: drain fully with zero accumulation so its bytes still pass
+            // through the parser and any fault becomes the transport `400`.
+            drain_field(&mut field).await?;
         }
-        if field.file_name().is_none() {
-            return Ok(None);
-        }
-        let content_type = field
-            .content_type()
-            .filter(|value| !value.is_empty())
-            .unwrap_or(DEFAULT_UPLOAD_CONTENT_TYPE)
-            .to_owned();
-        let bytes = read_field_bounded(field).await?;
-        return Ok(Some(UploadedFile {
-            bytes,
-            content_type,
-        }));
     }
-    Ok(None)
+    Ok(claimed.flatten())
 }
 
-/// Read a multipart file part into memory, bounded at `AVATAR_MAX_BYTES + 1` — enough
-/// for the domain validator to return the exact `avatar_too_large`, never more. axum
-/// applies no envelope cap of its own (the served app owns the global request limit, an
-/// integration seam this leaf does not mount), so an unbounded `field.bytes()` would
-/// buffer an arbitrarily large body before the `413` fired.
+/// Read a multipart file part into memory, bounded at `AVATAR_MAX_BYTES + 1` — enough for
+/// the domain validator to return the exact `avatar_too_large`, never more — while still
+/// draining the field to its end. axum applies no envelope cap of its own (the served app
+/// owns the global request limit, an integration seam this leaf does not mount), so an
+/// unbounded `field.bytes()` would buffer an arbitrarily large body; but stopping the READ
+/// at the cap without draining would leave a truncated tail unparsed, so we keep pulling
+/// chunks (discarding past the cap) to preserve the `formData()` parse-before-validate order.
 async fn read_field_bounded(
-    mut field: axum::extract::multipart::Field<'_>,
+    field: &mut axum::extract::multipart::Field<'_>,
 ) -> Result<Vec<u8>, axum::extract::multipart::MultipartError> {
     let limit = AVATAR_MAX_BYTES as usize + 1;
     let mut bytes = Vec::new();
     while let Some(chunk) = field.chunk().await? {
-        let room = limit - bytes.len();
-        if chunk.len() >= room {
-            bytes.extend_from_slice(&chunk[..room]);
-            break;
+        if bytes.len() < limit {
+            let room = limit - bytes.len();
+            let take = room.min(chunk.len());
+            bytes.extend_from_slice(&chunk[..take]);
         }
-        bytes.extend_from_slice(&chunk);
+        // Past the cap we keep pulling to drain the field (and surface any parse fault),
+        // but retain nothing more.
     }
     Ok(bytes)
+}
+
+/// Pull a field to its end, discarding its bytes. Used to complete the `formData()`-equivalent
+/// full decode of parts this handler does not keep; any stream/parse fault propagates as the
+/// transport `400`.
+async fn drain_field(
+    field: &mut axum::extract::multipart::Field<'_>,
+) -> Result<(), axum::extract::multipart::MultipartError> {
+    while field.chunk().await?.is_some() {}
+    Ok(())
 }
 
 // ===========================================================================
@@ -972,6 +1004,29 @@ mod tests {
         out
     }
 
+    /// A body whose FIRST `file` part is complete and valid, followed by a second part that
+    /// is opened but truncated — its data never terminates with a boundary, so the multipart
+    /// parser hits end-of-stream mid-part and faults. Drives the "drain the whole envelope"
+    /// contract: the valid first file must not shortcut past the malformed tail.
+    fn multipart_valid_file_then_truncated_part() -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+        out.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"file\"; filename=\"a.png\"\r\n",
+        );
+        out.extend_from_slice(b"Content-Type: image/png\r\n\r\n");
+        out.extend_from_slice(&[1, 2, 3]);
+        // Open a second part, then cut the stream off inside its data with no closing
+        // boundary — a premature end the parser cannot complete.
+        out.extend_from_slice(format!("\r\n--{BOUNDARY}\r\n").as_bytes());
+        out.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"junk\"; filename=\"b.bin\"\r\n",
+        );
+        out.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+        out.extend_from_slice(b"DANGLING-NO-CLOSING-BOUNDARY");
+        out
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn post_with(
         reads: FakeReads,
@@ -1181,14 +1236,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_non_creator_who_can_see_it_is_forbidden_before_the_body_is_read() {
-        // The gate runs BEFORE multipart parse: a valid body still gets 403, not 400.
+    async fn a_non_creator_is_forbidden_before_the_body_is_touched() {
+        // Discriminating input: a body that the transport layer would REJECT if it ran
+        // first (a non-multipart `application/json` body → `multipart_required` 400). The
+        // caller can see the agent but did not create it, so the authority gate must refuse
+        // FIRST with 403 — never 400. If the multipart parse ever migrates ahead of the
+        // gate, this flips to 400 and the regression is caught. No blob put, no write.
         let blobs = FakeBlobs::new();
-        let reply = post_upload(
+        let reply = post_with(
             FakeReads::new(present(workspace_only_facts()), present(creator_facts())),
             FakeWrites::new(WriteFixture::Row(AgentProfileRowWrite::NoSuchAgent)),
             blobs.clone(),
             FakeSink::new(false),
+            "a1",
+            true,
+            "application/json",
+            b"{}".to_vec(),
         )
         .await;
         assert_eq!(reply.status, StatusCode::FORBIDDEN);
@@ -1322,7 +1385,82 @@ mod tests {
         assert_eq!(reply.writes, 0);
     }
 
-    // ================= POST write-stage outcomes =================
+    #[tokio::test]
+    async fn a_cased_media_type_is_lowercased_before_the_domain_allowlist() {
+        // `input.contentType.toLowerCase()`: `IMAGE/PNG` must pass the allowlist and reach
+        // the put, exactly as `image/png` does.
+        let blobs = FakeBlobs::new();
+        let reply = post_with(
+            FakeReads::new(
+                present(creator_facts()),
+                present(projected_facts(Some("agents/a1/avatars/blob-0.png"))),
+            ),
+            FakeWrites::new(WriteFixture::Row(AgentProfileRowWrite::Committed {
+                before: before(AgentAvatarRow::Absent),
+                row: committed(present_avatar(FRESH)),
+            })),
+            blobs.clone(),
+            FakeSink::new(false),
+            "a1",
+            true,
+            &format!("multipart/form-data; boundary={BOUNDARY}"),
+            multipart_file(Some("a.png"), Some("IMAGE/PNG"), &[1, 2, 3]),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(blobs.puts(), 1, "a cased-but-valid type still reaches the put");
+    }
+
+    #[tokio::test]
+    async fn lowercasing_does_not_strip_parameters_so_a_charset_type_is_still_415() {
+        // Lowercasing is the ONLY normalization: `IMAGE/PNG; CHARSET=X` lowercases to
+        // `image/png; charset=x`, which is NOT the bare `image/png` the allowlist admits —
+        // parameters are not stripped, so it is still the unsupported-type 415.
+        let reply = post_with(
+            FakeReads::new(present(creator_facts()), present(creator_facts())),
+            FakeWrites::new(WriteFixture::Row(AgentProfileRowWrite::NoSuchAgent)),
+            FakeBlobs::new(),
+            FakeSink::new(false),
+            "a1",
+            true,
+            &format!("multipart/form-data; boundary={BOUNDARY}"),
+            multipart_file(Some("a.png"), Some("IMAGE/PNG; CHARSET=X"), &[1, 2, 3]),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(
+            parsed(&reply),
+            json!({
+                "error": "Avatar must be a PNG, JPEG, GIF, or WEBP image.",
+                "code": "avatar_unsupported_type"
+            })
+        );
+        assert_eq!(reply.writes, 0);
+    }
+
+    #[tokio::test]
+    async fn a_malformed_trailing_part_refuses_at_transport_even_after_a_valid_file() {
+        // `formData()` decodes the WHOLE envelope before `form.get('file')`, so a valid first
+        // `file` part followed by a truncated/malformed trailing part is the transport 400 —
+        // the domain never runs, no blob is put, no row is written. This kills a regression
+        // that returns on the first file without draining the rest.
+        let blobs = FakeBlobs::new();
+        let reply = post_with(
+            FakeReads::new(present(creator_facts()), present(creator_facts())),
+            FakeWrites::new(WriteFixture::Row(AgentProfileRowWrite::NoSuchAgent)),
+            blobs.clone(),
+            FakeSink::new(false),
+            "a1",
+            true,
+            &format!("multipart/form-data; boundary={BOUNDARY}"),
+            multipart_valid_file_then_truncated_part(),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed(&reply), json!({ "error": "multipart/form-data required" }));
+        assert_eq!(blobs.puts(), 0, "a transport refusal never puts a blob");
+        assert_eq!(reply.writes, 0);
+    }
 
     #[tokio::test]
     async fn a_storage_put_failure_is_the_avatar_storage_failed_400_and_never_writes() {
