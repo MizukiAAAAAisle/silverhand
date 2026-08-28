@@ -1,14 +1,22 @@
 //! The durable runtime-transition lock: acquire, release, and commit-and-release,
 //! each a compare-and-set under the same root-write reservation the other axes use.
 //!
+//! This adapter WITNESSES; it never mints the domain verdict. Each write projects the
+//! row it actually touched from its own `RETURNING` clause — the acquired lock's
+//! `id`/`target`/`started_at`, or the committed after-image's every column — and the
+//! core free functions ([`begin_runtime_transition`], [`complete_runtime_transition`])
+//! bind the subject and seal it against the request. The adapter cannot claim success
+//! for a row it did not touch: no `RETURNING` row means no witness.
+//!
 //! `begin` is a pre-read then a compare-and-set that turns a null lock into a target;
 //! the `WHERE` re-states every precondition the pre-read observed, so a row that moved
-//! out from under the lock changes nothing and surfaces as a lost serialized CAS
-//! rather than a silent no-op. `abort` and `complete` are keyed compare-and-sets on
-//! the target the caller owns: a row taken by another attempt matches nothing, so it
-//! is `NotHeld` / `Lost`, never a second write. `complete` writes the `runtime` +
-//! tuning and clears the lock in the SAME statement, so the ownership guard gates the
-//! tuning write itself.
+//! out from under the lock changes nothing and surfaces as a lost serialized CAS rather
+//! than a silent no-op. `abort` and `complete` are keyed on the ownership token minted
+//! at `begin`: the guard is the token's target AND its `started_at`, so a row a *new*
+//! attempt reacquired (same target, fresh `started_at`) matches nothing for the *old*
+//! token — the structural defense against ABA. `complete` writes the `runtime` + tuning
+//! and clears the lock in the SAME statement, so the ownership guard gates the tuning
+//! write itself.
 //!
 //! The `(runtime_transition_target, runtime_transition_started_at)` pair is set and
 //! cleared together in every statement, satisfying the schema's paired CHECK and its
@@ -19,8 +27,9 @@ use silverhand_backend_core::{
     identity::AgentId,
     persistence::PersistenceFailure,
     runtime_transition::{
-        AbortTransition, BeginTransition, CompleteTransition, RuntimeTransitionCommit,
-        RuntimeTransitionWrite,
+        AbortTransition, BeginTransitionRecord, CompleteTransitionRecord,
+        RuntimeTransitionAfterImage, RuntimeTransitionCommit, RuntimeTransitionLock,
+        RuntimeTransitionLockRow, RuntimeTransitionWrite,
     },
 };
 use sqlx::{Row, sqlite::SqliteRow};
@@ -34,33 +43,41 @@ const SELECT_BEGIN_PRECHECK: &str =
     "SELECT deletion_started_at, runtime_transition_target FROM agents WHERE id = ?";
 
 /// Acquire: a null lock becomes `target` with its paired started-at. The `WHERE`
-/// re-states the preconditions the pre-read observed as the serialized compare-and-set.
+/// re-states the preconditions the pre-read observed as the serialized compare-and-set,
+/// and `RETURNING` hands back the row the write touched so core can prove the subject.
 /// It does NOT bump `updated_at` — the runtime has not changed yet, matching the
 /// TypeScript `beginRuntimeTransition`.
 const BEGIN_TRANSITION_CAS: &str = "UPDATE agents \
         SET runtime_transition_target = ?, runtime_transition_started_at = ? \
       WHERE id = ? \
         AND runtime_transition_target IS NULL \
-        AND deletion_started_at IS NULL";
+        AND deletion_started_at IS NULL \
+    RETURNING id, runtime_transition_target, runtime_transition_started_at";
 
-/// Release a lock held for the caller's target, clearing the pair together.
+/// Release a lock the caller owns, keyed on BOTH its target and its started-at so a
+/// reacquired row (fresh started-at) is not the caller's to release.
 const ABORT_TRANSITION_CAS: &str = "UPDATE agents \
         SET runtime_transition_target = NULL, runtime_transition_started_at = NULL \
       WHERE id = ? \
-        AND runtime_transition_target = ?";
+        AND runtime_transition_target = ? \
+        AND runtime_transition_started_at = ?";
 
-/// Commit runtime + tuning and release the lock, guarded by the owned target. The
-/// target column and the new `runtime` value are the same string, so the pair CHECK
-/// and the ownership guard cannot disagree.
+/// Commit runtime + tuning and release the lock, guarded by the owned target AND
+/// started-at, returning the after-image core seals field by field. The target column
+/// and the new `runtime` value are the same string, so the pair CHECK and the ownership
+/// guard cannot disagree.
 const COMPLETE_TRANSITION_CAS: &str = "UPDATE agents \
         SET runtime = ?, model = ?, reasoning_effort = ?, fast_mode = ?, \
             runtime_transition_target = NULL, runtime_transition_started_at = NULL, \
             updated_at = ? \
       WHERE id = ? \
-        AND runtime_transition_target = ?";
+        AND runtime_transition_target = ? \
+        AND runtime_transition_started_at = ? \
+    RETURNING id, runtime, model, reasoning_effort, fast_mode, updated_at, \
+              runtime_transition_target, runtime_transition_started_at";
 
 /// The writer was reserved and every precondition the pre-read observed still held, yet
-/// the acquiring compare-and-set changed no row. Under `BEGIN IMMEDIATE` nothing else
+/// the acquiring compare-and-set returned no row. Under `BEGIN IMMEDIATE` nothing else
 /// can have written the row, so this is a broken invariant, not a product answer.
 #[derive(Debug, Error)]
 #[error("begin runtime transition lost its serialized compare-and-set")]
@@ -85,13 +102,39 @@ fn fast_mode_column(fast_mode: Option<bool>) -> Option<i64> {
     fast_mode.map(|on| if on { 1 } else { 0 })
 }
 
+/// Project the acquired lock from the `begin` `RETURNING` row. The `AgentId` is decoded
+/// from the row's OWN `id` column, never back-filled from the query parameter; the lock
+/// columns are non-null because this statement just set them.
+fn begin_lock_row(row: &SqliteRow) -> Result<RuntimeTransitionLockRow, sqlx::Error> {
+    Ok(RuntimeTransitionLockRow {
+        agent_id: super::decode::agent_id(row.try_get::<String, _>("id")?)?,
+        target: row.try_get::<String, _>("runtime_transition_target")?,
+        started_at: row.try_get::<i64, _>("runtime_transition_started_at")?,
+    })
+}
+
+/// Project the committed after-image from the `complete` `RETURNING` row. The id rides
+/// the row's OWN `id`; the lock pair is read back so core can prove it cleared.
+fn complete_after_image(row: &SqliteRow) -> Result<RuntimeTransitionAfterImage, sqlx::Error> {
+    Ok(RuntimeTransitionAfterImage {
+        agent_id: super::decode::agent_id(row.try_get::<String, _>("id")?)?,
+        runtime: row.try_get::<String, _>("runtime")?,
+        model: row.try_get::<Option<String>, _>("model")?,
+        reasoning_effort: row.try_get::<Option<String>, _>("reasoning_effort")?,
+        fast_mode: row.try_get::<Option<i64>, _>("fast_mode")?,
+        updated_at: row.try_get::<i64, _>("updated_at")?,
+        transition_target: row.try_get::<Option<String>, _>("runtime_transition_target")?,
+        transition_started_at: row.try_get::<Option<i64>, _>("runtime_transition_started_at")?,
+    })
+}
+
 impl RuntimeTransitionWrite for SqliteHostAgentStore {
     async fn begin(
         &self,
         agent: &AgentId,
         target: RuntimeKind,
         now_ms: i64,
-    ) -> Result<BeginTransition, PersistenceFailure> {
+    ) -> Result<BeginTransitionRecord, PersistenceFailure> {
         let mut tx = self
             .begin_root_write()
             .await
@@ -103,46 +146,46 @@ impl RuntimeTransitionWrite for SqliteHostAgentStore {
             .await
             .map_err(PersistenceFailure::from_source)?
         else {
-            return Ok(BeginTransition::NotFound);
+            return Ok(BeginTransitionRecord::NotFound);
         };
         let pre = begin_precheck(&row).map_err(PersistenceFailure::from_source)?;
 
         // Precedence is the TypeScript authority's re-read: an in-flight delete answers
         // before an in-flight transition.
         if pre.deletion_started_at.is_some() {
-            return Ok(BeginTransition::Deleting);
+            return Ok(BeginTransitionRecord::Deleting);
         }
         if pre.runtime_transition_target.is_some() {
-            return Ok(BeginTransition::InProgress);
+            return Ok(BeginTransitionRecord::InProgress);
         }
 
-        let changed = sqlx::query(BEGIN_TRANSITION_CAS)
+        let Some(returned) = sqlx::query(BEGIN_TRANSITION_CAS)
             .bind(target.as_str())
             .bind(now_ms)
             .bind(agent.as_str())
-            .execute(&mut *tx)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(PersistenceFailure::from_source)?
-            .rows_affected();
-        if changed != 1 {
+        else {
             return Err(PersistenceFailure::from_source(BeginTransitionCasLost));
-        }
+        };
+        let witness = begin_lock_row(&returned).map_err(PersistenceFailure::from_source)?;
         tx.commit().await.map_err(PersistenceFailure::from_source)?;
-        Ok(BeginTransition::Started)
+        Ok(BeginTransitionRecord::Locked(witness))
     }
 
     async fn abort(
         &self,
-        agent: &AgentId,
-        target: RuntimeKind,
+        lock: &RuntimeTransitionLock,
     ) -> Result<AbortTransition, PersistenceFailure> {
         let mut tx = self
             .begin_root_write()
             .await
             .map_err(PersistenceFailure::from_source)?;
         let changed = sqlx::query(ABORT_TRANSITION_CAS)
-            .bind(agent.as_str())
-            .bind(target.as_str())
+            .bind(lock.agent_id().as_str())
+            .bind(lock.target().as_str())
+            .bind(lock.started_at())
             .execute(&mut *tx)
             .await
             .map_err(PersistenceFailure::from_source)?
@@ -157,32 +200,34 @@ impl RuntimeTransitionWrite for SqliteHostAgentStore {
 
     async fn complete(
         &self,
-        agent: &AgentId,
+        lock: &RuntimeTransitionLock,
         commit: &RuntimeTransitionCommit,
         now_ms: i64,
-    ) -> Result<CompleteTransition, PersistenceFailure> {
+    ) -> Result<CompleteTransitionRecord, PersistenceFailure> {
         let mut tx = self
             .begin_root_write()
             .await
             .map_err(PersistenceFailure::from_source)?;
-        let changed = sqlx::query(COMPLETE_TRANSITION_CAS)
+        let returned = sqlx::query(COMPLETE_TRANSITION_CAS)
             .bind(commit.runtime.as_str())
             .bind(commit.model.as_deref())
             .bind(commit.reasoning_effort.as_deref())
             .bind(fast_mode_column(commit.fast_mode))
             .bind(now_ms)
-            .bind(agent.as_str())
-            .bind(commit.runtime.as_str())
-            .execute(&mut *tx)
+            .bind(lock.agent_id().as_str())
+            .bind(lock.target().as_str())
+            .bind(lock.started_at())
+            .fetch_optional(&mut *tx)
             .await
-            .map_err(PersistenceFailure::from_source)?
-            .rows_affected();
+            .map_err(PersistenceFailure::from_source)?;
+        let record = match returned {
+            Some(row) => CompleteTransitionRecord::Committed(
+                complete_after_image(&row).map_err(PersistenceFailure::from_source)?,
+            ),
+            None => CompleteTransitionRecord::Lost,
+        };
         tx.commit().await.map_err(PersistenceFailure::from_source)?;
-        Ok(if changed > 0 {
-            CompleteTransition::Committed
-        } else {
-            CompleteTransition::Lost
-        })
+        Ok(record)
     }
 }
 
@@ -190,6 +235,10 @@ impl RuntimeTransitionWrite for SqliteHostAgentStore {
 mod tests {
     use std::{path::PathBuf, time::Duration};
 
+    use silverhand_backend_core::runtime_transition::{
+        BeginTransition, CompleteTransition, abort_runtime_transition, begin_runtime_transition,
+        complete_runtime_transition,
+    };
     use sqlx::{Connection, Row};
     use tempfile::TempDir;
 
@@ -266,6 +315,21 @@ mod tests {
         )
     }
 
+    /// Acquire a lock through the full core+adapter stack, returning the sealed token.
+    async fn acquire(
+        store: &SqliteHostAgentStore,
+        target: RuntimeKind,
+        now: i64,
+    ) -> RuntimeTransitionLock {
+        match begin_runtime_transition(store, &agent("a1"), target, now)
+            .await
+            .unwrap()
+        {
+            BeginTransition::Started(lock) => lock,
+            other => panic!("expected a sealed lock, got {other:?}"),
+        }
+    }
+
     /// The deterministic writer-reservation gate. A no-write answer (`NotFound`, from an
     /// absent agent) succeeds while nothing is held, then fails at `begin_root_write`
     /// with SQLITE_BUSY once the single writer is held.
@@ -285,7 +349,7 @@ mod tests {
             .begin(&agent("missing"), RuntimeKind::Codex, 1)
             .await
             .unwrap();
-        assert!(matches!(idle, BeginTransition::NotFound));
+        assert!(matches!(idle, BeginTransitionRecord::NotFound));
 
         let held = store.begin_root_write().await.unwrap();
         let contended = store
@@ -305,11 +369,11 @@ mod tests {
         let path = seed_schema(&dir, "begin.db", &[USER, HOST, ACTIVE_A1]).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
-        let started = store
-            .begin(&agent("a1"), RuntimeKind::Codex, 5)
-            .await
-            .unwrap();
-        assert_eq!(started, BeginTransition::Started);
+        let lock = acquire(&store, RuntimeKind::Codex, 5).await;
+        // The sealed token carries the row the write actually touched.
+        assert_eq!(lock.agent_id(), &agent("a1"));
+        assert_eq!(lock.target(), RuntimeKind::Codex);
+        assert_eq!(lock.started_at(), 5);
 
         let row = sqlx::query(
             "SELECT runtime, updated_at, runtime_transition_target, runtime_transition_started_at \
@@ -339,8 +403,7 @@ mod tests {
         let missing = seed_schema(&dir, "missing.db", &[USER, HOST]).await;
         let store = SqliteHostAgentStore::open(&missing).await.unwrap();
         assert_eq!(
-            store
-                .begin(&agent("a1"), RuntimeKind::Codex, 1)
+            begin_runtime_transition(&store, &agent("a1"), RuntimeKind::Codex, 1)
                 .await
                 .unwrap(),
             BeginTransition::NotFound
@@ -350,8 +413,7 @@ mod tests {
         let deleting = seed_schema(&dir, "deleting.db", &[USER, HOST, DELETING_A1]).await;
         let store = SqliteHostAgentStore::open(&deleting).await.unwrap();
         assert_eq!(
-            store
-                .begin(&agent("a1"), RuntimeKind::Codex, 1)
+            begin_runtime_transition(&store, &agent("a1"), RuntimeKind::Codex, 1)
                 .await
                 .unwrap(),
             BeginTransition::Deleting
@@ -361,8 +423,7 @@ mod tests {
         let transition = seed_schema(&dir, "transition.db", &[USER, HOST, TRANSITION_A1]).await;
         let store = SqliteHostAgentStore::open(&transition).await.unwrap();
         assert_eq!(
-            store
-                .begin(&agent("a1"), RuntimeKind::Cursor, 1)
+            begin_runtime_transition(&store, &agent("a1"), RuntimeKind::Cursor, 1)
                 .await
                 .unwrap(),
             BeginTransition::InProgress
@@ -370,60 +431,90 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn abort_releases_only_a_matching_lock() {
+    async fn abort_releases_the_lock_it_owns_then_is_not_held() {
         let dir = tempfile::tempdir().unwrap();
-        let path = seed_schema(&dir, "abort.db", &[USER, HOST, TRANSITION_A1]).await;
+        let path = seed_schema(&dir, "abort.db", &[USER, HOST, ACTIVE_A1]).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
-        // The wrong target matches nothing; the lock is left intact.
+        let lock = acquire(&store, RuntimeKind::Codex, 5).await;
         assert_eq!(
-            store
-                .abort(&agent("a1"), RuntimeKind::Cursor)
-                .await
-                .unwrap(),
-            AbortTransition::NotHeld
-        );
-        assert_eq!(
-            lock_columns(&store).await,
-            (Some("codex".to_string()), Some(1))
-        );
-
-        // The owned target releases the pair together.
-        assert_eq!(
-            store.abort(&agent("a1"), RuntimeKind::Codex).await.unwrap(),
+            abort_runtime_transition(&store, &lock).await.unwrap(),
             AbortTransition::Released
         );
         assert_eq!(lock_columns(&store).await, (None, None));
+
+        // A second abort of the same token finds nothing to release.
+        assert_eq!(
+            abort_runtime_transition(&store, &lock).await.unwrap(),
+            AbortTransition::NotHeld
+        );
     }
 
+    /// The ownership discriminator (no-ABA proof). A new attempt reacquires the same
+    /// target with a fresh started-at; the OLD token can neither abort nor complete the
+    /// new lock, because its guard binds the started-at it acquired.
     #[tokio::test]
-    async fn abort_is_not_held_when_no_lock() {
+    async fn a_reacquired_lock_is_not_the_old_tokens_to_touch() {
         let dir = tempfile::tempdir().unwrap();
-        let path = seed_schema(&dir, "abort-none.db", &[USER, HOST, ACTIVE_A1]).await;
+        let path = seed_schema(&dir, "aba.db", &[USER, HOST, ACTIVE_A1]).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
+        let stale = acquire(&store, RuntimeKind::Codex, 5).await;
+        // Simulate a fresh attempt reacquiring the SAME target with a new started-at.
+        sqlx::query("UPDATE agents SET runtime_transition_started_at = 9 WHERE id = 'a1'")
+            .execute(store.pool())
+            .await
+            .unwrap();
+
         assert_eq!(
-            store.abort(&agent("a1"), RuntimeKind::Codex).await.unwrap(),
+            abort_runtime_transition(&store, &stale).await.unwrap(),
             AbortTransition::NotHeld
+        );
+        let commit = RuntimeTransitionCommit {
+            runtime: RuntimeKind::Codex,
+            model: None,
+            reasoning_effort: None,
+            fast_mode: None,
+        };
+        assert_eq!(
+            complete_runtime_transition(&store, &stale, &commit, 42)
+                .await
+                .unwrap(),
+            CompleteTransition::Lost
+        );
+        // The new attempt's lock still stands, untouched.
+        assert_eq!(
+            lock_columns(&store).await,
+            (Some("codex".to_string()), Some(9))
         );
     }
 
     #[tokio::test]
     async fn complete_writes_runtime_and_tuning_and_releases_the_lock() {
         let dir = tempfile::tempdir().unwrap();
-        let path = seed_schema(&dir, "complete.db", &[USER, HOST, TRANSITION_A1]).await;
+        let path = seed_schema(&dir, "complete.db", &[USER, HOST, ACTIVE_A1]).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
+        let lock = acquire(&store, RuntimeKind::Codex, 5).await;
         let commit = RuntimeTransitionCommit {
             runtime: RuntimeKind::Codex,
             model: Some("gpt".to_string()),
             reasoning_effort: Some("high".to_string()),
             fast_mode: Some(true),
         };
-        assert_eq!(
-            store.complete(&agent("a1"), &commit, 42).await.unwrap(),
-            CompleteTransition::Committed
-        );
+        let CompleteTransition::Committed(sealed) =
+            complete_runtime_transition(&store, &lock, &commit, 42)
+                .await
+                .unwrap()
+        else {
+            panic!("expected a committed transition");
+        };
+        assert_eq!(sealed.agent_id(), &agent("a1"));
+        assert_eq!(sealed.runtime(), RuntimeKind::Codex);
+        assert_eq!(sealed.model(), Some("gpt"));
+        assert_eq!(sealed.reasoning_effort(), Some("high"));
+        assert_eq!(sealed.fast_mode(), Some(true));
+        assert_eq!(sealed.updated_at(), 42);
 
         let row = sqlx::query(
             "SELECT runtime, model, reasoning_effort, fast_mode, updated_at, \
@@ -457,20 +548,33 @@ mod tests {
     #[tokio::test]
     async fn complete_clears_tuning_columns_to_null() {
         let dir = tempfile::tempdir().unwrap();
-        let path = seed_schema(&dir, "complete-null.db", &[USER, HOST, TRANSITION_A1]).await;
+        // Seed a row whose tuning columns are already set, to prove `complete` overwrites
+        // them with NULLs rather than leaving the previous values.
+        let seeded = "INSERT INTO agents \
+             (id, name, runtime, host_id, created_by_user_id, created_at, updated_at, \
+              materialization_status, session_scope, model, reasoning_effort, fast_mode) \
+             VALUES ('a1', 'a1', 'claude', 'h1', 'u1', 1, 1, 'active', 'conversation', \
+                     'old', 'low', 1)";
+        let path = seed_schema(&dir, "complete-null.db", &[USER, HOST, seeded]).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
-        // A commit with no tuning writes SQL NULLs, not the previous values.
+        let lock = acquire(&store, RuntimeKind::Codex, 5).await;
         let commit = RuntimeTransitionCommit {
             runtime: RuntimeKind::Codex,
             model: None,
             reasoning_effort: None,
             fast_mode: None,
         };
-        assert_eq!(
-            store.complete(&agent("a1"), &commit, 42).await.unwrap(),
-            CompleteTransition::Committed
-        );
+        let CompleteTransition::Committed(sealed) =
+            complete_runtime_transition(&store, &lock, &commit, 42)
+                .await
+                .unwrap()
+        else {
+            panic!("expected a committed transition");
+        };
+        assert_eq!(sealed.model(), None);
+        assert_eq!(sealed.reasoning_effort(), None);
+        assert_eq!(sealed.fast_mode(), None);
 
         let row =
             sqlx::query("SELECT model, reasoning_effort, fast_mode FROM agents WHERE id = 'a1'")
@@ -480,44 +584,5 @@ mod tests {
         assert_eq!(row.get::<Option<String>, _>("model"), None);
         assert_eq!(row.get::<Option<String>, _>("reasoning_effort"), None);
         assert_eq!(row.get::<Option<i64>, _>("fast_mode"), None);
-    }
-
-    #[tokio::test]
-    async fn complete_is_lost_when_the_lock_moved() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = seed_schema(&dir, "complete-lost.db", &[USER, HOST, TRANSITION_A1]).await;
-        let store = SqliteHostAgentStore::open(&path).await.unwrap();
-
-        // Another attempt took the row: the lock now names a different target, so this
-        // commit's guard matches nothing and must write nothing.
-        sqlx::query("UPDATE agents SET runtime_transition_target = 'cursor' WHERE id = 'a1'")
-            .execute(store.pool())
-            .await
-            .unwrap();
-
-        let commit = RuntimeTransitionCommit {
-            runtime: RuntimeKind::Codex,
-            model: Some("gpt".to_string()),
-            reasoning_effort: None,
-            fast_mode: None,
-        };
-        assert_eq!(
-            store.complete(&agent("a1"), &commit, 42).await.unwrap(),
-            CompleteTransition::Lost
-        );
-
-        // The runtime and mtime are untouched; the other attempt's lock still stands.
-        let row = sqlx::query(
-            "SELECT runtime, updated_at, runtime_transition_target FROM agents WHERE id = 'a1'",
-        )
-        .fetch_one(store.pool())
-        .await
-        .unwrap();
-        assert_eq!(row.get::<String, _>("runtime"), "claude");
-        assert_eq!(row.get::<i64, _>("updated_at"), 1);
-        assert_eq!(
-            row.get::<Option<String>, _>("runtime_transition_target"),
-            Some("cursor".to_string())
-        );
     }
 }
