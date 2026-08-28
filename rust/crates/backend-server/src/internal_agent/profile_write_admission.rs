@@ -223,18 +223,65 @@ fn bad_request(error: &'static str) -> Response {
 /// Admit a standalone `POST /internal/agents/{aid}/avatar`. Consumes the multipart
 /// `file` part and validates its size + declared MIME. On success the caller holds
 /// a [`ValidatedAvatar`] and NOTHING has been stored.
+///
+/// The WHOLE envelope is consumed to true EOF, mirroring TS's `await c.req.formData()`
+/// (which parses every part before `form.get('file')` is read): the first `file`-named
+/// part wins — File or not, like `form.get('file')` — and every remaining part is
+/// chunk-drained with zero accumulation. A malformed/truncated trailing part therefore
+/// still surfaces as the terminal `multipart/form-data required` 400 BEFORE any
+/// candidate is validated or stored — an envelope-parse fault outranks both the
+/// size/MIME `validate_candidate` verdict and `file field required`, exactly as the
+/// `formData()` throw precedes `form.get` in the product.
 pub async fn admit_avatar_upload(
     request: Request,
 ) -> Result<ValidatedAvatar, ProfileAdmissionRefusal> {
     let mut multipart = Multipart::from_request(request, &())
         .await
         .map_err(|_| ProfileAdmissionRefusal::MultipartRequired)?;
-    let file = match first_file_field(&mut multipart).await {
-        Ok(Some(file)) => file,
-        Ok(None) => return Err(ProfileAdmissionRefusal::FileFieldRequired),
-        Err(_) => return Err(ProfileAdmissionRefusal::MultipartRequired),
-    };
-    validate_candidate(file)
+
+    // `Some(Some(_))` = a first `file`-named File captured; `Some(None)` = a first
+    // `file`-named plain part (present but not a `File` → `file field required`, like
+    // `form.get('file') instanceof File`); `None` = no `file` part seen yet.
+    let mut file_slot: Option<Option<UploadedFile>> = None;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(_) => return Err(ProfileAdmissionRefusal::MultipartRequired),
+        };
+        // Snapshot the discriminators so the field can be moved into a consuming read
+        // below without holding a borrow across the match.
+        let name = field.name().map(str::to_owned);
+        let is_file = field.file_name().is_some();
+        match name.as_deref() {
+            Some("file") if file_slot.is_none() => {
+                if is_file {
+                    let content_type = declared_content_type(&field);
+                    // Stops at the cap + 1; the field's remaining chunks (if any) are
+                    // driven off the stream by the next `next_field()`, so an oversize
+                    // candidate never lets a later envelope fault slip past unseen.
+                    let bytes = read_field_bounded(field)
+                        .await
+                        .map_err(|_| ProfileAdmissionRefusal::MultipartRequired)?;
+                    file_slot = Some(Some(UploadedFile {
+                        bytes,
+                        content_type,
+                    }));
+                } else {
+                    drain(field).await?;
+                    file_slot = Some(None);
+                }
+            }
+            // Every other part — unknown, duplicate, or a later `file` — is drained to
+            // advance the stream with zero accumulation, so the loop reaches true EOF.
+            _ => drain(field).await?,
+        }
+    }
+
+    match file_slot {
+        Some(Some(file)) => validate_candidate(file),
+        _ => Err(ProfileAdmissionRefusal::FileFieldRequired),
+    }
 }
 
 /// Admit a `POST /internal/agents/{aid}/profile`. One multipart carries the text
@@ -400,29 +447,6 @@ fn validate_candidate(file: UploadedFile) -> Result<ValidatedAvatar, ProfileAdmi
         }),
         Err(rejection) => Err(ProfileAdmissionRefusal::Avatar(rejection)),
     }
-}
-
-/// Find the FIRST multipart part named `file`, mirroring `form.get('file')`. The
-/// part must carry a filename to be a `File`; a same-named plain part yields
-/// `Ok(None)` (→ `file field required`). A stream/decode fault yields `Err`.
-async fn first_file_field(
-    multipart: &mut Multipart,
-) -> Result<Option<UploadedFile>, MultipartError> {
-    while let Some(field) = multipart.next_field().await? {
-        if field.name() != Some("file") {
-            continue;
-        }
-        if field.file_name().is_none() {
-            return Ok(None);
-        }
-        let content_type = declared_content_type(&field);
-        let bytes = read_field_bounded(field).await?;
-        return Ok(Some(UploadedFile {
-            bytes,
-            content_type,
-        }));
-    }
-    Ok(None)
 }
 
 /// The part's declared content type, lowercased — the product's
@@ -599,6 +623,51 @@ mod tests {
         app.oneshot(request).await.unwrap().status()
     }
 
+    /// A body whose FIRST `file` part is complete and valid, followed by a second part
+    /// opened but truncated — its data never terminates with a closing boundary, so the
+    /// multipart parser hits end-of-stream mid-part and faults. Drives the whole-envelope
+    /// contract: a valid first file must not shortcut past a malformed tail.
+    fn valid_file_then_truncated_part() -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+        out.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"file\"; filename=\"a.png\"\r\n",
+        );
+        out.extend_from_slice(b"Content-Type: image/png\r\n\r\n");
+        out.extend_from_slice(&[1, 2, 3]);
+        // Open a second part, then cut the stream off inside its data with no closing
+        // boundary — a premature end the parser cannot complete.
+        out.extend_from_slice(format!("\r\n--{BOUNDARY}\r\n").as_bytes());
+        out.extend_from_slice(b"Content-Disposition: form-data; name=\"junk\"\r\n\r\n");
+        out.extend_from_slice(b"DANGLING-NO-CLOSING-BOUNDARY");
+        out
+    }
+
+    /// Drive `admit_avatar_upload` through the same body-limit-disabled router as
+    /// [`admit_avatar_status`], but with a RAW pre-encoded body so a malformed/truncated
+    /// envelope (which [`encode`] can never produce) can be exercised.
+    async fn admit_avatar_status_raw(body: Vec<u8>) -> StatusCode {
+        async fn probe(request: Request<Body>) -> Response {
+            match admit_avatar_upload(request).await {
+                Ok(_) => StatusCode::OK.into_response(),
+                Err(refusal) => refusal.into_response(),
+            }
+        }
+        let app = Router::new()
+            .route("/p", post(probe))
+            .layer(DefaultBodyLimit::disable());
+        let request = Request::builder()
+            .method("POST")
+            .uri("/p")
+            .header(
+                CONTENT_TYPE,
+                format!("multipart/form-data; boundary={BOUNDARY}"),
+            )
+            .body(Body::from(body))
+            .unwrap();
+        app.oneshot(request).await.unwrap().status()
+    }
+
     async fn refusal_body(refusal: ProfileAdmissionRefusal) -> (StatusCode, Value) {
         let response = refusal.into_response();
         let status = response.status();
@@ -638,6 +707,19 @@ mod tests {
         let request = multipart_request(&[Part::text("file", "not-a-file")]);
         let refusal = admit_avatar_upload(request).await.unwrap_err();
         assert_eq!(refusal, ProfileAdmissionRefusal::FileFieldRequired);
+    }
+
+    /// The whole-envelope discriminator: a valid FIRST `file` followed by a truncated
+    /// trailing part is the transport `400`, NOT a silent success on the good file. The
+    /// admission consumes every part to true EOF, so the malformed tail surfaces before
+    /// any candidate is validated. (The handler-side twin in `profile_write` proves the
+    /// same body reaches the route with zero put/write/announce/reproject.)
+    #[tokio::test]
+    async fn a_valid_first_file_then_a_truncated_trailing_part_is_multipart_required() {
+        assert_eq!(
+            admit_avatar_status_raw(valid_file_then_truncated_part()).await,
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[tokio::test]

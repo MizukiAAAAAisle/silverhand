@@ -618,6 +618,11 @@ mod tests {
         fn deleted(&self) -> Vec<String> {
             self.deletes.lock().unwrap().clone()
         }
+        /// How many blobs were `put` — a Set write puts the fresh blob FIRST, so a zero
+        /// count proves the write core's blob leg never ran.
+        fn puts(&self) -> usize {
+            self.next.load(Ordering::SeqCst)
+        }
     }
     impl AgentAvatarBlobRead for FakeBlobs {
         async fn read(
@@ -853,6 +858,27 @@ mod tests {
     /// A tiny valid PNG header (enough bytes to pass the size floor; MIME is declared).
     fn png_bytes() -> Vec<u8> {
         vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]
+    }
+
+    /// A body whose FIRST `file` part is complete and valid, then a second part opened but
+    /// truncated — its data never terminates with a closing boundary, so the multipart
+    /// parser hits end-of-stream mid-part and faults. Proves the whole-envelope drain: the
+    /// valid first file must not shortcut past the malformed tail.
+    fn multipart_valid_file_then_truncated_part() -> (String, Vec<u8>) {
+        const BOUNDARY: &str = "X-TEST-BOUNDARY";
+        let mut body: Vec<u8> = Vec::new();
+        body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+        body.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"file\"; filename=\"avatar.png\"\r\n",
+        );
+        body.extend_from_slice(b"Content-Type: image/png\r\n\r\n");
+        body.extend_from_slice(&png_bytes());
+        // Open a second part, then cut the stream off inside its data with no closing
+        // boundary — a premature end the parser cannot complete.
+        body.extend_from_slice(format!("\r\n--{BOUNDARY}\r\n").as_bytes());
+        body.extend_from_slice(b"Content-Disposition: form-data; name=\"junk\"\r\n\r\n");
+        body.extend_from_slice(b"DANGLING-NO-CLOSING-BOUNDARY");
+        (format!("multipart/form-data; boundary={BOUNDARY}"), body)
     }
 
     async fn body_json(response: Response) -> Value {
@@ -1397,6 +1423,39 @@ mod tests {
         assert_eq!(sink.calls(), 0);
         assert!(blobs.deleted().is_empty());
         assert_eq!(reader.reads(), 0, "a refused request never reprojects");
+    }
+
+    /// The whole-envelope discriminator at the ROUTE: a valid FIRST `file` followed by a
+    /// truncated trailing part is the admission `400`, and NOTHING downstream is touched —
+    /// zero blob put, zero row write, zero announce, zero reproject. The admission consumes
+    /// every part to true EOF, so the malformed tail refuses BEFORE `run_avatar_edit` is
+    /// even entered; a Set write puts its blob first and Committed announces + reprojects,
+    /// so all-zero proves the write core never ran (the twin admission-level test asserts
+    /// the same body's status in isolation).
+    #[tokio::test]
+    async fn post_avatar_valid_file_then_truncated_trailing_part_refuses_with_zero_effect() {
+        // If the write core were ever reached, this Committed outcome would put, announce,
+        // and reproject — so its side effects staying zero is the proof it was not.
+        let writes = AgentProfileRowWrite::Committed {
+            before: before("Name", AgentAvatarRow::Absent),
+            row: committed("Name", present(FRESH)),
+        };
+        let reader = FakeDetailReader::with(Some(detail_facts(Some("avatars/a1.png"))));
+        let (state, blobs, sink) = avatar_state(writes, reader.clone(), FakeBlobs::new());
+        let (content_type, body) = multipart_valid_file_then_truncated_part();
+        let response = avatar_router(state)
+            .oneshot(avatar_post(content_type, body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(response).await,
+            json!({ "error": "multipart/form-data required" })
+        );
+        assert_eq!(blobs.puts(), 0, "no blob was put");
+        assert!(blobs.deleted().is_empty(), "no blob was deleted");
+        assert_eq!(sink.calls(), 0, "no agent_changed was announced");
+        assert_eq!(reader.reads(), 0, "no reproject read was issued");
     }
 
     #[tokio::test]
