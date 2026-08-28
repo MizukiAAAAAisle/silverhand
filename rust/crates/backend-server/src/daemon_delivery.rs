@@ -66,6 +66,7 @@ use crate::{
         RuntimeProductEvent, decode_product_event,
     },
     error,
+    host_agent_background::agent_deletion_resumer::HostConnections,
     host_control::admission::{
         AdmissionUnavailable, DialerId, HostAdmission, ProtocolMismatch, RefusalNews, SlotOccupancy,
     },
@@ -948,6 +949,15 @@ impl DaemonDeliveryController {
         }
     }
 
+    /// A read-only projection of the connection generation that currently owns each
+    /// host. Like the name view it carries no dispatch: the deletion resumer only
+    /// compares the id to bind and supersede its retry chains, never to send.
+    pub fn host_connections(&self) -> DaemonHostConnections {
+        DaemonHostConnections {
+            registry: self.registry.clone(),
+        }
+    }
+
     /// Per-computer connection control sharing this runtime's one registry.
     pub fn connection_control(&self) -> DaemonConnectionControlHandle {
         DaemonConnectionControlHandle {
@@ -1025,6 +1035,23 @@ impl ConnectedHostName for ConnectedHostNameView {
             .ok()
             .flatten()
             .map(|attachment| attachment.host_name)
+    }
+}
+
+/// The narrow production answer to the deletion resumer's connection-generation port.
+/// `Clone` shares the one registry; it snapshots no generation into a second authority.
+#[derive(Clone)]
+pub struct DaemonHostConnections {
+    registry: DaemonRegistry,
+}
+
+impl HostConnections for DaemonHostConnections {
+    fn current_generation(&self, host: &HostId) -> Option<String> {
+        self.registry
+            .attachment(host.as_str())
+            .ok()
+            .flatten()
+            .map(|attachment| attachment.connection_id)
     }
 }
 
