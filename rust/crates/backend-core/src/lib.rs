@@ -10,6 +10,7 @@ pub mod agent_availability_read;
 pub mod agent_detail_read;
 pub mod agent_lifecycle;
 pub mod agent_list_read;
+pub mod agent_peer_profile;
 pub mod agent_presence_read;
 pub mod agent_profile_mcp;
 pub mod agent_profile_read;

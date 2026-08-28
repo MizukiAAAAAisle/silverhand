@@ -48,6 +48,13 @@ async fn profile_of(cold_read: &SqliteAgentProfileRead, id: &str) -> Option<Agen
     cold_read.read_agent_profile(&agent(id)).await.unwrap()
 }
 
+async fn profile_by_handle(
+    cold_read: &SqliteAgentProfileRead,
+    handle: &str,
+) -> Option<AgentProfileFact> {
+    cold_read.read_agent_profile_by_handle(handle).await.unwrap()
+}
+
 async fn try_profile(
     cold_read: &SqliteAgentProfileRead,
     id: &str,
@@ -146,4 +153,30 @@ async fn an_empty_or_absent_avatar_key_is_no_avatar() {
 async fn an_absent_row_is_none_not_a_failure() {
     let (_dir, cold_read) = seeded(&[]).await;
     assert!(try_profile(&cold_read, "ghost").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn by_handle_resolves_the_row_and_matches_name_exactly() {
+    let (_dir, cold_read) = seeded(&[
+        HOST,
+        CREATOR,
+        "INSERT INTO agents (id, name, display_name, runtime, host_id, created_at, updated_at, \
+             created_by_user_id, avatar_storage_key, avatar_content_type) \
+         VALUES ('a1', 'agent-one', 'Agent One', 'qoder', 'h1', 1000, 2500, 'u-creator', \
+             'avatars/a1.png', 'image/png')",
+    ])
+    .await;
+
+    let fact = profile_by_handle(&cold_read, "agent-one")
+        .await
+        .expect("handle resolves");
+    assert_eq!(fact.id, agent("a1"));
+    assert_eq!(fact.name, "agent-one");
+    assert_eq!(fact.avatar, Some(AvatarRevision::at(2500)));
+
+    // Exact match, no COLLATE: a different case is a different handle, so the
+    // adapter returns nothing rather than the row — the invariant the peer
+    // source-binding relies on.
+    assert!(profile_by_handle(&cold_read, "Agent-One").await.is_none());
+    assert!(profile_by_handle(&cold_read, "missing").await.is_none());
 }

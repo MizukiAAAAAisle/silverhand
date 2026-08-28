@@ -36,7 +36,9 @@ use silverhand_backend_core::{
 };
 use sqlx::{
     Row, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+    sqlite::{
+        SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous,
+    },
 };
 use thiserror::Error;
 
@@ -45,12 +47,26 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFERRED_READ_BEGIN: &str = "BEGIN DEFERRED";
 
 /// The narrow profile read: only the columns the internal profile DTO and its
-/// avatar-URL derivation consume, resolved for ONE id. No host join, no ACL SQL,
-/// no wire-vocabulary columns (runtime/model/…) — those belong to the detail
-/// read, not here. Composed as a `&'static str` because sqlx accepts no
+/// avatar-URL derivation consume. No host join, no ACL SQL, no wire-vocabulary
+/// columns (runtime/model/…) — those belong to the detail read, not here. The
+/// two lookups (by id, by handle) share this projection and differ only in the
+/// predicate they append, so both decode one row shape through
+/// [`decode_profile_row`]. Composed as `&'static str` because sqlx accepts no
 /// runtime-built statement.
-const SELECT_AGENT_PROFILE_ROW: &str = "SELECT id, name, display_name, description, \
-     avatar_storage_key, updated_at FROM agents WHERE id = ?";
+macro_rules! select_agent_profile_from {
+    () => {
+        "SELECT id, name, display_name, description, avatar_storage_key, updated_at FROM agents"
+    };
+}
+
+/// By id — the self profile read.
+const SELECT_AGENT_PROFILE_BY_ID: &str =
+    concat!(select_agent_profile_from!(), " WHERE id = ?");
+
+/// By handle — the peer read. `agents.name` is matched EXACTLY (no `COLLATE`), so
+/// a different case is a different handle, mirroring the product's `getByName`.
+const SELECT_AGENT_PROFILE_BY_HANDLE: &str =
+    concat!(select_agent_profile_from!(), " WHERE name = ?");
 
 #[derive(Clone)]
 pub struct SqliteAgentProfileRead {
@@ -66,6 +82,30 @@ pub enum AgentProfileReadError {
     Sql(#[from] sqlx::Error),
     #[error("stored agents.id does not name a usable identity")]
     MalformedIdentity,
+}
+
+/// Decode one profile row: the id is re-sourced through the domain's fallible
+/// parser (an empty stored id is corruption, a safe `500`, never coerced), and
+/// the avatar folds by TRUTHINESS — a non-empty `avatar_storage_key` + the row's
+/// `updated_at` collapse to `Some(AvatarRevision)`, the same rule the canonical
+/// `avatar_url` applies; the storage key itself never leaves this decode.
+fn decode_profile_row(row: &SqliteRow) -> Result<AgentProfileFact, AgentProfileReadError> {
+    let stored_id: String = row.try_get("id")?;
+    let id = AgentId::parse(stored_id).map_err(|_| AgentProfileReadError::MalformedIdentity)?;
+
+    let avatar_storage_key: Option<String> = row.try_get("avatar_storage_key")?;
+    let updated_at: i64 = row.try_get("updated_at")?;
+    let avatar = avatar_storage_key
+        .filter(|key| !key.is_empty())
+        .map(|_| AvatarRevision::at(updated_at));
+
+    Ok(AgentProfileFact {
+        id,
+        name: row.try_get("name")?,
+        display_name: row.try_get("display_name")?,
+        description: row.try_get("description")?,
+        avatar,
+    })
 }
 
 impl SqliteAgentProfileRead {
@@ -84,46 +124,27 @@ impl SqliteAgentProfileRead {
         Ok(Self { pool })
     }
 
-    async fn read_agent_profile_fact(
+    /// Read one profile row for `statement` bound to `key`. Shared by the id and
+    /// handle lookups so both resolve on ONE `BEGIN DEFERRED` snapshot and decode
+    /// identically; only the predicate the statement carries differs.
+    async fn read_profile_where(
         &self,
-        agent: &AgentId,
+        statement: &'static str,
+        key: &str,
     ) -> Result<Option<AgentProfileFact>, AgentProfileReadError> {
         let mut tx = self.pool.begin_with(DEFERRED_READ_BEGIN).await?;
 
-        let row = sqlx::query(SELECT_AGENT_PROFILE_ROW)
-            .bind(agent.as_str())
+        let row = sqlx::query(statement)
+            .bind(key)
             .fetch_optional(&mut *tx)
             .await?;
-        let Some(row) = row else {
-            tx.commit().await?;
-            return Ok(None);
-        };
-
-        // The id is re-sourced from the returned row, not the bound coordinate:
-        // the fact is bound to a verified source, and an empty stored id fails
-        // closed here rather than reaching the wire.
-        let stored_id: String = row.try_get("id")?;
-        let id = AgentId::parse(stored_id).map_err(|_| AgentProfileReadError::MalformedIdentity)?;
-
-        // Truthiness, not `IS NOT NULL`: an empty key is no avatar, matching the
-        // canonical `avatar_url` rule. The revision is the row's `updated_at`, the
-        // same cache-buster the wire appends.
-        let avatar_storage_key: Option<String> = row.try_get("avatar_storage_key")?;
-        let updated_at: i64 = row.try_get("updated_at")?;
-        let avatar = avatar_storage_key
-            .filter(|key| !key.is_empty())
-            .map(|_| AvatarRevision::at(updated_at));
-
-        let fact = AgentProfileFact {
-            id,
-            name: row.try_get("name")?,
-            display_name: row.try_get("display_name")?,
-            description: row.try_get("description")?,
-            avatar,
+        let fact = match row {
+            Some(row) => Some(decode_profile_row(&row)?),
+            None => None,
         };
 
         tx.commit().await?;
-        Ok(Some(fact))
+        Ok(fact)
     }
 }
 
@@ -132,7 +153,16 @@ impl AgentProfileReadModel for SqliteAgentProfileRead {
         &self,
         agent: &AgentId,
     ) -> Result<Option<AgentProfileFact>, PersistenceFailure> {
-        self.read_agent_profile_fact(agent)
+        self.read_profile_where(SELECT_AGENT_PROFILE_BY_ID, agent.as_str())
+            .await
+            .map_err(PersistenceFailure::from_source)
+    }
+
+    async fn read_agent_profile_by_handle(
+        &self,
+        handle: &str,
+    ) -> Result<Option<AgentProfileFact>, PersistenceFailure> {
+        self.read_profile_where(SELECT_AGENT_PROFILE_BY_HANDLE, handle)
             .await
             .map_err(PersistenceFailure::from_source)
     }
