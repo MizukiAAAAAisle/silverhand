@@ -2,6 +2,7 @@
 //! HTTP, WebSocket and wire projection boundary.
 
 pub mod access;
+pub mod agent_materialize;
 pub mod auth;
 pub mod avatar_blob;
 mod bearer;
@@ -19,6 +20,7 @@ pub mod human_auth;
 pub mod messaging;
 pub mod ops;
 pub mod password_hasher;
+pub mod runtime_control;
 pub mod runtime_credential;
 pub mod scope_events;
 pub mod scope_runtime_stop;

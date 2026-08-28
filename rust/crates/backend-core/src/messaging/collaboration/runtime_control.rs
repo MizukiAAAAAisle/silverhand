@@ -6,7 +6,10 @@
 
 use std::{error::Error, fmt, future::Future};
 
-use crate::identity::{AgentId, ConversationId, UserId};
+use crate::{
+    identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
+    runtime_credential::{RuntimeGeneration, RuntimeScope},
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeControlTarget {
@@ -35,6 +38,204 @@ impl RuntimeControlTarget {
     pub fn agent(&self) -> &AgentId {
         &self.agent
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeControlObservedStatus {
+    Idle,
+    Starting,
+    Active,
+    Crashed,
+}
+
+impl RuntimeControlObservedStatus {
+    pub const fn was_running(self) -> bool {
+        matches!(self, Self::Starting | Self::Active)
+    }
+}
+
+/// Durable pre-state for one semantic runtime seat. This is a fact-source value;
+/// callers must bind it to the request with [`Self::bind`] before any effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeControlSeatSnapshot {
+    agent: AgentId,
+    host: HostId,
+    scope: RuntimeScope,
+    generation: RuntimeGeneration,
+    daemon_instance: Option<DaemonInstanceId>,
+    previous_cli_session: Option<CliSessionId>,
+    observed_status: RuntimeControlObservedStatus,
+    agent_name: String,
+}
+
+impl RuntimeControlSeatSnapshot {
+    #[allow(clippy::too_many_arguments)]
+    pub fn decoded(
+        agent: AgentId,
+        host: HostId,
+        scope: RuntimeScope,
+        generation: RuntimeGeneration,
+        daemon_instance: Option<DaemonInstanceId>,
+        previous_cli_session: Option<CliSessionId>,
+        observed_status: RuntimeControlObservedStatus,
+        agent_name: String,
+    ) -> Self {
+        Self {
+            agent,
+            host,
+            scope,
+            generation,
+            daemon_instance,
+            previous_cli_session,
+            observed_status,
+            agent_name,
+        }
+    }
+
+    pub fn bind(
+        self,
+        target: &RuntimeControlTarget,
+    ) -> Result<BoundRuntimeControlSeat, RuntimeControlSeatMismatch> {
+        let coordinate_matches = self.agent == target.agent
+            && self.scope.agent() == &target.agent
+            && self
+                .scope
+                .source()
+                .is_none_or(|source| source == &target.conversation);
+        if !coordinate_matches || self.agent_name.is_empty() {
+            return Err(RuntimeControlSeatMismatch);
+        }
+        Ok(BoundRuntimeControlSeat(self))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BoundRuntimeControlSeat(RuntimeControlSeatSnapshot);
+
+impl BoundRuntimeControlSeat {
+    pub fn host(&self) -> &HostId {
+        &self.0.host
+    }
+
+    pub fn scope(&self) -> &RuntimeScope {
+        &self.0.scope
+    }
+
+    pub const fn generation(&self) -> RuntimeGeneration {
+        self.0.generation
+    }
+
+    pub fn daemon_instance(&self) -> Option<&DaemonInstanceId> {
+        self.0.daemon_instance.as_ref()
+    }
+
+    pub fn previous_cli_session(&self) -> Option<&CliSessionId> {
+        self.0.previous_cli_session.as_ref()
+    }
+
+    pub const fn was_running(&self) -> bool {
+        self.0.observed_status.was_running()
+    }
+
+    pub fn agent(&self) -> &AgentId {
+        &self.0.agent
+    }
+
+    pub fn agent_name(&self) -> &str {
+        &self.0.agent_name
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("runtime-control seat facts do not match the requested coordinate")]
+pub struct RuntimeControlSeatMismatch;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ClearSessionAuditWitness {
+    None,
+    Conversation(ConversationId),
+    Agent(AgentId),
+}
+
+/// The database adapter's before/committed witness. It does not mint the
+/// application outcome; [`seal_clear_session_commit`] validates every field.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClearSessionCommitReceipt {
+    scope: RuntimeScope,
+    generation: RuntimeGeneration,
+    previous_cli_session: Option<CliSessionId>,
+    was_running: bool,
+    committed_cli_session: Option<CliSessionId>,
+    audit: ClearSessionAuditWitness,
+}
+
+impl ClearSessionCommitReceipt {
+    pub fn decoded(
+        scope: RuntimeScope,
+        generation: RuntimeGeneration,
+        previous_cli_session: Option<CliSessionId>,
+        was_running: bool,
+        committed_cli_session: Option<CliSessionId>,
+        audit: ClearSessionAuditWitness,
+    ) -> Self {
+        Self {
+            scope,
+            generation,
+            previous_cli_session,
+            was_running,
+            committed_cli_session,
+            audit,
+        }
+    }
+}
+
+pub fn seal_clear_session_commit(
+    before: &BoundRuntimeControlSeat,
+    committed: ClearSessionCommitReceipt,
+) -> Result<ClearSessionOutcome, ClearSessionCommitMismatch> {
+    let should_audit = before.was_running() || before.previous_cli_session().is_some();
+    let expected_audit = if !should_audit {
+        ClearSessionAuditWitness::None
+    } else {
+        match before.scope() {
+            RuntimeScope::ConversationSlot { source, .. } => {
+                ClearSessionAuditWitness::Conversation(source.clone())
+            }
+            RuntimeScope::AgentSlot { agent } => ClearSessionAuditWitness::Agent(agent.clone()),
+        }
+    };
+    if committed.scope != *before.scope()
+        || committed.generation != before.generation()
+        || committed.previous_cli_session.as_ref() != before.previous_cli_session()
+        || committed.was_running != before.was_running()
+        || committed.committed_cli_session.is_some()
+        || committed.audit != expected_audit
+    {
+        return Err(ClearSessionCommitMismatch);
+    }
+    Ok(ClearSessionOutcome::committed(
+        committed.previous_cli_session,
+        committed.was_running,
+    ))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("clear-session committed witness does not match the captured seat")]
+pub struct ClearSessionCommitMismatch;
+
+pub trait RuntimeControlSeatPort: Clone + Send + Sync + 'static {
+    type Error: Error + Send + Sync + 'static;
+
+    fn snapshot(
+        &self,
+        target: &RuntimeControlTarget,
+    ) -> impl Future<Output = Result<Option<RuntimeControlSeatSnapshot>, Self::Error>> + Send;
+
+    fn settle_clear(
+        &self,
+        target: &RuntimeControlTarget,
+        before: &BoundRuntimeControlSeat,
+    ) -> impl Future<Output = Result<Option<ClearSessionCommitReceipt>, Self::Error>> + Send;
 }
 
 /// One request-scoped, consistent read snapshot.
@@ -408,6 +609,120 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn clear_commit_receipt_cannot_mint_a_verdict_from_wrong_witnesses() {
+        let target = RuntimeControlTarget::new(
+            UserId::parse("user-1").unwrap(),
+            ConversationId::parse("conversation-1").unwrap(),
+            AgentId::parse("agent-1").unwrap(),
+        );
+        let before = RuntimeControlSeatSnapshot::decoded(
+            AgentId::parse("agent-1").unwrap(),
+            HostId::parse("host-1").unwrap(),
+            RuntimeScope::ConversationSlot {
+                agent: AgentId::parse("agent-1").unwrap(),
+                source: ConversationId::parse("conversation-1").unwrap(),
+            },
+            RuntimeGeneration::new(7).unwrap(),
+            Some(DaemonInstanceId::parse("daemon-1").unwrap()),
+            Some(CliSessionId::parse("session-1").unwrap()),
+            RuntimeControlObservedStatus::Active,
+            "agent".to_owned(),
+        )
+        .bind(&target)
+        .unwrap();
+        let receipt = |scope, generation, previous, was_running, committed, audit| {
+            ClearSessionCommitReceipt::decoded(
+                scope,
+                generation,
+                previous,
+                was_running,
+                committed,
+                audit,
+            )
+        };
+        assert!(
+            seal_clear_session_commit(
+                &before,
+                receipt(
+                    before.scope().clone(),
+                    before.generation(),
+                    before.previous_cli_session().cloned(),
+                    true,
+                    None,
+                    ClearSessionAuditWitness::Conversation(
+                        ConversationId::parse("conversation-1").unwrap(),
+                    ),
+                ),
+            )
+            .is_ok()
+        );
+        for corrupt in [
+            receipt(
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-1").unwrap(),
+                },
+                before.generation(),
+                before.previous_cli_session().cloned(),
+                true,
+                None,
+                ClearSessionAuditWitness::Conversation(
+                    ConversationId::parse("conversation-1").unwrap(),
+                ),
+            ),
+            receipt(
+                before.scope().clone(),
+                RuntimeGeneration::new(8).unwrap(),
+                before.previous_cli_session().cloned(),
+                true,
+                None,
+                ClearSessionAuditWitness::Conversation(
+                    ConversationId::parse("conversation-1").unwrap(),
+                ),
+            ),
+            receipt(
+                before.scope().clone(),
+                before.generation(),
+                None,
+                true,
+                None,
+                ClearSessionAuditWitness::Conversation(
+                    ConversationId::parse("conversation-1").unwrap(),
+                ),
+            ),
+            receipt(
+                before.scope().clone(),
+                before.generation(),
+                before.previous_cli_session().cloned(),
+                false,
+                None,
+                ClearSessionAuditWitness::Conversation(
+                    ConversationId::parse("conversation-1").unwrap(),
+                ),
+            ),
+            receipt(
+                before.scope().clone(),
+                before.generation(),
+                before.previous_cli_session().cloned(),
+                true,
+                Some(CliSessionId::parse("still-present").unwrap()),
+                ClearSessionAuditWitness::Conversation(
+                    ConversationId::parse("conversation-1").unwrap(),
+                ),
+            ),
+            receipt(
+                before.scope().clone(),
+                before.generation(),
+                before.previous_cli_session().cloned(),
+                true,
+                None,
+                ClearSessionAuditWitness::None,
+            ),
+        ] {
+            assert!(seal_clear_session_commit(&before, corrupt).is_err());
+        }
+    }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
     #[error("{0}")]

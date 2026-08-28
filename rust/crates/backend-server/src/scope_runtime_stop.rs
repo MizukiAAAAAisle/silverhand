@@ -174,7 +174,7 @@ pub(crate) async fn stop_captured(
             return Err(ScopeRuntimeStopFailure::Ambiguous);
         }
         Err(HostDataPlaneFailure::TimedOut) => return Err(ScopeRuntimeStopFailure::TimedOut),
-        Err(HostDataPlaneFailure::Refused) => {
+        Err(HostDataPlaneFailure::Refused(_)) => {
             return Err(ScopeRuntimeStopFailure::DaemonRefused);
         }
         Err(HostDataPlaneFailure::ProtocolCorruption) => {

@@ -83,6 +83,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_detail_read"),
     ("backend-core", "agent_lifecycle"),
     ("backend-core", "agent_list_read"),
+    // #task:2229 — unmounted typed agent-materialize capability and its production
+    // exact-custody data-plane adapter. The later create vertical consumes this
+    // port; this ticket does not activate a route.
+    ("backend-core", "agent_materialize"),
     ("backend-core", "agent_presence_read"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
@@ -125,6 +129,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // under one ambient storage kind. An adapter like `clock` / `password_hasher`
     // below, so it belongs in this seam ledger but NOT `ACTIVATION_NAMESPACES`.
     ("backend-server", "avatar_blob"),
+    ("backend-server", "agent_materialize"),
     ("backend-server", "clock"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
@@ -137,6 +142,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "users"),
     ("backend-server", "ops"),
     ("backend-server", "password_hasher"),
+    // #task:2229 — unmounted runtime start/stop/clear production capability. It
+    // owns exact-custody commands, the ephemeral clear waiter, and committed
+    // clear settlement; the later route vertical is the activation owner.
+    ("backend-server", "runtime_control"),
     ("backend-server", "scope_runtime_stop"),
     ("backend-server", "workspace_detail"),
     ("backend-server", "workspace_metadata_write"),

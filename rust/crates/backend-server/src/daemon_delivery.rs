@@ -1,5 +1,8 @@
 //! Authenticated daemon attachment, delivery custody and Messaging effect adapters.
 
+pub(crate) mod agent_materialize_codec;
+pub(crate) mod runtime_clear_session_codec;
+pub(crate) mod runtime_start_codec;
 pub(crate) mod runtime_stop_codec;
 
 use std::{
@@ -60,6 +63,7 @@ use tokio::{
 };
 
 use crate::{
+    agent_materialize::ProductionAgentMaterialize,
     bearer::strict_bearer_credential,
     daemon_events::{
         AgentRunStateWire, DaemonRuntimeEventOwner, HydratedRuntime, RuntimeEventDirective,
@@ -165,9 +169,40 @@ pub struct DaemonDeliveryRuntime<C, D, H> {
     seeds: HostStatusSeeds,
     config: DaemonDeliveryConfig,
     events: DaemonRuntimeEventOwner<D>,
+    clear_session_waiters: crate::runtime_control::RuntimeClearSessionWaiters,
 }
 
 impl<C, D, H> DaemonDeliveryRuntime<C, D, H> {
+    pub fn agent_materialize(&self) -> ProductionAgentMaterialize {
+        ProductionAgentMaterialize::new(
+            OwningHostDataPlane {
+                registry: self.registry.clone(),
+            },
+            self.config.command_timeout,
+        )
+    }
+
+    pub fn runtime_control(&self) -> crate::runtime_control::ProductionRuntimeControl<C, D, H>
+    where
+        C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+        D: RuntimeDispatchReadPort
+            + silverhand_backend_core::messaging::collaboration::RuntimeControlSeatPort,
+        H: ComputerReadModel,
+    {
+        let data_plane = OwningHostDataPlane {
+            registry: self.registry.clone(),
+        };
+        crate::runtime_control::ProductionRuntimeControl::new(
+            self.credentials.clone(),
+            self.data.clone(),
+            self.host_credentials.clone(),
+            data_plane,
+            self.scope_runtime_stop(),
+            self.clear_session_waiters.clone(),
+            self.config.command_timeout,
+        )
+    }
+
     pub(crate) fn conversation_agent_run_states(
         &self,
         conversation: &ConversationId,
@@ -234,6 +269,7 @@ where
                 Arc::new(events.host_runtime_activity()),
             ),
             events,
+            clear_session_waiters: crate::runtime_control::RuntimeClearSessionWaiters::default(),
             data,
             host_credentials,
             // One ledger per runtime, reading occupancy from the very registry the
@@ -1312,7 +1348,7 @@ impl Error for CommandDispatchError {}
 /// Private to this module because that admission is all it is for — no caller,
 /// here or in the TS contract, acts on which of the five arrived.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DaemonRefusalCode {
+pub(crate) enum DaemonRefusalCode {
     UnknownIntent,
     InvalidParams,
     InternalError,
@@ -1338,7 +1374,7 @@ impl DaemonRefusalCode {
 /// transport's: admitting them for another kind would let a daemon answer a
 /// host-control command in a language that command has no arm for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RuntimeRefusalCode {
+pub(crate) enum RuntimeRefusalCode {
     AgentDeleting,
     WorkspaceNotProvisioned,
     WorkspaceBundleMissing,
@@ -1348,9 +1384,33 @@ enum RuntimeRefusalCode {
 /// Codes scoped to `agent_files_purge`. They are accepted only on that command;
 /// seeing one on any other kind is protocol corruption.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AgentFilesPurgeRefusalCode {
+pub(crate) enum AgentFilesPurgeRefusalCode {
     QuiesceFailed,
     PartialPurge,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AgentMaterializeRefusalCode {
+    AgentDeleting,
+    FsQuotaExceeded,
+    FsUnavailable,
+    AgentDirCollision,
+    UnsupportedTemplate,
+    UnsupportedRuntime,
+}
+
+impl AgentMaterializeRefusalCode {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "agent_deleting" => Some(Self::AgentDeleting),
+            "fs_quota_exceeded" => Some(Self::FsQuotaExceeded),
+            "fs_unavailable" => Some(Self::FsUnavailable),
+            "agent_dir_collision" => Some(Self::AgentDirCollision),
+            "unsupported_template" => Some(Self::UnsupportedTemplate),
+            "unsupported_runtime" => Some(Self::UnsupportedRuntime),
+            _ => None,
+        }
+    }
 }
 
 impl AgentFilesPurgeRefusalCode {
@@ -1382,10 +1442,11 @@ impl RuntimeRefusalCode {
 /// runtime-scoped code on a kind without that vocabulary is a frame in the wrong
 /// language.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CommandRefusal {
-    Response,
-    RuntimeScoped,
-    AgentFilesPurgeScoped,
+pub(crate) enum CommandRefusal {
+    Response(DaemonRefusalCode),
+    RuntimeScoped(RuntimeRefusalCode),
+    AgentMaterializeScoped(AgentMaterializeRefusalCode),
+    AgentFilesPurgeScoped(AgentFilesPurgeRefusalCode),
 }
 
 impl CommandRefusal {
@@ -1395,16 +1456,21 @@ impl CommandRefusal {
             return None;
         }
         let code = object.get("code").and_then(Value::as_str)?;
-        if DaemonRefusalCode::parse(code).is_some() {
-            return Some(Self::Response);
+        if let Some(code) = DaemonRefusalCode::parse(code) {
+            return Some(Self::Response(code));
         }
-        if !matches!(kind, "runtime_start" | "runtime_deliver") {
-            return (kind == "agent_files_purge")
-                .then(|| AgentFilesPurgeRefusalCode::parse(code))
-                .flatten()
-                .map(|_| Self::AgentFilesPurgeScoped);
+        match kind {
+            "runtime_start" | "runtime_deliver" => {
+                RuntimeRefusalCode::parse(code).map(Self::RuntimeScoped)
+            }
+            "agent_materialize" => {
+                AgentMaterializeRefusalCode::parse(code).map(Self::AgentMaterializeScoped)
+            }
+            "agent_files_purge" => {
+                AgentFilesPurgeRefusalCode::parse(code).map(Self::AgentFilesPurgeScoped)
+            }
+            _ => None,
         }
-        RuntimeRefusalCode::parse(code).map(|_| Self::RuntimeScoped)
     }
 }
 
@@ -1440,8 +1506,11 @@ impl DaemonAttachment {
 /// schemas remain in command-specific adapters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HostDataPlaneCommandKind {
+    AgentMaterialize,
     HostStatus,
+    RuntimeClearSession,
     RuntimeCatalog,
+    RuntimeStart,
     RuntimeStop,
     ProxyConfigGet,
     ProxyConfigSet,
@@ -1451,9 +1520,12 @@ pub(crate) enum HostDataPlaneCommandKind {
 impl HostDataPlaneCommandKind {
     /// Every variant, so the response envelope admits exactly the kinds this face can
     /// send. A variant missing here is not silently tolerated: nothing could answer it.
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 9] = [
+        Self::AgentMaterialize,
         Self::HostStatus,
+        Self::RuntimeClearSession,
         Self::RuntimeCatalog,
+        Self::RuntimeStart,
         Self::RuntimeStop,
         Self::ProxyConfigGet,
         Self::ProxyConfigSet,
@@ -1462,8 +1534,11 @@ impl HostDataPlaneCommandKind {
 
     fn as_wire(self) -> &'static str {
         match self {
+            Self::AgentMaterialize => "agent_materialize",
             Self::HostStatus => "host_status",
+            Self::RuntimeClearSession => "runtime_clear_session",
             Self::RuntimeCatalog => "host_runtime_catalog",
+            Self::RuntimeStart => "runtime_start",
             Self::RuntimeStop => RUNTIME_STOP_KIND,
             Self::ProxyConfigGet => "host_proxy_config_get",
             Self::ProxyConfigSet => "host_proxy_config_set",
@@ -1568,7 +1643,7 @@ pub(crate) enum HostDataPlaneFailure {
     /// consumer in this crate distinguishes them. What the closed set is
     /// load-bearing for is the arm itself: a refusal leaves the connection alive,
     /// and anything outside the set does not.
-    Refused,
+    Refused(CommandRefusal),
     ProtocolCorruption,
     RegistryUnavailable,
 }
@@ -1579,14 +1654,8 @@ impl HostDataPlaneFailure {
             CommandDispatchError::ProvenNotDispatched => Self::NotDispatched,
             CommandDispatchError::Ambiguous => Self::Ambiguous,
             CommandDispatchError::TimedOut => Self::TimedOut,
-            CommandDispatchError::DaemonRefused(CommandRefusal::Response) => Self::Refused,
-            // No command admitted through this data plane accepts runtime-scoped
-            // or purge-scoped codes: runtime_stop has only response-level daemon
-            // refusals. Reaching either arm is therefore the wrong vocabulary.
-            CommandDispatchError::DaemonRefused(
-                CommandRefusal::RuntimeScoped | CommandRefusal::AgentFilesPurgeScoped,
-            )
-            | CommandDispatchError::InvalidResponse => Self::ProtocolCorruption,
+            CommandDispatchError::DaemonRefused(refusal) => Self::Refused(refusal),
+            CommandDispatchError::InvalidResponse => Self::ProtocolCorruption,
         }
     }
 }
@@ -1602,7 +1671,7 @@ impl fmt::Display for HostDataPlaneFailure {
             Self::NotDispatched => "host command was proven not dispatched",
             Self::Ambiguous => "host command outcome is ambiguous",
             Self::TimedOut => "host command timed out",
-            Self::Refused => "daemon refused the host command",
+            Self::Refused(_) => "daemon refused the host command",
             Self::ProtocolCorruption => "daemon answered the host command with a corrupt frame",
             Self::RegistryUnavailable => "daemon attachment registry is unavailable",
         })
@@ -1848,16 +1917,28 @@ impl RuntimeStartTransport for StartTransport {
         &self,
         handoff: &RuntimeStartHandoff,
     ) -> Result<(), RuntimeDispatchFailure<Self::Error>> {
-        let params = runtime_start_params(&self.target, handoff);
+        let params = runtime_start_codec::encode(&self.target, handoff).map_err(|_| {
+            RuntimeDispatchFailure::ProvenNotDispatched(StartTransportError::InvalidRequest)
+        })?;
         match self
             .attachment
             .command("runtime_start", params, self.timeout)
             .await
         {
-            Ok(result) if valid_runtime_start_success(&result) => Ok(()),
-            Ok(result) if valid_runtime_start_refusal(&result) => Err(
-                RuntimeDispatchFailure::ProvenNotDispatched(StartTransportError::Refused),
-            ),
+            Ok(result)
+                if runtime_start_codec::decode_result(&result)
+                    == Some(runtime_start_codec::RuntimeStartResult::Started) =>
+            {
+                Ok(())
+            }
+            Ok(result)
+                if runtime_start_codec::decode_result(&result)
+                    == Some(runtime_start_codec::RuntimeStartResult::InitCooldown) =>
+            {
+                Err(RuntimeDispatchFailure::ProvenNotDispatched(
+                    StartTransportError::Refused,
+                ))
+            }
             Ok(_) => Err(RuntimeDispatchFailure::Ambiguous(
                 StartTransportError::InvalidResponse,
             )),
@@ -1875,6 +1956,7 @@ impl RuntimeStartTransport for StartTransport {
 enum StartTransportError {
     Transport,
     Refused,
+    InvalidRequest,
     InvalidResponse,
 }
 
@@ -1883,6 +1965,7 @@ impl fmt::Display for StartTransportError {
         formatter.write_str(match self {
             Self::Transport => "runtime_start transport failed",
             Self::Refused => "daemon refused runtime_start",
+            Self::InvalidRequest => "runtime_start request is outside its wire schema",
             Self::InvalidResponse => "daemon returned an invalid runtime_start response",
         })
     }
@@ -2809,6 +2892,7 @@ async fn settle_event<C, D, H>(
             return;
         }
     };
+    runtime.clear_session_waiters.notify_exit(&principal);
     let owner = match DeliveryLeaseOwner::parse(connection_id.to_owned()) {
         Ok(owner) => owner,
         Err(cause) => {
@@ -3663,15 +3747,6 @@ impl fmt::Display for EventIdentityError {
 
 impl Error for EventIdentityError {}
 
-fn runtime_start_params(target: &RuntimeDispatchTarget, handoff: &RuntimeStartHandoff) -> Value {
-    json!({
-        "conversation_id": target.conversation.as_str(),
-        "agent_id": handoff.principal().agent().as_str(),
-        "runtime_generation": handoff.principal().custody().generation().as_i64(),
-        "options": spawn_options(&target.plan, handoff.daemon_auth_token()),
-    })
-}
-
 fn runtime_deliver_params(
     target: &RuntimeDispatchTarget,
     handoff: &RuntimeStartHandoff,
@@ -3846,23 +3921,6 @@ enum DeliveryDisposition {
     Invalid,
 }
 
-fn valid_runtime_start_success(value: &Value) -> bool {
-    exact_keys(value, &["started", "pid", "started_at"])
-        && value.get("started").and_then(Value::as_bool) == Some(true)
-        && value.get("pid").and_then(Value::as_i64).is_some()
-        && value.get("started_at").and_then(Value::as_i64).is_some()
-}
-
-fn valid_runtime_start_refusal(value: &Value) -> bool {
-    exact_keys(value, &["started", "reason", "cooldown_until"])
-        && value.get("started").and_then(Value::as_bool) == Some(false)
-        && value.get("reason").and_then(Value::as_str) == Some("init_cooldown")
-        && value
-            .get("cooldown_until")
-            .and_then(Value::as_i64)
-            .is_some_and(|value| value > 0)
-}
-
 fn delivery_disposition(value: &Value) -> DeliveryDisposition {
     match value.get("disposition").and_then(Value::as_str) {
         Some("spawning" | "admitted" | "deferred")
@@ -3917,6 +3975,29 @@ mod tests {
     use crate::current_schema;
 
     use super::*;
+
+    fn attach_for_command_test(
+        registry: &DaemonRegistry,
+        host: &HostId,
+        instance: DaemonInstanceId,
+    ) -> (String, mpsc::Receiver<ConnectionControl>) {
+        let (commands, receive) = mpsc::channel(4);
+        let (close, _close_receive) = watch::channel(None);
+        let connection = registry.reserve(host.as_str(), commands, close).unwrap();
+        assert!(
+            registry
+                .attach(
+                    host.as_str(),
+                    &connection,
+                    AttachedDaemon {
+                        daemon_instance: instance,
+                        host_name: host.as_str().to_owned(),
+                    },
+                )
+                .unwrap()
+        );
+        (connection, receive)
+    }
 
     struct ControlledCommandSink {
         entered_first_write: Arc<Notify>,
@@ -4614,7 +4695,7 @@ mod tests {
                     Answer::Refused => command
                         .response
                         .send(Err(CommandDispatchError::DaemonRefused(
-                            CommandRefusal::Response,
+                            CommandRefusal::Response(DaemonRefusalCode::ShuttingDown),
                         )))
                         .unwrap(),
                     Answer::Drop => drop(command.response),
@@ -5102,6 +5183,8 @@ mod tests {
     fn refusal_codes_are_admitted_per_kind_and_never_invented() {
         let error = |code: &str| json!({ "code": code, "message": "why" });
         for kind in [
+            "agent_materialize",
+            "runtime_clear_session",
             "runtime_start",
             "runtime_deliver",
             RUNTIME_STOP_KIND,
@@ -5109,7 +5192,7 @@ mod tests {
         ] {
             assert_eq!(
                 CommandRefusal::decode(kind, &error("shutting_down")),
-                Some(CommandRefusal::Response)
+                Some(CommandRefusal::Response(DaemonRefusalCode::ShuttingDown))
             );
             assert_eq!(CommandRefusal::decode(kind, &error("banana")), None);
         }
@@ -5146,6 +5229,23 @@ mod tests {
                 None
             );
         }
+        for code in [
+            "agent_deleting",
+            "fs_quota_exceeded",
+            "fs_unavailable",
+            "agent_dir_collision",
+            "unsupported_template",
+            "unsupported_runtime",
+        ] {
+            assert!(matches!(
+                CommandRefusal::decode("agent_materialize", &error(code)),
+                Some(CommandRefusal::AgentMaterializeScoped(_))
+            ));
+            assert_eq!(
+                CommandRefusal::decode("runtime_clear_session", &error(code)),
+                None
+            );
+        }
         assert_eq!(
             CommandRefusal::decode("runtime_start", &json!({ "code": "internal_error" })),
             None
@@ -5174,7 +5274,9 @@ mod tests {
             .expect("response-level refusal is admitted for runtime_stop");
         assert!(matches!(
             HostDataPlaneFailure::from_dispatch(CommandDispatchError::DaemonRefused(response)),
-            HostDataPlaneFailure::Refused
+            HostDataPlaneFailure::Refused(CommandRefusal::Response(
+                DaemonRefusalCode::ShuttingDown,
+            ))
         ));
 
         // runtime_stop has no operation-scoped refusal arm. The real connection
@@ -5231,12 +5333,21 @@ mod tests {
     #[test]
     fn every_shared_host_data_plane_word_is_admitted_on_the_response_epoch() {
         for (kind, wire) in [
+            (
+                HostDataPlaneCommandKind::AgentMaterialize,
+                "agent_materialize",
+            ),
             (HostDataPlaneCommandKind::HostStatus, "host_status"),
+            (
+                HostDataPlaneCommandKind::RuntimeClearSession,
+                "runtime_clear_session",
+            ),
             (
                 HostDataPlaneCommandKind::RuntimeCatalog,
                 "host_runtime_catalog",
             ),
             (HostDataPlaneCommandKind::RuntimeStop, "runtime_stop"),
+            (HostDataPlaneCommandKind::RuntimeStart, "runtime_start"),
             (
                 HostDataPlaneCommandKind::ProxyConfigGet,
                 "host_proxy_config_get",
@@ -5255,6 +5366,579 @@ mod tests {
                 "result": { "ok": true },
             })));
         }
+    }
+
+    #[tokio::test]
+    async fn materialize_command_stays_on_its_captured_host_and_connection_generation() {
+        use silverhand_backend_core::{
+            agent_materialize::{
+                AgentMaterializePort, AgentMaterializeTarget, AgentMaterializeTemplate,
+            },
+            agents::runtime::RuntimeKind,
+            identity::WorkspaceId,
+        };
+
+        let registry = DaemonRegistry::with_process_epoch("materialize-test".to_owned());
+        let host_a = HostId::parse("host-a").unwrap();
+        let host_b = HostId::parse("host-b").unwrap();
+        let instance = DaemonInstanceId::parse("same-instance").unwrap();
+        let (connection_a, mut receive_a) =
+            attach_for_command_test(&registry, &host_a, instance.clone());
+        let (_connection_b, mut receive_b) =
+            attach_for_command_test(&registry, &host_b, instance.clone());
+        let plane = OwningHostDataPlane {
+            registry: registry.clone(),
+        };
+        let adapter = crate::agent_materialize::ProductionAgentMaterialize::new(
+            plane.clone(),
+            Duration::from_secs(10),
+        );
+        let target = AgentMaterializeTarget::reserved(
+            host_a.clone(),
+            AgentId::parse("agent-a").unwrap(),
+            WorkspaceId::parse("wsah_agent-a").unwrap(),
+            "Agent A".to_owned(),
+            RuntimeKind::Codex,
+            None,
+            None,
+            AgentMaterializeTemplate::Default,
+        );
+        let call_target = target.clone();
+        let call = tokio::spawn(async move { adapter.materialize(&call_target).await });
+        let ConnectionControl::Command(command) = receive_a.recv().await.unwrap() else {
+            panic!("materialize must enter host A FIFO")
+        };
+        assert_eq!(command.kind, "agent_materialize");
+        assert_eq!(command.params["agent_id"], "agent-a");
+        assert!(matches!(
+            receive_b.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        command
+            .response
+            .send(Ok(json!({
+                "ok":true,"agent_dir":"/agent-a",
+                "agent_home_workspace_path":"/agent-a","materialized_at":1
+            })))
+            .unwrap();
+        assert!(call.await.unwrap().unwrap().is_ok());
+
+        let captured_a = plane.resolve(&host_a).unwrap().unwrap();
+        registry.remove(host_a.as_str(), &connection_a);
+        let (_successor_connection, mut successor_receive) =
+            attach_for_command_test(&registry, &host_a, instance);
+        let params = agent_materialize_codec::encode(&target).unwrap();
+        assert!(matches!(
+            crate::agent_materialize::materialize_captured(
+                &plane,
+                captured_a,
+                params,
+                Duration::from_secs(10),
+            )
+            .await
+            .unwrap(),
+            Err(silverhand_backend_core::agent_materialize::AgentMaterializeRefusal::HostAttachPending)
+        ));
+        assert!(matches!(
+            successor_receive.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn clear_command_replacement_is_attach_pending_and_successor_fifo_stays_empty() {
+        let registry = DaemonRegistry::with_process_epoch("clear-test".to_owned());
+        let host = HostId::parse("host-a").unwrap();
+        let instance = DaemonInstanceId::parse("same-instance").unwrap();
+        let (connection_a, _receive_a) =
+            attach_for_command_test(&registry, &host, instance.clone());
+        let plane = OwningHostDataPlane {
+            registry: registry.clone(),
+        };
+        let captured_a = plane.resolve(&host).unwrap().unwrap();
+        registry.remove(host.as_str(), &connection_a);
+        let (_connection_b, mut receive_b) = attach_for_command_test(&registry, &host, instance);
+        let result = crate::runtime_control::clear_captured(
+            &plane,
+            captured_a,
+            &RuntimeScope::AgentSlot {
+                agent: AgentId::parse("agent-a").unwrap(),
+            },
+            silverhand_backend_core::runtime_credential::RuntimeGeneration::new(1).unwrap(),
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            result,
+            crate::runtime_control::ClearDispatchOutcome::AttachPending
+        ));
+        assert!(matches!(
+            receive_b.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[derive(Clone)]
+    struct ClearCustody;
+
+    impl silverhand_backend_core::runtime_credential::RuntimeCustodyPort for ClearCustody {
+        async fn claim_or_current(
+            &self,
+            _claim: silverhand_backend_core::runtime_credential::ClaimRuntimeCustody,
+        ) -> Result<
+            Option<silverhand_backend_core::runtime_credential::ClaimedRuntime>,
+            PersistenceFailure,
+        > {
+            unreachable!("clear never claims custody")
+        }
+
+        async fn current(
+            &self,
+            _scope: RuntimeScope,
+        ) -> Result<Option<RuntimePrincipal>, PersistenceFailure> {
+            unreachable!("clear never asks current custody")
+        }
+
+        async fn is_current(
+            &self,
+            _principal: RuntimePrincipal,
+        ) -> Result<bool, PersistenceFailure> {
+            unreachable!("clear never authenticates custody")
+        }
+
+        async fn finalize(
+            &self,
+            _finalization: silverhand_backend_core::runtime_credential::FinalizeRuntimeCustody,
+        ) -> Result<bool, PersistenceFailure> {
+            Ok(true)
+        }
+    }
+
+    #[derive(Clone)]
+    struct ClearSeat {
+        snapshot: silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot,
+        settles: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl RuntimeDispatchReadPort for ClearSeat {
+        async fn resolve_dispatch_target(
+            &self,
+            _conversation: ConversationId,
+            _agent: AgentId,
+        ) -> Result<Option<RuntimeDispatchTarget>, PersistenceFailure> {
+            unreachable!("clear never resolves a start target")
+        }
+
+        async fn current_custodies_for_host(
+            &self,
+            _host_id: String,
+        ) -> Result<Vec<RuntimePrincipal>, PersistenceFailure> {
+            unreachable!("clear never hydrates")
+        }
+    }
+
+    impl silverhand_backend_core::messaging::collaboration::RuntimeControlSeatPort for ClearSeat {
+        type Error = std::io::Error;
+
+        async fn snapshot(
+            &self,
+            _target: &silverhand_backend_core::messaging::collaboration::RuntimeControlTarget,
+        ) -> Result<
+            Option<silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot>,
+            Self::Error,
+        > {
+            Ok(Some(self.snapshot.clone()))
+        }
+
+        async fn settle_clear(
+            &self,
+            _target: &silverhand_backend_core::messaging::collaboration::RuntimeControlTarget,
+            before: &silverhand_backend_core::messaging::collaboration::BoundRuntimeControlSeat,
+        ) -> Result<
+            Option<silverhand_backend_core::messaging::collaboration::ClearSessionCommitReceipt>,
+            Self::Error,
+        > {
+            self.settles
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Some(
+                silverhand_backend_core::messaging::collaboration::ClearSessionCommitReceipt::decoded(
+                    before.scope().clone(),
+                    before.generation(),
+                    before.previous_cli_session().cloned(),
+                    before.was_running(),
+                    None,
+                    silverhand_backend_core::messaging::collaboration::ClearSessionAuditWitness::Agent(
+                        before.agent().clone(),
+                    ),
+                ),
+            ))
+        }
+    }
+
+    #[derive(Clone)]
+    struct ClearComputer(HostId);
+
+    impl ComputerReadModel for ClearComputer {
+        async fn list_for_owner(
+            &self,
+            _owner: UserId,
+        ) -> Result<
+            Vec<silverhand_backend_core::host_runtime::computer::ComputerRecord>,
+            PersistenceFailure,
+        > {
+            unreachable!("exact clear never lists hosts")
+        }
+
+        async fn read_computer(
+            &self,
+            computer: HostId,
+        ) -> Result<
+            Option<silverhand_backend_core::host_runtime::computer::ComputerRecord>,
+            PersistenceFailure,
+        > {
+            use silverhand_backend_core::host_runtime::computer::{
+                ComputerRecord, HostKind, ProvisioningSource,
+            };
+            assert_eq!(computer, self.0);
+            Ok(Some(ComputerRecord {
+                id: self.0.clone(),
+                name: "host".to_owned(),
+                kind: HostKind::Remote,
+                created_at: 0,
+                owner: Some(UserId::parse("user-1").unwrap()),
+                installation_id: None,
+                last_seen_at: None,
+                activated_at: Some(1),
+                finalized_at: Some(1),
+                revoked_at: None,
+                provisioning_source: ProvisioningSource::UserInvite,
+                display_label: None,
+            }))
+        }
+    }
+
+    struct ProductionClearFixture {
+        control: crate::runtime_control::ProductionRuntimeControl<
+            ClearCustody,
+            ClearSeat,
+            ClearComputer,
+        >,
+        receive: mpsc::Receiver<ConnectionControl>,
+        waiters: crate::runtime_control::RuntimeClearSessionWaiters,
+        principal: RuntimePrincipal,
+        target: silverhand_backend_core::messaging::collaboration::RuntimeControlTarget,
+        settles: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    fn production_clear_fixture() -> ProductionClearFixture {
+        use silverhand_backend_core::messaging::collaboration::{
+            CliSessionId, RuntimeControlObservedStatus, RuntimeControlSeatSnapshot,
+            RuntimeControlTarget,
+        };
+        let registry = DaemonRegistry::with_process_epoch("clear-production".to_owned());
+        let host = HostId::parse("host-a").unwrap();
+        let daemon = DaemonInstanceId::parse("daemon-a").unwrap();
+        let (_connection, receive) = attach_for_command_test(&registry, &host, daemon.clone());
+        let scope = RuntimeScope::AgentSlot {
+            agent: AgentId::parse("agent-a").unwrap(),
+        };
+        let generation =
+            silverhand_backend_core::runtime_credential::RuntimeGeneration::new(7).unwrap();
+        let principal = RuntimePrincipal::for_scope(
+            scope.clone(),
+            silverhand_backend_core::runtime_credential::RuntimeCustody::new(
+                generation,
+                daemon.clone(),
+            ),
+        );
+        let settles = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seats = ClearSeat {
+            snapshot: RuntimeControlSeatSnapshot::decoded(
+                AgentId::parse("agent-a").unwrap(),
+                host.clone(),
+                scope,
+                generation,
+                Some(daemon),
+                Some(CliSessionId::parse("session-a").unwrap()),
+                RuntimeControlObservedStatus::Active,
+                "agent-a".to_owned(),
+            ),
+            settles: Arc::clone(&settles),
+        };
+        let plane = OwningHostDataPlane {
+            registry: registry.clone(),
+        };
+        let computers = ClearComputer(host);
+        let waiters = crate::runtime_control::RuntimeClearSessionWaiters::default();
+        let stop = ProductionScopeRuntimeStop::new(
+            computers.clone(),
+            plane.clone(),
+            Duration::from_secs(30),
+        );
+        let control = crate::runtime_control::ProductionRuntimeControl::new(
+            RuntimeCredentialAuthority::production(ClearCustody),
+            seats,
+            computers,
+            plane,
+            stop,
+            waiters.clone(),
+            Duration::from_secs(30),
+        );
+        ProductionClearFixture {
+            control,
+            receive,
+            waiters,
+            principal,
+            target: RuntimeControlTarget::new(
+                UserId::parse("user-1").unwrap(),
+                ConversationId::parse("conversation-a").unwrap(),
+                AgentId::parse("agent-a").unwrap(),
+            ),
+            settles,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn clear_ack_alone_times_out_without_settlement_and_finally_releases_single_flight() {
+        use silverhand_backend_core::messaging::collaboration::{
+            ClearSessionProviderRefusal, RuntimeControlPort,
+        };
+        let ProductionClearFixture {
+            control,
+            mut receive,
+            waiters,
+            principal,
+            target,
+            settles,
+        } = production_clear_fixture();
+        let first_control = control.clone();
+        let first_target = target.clone();
+        let first = tokio::spawn(async move { first_control.clear_session(&first_target).await });
+        let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
+            panic!("clear must enter the production FIFO")
+        };
+        assert_eq!(command.kind, "runtime_clear_session");
+        assert_eq!(command.params["runtime_generation"], 7);
+        command.response.send(Ok(json!({"cleared":true}))).unwrap();
+
+        let concurrent = control.clear_session(&target).await.unwrap();
+        assert_eq!(concurrent, Err(ClearSessionProviderRefusal::InProgress));
+        waiters.notify_exit(&RuntimePrincipal::for_scope(
+            principal.scope(),
+            silverhand_backend_core::runtime_credential::RuntimeCustody::new(
+                silverhand_backend_core::runtime_credential::RuntimeGeneration::new(8).unwrap(),
+                principal.custody().daemon_instance().clone(),
+            ),
+        ));
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert_eq!(
+            first.await.unwrap().unwrap(),
+            Err(ClearSessionProviderRefusal::Timeout)
+        );
+        assert_eq!(settles.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let retry_control = control.clone();
+        let retry_target = target.clone();
+        let retry = tokio::spawn(async move { retry_control.clear_session(&retry_target).await });
+        let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
+            panic!("finally cleanup must admit a retry")
+        };
+        command.response.send(Ok(json!({"cleared":false}))).unwrap();
+        assert!(retry.await.unwrap().unwrap().is_ok());
+        assert_eq!(settles.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn exact_exit_before_clear_response_is_latched_then_settled() {
+        use silverhand_backend_core::messaging::collaboration::RuntimeControlPort;
+        let ProductionClearFixture {
+            control,
+            mut receive,
+            waiters,
+            principal,
+            target,
+            settles,
+        } = production_clear_fixture();
+        let call = tokio::spawn(async move { control.clear_session(&target).await });
+        let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
+            panic!("clear must enter the production FIFO")
+        };
+        waiters.notify_exit(&principal);
+        command.response.send(Ok(json!({"cleared":true}))).unwrap();
+        assert!(call.await.unwrap().unwrap().is_ok());
+        assert_eq!(settles.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[derive(Clone)]
+    struct StartCustody;
+
+    impl silverhand_backend_core::runtime_credential::RuntimeCustodyPort for StartCustody {
+        async fn claim_or_current(
+            &self,
+            claim: silverhand_backend_core::runtime_credential::ClaimRuntimeCustody,
+        ) -> Result<
+            Option<silverhand_backend_core::runtime_credential::ClaimedRuntime>,
+            PersistenceFailure,
+        > {
+            Ok(Some(
+                silverhand_backend_core::runtime_credential::ClaimedRuntime::new(
+                    RuntimePrincipal::for_scope(
+                        claim.scope().clone(),
+                        silverhand_backend_core::runtime_credential::RuntimeCustody::new(
+                            silverhand_backend_core::runtime_credential::RuntimeGeneration::new(1)
+                                .unwrap(),
+                            claim.daemon_instance().clone(),
+                        ),
+                    ),
+                    true,
+                ),
+            ))
+        }
+
+        async fn current(
+            &self,
+            _scope: RuntimeScope,
+        ) -> Result<Option<RuntimePrincipal>, PersistenceFailure> {
+            Ok(None)
+        }
+
+        async fn is_current(
+            &self,
+            _principal: RuntimePrincipal,
+        ) -> Result<bool, PersistenceFailure> {
+            Ok(true)
+        }
+
+        async fn finalize(
+            &self,
+            _finalization: silverhand_backend_core::runtime_credential::FinalizeRuntimeCustody,
+        ) -> Result<bool, PersistenceFailure> {
+            Ok(true)
+        }
+    }
+
+    #[derive(Clone)]
+    struct StartSeat(RuntimeDispatchTarget);
+
+    impl RuntimeDispatchReadPort for StartSeat {
+        async fn resolve_dispatch_target(
+            &self,
+            conversation: ConversationId,
+            agent: AgentId,
+        ) -> Result<Option<RuntimeDispatchTarget>, PersistenceFailure> {
+            assert_eq!(conversation, self.0.conversation);
+            assert_eq!(agent, *self.0.plan.scope.agent());
+            Ok(Some(self.0.clone()))
+        }
+
+        async fn current_custodies_for_host(
+            &self,
+            _host_id: String,
+        ) -> Result<Vec<RuntimePrincipal>, PersistenceFailure> {
+            unreachable!("runtime control start never hydrates")
+        }
+    }
+
+    impl silverhand_backend_core::messaging::collaboration::RuntimeControlSeatPort for StartSeat {
+        type Error = std::io::Error;
+
+        async fn snapshot(
+            &self,
+            _target: &silverhand_backend_core::messaging::collaboration::RuntimeControlTarget,
+        ) -> Result<
+            Option<silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot>,
+            Self::Error,
+        > {
+            unreachable!("start resolves the spawn plan")
+        }
+
+        async fn settle_clear(
+            &self,
+            _target: &silverhand_backend_core::messaging::collaboration::RuntimeControlTarget,
+            _before: &silverhand_backend_core::messaging::collaboration::BoundRuntimeControlSeat,
+        ) -> Result<
+            Option<silverhand_backend_core::messaging::collaboration::ClearSessionCommitReceipt>,
+            Self::Error,
+        > {
+            unreachable!("start never settles clear")
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_control_start_traverses_typed_codec_and_production_fifo() {
+        use silverhand_backend_core::{
+            agents::runtime::RuntimeKind,
+            messaging::collaboration::{RuntimeControlPort, RuntimeControlTarget},
+            runtime_delivery::{RuntimeAgentSpec, RuntimeSpawnPlan},
+        };
+        let registry = DaemonRegistry::with_process_epoch("start-production".to_owned());
+        let host = HostId::parse("host-a").unwrap();
+        let (_connection, mut receive) = attach_for_command_test(
+            &registry,
+            &host,
+            DaemonInstanceId::parse("daemon-a").unwrap(),
+        );
+        let conversation = ConversationId::parse("conversation-a").unwrap();
+        let agent = AgentId::parse("agent-a").unwrap();
+        let seats = StartSeat(RuntimeDispatchTarget {
+            host_id: host.as_str().to_owned(),
+            conversation: conversation.clone(),
+            plan: RuntimeSpawnPlan {
+                scope: RuntimeScope::AgentSlot {
+                    agent: agent.clone(),
+                },
+                agent: RuntimeAgentSpec {
+                    id: agent.clone(),
+                    name: "agent-a".to_owned(),
+                    runtime: RuntimeKind::Codex,
+                    model: None,
+                    reasoning_effort: None,
+                    fast_mode: None,
+                    cli_session_id: None,
+                },
+                workspace: None,
+                workspace_memory_index: Vec::new(),
+                session: None,
+            },
+        });
+        let plane = OwningHostDataPlane {
+            registry: registry.clone(),
+        };
+        let computers = ClearComputer(host);
+        let stop = ProductionScopeRuntimeStop::new(
+            computers.clone(),
+            plane.clone(),
+            Duration::from_secs(30),
+        );
+        let control = crate::runtime_control::ProductionRuntimeControl::new(
+            RuntimeCredentialAuthority::production(StartCustody),
+            seats,
+            computers,
+            plane,
+            stop,
+            crate::runtime_control::RuntimeClearSessionWaiters::default(),
+            Duration::from_secs(30),
+        );
+        let target =
+            RuntimeControlTarget::new(UserId::parse("user-1").unwrap(), conversation, agent);
+        let call = tokio::spawn(async move { control.start(&target).await });
+        let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
+            panic!("runtime_start must enter the production FIFO")
+        };
+        assert_eq!(command.kind, "runtime_start");
+        assert_eq!(command.params["conversation_id"], "conversation-a");
+        assert_eq!(command.params["agent_id"], "agent-a");
+        assert_eq!(command.params["runtime_generation"], 1);
+        assert_eq!(
+            command.params["options"]["runtime_scope"],
+            json!({"kind":"agent","agent_id":"agent-a"})
+        );
+        command
+            .response
+            .send(Ok(json!({"started":true,"pid":42,"started_at":7})))
+            .unwrap();
+        assert!(call.await.unwrap().unwrap().is_ok());
     }
 
     #[test]
@@ -5480,15 +6164,21 @@ mod tests {
 
     #[test]
     fn response_result_shapes_do_not_accept_extra_fields() {
-        assert!(valid_runtime_start_success(
-            &json!({ "started": true, "pid": 1, "started_at": 2 })
-        ));
-        assert!(!valid_runtime_start_success(&json!({
-            "started": true,
-            "pid": 1,
-            "started_at": 2,
-            "extra": true,
-        })));
+        assert_eq!(
+            runtime_start_codec::decode_result(
+                &json!({ "started": true, "pid": 1, "started_at": 2 })
+            ),
+            Some(runtime_start_codec::RuntimeStartResult::Started)
+        );
+        assert_eq!(
+            runtime_start_codec::decode_result(&json!({
+                "started": true,
+                "pid": 1,
+                "started_at": 2,
+                "extra": true,
+            })),
+            None
+        );
         assert!(matches!(
             delivery_disposition(&json!({ "disposition": "refused", "reason": "startup_pending" })),
             DeliveryDisposition::Refused

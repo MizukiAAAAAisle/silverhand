@@ -5,8 +5,16 @@ use std::{collections::HashSet, path::Path, time::Duration};
 use serde::Serialize;
 use silverhand_backend_core::{
     agents::runtime::RuntimeKind,
-    identity::{AgentId, ConversationId, DaemonInstanceId, UserId, WorkspaceId},
-    messaging::{FromKind, MessageContent, ReferencePositions},
+    identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId},
+    messaging::{
+        FromKind, MessageContent, MessageId, ReferencePositions,
+        collaboration::{
+            BoundRuntimeControlSeat, ClearSessionAuditWitness, ClearSessionCommitReceipt,
+            CliSessionId, RuntimeControlObservedStatus, RuntimeControlSeatPort,
+            RuntimeControlSeatSnapshot, RuntimeControlTarget,
+        },
+        environment::SendClock,
+    },
     persistence::PersistenceFailure,
     policy::agent_presence,
     runtime_credential::{RuntimeGeneration, RuntimePrincipal, RuntimeScope},
@@ -505,6 +513,325 @@ impl SqliteRuntimeDeliveryStore {
             activity_id,
             presence_viewers,
         ))
+    }
+}
+
+impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
+    type Error = PersistenceFailure;
+
+    async fn snapshot(
+        &self,
+        target: &RuntimeControlTarget,
+    ) -> Result<Option<RuntimeControlSeatSnapshot>, Self::Error> {
+        let Some(row) = sqlx::query(
+            "SELECT a.id AS agent_id, a.name AS agent_name, a.host_id, a.session_scope, \
+                    s.conversation_id, s.generation, s.claimed_by_daemon_instance_id, \
+                    s.cli_session_id, s.observed_status \
+               FROM agents a \
+               JOIN agent_runtime_slots s ON s.agent_id = a.id \
+              WHERE a.id = ? AND ((a.session_scope = 'conversation' AND s.conversation_id = ?) \
+                   OR (a.session_scope = 'agent' AND s.conversation_id IS NULL))",
+        )
+        .bind(target.agent().as_str())
+        .bind(target.conversation().as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(persistence)?
+        else {
+            return Ok(None);
+        };
+
+        let agent = AgentId::parse(row.try_get::<String, _>("agent_id").map_err(persistence)?)
+            .map_err(PersistenceFailure::from_source)?;
+        let session_scope: String = row.try_get("session_scope").map_err(persistence)?;
+        let conversation = row
+            .try_get::<Option<String>, _>("conversation_id")
+            .map_err(persistence)?
+            .map(ConversationId::parse)
+            .transpose()
+            .map_err(PersistenceFailure::from_source)?;
+        let scope = match (session_scope.as_str(), conversation) {
+            ("conversation", Some(source)) => RuntimeScope::ConversationSlot {
+                agent: agent.clone(),
+                source,
+            },
+            ("agent", None) => RuntimeScope::AgentSlot {
+                agent: agent.clone(),
+            },
+            _ => {
+                return Err(PersistenceFailure::from_source(
+                    InvalidPersistedRuntimeTarget,
+                ));
+            }
+        };
+        let host = HostId::parse(row.try_get::<String, _>("host_id").map_err(persistence)?)
+            .map_err(PersistenceFailure::from_source)?;
+        let generation = RuntimeGeneration::new(row.try_get("generation").map_err(persistence)?)
+            .map_err(PersistenceFailure::from_source)?;
+        let daemon = row
+            .try_get::<Option<String>, _>("claimed_by_daemon_instance_id")
+            .map_err(persistence)?
+            .map(DaemonInstanceId::parse)
+            .transpose()
+            .map_err(PersistenceFailure::from_source)?;
+        let cli_session = row
+            .try_get::<Option<String>, _>("cli_session_id")
+            .map_err(persistence)?
+            .map(CliSessionId::parse)
+            .transpose()
+            .map_err(PersistenceFailure::from_source)?;
+        let status = match row
+            .try_get::<String, _>("observed_status")
+            .map_err(persistence)?
+            .as_str()
+        {
+            "idle" => RuntimeControlObservedStatus::Idle,
+            "starting" => RuntimeControlObservedStatus::Starting,
+            "active" => RuntimeControlObservedStatus::Active,
+            "crashed" => RuntimeControlObservedStatus::Crashed,
+            _ => {
+                return Err(PersistenceFailure::from_source(
+                    InvalidPersistedRuntimeTarget,
+                ));
+            }
+        };
+        let agent_name: String = row.try_get("agent_name").map_err(persistence)?;
+        Ok(Some(RuntimeControlSeatSnapshot::decoded(
+            agent,
+            host,
+            scope,
+            generation,
+            daemon,
+            cli_session,
+            status,
+            agent_name,
+        )))
+    }
+
+    async fn settle_clear(
+        &self,
+        target: &RuntimeControlTarget,
+        before: &BoundRuntimeControlSeat,
+    ) -> Result<Option<ClearSessionCommitReceipt>, Self::Error> {
+        let should_audit = before.was_running() || before.previous_cli_session().is_some();
+        let environment = crate::messaging::HostEnvironment;
+        let occurred_at = environment
+            .now_unix_ms()
+            .map_err(PersistenceFailure::from_source)?;
+        let audit_message = match (should_audit, before.scope()) {
+            (true, RuntimeScope::ConversationSlot { .. }) => {
+                Some(MessageId::mint(&environment).map_err(PersistenceFailure::from_source)?)
+            }
+            _ => None,
+        };
+        let mut tx = self
+            .pool
+            .begin_with(ROOT_WRITE_BEGIN)
+            .await
+            .map_err(persistence)?;
+        let row = match before.scope() {
+            RuntimeScope::ConversationSlot { agent, source } => sqlx::query(
+                "SELECT s.id, s.generation, s.cli_session_id, a.host_id, a.name \
+                   FROM agent_runtime_slots s JOIN agents a ON a.id=s.agent_id \
+                  WHERE s.agent_id=? AND s.conversation_id=?",
+            )
+            .bind(agent.as_str())
+            .bind(source.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(persistence)?,
+            RuntimeScope::AgentSlot { agent } => sqlx::query(
+                "SELECT s.id, s.generation, s.cli_session_id, a.host_id, a.name \
+                   FROM agent_runtime_slots s JOIN agents a ON a.id=s.agent_id \
+                  WHERE s.agent_id=? AND s.conversation_id IS NULL",
+            )
+            .bind(agent.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(persistence)?,
+        };
+        let Some(row) = row else {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(None);
+        };
+        let slot_id: i64 = row.try_get("id").map_err(persistence)?;
+        let generation: i64 = row.try_get("generation").map_err(persistence)?;
+        let current_cli: Option<String> = row.try_get("cli_session_id").map_err(persistence)?;
+        let current_host: String = row.try_get("host_id").map_err(persistence)?;
+        let current_name: String = row.try_get("name").map_err(persistence)?;
+        let expected_cli = before.previous_cli_session().map(CliSessionId::as_str);
+        if generation != before.generation().as_i64()
+            || current_cli.as_deref() != expected_cli
+            || current_host != before.host().as_str()
+            || current_name != before.agent_name()
+        {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(None);
+        }
+
+        let changed = sqlx::query(
+            "UPDATE agent_runtime_slots SET cli_session_id=NULL \
+              WHERE id=? AND generation=? AND cli_session_id IS ?",
+        )
+        .bind(slot_id)
+        .bind(before.generation().as_i64())
+        .bind(expected_cli)
+        .execute(&mut *tx)
+        .await
+        .map_err(persistence)?
+        .rows_affected();
+        if changed != 1 {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(None);
+        }
+        if before.previous_cli_session().is_some() {
+            sqlx::query(
+                "INSERT INTO agent_runtime_events(slot_id,agent_id,conversation_id,generation,\
+                 event_kind,daemon_instance_id,observed_status,observed_pid,cli_session_id,occurred_at) \
+                 SELECT id,agent_id,conversation_id,generation,'projection_updated',\
+                        claimed_by_daemon_instance_id,observed_status,observed_pid,cli_session_id,? \
+                   FROM agent_runtime_slots WHERE id=? AND generation=?",
+            )
+            .bind(occurred_at)
+            .bind(slot_id)
+            .bind(before.generation().as_i64())
+            .execute(&mut *tx)
+            .await
+            .map_err(persistence)?;
+        }
+
+        let audit = if !should_audit {
+            ClearSessionAuditWitness::None
+        } else {
+            match before.scope() {
+                RuntimeScope::ConversationSlot { source, .. } => {
+                    let advanced = sqlx::query(
+                        "UPDATE conversations SET latest_message_seq=latest_message_seq+1 WHERE id=?",
+                    )
+                    .bind(source.as_str())
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(persistence)?
+                    .rows_affected();
+                    if advanced != 1 {
+                        return Err(PersistenceFailure::from_source(
+                            InvalidPersistedRuntimeTarget,
+                        ));
+                    }
+                    let sequence: i64 = sqlx::query_scalar(
+                        "SELECT latest_message_seq FROM conversations WHERE id=?",
+                    )
+                    .bind(source.as_str())
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(persistence)?;
+                    let prefix = before
+                        .previous_cli_session()
+                        .map(|value| value.as_str().chars().take(8).collect::<String>());
+                    let previous_label = prefix
+                        .as_deref()
+                        .map_or_else(|| "none".to_owned(), |value| format!("{value}..."));
+                    let content = format!(
+                        "@{} cleared @{}'s CLI session context (prev session: {}). Next start will use a fresh session; pending deliveries remain queued.",
+                        target.actor().as_str(),
+                        before.agent_name(),
+                        previous_label,
+                    );
+                    let metadata = serde_json::to_string(&serde_json::json!({
+                        "subtype": "session_cleared",
+                        "agent_id": before.agent().as_str(),
+                        "agent_name": before.agent_name(),
+                        "actor_user_id": target.actor().as_str(),
+                        "previous_cli_session_id_prefix": prefix,
+                        "was_running": before.was_running(),
+                    }))
+                    .map_err(PersistenceFailure::from_source)?;
+                    sqlx::query(
+                        "INSERT INTO messages(id,conversation_id,from_kind,from_agent_id,from_user_id,\
+                         content,metadata,seq,created_at,thread_root_id,author_id,author_name,\
+                         author_display_name,cc_source_message_id) \
+                         VALUES(?,?,'system',NULL,?,?,?,?,?,NULL,NULL,NULL,NULL,NULL)",
+                    )
+                    .bind(audit_message.as_ref().expect("conversation audit id").as_str())
+                    .bind(source.as_str())
+                    .bind(target.actor().as_str())
+                    .bind(content)
+                    .bind(metadata)
+                    .bind(sequence)
+                    .bind(occurred_at)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(persistence)?;
+                    let advanced_head = sqlx::query(
+                        "UPDATE conversation_stream_heads SET latest_seq=? \
+                          WHERE conversation_id=? AND thread_root_id IS NULL",
+                    )
+                    .bind(sequence)
+                    .bind(source.as_str())
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(persistence)?
+                    .rows_affected();
+                    if advanced_head == 0 {
+                        sqlx::query(
+                            "INSERT INTO conversation_stream_heads(conversation_id,thread_root_id,latest_seq) \
+                             VALUES(?,NULL,?)",
+                        )
+                        .bind(source.as_str())
+                        .bind(sequence)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(persistence)?;
+                    } else if advanced_head != 1 {
+                        return Err(PersistenceFailure::from_source(
+                            InvalidPersistedRuntimeTarget,
+                        ));
+                    }
+                    ClearSessionAuditWitness::Conversation(source.clone())
+                }
+                RuntimeScope::AgentSlot { agent } => {
+                    let prefix = before
+                        .previous_cli_session()
+                        .map(|value| value.as_str().chars().take(8).collect::<String>());
+                    sqlx::query(
+                        "INSERT INTO agent_runtime_control_events(agent_id,generation,actor_user_id,\
+                         reason,was_running,previous_cli_session_id_prefix,occurred_at) \
+                         VALUES(?,?,?,'session_cleared',?,?,?)",
+                    )
+                    .bind(agent.as_str())
+                    .bind(before.generation().as_i64())
+                    .bind(target.actor().as_str())
+                    .bind(i64::from(before.was_running()))
+                    .bind(prefix)
+                    .bind(occurred_at)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(persistence)?;
+                    ClearSessionAuditWitness::Agent(agent.clone())
+                }
+            }
+        };
+        let committed_cli: Option<String> = sqlx::query_scalar(
+            "SELECT cli_session_id FROM agent_runtime_slots WHERE id=? AND generation=?",
+        )
+        .bind(slot_id)
+        .bind(before.generation().as_i64())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(persistence)?
+        .flatten();
+        tx.commit().await.map_err(persistence)?;
+        Ok(Some(ClearSessionCommitReceipt::decoded(
+            before.scope().clone(),
+            before.generation(),
+            before.previous_cli_session().cloned(),
+            before.was_running(),
+            committed_cli
+                .map(CliSessionId::parse)
+                .transpose()
+                .map_err(PersistenceFailure::from_source)?,
+            audit,
+        )))
     }
 }
 
@@ -2223,6 +2550,257 @@ mod presentation_tests {
                 "system",
                 "other",
             ])
+        );
+    }
+}
+
+#[cfg(test)]
+mod runtime_control_seat_tests {
+    use silverhand_backend_core::{
+        identity::UserId,
+        messaging::collaboration::{
+            RuntimeControlSeatPort, RuntimeControlTarget, seal_clear_session_commit,
+        },
+    };
+    use sqlx::{Connection, Executor};
+
+    use super::*;
+
+    async fn seeded() -> (tempfile::TempDir, SqliteRuntimeDeliveryStore) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("runtime-control-seat.sqlite");
+        let mut db = crate::current_schema::create_current_schema(&path).await;
+        db.execute(sqlx::raw_sql(
+            "INSERT INTO users(id,name,display_name,created_at,updated_at) \
+                 VALUES('user-1','owner','Owner',0,0); \
+             INSERT INTO hosts(id,name,kind,created_at) VALUES('host-1','Host','local',0); \
+             INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,display_name,\
+                 created_by_user_id,materialization_status,session_scope) VALUES \
+                 ('agent-conv','conv-agent','codex','host-1',0,0,'Conv','user-1','active','conversation'), \
+                 ('agent-seat','seat-agent','codex','host-1',0,0,'Seat','user-1','active','agent'); \
+             INSERT INTO workspaces(id,name,name_key,owner_user_id,created_at,updated_at) \
+                 VALUES('workspace-1','Space','space','user-1',0,0); \
+             INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,\
+                 status,visibility,created_at,updated_at,latest_message_seq) VALUES \
+                 ('conversation-1','workspace-1','workspace','open','General','general','open','private',0,0,0), \
+                 ('conversation-2','workspace-1','workspace','open','Other','other','open','private',0,0,0); \
+             INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) \
+                 VALUES('conversation-1','agent-conv',0),('conversation-1','agent-seat',0); \
+             UPDATE agent_runtime_slots SET generation=1,claimed_by_daemon_instance_id='daemon-1',\
+                 observed_status='active',cli_session_id='session-conv' \
+               WHERE agent_id='agent-conv' AND conversation_id='conversation-1'; \
+             UPDATE agent_runtime_slots SET generation=1,claimed_by_daemon_instance_id='daemon-1',\
+                 observed_status='starting',cli_session_id='session-seat' \
+               WHERE agent_id='agent-seat' AND conversation_id IS NULL;",
+        ))
+        .await
+        .unwrap();
+        db.close().await.unwrap();
+        let store = SqliteRuntimeDeliveryStore::open(&path).await.unwrap();
+        (directory, store)
+    }
+
+    fn target(conversation: &str, agent: &str) -> RuntimeControlTarget {
+        RuntimeControlTarget::new(
+            UserId::parse("user-1").unwrap(),
+            ConversationId::parse(conversation).unwrap(),
+            AgentId::parse(agent).unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn conversation_clear_cas_audit_and_receipt_are_one_commit() {
+        let (_directory, store) = seeded().await;
+        let target = target("conversation-1", "agent-conv");
+        let before = store
+            .snapshot(&target)
+            .await
+            .unwrap()
+            .unwrap()
+            .bind(&target)
+            .unwrap();
+        let receipt = store.settle_clear(&target, &before).await.unwrap().unwrap();
+        let outcome = seal_clear_session_commit(&before, receipt).unwrap();
+        assert_eq!(
+            outcome.previous_cli_session().unwrap().as_str(),
+            "session-conv"
+        );
+        assert!(outcome.was_running());
+        let cli: Option<String> = sqlx::query_scalar(
+            "SELECT cli_session_id FROM agent_runtime_slots WHERE agent_id='agent-conv'",
+        )
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(cli, None);
+        let audit: (i64, String) = sqlx::query_as(
+            "SELECT seq,metadata FROM messages WHERE conversation_id='conversation-1'",
+        )
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(audit.0, 1);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&audit.1).unwrap()["subtype"],
+            "session_cleared"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM agent_runtime_events WHERE agent_id='agent-conv' AND event_kind='projection_updated'",
+            )
+            .fetch_one(&store.pool)
+            .await
+            .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_clear_writes_only_the_agent_control_audit() {
+        let (_directory, store) = seeded().await;
+        let target = target("conversation-1", "agent-seat");
+        let before = store
+            .snapshot(&target)
+            .await
+            .unwrap()
+            .unwrap()
+            .bind(&target)
+            .unwrap();
+        let receipt = store.settle_clear(&target, &before).await.unwrap().unwrap();
+        assert!(seal_clear_session_commit(&before, receipt).is_ok());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM agent_runtime_control_events WHERE agent_id='agent-seat' AND generation=1 AND actor_user_id='user-1'",
+            )
+            .fetch_one(&store.pool)
+            .await
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM messages")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn already_idle_empty_session_still_cas_settles_without_an_audit() {
+        let (_directory, store) = seeded().await;
+        sqlx::query(
+            "UPDATE agent_runtime_slots SET observed_status='idle',cli_session_id=NULL \
+              WHERE agent_id='agent-seat' AND conversation_id IS NULL",
+        )
+        .execute(&store.pool)
+        .await
+        .unwrap();
+        let target = target("conversation-1", "agent-seat");
+        let before = store
+            .snapshot(&target)
+            .await
+            .unwrap()
+            .unwrap()
+            .bind(&target)
+            .unwrap();
+        let receipt = store.settle_clear(&target, &before).await.unwrap().unwrap();
+        let outcome = seal_clear_session_commit(&before, receipt).unwrap();
+        assert!(!outcome.was_running());
+        assert!(outcome.previous_cli_session().is_none());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_runtime_control_events")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn successor_generation_rejects_old_settlement_without_residue() {
+        let (_directory, store) = seeded().await;
+        let target = target("conversation-1", "agent-seat");
+        let before = store
+            .snapshot(&target)
+            .await
+            .unwrap()
+            .unwrap()
+            .bind(&target)
+            .unwrap();
+        sqlx::query(
+            "UPDATE agent_runtime_slots SET generation=2,claimed_by_daemon_instance_id='daemon-2' \
+              WHERE agent_id='agent-seat' AND conversation_id IS NULL",
+        )
+        .execute(&store.pool)
+        .await
+        .unwrap();
+        assert!(
+            store
+                .settle_clear(&target, &before)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT cli_session_id FROM agent_runtime_slots WHERE agent_id='agent-seat'",
+            )
+            .fetch_one(&store.pool)
+            .await
+            .unwrap()
+            .as_deref(),
+            Some("session-seat")
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agent_runtime_control_events")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_failure_rolls_back_the_cli_clear() {
+        let (_directory, store) = seeded().await;
+        sqlx::query(
+            "CREATE TRIGGER reject_clear_audit BEFORE INSERT ON agent_runtime_control_events \
+             BEGIN SELECT RAISE(ABORT,'reject'); END",
+        )
+        .execute(&store.pool)
+        .await
+        .unwrap();
+        let target = target("conversation-1", "agent-seat");
+        let before = store
+            .snapshot(&target)
+            .await
+            .unwrap()
+            .unwrap()
+            .bind(&target)
+            .unwrap();
+        assert!(store.settle_clear(&target, &before).await.is_err());
+        assert_eq!(
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT cli_session_id FROM agent_runtime_slots WHERE agent_id='agent-seat'",
+            )
+            .fetch_one(&store.pool)
+            .await
+            .unwrap()
+            .as_deref(),
+            Some("session-seat")
+        );
+    }
+
+    #[tokio::test]
+    async fn conversation_scope_is_source_bound() {
+        let (_directory, store) = seeded().await;
+        assert!(
+            store
+                .snapshot(&target("conversation-2", "agent-conv"))
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 }
