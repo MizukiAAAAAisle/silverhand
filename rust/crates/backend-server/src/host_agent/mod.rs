@@ -21,6 +21,7 @@ pub mod agent_detail;
 pub mod agent_list;
 pub mod agent_patch;
 pub mod agent_presence;
+pub mod agent_stop;
 mod agent_wire;
 pub mod availability;
 pub mod host_attachment;

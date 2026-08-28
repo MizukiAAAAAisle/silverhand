@@ -96,6 +96,13 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_avatar_write"),
     ("backend-core", "agent_profile_write"),
     ("backend-core", "participant_handle_availability"),
+    // The agent-scoped bulk runtime stop (POST /api/agents/{id}/stop): its
+    // source-bound snapshot read port and the aggregation use case. It consumes
+    // #task:2227's `scope_runtime_stop` capability per seat and mints no new stop
+    // adapter or refusal vocabulary. Its SQLite adapter rides the existing
+    // `host_agent` store and its server route is the `host_agent::agent_stop`
+    // submodule; both stay UNMOUNTED until a later integration.
+    ("backend-core", "agent_bulk_stop"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
     ("backend-core", "host_resources_read"),
