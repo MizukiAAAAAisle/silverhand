@@ -9,3 +9,4 @@ mod wire;
 
 pub mod peer_profile;
 pub mod profile;
+pub mod profile_mcp;
