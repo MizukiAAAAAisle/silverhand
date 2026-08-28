@@ -249,13 +249,18 @@ pub async fn admit_profile_edit(
         .await
         .map_err(|_| ProfileAdmissionRefusal::MultipartRequired)?;
 
-    // Collect the form once. Text fields are first-wins (mirroring `form.get`) and
-    // captured only when the part is a non-file value (`typeof raw === 'string'`).
-    // The first `file`-named part is remembered whether or not it is a `File`, so
-    // the "set needs a File" check mirrors `form.get('file') instanceof File`.
+    // Collect the form once. `display_name`/`description` are first-wins (mirroring
+    // `form.get`) and captured only when the part is a non-file value
+    // (`typeof raw === 'string'`); a File under those names is ignored, exactly as
+    // TS's `typeof !== 'string'` guard drops it. `avatar_action`, by contrast, takes
+    // the FIRST slot whether or not it is a File — `form.get('avatar_action')`
+    // returns the first entry, and a `File` there is `!== "set"/"clear"`, so it must
+    // reach the invalid-action refusal rather than be silently ignored. The first
+    // `file`-named part is remembered whether or not it is a `File`, so the "set needs
+    // a File" check mirrors `form.get('file') instanceof File`.
     let mut display_name_raw: Option<String> = None;
     let mut description_raw: Option<String> = None;
-    let mut avatar_action_raw: Option<String> = None;
+    let mut avatar_action_slot: Option<AvatarActionSlot> = None;
     let mut file_slot: Option<Option<UploadedFile>> = None;
 
     loop {
@@ -275,8 +280,15 @@ pub async fn admit_profile_edit(
             Some("description") if !is_file && description_raw.is_none() => {
                 description_raw = Some(field_text(field).await?);
             }
-            Some("avatar_action") if !is_file && avatar_action_raw.is_none() => {
-                avatar_action_raw = Some(field_text(field).await?);
+            Some("avatar_action") if avatar_action_slot.is_none() => {
+                // First slot wins, File or not: a File here is a present-but-invalid
+                // action, not an absent one.
+                if is_file {
+                    drain(field).await?;
+                    avatar_action_slot = Some(AvatarActionSlot::NonText);
+                } else {
+                    avatar_action_slot = Some(AvatarActionSlot::Text(field_text(field).await?));
+                }
             }
             Some("file") if file_slot.is_none() => {
                 if is_file {
@@ -301,12 +313,18 @@ pub async fn admit_profile_edit(
         }
     }
 
-    // 1. `avatar_action` validity (present → must be "set" | "clear").
-    let avatar_action = match avatar_action_raw.as_deref() {
+    // 1. `avatar_action` validity (present → must be "set" | "clear"; a File slot is
+    // present-but-invalid).
+    let avatar_action = match avatar_action_slot {
         None => None,
-        Some("set") => Some(AvatarActionKind::Set),
-        Some("clear") => Some(AvatarActionKind::Clear),
-        Some(_) => return Err(ProfileAdmissionRefusal::InvalidAvatarAction),
+        Some(AvatarActionSlot::NonText) => {
+            return Err(ProfileAdmissionRefusal::InvalidAvatarAction);
+        }
+        Some(AvatarActionSlot::Text(raw)) => match raw.as_str() {
+            "set" => Some(AvatarActionKind::Set),
+            "clear" => Some(AvatarActionKind::Clear),
+            _ => return Err(ProfileAdmissionRefusal::InvalidAvatarAction),
+        },
     };
 
     let has_text = display_name_raw.is_some() || description_raw.is_some();
@@ -354,6 +372,14 @@ enum AvatarActionKind {
     Clear,
 }
 
+/// The FIRST `avatar_action` slot, captured before validity is judged. A non-file
+/// part carries its text; a `File` part is `NonText` — present, but never `"set"` or
+/// `"clear"`, so it refuses as an invalid action rather than being ignored.
+enum AvatarActionSlot {
+    Text(String),
+    NonText,
+}
+
 // ===========================================================================
 // Multipart plumbing (local to this route family).
 // ===========================================================================
@@ -399,14 +425,17 @@ async fn first_file_field(
     Ok(None)
 }
 
-/// The part's declared content type, `file.type || 'application/octet-stream'`: an
-/// absent OR empty value falls back to the octet-stream default (→ `415` later).
+/// The part's declared content type, lowercased — the product's
+/// `input.contentType.toLowerCase()` before `validateAvatarFile`. An absent OR empty
+/// value falls back to the octet-stream default (→ `415` later). Only ASCII case is
+/// folded: no trim and no `;params` stripping, so `image/png; charset=x` stays
+/// outside the exact allowlist and still yields `415`.
 fn declared_content_type(field: &Field<'_>) -> String {
     field
         .content_type()
         .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_UPLOAD_CONTENT_TYPE)
-        .to_owned()
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| DEFAULT_UPLOAD_CONTENT_TYPE.to_owned())
 }
 
 /// Read a multipart file part into memory, bounded at `AVATAR_MAX_BYTES + 1`.
@@ -432,13 +461,18 @@ async fn read_field_bounded(mut field: Field<'_>) -> Result<Vec<u8>, MultipartEr
 }
 
 /// Advance past a part we do not consume, folding a stream fault into the terminal
-/// `multipart/form-data required` refusal (the product's `formData()` throw).
-async fn drain(field: Field<'_>) -> Result<(), ProfileAdmissionRefusal> {
-    field
-        .bytes()
+/// `multipart/form-data required` refusal (the product's `formData()` throw). Chunks
+/// are discarded as they arrive with ZERO accumulation, so an unknown or duplicate
+/// part can never charge the whole request ceiling into memory — the same bounded
+/// discipline as [`read_field_bounded`].
+async fn drain(mut field: Field<'_>) -> Result<(), ProfileAdmissionRefusal> {
+    while field
+        .chunk()
         .await
-        .map(|_| ())
-        .map_err(|_| ProfileAdmissionRefusal::MultipartRequired)
+        .map_err(|_| ProfileAdmissionRefusal::MultipartRequired)?
+        .is_some()
+    {}
+    Ok(())
 }
 
 /// Read a non-file part's value as text, folding a decode fault into the terminal
@@ -657,6 +691,26 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn an_uppercase_declared_mime_is_lowercased_and_admitted() {
+        // TS lowercases contentType before validateAvatarFile: `IMAGE/PNG` admits.
+        let request = multipart_request(&[Part::file("file", "IMAGE/PNG", vec![1, 2, 3])]);
+        let avatar = admit_avatar_upload(request).await.expect("admitted");
+        assert_eq!(avatar.content_type(), AvatarContentType::Png);
+    }
+
+    #[tokio::test]
+    async fn a_declared_mime_with_params_stays_unsupported_after_lowercasing() {
+        // Only ASCII case is folded — no `;params` stripping — so a parameterized
+        // type is outside the exact allowlist and is 415, matching TS.
+        let request = multipart_request(&[Part::file("file", "IMAGE/PNG; CHARSET=X", vec![1])]);
+        let refusal = admit_avatar_upload(request).await.unwrap_err();
+        assert_eq!(
+            refusal,
+            ProfileAdmissionRefusal::Avatar(AvatarRejection::UnsupportedType)
+        );
+    }
+
     // ---- profile-edit admission ----
 
     #[tokio::test]
@@ -693,6 +747,34 @@ mod tests {
         let request = multipart_request(&[Part::text("avatar_action", "bogus")]);
         let refusal = admit_profile_edit(request).await.unwrap_err();
         assert_eq!(refusal, ProfileAdmissionRefusal::InvalidAvatarAction);
+    }
+
+    #[tokio::test]
+    async fn a_first_slot_file_avatar_action_is_invalid_not_ignored() {
+        // `form.get('avatar_action')` returns the FIRST entry; a File there is
+        // `!== "set"/"clear"`, so it must refuse as an invalid action — NOT be
+        // ignored (which would fall through to the later text `set` or to
+        // nothing-to-update).
+        let request = multipart_request(&[
+            Part::file("avatar_action", "text/plain", vec![1]),
+            Part::text("avatar_action", "set"),
+        ]);
+        let refusal = admit_profile_edit(request).await.unwrap_err();
+        assert_eq!(refusal, ProfileAdmissionRefusal::InvalidAvatarAction);
+    }
+
+    #[tokio::test]
+    async fn a_large_unknown_part_is_chunk_drained_and_a_later_field_still_parses() {
+        // The unknown part is discarded chunk-by-chunk with zero accumulation, so it
+        // never charges the request ceiling into memory; the trailing known field is
+        // still admitted.
+        let junk = "x".repeat(256 * 1024);
+        let request = multipart_request(&[
+            Part::text("junk", &junk),
+            Part::text("display_name", "Name"),
+        ]);
+        let edit = admit_profile_edit(request).await.expect("admitted");
+        assert_eq!(edit.display_name().map(DisplayName::as_str), Some("Name"));
     }
 
     #[tokio::test]
