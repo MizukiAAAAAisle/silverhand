@@ -1,5 +1,7 @@
 //! Authenticated daemon attachment, delivery custody and Messaging effect adapters.
 
+pub(crate) mod runtime_stop_codec;
+
 use std::{
     collections::HashMap,
     error::Error,
@@ -27,9 +29,10 @@ use silverhand_backend_core::{
     host_runtime::{
         aftermath::{CustodyEffectFailure, DaemonConnectionControl},
         custody::{HostCredentialLookup, VerifyHostTokenFact, verify_host_token},
+        read::ComputerReadModel,
         rotation::{DaemonRotationAck, DaemonTokenRotationChannel, RotatedTokenDelivery},
     },
-    identity::{AgentId, ConversationId, DaemonInstanceId, HostId},
+    identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
     messaging::{
         CreatedMessage,
         collaboration::workspace_rename_messaging::{
@@ -66,7 +69,9 @@ use crate::{
     host_control::admission::{
         AdmissionUnavailable, DialerId, HostAdmission, ProtocolMismatch, RefusalNews, SlotOccupancy,
     },
-    host_control::status_seed::{CustodyUnavailable, DaemonCustody, HostStatusSeeds},
+    host_control::status_seed::{
+        AttachedStatusCustody, CustodyUnavailable, DaemonCustody, HostStatusSeeds, SeedAttempt,
+    },
     host_control::status_snapshot::{self, StatusSnapshotOutcome, StatusSnapshotRequest},
     host_runtime::detail::ConnectedHostName,
     messaging::references::MarkdownReferencePositions,
@@ -75,6 +80,11 @@ use crate::{
         RuntimeStartHandoff, RuntimeStartTransport, RuntimeStopTransport,
     },
     scope_events::ScopeEventHub,
+    scope_runtime_stop::ProductionScopeRuntimeStop,
+};
+
+use self::runtime_stop_codec::{
+    KIND as RUNTIME_STOP_KIND, RuntimeStopCodecError, RuntimeStopCommand,
 };
 
 include!(concat!(env!("OUT_DIR"), "/daemon_admission.rs"));
@@ -99,6 +109,7 @@ const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_PONG_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_millis(1_500);
 const HOST_REVOKED_CLOSE_REASON: &str = "host_revoked";
+const HOST_DISCONNECTED_CLOSE_REASON: &str = "host_disconnected";
 
 #[derive(Clone)]
 pub struct DaemonDeliveryConfig {
@@ -166,6 +177,22 @@ impl<C, D, H> DaemonDeliveryRuntime<C, D, H> {
     > {
         self.events.conversation_run_states(conversation)
     }
+
+    /// The exact-seat stop adapter bound to the persisted host facts and live daemon
+    /// registry owned by this runtime. Neither authority is accepted from the caller,
+    /// so a composition root cannot accidentally splice different host worlds.
+    pub fn scope_runtime_stop(&self) -> ProductionScopeRuntimeStop<H>
+    where
+        H: ComputerReadModel,
+    {
+        ProductionScopeRuntimeStop::new(
+            self.host_credentials.clone(),
+            OwningHostDataPlane {
+                registry: self.registry.clone(),
+            },
+            self.config.command_timeout,
+        )
+    }
 }
 
 impl<C, D, H> DaemonDeliveryRuntime<C, D, H>
@@ -197,9 +224,16 @@ where
         event_hub: ScopeEventHub,
     ) -> Result<Self, DaemonDeliveryBuildError> {
         let registry = DaemonRegistry::new()?;
+        let events = DaemonRuntimeEventOwner::new(data.clone(), event_hub);
         Ok(Self {
             credentials,
-            events: DaemonRuntimeEventOwner::new(data.clone(), event_hub),
+            seeds: HostStatusSeeds::new(
+                Arc::new(OwningHostDataPlane {
+                    registry: registry.clone(),
+                }),
+                Arc::new(events.host_runtime_activity()),
+            ),
+            events,
             data,
             host_credentials,
             // One ledger per runtime, reading occupancy from the very registry the
@@ -207,11 +241,6 @@ where
             // is what makes "the writer and every reader are the same state" a
             // property of construction: there is no second place to build one.
             admission: HostAdmission::new(Arc::new(registry.clone())),
-            // One seed store per runtime, for the same reason: a second one would
-            // answer a host from an emptier set of facts than the one that seeded it.
-            seeds: HostStatusSeeds::new(Arc::new(HostCommandDispatch {
-                registry: registry.clone(),
-            })),
             registry,
             config,
         })
@@ -281,10 +310,6 @@ where
         let hydrated = status
             .hydrated(attachment.daemon_instance.clone())
             .map_err(|source| DaemonDeliveryError::Hydration(Box::new(source)))?;
-        self.events
-            .hydrate(&attachment.host_id, hydrated)
-            .await
-            .map_err(|source| DaemonDeliveryError::Hydration(Box::new(source)))?;
         let persisted = self
             .data
             .current_custodies_for_host(attachment.host_id.clone())
@@ -296,6 +321,19 @@ where
             .iter()
             .cloned()
             .collect::<std::collections::HashSet<_>>();
+        self.events
+            .hydrate(
+                &attachment.host_id,
+                &attachment.daemon_instance,
+                &attachment.connection_id,
+                active_set
+                    .iter()
+                    .map(|principal| principal.agent().clone())
+                    .collect(),
+                hydrated,
+            )
+            .await
+            .map_err(|source| DaemonDeliveryError::Hydration(Box::new(source)))?;
         let persisted_set = persisted
             .iter()
             .cloned()
@@ -807,23 +845,34 @@ impl SlotOccupancy for DaemonRegistry {
 /// What the status answer means is not decided here either: this forwards to the
 /// snapshot leaf, so the seed layer gets a probe whose contract it does not own and
 /// cannot restate.
-impl DaemonCustody for HostCommandDispatch {
-    fn attached_instance(
+impl DaemonCustody for OwningHostDataPlane {
+    fn attached_custody(
         &self,
         host: &HostId,
-    ) -> Result<Option<DaemonInstanceId>, CustodyUnavailable> {
+    ) -> Result<Option<AttachedStatusCustody>, CustodyUnavailable> {
         Ok(self
             .registry
             .attachment(host.as_str())
             .map_err(|_| CustodyUnavailable)?
-            .map(|attachment| attachment.daemon_instance))
+            .map(|attachment| AttachedStatusCustody {
+                daemon_instance: attachment.daemon_instance,
+                connection_id: attachment.connection_id,
+            }))
     }
 
     fn probe_status<'a>(
         &'a self,
-        request: StatusSnapshotRequest,
+        host: HostId,
+        custody: AttachedStatusCustody,
     ) -> Pin<Box<dyn Future<Output = StatusSnapshotOutcome> + Send + 'a>> {
-        Box::pin(status_snapshot::probe(self, request))
+        Box::pin(async move {
+            let custody = HostDataPlaneCustody {
+                host,
+                instance: custody.daemon_instance,
+                connection_id: custody.connection_id,
+            };
+            status_snapshot::probe(self, StatusSnapshotRequest::new(custody)).await
+        })
     }
 }
 
@@ -857,8 +906,8 @@ pub struct DaemonDeliveryController {
 }
 
 impl DaemonDeliveryController {
-    pub fn host_commands(&self) -> HostCommandDispatch {
-        HostCommandDispatch {
+    pub fn owning_host_data_plane(&self) -> OwningHostDataPlane {
+        OwningHostDataPlane {
             registry: self.registry.clone(),
         }
     }
@@ -1005,6 +1054,24 @@ impl DaemonConnectionControl for DaemonConnectionControlHandle {
     }
 }
 
+impl DaemonConnectionControlHandle {
+    /// Availability-only user disconnect. The close signal travels through the
+    /// captured generation's private channel, so a replacement can never receive
+    /// it. Presence of the captured slot is the product's boolean result even if
+    /// that socket task exits during the send.
+    pub fn disconnect_user_managed(&self, computer: &HostId) -> Result<bool, DaemonRegistryError> {
+        let current = self.registry.current_close_control(computer.as_str())?;
+        let Some(current) = current else {
+            return Ok(false);
+        };
+        let _ = current.sender.send(Some(ConnectionClose {
+            expected_connection_id: Some(current.connection_id),
+            reason: HOST_DISCONNECTED_CLOSE_REASON,
+        }));
+        Ok(true)
+    }
+}
+
 /// Real daemon transports used by the production computer-cascade composer.
 #[derive(Clone)]
 pub struct DaemonCascadeEffects {
@@ -1017,24 +1084,26 @@ impl DaemonCascadeEffects {
         computer: &HostId,
         seat: &AgentRuntimeSessionFacts,
     ) -> Result<(), CustodyEffectFailure> {
+        let command =
+            RuntimeStopCommand::encode(&seat.scope, seat.generation).map_err(|source| {
+                CustodyEffectFailure::from_source(CascadeDaemonError::InvalidRuntimeStopRequest(
+                    source,
+                ))
+            })?;
         let attachment = self
             .attachment(computer)
             .map_err(CustodyEffectFailure::from_source)?;
         let result = attachment
             .command(
-                "runtime_stop",
-                json!({
-                    "runtime_scope": scope_wire(&seat.scope),
-                    "runtime_generation": seat.generation.as_i64(),
-                    "mode": "hard",
-                }),
+                RUNTIME_STOP_KIND,
+                command.into_params(),
                 DEFAULT_COMMAND_TIMEOUT,
             )
             .await
             .map_err(|source| {
                 CustodyEffectFailure::from_source(CascadeDaemonError::Command(source))
             })?;
-        if !valid_runtime_stop_result(&result) {
+        if !runtime_stop_codec::valid_result(&result) {
             return Err(CustodyEffectFailure::from_source(
                 CascadeDaemonError::InvalidRuntimeStopResponse,
             ));
@@ -1081,6 +1150,7 @@ enum CascadeDaemonError {
     Registry(DaemonRegistryError),
     NoCurrentDaemon,
     Command(CommandDispatchError),
+    InvalidRuntimeStopRequest(RuntimeStopCodecError),
     InvalidRuntimeStopResponse,
     InvalidAgentFilesPurgeResponse,
 }
@@ -1091,6 +1161,7 @@ impl fmt::Display for CascadeDaemonError {
             Self::Registry(_) => "daemon attachment registry is unavailable",
             Self::NoCurrentDaemon => "host has no attached daemon",
             Self::Command(_) => "daemon cascade command failed",
+            Self::InvalidRuntimeStopRequest(_) => "daemon runtime_stop target is not wire-safe",
             Self::InvalidRuntimeStopResponse => "daemon returned an invalid runtime_stop response",
             Self::InvalidAgentFilesPurgeResponse => {
                 "daemon returned an invalid agent_files_purge response"
@@ -1104,6 +1175,7 @@ impl Error for CascadeDaemonError {
         match self {
             Self::Registry(source) => Some(source),
             Self::Command(source) => Some(source),
+            Self::InvalidRuntimeStopRequest(source) => Some(source),
             Self::NoCurrentDaemon
             | Self::InvalidRuntimeStopResponse
             | Self::InvalidAgentFilesPurgeResponse => None,
@@ -1113,7 +1185,6 @@ impl Error for CascadeDaemonError {
 
 enum ConnectionControl {
     Command(CommandRequest),
-    CommandTimedOut(String),
     Hydrated(Result<AttachedDaemon, DaemonDeliveryError>),
 }
 
@@ -1126,8 +1197,84 @@ struct ConnectionClose {
 struct CommandRequest {
     kind: &'static str,
     params: Value,
-    timeout: Duration,
+    deadline: Instant,
     response: oneshot::Sender<Result<Value, CommandDispatchError>>,
+}
+
+fn command_expired_before_send(command: &CommandRequest) -> bool {
+    command.response.is_closed() || Instant::now() >= command.deadline
+}
+
+trait CommandWireSink {
+    async fn send(&mut self, message: Message, deadline: Instant) -> InterruptibleSend;
+}
+
+enum DequeuedCommandSend {
+    Skipped,
+    Sent {
+        id: String,
+        kind: &'static str,
+        deadline: Instant,
+        response: oneshot::Sender<Result<Value, CommandDispatchError>>,
+    },
+    Terminate,
+    Close(ConnectionClose),
+}
+
+/// The sole dequeue-to-wire decision for a business command. The caller has
+/// removed `command` from the FIFO, but this function alone decides whether it is
+/// still admissible at the wire boundary. Tests drive the same branch through a
+/// controlled sink, so removing the expiry/cancellation gate makes a late command
+/// observable as a sink write.
+async fn send_dequeued_command<S: CommandWireSink>(
+    command: CommandRequest,
+    next_command: &mut u64,
+    sink: &mut S,
+) -> DequeuedCommandSend {
+    if command_expired_before_send(&command) {
+        let _ = command.response.send(Err(CommandDispatchError::TimedOut));
+        return DequeuedCommandSend::Skipped;
+    }
+    *next_command = match next_command.checked_add(1) {
+        Some(next) => next,
+        None => {
+            let _ = command
+                .response
+                .send(Err(CommandDispatchError::ProvenNotDispatched));
+            return DequeuedCommandSend::Skipped;
+        }
+    };
+    let id = format!("rust-daemon-{next_command}");
+    let frame = json!({
+        "direction": "server_to_daemon",
+        "type": "command",
+        "id": id,
+        "kind": command.kind,
+        "params": command.params,
+    });
+    match sink
+        .send(Message::Text(frame.to_string().into()), command.deadline)
+        .await
+    {
+        InterruptibleSend::Sent => DequeuedCommandSend::Sent {
+            id,
+            kind: command.kind,
+            deadline: command.deadline,
+            response: command.response,
+        },
+        InterruptibleSend::Expired => {
+            let _ = command.response.send(Err(CommandDispatchError::TimedOut));
+            DequeuedCommandSend::Terminate
+        }
+        InterruptibleSend::TransportFailed | InterruptibleSend::Terminated => {
+            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
+            DequeuedCommandSend::Terminate
+        }
+        InterruptibleSend::Close(requested) => {
+            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
+            DequeuedCommandSend::Close(requested)
+        }
+    }
 }
 
 type PendingCommand = (
@@ -1232,7 +1379,8 @@ impl RuntimeRefusalCode {
 /// stay closed sets and each `parse` is still what admits a token for a kind, but
 /// the admitted value is not carried: nothing reads which code arrived, while the
 /// vocabulary decides everything — a response-level code is a refusal, and a
-/// runtime-scoped code on a host-control kind is a frame in the wrong language.
+/// runtime-scoped code on a kind without that vocabulary is a frame in the wrong
+/// language.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CommandRefusal {
     Response,
@@ -1267,38 +1415,58 @@ impl DaemonAttachment {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, CommandDispatchError> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(CommandDispatchError::TimedOut)?;
         let (response, receive) = oneshot::channel();
         self.commands
             .try_send(ConnectionControl::Command(CommandRequest {
                 kind,
                 params,
-                timeout,
+                deadline,
                 response,
             }))
             .map_err(|_| CommandDispatchError::ProvenNotDispatched)?;
-        receive.await.map_err(|_| CommandDispatchError::Ambiguous)?
+        match tokio::time::timeout_at(deadline, receive).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(CommandDispatchError::Ambiguous),
+            Err(_) => Err(CommandDispatchError::TimedOut),
+        }
     }
 }
 
-/// The command kinds a host-control face may send. Closed here because the wire
-/// vocabulary belongs to the transport: a module reaching this face cannot name
-/// `runtime_start` or any other custody command through it.
+/// Command kinds admitted through the shared owning-host outbound data plane.
+/// Closed here because the wire vocabulary belongs to the transport; payload
+/// schemas remain in command-specific adapters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HostCommandKind {
+pub(crate) enum HostDataPlaneCommandKind {
     HostStatus,
     RuntimeCatalog,
+    RuntimeStop,
+    ProxyConfigGet,
+    ProxyConfigSet,
     RotateToken,
 }
 
-impl HostCommandKind {
+impl HostDataPlaneCommandKind {
     /// Every variant, so the response envelope admits exactly the kinds this face can
     /// send. A variant missing here is not silently tolerated: nothing could answer it.
-    const ALL: [Self; 3] = [Self::HostStatus, Self::RuntimeCatalog, Self::RotateToken];
+    const ALL: [Self; 6] = [
+        Self::HostStatus,
+        Self::RuntimeCatalog,
+        Self::RuntimeStop,
+        Self::ProxyConfigGet,
+        Self::ProxyConfigSet,
+        Self::RotateToken,
+    ];
 
     fn as_wire(self) -> &'static str {
         match self {
             Self::HostStatus => "host_status",
             Self::RuntimeCatalog => "host_runtime_catalog",
+            Self::RuntimeStop => RUNTIME_STOP_KIND,
+            Self::ProxyConfigGet => "host_proxy_config_get",
+            Self::ProxyConfigSet => "host_proxy_config_set",
             Self::RotateToken => "rotate_token",
         }
     }
@@ -1310,16 +1478,36 @@ impl HostCommandKind {
     }
 }
 
-/// One host-control round trip. Crate-private on purpose: a raw command pairs a
+/// One owning-host data-plane round trip. Crate-private on purpose: a raw command pairs a
 /// kind with a free-form payload and a budget, so anything able to build one could
 /// send a legal kind with a payload that kind has no contract for. Only the typed
-/// operations in [`crate::host_control`] may state that pairing.
-pub(crate) struct HostCommand {
-    pub(crate) host: HostId,
-    pub(crate) expected_instance: DaemonInstanceId,
-    pub(crate) kind: HostCommandKind,
+/// command adapters may state that pairing.
+pub(crate) struct HostDataPlaneRequest {
+    pub(crate) custody: HostDataPlaneCustody,
+    pub(crate) kind: HostDataPlaneCommandKind,
     pub(crate) params: Value,
     pub(crate) timeout: Duration,
+}
+
+/// The host and daemon instance captured together from the live registry.
+/// Fields and constructor are private: a route cannot cross-wire host A with an
+/// instance it observed on host B, and a command cannot change the host after
+/// resolution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostDataPlaneCustody {
+    host: HostId,
+    instance: DaemonInstanceId,
+    connection_id: String,
+}
+
+impl HostDataPlaneCustody {
+    pub fn host(&self) -> &HostId {
+        &self.host
+    }
+
+    pub fn daemon_instance(&self) -> &DaemonInstanceId {
+        &self.instance
+    }
 }
 
 /// A daemon answer together with the coordinate it was answered on. The pair is
@@ -1331,23 +1519,26 @@ pub(crate) struct HostCommand {
 /// value out without naming the coordinate it awaited: one host's legal answer can
 /// never be filed under another host's key, not even when both machines happen to
 /// spell their daemon instance the same way.
-pub(crate) struct HostCommandAnswer {
+pub(crate) struct HostDataPlaneAnswer {
     host: HostId,
     instance: DaemonInstanceId,
+    connection_id: String,
     result: Value,
 }
 
-impl HostCommandAnswer {
+impl HostDataPlaneAnswer {
     pub(crate) fn into_result_for(
         self,
-        host: &HostId,
-        instance: &DaemonInstanceId,
-    ) -> Result<Value, HostAnswerMismatch> {
-        if &self.host != host {
-            return Err(HostAnswerMismatch::Host);
+        custody: &HostDataPlaneCustody,
+    ) -> Result<Value, HostDataPlaneAnswerMismatch> {
+        if self.host != custody.host {
+            return Err(HostDataPlaneAnswerMismatch::Host);
         }
-        if &self.instance != instance {
-            return Err(HostAnswerMismatch::DaemonInstance);
+        if self.connection_id != custody.connection_id {
+            return Err(HostDataPlaneAnswerMismatch::ConnectionGeneration);
+        }
+        if self.instance != custody.instance {
+            return Err(HostDataPlaneAnswerMismatch::DaemonInstance);
         }
         Ok(self.result)
     }
@@ -1358,38 +1549,40 @@ impl HostCommandAnswer {
 /// custody and was handed another's, which no caller can act on and no daemon
 /// caused. It is this crate's own contract failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HostAnswerMismatch {
+pub(crate) enum HostDataPlaneAnswerMismatch {
     Host,
+    ConnectionGeneration,
     DaemonInstance,
 }
 
 #[derive(Debug)]
-pub(crate) enum HostCommandFailure {
+pub(crate) enum HostDataPlaneFailure {
     NoCurrentDaemon,
+    ConnectionGenerationMismatch,
     DaemonInstanceMismatch,
     NotDispatched,
     Ambiguous,
     TimedOut,
     /// The daemon answered with a code the closed set admits for this kind. Which
     /// code it was is deliberately not carried: no reader in this crate — and no
-    /// mapper in the TS contract for either host-control operation — distinguishes
-    /// them. What the closed set is load-bearing for is the arm itself: a refusal
-    /// leaves the connection alive, and anything outside the set does not.
+    /// consumer in this crate distinguishes them. What the closed set is
+    /// load-bearing for is the arm itself: a refusal leaves the connection alive,
+    /// and anything outside the set does not.
     Refused,
     ProtocolCorruption,
     RegistryUnavailable,
 }
 
-impl HostCommandFailure {
+impl HostDataPlaneFailure {
     fn from_dispatch(error: CommandDispatchError) -> Self {
         match error {
             CommandDispatchError::ProvenNotDispatched => Self::NotDispatched,
             CommandDispatchError::Ambiguous => Self::Ambiguous,
             CommandDispatchError::TimedOut => Self::TimedOut,
             CommandDispatchError::DaemonRefused(CommandRefusal::Response) => Self::Refused,
-            // A runtime-scoped code is not admitted for a host-control kind, so
-            // reaching this arm means the frame decoded as something no
-            // host-control command can be refused with.
+            // No command admitted through this data plane accepts runtime-scoped
+            // or purge-scoped codes: runtime_stop has only response-level daemon
+            // refusals. Reaching either arm is therefore the wrong vocabulary.
             CommandDispatchError::DaemonRefused(
                 CommandRefusal::RuntimeScoped | CommandRefusal::AgentFilesPurgeScoped,
             )
@@ -1398,10 +1591,13 @@ impl HostCommandFailure {
     }
 }
 
-impl fmt::Display for HostCommandFailure {
+impl fmt::Display for HostDataPlaneFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::NoCurrentDaemon => "host has no attached daemon",
+            Self::ConnectionGenerationMismatch => {
+                "host daemon connection generation changed before dispatch"
+            }
             Self::DaemonInstanceMismatch => "host daemon custody changed before dispatch",
             Self::NotDispatched => "host command was proven not dispatched",
             Self::Ambiguous => "host command outcome is ambiguous",
@@ -1413,21 +1609,20 @@ impl fmt::Display for HostCommandFailure {
     }
 }
 
-impl Error for HostCommandFailure {}
+impl Error for HostDataPlaneFailure {}
 
-/// The handle composition may hand to a host-control operation. Public as an
-/// opaque value only: it carries no readable state, and the raw round trip behind
-/// it is crate-private, so the only way to send a host command from outside this
-/// crate is a typed operation in [`crate::host_control`].
+/// The one production owner for correlated outbound commands to a named host.
+/// It resolves a generation-bound custody from the live daemon registry, and the
+/// raw round trip remains crate-private so route schemas stay in typed adapters.
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::daemon_delivery::{HostCommand, HostCommandKind};
+/// use silverhand_backend_server::daemon_delivery::{HostDataPlaneRequest, HostDataPlaneCommandKind};
 ///
-/// fn forge() -> HostCommand {
-///     HostCommand {
+/// fn forge() -> HostDataPlaneRequest {
+///     HostDataPlaneRequest {
 ///         host: silverhand_backend_core::identity::HostId::parse("host-1").unwrap(),
 ///         expected_instance: silverhand_backend_core::identity::DaemonInstanceId::parse("i").unwrap(),
-///         kind: HostCommandKind::RuntimeCatalog,
+///         kind: HostDataPlaneCommandKind::RuntimeCatalog,
 ///         params: serde_json::json!({ "force": true }),
 ///         timeout: std::time::Duration::from_secs(1),
 ///     }
@@ -1435,65 +1630,88 @@ impl Error for HostCommandFailure {}
 /// ```
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::daemon_delivery::HostCommandDispatch;
+/// use silverhand_backend_server::daemon_delivery::OwningHostDataPlane;
 ///
 /// // Names no crate-private type, so nothing here fails for a naming reason. The
 /// // round trip stays unreachable while ANY part of it — the parameter, the answer,
 /// // the failure, or the method — is crate-private: publishing the whole face is
 /// // what turns this green.
-/// async fn send(dispatch: &HostCommandDispatch) {
+/// async fn send(dispatch: &OwningHostDataPlane) {
 ///     let _ = dispatch.dispatch(unreachable!()).await;
 /// }
 /// ```
 ///
 /// ```
-/// use silverhand_backend_core::identity::{DaemonInstanceId, HostId};
+/// use silverhand_backend_core::identity::HostId;
 /// use silverhand_backend_server::{
-///     daemon_delivery::{DaemonDeliveryController, HostCommandDispatch},
+///     daemon_delivery::{DaemonDeliveryController, OwningHostDataPlane},
 ///     host_control::runtime_catalog::{self, RuntimeCatalogOutcome, RuntimeCatalogRequest},
 /// };
 ///
-/// async fn probe(dispatch: &HostCommandDispatch) -> RuntimeCatalogOutcome {
-///     let _ = DaemonDeliveryController::host_commands;
+/// async fn probe(dispatch: &OwningHostDataPlane) -> RuntimeCatalogOutcome {
+///     let _ = DaemonDeliveryController::owning_host_data_plane;
+///     let custody = dispatch
+///         .resolve(&HostId::parse("host-1").unwrap())
+///         .unwrap()
+///         .expect("host is attached");
 ///     runtime_catalog::probe(
 ///         dispatch,
-///         RuntimeCatalogRequest {
-///             host: HostId::parse("host-1").unwrap(),
-///             daemon_instance: DaemonInstanceId::parse("instance-1").unwrap(),
-///             force: true,
-///         },
+///         RuntimeCatalogRequest::new(custody, true),
 ///     )
 ///     .await
 /// }
 /// ```
 #[derive(Clone)]
-pub struct HostCommandDispatch {
+pub struct OwningHostDataPlane {
     registry: DaemonRegistry,
 }
 
-impl HostCommandDispatch {
+impl OwningHostDataPlane {
+    /// Resolve the attached custody for `host`. `None` is the ordinary offline
+    /// answer. A later replacement is caught again inside `dispatch` before send.
+    pub fn resolve(
+        &self,
+        host: &HostId,
+    ) -> Result<Option<HostDataPlaneCustody>, DaemonRegistryError> {
+        Ok(self
+            .registry
+            .attachment(host.as_str())?
+            .map(|attachment| HostDataPlaneCustody {
+                host: host.clone(),
+                instance: attachment.daemon_instance,
+                connection_id: attachment.connection_id,
+            }))
+    }
+
     pub(crate) async fn dispatch(
         &self,
-        command: HostCommand,
-    ) -> Result<HostCommandAnswer, HostCommandFailure> {
+        command: HostDataPlaneRequest,
+    ) -> Result<HostDataPlaneAnswer, HostDataPlaneFailure> {
+        let host = command.custody.host;
+        let expected_instance = command.custody.instance;
+        let expected_connection_id = command.custody.connection_id;
         let attachment = self
             .registry
-            .attachment(command.host.as_str())
-            .map_err(|_| HostCommandFailure::RegistryUnavailable)?
-            .ok_or(HostCommandFailure::NoCurrentDaemon)?;
-        if attachment.daemon_instance != command.expected_instance {
-            return Err(HostCommandFailure::DaemonInstanceMismatch);
+            .attachment(host.as_str())
+            .map_err(|_| HostDataPlaneFailure::RegistryUnavailable)?
+            .ok_or(HostDataPlaneFailure::NoCurrentDaemon)?;
+        if attachment.connection_id != expected_connection_id {
+            return Err(HostDataPlaneFailure::ConnectionGenerationMismatch);
+        }
+        if attachment.daemon_instance != expected_instance {
+            return Err(HostDataPlaneFailure::DaemonInstanceMismatch);
         }
         let result = attachment
             .command(command.kind.as_wire(), command.params, command.timeout)
             .await
-            .map_err(HostCommandFailure::from_dispatch)?;
-        Ok(HostCommandAnswer {
+            .map_err(HostDataPlaneFailure::from_dispatch)?;
+        Ok(HostDataPlaneAnswer {
             // The lookup either matched this key's slot or there was no attachment
             // at all, so this is the host that served the command, not a coordinate
             // a consumer may restate later.
-            host: command.host,
+            host,
             instance: attachment.daemon_instance,
+            connection_id: attachment.connection_id,
             result,
         })
     }
@@ -1540,7 +1758,7 @@ impl DaemonTokenRotationChannel for DaemonTokenRotation {
         let params = rotation_params(&host_id, delivery.reveal_token(), issued_at, grace_until);
         let result = attachment
             .command(
-                HostCommandKind::RotateToken.as_wire(),
+                HostDataPlaneCommandKind::RotateToken.as_wire(),
                 params,
                 HOST_TOKEN_ROTATION_TIMEOUT,
             )
@@ -1681,36 +1899,19 @@ impl RuntimeStopTransport for StopTransport {
     type Error = StopTransportError;
 
     async fn stop_exact(&self, principal: &RuntimePrincipal) -> Result<(), Self::Error> {
+        let command =
+            RuntimeStopCommand::encode(&principal.scope(), principal.custody().generation())
+                .map_err(StopTransportError::InvalidRequest)?;
         let result = self
             .attachment
-            .command(
-                "runtime_stop",
-                json!({
-                    "runtime_scope": scope_wire(&principal.scope()),
-                    "runtime_generation": principal.custody().generation().as_i64(),
-                    "mode": "hard",
-                }),
-                self.timeout,
-            )
+            .command(RUNTIME_STOP_KIND, command.into_params(), self.timeout)
             .await
             .map_err(StopTransportError::Command)?;
-        if !valid_runtime_stop_result(&result) {
+        if !runtime_stop_codec::valid_result(&result) {
             return Err(StopTransportError::InvalidResponse);
         }
         Ok(())
     }
-}
-
-fn valid_runtime_stop_result(result: &Value) -> bool {
-    let Some(object) = result.as_object() else {
-        return false;
-    };
-    object.len() == 3
-        && object.get("mode").and_then(Value::as_str) == Some("hard")
-        && object.get("stopped").and_then(Value::as_bool).is_some()
-        && object
-            .get("exit_code")
-            .is_some_and(|value| value.is_null() || value.as_i64().is_some())
 }
 
 fn valid_agent_files_purge_result(result: &Value) -> bool {
@@ -1732,6 +1933,7 @@ fn valid_agent_files_purge_result(result: &Value) -> bool {
 #[derive(Debug)]
 enum StopTransportError {
     Command(CommandDispatchError),
+    InvalidRequest(RuntimeStopCodecError),
     InvalidResponse,
 }
 
@@ -1739,6 +1941,7 @@ impl fmt::Display for StopTransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Command(_) => "runtime_stop transport failed",
+            Self::InvalidRequest(_) => "runtime_stop target is not wire-safe",
             Self::InvalidResponse => "daemon returned an invalid runtime_stop response",
         })
     }
@@ -1748,6 +1951,7 @@ impl Error for StopTransportError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Command(source) => Some(source),
+            Self::InvalidRequest(source) => Some(source),
             Self::InvalidResponse => None,
         }
     }
@@ -1901,6 +2105,7 @@ enum ConnectionInput {
 
 enum InterruptibleSend {
     Sent,
+    Expired,
     TransportFailed,
     Close(ConnectionClose),
     Terminated,
@@ -1954,6 +2159,7 @@ async fn send_command_interruptibly(
     close: &mut watch::Receiver<Option<ConnectionClose>>,
     connection_id: &str,
     message: Message,
+    deadline: Instant,
 ) -> InterruptibleSend {
     let send = socket.send(message);
     tokio::pin!(send);
@@ -1962,11 +2168,31 @@ async fn send_command_interruptibly(
         requested = matching_connection_close(close, connection_id) => requested
             .map(InterruptibleSend::Close)
             .unwrap_or(InterruptibleSend::Terminated),
+        _ = tokio::time::sleep_until(deadline) => InterruptibleSend::Expired,
         result = &mut send => if result.is_ok() {
             InterruptibleSend::Sent
         } else {
             InterruptibleSend::TransportFailed
         },
+    }
+}
+
+struct WebSocketCommandSink<'a> {
+    socket: &'a mut WebSocket,
+    close: &'a mut watch::Receiver<Option<ConnectionClose>>,
+    connection_id: &'a str,
+}
+
+impl CommandWireSink for WebSocketCommandSink<'_> {
+    async fn send(&mut self, message: Message, deadline: Instant) -> InterruptibleSend {
+        send_command_interruptibly(
+            self.socket,
+            self.close,
+            self.connection_id,
+            message,
+            deadline,
+        )
+        .await
     }
 }
 
@@ -1998,8 +2224,10 @@ where
         signed_unix_millis(SystemTime::now()),
     )
     .await;
-    let host_id = match verified {
-        Ok(VerifyHostTokenFact::Accepted { host_id, .. }) => host_id,
+    let (host_id, owner_user_id) = match verified {
+        Ok(VerifyHostTokenFact::Accepted {
+            host_id, user_id, ..
+        }) => (host_id, user_id),
         Ok(VerifyHostTokenFact::Rejected(_)) => return StatusCode::UNAUTHORIZED.into_response(),
         Err(cause) => {
             tracing::error!(
@@ -2029,8 +2257,11 @@ where
             connection(
                 socket,
                 runtime,
-                host_id,
-                connection_id,
+                AuthenticatedHostConnection {
+                    host_id,
+                    owner_user_id,
+                    connection_id,
+                },
                 commands,
                 receive,
                 close_receive,
@@ -2038,11 +2269,16 @@ where
         })
 }
 
+struct AuthenticatedHostConnection {
+    host_id: String,
+    owner_user_id: UserId,
+    connection_id: String,
+}
+
 async fn connection<C, D, H>(
     mut socket: WebSocket,
     runtime: DaemonDeliveryRuntime<C, D, H>,
-    host_id: String,
-    connection_id: String,
+    authenticated: AuthenticatedHostConnection,
     control: mpsc::Sender<ConnectionControl>,
     mut commands: mpsc::Receiver<ConnectionControl>,
     mut close: watch::Receiver<Option<ConnectionClose>>,
@@ -2051,7 +2287,13 @@ async fn connection<C, D, H>(
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
+    let AuthenticatedHostConnection {
+        host_id,
+        owner_user_id,
+        connection_id,
+    } = authenticated;
     let mut pending: HashMap<String, PendingCommand> = HashMap::new();
+    let (timeout_control, mut timed_out_commands) = mpsc::unbounded_channel();
     let mut next_command = 0_u64;
     let mut compatible: Option<AttachedDaemon> = None;
     let mut attached: Option<DaemonInstanceId> = None;
@@ -2063,65 +2305,44 @@ async fn connection<C, D, H>(
     let mut awaiting_pong: Option<(i64, Instant)> = None;
     loop {
         tokio::select! {
+            Some(id) = timed_out_commands.recv() => {
+                if let Some((_, response)) = pending.remove(&id) {
+                    let _ = response.send(Err(CommandDispatchError::TimedOut));
+                }
+            }
             received_control = next_connection_input(&mut close, &connection_id, &mut commands) => match received_control {
                 ConnectionInput::Close(requested) => {
                     send_connection_close(&mut socket, requested).await;
                     break;
                 }
                 ConnectionInput::Control(ConnectionControl::Command(command)) if compatible.is_some() => {
-                    next_command = match next_command.checked_add(1) {
-                        Some(next) => next,
-                        None => {
-                            let _ = command.response.send(Err(CommandDispatchError::ProvenNotDispatched));
-                            continue;
-                        }
+                    let mut sink = WebSocketCommandSink {
+                        socket: &mut socket,
+                        close: &mut close,
+                        connection_id: &connection_id,
                     };
-                    let id = format!("rust-daemon-{next_command}");
-                    let frame = json!({
-                        "direction": "server_to_daemon",
-                        "type": "command",
-                        "id": id,
-                        "kind": command.kind,
-                        "params": command.params,
-                    });
-                    match send_command_interruptibly(
-                        &mut socket,
-                        &mut close,
-                        &connection_id,
-                        Message::Text(frame.to_string().into()),
-                    ).await {
-                        InterruptibleSend::Sent => {}
-                        InterruptibleSend::TransportFailed => {
-                            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
-                            break;
+                    let sent = send_dequeued_command(command, &mut next_command, &mut sink).await;
+                    let (id, kind, deadline, response) = match sent {
+                        DequeuedCommandSend::Skipped => continue,
+                        DequeuedCommandSend::Sent { id, kind, deadline, response } => {
+                            (id, kind, deadline, response)
                         }
-                        InterruptibleSend::Close(requested) => {
-                            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
+                        DequeuedCommandSend::Terminate => break,
+                        DequeuedCommandSend::Close(requested) => {
                             send_connection_close(&mut socket, requested).await;
                             break;
                         }
-                        InterruptibleSend::Terminated => {
-                            let _ = command.response.send(Err(CommandDispatchError::Ambiguous));
-                            break;
-                        }
-                    }
+                    };
                     let timeout_id = id.clone();
-                    let timeout_control = control.clone();
+                    let timeout_sender = timeout_control.clone();
                     tokio::spawn(async move {
-                        tokio::time::sleep(command.timeout).await;
-                        let _ = timeout_control
-                            .send(ConnectionControl::CommandTimedOut(timeout_id))
-                            .await;
+                        tokio::time::sleep_until(deadline).await;
+                        let _ = timeout_sender.send(timeout_id);
                     });
-                    pending.insert(id, (command.kind, command.response));
+                    pending.insert(id, (kind, response));
                 }
                 ConnectionInput::Control(ConnectionControl::Command(command)) => {
                     let _ = command.response.send(Err(CommandDispatchError::ProvenNotDispatched));
-                }
-                ConnectionInput::Control(ConnectionControl::CommandTimedOut(id)) => {
-                    if let Some((_, response)) = pending.remove(&id) {
-                        let _ = response.send(Err(CommandDispatchError::TimedOut));
-                    }
                 }
                 ConnectionInput::Control(ConnectionControl::Hydrated(Ok(ready))) => {
                     if compatible
@@ -2132,7 +2353,7 @@ async fn connection<C, D, H>(
                     }
                     match runtime.registry.attach(&host_id, &connection_id, ready.clone()) {
                         Ok(true) => {
-                            attached = Some(ready.daemon_instance);
+                            attached = Some(ready.daemon_instance.clone());
                             // The only edge that resolves a refusal, and only now: strict
                             // ready passed AND the registry promoted THIS connection. A
                             // parse that never became custody leaves the record standing.
@@ -2143,6 +2364,72 @@ async fn connection<C, D, H>(
                                     "host admission refusal could not be cleared after attachment"
                                 );
                             }
+                            // Status is a zero-RPC HTTP read. Seed this exact admitted
+                            // generation in the background at the promotion edge; the
+                            // seed owner rechecks custody after every await and drops a
+                            // late answer if this socket is replaced.
+                            let seeds = runtime.seeds.clone();
+                            let seed_events = runtime.events.clone();
+                            let seed_registry = runtime.registry.clone();
+                            let seed_host = HostId::parse(host_id.clone())
+                                .expect("authenticated host ids are validated at lookup");
+                            let seed_instance = ready.daemon_instance.clone();
+                            let seed_connection_id = connection_id.clone();
+                            let seed_owner = owner_user_id.clone();
+                            tokio::spawn(async move {
+                                let mut attempt = seeds
+                                    .seed_on_attach(&seed_host, &seed_instance)
+                                    .await;
+                                loop {
+                                    match attempt {
+                                        Ok(SeedAttempt::Deferred { after, ticket }) => {
+                                            if !wait_for_seed_retry_or_replacement(
+                                                &seed_registry,
+                                                &seed_host,
+                                                &seed_connection_id,
+                                                after,
+                                            )
+                                            .await
+                                            {
+                                                break;
+                                            }
+                                            attempt = seeds
+                                                .retry(&seed_host, &seed_instance, ticket)
+                                                .await;
+                                        }
+                                        Ok(SeedAttempt::Sealed) => {
+                                            if let Err(cause) = seed_events
+                                                .publish_host_connection_changed(
+                                                    &seed_owner,
+                                                    &seed_host,
+                                                )
+                                            {
+                                                tracing::error!(
+                                                    error_chain = %error::describe(&cause),
+                                                    host_id = %seed_host.as_str(),
+                                                    "host status seed landed but connection invalidation failed"
+                                                );
+                                            }
+                                            break;
+                                        }
+                                        Ok(
+                                            SeedAttempt::AlreadySealed
+                                            | SeedAttempt::AlreadyInFlight
+                                            | SeedAttempt::Superseded
+                                            | SeedAttempt::StaleWake
+                                            | SeedAttempt::Exhausted,
+                                        ) => break,
+                                        Err(cause) => {
+                                            tracing::error!(
+                                                error_chain = %error::describe(&cause),
+                                                host_id = %seed_host.as_str(),
+                                                "host status seed chain failed"
+                                            );
+                                            break;
+                                        }
+                                    }
+                                }
+                            });
                         }
                         Ok(false) => break,
                         Err(cause) => {
@@ -2349,7 +2636,13 @@ async fn connection<C, D, H>(
                                 }))).await;
                                 break;
                             };
-                            finalize_runtime_event(&runtime, &host_id, Some(instance), event).await;
+                            finalize_runtime_event(
+                                &runtime,
+                                &host_id,
+                                &connection_id,
+                                Some(instance),
+                                event,
+                            ).await;
                         }
                         Ok(DaemonFrame::Product(event)) => {
                             let Some(instance) = attached.as_ref() else {
@@ -2359,7 +2652,11 @@ async fn connection<C, D, H>(
                                 }))).await;
                                 break;
                             };
-                            match runtime.events.handle(&host_id, instance, event).await {
+                            match runtime
+                                .events
+                                .handle(&host_id, instance, &connection_id, event)
+                                .await
+                            {
                                 Ok(RuntimeEventDirective::None) => {}
                                 Ok(RuntimeEventDirective::Drain {
                                     conversation,
@@ -2441,7 +2738,9 @@ async fn connection<C, D, H>(
     if let Some(instance) = attached
         .as_ref()
         .or_else(|| compatible.as_ref().map(|ready| &ready.daemon_instance))
-        && let Err(cause) = runtime.events.detach_daemon(&host_id, instance)
+        && let Err(cause) = runtime
+            .events
+            .detach_daemon(&host_id, instance, &connection_id)
     {
         tracing::error!(
             error_chain = %error::describe(&cause),
@@ -2456,6 +2755,35 @@ async fn connection<C, D, H>(
             error_chain = %error::describe(&cause),
             "daemon disconnect inbox lease release failed"
         );
+    }
+}
+
+async fn wait_for_seed_retry_or_replacement(
+    registry: &DaemonRegistry,
+    host: &HostId,
+    connection_id: &str,
+    after: Duration,
+) -> bool {
+    let deadline = Instant::now() + after;
+    loop {
+        let changed = registry.changed.notified();
+        if registry
+            .slot_connection_id(host.as_str())
+            .ok()
+            .flatten()
+            .as_deref()
+            != Some(connection_id)
+        {
+            return false;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => return registry
+                .slot_connection_id(host.as_str())
+                .ok()
+                .flatten()
+                .as_deref() == Some(connection_id),
+            _ = changed => {}
+        }
     }
 }
 
@@ -2632,6 +2960,7 @@ async fn commit_consumed_event<C, D, H>(
 async fn finalize_runtime_event<C, D, H>(
     runtime: &DaemonDeliveryRuntime<C, D, H>,
     host_id: &str,
+    connection_id: &str,
     attached: Option<&DaemonInstanceId>,
     event: RuntimeExitEvent,
 ) where
@@ -2696,6 +3025,7 @@ async fn finalize_runtime_event<C, D, H>(
             };
             match runtime.events.complete_exit_state(
                 &admission,
+                connection_id,
                 &result,
                 conversation,
                 event.code,
@@ -3067,10 +3397,8 @@ fn valid_command_response_envelope(value: &Value) -> bool {
             .get("kind")
             .and_then(Value::as_str)
             .is_some_and(|kind| {
-                matches!(
-                    kind,
-                    "runtime_start" | "runtime_stop" | "runtime_deliver" | "runtime_status"
-                ) || HostCommandKind::sends_wire(kind)
+                matches!(kind, "runtime_start" | "runtime_deliver" | "runtime_status")
+                    || HostDataPlaneCommandKind::sends_wire(kind)
                     || kind == "agent_files_purge"
             })
 }
@@ -3581,13 +3909,773 @@ mod tests {
         runtime_credential::{ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime},
     };
     use silverhand_backend_sqlite::{
-        runtime_credential::SqliteRuntimeCustodyStore, runtime_delivery::SqliteRuntimeDeliveryStore,
+        host_runtime::SqliteHostRuntimeStore, runtime_credential::SqliteRuntimeCustodyStore,
+        runtime_delivery::SqliteRuntimeDeliveryStore,
     };
     use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
 
     use crate::current_schema;
 
     use super::*;
+
+    struct ControlledCommandSink {
+        entered_first_write: Arc<Notify>,
+        release_first_write: Arc<Notify>,
+        frames: Arc<Mutex<Vec<Value>>>,
+        sends: usize,
+    }
+
+    impl CommandWireSink for ControlledCommandSink {
+        async fn send(&mut self, message: Message, _deadline: Instant) -> InterruptibleSend {
+            self.sends += 1;
+            if self.sends == 1 {
+                self.entered_first_write.notify_one();
+                self.release_first_write.notified().await;
+            }
+            let Message::Text(frame) = message else {
+                panic!("business command sink received a non-text frame");
+            };
+            self.frames
+                .lock()
+                .unwrap()
+                .push(serde_json::from_str(&frame).unwrap());
+            InterruptibleSend::Sent
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn production_dequeue_to_wire_gate_drops_a_queued_set_after_its_budget_expires() {
+        let (commands, mut receive) = mpsc::channel(32);
+        let attachment = DaemonAttachment {
+            host_id: "host-1".to_owned(),
+            connection_id: "connection-1".to_owned(),
+            daemon_instance: DaemonInstanceId::parse("instance-1").unwrap(),
+            host_name: "host".to_owned(),
+            commands,
+        };
+
+        let entered_first_write = Arc::new(Notify::new());
+        let release_first_write = Arc::new(Notify::new());
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let wire = tokio::spawn({
+            let entered_first_write = Arc::clone(&entered_first_write);
+            let release_first_write = Arc::clone(&release_first_write);
+            let frames = Arc::clone(&frames);
+            async move {
+                let mut sink = ControlledCommandSink {
+                    entered_first_write,
+                    release_first_write,
+                    frames,
+                    sends: 0,
+                };
+                let mut next_command = 0;
+                let mut pending_responses = Vec::new();
+                for _ in 0..2 {
+                    let command = match receive.recv().await.unwrap() {
+                        ConnectionControl::Command(command) => command,
+                        ConnectionControl::Hydrated(_) => panic!("expected command"),
+                    };
+                    match send_dequeued_command(command, &mut next_command, &mut sink).await {
+                        DequeuedCommandSend::Skipped => {}
+                        DequeuedCommandSend::Sent { response, .. } => {
+                            pending_responses.push(response);
+                        }
+                        DequeuedCommandSend::Terminate | DequeuedCommandSend::Close(_) => {
+                            panic!("controlled sink cannot terminate the command loop")
+                        }
+                    }
+                }
+                pending_responses
+            }
+        });
+
+        let first_attachment = attachment.clone();
+        let first = tokio::spawn(async move {
+            first_attachment
+                .command("host_status", json!({}), Duration::from_secs(60))
+                .await
+        });
+        entered_first_write.notified().await;
+
+        let second_attachment = attachment.clone();
+        let second = tokio::spawn(async move {
+            second_attachment
+                .command(
+                    "host_proxy_config_set",
+                    json!({ "proxy_url": "http://proxy" }),
+                    Duration::from_secs(10),
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert!(matches!(
+            second.await.unwrap(),
+            Err(CommandDispatchError::TimedOut)
+        ));
+
+        // The controlled sink is the socket-write seam used by the same production
+        // dequeue function. Once the first write resumes, the late SET is dequeued
+        // but must be rejected before this sink can observe it. Removing the
+        // production expiry/cancellation branch records a second frame and kills the
+        // assertion below.
+        release_first_write.notify_one();
+        let pending_responses = wire.await.unwrap();
+        assert_eq!(pending_responses.len(), 1);
+        let frames = frames.lock().unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["kind"], "host_status");
+        first.abort();
+    }
+
+    #[tokio::test]
+    async fn production_status_adapter_never_re_resolves_captured_custody_by_host_and_instance() {
+        let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+        let host = HostId::parse("host-1").unwrap();
+        let instance = DaemonInstanceId::parse("instance-1").unwrap();
+
+        let (a_commands, _a_receive) = mpsc::channel(4);
+        let (a_close, _a_close_receive) = watch::channel(None);
+        let connection_a = registry
+            .reserve(host.as_str(), a_commands, a_close)
+            .unwrap();
+        assert!(
+            registry
+                .attach(
+                    host.as_str(),
+                    &connection_a,
+                    AttachedDaemon {
+                        daemon_instance: instance.clone(),
+                        host_name: "host-a".to_owned(),
+                    },
+                )
+                .unwrap()
+        );
+        let data_plane = OwningHostDataPlane {
+            registry: registry.clone(),
+        };
+        let captured_a = DaemonCustody::attached_custody(&data_plane, &host)
+            .unwrap()
+            .expect("connection A is attached");
+        assert_eq!(captured_a.connection_id, connection_a);
+
+        registry.remove(host.as_str(), &connection_a);
+        let (b_commands, mut b_receive) = mpsc::channel(4);
+        let (b_close, _b_close_receive) = watch::channel(None);
+        let connection_b = registry
+            .reserve(host.as_str(), b_commands, b_close)
+            .unwrap();
+        assert!(
+            registry
+                .attach(
+                    host.as_str(),
+                    &connection_b,
+                    AttachedDaemon {
+                        daemon_instance: instance,
+                        host_name: "host-b".to_owned(),
+                    },
+                )
+                .unwrap()
+        );
+
+        // This call crosses the production DaemonCustody adapter and the real
+        // OwningHostDataPlane pre-send check. An implementation that discards A's
+        // connection id and re-resolves by host+same-instance queues host_status on
+        // B, then waits for B's answer. Preserve the queue assertion even if the
+        // probe times out so that mutation fails on the generation leak itself.
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(50),
+            DaemonCustody::probe_status(&data_plane, host, captured_a),
+        )
+        .await;
+        assert!(matches!(
+            b_receive.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            outcome.expect("captured A must settle without waiting on B"),
+            StatusSnapshotOutcome::Disconnected
+        ));
+    }
+
+    mod scope_runtime_stop_adapter {
+        use std::{io, thread};
+
+        use silverhand_backend_core::{
+            host_runtime::{
+                computer::{ComputerRecord, HostKind, ProvisioningSource},
+                read::ComputerReadModel,
+            },
+            identity::{AgentId, ConversationId, UserId},
+            scope_runtime_stop::{
+                ScopeRuntimeStopOutcome, ScopeRuntimeStopPort, ScopeRuntimeStopRefusal,
+                ScopeRuntimeStopTarget,
+            },
+            wire_number::JsSafeInteger,
+        };
+
+        use crate::daemon_delivery::runtime_stop_codec::RuntimeStopCommand;
+        use crate::scope_runtime_stop::{
+            ProductionScopeRuntimeStop, ScopeRuntimeStopFailure, stop_captured,
+        };
+
+        use super::*;
+
+        #[derive(Clone)]
+        struct StopComputerRead {
+            record: Option<ComputerRecord>,
+            fails: bool,
+        }
+
+        impl ComputerReadModel for StopComputerRead {
+            async fn list_for_owner(
+                &self,
+                _owner: UserId,
+            ) -> Result<Vec<ComputerRecord>, PersistenceFailure> {
+                unreachable!("exact-host runtime stop never lists computers")
+            }
+
+            async fn read_computer(
+                &self,
+                _computer: HostId,
+            ) -> Result<Option<ComputerRecord>, PersistenceFailure> {
+                if self.fails {
+                    Err(PersistenceFailure::from_source(io::Error::other(
+                        "host read failed",
+                    )))
+                } else {
+                    Ok(self.record.clone())
+                }
+            }
+        }
+
+        fn computer(
+            id: &str,
+            activated_at: Option<i64>,
+            finalized_at: Option<i64>,
+            revoked_at: Option<i64>,
+        ) -> ComputerRecord {
+            ComputerRecord {
+                id: HostId::parse(id).unwrap(),
+                name: id.to_owned(),
+                kind: HostKind::Remote,
+                created_at: 1,
+                owner: Some(UserId::parse("owner-1").unwrap()),
+                installation_id: None,
+                last_seen_at: None,
+                activated_at,
+                finalized_at,
+                revoked_at,
+                provisioning_source: ProvisioningSource::UserInvite,
+                display_label: None,
+            }
+        }
+
+        fn target(host: &str, scope: RuntimeScope, generation: i64) -> ScopeRuntimeStopTarget {
+            ScopeRuntimeStopTarget::new(
+                HostId::parse(host).unwrap(),
+                scope,
+                silverhand_backend_core::runtime_credential::RuntimeGeneration::new(generation)
+                    .unwrap(),
+            )
+        }
+
+        fn attach(
+            registry: &DaemonRegistry,
+            host: &HostId,
+            instance: DaemonInstanceId,
+            capacity: usize,
+        ) -> (String, mpsc::Receiver<ConnectionControl>) {
+            let (commands, receive) = mpsc::channel(capacity);
+            let (close, _close_receive) = watch::channel(None);
+            let connection = registry.reserve(host.as_str(), commands, close).unwrap();
+            assert!(
+                registry
+                    .attach(
+                        host.as_str(),
+                        &connection,
+                        AttachedDaemon {
+                            daemon_instance: instance,
+                            host_name: host.as_str().to_owned(),
+                        },
+                    )
+                    .unwrap()
+            );
+            (connection, receive)
+        }
+
+        fn plane(registry: &DaemonRegistry) -> OwningHostDataPlane {
+            OwningHostDataPlane {
+                registry: registry.clone(),
+            }
+        }
+
+        fn adapter(
+            record: Option<ComputerRecord>,
+            registry: &DaemonRegistry,
+        ) -> ProductionScopeRuntimeStop<StopComputerRead> {
+            ProductionScopeRuntimeStop::new(
+                StopComputerRead {
+                    record,
+                    fails: false,
+                },
+                plane(registry),
+                Duration::from_secs(10),
+            )
+        }
+
+        async fn receive_runtime_stop(
+            receive: &mut mpsc::Receiver<ConnectionControl>,
+        ) -> CommandRequest {
+            let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
+                panic!("runtime stop must enter the command FIFO")
+            };
+            assert_eq!(command.kind, "runtime_stop");
+            command
+        }
+
+        fn success() -> Value {
+            json!({ "mode": "hard", "stopped": true, "exit_code": 0 })
+        }
+
+        #[tokio::test]
+        async fn exact_host_scope_and_generation_reach_only_the_captured_hosts_fifo() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host_a = HostId::parse("host-a").unwrap();
+            let host_b = HostId::parse("host-b").unwrap();
+            let instance = DaemonInstanceId::parse("same-instance").unwrap();
+            let (_connection_a, mut receive_a) = attach(&registry, &host_a, instance.clone(), 4);
+            let (_connection_b, mut receive_b) = attach(&registry, &host_b, instance, 4);
+            let stop = adapter(Some(computer("host-a", Some(1), Some(2), None)), &registry);
+            let exact = target(
+                "host-a",
+                RuntimeScope::ConversationSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                    source: ConversationId::parse("conversation-a").unwrap(),
+                },
+                17,
+            );
+
+            let call = tokio::spawn(async move { stop.hard_stop(&exact).await });
+            let command = receive_runtime_stop(&mut receive_a).await;
+            assert_eq!(
+                command.params,
+                json!({
+                    "runtime_scope": {
+                        "kind": "conversation",
+                        "conversation_id": "conversation-a",
+                        "agent_id": "agent-a",
+                    },
+                    "runtime_generation": 17,
+                    "mode": "hard",
+                })
+            );
+            assert!(matches!(
+                receive_b.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ));
+            command.response.send(Ok(success())).unwrap();
+            assert_eq!(call.await.unwrap().unwrap(), Ok(ScopeRuntimeStopOutcome));
+        }
+
+        #[tokio::test]
+        async fn agent_slot_keeps_max_safe_generation_exact_on_the_wire() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host = HostId::parse("host-a").unwrap();
+            let (_connection, mut receive) = attach(
+                &registry,
+                &host,
+                DaemonInstanceId::parse("instance-a").unwrap(),
+                4,
+            );
+            let stop = adapter(Some(computer("host-a", Some(1), Some(2), None)), &registry);
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                JsSafeInteger::MAX,
+            );
+
+            let call = tokio::spawn(async move { stop.hard_stop(&exact).await });
+            let command = receive_runtime_stop(&mut receive).await;
+            assert_eq!(
+                command.params,
+                json!({
+                    "runtime_scope": { "kind": "agent", "agent_id": "agent-a" },
+                    "runtime_generation": JsSafeInteger::MAX,
+                    "mode": "hard",
+                })
+            );
+            command.response.send(Ok(success())).unwrap();
+            assert_eq!(call.await.unwrap().unwrap(), Ok(ScopeRuntimeStopOutcome));
+        }
+
+        #[tokio::test]
+        async fn production_composition_binds_the_sqlite_host_facts_to_its_own_registry() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("scope-runtime-stop.sqlite");
+            let mut database = crate::current_schema::create_current_schema(&path).await;
+            sqlx::query(
+                "INSERT INTO users (id, name, display_name, created_at, updated_at)
+                 VALUES ('owner-1', 'owner-1', 'Owner', 1, 1)",
+            )
+            .execute(&mut database)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO hosts
+                    (id, name, kind, created_at, user_id, activated_at, finalized_at,
+                     provisioning_source)
+                 VALUES ('host-a', 'host-a', 'remote', 1, 'owner-1', 2, 3, 'user_invite')",
+            )
+            .execute(&mut database)
+            .await
+            .unwrap();
+            database.close().await.unwrap();
+
+            let runtime = DaemonDeliveryRuntime::new(
+                RuntimeCredentialAuthority::production(
+                    SqliteRuntimeCustodyStore::open(&path).await.unwrap(),
+                ),
+                SqliteRuntimeDeliveryStore::open(&path).await.unwrap(),
+                SqliteHostRuntimeStore::open(&path).await.unwrap(),
+                DaemonDeliveryConfig::production(),
+                ScopeEventHub::production().unwrap(),
+            )
+            .unwrap();
+            let host = HostId::parse("host-a").unwrap();
+            let (_connection, mut receive) = attach(
+                &runtime.registry,
+                &host,
+                DaemonInstanceId::parse("instance-a").unwrap(),
+                4,
+            );
+            let stop = runtime.scope_runtime_stop();
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                29,
+            );
+
+            let call = tokio::spawn(async move { stop.hard_stop(&exact).await });
+            let command = receive_runtime_stop(&mut receive).await;
+            assert_eq!(command.params["runtime_generation"], 29);
+            command.response.send(Ok(success())).unwrap();
+            assert_eq!(call.await.unwrap().unwrap(), Ok(ScopeRuntimeStopOutcome));
+        }
+
+        #[tokio::test]
+        async fn same_instance_successor_cannot_receive_a_stop_captured_for_its_predecessor() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host = HostId::parse("host-a").unwrap();
+            let instance = DaemonInstanceId::parse("instance-shared").unwrap();
+            let (connection_a, _receive_a) = attach(&registry, &host, instance.clone(), 4);
+            let data_plane = plane(&registry);
+            let captured_a = data_plane.resolve(&host).unwrap().unwrap();
+            let command = RuntimeStopCommand::encode(
+                &RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                silverhand_backend_core::runtime_credential::RuntimeGeneration::new(31).unwrap(),
+            )
+            .unwrap();
+
+            registry.remove(host.as_str(), &connection_a);
+            let (_connection_b, mut receive_b) = attach(&registry, &host, instance, 4);
+            let outcome =
+                stop_captured(&data_plane, captured_a, command, Duration::from_secs(10)).await;
+
+            assert_eq!(
+                outcome.unwrap(),
+                Err(ScopeRuntimeStopRefusal::HostAttachPending)
+            );
+            assert!(matches!(
+                receive_b.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ));
+        }
+
+        #[tokio::test]
+        async fn persisted_lifecycle_refusals_short_circuit_before_the_registry() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let poisoned = Arc::clone(&registry.state);
+            let _ = thread::spawn(move || {
+                let _guard = poisoned.lock().unwrap();
+                panic!("poison registry for the discriminator");
+            })
+            .join();
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                1,
+            );
+
+            for (record, expected) in [
+                (None, ScopeRuntimeStopRefusal::HostMissing),
+                (
+                    Some(computer("host-a", None, None, None)),
+                    ScopeRuntimeStopRefusal::HostPendingAttach,
+                ),
+                (
+                    Some(computer("host-a", Some(1), None, None)),
+                    ScopeRuntimeStopRefusal::HostPendingAttach,
+                ),
+                (
+                    Some(computer("host-a", Some(1), Some(2), Some(3))),
+                    ScopeRuntimeStopRefusal::HostRevoked,
+                ),
+            ] {
+                assert_eq!(
+                    adapter(record, &registry).hard_stop(&exact).await.unwrap(),
+                    Err(expected)
+                );
+            }
+
+            assert!(matches!(
+                adapter(Some(computer("host-a", Some(1), Some(2), None)), &registry)
+                    .hard_stop(&exact)
+                    .await,
+                Err(ScopeRuntimeStopFailure::RegistryUnavailable)
+            ));
+        }
+
+        #[tokio::test]
+        async fn active_without_attachment_is_the_only_live_placement_refusal() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                1,
+            );
+            assert_eq!(
+                adapter(Some(computer("host-a", Some(1), Some(2), None)), &registry)
+                    .hard_stop(&exact)
+                    .await
+                    .unwrap(),
+                Err(ScopeRuntimeStopRefusal::HostAttachPending)
+            );
+        }
+
+        #[tokio::test]
+        async fn zero_and_max_safe_plus_one_fail_before_registry_and_fifo() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host = HostId::parse("host-a").unwrap();
+            let (_connection, mut receive) = attach(
+                &registry,
+                &host,
+                DaemonInstanceId::parse("instance-a").unwrap(),
+                4,
+            );
+            let poisoned = Arc::clone(&registry.state);
+            let _ = thread::spawn(move || {
+                let _guard = poisoned.lock().unwrap();
+                panic!("poison registry after attachment for the generation discriminator");
+            })
+            .join();
+
+            for generation in [0, JsSafeInteger::MAX + 1] {
+                let exact = target(
+                    "host-a",
+                    RuntimeScope::AgentSlot {
+                        agent: AgentId::parse("agent-a").unwrap(),
+                    },
+                    generation,
+                );
+                assert!(matches!(
+                    adapter(
+                        Some(computer("host-a", Some(1), Some(2), None)),
+                        &registry
+                    )
+                    .hard_stop(&exact)
+                    .await,
+                    Err(ScopeRuntimeStopFailure::GenerationOutOfWireRange {
+                        generation: actual
+                    }) if actual == generation
+                ));
+                assert!(matches!(
+                    receive.try_recv(),
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                ));
+            }
+        }
+
+        #[tokio::test]
+        async fn returned_host_facts_are_bound_to_the_requested_host_before_dispatch() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host = HostId::parse("host-a").unwrap();
+            let (_connection, mut receive) = attach(
+                &registry,
+                &host,
+                DaemonInstanceId::parse("instance-a").unwrap(),
+                4,
+            );
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                1,
+            );
+            let outcome = adapter(Some(computer("host-b", Some(1), Some(2), None)), &registry)
+                .hard_stop(&exact)
+                .await;
+
+            assert!(matches!(
+                outcome,
+                Err(ScopeRuntimeStopFailure::HostFactsMismatch { expected, actual })
+                    if expected.as_str() == "host-a" && actual.as_str() == "host-b"
+            ));
+            assert!(matches!(
+                receive.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ));
+        }
+
+        #[tokio::test]
+        async fn queue_saturation_is_a_hard_not_dispatched_failure() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host = HostId::parse("host-a").unwrap();
+            let (_connection, _receive) = attach(
+                &registry,
+                &host,
+                DaemonInstanceId::parse("instance-a").unwrap(),
+                1,
+            );
+            let attachment = registry.attachment(host.as_str()).unwrap().unwrap();
+            let (response, _receive_response) = oneshot::channel();
+            attachment
+                .commands
+                .try_send(ConnectionControl::Command(CommandRequest {
+                    kind: "host_status",
+                    params: json!({}),
+                    deadline: Instant::now() + Duration::from_secs(60),
+                    response,
+                }))
+                .unwrap();
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                1,
+            );
+
+            assert!(matches!(
+                adapter(Some(computer("host-a", Some(1), Some(2), None)), &registry)
+                    .hard_stop(&exact)
+                    .await,
+                Err(ScopeRuntimeStopFailure::NotDispatched)
+            ));
+        }
+
+        #[tokio::test]
+        async fn daemon_refusal_ambiguous_completion_and_bad_response_are_hard_faults() {
+            #[derive(Clone, Copy)]
+            enum Answer {
+                Refused,
+                Drop,
+                Invalid,
+            }
+
+            for (suffix, answer) in [
+                ("refused", Answer::Refused),
+                ("drop", Answer::Drop),
+                ("invalid", Answer::Invalid),
+            ] {
+                let registry = DaemonRegistry::with_process_epoch(format!("test-epoch-{suffix}"));
+                let host = HostId::parse(format!("host-{suffix}")).unwrap();
+                let (_connection, mut receive) = attach(
+                    &registry,
+                    &host,
+                    DaemonInstanceId::parse(format!("instance-{suffix}")).unwrap(),
+                    4,
+                );
+                let stop = adapter(
+                    Some(computer(host.as_str(), Some(1), Some(2), None)),
+                    &registry,
+                );
+                let exact = target(
+                    host.as_str(),
+                    RuntimeScope::AgentSlot {
+                        agent: AgentId::parse("agent-a").unwrap(),
+                    },
+                    1,
+                );
+                let call = tokio::spawn(async move { stop.hard_stop(&exact).await });
+                let command = receive_runtime_stop(&mut receive).await;
+                match answer {
+                    Answer::Refused => command
+                        .response
+                        .send(Err(CommandDispatchError::DaemonRefused(
+                            CommandRefusal::Response,
+                        )))
+                        .unwrap(),
+                    Answer::Drop => drop(command.response),
+                    Answer::Invalid => command
+                        .response
+                        .send(Ok(json!({
+                            "mode": "hard",
+                            "stopped": true,
+                            "exit_code": 0,
+                            "extra": true,
+                        })))
+                        .unwrap(),
+                }
+                let outcome = call.await.unwrap();
+                assert!(matches!(
+                    (answer, outcome),
+                    (Answer::Refused, Err(ScopeRuntimeStopFailure::DaemonRefused))
+                        | (Answer::Drop, Err(ScopeRuntimeStopFailure::Ambiguous))
+                        | (
+                            Answer::Invalid,
+                            Err(ScopeRuntimeStopFailure::ProtocolCorruption)
+                        )
+                ));
+            }
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn timeout_is_a_hard_fault_not_a_placement_refusal() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host = HostId::parse("host-a").unwrap();
+            let (_connection, mut receive) = attach(
+                &registry,
+                &host,
+                DaemonInstanceId::parse("instance-a").unwrap(),
+                4,
+            );
+            let stop = ProductionScopeRuntimeStop::new(
+                StopComputerRead {
+                    record: Some(computer("host-a", Some(1), Some(2), None)),
+                    fails: false,
+                },
+                plane(&registry),
+                Duration::from_secs(5),
+            );
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                1,
+            );
+            let call = tokio::spawn(async move { stop.hard_stop(&exact).await });
+            let _held_response = receive_runtime_stop(&mut receive).await.response;
+            tokio::time::advance(Duration::from_secs(5)).await;
+
+            assert!(matches!(
+                call.await.unwrap(),
+                Err(ScopeRuntimeStopFailure::TimedOut)
+            ));
+        }
+    }
 
     #[tokio::test]
     async fn disconnect_outranks_a_saturated_command_fifo_and_stays_generation_bound() {
@@ -3602,7 +4690,7 @@ mod tests {
             .try_send(ConnectionControl::Command(CommandRequest {
                 kind: "host_status",
                 params: json!({}),
-                timeout: DEFAULT_COMMAND_TIMEOUT,
+                deadline: Instant::now() + DEFAULT_COMMAND_TIMEOUT,
                 response: blocked_response,
             }))
             .unwrap();
@@ -3863,6 +4951,9 @@ mod tests {
                 .events
                 .hydrate(
                     "host-1",
+                    principal.clone().custody().daemon_instance(),
+                    "connection-test",
+                    [principal.agent().clone()].into_iter().collect(),
                     vec![HydratedRuntime {
                         principal,
                         run_state: Some(wire),
@@ -4010,7 +5101,12 @@ mod tests {
     #[test]
     fn refusal_codes_are_admitted_per_kind_and_never_invented() {
         let error = |code: &str| json!({ "code": code, "message": "why" });
-        for kind in ["runtime_start", "runtime_deliver", "host_runtime_catalog"] {
+        for kind in [
+            "runtime_start",
+            "runtime_deliver",
+            RUNTIME_STOP_KIND,
+            "host_runtime_catalog",
+        ] {
             assert_eq!(
                 CommandRefusal::decode(kind, &error("shutting_down")),
                 Some(CommandRefusal::Response)
@@ -4042,6 +5138,13 @@ mod tests {
                 CommandRefusal::decode("host_runtime_catalog", &error(code)),
                 None
             );
+            // runtime_stop has no operation-scoped refusal vocabulary. The real
+            // connection loop therefore classifies this `None` as InvalidResponse,
+            // which the owning-host data plane carries as ProtocolCorruption.
+            assert_eq!(
+                CommandRefusal::decode(RUNTIME_STOP_KIND, &error(code)),
+                None
+            );
         }
         assert_eq!(
             CommandRefusal::decode("runtime_start", &json!({ "code": "internal_error" })),
@@ -4065,47 +5168,93 @@ mod tests {
     }
 
     #[test]
+    fn runtime_stop_refusal_vocabulary_stays_on_the_hard_fault_side() {
+        let error = |code: &str| json!({ "code": code, "message": "why" });
+        let response = CommandRefusal::decode(RUNTIME_STOP_KIND, &error("shutting_down"))
+            .expect("response-level refusal is admitted for runtime_stop");
+        assert!(matches!(
+            HostDataPlaneFailure::from_dispatch(CommandDispatchError::DaemonRefused(response)),
+            HostDataPlaneFailure::Refused
+        ));
+
+        // runtime_stop has no operation-scoped refusal arm. The real connection
+        // loop turns this failed decode into InvalidResponse; the shared data plane
+        // then preserves it as protocol corruption, never a placement refusal.
+        assert_eq!(
+            CommandRefusal::decode(RUNTIME_STOP_KIND, &error("agent_deleting")),
+            None
+        );
+        assert!(matches!(
+            HostDataPlaneFailure::from_dispatch(CommandDispatchError::InvalidResponse),
+            HostDataPlaneFailure::ProtocolCorruption
+        ));
+    }
+
+    #[test]
     fn an_answer_opens_only_for_the_coordinate_that_awaited_it() {
-        let answer = || HostCommandAnswer {
+        let answer = || HostDataPlaneAnswer {
             host: HostId::parse("host-1").unwrap(),
             instance: DaemonInstanceId::parse("instance-shared").unwrap(),
+            connection_id: "connection-current".to_owned(),
             result: json!({ "runtimes": [] }),
         };
-        let host = |raw: &str| HostId::parse(raw).unwrap();
-        let instance = |raw: &str| DaemonInstanceId::parse(raw).unwrap();
+        let custody = |host: &str, instance: &str, connection: &str| HostDataPlaneCustody {
+            host: HostId::parse(host).unwrap(),
+            instance: DaemonInstanceId::parse(instance).unwrap(),
+            connection_id: connection.to_owned(),
+        };
 
         assert_eq!(
-            answer().into_result_for(&host("host-1"), &instance("instance-shared")),
+            answer().into_result_for(&custody("host-1", "instance-shared", "connection-current")),
             Ok(json!({ "runtimes": [] }))
         );
         // Both machines spell the custody the same way, so an instance-only bind
         // would file this answer under the wrong host.
         assert_eq!(
-            answer().into_result_for(&host("host-2"), &instance("instance-shared")),
-            Err(HostAnswerMismatch::Host)
+            answer().into_result_for(&custody("host-2", "instance-shared", "connection-current")),
+            Err(HostDataPlaneAnswerMismatch::Host)
         );
         assert_eq!(
-            answer().into_result_for(&host("host-1"), &instance("instance-old")),
-            Err(HostAnswerMismatch::DaemonInstance)
+            answer().into_result_for(&custody("host-1", "instance-shared", "connection-old")),
+            Err(HostDataPlaneAnswerMismatch::ConnectionGeneration)
         );
         assert_eq!(
-            answer().into_result_for(&host("host-2"), &instance("instance-old")),
-            Err(HostAnswerMismatch::Host)
+            answer().into_result_for(&custody("host-1", "instance-old", "connection-current")),
+            Err(HostDataPlaneAnswerMismatch::DaemonInstance)
+        );
+        assert_eq!(
+            answer().into_result_for(&custody("host-2", "instance-old", "connection-old")),
+            Err(HostDataPlaneAnswerMismatch::Host)
         );
     }
 
     #[test]
-    fn rotate_token_is_a_host_control_word_whose_answer_is_admitted() {
-        // The variant exists so the connection admits a `rotate_token` RESPONSE frame:
-        // without it the daemon's acknowledgement decodes as an unsupported kind and the
-        // socket is closed before the pending command is ever settled.
-        assert_eq!(HostCommandKind::RotateToken.as_wire(), "rotate_token");
-        assert!(HostCommandKind::sends_wire("rotate_token"));
-        assert!(valid_command_response_envelope(&json!({
-            "id": "r1",
-            "kind": "rotate_token",
-            "result": { "rotated": true, "host_id": "host-1", "config_refreshed_at": 42 },
-        })));
+    fn every_shared_host_data_plane_word_is_admitted_on_the_response_epoch() {
+        for (kind, wire) in [
+            (HostDataPlaneCommandKind::HostStatus, "host_status"),
+            (
+                HostDataPlaneCommandKind::RuntimeCatalog,
+                "host_runtime_catalog",
+            ),
+            (HostDataPlaneCommandKind::RuntimeStop, "runtime_stop"),
+            (
+                HostDataPlaneCommandKind::ProxyConfigGet,
+                "host_proxy_config_get",
+            ),
+            (
+                HostDataPlaneCommandKind::ProxyConfigSet,
+                "host_proxy_config_set",
+            ),
+            (HostDataPlaneCommandKind::RotateToken, "rotate_token"),
+        ] {
+            assert_eq!(kind.as_wire(), wire);
+            assert!(HostDataPlaneCommandKind::sends_wire(wire));
+            assert!(valid_command_response_envelope(&json!({
+                "id": "r1",
+                "kind": wire,
+                "result": { "ok": true },
+            })));
+        }
     }
 
     #[test]

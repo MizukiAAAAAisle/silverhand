@@ -27,7 +27,7 @@ pub mod cascade_effects;
 pub mod claim;
 pub mod delete;
 pub mod detail;
-mod host_wire;
+pub(crate) mod host_wire;
 pub mod list;
 pub mod resolve;
 pub mod revoke;
