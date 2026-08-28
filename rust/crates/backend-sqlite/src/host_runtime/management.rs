@@ -69,9 +69,10 @@ impl UpdateComputerUnitOfWork for SqliteHostRuntimeStore {
             .transpose()
             .map_err(PersistenceFailure::from_source)?;
 
+        let before = record.clone();
         let decision = decide(record);
         let result = match decision {
-            UpdateComputerDecision::Refuse(refusal) => UpdateComputerTransaction::Refused(refusal),
+            UpdateComputerDecision::Refuse(_) => UpdateComputerTransaction::Unchanged { before },
             UpdateComputerDecision::Write {
                 display_label,
                 finalized_at,
@@ -94,11 +95,15 @@ impl UpdateComputerUnitOfWork for SqliteHostRuntimeStore {
                     .ok_or_else(|| {
                         PersistenceFailure::from_source(HostManagementStoreError::ComputerVanished)
                     })?;
-                let computer =
+                let committed =
                     row_to_computer_record(&row).map_err(PersistenceFailure::from_source)?;
-                UpdateComputerTransaction::Updated {
-                    computer,
-                    finalized_now: finalized_at.is_some(),
+                UpdateComputerTransaction::Committed {
+                    before: before.ok_or_else(|| {
+                        PersistenceFailure::from_source(
+                            HostManagementStoreError::ComputerVanished,
+                        )
+                    })?,
+                    committed,
                 }
             }
         };

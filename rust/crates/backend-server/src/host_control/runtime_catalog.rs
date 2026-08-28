@@ -245,7 +245,6 @@ fn outcome_for(failure: HostDataPlaneFailure) -> RuntimeCatalogOutcome {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct CatalogWire {
     runtimes: Vec<RuntimeRowWire>,
     detected_at: i64,
@@ -267,7 +266,6 @@ impl CatalogWire {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct RuntimeRowWire {
     kind: String,
     state: String,
@@ -431,10 +429,10 @@ mod tests {
     }
 
     #[test]
-    fn a_widened_or_incomplete_row_is_refused_rather_than_defaulted() {
+    fn zod_style_unknown_fields_are_stripped_but_required_fields_stay_required() {
         let mut widened = row(json!({}));
         widened["unexpected"] = json!(true);
-        assert!(CatalogWire::decode(catalog(json!([widened]))).is_none());
+        assert!(CatalogWire::decode(catalog(json!([widened]))).is_some());
 
         let mut missing = row(json!({}));
         missing.as_object_mut().unwrap().remove("version");
@@ -446,7 +444,7 @@ mod tests {
 
         let mut widened_catalog = catalog(json!([]));
         widened_catalog["unexpected"] = json!(true);
-        assert!(CatalogWire::decode(widened_catalog).is_none());
+        assert!(CatalogWire::decode(widened_catalog).is_some());
 
         assert!(CatalogWire::decode(json!({ "runtimes": [] })).is_none());
         assert!(CatalogWire::decode(json!({ "runtimes": [], "detected_at": 1.5 })).is_none());

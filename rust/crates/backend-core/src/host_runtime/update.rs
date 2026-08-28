@@ -5,7 +5,7 @@
 //! revocation, lifecycle and input ordering in the domain without asking an adapter
 //! to mint a verdict, while making it impossible to decide from a pre-lock snapshot.
 
-use std::future::Future;
+use std::{error::Error, fmt, future::Future};
 
 use crate::{
     identity::{HostId, UserId},
@@ -63,12 +63,25 @@ pub enum UpdateComputerDecision {
 /// finalize.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UpdateComputerTransaction {
-    Refused(UpdateComputerRefusal),
-    Updated {
-        computer: ComputerRecord,
-        finalized_now: bool,
+    Unchanged {
+        before: Option<ComputerRecord>,
+    },
+    Committed {
+        before: ComputerRecord,
+        committed: ComputerRecord,
     },
 }
+
+#[derive(Debug)]
+struct InvalidUpdateWitness;
+
+impl fmt::Display for InvalidUpdateWitness {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("host update transaction returned an invalid committed witness")
+    }
+}
+
+impl Error for InvalidUpdateWitness {}
 
 pub trait UpdateComputerUnitOfWork: Clone + Send + Sync + 'static {
     /// Take the write lock, read `computer`, run `decide` against that in-lock
@@ -108,21 +121,52 @@ where
         command: UpdateComputerCommand,
     ) -> Result<UpdateComputerOutcome, PersistenceFailure> {
         let computer = command.computer.clone();
+        let decision_command = command.clone();
         let transaction = self
             .unit_of_work
-            .update_computer(computer, move |record| decide(&command, record))
+            .update_computer(computer, move |record| decide(&decision_command, record))
             .await?;
-        Ok(match transaction {
-            UpdateComputerTransaction::Refused(refusal) => UpdateComputerOutcome::Refused(refusal),
-            UpdateComputerTransaction::Updated {
-                computer,
-                finalized_now: true,
-            } => UpdateComputerOutcome::Finalized(computer),
-            UpdateComputerTransaction::Updated {
-                computer,
-                finalized_now: false,
-            } => UpdateComputerOutcome::Renamed(computer),
-        })
+        validate_transaction(&command, transaction)
+    }
+}
+
+fn validate_transaction(
+    command: &UpdateComputerCommand,
+    transaction: UpdateComputerTransaction,
+) -> Result<UpdateComputerOutcome, PersistenceFailure> {
+    match transaction {
+        UpdateComputerTransaction::Unchanged { before } => match decide(command, before) {
+            UpdateComputerDecision::Refuse(refusal) => Ok(UpdateComputerOutcome::Refused(refusal)),
+            UpdateComputerDecision::Write { .. } => {
+                Err(PersistenceFailure::from_source(InvalidUpdateWitness))
+            }
+        },
+        UpdateComputerTransaction::Committed {
+            before,
+            committed,
+        } => {
+            let UpdateComputerDecision::Write {
+                display_label,
+                finalized_at,
+            } = decide(command, Some(before.clone()))
+            else {
+                return Err(PersistenceFailure::from_source(InvalidUpdateWitness));
+            };
+            let finalizing = finalized_at.is_some();
+            let mut expected = before;
+            expected.display_label = display_label;
+            if let Some(finalized_at) = finalized_at {
+                expected.finalized_at = Some(finalized_at);
+            }
+            if committed != expected {
+                return Err(PersistenceFailure::from_source(InvalidUpdateWitness));
+            }
+            Ok(if finalizing {
+                UpdateComputerOutcome::Finalized(committed)
+            } else {
+                UpdateComputerOutcome::Renamed(committed)
+            })
+        }
     }
 }
 
@@ -165,6 +209,22 @@ fn decide(
 mod tests {
     use super::*;
     use crate::host_runtime::computer::{HostKind, ProvisioningSource};
+
+    #[derive(Clone)]
+    struct Witness(UpdateComputerTransaction);
+
+    impl UpdateComputerUnitOfWork for Witness {
+        async fn update_computer<D>(
+            &self,
+            _computer: HostId,
+            _decide: D,
+        ) -> Result<UpdateComputerTransaction, PersistenceFailure>
+        where
+            D: FnOnce(Option<ComputerRecord>) -> UpdateComputerDecision + Send,
+        {
+            Ok(self.0.clone())
+        }
+    }
 
     fn command(input: UpdateComputerInput) -> UpdateComputerCommand {
         UpdateComputerCommand {
@@ -263,5 +323,45 @@ mod tests {
                 finalized_at: None,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn committed_witness_must_exactly_match_the_core_derived_transition() {
+        let mut before = record("owner");
+        before.finalized_at = None;
+        let mut valid = before.clone();
+        valid.display_label = Some("Studio Mac".to_owned());
+        valid.finalized_at = Some(1_700_000_000_123);
+
+        let mut lies = Vec::new();
+        let mut wrong_id = valid.clone();
+        wrong_id.id = HostId::parse("host-2").unwrap();
+        lies.push(wrong_id);
+        let mut wrong_owner = valid.clone();
+        wrong_owner.owner = Some(UserId::parse("somebody-else").unwrap());
+        lies.push(wrong_owner);
+        let mut wrong_label = valid.clone();
+        wrong_label.display_label = Some("Wrong".to_owned());
+        lies.push(wrong_label);
+        let mut wrong_stamp = valid.clone();
+        wrong_stamp.finalized_at = Some(7);
+        lies.push(wrong_stamp);
+
+        for committed in lies {
+            let result = UpdateComputer::new(Witness(UpdateComputerTransaction::Committed {
+                before: before.clone(),
+                committed,
+            }))
+            .execute(command(label(" Studio Mac ")))
+            .await;
+            assert!(result.is_err());
+        }
+
+        let flipped = UpdateComputer::new(Witness(UpdateComputerTransaction::Unchanged {
+            before: Some(before),
+        }))
+        .execute(command(label(" Studio Mac ")))
+        .await;
+        assert!(flipped.is_err());
     }
 }

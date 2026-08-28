@@ -30,11 +30,6 @@ pub mod runtime_catalog;
 pub mod status;
 pub mod update;
 
-/// Same resource ceiling as the product request perimeter. Leaves defer body
-/// aggregation until after the identity gate; the cap prevents an unmounted
-/// component test from becoming an unbounded reader without narrowing production.
-const PRODUCT_REQUEST_BODY_MAX_BYTES: usize = 128 * 1024 * 1024;
-
 #[allow(clippy::too_many_arguments)]
 pub fn router<R, U, S, E, C>(
     computers: R,
@@ -67,9 +62,10 @@ where
 }
 
 async fn read_body(body: Body) -> Result<Bytes, ()> {
-    to_bytes(body, PRODUCT_REQUEST_BODY_MAX_BYTES)
-        .await
-        .map_err(|_| ())
+    // The mounted product stream perimeter owns the request-envelope ceiling.
+    // This leaf aggregates only after its identity/lifecycle gate and adds no
+    // second size authority that could drift from that perimeter.
+    to_bytes(body, usize::MAX).await.map_err(|_| ())
 }
 
 fn internal_error() -> Response {
