@@ -29,6 +29,7 @@ pub mod host_resources_read;
 pub mod host_runtime;
 pub mod human_auth_flows;
 pub mod identity;
+pub mod internal_profile_write;
 pub mod mcp_config;
 pub mod messaging;
 pub mod name_canonicalization;
