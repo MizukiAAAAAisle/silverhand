@@ -7,7 +7,10 @@
 //! agent-owned [`AgentAvatarBlobPointer`]). The two pointer custodies are DISTINCT
 //! domain types; only this adapter's private key→bytes plumbing
 //! ([`SingleKindAvatarBlobs::read_stored_key`]) is shared, because physical resolution
-//! under the ambient kind is identical.
+//! under the ambient kind is identical. Custody is not left to the newtype alone: the
+//! agent read/delete capabilities enforce it here ([`ensure_agent_custody`]), refusing
+//! any key outside agent scope BEFORE it touches the store, so a cross-wired or corrupted
+//! `agents.avatar_storage_key` can never reach a user's blob.
 //!
 //! The avatar leaf ships no blob backend of its own and depends only on the
 //! narrow [`AvatarBlobStore`] capability; the storage KIND is the adapter's,
@@ -49,6 +52,41 @@ const AVATAR_SCOPE: &str = "avatars";
 /// prefixes. The mutating agent capability owns its own namespace, mirroring the
 /// separation of the [`AgentAvatarBlobPointer`] domain type from the user pointer.
 const AGENT_AVATAR_SCOPE: &str = "agent-avatars";
+
+/// The legacy TS agent-avatar scope: keys minted before the Rust migration live under
+/// `agents/<id>/avatars/...`. Accepted as agent custody so migrated rows keep resolving.
+const LEGACY_AGENT_AVATAR_SCOPE: &str = "agents";
+
+/// Enforce that a raw blob key belongs to AGENT custody BEFORE it is resolved against
+/// the backing store. Custody is a real persistence-boundary check, not merely a newtype
+/// name: a key's first path segment (its scope) must be the new Rust agent scope or the
+/// legacy TS agent scope. Any other scope — notably the USER [`AVATAR_SCOPE`] — is
+/// refused here, so a cross-wired or corrupted `agents.avatar_storage_key` can never read
+/// or delete a user's blob through the agent capability. Default-deny: an unknown scope
+/// is refused, never resolved.
+fn ensure_agent_custody(key: &str) -> Result<(), AvatarStorageFailure> {
+    let scope = key.split('/').next().unwrap_or_default();
+    if scope == AGENT_AVATAR_SCOPE || scope == LEGACY_AGENT_AVATAR_SCOPE {
+        return Ok(());
+    }
+    /// A blob key presented to the agent capability that is not in agent custody — a
+    /// foreign (user or unknown) scope. Refused before touching the store. `thiserror`
+    /// is only a dev-dependency of this crate, so the `Display`/`Error` impls are
+    /// hand-written for this production error type.
+    #[derive(Debug)]
+    struct ForeignCustody {
+        key: String,
+    }
+    impl std::fmt::Display for ForeignCustody {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "blob key {:?} is not in agent avatar custody", self.key)
+        }
+    }
+    impl std::error::Error for ForeignCustody {}
+    Err(AvatarStorageFailure::from_source(ForeignCustody {
+        key: key.to_owned(),
+    }))
+}
 
 /// Drives a single-backend [`BlobStore`] as the avatar leaf's [`AvatarBlobStore`].
 /// `kind` is the one storage kind the wrapped backend reports; it is reconstructed
@@ -114,6 +152,9 @@ impl<B: BlobStore> AgentAvatarBlobRead for SingleKindAvatarBlobs<B> {
         &self,
         pointer: &AgentAvatarBlobPointer,
     ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
+        // Custody is enforced HERE, at the physical boundary: a key outside agent custody
+        // is refused before it can resolve to (and read) a foreign blob.
+        ensure_agent_custody(pointer.as_str())?;
         self.read_stored_key(pointer.as_str()).await
     }
 }
@@ -126,7 +167,8 @@ impl<B: BlobStore> AgentAvatarBlobStore for SingleKindAvatarBlobs<B> {
         bytes: Vec<u8>,
     ) -> Result<AgentAvatarBlobPointer, AvatarStorageFailure> {
         // The agent custody's OWN static scope, never the user `AVATAR_SCOPE`: an agent
-        // and a user sharing a raw id still get disjoint blob keys.
+        // and a user sharing a raw id still get disjoint blob keys. The minted key is in
+        // agent custody by construction.
         let namespace = BlobNamespace::for_semantic_id(AGENT_AVATAR_SCOPE, agent_id.as_str())
             .map_err(AvatarStorageFailure::from_source)?;
         let stored = self
@@ -139,6 +181,9 @@ impl<B: BlobStore> AgentAvatarBlobStore for SingleKindAvatarBlobs<B> {
     }
 
     async fn delete(&self, pointer: &AgentAvatarBlobPointer) -> Result<(), AvatarStorageFailure> {
+        // Enforce custody before deleting: the agent capability must never delete a blob
+        // outside agent custody (e.g. a user blob a corrupted DB key points at).
+        ensure_agent_custody(pointer.as_str())?;
         let stored = self.stored_from_key(pointer.as_str())?;
         self.blobs
             .delete(&stored)
@@ -303,23 +348,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_agent_read_capability_resolves_bytes_through_the_shared_plumbing() {
-        // The two custody pointers are distinct domain types but resolve identically at
-        // the physical layer: bytes stored under a key are readable through the agent
-        // read capability given the agent-owned pointer for that key.
+    async fn a_foreign_custody_key_is_refused_by_the_agent_capability_before_touching_storage() {
+        // The production-adapter custody discriminator. A real user blob exists under the
+        // user scope. Its key, re-wrapped as an agent pointer (the newtype alone does NOT
+        // enforce custody), must be refused by BOTH the agent read and delete capabilities
+        // BEFORE the backing store is touched — so a cross-wired `agents.avatar_storage_key`
+        // can never read or delete a user's blob — and the user blob must survive intact.
         let backend = MemoryBlobs::new(StorageKind::Local);
         let adapter = SingleKindAvatarBlobs::new(backend.clone(), StorageKind::Local);
-        let user = UserId::parse("agent-owner").unwrap();
+        let user = UserId::parse("victim").unwrap();
         let user_pointer =
-            AvatarBlobStore::put(&adapter, &user, AvatarContentType::Png, vec![4, 5, 6])
+            AvatarBlobStore::put(&adapter, &user, AvatarContentType::Png, vec![1, 2, 3])
                 .await
                 .unwrap();
+        assert_eq!(backend.live(), 1);
+        assert!(
+            user_pointer.as_str().starts_with("avatars/"),
+            "the user blob lives under the user scope: {}",
+            user_pointer.as_str()
+        );
 
-        let agent_pointer = AgentAvatarBlobPointer::parse(user_pointer.as_str()).unwrap();
-        let read = AgentAvatarBlobRead::read(&adapter, &agent_pointer)
-            .await
-            .unwrap();
-        assert!(matches!(read, AvatarBlobReadOutcome::Found(bytes) if bytes == vec![4, 5, 6]));
+        let foreign = AgentAvatarBlobPointer::parse(user_pointer.as_str()).unwrap();
+        assert!(
+            AgentAvatarBlobRead::read(&adapter, &foreign).await.is_err(),
+            "the agent read capability must refuse a user-scope key"
+        );
+        assert!(
+            AgentAvatarBlobStore::delete(&adapter, &foreign).await.is_err(),
+            "the agent delete capability must refuse a user-scope key"
+        );
+        assert_eq!(
+            backend.live(),
+            1,
+            "the agent capability must never delete a user blob"
+        );
+        let read = AvatarBlobRead::read(&adapter, &user_pointer).await.unwrap();
+        assert!(matches!(read, AvatarBlobReadOutcome::Found(bytes) if bytes == vec![1, 2, 3]));
+    }
+
+    #[tokio::test]
+    async fn both_the_new_and_legacy_agent_scopes_are_reachable_agent_custody() {
+        let backend = MemoryBlobs::new(StorageKind::Local);
+        let adapter = SingleKindAvatarBlobs::new(backend.clone(), StorageKind::Local);
+
+        // A new-namespace agent blob (minted by the agent put) reads back through the
+        // agent capability.
+        let fresh = AgentAvatarBlobStore::put(
+            &adapter,
+            &AgentId::parse("agent-1").unwrap(),
+            AvatarContentType::Png,
+            vec![9],
+        )
+        .await
+        .unwrap();
+        assert!(fresh.as_str().starts_with("agent-avatars/"));
+        let read = AgentAvatarBlobRead::read(&adapter, &fresh).await.unwrap();
+        assert!(matches!(read, AvatarBlobReadOutcome::Found(bytes) if bytes == vec![9]));
+
+        // A legacy TS-shaped key `agents/<id>/avatars/...` is accepted as agent custody:
+        // it REACHES the store (resolving to Missing here), it is not refused.
+        let legacy = AgentAvatarBlobPointer::parse("agents/agent-1/avatars/legacy.png").unwrap();
+        let read = AgentAvatarBlobRead::read(&adapter, &legacy).await.unwrap();
+        assert!(matches!(read, AvatarBlobReadOutcome::Missing));
     }
 
     #[tokio::test]

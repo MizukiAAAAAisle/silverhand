@@ -77,17 +77,20 @@ impl AnnouncedAgentAvatarWrite {
 // Upload.
 // ===========================================================================
 
-/// The closed outcome of [`upload_agent_avatar`]. Every arm reached AFTER the blob was
-/// put carries the fresh blob's [`BlobCleanup`] fate, so no orphan is ever dropped
-/// silently.
+/// The closed outcome of [`upload_agent_avatar`]. A failure reached BEFORE the durable
+/// commit (`NoSuchAgent`, `Unchanged`, a pre-commit persistence fault) leaves the fresh
+/// blob provably unreferenced, so it is cleaned and its [`BlobCleanup`] fate carried. A
+/// failure on a DURABLE commit ([`CommitUntrustworthy`](Self::CommitUntrustworthy))
+/// cannot prove the fresh blob unreferenced — the always-assign UPDATE persisted — so
+/// the blob is deliberately RETAINED, never cleaned.
 #[derive(Debug)]
-#[must_use = "an avatar upload outcome carries a committed effect or a blob-cleanup fate that must be handled"]
+#[must_use = "an avatar upload outcome carries a committed effect, a blob-cleanup fate, or a retained-blob residue that must be handled"]
 pub enum AgentAvatarUploadOutcome {
     /// The row was repointed at the fresh blob and the change announced. Carries the
     /// replaced prior blob's cleanup fate. → product `200` (DTO re-read).
     Committed(AnnouncedAgentAvatarWrite),
-    /// The row vanished between the visibility gate and the repoint. The fresh blob is
-    /// orphaned and cleaned best-effort. → product `404`.
+    /// The row vanished between the visibility gate and the repoint. No durable write
+    /// committed, so the fresh blob is orphaned and cleaned best-effort. → product `404`.
     NoSuchAgent { orphan_cleanup: BlobCleanup },
     /// The payload was refused before any blob was put — the empty/too-large/
     /// unsupported-type `400`/`413`/`415`. No blob or row was touched.
@@ -95,13 +98,22 @@ pub enum AgentAvatarUploadOutcome {
     /// The blob `put` itself failed; no row was written and no blob persisted. → the
     /// product's `avatar_storage_failed` `400`.
     StorageFailed(AvatarStorageFailure),
-    /// The write could not be trusted (persistence fault, an upload that changed
-    /// nothing, or a cross-subject/seal-mismatch commit). The fresh blob is orphaned and
-    /// cleaned best-effort; the cause is carried for the boundary log. → safe-`500`.
+    /// A pre-commit write fault (a persistence error, or an always-assign upload the
+    /// adapter reported `Unchanged`): no durable commit, so the fresh blob is a true
+    /// orphan, cleaned best-effort with its fate carried. → safe-`500`.
     WriteFaulted {
         cause: AgentProfileWriteError,
         orphan_cleanup: BlobCleanup,
     },
+    /// The row committed durably — the always-assign UPDATE persisted, so the row now
+    /// references the FRESH blob — yet the returned witness could not be trusted (a
+    /// cross-subject before-image, or a full-column seal mismatch, e.g. a tampered
+    /// non-avatar column). The fresh blob is DELIBERATELY retained, never deleted:
+    /// deleting it would strand the committed row on a dangling pointer. Custody of the
+    /// committed blob is indeterminate; `retained_fresh` is recorded for reconciliation.
+    /// This is NOT `BlobCleanup::NothingToClean` — a residue exists and cleanup was
+    /// intentionally not attempted. → safe-`500`, no announce.
+    CommitUntrustworthy { retained_fresh: AgentAvatarBlobPointer },
 }
 
 /// Upload (or replace) an agent's avatar. `subject` MUST have already cleared the
@@ -186,10 +198,14 @@ where
             if before.agent_id != *subject
                 || seal_agent_row(subject, &before, &admitted, &row, now_ms).is_err()
             {
-                let orphan_cleanup = cleanup_agent_blob(blobs, &pointer).await;
-                return AgentAvatarUploadOutcome::WriteFaulted {
-                    cause: AgentProfileWriteError::UntrustworthyWriteFact,
-                    orphan_cleanup,
+                // The always-assign UPDATE committed durably, so the persisted row
+                // references the FRESH blob regardless of WHY the witness is untrusted
+                // (a truthful commit can't have withheld our SET; an untruthful one can't
+                // be trusted to have). Deleting the fresh blob now would strand the row on
+                // a dangling pointer, so it is RETAINED and its custody recorded as
+                // indeterminate — never cleaned, never laundered to NothingToClean.
+                return AgentAvatarUploadOutcome::CommitUntrustworthy {
+                    retained_fresh: pointer,
                 };
             }
             // The commit is trustworthy. The prior blob the row pointed at (if any) is now
@@ -658,7 +674,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_commit_bound_to_another_agent_is_untrustworthy_and_orphans_are_cleaned() {
+    async fn a_commit_bound_to_another_agent_retains_the_fresh_blob_and_never_announces() {
+        // A durable commit whose before-image is bound to a different agent: the fact is
+        // untrustworthy, but the UPDATE committed, so the fresh blob may be referenced by
+        // the row. It must be RETAINED (never deleted), and never announced.
         let mut other = before(AgentAvatarRow::Absent);
         other.agent_id = AgentId::parse("agent-other").unwrap();
         let writes = FakeWrites::Row(AgentProfileRowWrite::Committed {
@@ -668,20 +687,19 @@ mod tests {
         let blobs = FakeBlobs::new(false);
         let sink = FakeSink::new(false);
         let outcome = upload_agent_avatar(&writes, &blobs, &sink, &agent(), candidate(), NOW).await;
-        let AgentAvatarUploadOutcome::WriteFaulted {
-            cause,
-            orphan_cleanup,
-        } = outcome
-        else {
-            panic!("expected WriteFaulted");
+        let AgentAvatarUploadOutcome::CommitUntrustworthy { retained_fresh } = outcome else {
+            panic!("expected CommitUntrustworthy");
         };
-        assert!(matches!(cause, AgentProfileWriteError::UntrustworthyWriteFact));
-        assert!(matches!(orphan_cleanup, BlobCleanup::Deleted));
+        assert_eq!(retained_fresh.as_str(), FRESH);
+        assert!(
+            blobs.deleted().is_empty(),
+            "a durable commit's fresh blob must never be deleted, even on a bad witness"
+        );
         assert_eq!(sink.calls(), 0);
     }
 
     #[tokio::test]
-    async fn a_commit_whose_committed_avatar_disagrees_is_untrustworthy() {
+    async fn a_commit_whose_committed_avatar_disagrees_retains_the_fresh_blob() {
         // The row came back Absent though the upload set a pointer: the seal fails.
         let writes = FakeWrites::Row(AgentProfileRowWrite::Committed {
             before: before(AgentAvatarRow::Absent),
@@ -692,11 +710,37 @@ mod tests {
         let outcome = upload_agent_avatar(&writes, &blobs, &sink, &agent(), candidate(), NOW).await;
         assert!(matches!(
             outcome,
-            AgentAvatarUploadOutcome::WriteFaulted {
-                cause: AgentProfileWriteError::UntrustworthyWriteFact,
-                ..
-            }
+            AgentAvatarUploadOutcome::CommitUntrustworthy { .. }
         ));
+        assert!(blobs.deleted().is_empty());
+        assert_eq!(sink.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_commit_whose_avatar_is_fresh_but_a_tuning_column_was_tampered_retains_the_fresh_blob()
+    {
+        // Cindy's P0-1 falsifier: the committed avatar correctly points at FRESH, but a
+        // NON-avatar column the avatar-only admit left untouched came back changed
+        // (display_name tampered). The full-column seal fails, yet the durable row DOES
+        // reference the fresh blob — so it must be RETAINED, safe-500, announce=0,
+        // fresh delete=0. Deleting fresh here would strand the row on a dangling pointer.
+        let mut tampered = committed(present(FRESH));
+        tampered.display_name = "Tampered Name".to_owned();
+        let writes = FakeWrites::Row(AgentProfileRowWrite::Committed {
+            before: before(AgentAvatarRow::Absent),
+            row: tampered,
+        });
+        let blobs = FakeBlobs::new(false);
+        let sink = FakeSink::new(false);
+        let outcome = upload_agent_avatar(&writes, &blobs, &sink, &agent(), candidate(), NOW).await;
+        let AgentAvatarUploadOutcome::CommitUntrustworthy { retained_fresh } = outcome else {
+            panic!("expected CommitUntrustworthy on a tampered non-avatar column");
+        };
+        assert_eq!(retained_fresh.as_str(), FRESH);
+        assert!(
+            blobs.deleted().is_empty(),
+            "the fresh blob the durable row references must never be deleted"
+        );
         assert_eq!(sink.calls(), 0);
     }
 
