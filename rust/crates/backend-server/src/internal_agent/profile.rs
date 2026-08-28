@@ -112,16 +112,14 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, header::AUTHORIZATION},
     };
+    use serde_json::{Value, json};
     use silverhand_backend_core::{
         agent_profile_read::AgentProfileFact,
         identity::{AgentId, DaemonInstanceId},
         messaging::AvatarRevision,
         persistence::PersistenceFailure,
-        runtime_credential::{
-            RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
-        },
+        runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     };
-    use serde_json::{Value, json};
     use std::{
         collections::HashMap,
         sync::{

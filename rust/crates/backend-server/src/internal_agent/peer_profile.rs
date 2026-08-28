@@ -36,6 +36,7 @@ use silverhand_backend_core::{
     },
     agent_profile_read::{AgentProfileReadModel, ProfileReadFault},
     identity::WorkspaceId,
+    name_canonicalization::is_ecmascript_trim_whitespace,
     runtime_credential::RuntimePrincipal,
     user_identity::ParticipantHandle,
 };
@@ -103,8 +104,14 @@ struct PeerProfileResponse {
 /// parity of the shared `normalizeHandle` (`handle.trim().replace(/^@/, '')`): trim,
 /// then strip AT MOST ONE leading `@`. A pasted mention (`@alice`) and a bare name
 /// (`alice`) must resolve to the same participant.
+///
+/// The trim folds against [`is_ecmascript_trim_whitespace`] — the ONE authority the
+/// name envelope already uses — NOT Rust's `str::trim` (Unicode White_Space): the two
+/// sets disagree (Rust trims U+0085, ECMAScript does not; ECMAScript trims U+FEFF,
+/// Rust does not), so a second hand-written trim here would admit or reject handles
+/// the TS door would not.
 fn normalize_handle(handle: &str) -> &str {
-    let trimmed = handle.trim();
+    let trimmed = handle.trim_matches(is_ecmascript_trim_whitespace);
     trimmed.strip_prefix('@').unwrap_or(trimmed)
 }
 
@@ -253,6 +260,7 @@ mod tests {
         body::{Body, to_bytes},
         http::Request,
     };
+    use serde_json::{Value, json};
     use silverhand_backend_core::{
         agent_peer_profile::WorkspacePlacement,
         agent_profile_read::AgentProfileFact,
@@ -261,7 +269,6 @@ mod tests {
         persistence::PersistenceFailure,
         runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimeScope},
     };
-    use serde_json::{Value, json};
     use std::{
         collections::{HashMap, HashSet},
         sync::{
@@ -472,8 +479,15 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(body_json(response).await, json!({ "error": "invalid query" }));
-        assert_eq!(ports.placement_calls(), 0, "syntax refuses before the floor");
+        assert_eq!(
+            body_json(response).await,
+            json!({ "error": "invalid query" })
+        );
+        assert_eq!(
+            ports.placement_calls(),
+            0,
+            "syntax refuses before the floor"
+        );
         assert!(ports.reader_asked().is_empty());
     }
 
@@ -519,6 +533,46 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(body_json(response).await["profile"]["name"], json!("alice"));
+        assert_eq!(ports.reader_asked(), vec!["alice".to_string()]);
+    }
+
+    /// Parity guard, direction A: U+0085 (NEL) is Unicode White_Space — Rust's
+    /// `str::trim` WOULD strip it — but it is NOT in the ECMAScript trim set, so the TS
+    /// door does not. The handle stays `\u{0085}alice`, fails the leading-letter
+    /// grammar, and is a `400` with NO port consulted. A second hand-written `trim()`
+    /// here would have wrongly resolved it.
+    #[tokio::test]
+    async fn a_nel_prefix_is_not_trimmed_and_is_a_400() {
+        let ports = permissive().build();
+        let response = call(
+            ports.clone(),
+            "?handle=%C2%85alice",
+            Some(conversation_slot("a1", "conv000000000001")),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            ports.placement_calls(),
+            0,
+            "NEL is not ECMAScript whitespace"
+        );
+        assert!(ports.reader_asked().is_empty());
+    }
+
+    /// Parity guard, direction B: U+FEFF (ZWNBSP/BOM) IS in the ECMAScript trim set —
+    /// the TS door strips it — but Rust's `str::trim` does NOT. Folding against the
+    /// canonical predicate strips it, so `\u{FEFF}alice` reaches the reader as the same
+    /// `alice` a bare name would.
+    #[tokio::test]
+    async fn a_bom_prefix_is_trimmed_like_a_bare_name() {
+        let ports = permissive().build();
+        let response = call(
+            ports.clone(),
+            "?handle=%EF%BB%BFalice",
+            Some(conversation_slot("a1", "conv000000000001")),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(ports.reader_asked(), vec!["alice".to_string()]);
     }
 
@@ -605,7 +659,12 @@ mod tests {
             ..permissive_fields()
         }
         .build();
-        let response = call(ports, "?handle=alice&workspace_id=w2", Some(agent_slot("a1"))).await;
+        let response = call(
+            ports,
+            "?handle=alice&workspace_id=w2",
+            Some(agent_slot("a1")),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(body_json(response).await, json!({ "error": "forbidden" }));
     }
