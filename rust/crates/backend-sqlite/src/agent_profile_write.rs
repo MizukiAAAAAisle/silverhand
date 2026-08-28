@@ -3,20 +3,30 @@
 //!
 //! Like the other write stores, this is a **pure consumer** of an existing product
 //! database: it opens a pool against a schema that already exists and migrates or
-//! seeds nothing. It decides nothing on its own either — legality (the runtime
-//! tuning gate) is admitted in [`silverhand_backend_core::agent_profile_write`]
-//! BEFORE the sealed [`AdmittedAgentProfileEdit`] reaches this port, so the adapter
-//! only ever sees a sealed edit plus a clock witness, never a raw column bag or a
-//! product decision to make.
+//! seeds nothing. It owns no product *rules* — the runtime tuning gate lives in
+//! [`silverhand_backend_core::agent_profile_write::admit_public_tuning_edit`] and
+//! there is only one copy of it. But this port is the sole place that gate can be
+//! replayed against the fact it will write: it takes the RAW
+//! [`AgentTuningEdit`] request and, inside its own write lock, reads the LOCKED
+//! current `runtime`/`model`/`reasoning_effort` and admits against those. A verdict
+//! reached against a pre-read snapshot could go stale between the read and the
+//! `UPDATE`; admitting under the lock makes the fact the gate judged the same fact
+//! the row commits, so two concurrent PATCHes can never compose an illegal final
+//! runtime state. There is no external admitted verdict this adapter trusts.
 //!
-//! The whole write is one `BEGIN IMMEDIATE` transaction. Only the columns the sealed
-//! edit actually names are placed in the `SET` clause — a `Leave` is omitted, a
-//! `Clear` writes `NULL`, a `Set` binds the value — and `updated_at` is always
-//! stamped to `now_ms`, so a tuning write always bumps the row's instant (matching
+//! The whole write is one `BEGIN IMMEDIATE` transaction. First a locked
+//! `SELECT runtime, model, reasoning_effort WHERE id = ?`: no row →
+//! [`AgentProfileRowWrite::NoSuchAgent`] (the surface's `404`, zero `UPDATE`); a row
+//! whose `runtime` cannot be decoded is a persistence-integrity fault. Then
+//! `admit_public_tuning_edit` against that locked context: a rejection returns
+//! [`AgentProfileRowWrite::TuningRejected`] with zero `UPDATE` and zero announce; an
+//! admitted edit drives the `UPDATE`. Only the columns the admitted edit names are
+//! placed in the `SET` clause — a `Leave` is omitted, a `Clear` writes `NULL`, a
+//! `Set` binds the value — and `updated_at` is always stamped to `now_ms`, so a
+//! committed tuning write always bumps the row's instant (matching
 //! `agent-service.ts`'s always-touch update). The committed columns are projected
 //! from the write's OWN `RETURNING` row — never a post-commit re-read — so the core
-//! seal binds the fact this write produced. A `WHERE id = ?` that matches no row
-//! yields [`AgentProfileRowWrite::NoSuchAgent`], the surface's `404`.
+//! seal binds the fact this write produced.
 //!
 //! The clock stays in the application: `now_ms` is passed in, exactly as the other
 //! write stores take it. Every driver error and every committed row whose id cannot
@@ -27,9 +37,10 @@ use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
     agent_profile_write::{
-        AdmittedAgentProfileEdit, AgentProfileRowWrite, AgentProfileWriteUnitOfWork,
-        CommittedAgentRow, FieldEdit, RequiredEdit,
+        AgentProfileRowWrite, AgentProfileWriteUnitOfWork, AgentTuningContext, AgentTuningEdit,
+        CommittedAgentRow, FieldEdit, RequiredEdit, admit_public_tuning_edit,
     },
+    agents::runtime::RuntimeKind,
     identity::AgentId,
     persistence::PersistenceFailure,
 };
@@ -78,6 +89,16 @@ struct CorruptStoredIdentifier {
     column: &'static str,
 }
 
+/// A stored `agents.runtime` that the domain refuses to decode. The product schema
+/// constrains this column to the known runtime kinds, so an undecodable value is a
+/// persistence-integrity fault surfaced as the source of a [`PersistenceFailure`] —
+/// never coerced into a baseline runtime that would silently widen the tuning gate.
+#[derive(Debug, Error)]
+#[error("agents.runtime holds an unknown runtime kind {value:?}")]
+struct CorruptStoredRuntime {
+    value: String,
+}
+
 /// A write that failed in the driver or on a row that cannot be decoded into the
 /// domain. Both reach the caller as the source of one `PersistenceFailure`; the
 /// split lets an integrity fault name its column rather than masquerade as a driver
@@ -88,6 +109,8 @@ enum ProfileWriteFailure {
     Sql(#[from] sqlx::Error),
     #[error(transparent)]
     Integrity(#[from] CorruptStoredIdentifier),
+    #[error(transparent)]
+    CorruptRuntime(#[from] CorruptStoredRuntime),
 }
 
 impl SqliteAgentProfileWrite {
@@ -117,21 +140,56 @@ impl SqliteAgentProfileWrite {
     async fn write_profile_edit(
         &self,
         agent: &AgentId,
-        edit: &AdmittedAgentProfileEdit,
+        request: &AgentTuningEdit,
         now_ms: i64,
     ) -> Result<AgentProfileRowWrite, ProfileWriteFailure> {
         let mut tx = self.pool.begin_with(ROOT_WRITE_BEGIN).await?;
 
-        // Build the `SET` clause from ONLY the columns the sealed edit names, through
-        // sqlx's `QueryBuilder` so every value goes through an audited `push_bind`
-        // (never string interpolation). A `Leave` contributes nothing; a `Clear`
-        // writes a literal `NULL`; a `Set` binds the value. `updated_at` is always
-        // appended, so the `SET` clause is never empty — a tuning write always bumps
-        // the instant.
+        // Under the write lock, read the row's CURRENT tuning state. This is both the
+        // existence check (no row → the surface's 404) and the context the tuning
+        // gate is replayed against — so the fact the gate judges is the fact this
+        // transaction will commit, with no window for a concurrent PATCH to slip a
+        // stale legality verdict past it.
+        let current =
+            sqlx::query("SELECT runtime, model, reasoning_effort FROM agents WHERE id = ?")
+                .bind(agent.as_str())
+                .fetch_optional(&mut *tx)
+                .await?;
+        let Some(current) = current else {
+            tx.commit().await?;
+            return Ok(AgentProfileRowWrite::NoSuchAgent);
+        };
+
+        let runtime_raw: String = current.try_get("runtime")?;
+        let runtime =
+            RuntimeKind::parse(&runtime_raw).ok_or(CorruptStoredRuntime { value: runtime_raw })?;
+        let context = AgentTuningContext {
+            runtime,
+            model: current.try_get("model")?,
+            reasoning_effort: current.try_get("reasoning_effort")?,
+        };
+
+        // Replay the ONE pure rule against the locked context. A rejection leaves the
+        // row untouched: no UPDATE is issued, so `updated_at` does not move and the
+        // caller announces nothing.
+        let admitted = match admit_public_tuning_edit(&context, request.clone()) {
+            Ok(admitted) => admitted,
+            Err(rejection) => {
+                tx.commit().await?;
+                return Ok(AgentProfileRowWrite::TuningRejected(rejection));
+            }
+        };
+
+        // Build the `SET` clause from ONLY the columns the admitted edit names,
+        // through sqlx's `QueryBuilder` so every value goes through an audited
+        // `push_bind` (never string interpolation). A `Leave` contributes nothing; a
+        // `Clear` writes a literal `NULL`; a `Set` binds the value. `updated_at` is
+        // always appended, so the `SET` clause is never empty — a committed tuning
+        // write always bumps the instant.
         let mut builder = QueryBuilder::<Sqlite>::new("UPDATE agents SET ");
         let mut needs_comma = false;
 
-        if let RequiredEdit::Set(value) = edit.display_name() {
+        if let RequiredEdit::Set(value) = admitted.display_name() {
             separator(&mut builder, &mut needs_comma);
             builder.push("display_name = ");
             builder.push_bind(value.as_str());
@@ -140,16 +198,16 @@ impl SqliteAgentProfileWrite {
             &mut builder,
             &mut needs_comma,
             "description",
-            edit.description(),
+            admitted.description(),
         );
-        push_nullable_str(&mut builder, &mut needs_comma, "model", edit.model());
+        push_nullable_str(&mut builder, &mut needs_comma, "model", admitted.model());
         push_nullable_str(
             &mut builder,
             &mut needs_comma,
             "reasoning_effort",
-            edit.reasoning_effort(),
+            admitted.reasoning_effort(),
         );
-        match edit.fast_mode() {
+        match admitted.fast_mode() {
             FieldEdit::Leave => {}
             FieldEdit::Clear => {
                 separator(&mut builder, &mut needs_comma);
@@ -170,6 +228,8 @@ impl SqliteAgentProfileWrite {
         builder.push_bind(agent.as_str());
         builder.push(RETURNING_COMMITTED_ROW);
 
+        // Existence was confirmed under this same lock, so the `RETURNING` row is
+        // present; a missing row here would be an in-transaction integrity anomaly.
         let row = builder.build().fetch_optional(&mut *tx).await?;
         let Some(row) = row else {
             tx.commit().await?;
@@ -178,7 +238,10 @@ impl SqliteAgentProfileWrite {
         let committed = decode_committed_row(&row)?;
 
         tx.commit().await?;
-        Ok(AgentProfileRowWrite::Committed(committed))
+        Ok(AgentProfileRowWrite::Committed {
+            admitted,
+            row: committed,
+        })
     }
 }
 
@@ -238,13 +301,13 @@ fn decode_committed_row(row: &SqliteRow) -> Result<CommittedAgentRow, ProfileWri
 }
 
 impl AgentProfileWriteUnitOfWork for SqliteAgentProfileWrite {
-    async fn apply_profile_edit(
+    async fn admit_and_apply_tuning_edit(
         &self,
         agent: &AgentId,
-        edit: &AdmittedAgentProfileEdit,
+        request: &AgentTuningEdit,
         now_ms: i64,
     ) -> Result<AgentProfileRowWrite, PersistenceFailure> {
-        self.write_profile_edit(agent, edit, now_ms)
+        self.write_profile_edit(agent, request, now_ms)
             .await
             .map_err(PersistenceFailure::from_source)
     }
@@ -253,18 +316,15 @@ impl AgentProfileWriteUnitOfWork for SqliteAgentProfileWrite {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::{
-        agent_profile_write::{AgentTuningContext, AgentTuningEdit, admit_public_tuning_edit},
-        agents::runtime::RuntimeKind,
-    };
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =
         include_str!("../../../../packages/backend/tests/migration-baseline/schema-current.sql");
 
     // A codex agent `agent-1` seeded with a full tuning state (model + reasoning +
-    // fast_mode) so a Clear has something to erase, and a claude agent `agent-2`
-    // whose tuning columns start NULL.
+    // fast_mode) so a Clear has something to erase; a claude agent `agent-2` whose
+    // tuning columns start NULL; and a codex agent `agent-3` at `gpt-5.6-sol` +
+    // `high` used only by the under-lock re-admission falsifier.
     const SEED_SQL: &str = "\
 INSERT INTO users (id, name, display_name, created_at, updated_at) \
   VALUES ('user-1', 'owner', 'Owner', 1, 1); \
@@ -272,7 +332,9 @@ INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'Host', 'local'
 INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, fast_mode, description, host_id, created_by_user_id, created_at, updated_at) \
   VALUES ('agent-1', 'alice', 'Alice', 'codex', 'gpt-5.6-sol', 'ultra', 1, 'first', 'host-1', 'user-1', 10, 100); \
 INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id, created_at, updated_at) \
-  VALUES ('agent-2', 'bob', 'Bob', 'claude', 'host-1', 'user-1', 10, 100);";
+  VALUES ('agent-2', 'bob', 'Bob', 'claude', 'host-1', 'user-1', 10, 100); \
+INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, host_id, created_by_user_id, created_at, updated_at) \
+  VALUES ('agent-3', 'carol', 'Carol', 'codex', 'gpt-5.6-sol', 'high', 'host-1', 'user-1', 10, 100);";
 
     async fn open_seeded() -> (tempfile::TempDir, SqliteAgentProfileWrite) {
         let directory = tempfile::tempdir().unwrap();
@@ -291,14 +353,6 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
 
     fn agent(id: &str) -> AgentId {
         AgentId::parse(id).unwrap()
-    }
-
-    fn codex_ctx() -> AgentTuningContext {
-        AgentTuningContext {
-            runtime: RuntimeKind::Codex,
-            model: Some("gpt-5.6-sol".to_owned()),
-            reasoning_effort: Some("ultra".to_owned()),
-        }
     }
 
     fn leave_all() -> AgentTuningEdit {
@@ -345,21 +399,19 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     #[tokio::test]
     async fn a_set_edit_writes_only_named_columns_bumps_updated_at_and_returns_the_committed_row() {
         let (_dir, adapter) = open_seeded().await;
-        let edit = admit_public_tuning_edit(
-            &codex_ctx(),
-            AgentTuningEdit {
-                display_name: RequiredEdit::Set("Alice II".to_owned()),
-                reasoning_effort: FieldEdit::Set("high".to_owned()),
-                ..leave_all()
-            },
-        )
-        .unwrap();
+        // A raw request; the adapter admits it under the lock against agent-1's
+        // seeded codex/`gpt-5.6-sol` context, where `high` is legal.
+        let request = AgentTuningEdit {
+            display_name: RequiredEdit::Set("Alice II".to_owned()),
+            reasoning_effort: FieldEdit::Set("high".to_owned()),
+            ..leave_all()
+        };
 
         let outcome = adapter
-            .apply_profile_edit(&agent("agent-1"), &edit, 777)
+            .admit_and_apply_tuning_edit(&agent("agent-1"), &request, 777)
             .await
             .unwrap();
-        let AgentProfileRowWrite::Committed(row) = outcome else {
+        let AgentProfileRowWrite::Committed { row, .. } = outcome else {
             panic!("expected Committed, got {outcome:?}");
         };
         assert_eq!(row.id, agent("agent-1"));
@@ -386,23 +438,19 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     async fn a_clear_writes_null_and_leaves_untouched_columns_alone() {
         let (_dir, adapter) = open_seeded().await;
         // Clearing model would strand the stored `ultra` effort, so also clear it —
-        // the admission accepts this (baseline codex + no effort is legal).
-        let edit = admit_public_tuning_edit(
-            &codex_ctx(),
-            AgentTuningEdit {
-                model: FieldEdit::Clear,
-                reasoning_effort: FieldEdit::Clear,
-                description: FieldEdit::Clear,
-                ..leave_all()
-            },
-        )
-        .unwrap();
+        // the under-lock admission accepts this (baseline codex + no effort is legal).
+        let request = AgentTuningEdit {
+            model: FieldEdit::Clear,
+            reasoning_effort: FieldEdit::Clear,
+            description: FieldEdit::Clear,
+            ..leave_all()
+        };
 
         let outcome = adapter
-            .apply_profile_edit(&agent("agent-1"), &edit, 900)
+            .admit_and_apply_tuning_edit(&agent("agent-1"), &request, 900)
             .await
             .unwrap();
-        let AgentProfileRowWrite::Committed(row) = outcome else {
+        let AgentProfileRowWrite::Committed { row, .. } = outcome else {
             panic!("expected Committed");
         };
         assert_eq!(row.model, None);
@@ -417,14 +465,13 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     #[tokio::test]
     async fn a_leave_only_edit_still_bumps_updated_at_and_touches_no_value() {
         let (_dir, adapter) = open_seeded().await;
-        // An all-Leave sealed edit (the route forbids an empty body, but the adapter
-        // is defensive): the SET clause is `updated_at = ?` alone.
-        let edit = admit_public_tuning_edit(&codex_ctx(), leave_all()).unwrap();
+        // An all-Leave request (the route forbids an empty body, but the adapter is
+        // defensive): the SET clause is `updated_at = ?` alone.
         let outcome = adapter
-            .apply_profile_edit(&agent("agent-1"), &edit, 1234)
+            .admit_and_apply_tuning_edit(&agent("agent-1"), &leave_all(), 1234)
             .await
             .unwrap();
-        let AgentProfileRowWrite::Committed(row) = outcome else {
+        let AgentProfileRowWrite::Committed { row, .. } = outcome else {
             panic!("expected Committed");
         };
         assert_eq!(row.display_name, "Alice");
@@ -433,23 +480,19 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     }
 
     #[tokio::test]
-    async fn a_fast_mode_set_writes_the_integer_one() {
+    async fn a_fast_mode_set_writes_the_integer_zero() {
         let (_dir, adapter) = open_seeded().await;
-        // agent-2 (claude) starts with fast_mode NULL; but claude does not support
-        // fast mode, so drive the codex agent-1 which starts at 1 → set false → 0.
-        let edit = admit_public_tuning_edit(
-            &codex_ctx(),
-            AgentTuningEdit {
-                fast_mode: FieldEdit::Set(false),
-                ..leave_all()
-            },
-        )
-        .unwrap();
+        // agent-1 (codex) starts with fast_mode 1; codex supports fast mode, so set
+        // it false → 0.
+        let request = AgentTuningEdit {
+            fast_mode: FieldEdit::Set(false),
+            ..leave_all()
+        };
         let outcome = adapter
-            .apply_profile_edit(&agent("agent-1"), &edit, 1500)
+            .admit_and_apply_tuning_edit(&agent("agent-1"), &request, 1500)
             .await
             .unwrap();
-        let AgentProfileRowWrite::Committed(row) = outcome else {
+        let AgentProfileRowWrite::Committed { row, .. } = outcome else {
             panic!("expected Committed");
         };
         assert_eq!(row.fast_mode, Some(false));
@@ -459,20 +502,70 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
     #[tokio::test]
     async fn a_missing_row_is_no_such_agent_and_writes_nothing() {
         let (_dir, adapter) = open_seeded().await;
-        let edit = admit_public_tuning_edit(
-            &codex_ctx(),
-            AgentTuningEdit {
-                display_name: RequiredEdit::Set("Ghost".to_owned()),
-                ..leave_all()
-            },
-        )
-        .unwrap();
+        let request = AgentTuningEdit {
+            display_name: RequiredEdit::Set("Ghost".to_owned()),
+            ..leave_all()
+        };
         let outcome = adapter
-            .apply_profile_edit(&agent("agent-missing"), &edit, 2000)
+            .admit_and_apply_tuning_edit(&agent("agent-missing"), &request, 2000)
             .await
             .unwrap();
         assert!(matches!(outcome, AgentProfileRowWrite::NoSuchAgent));
         // The real agents are untouched.
         assert_eq!(stored(&adapter, "agent-1").await.5, 100);
+    }
+
+    #[tokio::test]
+    async fn a_stale_legal_effort_is_re_rejected_against_the_locked_runtime_and_writes_nothing() {
+        // Cindy's deterministic falsifier for the write-lock TOCTOU. agent-3 starts
+        // Codex `gpt-5.6-sol` + `high`. Edit A moves only the model to `gpt-5.6-terra`
+        // (legal under `high`); edit B raises only the effort to `ultra` — legal
+        // against the pre-A `sol` snapshot, illegal against the committed `terra`.
+        // Because B is admitted under the write lock against the CURRENT runtime, it
+        // must be re-rejected with zero UPDATE, never composing a `terra + ultra` row.
+        let (_dir, adapter) = open_seeded().await;
+
+        let a = adapter
+            .admit_and_apply_tuning_edit(
+                &agent("agent-3"),
+                &AgentTuningEdit {
+                    model: FieldEdit::Set("gpt-5.6-terra".to_owned()),
+                    ..leave_all()
+                },
+                500,
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(a, AgentProfileRowWrite::Committed { .. }),
+            "A: {a:?}"
+        );
+        let (_, _, model_a, _, effort_a, updated_a) = stored(&adapter, "agent-3").await;
+        assert_eq!(model_a.as_deref(), Some("gpt-5.6-terra"));
+        assert_eq!(effort_a.as_deref(), Some("high"));
+        assert_eq!(updated_a, 500);
+
+        // The stale-admitted attacker: `ultra` was legal against `sol`.
+        let b = adapter
+            .admit_and_apply_tuning_edit(
+                &agent("agent-3"),
+                &AgentTuningEdit {
+                    reasoning_effort: FieldEdit::Set("ultra".to_owned()),
+                    ..leave_all()
+                },
+                900,
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(b, AgentProfileRowWrite::TuningRejected(_)),
+            "B must be re-rejected under the lock, got {b:?}"
+        );
+        // Zero UPDATE: model, effort, and the instant are exactly as A left them —
+        // the illegal `terra + ultra` combination never reached the row.
+        let (_, _, model_b, _, effort_b, updated_b) = stored(&adapter, "agent-3").await;
+        assert_eq!(model_b.as_deref(), Some("gpt-5.6-terra"));
+        assert_eq!(effort_b.as_deref(), Some("high"));
+        assert_eq!(updated_b, 500);
     }
 }

@@ -1,30 +1,45 @@
-//! The canonical `agents`-row write authority for the public tuning `PATCH
-//! /api/agents/{id}` — the ONE place a mutable agent column is admitted, sealed,
-//! and committed, with the `agent_changed` announce it owes.
+//! The canonical `agents`-row tuning write authority for the public `PATCH
+//! /api/agents/{id}` — where the profile/tuning columns are admitted, sealed, and
+//! committed, with the `agent_changed` announce they owe.
 //!
-//! ## Why this is a single authority, entered only through a sealed edit
+//! ## What this authority owns, and what it does not
 //!
-//! Every mutable `agents` column (`display_name`, `description`, `model`,
-//! `reasoning_effort`, `fast_mode`, and later the avatar pointer) is written here
-//! and nowhere else, so a value legal for one capability (the public tuning PATCH)
-//! can never be smuggled through a path meant for another (the internal profile
-//! POST, the avatar routes). That guarantee does NOT come from a wide, freely
-//! constructible edit struct — that would let any caller hand-craft a write that
-//! silently changes `model` alongside an avatar. It comes from an OPAQUE
-//! [`AdmittedAgentProfileEdit`] with no public constructor: the only way to mint one
-//! is a per-capability admission fn (this module ships [`admit_public_tuning_edit`];
-//! the internal-profile and avatar constructors land with their own routes), each
-//! of which can express only the columns that capability is allowed to touch. The
-//! persistence port therefore sees a SEALED edit plus a clock witness — never a raw
-//! column bag.
+//! This authority owns the `agents` columns the profile/tuning capability writes —
+//! `display_name`, `description`, `model`, `reasoning_effort`, `fast_mode`, and (when
+//! the avatar routes land) the paired avatar pointer `avatar_storage_key` /
+//! `avatar_content_type`. Columns owned by OTHER capabilities are not written here: a
+//! `runtime` transition, the deletion/materialization lifecycle's status columns, and
+//! agent creation each have their own writers. The point is that a value legal for the
+//! public tuning capability can never be smuggled through it into a column that
+//! capability may not touch.
 //!
-//! ## Legality is enforced at admission, against the CURRENT stored runtime
+//! That scoping does NOT come from a wide, freely constructible edit struct — that
+//! would let any caller hand-craft a write that silently changes `model` alongside an
+//! avatar. It comes from a per-capability REQUEST type admitted UNDER THE WRITE LOCK:
+//! the public tuning route hands its [`AgentTuningEdit`] (which can express only the
+//! tuning columns) to the port, and the port mints the opaque
+//! [`AdmittedAgentProfileEdit`] — the only thing the `SET` builder reads — inside its
+//! own write transaction, never before. A caller cannot express a column its
+//! capability may not touch (its request type has no such field). Separately, that the
+//! production adapter writes ONLY the columns the sealed edit names — never a stray
+//! `Leave` column — is a property of the adapter's `SET` builder, proven by the SQLite
+//! discriminator tests; it is enforcement by construction, not type-level
+//! unrepresentability.
+//!
+//! ## Legality is judged UNDER THE WRITE LOCK, against the row's CURRENT runtime
 //!
 //! PATCH cannot change `runtime` (the product's `z.never()`), so the tuning legality
-//! ([`crate::agents::runtime_capability`]) is judged against the stored runtime and
-//! the post-edit model/effort: `reasoning_effort` first, then `fast_mode`, mirroring
-//! `agent-service.ts`'s `normalizeRuntimeTuning`. A refusal is a product `400`
-//! carried in [`TuningRejection`], not a write attempt.
+//! ([`crate::agents::runtime_capability`]) is judged against the runtime/model/effort
+//! read UNDER THE WRITE LOCK — not a pre-read snapshot. Judging it earlier would open a
+//! TOCTOU window: two concurrent PATCHes, each legal against the same stale state,
+//! could compose an illegal final row (e.g. one moves the model off `sol`, the other
+//! sets `ultra`, and the combined row is `ultra` on a model that forbids it). Admitting
+//! the raw request inside the lock, against the locked current values, closes that
+//! window — and because the port never accepts a pre-sealed edit, there is nothing a
+//! caller could admit against a stale snapshot in the first place. `reasoning_effort`
+//! is judged first, then `fast_mode`, mirroring `agent-service.ts`'s
+//! `normalizeRuntimeTuning`. A refusal is a product `400` carried in [`TuningRejection`]
+//! with zero UPDATE and zero announce, never a write attempt.
 //!
 //! ## The committed fact is NARROW; the announce and DTO sit ABOVE it
 //!
@@ -203,7 +218,10 @@ impl AdmittedAgentProfileEdit {
     }
 }
 
-/// Admit a PUBLIC tuning PATCH into a sealed edit, or refuse it.
+/// Admit a PUBLIC tuning PATCH into a sealed edit, or refuse it. Invoked by the write
+/// port INSIDE its write lock, against the runtime/model/effort just read from the
+/// locked row — so the verdict is always against the row the write will land on, never
+/// a stale pre-read snapshot.
 ///
 /// Legality is judged exactly as `normalizeRuntimeTuning`: compute the post-edit
 /// model and effort (a left-alone column keeps its stored value), and — only when
@@ -280,26 +298,41 @@ pub struct CommittedAgentRow {
     pub updated_at: i64,
 }
 
-/// The raw outcome of applying a sealed edit, decided under the adapter's write lock.
+/// The raw outcome of a tuning write, decided under the adapter's write lock. The
+/// port re-admits the request against the row's CURRENT runtime inside the same lock,
+/// so legality is never a stale pre-read verdict.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AgentProfileRowWrite {
     /// No such agent row — the route maps this to a product `404`.
     NoSuchAgent,
-    /// The row was updated and `updated_at` stamped to `now_ms`; carries the
-    /// committed columns for the seal. A tuning edit always writes (it always bumps
-    /// `updated_at`), so it never reports a no-op; the avatar-clear capability, which
-    /// CAN be an idempotent no-op, gets its own `Unchanged` arm when it lands.
-    Committed(CommittedAgentRow),
+    /// The request was refused by the tuning legality judged against the LOCKED
+    /// current runtime/model/effort — the route's typed product `400`. No column was
+    /// written and no announce is owed.
+    TuningRejected(TuningRejection),
+    /// The row was updated and `updated_at` stamped to `now_ms`. Carries the intent
+    /// the port admitted under the lock AND the committed columns, so the outer
+    /// orchestration can seal the one against the other. A tuning edit always writes
+    /// (it always bumps `updated_at`), so it never reports a no-op; the avatar-clear
+    /// capability, which CAN be an idempotent no-op, gets its own `Unchanged` arm when
+    /// it lands.
+    Committed {
+        admitted: AdmittedAgentProfileEdit,
+        row: CommittedAgentRow,
+    },
 }
 
-/// The atomic `agents`-row write on the tuning capability. The adapter applies the
-/// sealed edit's `SET` columns, stamps `updated_at = now_ms`, and returns the
-/// committed columns via `RETURNING`, all under one write lock.
+/// The atomic `agents`-row tuning write. The adapter, under ONE write lock: reads the
+/// row's current runtime/model/effort, re-admits `request` against it through the
+/// canonical [`admit_public_tuning_edit`] (a refusal is [`AgentProfileRowWrite::TuningRejected`],
+/// zero UPDATE), then applies the admitted `SET` columns, stamps `updated_at = now_ms`,
+/// and returns the committed columns via `RETURNING`. Because the port takes the RAW
+/// request — never a pre-sealed edit — there is nothing a caller could admit against a
+/// stale snapshot; the only legality verdict is the one taken inside the lock.
 pub trait AgentProfileWriteUnitOfWork: Clone + Send + Sync + 'static {
-    fn apply_profile_edit(
+    fn admit_and_apply_tuning_edit(
         &self,
         agent: &AgentId,
-        edit: &AdmittedAgentProfileEdit,
+        request: &AgentTuningEdit,
         now_ms: i64,
     ) -> impl Future<Output = Result<AgentProfileRowWrite, PersistenceFailure>> + Send;
 }
@@ -359,6 +392,9 @@ pub enum AgentChangedAnnounce {
 pub enum AgentProfileUpdateOutcome {
     /// No such agent — the route's product `404`.
     NoSuchAgent,
+    /// The tuning was refused by the legality judged under the write lock — the
+    /// route's typed product `400`. No row was written and no announce fired.
+    TuningRejected(TuningRejection),
     /// The tuning was committed; carries the agent id (for the post-commit DTO
     /// re-read) and the announce fate.
     Committed(AnnouncedAgentProfileUpdate),
@@ -395,30 +431,40 @@ pub enum AgentProfileWriteError {
     UntrustworthyWriteFact,
 }
 
-/// Apply a sealed tuning edit and, on a genuine commit, fire the `agent_changed`
-/// announce. The committed row is SEALED against the request — same id, `updated_at`
-/// stamped to `now_ms`, and every touched column equal to the intent — before the
-/// announce fires; a mismatch is an untrustworthy write (safe-500), never a silent
-/// success.
+/// Apply a public tuning PATCH and, on a genuine commit, fire the `agent_changed`
+/// announce. The RAW request is handed to the write port, which admits it against the
+/// row's CURRENT runtime under its write lock (so two concurrent edits can never
+/// compose an illegal final row from mutually-stale snapshots); a legality refusal is
+/// [`AgentProfileUpdateOutcome::TuningRejected`], carrying zero write and zero
+/// announce. On a commit, the committed row is SEALED against the intent the port
+/// admitted — same id, `updated_at` stamped to `now_ms`, every touched column equal to
+/// the intent — before the announce fires; a mismatch is an untrustworthy write
+/// (safe-500), never a silent success.
 pub async fn update_agent_profile_and_announce<W, S>(
     writes: &W,
     announce_sink: &S,
     subject: &AgentId,
-    edit: &AdmittedAgentProfileEdit,
+    request: &AgentTuningEdit,
     now_ms: i64,
 ) -> Result<AgentProfileUpdateOutcome, AgentProfileWriteError>
 where
     W: AgentProfileWriteUnitOfWork,
     S: AgentChangedSink,
 {
-    match writes.apply_profile_edit(subject, edit, now_ms).await? {
+    match writes
+        .admit_and_apply_tuning_edit(subject, request, now_ms)
+        .await?
+    {
         AgentProfileRowWrite::NoSuchAgent => Ok(AgentProfileUpdateOutcome::NoSuchAgent),
-        AgentProfileRowWrite::Committed(committed) => {
-            seal_profile_write(subject, edit, &committed, now_ms)?;
+        AgentProfileRowWrite::TuningRejected(rejection) => {
+            Ok(AgentProfileUpdateOutcome::TuningRejected(rejection))
+        }
+        AgentProfileRowWrite::Committed { admitted, row } => {
+            seal_profile_write(subject, &admitted, &row, now_ms)?;
             let announce = announce(announce_sink, subject).await;
             Ok(AgentProfileUpdateOutcome::Committed(
                 AnnouncedAgentProfileUpdate {
-                    agent_id: committed.id,
+                    agent_id: row.id,
                     announce,
                 },
             ))
@@ -675,10 +721,10 @@ mod tests {
     #[derive(Clone)]
     struct FakeWrites(AgentProfileRowWrite);
     impl AgentProfileWriteUnitOfWork for FakeWrites {
-        async fn apply_profile_edit(
+        async fn admit_and_apply_tuning_edit(
             &self,
             _agent: &AgentId,
-            _edit: &AdmittedAgentProfileEdit,
+            _request: &AgentTuningEdit,
             _now_ms: i64,
         ) -> Result<AgentProfileRowWrite, PersistenceFailure> {
             Ok(self.0.clone())
@@ -727,25 +773,34 @@ mod tests {
         }
     }
 
+    fn request() -> AgentTuningEdit {
+        AgentTuningEdit {
+            display_name: RequiredEdit::Set("New Name".to_owned()),
+            description: FieldEdit::Clear,
+            model: FieldEdit::Set("gpt-5.6-sol".to_owned()),
+            reasoning_effort: FieldEdit::Set("ultra".to_owned()),
+            fast_mode: FieldEdit::Set(true),
+        }
+    }
+
     fn admitted() -> AdmittedAgentProfileEdit {
-        admit_public_tuning_edit(
-            &ctx(RuntimeKind::Codex),
-            AgentTuningEdit {
-                display_name: RequiredEdit::Set("New Name".to_owned()),
-                description: FieldEdit::Clear,
-                model: FieldEdit::Set("gpt-5.6-sol".to_owned()),
-                reasoning_effort: FieldEdit::Set("ultra".to_owned()),
-                fast_mode: FieldEdit::Set(true),
-            },
-        )
-        .unwrap()
+        admit_public_tuning_edit(&ctx(RuntimeKind::Codex), request()).unwrap()
+    }
+
+    /// The `Committed` arm the port returns: the intent it admitted paired with the
+    /// committed columns, for the outer seal.
+    fn committed_outcome(row: CommittedAgentRow) -> AgentProfileRowWrite {
+        AgentProfileRowWrite::Committed {
+            admitted: admitted(),
+            row,
+        }
     }
 
     #[tokio::test]
     async fn a_missing_row_is_no_such_agent_and_never_announces() {
         let writes = FakeWrites(AgentProfileRowWrite::NoSuchAgent);
         let sink = FakeSink::new(false);
-        let outcome = update_agent_profile_and_announce(&writes, &sink, &agent(), &admitted(), NOW)
+        let outcome = update_agent_profile_and_announce(&writes, &sink, &agent(), &request(), NOW)
             .await
             .unwrap();
         assert!(matches!(outcome, AgentProfileUpdateOutcome::NoSuchAgent));
@@ -753,10 +808,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_committed_write_seals_and_announces_once() {
-        let writes = FakeWrites(AgentProfileRowWrite::Committed(committed_row(NOW)));
+    async fn a_tuning_rejected_under_the_lock_is_carried_and_never_announces() {
+        // The port refused the edit against the LOCKED current runtime; the
+        // orchestration surfaces the typed refusal and fires no announce.
+        let rejection = TuningRejection::ReasoningEffortInvalidForRuntime {
+            runtime: RuntimeKind::Codex,
+            reasoning_effort: "ultra".to_owned(),
+            model: Some("gpt-5.6-terra".to_owned()),
+        };
+        let writes = FakeWrites(AgentProfileRowWrite::TuningRejected(rejection.clone()));
         let sink = FakeSink::new(false);
-        let outcome = update_agent_profile_and_announce(&writes, &sink, &agent(), &admitted(), NOW)
+        let outcome = update_agent_profile_and_announce(&writes, &sink, &agent(), &request(), NOW)
+            .await
+            .unwrap();
+        let AgentProfileUpdateOutcome::TuningRejected(carried) = outcome else {
+            panic!("expected TuningRejected");
+        };
+        assert_eq!(carried, rejection);
+        assert_eq!(sink.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_committed_write_seals_and_announces_once() {
+        let writes = FakeWrites(committed_outcome(committed_row(NOW)));
+        let sink = FakeSink::new(false);
+        let outcome = update_agent_profile_and_announce(&writes, &sink, &agent(), &request(), NOW)
             .await
             .unwrap();
         let AgentProfileUpdateOutcome::Committed(committed) = outcome else {
@@ -770,9 +846,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_announce_is_carried_without_flipping_the_commit() {
-        let writes = FakeWrites(AgentProfileRowWrite::Committed(committed_row(NOW)));
+        let writes = FakeWrites(committed_outcome(committed_row(NOW)));
         let sink = FakeSink::new(true);
-        let outcome = update_agent_profile_and_announce(&writes, &sink, &agent(), &admitted(), NOW)
+        let outcome = update_agent_profile_and_announce(&writes, &sink, &agent(), &request(), NOW)
             .await
             .unwrap();
         let AgentProfileUpdateOutcome::Committed(committed) = outcome else {
@@ -784,10 +860,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_write_that_did_not_stamp_now_is_untrustworthy() {
-        let writes = FakeWrites(AgentProfileRowWrite::Committed(committed_row(NOW - 1)));
+        let writes = FakeWrites(committed_outcome(committed_row(NOW - 1)));
         let sink = FakeSink::new(false);
         let result =
-            update_agent_profile_and_announce(&writes, &sink, &agent(), &admitted(), NOW).await;
+            update_agent_profile_and_announce(&writes, &sink, &agent(), &request(), NOW).await;
         assert!(matches!(
             result,
             Err(AgentProfileWriteError::UntrustworthyWriteFact)
@@ -800,10 +876,10 @@ mod tests {
         // The row came back with a display_name other than the one we set.
         let mut row = committed_row(NOW);
         row.display_name = "Someone Else".to_owned();
-        let writes = FakeWrites(AgentProfileRowWrite::Committed(row));
+        let writes = FakeWrites(committed_outcome(row));
         let sink = FakeSink::new(false);
         let result =
-            update_agent_profile_and_announce(&writes, &sink, &agent(), &admitted(), NOW).await;
+            update_agent_profile_and_announce(&writes, &sink, &agent(), &request(), NOW).await;
         assert!(matches!(
             result,
             Err(AgentProfileWriteError::UntrustworthyWriteFact)
@@ -815,10 +891,10 @@ mod tests {
     async fn a_write_for_a_different_agent_is_untrustworthy() {
         let mut row = committed_row(NOW);
         row.id = AgentId::parse("agent-other").unwrap();
-        let writes = FakeWrites(AgentProfileRowWrite::Committed(row));
+        let writes = FakeWrites(committed_outcome(row));
         let sink = FakeSink::new(false);
         let result =
-            update_agent_profile_and_announce(&writes, &sink, &agent(), &admitted(), NOW).await;
+            update_agent_profile_and_announce(&writes, &sink, &agent(), &request(), NOW).await;
         assert!(matches!(
             result,
             Err(AgentProfileWriteError::UntrustworthyWriteFact)

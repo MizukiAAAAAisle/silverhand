@@ -20,14 +20,16 @@
 //!     `400 {"error":"invalid input"}`. (See the module note below: the Zod `issues`
 //!     array is deliberately dropped, matching the ratified `PATCH /api/me`
 //!     precedent — no consumer branches on it.)
-//!  4. TUNING LEGALITY ([`admit_public_tuning_edit`]) — is the post-edit
-//!     runtime/model/effort pair legal? A refusal is the product's typed `400
-//!     {"error":<message>,"code":<code>}`, judged against the STORED runtime (PATCH
-//!     cannot change it).
-//!  5. WRITE + ANNOUNCE ([`update_agent_profile_and_announce`]) — commit the sealed
-//!     edit, then fire the best-effort app-scope `agent_changed` hint. A row that
-//!     vanished between the read and the write is the same `404`.
-//!  6. PROJECT — re-read through the canonical `agent_detail` projector and return the
+//!  4. WRITE + ANNOUNCE ([`update_agent_profile_and_announce`]) — hand the RAW request
+//!     to the write unit of work, which admits tuning legality UNDER its own write
+//!     lock against the runtime/model/effort as they stand THERE, then commits and
+//!     fires the best-effort app-scope `agent_changed` hint. Deciding legality here
+//!     against the pre-read snapshot would let two concurrent PATCHes compose an
+//!     illegal final runtime; under the lock the fact judged is the fact committed. A
+//!     tuning rejection is the product's typed `400 {"error":<message>,"code":<code>}`
+//!     with zero write and zero announce; a row that vanished before the write is the
+//!     same `404`.
+//!  5. PROJECT — re-read through the canonical `agent_detail` projector and return the
 //!     FULL `{ "agent": AgentDto }`, so the response (its `avatar_url` cache-buster
 //!     included) reflects the just-committed `updated_at`. A concurrent delete that
 //!     races the projection is honest post-commit residue: the write is durable, but
@@ -63,8 +65,8 @@ use silverhand_backend_core::{
     agent_detail_read::AgentDetailReadModel,
     agent_profile_write::{
         AgentChangedAnnounce, AgentChangedSink, AgentProfileUpdateOutcome, AgentProfileWriteError,
-        AgentProfileWriteUnitOfWork, AgentTuningContext, AgentTuningEdit, FieldEdit, RequiredEdit,
-        TuningRejection, admit_public_tuning_edit, update_agent_profile_and_announce,
+        AgentProfileWriteUnitOfWork, AgentTuningEdit, FieldEdit, RequiredEdit, TuningRejection,
+        update_agent_profile_and_announce,
     },
     capability::{
         agent_authority::{AgentAuthority, can_edit_agent},
@@ -203,24 +205,17 @@ where
         PatchBody::Invalid => return invalid_input(),
     };
 
-    // TUNING LEGALITY: judge the post-edit pair against the STORED runtime.
-    let context = AgentTuningContext {
-        runtime: detail.projection().runtime,
-        model: detail.projection().model.clone(),
-        reasoning_effort: detail.projection().reasoning_effort.clone(),
-    };
-    let admitted = match admit_public_tuning_edit(&context, request) {
-        Ok(admitted) => admitted,
-        Err(rejection) => return tuning_rejected(&rejection),
-    };
-
-    // WRITE + ANNOUNCE.
+    // WRITE + ANNOUNCE. Tuning legality is NOT decided here against the pre-read
+    // snapshot — that verdict could go stale before the write. The write unit of work
+    // re-admits the raw request UNDER its own lock against the current runtime, so the
+    // fact it judges is the fact it commits (a typed rejection returns below with zero
+    // UPDATE, zero announce).
     let now_ms = state.clock.now_unix_millis();
     let outcome = match update_agent_profile_and_announce(
         &state.writes,
         &state.sink,
         &agent,
-        &admitted,
+        &request,
         now_ms,
     )
     .await
@@ -239,6 +234,11 @@ where
         // The row vanished between the read and the write — the same 404 an absent row
         // gets at the gate.
         AgentProfileUpdateOutcome::NoSuchAgent => return not_found(),
+        // Re-admitted illegal under the write lock: the product's typed 400, judged
+        // against the runtime as it actually stood when the write ran.
+        AgentProfileUpdateOutcome::TuningRejected(rejection) => {
+            return tuning_rejected(&rejection);
+        }
         AgentProfileUpdateOutcome::Committed(committed) => committed,
     };
 
@@ -507,8 +507,8 @@ mod tests {
         agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
         agent_lifecycle::MaterializationStatus,
         agent_profile_write::{
-            AdmittedAgentProfileEdit, AgentProfileRowWrite, AgentProfileWriteUnitOfWork,
-            CommittedAgentRow, FieldEdit, RequiredEdit,
+            AgentProfileRowWrite, AgentProfileWriteUnitOfWork, AgentTuningContext,
+            CommittedAgentRow, FieldEdit, RequiredEdit, admit_public_tuning_edit,
         },
         agents::runtime::RuntimeKind,
         identity::{AgentId, UserId},
@@ -585,11 +585,17 @@ mod tests {
         ReadOutcome::Present(Box::new(facts))
     }
 
-    /// A write that seals: it applies the admitted edit onto a base row so every
-    /// touched column, the id, and `updated_at = now` match the seal.
+    /// A write unit of work that models the real adapter: it admits the RAW request
+    /// UNDER the lock against a configured current tuning `context` (defaulting to the
+    /// codex/`gpt-5.6-sol` full state), then either seals the admitted edit onto a base
+    /// row so every touched column, the id, and `updated_at = now` match the seal, or
+    /// carries the typed rejection back with no commit. The authoritative under-lock
+    /// enforcement (and its concurrent falsifier) lives in the sqlite adapter's tests;
+    /// here we only need a faithful outcome to check the handler's response mapping.
     #[derive(Clone)]
     struct SealingWrites {
         outcome: WriteOutcome,
+        context: AgentTuningContext,
         calls: Arc<AtomicUsize>,
     }
 
@@ -604,16 +610,24 @@ mod tests {
         fn new(outcome: WriteOutcome) -> Self {
             Self {
                 outcome,
+                context: codex_context(),
                 calls: Arc::new(AtomicUsize::new(0)),
             }
+        }
+
+        /// Set the locked current context the fake admits against — e.g. a claude agent
+        /// so a `fast_mode` edit is re-rejected under the lock.
+        fn with_context(mut self, context: AgentTuningContext) -> Self {
+            self.context = context;
+            self
         }
     }
 
     impl AgentProfileWriteUnitOfWork for SealingWrites {
-        async fn apply_profile_edit(
+        async fn admit_and_apply_tuning_edit(
             &self,
             agent: &AgentId,
-            edit: &AdmittedAgentProfileEdit,
+            request: &AgentTuningEdit,
             now_ms: i64,
         ) -> Result<AgentProfileRowWrite, PersistenceFailure> {
             self.calls.fetch_add(1, SeqCst);
@@ -623,21 +637,48 @@ mod tests {
                     "write boom",
                 ))),
                 WriteOutcome::Commits => {
-                    let display_name = match edit.display_name() {
-                        RequiredEdit::Leave => "Base Name".to_owned(),
-                        RequiredEdit::Set(value) => value.clone(),
-                    };
-                    Ok(AgentProfileRowWrite::Committed(CommittedAgentRow {
-                        id: agent.clone(),
-                        display_name,
-                        description: apply_str(edit.description(), Some("base desc")),
-                        model: apply_str(edit.model(), Some("gpt-5.6-sol")),
-                        reasoning_effort: apply_str(edit.reasoning_effort(), Some("ultra")),
-                        fast_mode: apply_bool(edit.fast_mode(), Some(true)),
-                        updated_at: now_ms,
-                    }))
+                    // The lock is held: admit against the current context. A rejection
+                    // commits nothing.
+                    match admit_public_tuning_edit(&self.context, request.clone()) {
+                        Err(rejection) => Ok(AgentProfileRowWrite::TuningRejected(rejection)),
+                        Ok(edit) => {
+                            let display_name = match edit.display_name() {
+                                RequiredEdit::Leave => "Base Name".to_owned(),
+                                RequiredEdit::Set(value) => value.clone(),
+                            };
+                            let row = CommittedAgentRow {
+                                id: agent.clone(),
+                                display_name,
+                                description: apply_str(edit.description(), Some("base desc")),
+                                model: apply_str(edit.model(), Some("gpt-5.6-sol")),
+                                reasoning_effort: apply_str(edit.reasoning_effort(), Some("ultra")),
+                                fast_mode: apply_bool(edit.fast_mode(), Some(true)),
+                                updated_at: now_ms,
+                            };
+                            Ok(AgentProfileRowWrite::Committed {
+                                admitted: edit,
+                                row,
+                            })
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    fn codex_context() -> AgentTuningContext {
+        AgentTuningContext {
+            runtime: RuntimeKind::Codex,
+            model: Some("gpt-5.6-sol".to_owned()),
+            reasoning_effort: Some("ultra".to_owned()),
+        }
+    }
+
+    fn claude_context() -> AgentTuningContext {
+        AgentTuningContext {
+            runtime: RuntimeKind::Claude,
+            model: None,
+            reasoning_effort: None,
         }
     }
 
@@ -1034,7 +1075,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_illegal_reasoning_effort_is_the_typed_tuning_400() {
-        // `none` is qoder's token; on the stored codex/sol pair it is out of range.
+        // `none` is qoder's token; against the write's locked codex/sol context it is
+        // out of range, so the UoW re-admits and returns a typed rejection.
         let reply = ok_run(r#"{"reasoning_effort":"none"}"#).await;
         assert_eq!(reply.status, StatusCode::BAD_REQUEST);
         assert_eq!(
@@ -1044,28 +1086,19 @@ mod tests {
                 "code": "reasoning_effort_invalid_for_runtime"
             })
         );
-        assert_eq!(reply.writes, 0);
+        // The UoW WAS consulted (that is where legality is now judged), but it committed
+        // nothing: no `agent_changed` announce fired.
+        assert_eq!(reply.writes, 1);
+        assert_eq!(reply.announces, 0);
     }
 
     #[tokio::test]
     async fn a_fast_mode_set_on_a_claude_agent_is_the_typed_tuning_400() {
-        // Re-project onto a claude agent, which does not support fast mode.
-        let mut projection = codex_projection();
-        projection.runtime = RuntimeKind::Claude;
-        projection.model = None;
-        projection.reasoning_effort = None;
-        projection.fast_mode = None;
-        let facts = AgentDetailFacts::from_source(
-            agent("a1"),
-            user("viewer-1"),
-            [],
-            [],
-            MaterializationStatus::Active,
-            projection,
-        );
+        // The write's locked context is a claude agent, which does not support fast
+        // mode, so the raw `fast_mode: true` request is re-rejected under the lock.
         let reply = patch_with(
-            FakeReads::new(present(facts.clone()), present(facts)),
-            SealingWrites::new(WriteOutcome::Commits),
+            FakeReads::new(present(creator_facts()), present(committed_facts())),
+            SealingWrites::new(WriteOutcome::Commits).with_context(claude_context()),
             FakeSink::new(false),
             "a1",
             r#"{"fast_mode":true}"#,
@@ -1080,7 +1113,8 @@ mod tests {
                 "code": "fast_mode_invalid_for_runtime"
             })
         );
-        assert_eq!(reply.writes, 0);
+        assert_eq!(reply.writes, 1);
+        assert_eq!(reply.announces, 0);
     }
 
     // ---- write-stage outcomes ----
