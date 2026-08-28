@@ -298,29 +298,46 @@ pub struct CommittedAgentRow {
     pub updated_at: i64,
 }
 
+/// The before-image a tuning write judged against, bound to the agent it was read
+/// for. Both halves are DB-observable WITNESSES: `agent_id` is decoded from the
+/// SELECTED row's own `id` column — never back-filled from a query parameter — and
+/// `context` is that row's current runtime/model/effort. The use case asserts
+/// `agent_id == subject` before it trusts `context` to replay the rule, so a cross-wire
+/// adapter cannot pass agent-B's current state as agent-A's before-image (minting a
+/// refusal that is really B's, or laundering A's write past B's legality).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentTuningBefore {
+    pub agent_id: AgentId,
+    pub context: AgentTuningContext,
+}
+
 /// The raw outcome of a tuning write, decided under the adapter's write lock. Every
-/// arm carries only DB-observable WITNESSES — the before-image the decision was read
-/// against, and the committed columns — never a product verdict and never an
-/// adapter-minted admitted intent. The domain re-derives the verdict from the witness
-/// by replaying the SAME pure rule (see [`update_agent_profile_and_announce`]), so a
-/// buggy or lying adapter cannot mint a product refusal or seal an unwarranted write.
+/// arm carries only DB-observable WITNESSES — the identity-bound before-image the
+/// decision was read against, and the committed columns — never a product verdict and
+/// never an adapter-minted admitted intent. The domain re-derives the verdict from the
+/// witness by replaying the SAME pure rule (see [`update_agent_profile_and_announce`]),
+/// binding the before-image's own `agent_id` to the request subject first, so a buggy
+/// or lying adapter cannot mint a product refusal, seal an unwarranted write, or borrow
+/// another agent's legality.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AgentProfileRowWrite {
     /// No such agent row — the route maps this to a product `404`.
     NoSuchAgent,
-    /// No column was written. Carries the before-image runtime/model/effort the port
-    /// read under its lock — a WITNESS, not a verdict. For a tuning edit the only
-    /// warranted reason to write nothing is a legality refusal, so the domain replays
-    /// the rule against `before`: a refusal mints the typed product `400`; anything the
-    /// rule would ADMIT means a warranted write was withheld — an untrustworthy fact.
-    Unchanged { before: AgentTuningContext },
-    /// The row was updated and `updated_at` stamped to `now_ms`. Carries the before-image
-    /// the port judged against AND the committed columns — both WITNESSES. The domain
-    /// replays the rule against `before` to confirm the write was warranted and to
-    /// RE-DERIVE the admitted intent it seals `row` against; the adapter never hands over
-    /// an admitted intent of its own.
+    /// No column was written. Carries the identity-bound before-image the port read
+    /// under its lock — a WITNESS, not a verdict. For a tuning edit the only warranted
+    /// reason to write nothing is a legality refusal, so the domain (after binding
+    /// `before.agent_id` to the subject) replays the rule against `before.context`: a
+    /// refusal mints the typed product `400`; anything the rule would ADMIT means a
+    /// warranted write was withheld — an untrustworthy fact.
+    Unchanged { before: AgentTuningBefore },
+    /// The row was updated and `updated_at` stamped to `now_ms`. Carries the
+    /// identity-bound before-image the port judged against AND the committed columns —
+    /// both WITNESSES. The domain binds `before.agent_id` to the subject, replays the
+    /// rule against `before.context` to confirm the write was warranted, and RE-DERIVES
+    /// the admitted intent it seals `row` against; the adapter never hands over an
+    /// admitted intent of its own.
     Committed {
-        before: AgentTuningContext,
+        before: AgentTuningBefore,
         row: CommittedAgentRow,
     },
 }
@@ -444,9 +461,11 @@ pub enum AgentProfileWriteError {
 /// announce. The RAW request is handed to the write port, which admits it against the
 /// row's CURRENT runtime under its write lock (so two concurrent edits can never
 /// compose an illegal final row from mutually-stale snapshots) and reports only
-/// WITNESSES: the before-image it read, plus the committed row on a write. The domain,
-/// NOT the adapter, decides the product answer by replaying the SAME pure
-/// [`admit_public_tuning_edit`] against the witnessed before-image:
+/// WITNESSES: the identity-bound before-image it read, plus the committed row on a
+/// write. The domain, NOT the adapter, decides the product answer — after binding the
+/// witness's own `before.agent_id` to the request subject (a mismatch is an
+/// untrustworthy fact, safe-500) — by replaying the SAME pure
+/// [`admit_public_tuning_edit`] against the witnessed before-context:
 /// - [`AgentProfileRowWrite::Unchanged`] must replay to a refusal → the typed product
 ///   `400` ([`AgentProfileUpdateOutcome::TuningRejected`]), zero write and zero
 ///   announce. If the rule would instead ADMIT, a warranted write was withheld — an
@@ -477,20 +496,28 @@ where
     {
         AgentProfileRowWrite::NoSuchAgent => Ok(AgentProfileUpdateOutcome::NoSuchAgent),
         AgentProfileRowWrite::Unchanged { before } => {
-            // The adapter wrote nothing and reported the before-image it read. The
-            // domain replays the rule against that witness to decide the verdict: a
-            // refusal is the typed product 400; an admit means a warranted write was
+            // Bind the witness to the request subject BEFORE trusting its context: a
+            // before-image read for another agent could otherwise mint a refusal that
+            // is really that agent's. Then replay the rule against the bound context —
+            // a refusal is the typed product 400; an admit means a warranted write was
             // silently withheld, which is untrustworthy.
-            match admit_public_tuning_edit(&before, request.clone()) {
+            if before.agent_id != *subject {
+                return Err(AgentProfileWriteError::UntrustworthyWriteFact);
+            }
+            match admit_public_tuning_edit(&before.context, request.clone()) {
                 Err(rejection) => Ok(AgentProfileUpdateOutcome::TuningRejected(rejection)),
                 Ok(_) => Err(AgentProfileWriteError::UntrustworthyWriteFact),
             }
         }
         AgentProfileRowWrite::Committed { before, row } => {
-            // A committed write MUST have been warranted: the rule replayed against the
-            // witnessed before-image has to ADMIT, and the intent it yields — not any
-            // intent from the adapter — is what seals the row.
-            let admitted = admit_public_tuning_edit(&before, request.clone())
+            // Bind the witness to the subject first, so another agent's legality can
+            // never launder this write. A committed write MUST then have been warranted:
+            // the rule replayed against the bound before-image has to ADMIT, and the
+            // intent it yields — not any intent from the adapter — is what seals the row.
+            if before.agent_id != *subject {
+                return Err(AgentProfileWriteError::UntrustworthyWriteFact);
+            }
+            let admitted = admit_public_tuning_edit(&before.context, request.clone())
                 .map_err(|_| AgentProfileWriteError::UntrustworthyWriteFact)?;
             seal_profile_write(subject, &admitted, &row, now_ms)?;
             let announce = announce(announce_sink, subject).await;
@@ -815,12 +842,22 @@ mod tests {
         }
     }
 
+    /// A before-image witness bound to `agent()` (the default subject). The mismatch
+    /// tests build one bound to a different id directly.
+    fn before(runtime: RuntimeKind) -> AgentTuningBefore {
+        AgentTuningBefore {
+            agent_id: agent(),
+            context: ctx(runtime),
+        }
+    }
+
     /// The `Committed` arm the port returns: the before-image it judged against (codex
-    /// baseline, against which [`request`] is legal) paired with the committed columns.
-    /// The domain replays the rule against `before` to re-derive the sealing intent.
+    /// baseline, bound to `agent()`, against which [`request`] is legal) paired with the
+    /// committed columns. The domain replays the rule against `before.context` to
+    /// re-derive the sealing intent.
     fn committed_outcome(row: CommittedAgentRow) -> AgentProfileRowWrite {
         AgentProfileRowWrite::Committed {
-            before: ctx(RuntimeKind::Codex),
+            before: before(RuntimeKind::Codex),
             row,
         }
     }
@@ -842,7 +879,7 @@ mod tests {
         // The DOMAIN — not the adapter — replays the pure rule against that witness to
         // mint the product refusal: Claude exposes no reasoning control, so `high` is
         // out of range. Zero announce.
-        let before = ctx(RuntimeKind::Claude);
+        let before = before(RuntimeKind::Claude);
         let request = AgentTuningEdit {
             reasoning_effort: FieldEdit::Set("high".to_owned()),
             ..leave_all()
@@ -873,7 +910,7 @@ mod tests {
         // The domain refuses to launder that into a product refusal. Deleting the core
         // replay would let this pass wrongly.
         let writes = FakeWrites(AgentProfileRowWrite::Unchanged {
-            before: ctx(RuntimeKind::Codex), // request() is legal here
+            before: before(RuntimeKind::Codex), // request() is legal here
         });
         let sink = FakeSink::new(false);
         let result =
@@ -896,12 +933,63 @@ mod tests {
             ..leave_all()
         };
         let writes = FakeWrites(AgentProfileRowWrite::Committed {
-            before: ctx(RuntimeKind::Claude),
+            before: before(RuntimeKind::Claude),
             row: committed_row(NOW),
         });
         let sink = FakeSink::new(false);
         let result =
             update_agent_profile_and_announce(&writes, &sink, &agent(), &request, NOW).await;
+        assert!(matches!(
+            result,
+            Err(AgentProfileWriteError::UntrustworthyWriteFact)
+        ));
+        assert_eq!(sink.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_witness_bound_to_another_agent_is_untrustworthy() {
+        // Cross-wire liar: the before-image is a REAL, legality-refusing context — but
+        // it was read for a DIFFERENT agent. Replaying it would mint a 400 that is
+        // really the other agent's. The subject bind fires first, so the domain refuses
+        // to attribute it. Zero announce. Deleting the id bind would let this mint a
+        // spurious 400.
+        let before = AgentTuningBefore {
+            agent_id: AgentId::parse("agent-other").unwrap(),
+            context: ctx(RuntimeKind::Claude),
+        };
+        let request = AgentTuningEdit {
+            reasoning_effort: FieldEdit::Set("high".to_owned()),
+            ..leave_all()
+        };
+        let writes = FakeWrites(AgentProfileRowWrite::Unchanged { before });
+        let sink = FakeSink::new(false);
+        let result =
+            update_agent_profile_and_announce(&writes, &sink, &agent(), &request, NOW).await;
+        assert!(matches!(
+            result,
+            Err(AgentProfileWriteError::UntrustworthyWriteFact)
+        ));
+        assert_eq!(sink.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_committed_witness_bound_to_another_agent_is_untrustworthy() {
+        // Cross-wire liar: the committed row.id IS the subject and the request is legal
+        // against the before-context — but that before-image was read for a DIFFERENT
+        // agent, so its legality is not the subject's to borrow. The subject bind fires
+        // before the seal, so the write cannot be laundered. Deleting the id bind would
+        // let this seal and succeed wrongly.
+        let before = AgentTuningBefore {
+            agent_id: AgentId::parse("agent-other").unwrap(),
+            context: ctx(RuntimeKind::Codex), // request() is legal here
+        };
+        let writes = FakeWrites(AgentProfileRowWrite::Committed {
+            before,
+            row: committed_row(NOW), // row.id == subject, would otherwise seal cleanly
+        });
+        let sink = FakeSink::new(false);
+        let result =
+            update_agent_profile_and_announce(&writes, &sink, &agent(), &request(), NOW).await;
         assert!(matches!(
             result,
             Err(AgentProfileWriteError::UntrustworthyWriteFact)

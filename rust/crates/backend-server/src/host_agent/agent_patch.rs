@@ -507,8 +507,9 @@ mod tests {
         agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
         agent_lifecycle::MaterializationStatus,
         agent_profile_write::{
-            AgentProfileRowWrite, AgentProfileWriteUnitOfWork, AgentTuningContext,
-            CommittedAgentRow, FieldEdit, RequiredEdit, admit_public_tuning_edit,
+            AgentProfileRowWrite, AgentProfileWriteUnitOfWork, AgentTuningBefore,
+            AgentTuningContext, CommittedAgentRow, FieldEdit, RequiredEdit,
+            admit_public_tuning_edit,
         },
         agents::runtime::RuntimeKind,
         identity::{AgentId, UserId},
@@ -645,7 +646,10 @@ mod tests {
                     // re-derive from `before`; this fake never returns it.
                     match admit_public_tuning_edit(&self.context, request.clone()) {
                         Err(_rejection) => Ok(AgentProfileRowWrite::Unchanged {
-                            before: self.context.clone(),
+                            before: AgentTuningBefore {
+                                agent_id: agent.clone(),
+                                context: self.context.clone(),
+                            },
                         }),
                         Ok(edit) => {
                             let display_name = match edit.display_name() {
@@ -662,7 +666,10 @@ mod tests {
                                 updated_at: now_ms,
                             };
                             Ok(AgentProfileRowWrite::Committed {
-                                before: self.context.clone(),
+                                before: AgentTuningBefore {
+                                    agent_id: agent.clone(),
+                                    context: self.context.clone(),
+                                },
                                 row,
                             })
                         }

@@ -17,13 +17,16 @@
 //! buggy adapter from fabricating a refusal the core cannot replay.
 //!
 //! The whole write is one `BEGIN IMMEDIATE` transaction. First a locked
-//! `SELECT runtime, model, reasoning_effort WHERE id = ?`: no row →
+//! `SELECT id, runtime, model, reasoning_effort WHERE id = ?`: no row →
 //! [`AgentProfileRowWrite::NoSuchAgent`] (the surface's `404`, zero `UPDATE`); a row
-//! whose `runtime` cannot be decoded is a persistence-integrity fault. Then
-//! `admit_public_tuning_edit` against that locked context decides only the branch: a
-//! refusal returns [`AgentProfileRowWrite::Unchanged`] carrying the before-image, with
-//! zero `UPDATE` — NOT the rejection itself, which the core re-derives; an admitted
-//! edit drives the `UPDATE`. Only the columns the admitted edit names are placed in
+//! whose `runtime` cannot be decoded is a persistence-integrity fault. The before-image
+//! witness binds its `agent_id` to the SELECTED row's OWN `id` column — decoded through
+//! the domain's fallible parser, never back-filled from the query parameter — so the
+//! core can confirm the witness was read for the request subject before it replays the
+//! rule. Then `admit_public_tuning_edit` against that locked context decides only the
+//! branch: a refusal returns [`AgentProfileRowWrite::Unchanged`] carrying that
+//! before-image, with zero `UPDATE` — NOT the rejection itself, which the core
+//! re-derives; an admitted edit drives the `UPDATE`. Only the columns the admitted edit names are placed in
 //! the `SET` clause — a `Leave` is omitted, a `Clear` writes `NULL`, a `Set` binds the
 //! value — and `updated_at` is always stamped to `now_ms`, so a committed tuning write
 //! always bumps the row's instant (matching `agent-service.ts`'s always-touch update).
@@ -41,8 +44,8 @@ use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
     agent_profile_write::{
-        AgentProfileRowWrite, AgentProfileWriteUnitOfWork, AgentTuningContext, AgentTuningEdit,
-        CommittedAgentRow, FieldEdit, RequiredEdit, admit_public_tuning_edit,
+        AgentProfileRowWrite, AgentProfileWriteUnitOfWork, AgentTuningBefore, AgentTuningContext,
+        AgentTuningEdit, CommittedAgentRow, FieldEdit, RequiredEdit, admit_public_tuning_edit,
     },
     agents::runtime::RuntimeKind,
     identity::AgentId,
@@ -155,7 +158,7 @@ impl SqliteAgentProfileWrite {
         // transaction will commit, with no window for a concurrent PATCH to slip a
         // stale legality verdict past it.
         let current =
-            sqlx::query("SELECT runtime, model, reasoning_effort FROM agents WHERE id = ?")
+            sqlx::query("SELECT id, runtime, model, reasoning_effort FROM agents WHERE id = ?")
                 .bind(agent.as_str())
                 .fetch_optional(&mut *tx)
                 .await?;
@@ -164,13 +167,21 @@ impl SqliteAgentProfileWrite {
             return Ok(AgentProfileRowWrite::NoSuchAgent);
         };
 
+        // Bind the before-image to the SELECTED row's OWN id column — never back-filled
+        // from the query parameter — so the witness the core replays against carries the
+        // identity it was actually read for. A malformed stored id is corruption.
+        let before_id = AgentId::parse(current.try_get::<String, _>("id")?)
+            .map_err(|_| CorruptStoredIdentifier { column: "id" })?;
         let runtime_raw: String = current.try_get("runtime")?;
         let runtime =
             RuntimeKind::parse(&runtime_raw).ok_or(CorruptStoredRuntime { value: runtime_raw })?;
-        let context = AgentTuningContext {
-            runtime,
-            model: current.try_get("model")?,
-            reasoning_effort: current.try_get("reasoning_effort")?,
+        let before = AgentTuningBefore {
+            agent_id: before_id,
+            context: AgentTuningContext {
+                runtime,
+                model: current.try_get("model")?,
+                reasoning_effort: current.try_get("reasoning_effort")?,
+            },
         };
 
         // Replay the ONE pure rule against the locked context to decide the branch. A
@@ -178,11 +189,11 @@ impl SqliteAgentProfileWrite {
         // not move. This adapter does NOT return the rejection — the product verdict is
         // the domain's to re-derive from the before-image witness; it returns only the
         // WITNESS it read.
-        let admitted = match admit_public_tuning_edit(&context, request.clone()) {
+        let admitted = match admit_public_tuning_edit(&before.context, request.clone()) {
             Ok(admitted) => admitted,
             Err(_rejection) => {
                 tx.commit().await?;
-                return Ok(AgentProfileRowWrite::Unchanged { before: context });
+                return Ok(AgentProfileRowWrite::Unchanged { before });
             }
         };
 
@@ -245,7 +256,7 @@ impl SqliteAgentProfileWrite {
 
         tx.commit().await?;
         Ok(AgentProfileRowWrite::Committed {
-            before: context,
+            before,
             row: committed,
         })
     }
@@ -417,9 +428,12 @@ INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, ho
             .admit_and_apply_tuning_edit(&agent("agent-1"), &request, 777)
             .await
             .unwrap();
-        let AgentProfileRowWrite::Committed { row, .. } = outcome else {
+        let AgentProfileRowWrite::Committed { before, row } = outcome else {
             panic!("expected Committed, got {outcome:?}");
         };
+        // The before witness carries the id decoded from the SELECTED row, bound to the
+        // subject the core will replay against.
+        assert_eq!(before.agent_id, agent("agent-1"));
         assert_eq!(row.id, agent("agent-1"));
         assert_eq!(row.display_name, "Alice II");
         assert_eq!(row.reasoning_effort.as_deref(), Some("high"));
@@ -564,15 +578,16 @@ INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, ho
             .await
             .unwrap();
         // Refused under the lock → the adapter writes nothing and reports the LOCKED
-        // before-image it read (codex + `terra` + `high`), NOT a verdict. The domain
-        // replays the rule against this witness to mint the 400; a `terra + ultra` row
-        // is never composed.
+        // before-image it read (codex + `terra` + `high`), NOT a verdict, bound to the
+        // agent id decoded from the SELECTED row. The domain replays the rule against
+        // this witness to mint the 400; a `terra + ultra` row is never composed.
         let AgentProfileRowWrite::Unchanged { before } = b else {
             panic!("B must report an Unchanged witness under the lock, got {b:?}");
         };
-        assert_eq!(before.runtime, RuntimeKind::Codex);
-        assert_eq!(before.model.as_deref(), Some("gpt-5.6-terra"));
-        assert_eq!(before.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(before.agent_id, agent("agent-3"));
+        assert_eq!(before.context.runtime, RuntimeKind::Codex);
+        assert_eq!(before.context.model.as_deref(), Some("gpt-5.6-terra"));
+        assert_eq!(before.context.reasoning_effort.as_deref(), Some("high"));
         // Zero UPDATE: model, effort, and the instant are exactly as A left them —
         // the illegal `terra + ultra` combination never reached the row.
         let (_, _, model_b, _, effort_b, updated_b) = stored(&adapter, "agent-3").await;
