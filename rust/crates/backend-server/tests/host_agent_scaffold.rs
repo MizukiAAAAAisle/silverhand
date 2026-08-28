@@ -84,6 +84,18 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_lifecycle"),
     ("backend-core", "agent_list_read"),
     ("backend-core", "agent_presence_read"),
+    // #task:2225 — the public agent-lifecycle and avatar route family (Rust Wave 3).
+    // Core capability ports and orchestration for the handle-availability probe
+    // (route 1, `participant_handle_availability`), the agent tuning/profile write
+    // (route 2, `agent_profile_write`), the agent avatar byte fetch (route 5,
+    // `agent_avatar`), and the agent avatar upload/clear lifecycle (routes 3/4,
+    // `agent_avatar_write`, which reuses the single `agent_profile_write` row writer).
+    // Their SQLite adapters and server route surfaces are the sibling entries below;
+    // all stay UNMOUNTED until a later integration wires them.
+    ("backend-core", "agent_avatar"),
+    ("backend-core", "agent_avatar_write"),
+    ("backend-core", "agent_profile_write"),
+    ("backend-core", "participant_handle_availability"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
     ("backend-core", "host_resources_read"),
@@ -118,6 +130,11 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // under one ambient storage kind. An adapter like `clock` / `password_hasher`
     // below, so it belongs in this seam ledger but NOT `ACTIVATION_NAMESPACES`.
     ("backend-server", "avatar_blob"),
+    // #task:2225 — the crate-root route surface for the handle-availability probe
+    // (route 1). The tuning-write (route 2) and avatar (route 5) surfaces are
+    // `host_agent` submodules, already covered by the `host_agent` entry. UNMOUNTED
+    // until a later integration.
+    ("backend-server", "agent_name_availability"),
     ("backend-server", "clock"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
@@ -142,6 +159,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-sqlite", "agent_detail_read"),
     ("backend-sqlite", "agent_list_read"),
     ("backend-sqlite", "agent_presence_read"),
+    // #task:2225 — the SQLite adapters for the Wave 3 verticals: the agent avatar
+    // serve-ref read (route 5) and the agent tuning/profile row write (route 2). The
+    // handle-availability probe (route 1) reuses the existing `handle_namespace`
+    // adapter listed below.
+    ("backend-sqlite", "agent_avatar_read"),
+    ("backend-sqlite", "agent_profile_write"),
     ("backend-sqlite", "agent_view_acl"),
     ("backend-sqlite", "credential"),
     ("backend-sqlite", "handle_namespace"),

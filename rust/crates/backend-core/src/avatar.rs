@@ -224,11 +224,23 @@ impl AvatarStorageFailure {
     }
 }
 
-/// The narrow avatar blob capability: put fresh bytes, read a pointer's bytes,
-/// delete a pointer. The adapter mints the per-upload physical key (a fresh one
-/// each put, so re-uploading the same picture never clobbers or cache-hits) and
-/// owns the single storage kind. The production adapter is a #2221 residual.
-pub trait AvatarBlobStore: Clone + Send + Sync + 'static {
+/// The narrow READ half of the avatar blob capability: fetch the bytes a pointer
+/// resolves to. Split out from the full store so a read-only consumer — the public
+/// byte fetch, for BOTH the `users` face here and the agent avatar face
+/// ([`crate::agent_avatar`]) — depends only on the read, never on the id-keyed
+/// `put` or the `delete`. The production adapter is a #2221 residual.
+pub trait AvatarBlobRead: Clone + Send + Sync + 'static {
+    fn read(
+        &self,
+        pointer: &AvatarBlobPointer,
+    ) -> impl Future<Output = Result<AvatarBlobReadOutcome, AvatarStorageFailure>> + Send;
+}
+
+/// The full avatar blob capability: the narrow [`AvatarBlobRead`] plus the
+/// mutating `put`/`delete` the upload and clear paths own. The adapter mints the
+/// per-upload physical key (a fresh one each put, so re-uploading the same picture
+/// never clobbers or cache-hits) and owns the single storage kind.
+pub trait AvatarBlobStore: AvatarBlobRead {
     /// Store `bytes` for `user_id` under a fresh key and return its pointer.
     fn put(
         &self,
@@ -236,11 +248,6 @@ pub trait AvatarBlobStore: Clone + Send + Sync + 'static {
         content_type: AvatarContentType,
         bytes: Vec<u8>,
     ) -> impl Future<Output = Result<AvatarBlobPointer, AvatarStorageFailure>> + Send;
-
-    fn read(
-        &self,
-        pointer: &AvatarBlobPointer,
-    ) -> impl Future<Output = Result<AvatarBlobReadOutcome, AvatarStorageFailure>> + Send;
 
     /// Best-effort delete. A failure never flips the already-committed pointer
     /// write (an orphaned previous blob is annoying, never fatal — the DB pointer
@@ -745,6 +752,20 @@ mod tests {
         deleted: Arc<Mutex<Vec<String>>>,
         puts: Arc<AtomicUsize>,
     }
+    impl AvatarBlobRead for RecordingBlobs {
+        async fn read(
+            &self,
+            _pointer: &AvatarBlobPointer,
+        ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
+            if self.read_err {
+                #[derive(Debug, Error)]
+                #[error("read fault")]
+                struct ReadFault;
+                return Err(AvatarStorageFailure::from_source(ReadFault));
+            }
+            Ok(self.read.clone().unwrap_or(AvatarBlobReadOutcome::Missing))
+        }
+    }
     impl AvatarBlobStore for RecordingBlobs {
         async fn put(
             &self,
@@ -761,18 +782,6 @@ mod tests {
             }
             AvatarBlobPointer::parse(self.put_key.clone())
                 .map_err(AvatarStorageFailure::from_source)
-        }
-        async fn read(
-            &self,
-            _pointer: &AvatarBlobPointer,
-        ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
-            if self.read_err {
-                #[derive(Debug, Error)]
-                #[error("read fault")]
-                struct ReadFault;
-                return Err(AvatarStorageFailure::from_source(ReadFault));
-            }
-            Ok(self.read.clone().unwrap_or(AvatarBlobReadOutcome::Missing))
         }
         async fn delete(&self, pointer: &AvatarBlobPointer) -> Result<(), AvatarStorageFailure> {
             self.deleted
