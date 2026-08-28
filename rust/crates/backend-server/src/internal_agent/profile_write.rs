@@ -1,27 +1,31 @@
-//! The internal agent-profile WRITE routes — `POST /internal/agents/{aid}/profile`,
-//! `POST /internal/agents/{aid}/avatar`, and `DELETE /internal/agents/{aid}/avatar`.
+//! The internal agent-profile WRITE route — `POST /internal/agents/{aid}/profile`.
 //!
 //! ## Self-pin, admission, one write, reproject
 //!
-//! Every route sits behind the same self-pin credential layer as the read
+//! The route sits behind the same self-pin credential layer as the read
 //! ([`require_runtime_credential`](crate::runtime_credential::require_runtime_credential)):
-//! `{aid}` is bound to the caller's own agent before any handler runs, so a non-self
-//! caller is an indistinguishable `401` upstream and these handlers take NO path param —
+//! `{aid}` is bound to the caller's own agent before the handler runs, so a non-self
+//! caller is an indistinguishable `401` upstream and the handler takes NO path param —
 //! the subject is `credential.agent()`, never a wire value. An absent credential is the
 //! composition-fault safe `500`, never a `401` (that verdict is the layer's).
 //!
 //! The body is decoded by the request-admission checkpoint
-//! ([`admit_profile_edit`](super::profile_write_admission::admit_profile_edit) /
-//! [`admit_avatar_upload`](super::profile_write_admission::admit_avatar_upload)) into a
-//! fully-validated edit or a terminal refusal; `DELETE` carries no body, so its whole
-//! algebra is the clear/no-op of the write unit of work. The validated edit is mapped to
-//! the core's [`InternalProfileEdit`] and applied by [`update_internal_profile`] as ONE
-//! row unit-of-work firing EXACTLY ONE `agent_changed` announce; on success the response
-//! is reprojected by RE-READING through the canonical profile read port (never from the
-//! write fact), so all three routes emit the single `AgentProfileDto` the CLI consumes.
+//! ([`admit_profile_edit`](super::profile_write_admission::admit_profile_edit)) into a
+//! fully-validated edit or a terminal refusal. The validated edit is mapped to the core's
+//! [`InternalProfileEdit`] and applied by [`update_internal_profile`] as ONE row
+//! unit-of-work firing EXACTLY ONE `agent_changed` announce; on success the response is
+//! reprojected by RE-READING through the canonical profile read port (never from the write
+//! fact), so it emits the single `AgentProfileDto` the CLI consumes. Per the ratified
+//! single-UoW divergence, an avatar set/clear supplied via multipart is folded into that
+//! SAME row write and still answers with `{ profile }`.
 //!
-//! The three envelopes mirror the product exactly: `POST /profile` → `{ profile }`,
-//! `POST /avatar` → `{ avatar_url, agent }`, `DELETE /avatar` → `{ agent }`.
+//! ## Deferred: the dedicated avatar routes
+//!
+//! `POST`/`DELETE /internal/agents/{aid}/avatar` are NOT registered this round. Their
+//! product success body is the FULL `AgentDto` returned by `agentService` (not the narrow
+//! profile DTO), whose single ACL-free projector/read face is owned by #2225 and not yet
+//! published. They will be added once that face lands and consumed directly — never forked
+//! into a second projector here.
 
 use axum::{
     Json, Router,
@@ -49,24 +53,19 @@ use silverhand_backend_core::{
 
 use super::{
     profile::SELF_PROFILE_PATH,
-    profile_write_admission::{
-        AvatarAction, ValidatedProfileEdit, admit_avatar_upload, admit_profile_edit,
-    },
+    profile_write_admission::{AvatarAction, ValidatedProfileEdit, admit_profile_edit},
     wire::{AgentProfileDto, agent_profile_dto},
 };
 use crate::{clock::ProcessClock, error};
-
-/// The internal avatar route template. `{aid}` is self-pinned by the credential layer.
-pub const SELF_AVATAR_PATH: &str = "/internal/agents/{aid}/avatar";
 
 /// The unmapped-error body: a bare `text/plain` `500`, never a JSON envelope — the same
 /// shape a thrown Hono handler yields.
 const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
 
-/// The ports the write routes drive: the canonical row writer, the avatar blob store, the
-/// `agent_changed` sink, the profile read port (for the post-commit reproject), and the
-/// process clock (the write instant the writer stamps and the seal verifies). Cloneable
-/// so Axum can hold it in router state.
+/// The ports the write route drives: the canonical row writer, the avatar blob store (an
+/// avatar set/clear rides the same profile write), the `agent_changed` sink, the profile
+/// read port (for the post-commit reproject), and the process clock (the write instant the
+/// writer stamps and the seal verifies). Cloneable so Axum can hold it in router state.
 #[derive(Clone)]
 pub struct InternalProfileWriteState<W, B, S, R, C> {
     pub writes: W,
@@ -76,7 +75,7 @@ pub struct InternalProfileWriteState<W, B, S, R, C> {
     pub clock: C,
 }
 
-/// Mount the three write routes generic over their ports, so tests drive them with
+/// Mount the profile write route generic over its ports, so tests drive it with
 /// driver-free fakes and the composition root wires the SQLite/blob/announce adapters AND
 /// the runtime-credential layer that self-pins `{aid}`. `GET /profile` is the read lane's
 /// (`self_profile_router`); Axum merges the two method handlers on the shared path.
@@ -92,39 +91,12 @@ where
 {
     Router::new()
         .route(SELF_PROFILE_PATH, post(post_profile::<W, B, S, R, C>))
-        .route(
-            SELF_AVATAR_PATH,
-            post(post_avatar::<W, B, S, R, C>).delete(delete_avatar::<W, B, S, R, C>),
-        )
         .with_state(state)
-}
-
-/// Which envelope a committed/no-op write reprojects into. The DTO is identical across
-/// all three; only the surrounding keys differ.
-#[derive(Clone, Copy)]
-enum Envelope {
-    /// `POST /profile` → `{ profile: <dto> }`.
-    Profile,
-    /// `POST /avatar` → `{ avatar_url: <dto.avatar_url>, agent: <dto> }`.
-    AvatarWithAgent,
-    /// `DELETE /avatar` → `{ agent: <dto> }`.
-    Agent,
 }
 
 #[derive(Serialize)]
 struct ProfileResponse {
     profile: AgentProfileDto,
-}
-
-#[derive(Serialize)]
-struct AvatarResponse {
-    avatar_url: Option<String>,
-    agent: AgentProfileDto,
-}
-
-#[derive(Serialize)]
-struct AgentResponse {
-    agent: AgentProfileDto,
 }
 
 async fn post_profile<W, B, S, R, C>(
@@ -147,63 +119,7 @@ where
         Err(refusal) => return refusal.into_response(),
     };
     let edit = profile_edit_to_core(validated);
-    run_and_reproject(&state, &subject, edit, Envelope::Profile).await
-}
-
-async fn post_avatar<W, B, S, R, C>(
-    credential: Option<Extension<RuntimePrincipal>>,
-    State(state): State<InternalProfileWriteState<W, B, S, R, C>>,
-    request: Request,
-) -> Response
-where
-    W: AgentProfileWriteUnitOfWork,
-    B: AgentAvatarBlobStore,
-    S: AgentChangedSink,
-    R: AgentProfileReadModel,
-    C: ProcessClock,
-{
-    let Some(subject) = pinned_subject(credential) else {
-        return composition_fault("self-avatar upload");
-    };
-    let validated = match admit_avatar_upload(request).await {
-        Ok(validated) => validated,
-        Err(refusal) => return refusal.into_response(),
-    };
-    // An avatar-only edit: the text columns are left untouched, the avatar is set to the
-    // validated payload the core will put and repoint in the SAME row write.
-    let edit = InternalProfileEdit {
-        display_name: RequiredEdit::Leave,
-        description: RequiredEdit::Leave,
-        avatar: InternalAvatarEdit::Set {
-            content_type: validated.content_type(),
-            bytes: validated.bytes().to_vec(),
-        },
-    };
-    run_and_reproject(&state, &subject, edit, Envelope::AvatarWithAgent).await
-}
-
-async fn delete_avatar<W, B, S, R, C>(
-    credential: Option<Extension<RuntimePrincipal>>,
-    State(state): State<InternalProfileWriteState<W, B, S, R, C>>,
-) -> Response
-where
-    W: AgentProfileWriteUnitOfWork,
-    B: AgentAvatarBlobStore,
-    S: AgentChangedSink,
-    R: AgentProfileReadModel,
-    C: ProcessClock,
-{
-    let Some(subject) = pinned_subject(credential) else {
-        return composition_fault("self-avatar clear");
-    };
-    // A body-less clear: leave the text columns, clear the avatar. A clear on an
-    // already-absent avatar is the write UoW's warranted no-op (still a `200`).
-    let edit = InternalProfileEdit {
-        display_name: RequiredEdit::Leave,
-        description: RequiredEdit::Leave,
-        avatar: InternalAvatarEdit::Clear,
-    };
-    run_and_reproject(&state, &subject, edit, Envelope::Agent).await
+    run_and_reproject(&state, &subject, edit).await
 }
 
 /// The pinned subject, read from the credential the self-pin layer injected. Absent means
@@ -217,7 +133,6 @@ async fn run_and_reproject<W, B, S, R, C>(
     state: &InternalProfileWriteState<W, B, S, R, C>,
     subject: &AgentId,
     edit: InternalProfileEdit,
-    envelope: Envelope,
 ) -> Response
 where
     W: AgentProfileWriteUnitOfWork,
@@ -245,27 +160,26 @@ where
             let (agent_id, announce, cleanup) = effect.into_parts();
             note_announce(subject, announce);
             note_cleanup(subject, cleanup);
-            reproject(&state.reader, &agent_id, envelope).await
+            reproject(&state.reader, &agent_id).await
         }
         // The one warranted no-op (avatar clear on an absent avatar, no text): nothing
         // changed, but the product still answers `200` with the current profile.
-        InternalProfileWriteOutcome::NoOp { agent_id } => {
-            reproject(&state.reader, &agent_id, envelope).await
-        }
+        InternalProfileWriteOutcome::NoOp { agent_id } => reproject(&state.reader, &agent_id).await,
         // The row vanished before the write — the product `404`. Any fresh blob was
         // already cleaned by the core; log its fate.
         InternalProfileWriteOutcome::NoSuchAgent { orphan_cleanup } => {
             note_cleanup(subject, orphan_cleanup);
             not_found()
         }
-        // A blob-store I/O failure with no row written and nothing persisted: the safe
-        // `500` (the product's un-statused avatar-service throw).
+        // The avatar blob store faulted with nothing written and nothing persisted. The
+        // product maps this to a stable detail-free `400` (TS `agentServiceErrorStatusMap`:
+        // `avatar_storage_failed` → 400), NOT a bare `500`. Zero write, zero announce.
         InternalProfileWriteOutcome::StorageFailed(failure) => {
             tracing::error!(
                 error_chain = %error::describe(&failure),
                 "internal-profile write: avatar blob storage failed"
             );
-            internal_error()
+            avatar_storage_failed()
         }
         // A pre-commit fault, or a durable-but-untrustworthy commit: both are the lane's
         // safe `500`. The core already carried the orphan/retained-blob discipline.
@@ -284,30 +198,29 @@ where
     }
 }
 
-/// Re-read the just-written profile and project it into the route's envelope. An absent
-/// row (a concurrent delete between the write and the read) is the product `404`; a
-/// persistence or source-binding fault is the safe `500`.
-async fn reproject<R>(reader: &R, subject: &AgentId, envelope: Envelope) -> Response
+/// Re-read the just-written profile and project it into `{ profile }`. This runs ONLY
+/// after a durable `Committed`/`NoOp` outcome, so the row is known to exist: an `Ok(None)`
+/// here means it vanished between the write and the read, which is NOT a product `404`
+/// (that would disguise a durable commit as un-written and invite a retry) — it is a safe
+/// `500`, exactly like a persistence or source-binding fault. The only legitimate `404` is
+/// the PRE-write `NoSuchAgent`, handled by the caller.
+async fn reproject<R>(reader: &R, subject: &AgentId) -> Response
 where
     R: AgentProfileReadModel,
 {
     match read_self_profile(reader, subject).await {
-        Ok(Some(fact)) => {
-            let dto = agent_profile_dto(&fact);
-            match envelope {
-                Envelope::Profile => Json(ProfileResponse { profile: dto }).into_response(),
-                Envelope::AvatarWithAgent => {
-                    let avatar_url = dto.avatar_url.clone();
-                    Json(AvatarResponse {
-                        avatar_url,
-                        agent: dto,
-                    })
-                    .into_response()
-                }
-                Envelope::Agent => Json(AgentResponse { agent: dto }).into_response(),
-            }
+        Ok(Some(fact)) => Json(ProfileResponse {
+            profile: agent_profile_dto(&fact),
+        })
+        .into_response(),
+        // A durable commit whose row is now unreadable: safe-500, never a 404.
+        Ok(None) => {
+            tracing::error!(
+                agent = subject.as_str(),
+                "internal-profile write committed but the row vanished before the reproject read"
+            );
+            internal_error()
         }
-        Ok(None) => not_found(),
         Err(fault) => {
             let cause: &dyn std::error::Error = match &fault {
                 ProfileReadFault::Persistence(failure) => failure,
@@ -350,6 +263,20 @@ fn not_found() -> Response {
     (
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({ "error": "agent not found" })),
+    )
+        .into_response()
+}
+
+/// The avatar blob store faulted with nothing written: the product's stable detail-free
+/// `400 { error, code }` (TS `agentServiceErrorBody` under `avatar_storage_failed` → 400).
+/// The cause is confined to the boundary log; the wire never carries it.
+fn avatar_storage_failed() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({
+            "error": "avatar storage failed",
+            "code": "avatar_storage_failed"
+        })),
     )
         .into_response()
 }
@@ -458,12 +385,22 @@ mod tests {
     struct FakeBlobs {
         next: Arc<AtomicUsize>,
         deletes: Arc<Mutex<Vec<String>>>,
+        put_fails: bool,
     }
     impl FakeBlobs {
         fn new() -> Self {
             Self {
                 next: Arc::new(AtomicUsize::new(0)),
                 deletes: Arc::new(Mutex::new(Vec::new())),
+                put_fails: false,
+            }
+        }
+        /// A store whose `put` always faults — used to prove the `avatar_storage_failed`
+        /// → detail-free `400` mapping, with zero write and zero announce.
+        fn failing_put() -> Self {
+            Self {
+                put_fails: true,
+                ..Self::new()
             }
         }
         fn deleted(&self) -> Vec<String> {
@@ -485,6 +422,11 @@ mod tests {
             _content_type: AvatarContentType,
             _bytes: Vec<u8>,
         ) -> Result<AgentAvatarBlobPointer, AvatarStorageFailure> {
+            if self.put_fails {
+                return Err(AvatarStorageFailure::from_source(std::io::Error::other(
+                    "blob put failed",
+                )));
+            }
             let n = self.next.fetch_add(1, Ordering::SeqCst);
             Ok(ptr(&format!("agents/mint/blob-{n}")))
         }
@@ -572,7 +514,7 @@ mod tests {
             &self,
             _handle: &str,
         ) -> Result<Option<AgentProfileFact>, PersistenceFailure> {
-            unreachable!("the write routes never read by handle")
+            unreachable!("the write route never reads by handle")
         }
     }
 
@@ -647,7 +589,18 @@ mod tests {
         FakeBlobs,
         FakeSink,
     ) {
-        let blobs = FakeBlobs::new();
+        state_with_blobs(writes, reader, FakeBlobs::new())
+    }
+
+    fn state_with_blobs(
+        writes: AgentProfileRowWrite,
+        reader: FakeReader,
+        blobs: FakeBlobs,
+    ) -> (
+        InternalProfileWriteState<FakeWrites, FakeBlobs, FakeSink, FakeReader, FixedClock>,
+        FakeBlobs,
+        FakeSink,
+    ) {
         let sink = FakeSink::new();
         let state = InternalProfileWriteState {
             writes: FakeWrites::Row(writes),
@@ -701,7 +654,19 @@ mod tests {
         internal_profile_write_router(state)
     }
 
-    // ================= POST /profile =================
+    /// A POST to `/internal/agents/a1/profile` carrying the given multipart body and the
+    /// self-pinned credential for `a1`.
+    fn profile_post(content_type: String, body: Vec<u8>) -> HttpRequest<Body> {
+        HttpRequest::builder()
+            .method("POST")
+            .uri("/internal/agents/a1/profile")
+            .header("content-type", content_type)
+            .extension(principal("a1"))
+            .body(Body::from(body))
+            .unwrap()
+    }
+
+    // ================= POST /profile — success projection =================
 
     #[tokio::test]
     async fn post_profile_combined_text_and_avatar_projects_the_profile_envelope() {
@@ -717,14 +682,10 @@ mod tests {
             &[("display_name", "New"), ("avatar_action", "set")],
             Some(&png_bytes()),
         );
-        let request = HttpRequest::builder()
-            .method("POST")
-            .uri("/internal/agents/a1/profile")
-            .header("content-type", content_type)
-            .extension(principal("a1"))
-            .body(Body::from(body))
+        let response = router(state)
+            .oneshot(profile_post(content_type, body))
+            .await
             .unwrap();
-        let response = router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(sink.calls(), 1, "a combined edit announces exactly once");
         assert!(
@@ -750,118 +711,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_profile_with_nothing_to_update_is_the_admission_400_and_never_writes() {
-        // No text and no avatar_action → admission's NothingToUpdate, before any write.
-        let writes = AgentProfileRowWrite::NoSuchAgent; // must never be consulted
-        let reader = FakeReader::with(None);
-        let (state, blobs, sink) = state(writes, reader.clone());
-        let (content_type, body) = multipart_body(&[("ignored", "x")], None);
-        let request = HttpRequest::builder()
-            .method("POST")
-            .uri("/internal/agents/a1/profile")
-            .header("content-type", content_type)
-            .extension(principal("a1"))
-            .body(Body::from(body))
-            .unwrap();
-        let response = router(state).oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            body_json(response).await,
-            json!({ "error": "no fields to update" })
-        );
-        assert_eq!(sink.calls(), 0);
-        assert!(blobs.deleted().is_empty());
-        assert_eq!(reader.reads(), 0, "a refused request never reprojects");
-    }
-
-    // ================= POST /avatar =================
-
-    #[tokio::test]
-    async fn post_avatar_projects_avatar_url_and_agent() {
-        let writes = AgentProfileRowWrite::Committed {
-            before: before("Name", present("agents/prior/blob-9")),
-            row: committed("Name", present(FRESH)),
-        };
-        let reader = FakeReader::with(Some(fact("agent-one", Some(NOW))));
-        let (state, blobs, sink) = state(writes, reader);
-        let (content_type, body) = multipart_body(&[], Some(&png_bytes()));
-        let request = HttpRequest::builder()
-            .method("POST")
-            .uri("/internal/agents/a1/avatar")
-            .header("content-type", content_type)
-            .extension(principal("a1"))
-            .body(Body::from(body))
-            .unwrap();
-        let response = router(state).oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(sink.calls(), 1);
-        assert_eq!(
-            blobs.deleted(),
-            vec!["agents/prior/blob-9".to_owned()],
-            "the prior blob is cleaned on a replacement"
-        );
-        let expected_url = format!("/api/agents/a1/avatar?v={NOW}");
-        assert_eq!(
-            body_json(response).await,
-            json!({
-                "avatar_url": expected_url,
-                "agent": {
-                    "id": "a1",
-                    "name": "agent-one",
-                    "display_name": "agent-one",
-                    "description": "a bio",
-                    "avatar_url": expected_url
-                }
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn post_avatar_without_a_file_is_the_admission_400() {
-        let writes = AgentProfileRowWrite::NoSuchAgent;
-        let reader = FakeReader::with(None);
-        let (state, _blobs, sink) = state(writes, reader);
-        let (content_type, body) = multipart_body(&[("nope", "x")], None);
-        let request = HttpRequest::builder()
-            .method("POST")
-            .uri("/internal/agents/a1/avatar")
-            .header("content-type", content_type)
-            .extension(principal("a1"))
-            .body(Body::from(body))
-            .unwrap();
-        let response = router(state).oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            body_json(response).await,
-            json!({ "error": "file field required" })
-        );
-        assert_eq!(sink.calls(), 0);
-    }
-
-    // ================= DELETE /avatar =================
-
-    #[tokio::test]
-    async fn delete_avatar_present_clears_the_blob_and_projects_agent() {
+    async fn post_profile_clear_present_avatar_cleans_the_blob_and_projects_profile() {
+        // avatar_action=clear with a prior blob present: the row clears, the prior blob is
+        // cleaned, and the envelope is `{ profile }` with a null avatar_url.
         let writes = AgentProfileRowWrite::Committed {
             before: before("Name", present("agents/prior/blob-9")),
             row: committed("Name", AgentAvatarRow::Absent),
         };
         let reader = FakeReader::with(Some(fact("agent-one", None)));
         let (state, blobs, sink) = state(writes, reader);
-        let request = HttpRequest::builder()
-            .method("DELETE")
-            .uri("/internal/agents/a1/avatar")
-            .extension(principal("a1"))
-            .body(Body::empty())
+        let (content_type, body) = multipart_body(&[("avatar_action", "clear")], None);
+        let response = router(state)
+            .oneshot(profile_post(content_type, body))
+            .await
             .unwrap();
-        let response = router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(sink.calls(), 1);
         assert_eq!(blobs.deleted(), vec!["agents/prior/blob-9".to_owned()]);
         assert_eq!(
             body_json(response).await,
             json!({
-                "agent": {
+                "profile": {
                     "id": "a1",
                     "name": "agent-one",
                     "display_name": "agent-one",
@@ -873,62 +743,116 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_avatar_absent_is_a_noop_but_still_200() {
+    async fn post_profile_clear_absent_avatar_is_a_noop_but_still_200() {
+        // avatar_action=clear on an already-absent avatar, no text: the warranted no-op,
+        // still `200` with the current profile, no announce, no blob touched.
         let writes = AgentProfileRowWrite::Unchanged {
             before: before("Name", AgentAvatarRow::Absent),
         };
         let reader = FakeReader::with(Some(fact("agent-one", None)));
         let (state, blobs, sink) = state(writes, reader);
-        let request = HttpRequest::builder()
-            .method("DELETE")
-            .uri("/internal/agents/a1/avatar")
-            .extension(principal("a1"))
-            .body(Body::empty())
+        let (content_type, body) = multipart_body(&[("avatar_action", "clear")], None);
+        let response = router(state)
+            .oneshot(profile_post(content_type, body))
+            .await
             .unwrap();
-        let response = router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(sink.calls(), 0, "a genuine no-op announces nothing");
         assert!(blobs.deleted().is_empty());
         assert_eq!(
-            body_json(response).await["agent"]["avatar_url"],
+            body_json(response).await["profile"]["avatar_url"],
             Value::Null
         );
     }
 
-    // ================= failure & self-pin wiring =================
+    // ================= POST /profile — admission =================
 
     #[tokio::test]
-    async fn an_absent_credential_is_a_safe_500_and_never_writes() {
+    async fn post_profile_with_nothing_to_update_is_the_admission_400_and_never_writes() {
+        // No text and no avatar_action → admission's NothingToUpdate, before any write.
+        let writes = AgentProfileRowWrite::NoSuchAgent; // must never be consulted
+        let reader = FakeReader::with(None);
+        let (state, blobs, sink) = state(writes, reader.clone());
+        let (content_type, body) = multipart_body(&[("ignored", "x")], None);
+        let response = router(state)
+            .oneshot(profile_post(content_type, body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(response).await,
+            json!({ "error": "no fields to update" })
+        );
+        assert_eq!(sink.calls(), 0);
+        assert!(blobs.deleted().is_empty());
+        assert_eq!(reader.reads(), 0, "a refused request never reprojects");
+    }
+
+    // ================= POST /profile — outcome → status =================
+
+    #[tokio::test]
+    async fn a_pre_write_missing_agent_is_a_404() {
+        // The only legitimate 404: the row does not exist BEFORE the write.
         let writes = AgentProfileRowWrite::NoSuchAgent;
         let reader = FakeReader::with(None);
         let (state, _blobs, sink) = state(writes, reader.clone());
-        let request = HttpRequest::builder()
-            .method("DELETE")
-            .uri("/internal/agents/a1/avatar")
-            .body(Body::empty())
+        let (content_type, body) = multipart_body(&[("display_name", "New")], None);
+        let response = router(state)
+            .oneshot(profile_post(content_type, body))
+            .await
             .unwrap();
-        let response = router(state).oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(sink.calls(), 0);
-        assert_eq!(reader.reads(), 0);
-    }
-
-    #[tokio::test]
-    async fn a_vanished_row_is_a_404() {
-        let writes = AgentProfileRowWrite::NoSuchAgent;
-        let reader = FakeReader::with(None);
-        let (state, _blobs, _sink) = state(writes, reader);
-        let request = HttpRequest::builder()
-            .method("DELETE")
-            .uri("/internal/agents/a1/avatar")
-            .extension(principal("a1"))
-            .body(Body::empty())
-            .unwrap();
-        let response = router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(
             body_json(response).await,
             json!({ "error": "agent not found" })
+        );
+        assert_eq!(sink.calls(), 0);
+        assert_eq!(reader.reads(), 0, "a pre-write 404 never reprojects");
+    }
+
+    #[tokio::test]
+    async fn a_blob_put_failure_is_the_avatar_storage_400_and_never_writes() {
+        // The blob store faults on put: the stable detail-free 400, zero write/announce,
+        // and no reproject. The row writer must never be consulted.
+        let writes = AgentProfileRowWrite::NoSuchAgent; // must never be reached
+        let reader = FakeReader::with(None);
+        let (state, _blobs, sink) =
+            state_with_blobs(writes, reader.clone(), FakeBlobs::failing_put());
+        let (content_type, body) = multipart_body(&[("avatar_action", "set")], Some(&png_bytes()));
+        let response = router(state)
+            .oneshot(profile_post(content_type, body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(response).await,
+            json!({ "error": "avatar storage failed", "code": "avatar_storage_failed" })
+        );
+        assert_eq!(sink.calls(), 0, "a storage fault never announces");
+        assert_eq!(reader.reads(), 0, "and never reprojects");
+    }
+
+    #[tokio::test]
+    async fn a_committed_then_vanished_row_is_a_safe_500() {
+        // A durable Committed whose row is unreadable at reproject: safe-500, NEVER a 404
+        // (a 404 would disguise a durable commit as un-written and invite a retry).
+        let writes = AgentProfileRowWrite::Committed {
+            before: before("Old", AgentAvatarRow::Absent),
+            row: committed("New", AgentAvatarRow::Absent),
+        };
+        let reader = FakeReader::with(None); // the row vanished after the commit
+        let (state, _blobs, sink) = state(writes, reader.clone());
+        let (content_type, body) = multipart_body(&[("display_name", "New")], None);
+        let response = router(state)
+            .oneshot(profile_post(content_type, body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(sink.calls(), 1, "the durable commit still announced once");
+        assert_eq!(
+            reader.reads(),
+            1,
+            "the reproject was attempted and found nothing"
         );
     }
 
@@ -943,21 +867,40 @@ mod tests {
         };
         let reader = FakeReader::with(Some(fact("agent-one", None)));
         let (state, _blobs, sink) = state(writes, reader.clone());
-        let request = HttpRequest::builder()
-            .method("DELETE")
-            .uri("/internal/agents/a1/avatar")
-            .extension(principal("a1"))
-            .body(Body::empty())
+        let (content_type, body) = multipart_body(&[("display_name", "New")], None);
+        let response = router(state)
+            .oneshot(profile_post(content_type, body))
+            .await
             .unwrap();
-        let response = router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(sink.calls(), 0, "an untrustworthy commit never announces");
         assert_eq!(reader.reads(), 0, "and never reprojects");
     }
 
+    // ================= self-pin wiring =================
+
+    #[tokio::test]
+    async fn an_absent_credential_is_a_safe_500_and_never_writes() {
+        let writes = AgentProfileRowWrite::NoSuchAgent;
+        let reader = FakeReader::with(None);
+        let (state, _blobs, sink) = state(writes, reader.clone());
+        let (content_type, body) = multipart_body(&[("display_name", "New")], None);
+        // No credential extension: the self-pin layer was not composed in front.
+        let request = HttpRequest::builder()
+            .method("POST")
+            .uri("/internal/agents/a1/profile")
+            .header("content-type", content_type)
+            .body(Body::from(body))
+            .unwrap();
+        let response = router(state).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(sink.calls(), 0);
+        assert_eq!(reader.reads(), 0);
+    }
+
     /// A faithful self-pin authority stand-in (the production rule is in
     /// `runtime_credential.rs`): admit ONLY when the route `{aid}` equals the enrolled
-    /// agent. Proves the write routes sit BEHIND the credential layer.
+    /// agent. Proves the write route sits BEHIND the credential layer.
     #[derive(Clone)]
     struct PinnedAuthority {
         enrolled: AgentId,
@@ -984,11 +927,13 @@ mod tests {
         let authority = PinnedAuthority { enrolled: agent() };
         let router =
             crate::runtime_credential::require_runtime_credential(router(state), authority);
+        let (content_type, body) = multipart_body(&[("display_name", "New")], None);
         let request = HttpRequest::builder()
-            .method("DELETE")
-            .uri("/internal/agents/someone-else/avatar")
+            .method("POST")
+            .uri("/internal/agents/someone-else/profile")
+            .header("content-type", content_type)
             .header(AUTHORIZATION, "Bearer test-secret")
-            .body(Body::empty())
+            .body(Body::from(body))
             .unwrap();
         let response = router.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
