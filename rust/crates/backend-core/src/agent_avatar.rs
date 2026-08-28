@@ -105,6 +105,43 @@ pub trait AgentAvatarBlobRead: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<AvatarBlobReadOutcome, AvatarStorageFailure>> + Send;
 }
 
+/// The full agent-avatar blob capability: the narrow [`AgentAvatarBlobRead`] plus the
+/// mutating `put`/`delete` the upload and clear routes own. Distinct from the user
+/// [`crate::avatar::AvatarBlobStore`]: the two custodies never share a domain type, and
+/// the production adapter MUST mint agent keys under a DIFFERENT static namespace than
+/// user keys — so even if an [`AgentId`] and a [`crate::identity::UserId`] carry the
+/// same raw string, their blobs never collide. `put` mints a FRESH physical key on
+/// every call (re-uploading identical bytes never clobbers or cache-hits), returning
+/// the agent-owned [`AgentAvatarBlobPointer`]; only the private `StoredBlob`
+/// read/delete plumbing is shared with the user adapter.
+pub trait AgentAvatarBlobStore: AgentAvatarBlobRead {
+    /// Store `bytes` for `agent_id` under a fresh key and return its pointer.
+    fn put(
+        &self,
+        agent_id: &AgentId,
+        content_type: AvatarContentType,
+        bytes: Vec<u8>,
+    ) -> impl Future<Output = Result<AgentAvatarBlobPointer, AvatarStorageFailure>> + Send;
+
+    /// Best-effort delete. A failure never flips an already-committed pointer write
+    /// (the DB pointer is authoritative), but the orchestration CARRIES its fate for
+    /// the boundary to log rather than dropping it.
+    fn delete(
+        &self,
+        pointer: &AgentAvatarBlobPointer,
+    ) -> impl Future<Output = Result<(), AvatarStorageFailure>> + Send;
+}
+
+/// The avatar an upload asks the row to carry: a fresh blob pointer paired with its
+/// validated content type. It is exactly the payload of [`AgentAvatarRow::Present`],
+/// named on its own because it is the `Set` arm of the avatar column edit — the two
+/// coupled columns are always written and cleared together.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentAvatarAssignment {
+    pub pointer: AgentAvatarBlobPointer,
+    pub content_type: AvatarContentType,
+}
+
 /// The avatar coordinate held by an EXISTING agents row, decoded as one typed shape.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AgentAvatarRow {

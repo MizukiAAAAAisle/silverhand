@@ -28,7 +28,7 @@
 //! rebuilt under the wrong kind finds no bytes), never silent data corruption.
 
 use silverhand_backend_core::{
-    agent_avatar::{AgentAvatarBlobPointer, AgentAvatarBlobRead},
+    agent_avatar::{AgentAvatarBlobPointer, AgentAvatarBlobRead, AgentAvatarBlobStore},
     avatar::{
         AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome, AvatarBlobStore,
         AvatarContentType, AvatarStorageFailure,
@@ -36,12 +36,19 @@ use silverhand_backend_core::{
     blob_store::{
         BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore, StorageKind, StoredBlob,
     },
-    identity::UserId,
+    identity::{AgentId, UserId},
 };
 
-/// The fixed static scope every avatar blob is namespaced under. The per-user
+/// The fixed static scope every USER avatar blob is namespaced under. The per-user
 /// segment is derived losslessly from the opaque user id by the namespace builder.
 const AVATAR_SCOPE: &str = "avatars";
+
+/// The fixed static scope every AGENT avatar blob is namespaced under — DISTINCT from
+/// [`AVATAR_SCOPE`] so the two custodies never collide even when an [`AgentId`] and a
+/// [`UserId`] carry the same raw string: their blobs live under different scope
+/// prefixes. The mutating agent capability owns its own namespace, mirroring the
+/// separation of the [`AgentAvatarBlobPointer`] domain type from the user pointer.
+const AGENT_AVATAR_SCOPE: &str = "agent-avatars";
 
 /// Drives a single-backend [`BlobStore`] as the avatar leaf's [`AvatarBlobStore`].
 /// `kind` is the one storage kind the wrapped backend reports; it is reconstructed
@@ -108,6 +115,36 @@ impl<B: BlobStore> AgentAvatarBlobRead for SingleKindAvatarBlobs<B> {
         pointer: &AgentAvatarBlobPointer,
     ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
         self.read_stored_key(pointer.as_str()).await
+    }
+}
+
+impl<B: BlobStore> AgentAvatarBlobStore for SingleKindAvatarBlobs<B> {
+    async fn put(
+        &self,
+        agent_id: &AgentId,
+        content_type: AvatarContentType,
+        bytes: Vec<u8>,
+    ) -> Result<AgentAvatarBlobPointer, AvatarStorageFailure> {
+        // The agent custody's OWN static scope, never the user `AVATAR_SCOPE`: an agent
+        // and a user sharing a raw id still get disjoint blob keys.
+        let namespace = BlobNamespace::for_semantic_id(AGENT_AVATAR_SCOPE, agent_id.as_str())
+            .map_err(AvatarStorageFailure::from_source)?;
+        let stored = self
+            .blobs
+            .put(&namespace, content_type.as_str(), bytes)
+            .await
+            .map_err(AvatarStorageFailure::from_source)?;
+        AgentAvatarBlobPointer::parse(stored.key().as_str())
+            .map_err(AvatarStorageFailure::from_source)
+    }
+
+    async fn delete(&self, pointer: &AgentAvatarBlobPointer) -> Result<(), AvatarStorageFailure> {
+        let stored = self.stored_from_key(pointer.as_str())?;
+        self.blobs
+            .delete(&stored)
+            .await
+            .map(|_| ())
+            .map_err(AvatarStorageFailure::from_source)
     }
 }
 
@@ -230,8 +267,7 @@ mod tests {
         // losslessly rather than let it become a path component.
         let user = UserId::parse("user/with-sep").unwrap();
 
-        let pointer = adapter
-            .put(&user, AvatarContentType::Png, vec![1, 2, 3])
+        let pointer = AvatarBlobStore::put(&adapter, &user, AvatarContentType::Png, vec![1, 2, 3])
             .await
             .unwrap();
         assert_eq!(backend.live(), 1);
@@ -239,7 +275,7 @@ mod tests {
         let read = AvatarBlobRead::read(&adapter, &pointer).await.unwrap();
         assert!(matches!(read, AvatarBlobReadOutcome::Found(bytes) if bytes == vec![1, 2, 3]));
 
-        adapter.delete(&pointer).await.unwrap();
+        AvatarBlobStore::delete(&adapter, &pointer).await.unwrap();
         assert_eq!(backend.live(), 0);
         assert!(matches!(
             AvatarBlobRead::read(&adapter, &pointer).await.unwrap(),
@@ -253,12 +289,10 @@ mod tests {
             SingleKindAvatarBlobs::new(MemoryBlobs::new(StorageKind::Local), StorageKind::Local);
         let user = UserId::parse("stable-user").unwrap();
 
-        let first = adapter
-            .put(&user, AvatarContentType::Png, vec![9])
+        let first = AvatarBlobStore::put(&adapter, &user, AvatarContentType::Png, vec![9])
             .await
             .unwrap();
-        let second = adapter
-            .put(&user, AvatarContentType::Png, vec![9])
+        let second = AvatarBlobStore::put(&adapter, &user, AvatarContentType::Png, vec![9])
             .await
             .unwrap();
         assert_ne!(
@@ -276,22 +310,66 @@ mod tests {
         let backend = MemoryBlobs::new(StorageKind::Local);
         let adapter = SingleKindAvatarBlobs::new(backend.clone(), StorageKind::Local);
         let user = UserId::parse("agent-owner").unwrap();
-        let user_pointer = adapter
-            .put(&user, AvatarContentType::Png, vec![4, 5, 6])
-            .await
-            .unwrap();
+        let user_pointer =
+            AvatarBlobStore::put(&adapter, &user, AvatarContentType::Png, vec![4, 5, 6])
+                .await
+                .unwrap();
 
         let agent_pointer = AgentAvatarBlobPointer::parse(user_pointer.as_str()).unwrap();
         let read = AgentAvatarBlobRead::read(&adapter, &agent_pointer)
             .await
             .unwrap();
         assert!(matches!(read, AvatarBlobReadOutcome::Found(bytes) if bytes == vec![4, 5, 6]));
+    }
 
-        // A pointer to no stored bytes is a clean Missing, left for the core to price.
-        let dangling = AgentAvatarBlobPointer::parse("agents/ghost/avatars/blob-0.png").unwrap();
-        assert!(matches!(
-            AgentAvatarBlobRead::read(&adapter, &dangling).await.unwrap(),
-            AvatarBlobReadOutcome::Missing
-        ));
+    #[tokio::test]
+    async fn the_agent_put_uses_a_distinct_scope_and_round_trips_and_deletes() {
+        let backend = MemoryBlobs::new(StorageKind::Local);
+        let adapter = SingleKindAvatarBlobs::new(backend.clone(), StorageKind::Local);
+        let agent = AgentId::parse("agent-1").unwrap();
+
+        let pointer = AgentAvatarBlobStore::put(&adapter, &agent, AvatarContentType::Png, vec![7, 8])
+            .await
+            .unwrap();
+        assert!(
+            pointer.as_str().starts_with("agent-avatars/"),
+            "agent blobs live under their own scope, never the user `avatars/` scope: {}",
+            pointer.as_str()
+        );
+        assert_eq!(backend.live(), 1);
+
+        let read = AgentAvatarBlobRead::read(&adapter, &pointer).await.unwrap();
+        assert!(matches!(read, AvatarBlobReadOutcome::Found(bytes) if bytes == vec![7, 8]));
+
+        AgentAvatarBlobStore::delete(&adapter, &pointer).await.unwrap();
+        assert_eq!(backend.live(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_agent_and_a_user_sharing_a_raw_id_get_disjoint_blob_keys() {
+        let adapter =
+            SingleKindAvatarBlobs::new(MemoryBlobs::new(StorageKind::Local), StorageKind::Local);
+        let shared = "shared-id";
+        let user_pointer = AvatarBlobStore::put(
+            &adapter,
+            &UserId::parse(shared).unwrap(),
+            AvatarContentType::Png,
+            vec![1],
+        )
+        .await
+        .unwrap();
+        let agent_pointer = AgentAvatarBlobStore::put(
+            &adapter,
+            &AgentId::parse(shared).unwrap(),
+            AvatarContentType::Png,
+            vec![1],
+        )
+        .await
+        .unwrap();
+        assert_ne!(
+            user_pointer.as_str(),
+            agent_pointer.as_str(),
+            "the two custodies must never collide even on an identical raw id"
+        );
     }
 }

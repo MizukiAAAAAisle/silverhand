@@ -504,6 +504,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        agent_avatar::AgentAvatarRow,
         agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
         agent_lifecycle::MaterializationStatus,
         agent_profile_write::{
@@ -649,6 +650,10 @@ mod tests {
                     // never returns it.
                     let before = AgentRowBefore {
                         agent_id: agent.clone(),
+                        display_name: "Base Name".to_owned(),
+                        description: Some("base desc".to_owned()),
+                        fast_mode: Some(true),
+                        avatar: AgentAvatarRow::Absent,
                         context: self.context.clone(),
                     };
                     match decide(&before) {
@@ -665,6 +670,7 @@ mod tests {
                                 model: apply_str(edit.model(), Some("gpt-5.6-sol")),
                                 reasoning_effort: apply_str(edit.reasoning_effort(), Some("ultra")),
                                 fast_mode: apply_bool(edit.fast_mode(), Some(true)),
+                                avatar: AgentAvatarRow::Absent,
                                 updated_at: now_ms,
                             };
                             Ok(AgentProfileRowWrite::Committed { before, row })

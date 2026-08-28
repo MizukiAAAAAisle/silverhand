@@ -87,10 +87,13 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // #task:2225 — the public agent-lifecycle and avatar route family (Rust Wave 3).
     // Core capability ports and orchestration for the handle-availability probe
     // (route 1, `participant_handle_availability`), the agent tuning/profile write
-    // (route 2, `agent_profile_write`), and the agent avatar byte fetch (route 5,
-    // `agent_avatar`). Their SQLite adapters and server route surfaces are the sibling
-    // entries below; all stay UNMOUNTED until a later integration wires them.
+    // (route 2, `agent_profile_write`), the agent avatar byte fetch (route 5,
+    // `agent_avatar`), and the agent avatar upload/clear lifecycle (routes 3/4,
+    // `agent_avatar_write`, which reuses the single `agent_profile_write` row writer).
+    // Their SQLite adapters and server route surfaces are the sibling entries below;
+    // all stay UNMOUNTED until a later integration wires them.
     ("backend-core", "agent_avatar"),
+    ("backend-core", "agent_avatar_write"),
     ("backend-core", "agent_profile_write"),
     ("backend-core", "participant_handle_availability"),
     ("backend-core", "capability"),

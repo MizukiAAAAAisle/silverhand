@@ -5,9 +5,12 @@
 //! ## What this authority owns, and what it does not
 //!
 //! This authority owns the `agents` columns the profile/tuning capability writes —
-//! `display_name`, `description`, `model`, `reasoning_effort`, `fast_mode`, and (when
-//! the avatar routes land) the paired avatar pointer `avatar_storage_key` /
-//! `avatar_content_type`. Columns owned by OTHER capabilities are not written here: a
+//! `display_name`, `description`, `model`, `reasoning_effort`, `fast_mode` — plus the
+//! paired avatar pointer `avatar_storage_key` / `avatar_content_type`, whose SET/CLEAR
+//! admissions ([`admit_avatar_assignment`] / [`admit_avatar_removal`]) live here even
+//! though the avatar upload/clear ORCHESTRATION (blob put, orphan cleanup, announce)
+//! lives in the sibling `agent_avatar_write` bounded context, which reuses THIS single
+//! canonical row writer. Columns owned by OTHER capabilities are not written here: a
 //! `runtime` transition, the deletion/materialization lifecycle's status columns, and
 //! agent creation each have their own writers. The point is that a value legal for the
 //! public tuning capability can never be smuggled through it into a column that
@@ -61,6 +64,7 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    agent_avatar::{AgentAvatarAssignment, AgentAvatarRow},
     agents::{
         runtime::RuntimeKind,
         runtime_capability::{reasoning_effort_valid_for_runtime, runtime_supports_fast_mode},
@@ -188,13 +192,14 @@ impl TuningRejection {
 /// An admitted `agents`-row edit — the ONLY thing the persistence port accepts.
 ///
 /// It has NO public constructor: a value exists only if a per-capability admission
-/// fn ([`admit_public_tuning_edit`] today) minted it, so a caller cannot fabricate a
-/// write that touches columns its capability may not. Its accessors are public so
-/// the persistence adapter can read which columns to `SET`, but the shape is
-/// otherwise opaque — the adapter learns the intended values, never gains the power
-/// to construct an intent. The avatar arm is carried as `Leave` here because the
-/// tuning capability never touches it; the avatar and internal-profile constructors
-/// (their own routes) set it.
+/// fn ([`admit_public_tuning_edit`] for tuning, [`admit_avatar_assignment`] /
+/// [`admit_avatar_removal`] for the avatar routes) minted it, so a caller cannot
+/// fabricate a write that touches columns its capability may not. Its accessors are
+/// public so the persistence adapter can read which columns to `SET`, but the shape is
+/// otherwise opaque — the adapter learns the intended values, never gains the power to
+/// construct an intent. Each admission mints an edit that names ONLY its own columns
+/// (all others `Leave`): tuning leaves `avatar`, and the avatar admissions leave every
+/// tuning column, so a write can never smuggle a column across capability boundaries.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AdmittedAgentProfileEdit {
     display_name: RequiredEdit<String>,
@@ -202,6 +207,7 @@ pub struct AdmittedAgentProfileEdit {
     model: FieldEdit<String>,
     reasoning_effort: FieldEdit<String>,
     fast_mode: FieldEdit<bool>,
+    avatar: FieldEdit<AgentAvatarAssignment>,
 }
 
 impl AdmittedAgentProfileEdit {
@@ -219,6 +225,45 @@ impl AdmittedAgentProfileEdit {
     }
     pub fn fast_mode(&self) -> &FieldEdit<bool> {
         &self.fast_mode
+    }
+    pub fn avatar(&self) -> &FieldEdit<AgentAvatarAssignment> {
+        &self.avatar
+    }
+}
+
+/// The edit that leaves every tuning column untouched — the shared base the avatar
+/// admissions extend with their single avatar arm, keeping this the one place the
+/// tuning columns default to `Leave`.
+fn leave_tuning_columns() -> AdmittedAgentProfileEdit {
+    AdmittedAgentProfileEdit {
+        display_name: RequiredEdit::Leave,
+        description: FieldEdit::Leave,
+        model: FieldEdit::Leave,
+        reasoning_effort: FieldEdit::Leave,
+        fast_mode: FieldEdit::Leave,
+        avatar: FieldEdit::Leave,
+    }
+}
+
+/// Admit an avatar UPLOAD: set the paired avatar column to a freshly-minted blob
+/// pointer + its validated content type, leaving every tuning column untouched. The
+/// avatar capability judges no runtime legality — the payload was already validated
+/// (empty/size/MIME) by [`crate::avatar::validate_avatar`] before the blob was put —
+/// so this admission is infallible and names ONLY the avatar column.
+pub fn admit_avatar_assignment(assignment: &AgentAvatarAssignment) -> AdmittedAgentProfileEdit {
+    AdmittedAgentProfileEdit {
+        avatar: FieldEdit::Set(assignment.clone()),
+        ..leave_tuning_columns()
+    }
+}
+
+/// Admit an avatar REMOVAL: clear the paired avatar column (both `avatar_storage_key`
+/// and `avatar_content_type` to NULL, written together), leaving every tuning column
+/// untouched.
+pub fn admit_avatar_removal() -> AdmittedAgentProfileEdit {
+    AdmittedAgentProfileEdit {
+        avatar: FieldEdit::Clear,
+        ..leave_tuning_columns()
     }
 }
 
@@ -280,6 +325,8 @@ pub fn admit_public_tuning_edit(
         model: request.model,
         reasoning_effort: request.reasoning_effort,
         fast_mode: request.fast_mode,
+        // The tuning capability never touches the avatar column.
+        avatar: FieldEdit::Leave,
     })
 }
 
@@ -288,9 +335,13 @@ pub fn admit_public_tuning_edit(
 // ===========================================================================
 
 /// The committed `agents`-row values a write returns for SEALING — the id, the write
-/// instant, and every column the tuning capability can touch. This is NOT the wire
-/// DTO: it carries no host `LEFT JOIN` label and no avatar URL. The adapter fills it
-/// from the `UPDATE ... RETURNING` under its write lock.
+/// instant, and every column this canonical writer can touch (the tuning columns AND
+/// the paired avatar column state). This is NOT the wire DTO: it carries the avatar
+/// column pair as the typed [`AgentAvatarRow`], never a rendered avatar URL, and no
+/// host `LEFT JOIN` label. The adapter fills it from the `UPDATE ... RETURNING` under
+/// its write lock, decoding the avatar pair through the SAME `decode_agent_avatar_row`
+/// rule the before-image used, so a half-populated or malformed committed pair is an
+/// integrity fault, never a silently-dropped column.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommittedAgentRow {
     pub id: AgentId,
@@ -299,19 +350,28 @@ pub struct CommittedAgentRow {
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub fast_mode: Option<bool>,
+    pub avatar: AgentAvatarRow,
     pub updated_at: i64,
 }
 
-/// The before-image a tuning write judged against, bound to the agent it was read
-/// for. Both halves are DB-observable WITNESSES: `agent_id` is decoded from the
-/// SELECTED row's own `id` column — never back-filled from a query parameter — and
-/// `context` is that row's current runtime/model/effort. The use case asserts
-/// `agent_id == subject` before it trusts `context` to replay the rule, so a cross-wire
-/// adapter cannot pass agent-B's current state as agent-A's before-image (minting a
-/// refusal that is really B's, or laundering A's write past B's legality).
+/// The before-image a write judged against, bound to the agent it was read for, and
+/// covering EVERY committed mutable column this canonical writer can touch — because
+/// the full-column seal derives the expected after-image as `replay(before, edit)` and
+/// a left-alone column must equal its before value. All fields are DB-observable
+/// WITNESSES: `agent_id` and `avatar` come from the SELECTED row decoded as ONE typed
+/// shape by `decode_agent_avatar_row` (never back-filled from a query parameter), and
+/// `context` carries the current runtime/model/effort the tuning legality is judged
+/// against. The use case asserts `agent_id == subject` before it trusts any of this to
+/// replay the rule, so a cross-wire adapter cannot pass agent-B's current state as
+/// agent-A's before-image (minting a refusal that is really B's, or laundering A's
+/// write past B's legality).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentRowBefore {
     pub agent_id: AgentId,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub fast_mode: Option<bool>,
+    pub avatar: AgentAvatarRow,
     pub context: AgentTuningContext,
 }
 
@@ -545,7 +605,7 @@ where
             }
             let admitted = admit_public_tuning_edit(&before.context, request.clone())
                 .map_err(|_| AgentProfileWriteError::UntrustworthyWriteFact)?;
-            seal_profile_write(subject, &admitted, &row, now_ms)?;
+            seal_agent_row(subject, &before, &admitted, &row, now_ms)?;
             let announce = announce(announce_sink, subject).await;
             Ok(AgentProfileUpdateOutcome::Committed(
                 AnnouncedAgentProfileUpdate {
@@ -557,23 +617,34 @@ where
     }
 }
 
-/// Seal a committed tuning fact against the request: the row is the one asked for,
-/// the write stamped `updated_at` to `now_ms` (a tuning edit always writes), and
-/// every touched column carries exactly the intended value. A left-alone column is
-/// not asserted — there is no before-image to compare, and the product leaves it be.
-fn seal_profile_write(
+/// Seal a committed fact against the FULL expected after-image `replay(before, edit)`.
+/// The row must be the one asked for, the write must have stamped `updated_at` to
+/// `now_ms` (this writer always writes when it commits), and EVERY column must equal
+/// what the admitted edit derives from the before-image: a `Set`/`Clear` names its new
+/// value, and a `Leave` must equal the before value — so a commit that silently
+/// mutated a column the capability did not name (an avatar write that also touched
+/// `model`, a tuning write that dropped the avatar) is an untrustworthy fact. This is
+/// the ONE seal both the tuning use case and the avatar use cases share, over the same
+/// canonical row.
+pub(crate) fn seal_agent_row(
     subject: &AgentId,
+    before: &AgentRowBefore,
     edit: &AdmittedAgentProfileEdit,
     committed: &CommittedAgentRow,
     now_ms: i64,
 ) -> Result<(), AgentProfileWriteError> {
     let ok = committed.id == *subject
         && committed.updated_at == now_ms
-        && column_matches(&edit.display_name, &committed.display_name)
-        && nullable_matches(&edit.description, &committed.description)
-        && nullable_matches(&edit.model, &committed.model)
-        && nullable_matches(&edit.reasoning_effort, &committed.reasoning_effort)
-        && nullable_matches(&edit.fast_mode, &committed.fast_mode);
+        && required_matches_after(&edit.display_name, &before.display_name, &committed.display_name)
+        && nullable_matches_after(&edit.description, &before.description, &committed.description)
+        && nullable_matches_after(&edit.model, &before.context.model, &committed.model)
+        && nullable_matches_after(
+            &edit.reasoning_effort,
+            &before.context.reasoning_effort,
+            &committed.reasoning_effort,
+        )
+        && nullable_matches_after(&edit.fast_mode, &before.fast_mode, &committed.fast_mode)
+        && avatar_matches_after(&edit.avatar, &before.avatar, &committed.avatar);
     if ok {
         Ok(())
     } else {
@@ -581,22 +652,52 @@ fn seal_profile_write(
     }
 }
 
-/// A non-nullable column matches: a `Set` must equal the committed value; a `Leave`
-/// is not asserted (kept as stored).
-fn column_matches<T: PartialEq>(edit: &RequiredEdit<T>, committed: &T) -> bool {
+/// A non-nullable column's expected after-image: a `Set` names the new value, a
+/// `Leave` must equal the before value.
+fn required_matches_after<T: PartialEq>(
+    edit: &RequiredEdit<T>,
+    before: &T,
+    committed: &T,
+) -> bool {
     match edit {
-        RequiredEdit::Leave => true,
-        RequiredEdit::Set(value) => value == committed,
+        RequiredEdit::Leave => committed == before,
+        RequiredEdit::Set(value) => committed == value,
     }
 }
 
-/// A nullable column matches: a `Set` must equal `Some(value)`, a `Clear` must be
-/// `None`, a `Leave` is not asserted.
-fn nullable_matches<T: PartialEq>(edit: &FieldEdit<T>, committed: &Option<T>) -> bool {
+/// A nullable column's expected after-image: a `Set` names `Some(value)`, a `Clear`
+/// names `None`, a `Leave` must equal the before value.
+fn nullable_matches_after<T: PartialEq>(
+    edit: &FieldEdit<T>,
+    before: &Option<T>,
+    committed: &Option<T>,
+) -> bool {
     match edit {
-        FieldEdit::Leave => true,
+        FieldEdit::Leave => committed == before,
         FieldEdit::Clear => committed.is_none(),
         FieldEdit::Set(value) => committed.as_ref() == Some(value),
+    }
+}
+
+/// The paired avatar column's expected after-image: a `Set` names the assigned
+/// pointer + content type as [`AgentAvatarRow::Present`], a `Clear` names
+/// [`AgentAvatarRow::Absent`] (both columns NULL, together), a `Leave` must equal the
+/// before row state.
+fn avatar_matches_after(
+    edit: &FieldEdit<AgentAvatarAssignment>,
+    before: &AgentAvatarRow,
+    committed: &AgentAvatarRow,
+) -> bool {
+    match edit {
+        FieldEdit::Leave => committed == before,
+        FieldEdit::Clear => *committed == AgentAvatarRow::Absent,
+        FieldEdit::Set(assignment) => {
+            *committed
+                == AgentAvatarRow::Present {
+                    pointer: assignment.pointer.clone(),
+                    content_type: assignment.content_type,
+                }
+        }
     }
 }
 
@@ -860,6 +961,7 @@ mod tests {
             model: Some("gpt-5.6-sol".to_owned()),
             reasoning_effort: Some("ultra".to_owned()),
             fast_mode: Some(true),
+            avatar: AgentAvatarRow::Absent,
             updated_at: now,
         }
     }
@@ -874,11 +976,17 @@ mod tests {
         }
     }
 
-    /// A before-image witness bound to `agent()` (the default subject). The mismatch
-    /// tests build one bound to a different id directly.
+    /// A before-image witness bound to `agent()` (the default subject). The mutable
+    /// column state is arbitrary except `avatar` (Absent): [`request`] SETs every
+    /// tuning column, so only the left-alone avatar is sealed against the before value.
+    /// The mismatch tests build one bound to a different id directly.
     fn before(runtime: RuntimeKind) -> AgentRowBefore {
         AgentRowBefore {
             agent_id: agent(),
+            display_name: "Old Name".to_owned(),
+            description: None,
+            fast_mode: None,
+            avatar: AgentAvatarRow::Absent,
             context: ctx(runtime),
         }
     }
@@ -987,6 +1095,10 @@ mod tests {
         // spurious 400.
         let before = AgentRowBefore {
             agent_id: AgentId::parse("agent-other").unwrap(),
+            display_name: "Old Name".to_owned(),
+            description: None,
+            fast_mode: None,
+            avatar: AgentAvatarRow::Absent,
             context: ctx(RuntimeKind::Claude),
         };
         let request = AgentTuningEdit {
@@ -1013,6 +1125,10 @@ mod tests {
         // let this seal and succeed wrongly.
         let before = AgentRowBefore {
             agent_id: AgentId::parse("agent-other").unwrap(),
+            display_name: "Old Name".to_owned(),
+            description: None,
+            fast_mode: None,
+            avatar: AgentAvatarRow::Absent,
             context: ctx(RuntimeKind::Codex), // request() is legal here
         };
         let writes = FakeWrites(AgentProfileRowWrite::Committed {

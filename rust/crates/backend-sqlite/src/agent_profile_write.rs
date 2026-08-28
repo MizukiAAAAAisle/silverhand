@@ -1,6 +1,6 @@
 //! SQLite adapter for the canonical, capability-NEUTRAL `agents`-row write behind the
-//! public agent-lifecycle routes (`PATCH /api/agents/{id}` today; avatar and
-//! internal-profile next).
+//! public agent-lifecycle routes (`PATCH /api/agents/{id}` and the avatar upload/removal
+//! today; internal-profile next).
 //!
 //! Like the other write stores, this is a **pure consumer** of an existing product
 //! database: it opens a pool against a schema that already exists and migrates or
@@ -20,20 +20,22 @@
 //! the core cannot replay.
 //!
 //! The whole write is one `BEGIN IMMEDIATE` transaction. First a locked
-//! `SELECT id, runtime, model, reasoning_effort WHERE id = ?`: no row →
-//! [`AgentProfileRowWrite::NoSuchAgent`] (the surface's `404`, zero `UPDATE`); a row
-//! whose `runtime` cannot be decoded is a persistence-integrity fault. The before-image
-//! witness binds its `agent_id` to the SELECTED row's OWN `id` column — decoded through
-//! the domain's fallible parser, never back-filled from the query parameter — so the
-//! core can confirm the witness was read for the request subject before it replays the
-//! decision. Then the injected `decide(&before)` chooses the branch: `None` returns
+//! `SELECT` of the row's `id`, tuning columns, and coupled avatar pair `WHERE id = ?`:
+//! no row → [`AgentProfileRowWrite::NoSuchAgent`] (the surface's `404`, zero `UPDATE`);
+//! a row whose `runtime` cannot be decoded, or whose id / avatar pair is malformed, is a
+//! persistence-integrity fault. The before-image witness binds its `agent_id` AND its
+//! avatar state to the SELECTED row's OWN columns — decoded WHOLE through the domain's
+//! one shared avatar rule, never back-filled from the query parameter — so the core can
+//! confirm the witness was read for the request subject before it replays the decision.
+//! Then the injected `decide(&before)` chooses the branch: `None` returns
 //! [`AgentProfileRowWrite::Unchanged`] carrying that before-image, with zero `UPDATE`;
 //! `Some(edit)` drives the `UPDATE`. Only the columns the admitted edit names are placed
 //! in the `SET` clause — a `Leave` is omitted, a `Clear` writes `NULL`, a `Set` binds the
-//! value — and `updated_at` is always stamped to `now_ms`, so a committed write always
-//! bumps the row's instant (matching `agent-service.ts`'s always-touch update). The
-//! committed columns are projected from the write's OWN `RETURNING` row — never a
-//! post-commit re-read — and returned alongside the before-image as
+//! value, and the avatar's two columns are always written or cleared TOGETHER — and
+//! `updated_at` is always stamped to `now_ms`, so a committed write always bumps the
+//! row's instant (matching `agent-service.ts`'s always-touch update). The committed
+//! columns are projected from the write's OWN `RETURNING` row — never a post-commit
+//! re-read — and returned alongside the before-image as
 //! [`AgentProfileRowWrite::Committed`], so the core replay can re-derive the admitted
 //! intent and seal the fact this write produced.
 //!
@@ -45,6 +47,9 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    agent_avatar::{
+        AgentAvatarRow, AgentAvatarRowCorruption, AgentAvatarServeRef, decode_agent_avatar_row,
+    },
     agent_profile_write::{
         AdmittedAgentProfileEdit, AgentProfileRowWrite, AgentProfileWriteUnitOfWork,
         AgentRowBefore, AgentTuningContext, CommittedAgentRow, FieldEdit, RequiredEdit,
@@ -69,8 +74,8 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 // tuning columns, and the write instant. A FIXED `RETURNING` suffix — it does not
 // vary with which columns the `SET` clause touched, so the write always projects the
 // same shape the seal reads.
-const RETURNING_COMMITTED_ROW: &str =
-    " RETURNING id, display_name, description, model, reasoning_effort, fast_mode, updated_at";
+const RETURNING_COMMITTED_ROW: &str = " RETURNING id, display_name, description, model, \
+     reasoning_effort, fast_mode, avatar_storage_key, avatar_content_type, updated_at";
 
 /// A pooled connection to an existing product database, offering the canonical
 /// agent-tuning write. Holds no clock; `now_ms` is passed in by the application.
@@ -88,16 +93,6 @@ pub enum SqliteAgentProfileWriteError {
     Sql(#[from] sqlx::Error),
 }
 
-/// A committed row whose `id` column decodes to a value the domain refuses (today
-/// only the empty string). The product schema's ids are non-empty by construction,
-/// so such a row is a persistence-integrity fault surfaced as the source of a
-/// [`PersistenceFailure`], never coerced to a sentinel.
-#[derive(Debug, Error)]
-#[error("agents.{column} holds an unusable identifier")]
-struct CorruptStoredIdentifier {
-    column: &'static str,
-}
-
 /// A stored `agents.runtime` that the domain refuses to decode. The product schema
 /// constrains this column to the known runtime kinds, so an undecodable value is a
 /// persistence-integrity fault surfaced as the source of a [`PersistenceFailure`] —
@@ -109,15 +104,17 @@ struct CorruptStoredRuntime {
 }
 
 /// A write that failed in the driver or on a row that cannot be decoded into the
-/// domain. Both reach the caller as the source of one `PersistenceFailure`; the
-/// split lets an integrity fault name its column rather than masquerade as a driver
-/// error.
+/// domain. All three reach the caller as the source of one `PersistenceFailure`; the
+/// split lets an integrity fault name its cause rather than masquerade as a driver
+/// error. The agent id AND the avatar pair are decoded through the shared
+/// [`decode_agent_avatar_row`] rule, so a malformed id or a half-populated avatar pair
+/// is [`AvatarCorruption`], caught before the decision or the seal ever runs.
 #[derive(Debug, Error)]
 enum ProfileWriteFailure {
     #[error(transparent)]
     Sql(#[from] sqlx::Error),
     #[error(transparent)]
-    Integrity(#[from] CorruptStoredIdentifier),
+    AvatarCorruption(#[from] AgentAvatarRowCorruption),
     #[error(transparent)]
     CorruptRuntime(#[from] CorruptStoredRuntime),
 }
@@ -162,26 +159,36 @@ impl SqliteAgentProfileWrite {
         // gate is replayed against — so the fact the gate judges is the fact this
         // transaction will commit, with no window for a concurrent PATCH to slip a
         // stale legality verdict past it.
-        let current =
-            sqlx::query("SELECT id, runtime, model, reasoning_effort FROM agents WHERE id = ?")
-                .bind(agent.as_str())
-                .fetch_optional(&mut *tx)
-                .await?;
+        let current = sqlx::query(
+            "SELECT id, runtime, model, reasoning_effort, display_name, description, fast_mode, \
+                    avatar_storage_key, avatar_content_type \
+               FROM agents WHERE id = ?",
+        )
+        .bind(agent.as_str())
+        .fetch_optional(&mut *tx)
+        .await?;
         let Some(current) = current else {
             tx.commit().await?;
             return Ok(AgentProfileRowWrite::NoSuchAgent);
         };
 
-        // Bind the before-image to the SELECTED row's OWN id column — never back-filled
-        // from the query parameter — so the witness the core replays against carries the
-        // identity it was actually read for. A malformed stored id is corruption.
-        let before_id = AgentId::parse(current.try_get::<String, _>("id")?)
-            .map_err(|_| CorruptStoredIdentifier { column: "id" })?;
+        // Bind the before-image to the SELECTED row's OWN id and avatar columns —
+        // never back-filled from the query parameter — so the witness the core replays
+        // against carries the identity AND avatar state it was actually read for. The id
+        // and the coupled avatar pair are decoded WHOLE through the one shared rule; a
+        // malformed id or a half-populated avatar pair is corruption caught here, before
+        // the decision or the seal ever runs.
+        let (before_id, before_avatar) = decode_id_and_avatar(&current)?;
         let runtime_raw: String = current.try_get("runtime")?;
         let runtime =
             RuntimeKind::parse(&runtime_raw).ok_or(CorruptStoredRuntime { value: runtime_raw })?;
+        let fast_mode: Option<i64> = current.try_get("fast_mode")?;
         let before = AgentRowBefore {
             agent_id: before_id,
+            display_name: current.try_get("display_name")?,
+            description: current.try_get("description")?,
+            fast_mode: fast_mode.map(|value| value != 0),
+            avatar: before_avatar,
             context: AgentTuningContext {
                 runtime,
                 model: current.try_get("model")?,
@@ -239,6 +246,24 @@ impl SqliteAgentProfileWrite {
                 separator(&mut builder, &mut needs_comma);
                 builder.push("fast_mode = ");
                 builder.push_bind(*value);
+            }
+        }
+        // The avatar is a COUPLED pair: the storage key and the content type are always
+        // written or cleared together, never one without the other, so the row can never
+        // hold a half-populated pair the decode rule would reject on the next read. A
+        // `Leave` omits both; a `Clear` NULLs both; a `Set` binds both.
+        match admitted.avatar() {
+            FieldEdit::Leave => {}
+            FieldEdit::Clear => {
+                separator(&mut builder, &mut needs_comma);
+                builder.push("avatar_storage_key = NULL, avatar_content_type = NULL");
+            }
+            FieldEdit::Set(assignment) => {
+                separator(&mut builder, &mut needs_comma);
+                builder.push("avatar_storage_key = ");
+                builder.push_bind(assignment.pointer.as_str());
+                builder.push(", avatar_content_type = ");
+                builder.push_bind(assignment.content_type.as_str());
             }
         }
 
@@ -302,13 +327,35 @@ fn push_nullable_str(
     }
 }
 
-/// Decode the committed tuning columns from the write's own `RETURNING` row. The id
-/// is parsed through the domain's fallible parser, so a malformed committed id is
-/// corruption, never a product answer; `fast_mode` is read as an integer and folded
-/// `!= 0`, mirroring the detail read's affinity-safe decode.
+/// Decode a row's read-back `id` + coupled avatar pair through the ONE shared core
+/// rule ([`decode_agent_avatar_row`]). Both the locked before-image and the committed
+/// `RETURNING` row go through this, so the id is bound to the row's OWN `id` column
+/// (never the query parameter) and a malformed id or a half-populated avatar pair is an
+/// integrity fault BEFORE the decision or the seal, never a silently-dropped column.
+fn decode_id_and_avatar(
+    row: &SqliteRow,
+) -> Result<(AgentId, AgentAvatarRow), ProfileWriteFailure> {
+    let row_id: String = row.try_get("id")?;
+    let storage_key: Option<String> = row.try_get("avatar_storage_key")?;
+    let content_type: Option<String> = row.try_get("avatar_content_type")?;
+    // The shared decode yields `Row { source, avatar }` for any present row (the no-row
+    // case is the caller's SELECT/RETURNING existence check, never this decode), so both
+    // halves of the identity-bound fact come out of one rule, whole.
+    let AgentAvatarServeRef::Row { source, avatar } =
+        decode_agent_avatar_row(&row_id, storage_key.as_deref(), content_type.as_deref())?
+    else {
+        unreachable!("decode_agent_avatar_row yields Row for a present agents row");
+    };
+    Ok((source, avatar))
+}
+
+/// Decode the committed columns from the write's own `RETURNING` row. The id and the
+/// coupled avatar pair are decoded WHOLE through [`decode_id_and_avatar`], so a
+/// malformed committed id or a half-populated avatar pair is corruption, never a
+/// product answer; `fast_mode` is read as an integer and folded `!= 0`, mirroring the
+/// detail read's affinity-safe decode.
 fn decode_committed_row(row: &SqliteRow) -> Result<CommittedAgentRow, ProfileWriteFailure> {
-    let id = AgentId::parse(row.try_get::<String, _>("id")?)
-        .map_err(|_| CorruptStoredIdentifier { column: "id" })?;
+    let (id, avatar) = decode_id_and_avatar(row)?;
     let fast_mode: Option<i64> = row.try_get("fast_mode")?;
     let fast_mode = fast_mode.map(|value| value != 0);
     Ok(CommittedAgentRow {
@@ -318,6 +365,7 @@ fn decode_committed_row(row: &SqliteRow) -> Result<CommittedAgentRow, ProfileWri
         model: row.try_get("model")?,
         reasoning_effort: row.try_get("reasoning_effort")?,
         fast_mode,
+        avatar,
         updated_at: row.try_get("updated_at")?,
     })
 }
@@ -341,7 +389,11 @@ impl AgentProfileWriteUnitOfWork for SqliteAgentProfileWrite {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::agent_profile_write::{AgentTuningEdit, admit_public_tuning_edit};
+    use silverhand_backend_core::agent_avatar::{AgentAvatarAssignment, AgentAvatarBlobPointer};
+    use silverhand_backend_core::agent_profile_write::{
+        AgentTuningEdit, admit_avatar_assignment, admit_avatar_removal, admit_public_tuning_edit,
+    };
+    use silverhand_backend_core::avatar::AvatarContentType;
     use sqlx::{Connection, Executor, SqliteConnection};
 
     /// Drive the canonical writer exactly as the production PATCH route does: inject the
@@ -369,8 +421,12 @@ mod tests {
 
     // A codex agent `agent-1` seeded with a full tuning state (model + reasoning +
     // fast_mode) so a Clear has something to erase; a claude agent `agent-2` whose
-    // tuning columns start NULL; and a codex agent `agent-3` at `gpt-5.6-sol` +
-    // `high` used only by the under-lock re-admission falsifier.
+    // tuning columns start NULL; a codex agent `agent-3` at `gpt-5.6-sol` + `high` used
+    // only by the under-lock re-admission falsifier; a claude agent `agent-4` seeded WITH
+    // a valid coupled avatar pair so a Clear has one to erase and a Leave one to
+    // preserve; and a claude agent `agent-5` seeded with an EMPTY storage key + a content
+    // type — a pair that passes the schema's NULL-coupling CHECK yet the writer never
+    // mints, so the decode rule rejects it as corruption BEFORE any decision.
     const SEED_SQL: &str = "\
 INSERT INTO users (id, name, display_name, created_at, updated_at) \
   VALUES ('user-1', 'owner', 'Owner', 1, 1); \
@@ -380,7 +436,11 @@ INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, fa
 INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id, created_at, updated_at) \
   VALUES ('agent-2', 'bob', 'Bob', 'claude', 'host-1', 'user-1', 10, 100); \
 INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, host_id, created_by_user_id, created_at, updated_at) \
-  VALUES ('agent-3', 'carol', 'Carol', 'codex', 'gpt-5.6-sol', 'high', 'host-1', 'user-1', 10, 100);";
+  VALUES ('agent-3', 'carol', 'Carol', 'codex', 'gpt-5.6-sol', 'high', 'host-1', 'user-1', 10, 100); \
+INSERT INTO agents (id, name, display_name, runtime, avatar_storage_key, avatar_content_type, host_id, created_by_user_id, created_at, updated_at) \
+  VALUES ('agent-4', 'dave', 'Dave', 'claude', 'agent-avatars/agent-4/blob-seed', 'image/png', 'host-1', 'user-1', 10, 100); \
+INSERT INTO agents (id, name, display_name, runtime, avatar_storage_key, avatar_content_type, host_id, created_by_user_id, created_at, updated_at) \
+  VALUES ('agent-5', 'erin', 'Erin', 'claude', '', 'image/png', 'host-1', 'user-1', 10, 100);";
 
     async fn open_seeded() -> (tempfile::TempDir, SqliteAgentProfileWrite) {
         let directory = tempfile::tempdir().unwrap();
@@ -618,5 +678,127 @@ INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, ho
         assert_eq!(model_b.as_deref(), Some("gpt-5.6-terra"));
         assert_eq!(effort_b.as_deref(), Some("high"));
         assert_eq!(updated_b, 500);
+    }
+
+    /// The raw coupled avatar columns as they sit on disk, for asserting a `Set` binds
+    /// both and a `Clear` NULLs both.
+    async fn stored_avatar(
+        adapter: &SqliteAgentProfileWrite,
+        id: &str,
+    ) -> (Option<String>, Option<String>) {
+        sqlx::query_as::<_, (Option<String>, Option<String>)>(
+            "SELECT avatar_storage_key, avatar_content_type FROM agents WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&adapter.pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_avatar_assignment_writes_both_paired_columns_and_returns_present() {
+        let (_dir, adapter) = open_seeded().await;
+        // agent-2 starts with no avatar; assign one — both coupled columns must land
+        // together and the committed row must report the paired Present state.
+        let assignment = AgentAvatarAssignment {
+            pointer: AgentAvatarBlobPointer::parse("agent-avatars/agent-2/blob-0").unwrap(),
+            content_type: AvatarContentType::Png,
+        };
+        let expected = assignment.clone();
+        let outcome = adapter
+            .write_agent_row(
+                &agent("agent-2"),
+                move |_before| Some(admit_avatar_assignment(&assignment)),
+                4000,
+            )
+            .await
+            .unwrap();
+        let AgentProfileRowWrite::Committed { before, row } = outcome else {
+            panic!("expected Committed");
+        };
+        assert_eq!(before.avatar, AgentAvatarRow::Absent);
+        assert_eq!(
+            row.avatar,
+            AgentAvatarRow::Present {
+                pointer: expected.pointer.clone(),
+                content_type: AvatarContentType::Png,
+            }
+        );
+        assert_eq!(row.updated_at, 4000);
+        let (key, mime) = stored_avatar(&adapter, "agent-2").await;
+        assert_eq!(key.as_deref(), Some("agent-avatars/agent-2/blob-0"));
+        assert_eq!(mime.as_deref(), Some("image/png"));
+    }
+
+    #[tokio::test]
+    async fn an_avatar_removal_nulls_both_paired_columns_and_returns_absent() {
+        let (_dir, adapter) = open_seeded().await;
+        // agent-4 is seeded WITH a coupled avatar pair; a removal must NULL both columns
+        // together and the committed row must report Absent, with the before-image
+        // carrying the seeded Present state it read under the lock.
+        let outcome = adapter
+            .write_agent_row(&agent("agent-4"), |_before| Some(admit_avatar_removal()), 4100)
+            .await
+            .unwrap();
+        let AgentProfileRowWrite::Committed { before, row } = outcome else {
+            panic!("expected Committed");
+        };
+        assert!(
+            matches!(before.avatar, AgentAvatarRow::Present { .. }),
+            "the before witness must carry the seeded avatar it read"
+        );
+        assert_eq!(row.avatar, AgentAvatarRow::Absent);
+        assert_eq!(row.updated_at, 4100);
+        let (key, mime) = stored_avatar(&adapter, "agent-4").await;
+        assert_eq!(key, None);
+        assert_eq!(mime, None);
+    }
+
+    #[tokio::test]
+    async fn a_leave_avatar_edit_preserves_the_seeded_pair_in_the_committed_row() {
+        let (_dir, adapter) = open_seeded().await;
+        // A pure tuning edit (avatar Leave) on agent-4 must not touch the avatar columns:
+        // the RETURNING row still carries the seeded Present pair, whole.
+        let request = AgentTuningEdit {
+            display_name: RequiredEdit::Set("Dave II".to_owned()),
+            ..leave_all()
+        };
+        let outcome = admit_and_apply(&adapter, &agent("agent-4"), &request, 4200)
+            .await
+            .unwrap();
+        let AgentProfileRowWrite::Committed { row, .. } = outcome else {
+            panic!("expected Committed");
+        };
+        assert_eq!(row.display_name, "Dave II");
+        assert_eq!(
+            row.avatar,
+            AgentAvatarRow::Present {
+                pointer: AgentAvatarBlobPointer::parse("agent-avatars/agent-4/blob-seed").unwrap(),
+                content_type: AvatarContentType::Png,
+            }
+        );
+        let (key, mime) = stored_avatar(&adapter, "agent-4").await;
+        assert_eq!(key.as_deref(), Some("agent-avatars/agent-4/blob-seed"));
+        assert_eq!(mime.as_deref(), Some("image/png"));
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_stored_avatar_pair_is_an_integrity_fault_before_the_decision() {
+        let (_dir, adapter) = open_seeded().await;
+        // agent-5's stored key is empty — a pair the writer never mints. The decode of
+        // the LOCKED before-image must reject it as corruption BEFORE `decide` runs, so a
+        // decision closure that panics is never consulted and the call returns a
+        // persistence error rather than composing a write off a corrupt witness.
+        let result = adapter
+            .write_agent_row(
+                &agent("agent-5"),
+                |_before| panic!("the decision must never run on a corrupt before-image"),
+                4300,
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "an empty stored avatar key is corruption, not a decision input"
+        );
     }
 }
