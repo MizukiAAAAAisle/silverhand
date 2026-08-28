@@ -2892,7 +2892,6 @@ async fn settle_event<C, D, H>(
             return;
         }
     };
-    runtime.clear_session_waiters.notify_exit(&principal);
     let owner = match DeliveryLeaseOwner::parse(connection_id.to_owned()) {
         Ok(owner) => owner,
         Err(cause) => {
@@ -3096,6 +3095,15 @@ async fn finalize_runtime_event<C, D, H>(
         .await
     {
         Ok(result) => {
+            if result.disposition()
+                == silverhand_backend_core::runtime_event::RuntimeExitDisposition::Applied
+            {
+                // A clear-session acknowledgement only says the daemon initiated
+                // the kill. Release its waiter after the exact runtime exit is
+                // durably committed; delivery settlement and stale exits are not
+                // evidence that this runtime stopped.
+                runtime.clear_session_waiters.notify_exit(&principal);
+            }
             let conversation = match event.conversation() {
                 Ok(conversation) => conversation,
                 Err(cause) => {

@@ -23,6 +23,11 @@ use silverhand_backend_core::{
         AddressedPrincipals, CreatedMessage, DirectLineAuthority, FromKind, MessageContent,
         MessageId, MessageSeq, PrincipalKind, ReferencePositions, SendActor, SendDestination,
         SendMessage, SendMessageDraft, SendMessageUnitOfWork,
+        collaboration::{
+            BoundRuntimeControlSeat, ClearSessionCommitReceipt, ClearSessionProviderRefusal,
+            RuntimeControlPort, RuntimeControlSeatPort, RuntimeControlSeatSnapshot,
+            RuntimeControlTarget,
+        },
         post_commit::{IdleStart, MainDelivery},
     },
     persistence::PersistenceFailure,
@@ -70,6 +75,7 @@ use silverhand_backend_server::{
         cascade_effects::{AgentDeletedAnnouncement, ProductionComputerCascadeEffects},
         detail::ConnectedHostName,
     },
+    runtime_control::ProductionRuntimeControl,
     runtime_credential::RuntimeCredentialAuthority,
     scope_events::{
         AllowedOrigin, ConnectionLifecycle, DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH,
@@ -125,6 +131,11 @@ type Effects = DaemonDeliveryEffects<
     CountingRuntimeDeliveryStore,
     SqliteHostRuntimeStore,
 >;
+type RuntimeControl = ProductionRuntimeControl<
+    SqliteRuntimeCustodyStore,
+    CountingRuntimeDeliveryStore,
+    SqliteHostRuntimeStore,
+>;
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 struct Fixture {
@@ -132,7 +143,9 @@ struct Fixture {
     path: std::path::PathBuf,
     address: std::net::SocketAddr,
     effects: Effects,
+    runtime_control: RuntimeControl,
     settlement_calls: Arc<AtomicUsize>,
+    clear_settlement_calls: Arc<AtomicUsize>,
     controller: DaemonDeliveryController,
     event_controller: EventWebSocketController,
     server: tokio::task::JoinHandle<()>,
@@ -236,9 +249,11 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
     db.close().await.unwrap();
     let custody = SqliteRuntimeCustodyStore::open(&path).await.unwrap();
     let settlement_calls = Arc::new(AtomicUsize::new(0));
+    let clear_settlement_calls = Arc::new(AtomicUsize::new(0));
     let data = CountingRuntimeDeliveryStore {
         inner: SqliteRuntimeDeliveryStore::open(&path).await.unwrap(),
         settlement_calls: settlement_calls.clone(),
+        clear_settlement_calls: clear_settlement_calls.clone(),
     };
     let hosts = SqliteHostRuntimeStore::open(&path).await.unwrap();
     let event_hub = ScopeEventHub::production().unwrap();
@@ -249,6 +264,7 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
         event_hub.clone(),
     )
     .unwrap();
+    let runtime_control = runtime.runtime_control();
     let effects = runtime.effects();
     let (daemon_router, controller) = runtime.router();
     let sessions = HumanSessionAuthenticator::new(
@@ -275,7 +291,9 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
         path,
         address,
         effects,
+        runtime_control,
         settlement_calls,
+        clear_settlement_calls,
         controller,
         event_controller,
         server,
@@ -286,6 +304,7 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
 struct CountingRuntimeDeliveryStore {
     inner: SqliteRuntimeDeliveryStore,
     settlement_calls: Arc<AtomicUsize>,
+    clear_settlement_calls: Arc<AtomicUsize>,
 }
 
 impl RuntimeDispatchReadPort for CountingRuntimeDeliveryStore {
@@ -304,6 +323,26 @@ impl RuntimeDispatchReadPort for CountingRuntimeDeliveryStore {
         host_id: String,
     ) -> Result<Vec<RuntimePrincipal>, PersistenceFailure> {
         self.inner.current_custodies_for_host(host_id).await
+    }
+}
+
+impl RuntimeControlSeatPort for CountingRuntimeDeliveryStore {
+    type Error = PersistenceFailure;
+
+    async fn snapshot(
+        &self,
+        target: &RuntimeControlTarget,
+    ) -> Result<Option<RuntimeControlSeatSnapshot>, Self::Error> {
+        self.inner.snapshot(target).await
+    }
+
+    async fn settle_clear(
+        &self,
+        target: &RuntimeControlTarget,
+        before: &BoundRuntimeControlSeat,
+    ) -> Result<Option<ClearSessionCommitReceipt>, Self::Error> {
+        self.clear_settlement_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.settle_clear(target, before).await
     }
 }
 
@@ -1224,6 +1263,67 @@ fn runtime_scope() -> RuntimeScope {
         agent: AgentId::parse(AGENT).unwrap(),
         source: ConversationId::parse(CONVERSATION).unwrap(),
     }
+}
+
+fn runtime_control_target() -> RuntimeControlTarget {
+    RuntimeControlTarget::new(
+        UserId::parse("user-1").unwrap(),
+        ConversationId::parse(CONVERSATION).unwrap(),
+        AgentId::parse(AGENT).unwrap(),
+    )
+}
+
+async fn activate_host_for_runtime_control(path: &std::path::Path) {
+    let mut db = open(path).await;
+    assert_eq!(
+        sqlx::query("UPDATE hosts SET activated_at=1, finalized_at=1 WHERE id='host-1'")
+            .execute(&mut db)
+            .await
+            .unwrap()
+            .rows_affected(),
+        1
+    );
+    assert_eq!(
+        sqlx::query("UPDATE conversations SET latest_message_seq=1 WHERE id=?")
+            .bind(CONVERSATION)
+            .execute(&mut db)
+            .await
+            .unwrap()
+            .rows_affected(),
+        1,
+        "the seeded message and its stream head must describe one snapshot"
+    );
+}
+
+async fn start_through_runtime_control(
+    fixture: &Fixture,
+    socket: &mut Socket,
+    target: &RuntimeControlTarget,
+) -> i64 {
+    let control = fixture.runtime_control.clone();
+    let target = target.clone();
+    let call = tokio::spawn(async move { control.start(&target).await });
+    let command = next_json(socket).await;
+    assert_eq!(command["kind"], "runtime_start");
+    let generation = command["params"]["runtime_generation"].as_i64().unwrap();
+    respond(
+        socket,
+        &command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    call.await.unwrap().unwrap().unwrap();
+    generation
+}
+
+async fn wait_for_counter(counter: &AtomicUsize, expected: usize) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while counter.load(Ordering::SeqCst) != expected {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("counter did not reach its expected value");
 }
 
 async fn next_json(socket: &mut Socket) -> Value {
@@ -3530,6 +3630,127 @@ async fn runtime_exit_finalizes_only_the_exact_generation_and_never_its_successo
             .as_deref(),
         Some("instance-test")
     );
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn clear_session_waiter_settles_after_the_exact_runtime_exit_frame_commits() {
+    let fixture = fixture("clear-runtime-exit.sqlite").await;
+    activate_host_for_runtime_control(&fixture.path).await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+
+    let target = runtime_control_target();
+    let generation = start_through_runtime_control(&fixture, &mut socket, &target).await;
+    let control = fixture.runtime_control.clone();
+    let clear_target = target.clone();
+    let clear = tokio::spawn(async move { control.clear_session(&clear_target).await });
+    let command = next_json(&mut socket).await;
+    assert_eq!(command["kind"], "runtime_clear_session");
+    assert_eq!(command["params"]["runtime_generation"], generation);
+
+    // The exit deliberately wins the response race. The production frame router
+    // must durably commit it and latch the waiter that was registered before send.
+    send_runtime_exit(&mut socket, generation, true, 111).await;
+    respond(&mut socket, &command, json!({ "cleared": true })).await;
+    let outcome = clear.await.unwrap().unwrap().unwrap();
+    assert!(outcome.was_running());
+    assert_eq!(outcome.previous_cli_session(), None);
+    assert_eq!(
+        fixture.clear_settlement_calls.load(Ordering::SeqCst),
+        1,
+        "one durable exit releases exactly one clear settlement"
+    );
+
+    let mut db = open(&fixture.path).await;
+    let slot = sqlx::query(
+        "SELECT claimed_by_daemon_instance_id, cli_session_id
+           FROM agent_runtime_slots
+          WHERE agent_id=? AND conversation_id=?",
+    )
+    .bind(AGENT)
+    .bind(CONVERSATION)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert!(
+        slot.get::<Option<String>, _>("claimed_by_daemon_instance_id")
+            .is_none()
+    );
+    assert!(slot.get::<Option<String>, _>("cli_session_id").is_none());
+    let audits: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM messages
+          WHERE conversation_id=? AND from_kind='system'
+            AND json_extract(metadata, '$.subtype')='session_cleared'",
+    )
+    .bind(CONVERSATION)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(audits, 1);
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn delivery_failed_frame_cannot_release_a_clear_session_waiter() {
+    let fixture = fixture("clear-delivery-failed.sqlite").await;
+    activate_host_for_runtime_control(&fixture.path).await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+
+    let target = runtime_control_target();
+    let generation = start_through_runtime_control(&fixture, &mut socket, &target).await;
+    let control = fixture.runtime_control.clone();
+    let clear_target = target.clone();
+    let clear = tokio::spawn(async move { control.clear_session(&clear_target).await });
+    let command = next_json(&mut socket).await;
+    assert_eq!(command["kind"], "runtime_clear_session");
+    respond(&mut socket, &command, json!({ "cleared": true })).await;
+
+    send_delivery_failed(&mut socket, generation, "driver_refused", 120).await;
+    wait_for_counter(&fixture.settlement_calls, 1).await;
+    tokio::task::yield_now().await;
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(11)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+        clear.await.unwrap().unwrap(),
+        Err(ClearSessionProviderRefusal::Timeout)
+    );
+    assert_eq!(
+        fixture.clear_settlement_calls.load(Ordering::SeqCst),
+        0,
+        "delivery settlement is not runtime-exit evidence"
+    );
+
+    let mut db = open(&fixture.path).await;
+    let claimed: Option<String> = sqlx::query_scalar(
+        "SELECT claimed_by_daemon_instance_id
+           FROM agent_runtime_slots
+          WHERE agent_id=? AND conversation_id=?",
+    )
+    .bind(AGENT)
+    .bind(CONVERSATION)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(claimed.as_deref(), Some("instance-test"));
+    let audits: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM messages
+          WHERE conversation_id=? AND from_kind='system'
+            AND json_extract(metadata, '$.subtype')='session_cleared'",
+    )
+    .bind(CONVERSATION)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(audits, 0);
 
     socket.close(None).await.unwrap();
     fixture.controller.close().await;
