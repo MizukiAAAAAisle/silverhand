@@ -166,11 +166,13 @@ where
 // ===========================================================================
 
 /// `{ ok: true, bytes_written: number }` — the daemon's byte count for the written
-/// `mcp.json`.
+/// `mcp.json`. `bytes_written` is an `i64` sourced from the port's
+/// [`McpBytesWritten`], which has already guaranteed a JS-safe value, so the wire
+/// number is always exactly representable by a JavaScript consumer.
 #[derive(Serialize)]
 struct WriteConfigResponse {
     ok: bool,
-    bytes_written: u64,
+    bytes_written: i64,
 }
 
 async fn write_config<D>(
@@ -204,7 +206,7 @@ where
     match data_plane.write_config(credential.agent(), &raw).await {
         Ok(bytes_written) => Json(WriteConfigResponse {
             ok: true,
-            bytes_written,
+            bytes_written: bytes_written.get(),
         })
         .into_response(),
         Err(fault) => data_plane_error(fault),
@@ -366,6 +368,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        agent_profile_mcp::McpBytesWritten,
         identity::{AgentId, DaemonInstanceId},
         persistence::PersistenceFailure,
         runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},
@@ -390,7 +393,7 @@ mod tests {
 
     struct FakeInner {
         read: Mutex<Result<Option<String>, McpDataPlaneFault>>,
-        write: Mutex<Result<u64, McpDataPlaneFault>>,
+        write: Mutex<Result<McpBytesWritten, McpDataPlaneFault>>,
         probe: Mutex<Result<McpProbeOutcome, McpDataPlaneFault>>,
         consulted: AtomicBool,
         asked_for: Mutex<Vec<String>>,
@@ -403,7 +406,7 @@ mod tests {
             Self {
                 inner: Arc::new(FakeInner {
                     read: Mutex::new(Ok(None)),
-                    write: Mutex::new(Ok(0)),
+                    write: Mutex::new(Ok(McpBytesWritten::new(0).expect("0 is representable"))),
                     probe: Mutex::new(Ok(outcome(true, McpProbePhase::Tools))),
                     consulted: AtomicBool::new(false),
                     asked_for: Mutex::new(Vec::new()),
@@ -418,7 +421,7 @@ mod tests {
             self
         }
 
-        fn on_write(self, result: Result<u64, McpDataPlaneFault>) -> Self {
+        fn on_write(self, result: Result<McpBytesWritten, McpDataPlaneFault>) -> Self {
             *self.inner.write.lock().unwrap() = result;
             self
         }
@@ -460,7 +463,11 @@ mod tests {
             clone_result(&self.inner.read.lock().unwrap())
         }
 
-        async fn write_config(&self, agent: &AgentId, raw: &str) -> Result<u64, McpDataPlaneFault> {
+        async fn write_config(
+            &self,
+            agent: &AgentId,
+            raw: &str,
+        ) -> Result<McpBytesWritten, McpDataPlaneFault> {
             self.record(agent);
             *self.inner.wrote_raw.lock().unwrap() = Some(raw.to_string());
             match &*self.inner.write.lock().unwrap() {
@@ -635,7 +642,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_valid_config_is_written_verbatim() {
-        let data_plane = FakeDataPlane::new().on_write(Ok(42));
+        let data_plane = FakeDataPlane::new().on_write(Ok(McpBytesWritten::new(42).unwrap()));
         // Deliberately idiosyncratic whitespace: it must be persisted verbatim.
         let raw = "{\n  \"mcpServers\": {\n    \"a\": { \"command\": \"x\" }\n  }\n}";
         let response = injected(
@@ -653,6 +660,29 @@ mod tests {
         );
         assert_eq!(data_plane.wrote_raw().as_deref(), Some(raw));
         assert_eq!(data_plane.asked_for(), vec!["a1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn the_js_safe_max_byte_count_serializes_as_an_exact_number() {
+        // The port already refuses anything past JsSafeInteger::MAX at construction
+        // (proven in backend-core), so the largest value that can reach the wire is
+        // MAX itself; assert it renders as the exact integer a JS consumer preserves.
+        let max: i64 = 9_007_199_254_740_991;
+        let data_plane =
+            FakeDataPlane::new().on_write(Ok(McpBytesWritten::new(max as u64).unwrap()));
+        let response = injected(
+            data_plane,
+            "POST",
+            "/internal/agents/a1/profile/mcp",
+            Some(principal("a1")),
+            Body::from("{ \"mcpServers\": {} }"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            body_json(response).await,
+            json!({ "ok": true, "bytes_written": max })
+        );
     }
 
     #[tokio::test]
@@ -678,7 +708,7 @@ mod tests {
     async fn an_empty_body_is_the_empty_config_and_is_written() {
         // parse_mcp_config admits an empty/whitespace body as the empty config, so a
         // blank POST is a valid clear-to-empty, dispatched verbatim.
-        let data_plane = FakeDataPlane::new().on_write(Ok(0));
+        let data_plane = FakeDataPlane::new().on_write(Ok(McpBytesWritten::new(0).unwrap()));
         let response = injected(
             data_plane.clone(),
             "POST",

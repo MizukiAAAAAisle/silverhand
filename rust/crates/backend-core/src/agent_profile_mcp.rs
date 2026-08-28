@@ -23,6 +23,52 @@
 use std::future::Future;
 
 use crate::identity::AgentId;
+use crate::wire_number::JsSafeInteger;
+
+/// The byte count returned by a successful MCP config write.
+///
+/// A written-file size is nonnegative AND must round-trip through a JavaScript
+/// JSON consumer exactly, so this newtype admits only `0..=JsSafeInteger::MAX`
+/// and reuses [`JsSafeInteger`] for the binary64 precision boundary — it adds
+/// only the nonnegative semantics on top. A raw `u64` never crosses the port:
+/// the #2224 production decoder rejects a negative / `MAX + 1` / non-integer
+/// daemon result as protocol-invalid (folded into
+/// [`McpDataPlaneFaultCode::DaemonInternalError`]), so an unrepresentable count
+/// can never reach the wire.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct McpBytesWritten(JsSafeInteger);
+
+impl McpBytesWritten {
+    /// Admit a nonnegative byte count, rejecting anything a JavaScript number
+    /// cannot preserve exactly (`> JsSafeInteger::MAX`).
+    pub fn new(value: u64) -> Result<Self, McpBytesWrittenOutOfRange> {
+        if value <= JsSafeInteger::MAX as u64 {
+            // Bounded above by MAX and nonnegative, so the cast and inner
+            // construction are always in range.
+            Ok(Self(
+                JsSafeInteger::new(value as i64).expect("0..=MAX is within JsSafeInteger range"),
+            ))
+        } else {
+            Err(McpBytesWrittenOutOfRange(value))
+        }
+    }
+
+    /// The count as a JS-safe integer, ready to serialize.
+    pub fn get(self) -> i64 {
+        self.0.get()
+    }
+}
+
+/// A byte count larger than a JavaScript number can preserve exactly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("MCP config byte count is outside JavaScript's exact binary64 range")]
+pub struct McpBytesWrittenOutOfRange(u64);
+
+impl McpBytesWrittenOutOfRange {
+    pub fn value(self) -> u64 {
+        self.0
+    }
+}
 
 /// The stages a probe walks, deepest-reached first on success and the failing
 /// stage on failure: parse the config → find the named server → connect the
@@ -133,12 +179,14 @@ pub trait AgentProfileMcpDataPlane {
     /// Atomically replace the agent's raw config with `raw`, returning the byte
     /// count written. `raw` is the caller's verbatim text; the daemon
     /// re-validates, but this lane's handler is the primary validator via
-    /// [`crate::mcp_config::parse_mcp_config`].
+    /// [`crate::mcp_config::parse_mcp_config`]. The count is a
+    /// [`McpBytesWritten`], so a value a JavaScript consumer cannot represent
+    /// exactly is rejected at this port boundary, never serialized.
     fn write_config(
         &self,
         agent: &AgentId,
         raw: &str,
-    ) -> impl Future<Output = Result<u64, McpDataPlaneFault>> + Send;
+    ) -> impl Future<Output = Result<McpBytesWritten, McpDataPlaneFault>> + Send;
 
     /// Run one live probe against a named server and return its outcome. A
     /// connect/handshake failure is a successful call returning
@@ -173,8 +221,8 @@ mod tests {
             &self,
             _agent: &AgentId,
             raw: &str,
-        ) -> Result<u64, McpDataPlaneFault> {
-            Ok(raw.len() as u64)
+        ) -> Result<McpBytesWritten, McpDataPlaneFault> {
+            Ok(McpBytesWritten::new(raw.len() as u64).expect("test byte counts are small"))
         }
 
         async fn probe(
@@ -217,11 +265,26 @@ mod tests {
         AgentId::parse(id).expect("agent id")
     }
 
+    #[test]
+    fn bytes_written_admits_the_js_safe_max_and_rejects_one_past_it() {
+        let max = McpBytesWritten::new(JsSafeInteger::MAX as u64).expect("MAX is representable");
+        assert_eq!(max.get(), JsSafeInteger::MAX);
+
+        assert_eq!(
+            McpBytesWritten::new(JsSafeInteger::MAX as u64 + 1),
+            Err(McpBytesWrittenOutOfRange(JsSafeInteger::MAX as u64 + 1))
+        );
+        assert_eq!(McpBytesWritten::new(0).unwrap().get(), 0);
+    }
+
     #[tokio::test]
     async fn read_returns_none_for_a_missing_file_and_bytes_for_a_write() {
         let mut plane = FakeDataPlane::default();
         assert_eq!(plane.read_config(&agent("a1")).await.unwrap(), None);
-        assert_eq!(plane.write_config(&agent("a1"), "abc").await.unwrap(), 3);
+        assert_eq!(
+            plane.write_config(&agent("a1"), "abc").await.unwrap().get(),
+            3
+        );
 
         plane.files.insert("a1".to_string(), "x".to_string());
         assert_eq!(
