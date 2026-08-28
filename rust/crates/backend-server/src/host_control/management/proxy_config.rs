@@ -55,7 +55,7 @@ where
     };
     let custody = match resolve(&state, &host) {
         Ok(custody) => custody,
-        Err(response) => return response,
+        Err(refusal) => return refusal.into_response(),
     };
     render(proxy_config::get(&state.data_plane, ProxyConfigRequest::new(custody)).await)
 }
@@ -83,7 +83,7 @@ where
     };
     let custody = match resolve(&state, &host) {
         Ok(custody) => custody,
-        Err(response) => return response,
+        Err(refusal) => return refusal.into_response(),
     };
     render(proxy_config::set(&state.data_plane, ProxyConfigRequest::new(custody), config).await)
 }
@@ -125,17 +125,27 @@ where
 fn resolve<R>(
     state: &ProxyState<R>,
     host: &HostId,
-) -> Result<crate::daemon_delivery::HostDataPlaneCustody, Response> {
+) -> Result<crate::daemon_delivery::HostDataPlaneCustody, ResolveRefusal> {
     match state.data_plane.resolve(host) {
         Ok(Some(custody)) => Ok(custody),
-        Ok(None) => Err(coded("computer is offline", Some("computer_offline"), 503)),
+        Ok(None) => Err(ResolveRefusal::Offline),
         Err(cause) => {
             tracing::error!(error = %cause, "owning-host data plane resolve failed");
-            Err(coded(
-                "daemon request failed",
-                Some("daemon_internal_error"),
-                502,
-            ))
+            Err(ResolveRefusal::Internal)
+        }
+    }
+}
+
+enum ResolveRefusal {
+    Offline,
+    Internal,
+}
+
+impl IntoResponse for ResolveRefusal {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Offline => coded("computer is offline", Some("computer_offline"), 503),
+            Self::Internal => coded("daemon request failed", Some("daemon_internal_error"), 502),
         }
     }
 }
