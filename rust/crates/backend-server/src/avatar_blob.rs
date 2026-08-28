@@ -23,8 +23,8 @@
 
 use silverhand_backend_core::{
     avatar::{
-        AvatarBlobPointer, AvatarBlobReadOutcome, AvatarBlobStore, AvatarContentType,
-        AvatarStorageFailure,
+        AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome, AvatarBlobStore,
+        AvatarContentType, AvatarStorageFailure,
     },
     blob_store::{
         BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore, StorageKind, StoredBlob,
@@ -69,6 +69,24 @@ impl<B: BlobStore> SingleKindAvatarBlobs<B> {
     }
 }
 
+impl<B: BlobStore> AvatarBlobRead for SingleKindAvatarBlobs<B> {
+    async fn read(
+        &self,
+        pointer: &AvatarBlobPointer,
+    ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
+        let stored = self.stored_from_pointer(pointer)?;
+        match self
+            .blobs
+            .read(&stored)
+            .await
+            .map_err(AvatarStorageFailure::from_source)?
+        {
+            BlobReadOutcome::Found(read) => Ok(AvatarBlobReadOutcome::Found(read.into_bytes())),
+            BlobReadOutcome::Missing => Ok(AvatarBlobReadOutcome::Missing),
+        }
+    }
+}
+
 impl<B: BlobStore> AvatarBlobStore for SingleKindAvatarBlobs<B> {
     async fn put(
         &self,
@@ -84,22 +102,6 @@ impl<B: BlobStore> AvatarBlobStore for SingleKindAvatarBlobs<B> {
             .await
             .map_err(AvatarStorageFailure::from_source)?;
         AvatarBlobPointer::parse(stored.key().as_str()).map_err(AvatarStorageFailure::from_source)
-    }
-
-    async fn read(
-        &self,
-        pointer: &AvatarBlobPointer,
-    ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
-        let stored = self.stored_from_pointer(pointer)?;
-        match self
-            .blobs
-            .read(&stored)
-            .await
-            .map_err(AvatarStorageFailure::from_source)?
-        {
-            BlobReadOutcome::Found(read) => Ok(AvatarBlobReadOutcome::Found(read.into_bytes())),
-            BlobReadOutcome::Missing => Ok(AvatarBlobReadOutcome::Missing),
-        }
     }
 
     async fn delete(&self, pointer: &AvatarBlobPointer) -> Result<(), AvatarStorageFailure> {
