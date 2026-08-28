@@ -12,6 +12,7 @@ pub mod agent_lifecycle;
 pub mod agent_list_read;
 pub mod agent_presence_read;
 pub mod agent_profile_mcp;
+pub mod agent_profile_read;
 pub mod agents;
 pub mod auth;
 pub mod avatar;
