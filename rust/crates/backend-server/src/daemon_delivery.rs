@@ -2151,9 +2151,11 @@ where
             connection(
                 socket,
                 runtime,
-                host_id,
-                owner_user_id,
-                connection_id,
+                AuthenticatedHostConnection {
+                    host_id,
+                    owner_user_id,
+                    connection_id,
+                },
                 commands,
                 receive,
                 close_receive,
@@ -2161,12 +2163,16 @@ where
         })
 }
 
-async fn connection<C, D, H>(
-    mut socket: WebSocket,
-    runtime: DaemonDeliveryRuntime<C, D, H>,
+struct AuthenticatedHostConnection {
     host_id: String,
     owner_user_id: UserId,
     connection_id: String,
+}
+
+async fn connection<C, D, H>(
+    mut socket: WebSocket,
+    runtime: DaemonDeliveryRuntime<C, D, H>,
+    authenticated: AuthenticatedHostConnection,
     control: mpsc::Sender<ConnectionControl>,
     mut commands: mpsc::Receiver<ConnectionControl>,
     mut close: watch::Receiver<Option<ConnectionClose>>,
@@ -2175,6 +2181,11 @@ async fn connection<C, D, H>(
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
+    let AuthenticatedHostConnection {
+        host_id,
+        owner_user_id,
+        connection_id,
+    } = authenticated;
     let mut pending: HashMap<String, PendingCommand> = HashMap::new();
     let (timeout_control, mut timed_out_commands) = mpsc::unbounded_channel();
     let mut next_command = 0_u64;
