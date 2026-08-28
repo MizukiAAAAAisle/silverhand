@@ -2,6 +2,10 @@
 
 mod wire;
 
+/// The canonical placement-refusal → HTTP mapper, re-exported so the agent-scoped
+/// bulk stop reuses this ONE authority instead of re-minting the status/code map.
+pub(crate) use wire::placement_refusal;
+
 #[cfg(test)]
 mod tests;
 

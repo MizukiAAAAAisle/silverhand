@@ -31,6 +31,7 @@ use silverhand_backend_core::{
         WorkspaceRole,
     },
     agent_availability_read::AgentAvailabilityReadModel,
+    agent_profile_write::{AgentChangedAnnounceFailure, AgentChangedSink},
     auth::{AuthenticateHumanSession, SessionBearer},
     capability::agent_view::agent_viewer_user_ids,
     host_runtime::{
@@ -614,6 +615,31 @@ impl ScopeEventHub {
         audience: R,
     ) -> HubWorkspaceMetadataPublisher<R> {
         HubWorkspaceMetadataPublisher::new(self.clone(), audience)
+    }
+
+    /// The public agent-tuning write's post-commit `agent_changed` announce, built
+    /// over THIS hub. Binds `backend-core`'s [`AgentChangedSink`] to the accepted
+    /// [`publish_agent_changed`](ScopeEventHub::publish_agent_changed) producer, so the
+    /// tuning PATCH's best-effort announce rides the SAME app-scope `{agent_id}` frame
+    /// as every other agent-identity change, never a second event authority.
+    /// [`HubAgentChangedSink::new`] stays crate-private, so nothing outside this seam
+    /// can construct a sink on a hub other than the one it owns.
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_server::scope_events::{HubAgentChangedSink, ScopeEventHub};
+    ///
+    /// let hub = ScopeEventHub::production().unwrap();
+    /// let _ = HubAgentChangedSink::new(hub);
+    /// ```
+    ///
+    /// ```
+    /// use silverhand_backend_server::scope_events::ScopeEventHub;
+    ///
+    /// let hub = ScopeEventHub::production().unwrap();
+    /// let _ = hub.agent_changed_sink();
+    /// ```
+    pub fn agent_changed_sink(&self) -> HubAgentChangedSink {
+        HubAgentChangedSink::new(self.clone())
     }
 
     /// The custody context's post-commit availability fan-out, built over THIS hub.
@@ -1331,6 +1357,36 @@ impl<R: WorkspaceHumanAudienceReadPort> WorkspaceMetadataChangedSink
             return Err(failure);
         }
         Ok(())
+    }
+}
+
+/// The public agent-tuning write's post-commit `agent_changed` announce, over the
+/// real transport. A profile PATCH that commits owes clients the app-scope
+/// `{agent_id}` refresh hint; this narrow adapter binds `backend-core`'s
+/// [`AgentChangedSink`] to the ONE accepted producer
+/// ([`ScopeEventHub::publish_agent_changed`]) so the tuning write neither invents a
+/// second event authority nor hand-copies a `publishToScope`. Best-effort by the
+/// core contract: a transport failure is mapped to the source of an
+/// [`AgentChangedAnnounceFailure`] and returned, never swallowed and never allowed to
+/// flip an already-committed write. Its constructor stays crate-private, so a sink
+/// can only be minted through [`ScopeEventHub::agent_changed_sink`] on the hub that
+/// owns the transport.
+#[derive(Clone)]
+pub struct HubAgentChangedSink {
+    hub: ScopeEventHub,
+}
+
+impl HubAgentChangedSink {
+    pub(crate) fn new(hub: ScopeEventHub) -> Self {
+        Self { hub }
+    }
+}
+
+impl AgentChangedSink for HubAgentChangedSink {
+    async fn agent_changed(&self, agent: &AgentId) -> Result<(), AgentChangedAnnounceFailure> {
+        self.hub
+            .publish_agent_changed(agent)
+            .map_err(AgentChangedAnnounceFailure::from_source)
     }
 }
 
@@ -5590,7 +5646,33 @@ mod tests {
         );
     }
 
-    /// The production [`HubAgentDeletedAnnouncer`] — the composition-root glue that a
+    /// The production [`HubAgentChangedSink`] — the tuning PATCH's post-commit
+    /// announce adapter — lands the exact `{agent_id}`-only `agent_changed` frame on a
+    /// REAL subscription when driven through the `backend-core` `AgentChangedSink`
+    /// trait it satisfies. This is the real-hub discrimination gate: it proves the
+    /// production sink is a live producer over the accepted transport, not a trait +
+    /// test fake, and that it reuses the ONE `agent_changed` frame rather than a
+    /// second event.
+    #[tokio::test]
+    async fn hub_agent_changed_sink_lands_the_agent_changed_frame_on_a_real_subscription() {
+        use silverhand_backend_core::agent_profile_write::AgentChangedSink as _;
+
+        let hub = ScopeEventHub::test("epoch-1");
+        let mut app = hub.subscribe(EventScope::App).unwrap().receiver;
+
+        hub.agent_changed_sink()
+            .agent_changed(&agent())
+            .await
+            .unwrap();
+
+        let frame = app.recv().await.unwrap();
+        assert_eq!(frame.scope, "app");
+        assert_eq!(
+            serde_json::to_value(&frame.event).unwrap(),
+            json!({ "kind": "agent_changed", "payload": { "agent_id": "agent-1" } })
+        );
+    }
+
     /// committed computer cascade calls for each deleted agent — routes to the SAME
     /// app-scope `agent_changed` frame as the raw producer. Per the ratified A/B decision
     /// the terminal deletion reuses `agent_changed` rather than minting a distinct

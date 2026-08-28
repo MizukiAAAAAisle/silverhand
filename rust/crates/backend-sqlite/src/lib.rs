@@ -10,9 +10,12 @@ pub mod messaging;
 
 pub mod access;
 pub mod agent_availability_read;
+pub mod agent_avatar_read;
 pub mod agent_detail_read;
 pub mod agent_list_read;
 pub mod agent_presence_read;
+pub mod agent_profile_read;
+pub mod agent_profile_write;
 pub mod agent_view_acl;
 
 pub mod auth;

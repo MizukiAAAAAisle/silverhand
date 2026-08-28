@@ -33,8 +33,8 @@ use silverhand_backend_core::{
         SessionBearer, SessionClock, SessionTtl,
     },
     avatar::{
-        AVATAR_MAX_BYTES, AvatarBlobPointer, AvatarBlobReadOutcome, AvatarBlobStore,
-        AvatarContentType, AvatarStorageFailure,
+        AVATAR_MAX_BYTES, AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome,
+        AvatarBlobStore, AvatarContentType, AvatarStorageFailure,
     },
     credential::{
         Argon2idCost, PasswordHashError, PasswordHashParams, PasswordHasher,
@@ -148,6 +148,18 @@ impl MemoryBlobStore {
         self.blobs.lock().unwrap().len()
     }
 }
+impl AvatarBlobRead for MemoryBlobStore {
+    async fn read(
+        &self,
+        pointer: &AvatarBlobPointer,
+    ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
+        let blobs = self.blobs.lock().unwrap();
+        match blobs.iter().find(|(key, _)| key == pointer.as_str()) {
+            Some((_, bytes)) => Ok(AvatarBlobReadOutcome::Found(bytes.clone())),
+            None => Ok(AvatarBlobReadOutcome::Missing),
+        }
+    }
+}
 impl AvatarBlobStore for MemoryBlobStore {
     async fn put(
         &self,
@@ -163,16 +175,6 @@ impl AvatarBlobStore for MemoryBlobStore {
         );
         self.blobs.lock().unwrap().push((key.clone(), bytes));
         Ok(AvatarBlobPointer::parse(key).unwrap())
-    }
-    async fn read(
-        &self,
-        pointer: &AvatarBlobPointer,
-    ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
-        let blobs = self.blobs.lock().unwrap();
-        match blobs.iter().find(|(key, _)| key == pointer.as_str()) {
-            Some((_, bytes)) => Ok(AvatarBlobReadOutcome::Found(bytes.clone())),
-            None => Ok(AvatarBlobReadOutcome::Missing),
-        }
     }
     async fn delete(&self, pointer: &AvatarBlobPointer) -> Result<(), AvatarStorageFailure> {
         self.deleted

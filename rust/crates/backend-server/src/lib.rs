@@ -3,6 +3,9 @@
 
 pub mod access;
 pub mod agent_materialize;
+pub mod agent_name_availability;
+pub mod agent_profile_mcp_data_plane;
+pub(crate) mod agent_wire;
 pub mod auth;
 pub mod avatar_blob;
 mod bearer;
@@ -17,6 +20,7 @@ pub mod host_control;
 pub mod host_resources;
 pub mod host_runtime;
 pub mod human_auth;
+pub mod internal_agent;
 pub mod messaging;
 pub mod ops;
 pub mod password_hasher;

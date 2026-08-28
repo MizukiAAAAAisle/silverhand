@@ -1,6 +1,10 @@
 use std::collections::HashSet;
 use std::error::Error;
 
+use silverhand_backend_core::agent_peer_profile::{
+    CallerConversationPlacement, CallerReadMessagesCapability, CallerWorkspaceHorizon,
+    WorkspacePlacement,
+};
 use silverhand_backend_core::messaging::task::{
     AgentBoardResolver, AgentReadableBoards, BoardKey, BoardResolution, BoardScopeRequest,
     BoardScopeSource, PairKey, ReadableBoard, ResolvedBoard, TaskParticipationReads,
@@ -1002,6 +1006,19 @@ const AGENT_WORKSPACE_MEMBERSHIP: &str = "SELECT CASE WHEN w.owner_agent_id = ? 
      WHERE wm.workspace_id = w.id AND wm.agent_id = ?)) THEN 1 ELSE 0 END \
      FROM workspaces w WHERE w.id = ?";
 
+/// The `read_messages` capability for a workspace `w` — the SAME `owner_agent_id OR
+/// workspace_agent_capabilities` shape [`read_tasks_predicate`] answers for `read_tasks`,
+/// with the capability token HARDCODED to `'read_messages'`. It is never parameterized: a
+/// caller may not name the capability it is probed for. Three-valued in shape but the
+/// caller-side gate ladder has already settled workspace existence (via the horizon), so
+/// here a missing row or `0` both collapse to "may not read". An agent-home workspace grants
+/// its owner through the owner arm; every other member needs the explicit `read_messages`
+/// grant — a `read_tasks`/`send_messages` grant does NOT satisfy it.
+const AGENT_READ_MESSAGES_CAPABILITY: &str = "SELECT CASE WHEN w.owner_agent_id = ? OR \
+     EXISTS (SELECT 1 FROM workspace_agent_capabilities c WHERE c.workspace_id = w.id \
+     AND c.agent_id = ? AND c.capability = 'read_messages') THEN 1 ELSE 0 END \
+     FROM workspaces w WHERE w.id = ?";
+
 /// A conversation's placement-derived board coordinates: the placement kind and
 /// the id each placement derives its board from. Mirrors `boardOfConversation`'s
 /// authority (the v76 derivation trigger) but projects the RAW parts so the typed
@@ -1303,6 +1320,85 @@ where
         }
 
         Ok(boards)
+    }
+}
+
+// -- The internal peer-profile route's caller-side gate ports (#2226) ---------
+//
+// These three ports back the caller-side ladder of `admit_peer_profile`: the
+// conversation floor (placement), the cross-workspace horizon, and the always-on
+// `read_messages` capability. They mint NO new authority — each reuses a spelling
+// this store already owns (the placement decoder, the membership predicate, the
+// capability shape) — so the peer route reads through the SAME truth the task board
+// and send gate do. The trait declarations live in the #2226 consumer module; only
+// the production spelling lives here.
+
+impl<E> CallerConversationPlacement for MessagingStore<E>
+where
+    E: Send + Sync,
+{
+    async fn conversation_placement(
+        &self,
+        conversation: &ConversationId,
+    ) -> Result<Option<WorkspacePlacement>, PersistenceFailure> {
+        // Reuse the ONE placement decoder. `authority_conversation` runs `decode_placement`,
+        // which already guarantees `workspace.is_some() ⟺ kind == workspace` and turns an
+        // illegal placement or a missing coordinate on a selected row into corruption
+        // (safe-500, propagated by `?`). So mapping on `.workspace` is total: `Some` is a
+        // real workspace board, `None` is a direct pair (workspace-less); a missing
+        // conversation is honestly `None` at the outer `Option` (→ the route's 404).
+        Ok(self
+            .authority_conversation(conversation)
+            .await?
+            .map(|placement| match placement.workspace {
+                Some(workspace) => WorkspacePlacement::Workspace(workspace),
+                None => WorkspacePlacement::WorkspaceLess,
+            }))
+    }
+}
+
+impl<E> CallerWorkspaceHorizon for MessagingStore<E>
+where
+    E: Send + Sync,
+{
+    async fn can_access_workspace(
+        &self,
+        agent: &AgentId,
+        workspace: &WorkspaceId,
+    ) -> Result<bool, PersistenceFailure> {
+        // Reuse the horizon predicate: members ∪ owned agent-home, exactly the axis
+        // [`AGENT_WORKSPACE_MEMBERSHIP`] answers for the task board's 404-vs-403 split. Here
+        // it is folded to the boolean the caller gate needs — no row / `0` → outside the
+        // horizon, `1` → reachable — because target existence is settled by the read that
+        // follows, not by this gate.
+        let reachable: Option<i64> = sqlx::query_scalar(AGENT_WORKSPACE_MEMBERSHIP)
+            .bind(agent.as_str())
+            .bind(agent.as_str())
+            .bind(workspace.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(driver)?;
+        Ok(reachable.is_some_and(|is_member| is_member != 0))
+    }
+}
+
+impl<E> CallerReadMessagesCapability for MessagingStore<E>
+where
+    E: Send + Sync,
+{
+    async fn may_read_messages(
+        &self,
+        agent: &AgentId,
+        workspace: &WorkspaceId,
+    ) -> Result<bool, PersistenceFailure> {
+        let granted: Option<i64> = sqlx::query_scalar(AGENT_READ_MESSAGES_CAPABILITY)
+            .bind(agent.as_str())
+            .bind(agent.as_str())
+            .bind(workspace.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(driver)?;
+        Ok(granted.is_some_and(|allowed| allowed != 0))
     }
 }
 

@@ -156,6 +156,8 @@ fn map_refusal(refusal: CommandRefusal) -> Option<AgentMaterializeRefusal> {
             | DaemonRefusalCode::InternalError
             | DaemonRefusalCode::RequestTooLarge,
         ) => Some(AgentMaterializeRefusal::DaemonInternalError),
-        CommandRefusal::RuntimeScoped(_) | CommandRefusal::AgentFilesPurgeScoped(_) => None,
+        CommandRefusal::RuntimeScoped(_)
+        | CommandRefusal::AgentFilesPurgeScoped(_)
+        | CommandRefusal::AgentProfileMcpScoped(_) => None,
     }
 }

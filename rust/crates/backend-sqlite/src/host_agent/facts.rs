@@ -12,8 +12,10 @@
 //! identical statement without a second code path.
 
 use silverhand_backend_core::{
+    agent_bulk_stop::{AgentBulkStopReadPort, AgentBulkStopSnapshot},
+    agent_profile_mcp::{AgentProfileMcpPlacement, AgentProfileMcpPlacementRead},
     capability::computer_access::ComputerOwnershipFacts,
-    identity::AgentId,
+    identity::{AgentId, HostId},
     persistence::PersistenceFailure,
     runtime_credential::RuntimeScope,
     teardown::{
@@ -36,6 +38,14 @@ const SELECT_AGENTS_ON_HOST: &str = "SELECT id, name, display_name, runtime, hos
      FROM agents WHERE host_id = ? ORDER BY id ASC";
 const SELECT_RUNTIME_SESSIONS: &str = "SELECT agent_id, conversation_id, observed_status, \
      generation FROM agent_runtime_slots WHERE agent_id = ? ORDER BY id ASC";
+/// The bulk stop's host capture: the agent row's own id and the host every seat is
+/// dispatched to, read in the same transaction as the seats so a racing host
+/// reassignment cannot split them.
+const SELECT_AGENT_HOST: &str = "SELECT id, host_id FROM agents WHERE id = ?";
+/// Profile MCP routing reads the row's own id, owning host and deletion marker
+/// together so none can come from a different lifecycle snapshot.
+const SELECT_AGENT_MCP_PLACEMENT: &str =
+    "SELECT id, host_id, deletion_started_at FROM agents WHERE id = ?";
 const SELECT_IS_DELETION_PENDING: &str =
     "SELECT EXISTS(SELECT 1 FROM agents WHERE id = ? AND deletion_started_at IS NOT NULL)";
 const SELECT_COMPUTER_OWNERSHIP: &str = "SELECT id, user_id FROM hosts WHERE id = ?";
@@ -92,6 +102,24 @@ fn runtime_session(row: &SqliteRow) -> Result<AgentRuntimeSessionFacts, sqlx::Er
     })
 }
 
+/// The bulk stop's host capture: the agent row's own id (bound to the requested
+/// agent by the use case) and the host every seat dispatches to.
+fn agent_host(row: &SqliteRow) -> Result<(AgentId, HostId), sqlx::Error> {
+    Ok((
+        decode::agent_id(row.try_get("id")?)?,
+        decode::host_id(row.try_get("host_id")?)?,
+    ))
+}
+
+fn agent_mcp_placement(row: &SqliteRow) -> Result<AgentProfileMcpPlacement, sqlx::Error> {
+    Ok(AgentProfileMcpPlacement::new(
+        decode::agent_id(row.try_get("id")?)?,
+        decode::host_id(row.try_get("host_id")?)?,
+        row.try_get::<Option<i64>, _>("deletion_started_at")?
+            .is_some(),
+    ))
+}
+
 fn computer_ownership(row: &SqliteRow) -> Result<ComputerOwnershipFacts, sqlx::Error> {
     let owner = row
         .try_get::<Option<String>, _>("user_id")?
@@ -144,6 +172,29 @@ pub(super) async fn select_runtime_sessions(
         .fetch_all(&mut *conn)
         .await?;
     rows.iter().map(runtime_session).collect()
+}
+
+/// The bulk stop's single-snapshot capture: the agent row's host and every seat it
+/// owns, read on the SAME connection so the host a seat dispatches to cannot come
+/// from a different state than the seat set. `None` when the agent row is absent.
+pub(super) async fn select_bulk_stop_snapshot(
+    conn: &mut SqliteConnection,
+    id: &AgentId,
+) -> Result<Option<AgentBulkStopSnapshot>, sqlx::Error> {
+    let Some(row) = sqlx::query(SELECT_AGENT_HOST)
+        .bind(id.as_str())
+        .fetch_optional(&mut *conn)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let (source, host) = agent_host(&row)?;
+    let sessions = select_runtime_sessions(&mut *conn, id).await?;
+    Ok(Some(AgentBulkStopSnapshot {
+        source,
+        host,
+        sessions,
+    }))
 }
 
 pub(super) async fn select_is_deletion_pending(
@@ -305,6 +356,42 @@ impl AgentTeardownReadPort for SqliteHostAgentStore {
             .map_err(PersistenceFailure::from_source)?;
         select_computer_lifecycle(&mut conn, host_id)
             .await
+            .map_err(PersistenceFailure::from_source)
+    }
+}
+
+impl AgentBulkStopReadPort for SqliteHostAgentStore {
+    async fn read_bulk_stop_snapshot(
+        &self,
+        agent_id: &AgentId,
+    ) -> Result<Option<AgentBulkStopSnapshot>, PersistenceFailure> {
+        // One transaction so the host row and the seat set are read from a single
+        // consistent snapshot; a read-only tx that is simply dropped (rolled back).
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        let snapshot = select_bulk_stop_snapshot(&mut tx, agent_id)
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        Ok(snapshot)
+    }
+}
+
+impl AgentProfileMcpPlacementRead for SqliteHostAgentStore {
+    async fn read_mcp_placement(
+        &self,
+        agent: &AgentId,
+    ) -> Result<Option<AgentProfileMcpPlacement>, PersistenceFailure> {
+        let row = sqlx::query(SELECT_AGENT_MCP_PLACEMENT)
+            .bind(agent.as_str())
+            .fetch_optional(self.pool())
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        row.as_ref()
+            .map(agent_mcp_placement)
+            .transpose()
             .map_err(PersistenceFailure::from_source)
     }
 }
@@ -482,6 +569,95 @@ mod tests {
         assert!(
             is_decode_failure(&failure),
             "corrupt storage did not surface as a decode failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bulk_stop_snapshot_binds_the_source_host_and_its_seat() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = seed_read_fixture(&dir).await;
+
+        // The agent-scoped agent: source is its own id, host is h-good, and its
+        // trigger-created agent-scoped seat is present.
+        let snapshot = store
+            .read_bulk_stop_snapshot(&agent("a-agent"))
+            .await
+            .expect("read snapshot")
+            .expect("agent present");
+        assert_eq!(snapshot.source, agent("a-agent"));
+        assert_eq!(snapshot.host, host("h-good"));
+        assert!(matches!(
+            snapshot.sessions.as_slice(),
+            [session] if matches!(
+                &session.scope,
+                RuntimeScope::AgentSlot { agent } if agent == &self::agent("a-agent")
+            )
+        ));
+
+        // The conversation-scoped agent: same host, its seat carries the source
+        // conversation.
+        let conversation = store
+            .read_bulk_stop_snapshot(&agent("a-conv"))
+            .await
+            .expect("read snapshot")
+            .expect("agent present");
+        assert_eq!(conversation.source, agent("a-conv"));
+        assert_eq!(conversation.host, host("h-good"));
+        assert!(matches!(
+            conversation.sessions.as_slice(),
+            [session] if matches!(
+                &session.scope,
+                RuntimeScope::ConversationSlot { agent, source }
+                    if agent == &self::agent("a-conv") && source.as_str() == "c1"
+            )
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_bulk_stop_snapshot_is_absent_for_an_unknown_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = seed_read_fixture(&dir).await;
+
+        let snapshot = store
+            .read_bulk_stop_snapshot(&agent("nope"))
+            .await
+            .expect("read snapshot");
+        assert!(snapshot.is_none(), "an unknown agent has no snapshot");
+    }
+
+    #[tokio::test]
+    async fn profile_mcp_placement_sources_host_and_deletion_from_one_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = seed_read_fixture(&dir).await;
+
+        let active = store
+            .read_mcp_placement(&agent("a-agent"))
+            .await
+            .expect("read placement")
+            .expect("agent present");
+        assert_eq!(active.source(), &agent("a-agent"));
+        assert_eq!(active.host(), &host("h-good"));
+        assert!(!active.deletion_pending());
+
+        sqlx::query("UPDATE agents SET deletion_started_at = 7 WHERE id = 'a-agent'")
+            .execute(store.pool())
+            .await
+            .unwrap();
+        let deleting = store
+            .read_mcp_placement(&agent("a-agent"))
+            .await
+            .expect("read deleting placement")
+            .expect("agent present");
+        assert_eq!(deleting.source(), &agent("a-agent"));
+        assert_eq!(deleting.host(), &host("h-good"));
+        assert!(deleting.deletion_pending());
+
+        assert!(
+            store
+                .read_mcp_placement(&agent("nope"))
+                .await
+                .expect("read missing")
+                .is_none()
         );
     }
 }
