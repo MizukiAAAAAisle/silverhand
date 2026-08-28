@@ -506,10 +506,10 @@ impl HostStatusSeeds {
         };
         let outcome = self
             .custody
-            .probe_status(StatusSnapshotRequest {
-                host: host.clone(),
-                daemon_instance: instance.clone(),
-            })
+            .probe_status(StatusSnapshotRequest::expected(
+                host.clone(),
+                instance.clone(),
+            ))
             .await;
         self.settle(host, instance, guard, outcome)
     }
@@ -738,11 +738,11 @@ mod tests {
             request: StatusSnapshotRequest,
         ) -> Pin<Box<dyn Future<Output = StatusSnapshotOutcome> + Send + 'a>> {
             Box::pin(async move {
-                let instance = request.daemon_instance;
+                let instance = request.daemon_instance().clone();
                 self.frames
                     .lock()
                     .unwrap()
-                    .push((request.host, instance.clone()));
+                    .push((request.host().clone(), instance.clone()));
                 // Bounded on purpose. A frame that should never have left is sent at a
                 // custody whose hold no test releases, and an unbounded spin would
                 // report that as a hung suite rather than as the defect it is. The

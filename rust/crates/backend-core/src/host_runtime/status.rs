@@ -61,9 +61,7 @@ pub trait HostStatusStoredReadModel: Clone + Send + Sync + 'static {
 pub enum HostStatusFactsMismatch {
     #[error("host-status facts describe computer {found:?} but the read is about {expected:?}")]
     Computer { expected: HostId, found: HostId },
-    #[error(
-        "host-status facts for computer {computer:?} list agent {agent:?} under {found:?}"
-    )]
+    #[error("host-status facts for computer {computer:?} list agent {agent:?} under {found:?}")]
     Agent {
         computer: HostId,
         agent: AgentId,
@@ -109,12 +107,12 @@ pub fn visible_host_status<'a>(
             });
         }
     }
-    Ok(find_owned_computer(viewer, Some(facts.computer.clone())).map(|owned| {
-        VisibleHostStatus {
+    Ok(
+        find_owned_computer(viewer, Some(facts.computer.clone())).map(|owned| VisibleHostStatus {
             owned,
             agents: &facts.agents,
-        }
-    }))
+        }),
+    )
 }
 
 #[cfg(test)]
@@ -158,7 +156,11 @@ mod tests {
     #[test]
     fn missing_and_foreign_are_one_answer() {
         let viewer = UserId::parse("owner").unwrap();
-        assert!(visible_host_status(&viewer, &host("host-1"), None).unwrap().is_none());
+        assert!(
+            visible_host_status(&viewer, &host("host-1"), None)
+                .unwrap()
+                .is_none()
+        );
         assert!(
             visible_host_status(&viewer, &host("host-1"), Some(&facts("other", "host-1")))
                 .unwrap()
@@ -170,11 +172,7 @@ mod tests {
     fn a_cross_wired_registration_is_an_internal_mismatch() {
         let viewer = UserId::parse("owner").unwrap();
         assert!(matches!(
-            visible_host_status(
-                &viewer,
-                &host("host-1"),
-                Some(&facts("owner", "host-2"))
-            ),
+            visible_host_status(&viewer, &host("host-1"), Some(&facts("owner", "host-2"))),
             Err(HostStatusFactsMismatch::Agent { .. })
         ));
     }

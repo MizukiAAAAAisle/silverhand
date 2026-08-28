@@ -99,6 +99,7 @@ const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_PONG_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_millis(1_500);
 const HOST_REVOKED_CLOSE_REASON: &str = "host_revoked";
+const HOST_DISCONNECTED_CLOSE_REASON: &str = "host_disconnected";
 
 #[derive(Clone)]
 pub struct DaemonDeliveryConfig {
@@ -209,7 +210,7 @@ where
             admission: HostAdmission::new(Arc::new(registry.clone())),
             // One seed store per runtime, for the same reason: a second one would
             // answer a host from an emptier set of facts than the one that seeded it.
-            seeds: HostStatusSeeds::new(Arc::new(HostCommandDispatch {
+            seeds: HostStatusSeeds::new(Arc::new(OwningHostDataPlane {
                 registry: registry.clone(),
             })),
             registry,
@@ -807,7 +808,7 @@ impl SlotOccupancy for DaemonRegistry {
 /// What the status answer means is not decided here either: this forwards to the
 /// snapshot leaf, so the seed layer gets a probe whose contract it does not own and
 /// cannot restate.
-impl DaemonCustody for HostCommandDispatch {
+impl DaemonCustody for OwningHostDataPlane {
     fn attached_instance(
         &self,
         host: &HostId,
@@ -823,7 +824,19 @@ impl DaemonCustody for HostCommandDispatch {
         &'a self,
         request: StatusSnapshotRequest,
     ) -> Pin<Box<dyn Future<Output = StatusSnapshotOutcome> + Send + 'a>> {
-        Box::pin(status_snapshot::probe(self, request))
+        let host = request.host().clone();
+        let instance = request.daemon_instance().clone();
+        Box::pin(async move {
+            match self.resolve(&host) {
+                Ok(Some(custody)) if custody.daemon_instance() == &instance => {
+                    status_snapshot::probe(self, StatusSnapshotRequest::new(custody)).await
+                }
+                Ok(_) => StatusSnapshotOutcome::Disconnected,
+                Err(_) => StatusSnapshotOutcome::Unreachable(
+                    crate::host_control::status_snapshot::UnreachableReason::DaemonUnreachable,
+                ),
+            }
+        })
     }
 }
 
@@ -857,8 +870,8 @@ pub struct DaemonDeliveryController {
 }
 
 impl DaemonDeliveryController {
-    pub fn host_commands(&self) -> HostCommandDispatch {
-        HostCommandDispatch {
+    pub fn owning_host_data_plane(&self) -> OwningHostDataPlane {
+        OwningHostDataPlane {
             registry: self.registry.clone(),
         }
     }
@@ -1002,6 +1015,24 @@ impl DaemonConnectionControl for DaemonConnectionControlHandle {
             reason: HOST_REVOKED_CLOSE_REASON,
         }));
         Ok(())
+    }
+}
+
+impl DaemonConnectionControlHandle {
+    /// Availability-only user disconnect. The close signal travels through the
+    /// captured generation's private channel, so a replacement can never receive
+    /// it. Presence of the captured slot is the product's boolean result even if
+    /// that socket task exits during the send.
+    pub fn disconnect_user_managed(&self, computer: &HostId) -> Result<bool, DaemonRegistryError> {
+        let current = self.registry.current_close_control(computer.as_str())?;
+        let Some(current) = current else {
+            return Ok(false);
+        };
+        let _ = current.sender.send(Some(ConnectionClose {
+            expected_connection_id: Some(current.connection_id),
+            reason: HOST_DISCONNECTED_CLOSE_REASON,
+        }));
+        Ok(true)
     }
 }
 
@@ -1280,25 +1311,35 @@ impl DaemonAttachment {
     }
 }
 
-/// The command kinds a host-control face may send. Closed here because the wire
-/// vocabulary belongs to the transport: a module reaching this face cannot name
-/// `runtime_start` or any other custody command through it.
+/// Command kinds admitted through the shared owning-host outbound data plane.
+/// Closed here because the wire vocabulary belongs to the transport; payload
+/// schemas remain in command-specific adapters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HostCommandKind {
+pub(crate) enum HostDataPlaneCommandKind {
     HostStatus,
     RuntimeCatalog,
+    ProxyConfigGet,
+    ProxyConfigSet,
     RotateToken,
 }
 
-impl HostCommandKind {
+impl HostDataPlaneCommandKind {
     /// Every variant, so the response envelope admits exactly the kinds this face can
     /// send. A variant missing here is not silently tolerated: nothing could answer it.
-    const ALL: [Self; 3] = [Self::HostStatus, Self::RuntimeCatalog, Self::RotateToken];
+    const ALL: [Self; 5] = [
+        Self::HostStatus,
+        Self::RuntimeCatalog,
+        Self::ProxyConfigGet,
+        Self::ProxyConfigSet,
+        Self::RotateToken,
+    ];
 
     fn as_wire(self) -> &'static str {
         match self {
             Self::HostStatus => "host_status",
             Self::RuntimeCatalog => "host_runtime_catalog",
+            Self::ProxyConfigGet => "host_proxy_config_get",
+            Self::ProxyConfigSet => "host_proxy_config_set",
             Self::RotateToken => "rotate_token",
         }
     }
@@ -1310,16 +1351,36 @@ impl HostCommandKind {
     }
 }
 
-/// One host-control round trip. Crate-private on purpose: a raw command pairs a
+/// One owning-host data-plane round trip. Crate-private on purpose: a raw command pairs a
 /// kind with a free-form payload and a budget, so anything able to build one could
 /// send a legal kind with a payload that kind has no contract for. Only the typed
-/// operations in [`crate::host_control`] may state that pairing.
-pub(crate) struct HostCommand {
-    pub(crate) host: HostId,
-    pub(crate) expected_instance: DaemonInstanceId,
-    pub(crate) kind: HostCommandKind,
+/// command adapters may state that pairing.
+pub(crate) struct HostDataPlaneRequest {
+    pub(crate) custody: HostDataPlaneCustody,
+    pub(crate) kind: HostDataPlaneCommandKind,
     pub(crate) params: Value,
     pub(crate) timeout: Duration,
+}
+
+/// The host and daemon instance captured together from the live registry.
+/// Fields and constructor are private: a route cannot cross-wire host A with an
+/// instance it observed on host B, and a command cannot change the host after
+/// resolution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostDataPlaneCustody {
+    host: HostId,
+    instance: DaemonInstanceId,
+    connection_id: String,
+}
+
+impl HostDataPlaneCustody {
+    pub fn host(&self) -> &HostId {
+        &self.host
+    }
+
+    pub fn daemon_instance(&self) -> &DaemonInstanceId {
+        &self.instance
+    }
 }
 
 /// A daemon answer together with the coordinate it was answered on. The pair is
@@ -1331,23 +1392,26 @@ pub(crate) struct HostCommand {
 /// value out without naming the coordinate it awaited: one host's legal answer can
 /// never be filed under another host's key, not even when both machines happen to
 /// spell their daemon instance the same way.
-pub(crate) struct HostCommandAnswer {
+pub(crate) struct HostDataPlaneAnswer {
     host: HostId,
     instance: DaemonInstanceId,
+    connection_id: String,
     result: Value,
 }
 
-impl HostCommandAnswer {
+impl HostDataPlaneAnswer {
     pub(crate) fn into_result_for(
         self,
-        host: &HostId,
-        instance: &DaemonInstanceId,
-    ) -> Result<Value, HostAnswerMismatch> {
-        if &self.host != host {
-            return Err(HostAnswerMismatch::Host);
+        custody: &HostDataPlaneCustody,
+    ) -> Result<Value, HostDataPlaneAnswerMismatch> {
+        if self.host != custody.host {
+            return Err(HostDataPlaneAnswerMismatch::Host);
         }
-        if &self.instance != instance {
-            return Err(HostAnswerMismatch::DaemonInstance);
+        if self.connection_id != custody.connection_id {
+            return Err(HostDataPlaneAnswerMismatch::ConnectionGeneration);
+        }
+        if self.instance != custody.instance {
+            return Err(HostDataPlaneAnswerMismatch::DaemonInstance);
         }
         Ok(self.result)
     }
@@ -1358,14 +1422,16 @@ impl HostCommandAnswer {
 /// custody and was handed another's, which no caller can act on and no daemon
 /// caused. It is this crate's own contract failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HostAnswerMismatch {
+pub(crate) enum HostDataPlaneAnswerMismatch {
     Host,
+    ConnectionGeneration,
     DaemonInstance,
 }
 
 #[derive(Debug)]
-pub(crate) enum HostCommandFailure {
+pub(crate) enum HostDataPlaneFailure {
     NoCurrentDaemon,
+    ConnectionGenerationMismatch,
     DaemonInstanceMismatch,
     NotDispatched,
     Ambiguous,
@@ -1380,7 +1446,7 @@ pub(crate) enum HostCommandFailure {
     RegistryUnavailable,
 }
 
-impl HostCommandFailure {
+impl HostDataPlaneFailure {
     fn from_dispatch(error: CommandDispatchError) -> Self {
         match error {
             CommandDispatchError::ProvenNotDispatched => Self::NotDispatched,
@@ -1398,10 +1464,13 @@ impl HostCommandFailure {
     }
 }
 
-impl fmt::Display for HostCommandFailure {
+impl fmt::Display for HostDataPlaneFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::NoCurrentDaemon => "host has no attached daemon",
+            Self::ConnectionGenerationMismatch => {
+                "host daemon connection generation changed before dispatch"
+            }
             Self::DaemonInstanceMismatch => "host daemon custody changed before dispatch",
             Self::NotDispatched => "host command was proven not dispatched",
             Self::Ambiguous => "host command outcome is ambiguous",
@@ -1413,21 +1482,20 @@ impl fmt::Display for HostCommandFailure {
     }
 }
 
-impl Error for HostCommandFailure {}
+impl Error for HostDataPlaneFailure {}
 
-/// The handle composition may hand to a host-control operation. Public as an
-/// opaque value only: it carries no readable state, and the raw round trip behind
-/// it is crate-private, so the only way to send a host command from outside this
-/// crate is a typed operation in [`crate::host_control`].
+/// The one production owner for correlated outbound commands to a named host.
+/// It resolves a generation-bound custody from the live daemon registry, and the
+/// raw round trip remains crate-private so route schemas stay in typed adapters.
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::daemon_delivery::{HostCommand, HostCommandKind};
+/// use silverhand_backend_server::daemon_delivery::{HostDataPlaneRequest, HostDataPlaneCommandKind};
 ///
-/// fn forge() -> HostCommand {
-///     HostCommand {
+/// fn forge() -> HostDataPlaneRequest {
+///     HostDataPlaneRequest {
 ///         host: silverhand_backend_core::identity::HostId::parse("host-1").unwrap(),
 ///         expected_instance: silverhand_backend_core::identity::DaemonInstanceId::parse("i").unwrap(),
-///         kind: HostCommandKind::RuntimeCatalog,
+///         kind: HostDataPlaneCommandKind::RuntimeCatalog,
 ///         params: serde_json::json!({ "force": true }),
 ///         timeout: std::time::Duration::from_secs(1),
 ///     }
@@ -1435,65 +1503,88 @@ impl Error for HostCommandFailure {}
 /// ```
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::daemon_delivery::HostCommandDispatch;
+/// use silverhand_backend_server::daemon_delivery::OwningHostDataPlane;
 ///
 /// // Names no crate-private type, so nothing here fails for a naming reason. The
 /// // round trip stays unreachable while ANY part of it — the parameter, the answer,
 /// // the failure, or the method — is crate-private: publishing the whole face is
 /// // what turns this green.
-/// async fn send(dispatch: &HostCommandDispatch) {
+/// async fn send(dispatch: &OwningHostDataPlane) {
 ///     let _ = dispatch.dispatch(unreachable!()).await;
 /// }
 /// ```
 ///
 /// ```
-/// use silverhand_backend_core::identity::{DaemonInstanceId, HostId};
+/// use silverhand_backend_core::identity::HostId;
 /// use silverhand_backend_server::{
-///     daemon_delivery::{DaemonDeliveryController, HostCommandDispatch},
+///     daemon_delivery::{DaemonDeliveryController, OwningHostDataPlane},
 ///     host_control::runtime_catalog::{self, RuntimeCatalogOutcome, RuntimeCatalogRequest},
 /// };
 ///
-/// async fn probe(dispatch: &HostCommandDispatch) -> RuntimeCatalogOutcome {
-///     let _ = DaemonDeliveryController::host_commands;
+/// async fn probe(dispatch: &OwningHostDataPlane) -> RuntimeCatalogOutcome {
+///     let _ = DaemonDeliveryController::owning_host_data_plane;
+///     let custody = dispatch
+///         .resolve(&HostId::parse("host-1").unwrap())
+///         .unwrap()
+///         .expect("host is attached");
 ///     runtime_catalog::probe(
 ///         dispatch,
-///         RuntimeCatalogRequest {
-///             host: HostId::parse("host-1").unwrap(),
-///             daemon_instance: DaemonInstanceId::parse("instance-1").unwrap(),
-///             force: true,
-///         },
+///         RuntimeCatalogRequest::new(custody, true),
 ///     )
 ///     .await
 /// }
 /// ```
 #[derive(Clone)]
-pub struct HostCommandDispatch {
+pub struct OwningHostDataPlane {
     registry: DaemonRegistry,
 }
 
-impl HostCommandDispatch {
+impl OwningHostDataPlane {
+    /// Resolve the attached custody for `host`. `None` is the ordinary offline
+    /// answer. A later replacement is caught again inside `dispatch` before send.
+    pub fn resolve(
+        &self,
+        host: &HostId,
+    ) -> Result<Option<HostDataPlaneCustody>, DaemonRegistryError> {
+        Ok(self
+            .registry
+            .attachment(host.as_str())?
+            .map(|attachment| HostDataPlaneCustody {
+                host: host.clone(),
+                instance: attachment.daemon_instance,
+                connection_id: attachment.connection_id,
+            }))
+    }
+
     pub(crate) async fn dispatch(
         &self,
-        command: HostCommand,
-    ) -> Result<HostCommandAnswer, HostCommandFailure> {
+        command: HostDataPlaneRequest,
+    ) -> Result<HostDataPlaneAnswer, HostDataPlaneFailure> {
+        let host = command.custody.host;
+        let expected_instance = command.custody.instance;
+        let expected_connection_id = command.custody.connection_id;
         let attachment = self
             .registry
-            .attachment(command.host.as_str())
-            .map_err(|_| HostCommandFailure::RegistryUnavailable)?
-            .ok_or(HostCommandFailure::NoCurrentDaemon)?;
-        if attachment.daemon_instance != command.expected_instance {
-            return Err(HostCommandFailure::DaemonInstanceMismatch);
+            .attachment(host.as_str())
+            .map_err(|_| HostDataPlaneFailure::RegistryUnavailable)?
+            .ok_or(HostDataPlaneFailure::NoCurrentDaemon)?;
+        if attachment.connection_id != expected_connection_id {
+            return Err(HostDataPlaneFailure::ConnectionGenerationMismatch);
+        }
+        if attachment.daemon_instance != expected_instance {
+            return Err(HostDataPlaneFailure::DaemonInstanceMismatch);
         }
         let result = attachment
             .command(command.kind.as_wire(), command.params, command.timeout)
             .await
-            .map_err(HostCommandFailure::from_dispatch)?;
-        Ok(HostCommandAnswer {
+            .map_err(HostDataPlaneFailure::from_dispatch)?;
+        Ok(HostDataPlaneAnswer {
             // The lookup either matched this key's slot or there was no attachment
             // at all, so this is the host that served the command, not a coordinate
             // a consumer may restate later.
-            host: command.host,
+            host,
             instance: attachment.daemon_instance,
+            connection_id: attachment.connection_id,
             result,
         })
     }
@@ -1540,7 +1631,7 @@ impl DaemonTokenRotationChannel for DaemonTokenRotation {
         let params = rotation_params(&host_id, delivery.reveal_token(), issued_at, grace_until);
         let result = attachment
             .command(
-                HostCommandKind::RotateToken.as_wire(),
+                HostDataPlaneCommandKind::RotateToken.as_wire(),
                 params,
                 HOST_TOKEN_ROTATION_TIMEOUT,
             )
@@ -2132,7 +2223,7 @@ async fn connection<C, D, H>(
                     }
                     match runtime.registry.attach(&host_id, &connection_id, ready.clone()) {
                         Ok(true) => {
-                            attached = Some(ready.daemon_instance);
+                            attached = Some(ready.daemon_instance.clone());
                             // The only edge that resolves a refusal, and only now: strict
                             // ready passed AND the registry promoted THIS connection. A
                             // parse that never became custody leaves the record standing.
@@ -2143,6 +2234,25 @@ async fn connection<C, D, H>(
                                     "host admission refusal could not be cleared after attachment"
                                 );
                             }
+                            // Status is a zero-RPC HTTP read. Seed this exact admitted
+                            // generation in the background at the promotion edge; the
+                            // seed owner rechecks custody after every await and drops a
+                            // late answer if this socket is replaced.
+                            let seeds = runtime.seeds.clone();
+                            let seed_host = HostId::parse(host_id.clone())
+                                .expect("authenticated host ids are validated at lookup");
+                            let seed_instance = ready.daemon_instance.clone();
+                            tokio::spawn(async move {
+                                if let Err(cause) =
+                                    seeds.seed_on_attach(&seed_host, &seed_instance).await
+                                {
+                                    tracing::error!(
+                                        error_chain = %error::describe(&cause),
+                                        host_id = %seed_host.as_str(),
+                                        "host status seed chain failed"
+                                    );
+                                }
+                            });
                         }
                         Ok(false) => break,
                         Err(cause) => {
@@ -3070,7 +3180,7 @@ fn valid_command_response_envelope(value: &Value) -> bool {
                 matches!(
                     kind,
                     "runtime_start" | "runtime_stop" | "runtime_deliver" | "runtime_status"
-                ) || HostCommandKind::sends_wire(kind)
+                ) || HostDataPlaneCommandKind::sends_wire(kind)
                     || kind == "agent_files_purge"
             })
 }
@@ -4066,46 +4176,68 @@ mod tests {
 
     #[test]
     fn an_answer_opens_only_for_the_coordinate_that_awaited_it() {
-        let answer = || HostCommandAnswer {
+        let answer = || HostDataPlaneAnswer {
             host: HostId::parse("host-1").unwrap(),
             instance: DaemonInstanceId::parse("instance-shared").unwrap(),
+            connection_id: "connection-current".to_owned(),
             result: json!({ "runtimes": [] }),
         };
-        let host = |raw: &str| HostId::parse(raw).unwrap();
-        let instance = |raw: &str| DaemonInstanceId::parse(raw).unwrap();
+        let custody = |host: &str, instance: &str, connection: &str| HostDataPlaneCustody {
+            host: HostId::parse(host).unwrap(),
+            instance: DaemonInstanceId::parse(instance).unwrap(),
+            connection_id: connection.to_owned(),
+        };
 
         assert_eq!(
-            answer().into_result_for(&host("host-1"), &instance("instance-shared")),
+            answer().into_result_for(&custody("host-1", "instance-shared", "connection-current")),
             Ok(json!({ "runtimes": [] }))
         );
         // Both machines spell the custody the same way, so an instance-only bind
         // would file this answer under the wrong host.
         assert_eq!(
-            answer().into_result_for(&host("host-2"), &instance("instance-shared")),
-            Err(HostAnswerMismatch::Host)
+            answer().into_result_for(&custody("host-2", "instance-shared", "connection-current")),
+            Err(HostDataPlaneAnswerMismatch::Host)
         );
         assert_eq!(
-            answer().into_result_for(&host("host-1"), &instance("instance-old")),
-            Err(HostAnswerMismatch::DaemonInstance)
+            answer().into_result_for(&custody("host-1", "instance-shared", "connection-old")),
+            Err(HostDataPlaneAnswerMismatch::ConnectionGeneration)
         );
         assert_eq!(
-            answer().into_result_for(&host("host-2"), &instance("instance-old")),
-            Err(HostAnswerMismatch::Host)
+            answer().into_result_for(&custody("host-1", "instance-old", "connection-current")),
+            Err(HostDataPlaneAnswerMismatch::DaemonInstance)
+        );
+        assert_eq!(
+            answer().into_result_for(&custody("host-2", "instance-old", "connection-old")),
+            Err(HostDataPlaneAnswerMismatch::Host)
         );
     }
 
     #[test]
-    fn rotate_token_is_a_host_control_word_whose_answer_is_admitted() {
-        // The variant exists so the connection admits a `rotate_token` RESPONSE frame:
-        // without it the daemon's acknowledgement decodes as an unsupported kind and the
-        // socket is closed before the pending command is ever settled.
-        assert_eq!(HostCommandKind::RotateToken.as_wire(), "rotate_token");
-        assert!(HostCommandKind::sends_wire("rotate_token"));
-        assert!(valid_command_response_envelope(&json!({
-            "id": "r1",
-            "kind": "rotate_token",
-            "result": { "rotated": true, "host_id": "host-1", "config_refreshed_at": 42 },
-        })));
+    fn every_shared_host_data_plane_word_is_admitted_on_the_response_epoch() {
+        for (kind, wire) in [
+            (HostDataPlaneCommandKind::HostStatus, "host_status"),
+            (
+                HostDataPlaneCommandKind::RuntimeCatalog,
+                "host_runtime_catalog",
+            ),
+            (
+                HostDataPlaneCommandKind::ProxyConfigGet,
+                "host_proxy_config_get",
+            ),
+            (
+                HostDataPlaneCommandKind::ProxyConfigSet,
+                "host_proxy_config_set",
+            ),
+            (HostDataPlaneCommandKind::RotateToken, "rotate_token"),
+        ] {
+            assert_eq!(kind.as_wire(), wire);
+            assert!(HostDataPlaneCommandKind::sends_wire(wire));
+            assert!(valid_command_response_envelope(&json!({
+                "id": "r1",
+                "kind": wire,
+                "result": { "ok": true },
+            })));
+        }
     }
 
     #[test]

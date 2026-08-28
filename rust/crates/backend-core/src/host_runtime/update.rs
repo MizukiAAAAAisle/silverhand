@@ -113,9 +113,7 @@ where
             .update_computer(computer, move |record| decide(&command, record))
             .await?;
         Ok(match transaction {
-            UpdateComputerTransaction::Refused(refusal) => {
-                UpdateComputerOutcome::Refused(refusal)
-            }
+            UpdateComputerTransaction::Refused(refusal) => UpdateComputerOutcome::Refused(refusal),
             UpdateComputerTransaction::Updated {
                 computer,
                 finalized_now: true,

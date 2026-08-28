@@ -9,9 +9,7 @@ use silverhand_backend_core::{
     agents::runtime::RuntimeKind,
     host_runtime::{
         status::{HostStatusAgentFact, HostStatusStoredFacts, HostStatusStoredReadModel},
-        update::{
-            UpdateComputerDecision, UpdateComputerTransaction, UpdateComputerUnitOfWork,
-        },
+        update::{UpdateComputerDecision, UpdateComputerTransaction, UpdateComputerUnitOfWork},
     },
     identity::{AgentId, HostId},
     persistence::PersistenceFailure,
@@ -50,8 +48,9 @@ impl UpdateComputerUnitOfWork for SqliteHostRuntimeStore {
         decide: D,
     ) -> Result<UpdateComputerTransaction, PersistenceFailure>
     where
-        D: FnOnce(Option<silverhand_backend_core::host_runtime::computer::ComputerRecord>)
-                -> UpdateComputerDecision
+        D: FnOnce(
+                Option<silverhand_backend_core::host_runtime::computer::ComputerRecord>,
+            ) -> UpdateComputerDecision
             + Send,
     {
         // The lock is acquired at BEGIN, before the read the decision consumes.
@@ -72,9 +71,7 @@ impl UpdateComputerUnitOfWork for SqliteHostRuntimeStore {
 
         let decision = decide(record);
         let result = match decision {
-            UpdateComputerDecision::Refuse(refusal) => {
-                UpdateComputerTransaction::Refused(refusal)
-            }
+            UpdateComputerDecision::Refuse(refusal) => UpdateComputerTransaction::Refused(refusal),
             UpdateComputerDecision::Write {
                 display_label,
                 finalized_at,
@@ -95,12 +92,10 @@ impl UpdateComputerUnitOfWork for SqliteHostRuntimeStore {
                     .await
                     .map_err(PersistenceFailure::from_source)?
                     .ok_or_else(|| {
-                        PersistenceFailure::from_source(
-                            HostManagementStoreError::ComputerVanished,
-                        )
+                        PersistenceFailure::from_source(HostManagementStoreError::ComputerVanished)
                     })?;
-                let computer = row_to_computer_record(&row)
-                    .map_err(PersistenceFailure::from_source)?;
+                let computer =
+                    row_to_computer_record(&row).map_err(PersistenceFailure::from_source)?;
                 UpdateComputerTransaction::Updated {
                     computer,
                     finalized_now: finalized_at.is_some(),
@@ -148,23 +143,22 @@ impl HostStatusStoredReadModel for SqliteHostRuntimeStore {
     }
 }
 
-fn decode_status_agent(
-    row: &sqlx::sqlite::SqliteRow,
-) -> Result<HostStatusAgentFact, sqlx::Error> {
-    let id = AgentId::parse(row.try_get::<String, _>("id")?)
-        .map_err(|_| sqlx::Error::Decode(Box::new(HostManagementStoreError::MalformedAgentIdentity)))?;
-    let computer = HostId::parse(row.try_get::<String, _>("host_id")?)
-        .map_err(|_| sqlx::Error::Decode(Box::new(HostManagementStoreError::MalformedHostIdentity)))?;
+fn decode_status_agent(row: &sqlx::sqlite::SqliteRow) -> Result<HostStatusAgentFact, sqlx::Error> {
+    let id = AgentId::parse(row.try_get::<String, _>("id")?).map_err(|_| {
+        sqlx::Error::Decode(Box::new(HostManagementStoreError::MalformedAgentIdentity))
+    })?;
+    let computer = HostId::parse(row.try_get::<String, _>("host_id")?).map_err(|_| {
+        sqlx::Error::Decode(Box::new(HostManagementStoreError::MalformedHostIdentity))
+    })?;
     let runtime = RuntimeKind::parse(&row.try_get::<String, _>("runtime")?)
         .ok_or_else(|| sqlx::Error::Decode(Box::new(HostManagementStoreError::MalformedRuntime)))?;
-    let materialization_status = MaterializationStatus::parse(
-        &row.try_get::<String, _>("materialization_status")?,
-    )
-    .map_err(|_| {
-        sqlx::Error::Decode(Box::new(
-            HostManagementStoreError::MalformedMaterializationStatus,
-        ))
-    })?;
+    let materialization_status =
+        MaterializationStatus::parse(&row.try_get::<String, _>("materialization_status")?)
+            .map_err(|_| {
+                sqlx::Error::Decode(Box::new(
+                    HostManagementStoreError::MalformedMaterializationStatus,
+                ))
+            })?;
     Ok(HostStatusAgentFact {
         id,
         computer,
@@ -191,9 +185,8 @@ mod tests {
 
     use super::*;
 
-    const CURRENT_SCHEMA: &str = include_str!(
-        "../../../../../packages/backend/tests/migration-baseline/schema-current.sql"
-    );
+    const CURRENT_SCHEMA: &str =
+        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
 
     async fn fixture() -> (tempfile::TempDir, SqliteHostRuntimeStore) {
         let directory = tempfile::tempdir().unwrap();
@@ -247,13 +240,10 @@ mod tests {
         let (_directory, store) = fixture().await;
         let computer = HostId::parse("host-1").unwrap();
         let facts = store.read_host_status(&computer).await.unwrap().unwrap();
-        let visible = visible_host_status(
-            &UserId::parse("owner").unwrap(),
-            &computer,
-            Some(&facts),
-        )
-        .unwrap()
-        .unwrap();
+        let visible =
+            visible_host_status(&UserId::parse("owner").unwrap(), &computer, Some(&facts))
+                .unwrap()
+                .unwrap();
         assert_eq!(visible.computer().name, "stable");
         assert_eq!(visible.agents().len(), 1);
         assert_eq!(visible.agents()[0].id.as_str(), "agent-1");

@@ -1,13 +1,13 @@
 //! Typed request and result contract for the `host_runtime_catalog` command.
 //!
-//! The transport correlates, refuses a mismatched daemon instance before it sends
+//! The transport correlates, refuses a mismatched connection generation before it sends
 //! anything, and decodes the daemon's refusal code as a closed set. This leaf owns
 //! only what this one command sends, what its answer means, and how a refusal code
 //! maps to this operation's outcome — an unknown code is protocol corruption and
 //! never a refusal this operation can report. Sharing the transport primitive with
 //! the status seed must not merge the two payload or result vocabularies.
 //!
-//! Every fact this leaf produces is bound to the `(host, daemon instance)` it was
+//! Every fact this leaf produces is bound to the resolved host connection generation it was
 //! answered on, and its rows can only be read by naming that coordinate.
 //!
 //! `detected_at` is an `i64` where the TS contract says `z.number()`. That is a
@@ -20,23 +20,28 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use silverhand_backend_core::{
-    agents::runtime::RuntimeKind,
-    identity::{DaemonInstanceId, HostId},
-};
+use silverhand_backend_core::agents::runtime::RuntimeKind;
 
 use crate::daemon_delivery::{
-    HostCommand, HostCommandDispatch, HostCommandFailure, HostCommandKind,
+    HostDataPlaneCommandKind, HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest,
+    OwningHostDataPlane,
 };
+
+use super::js_safe_integer;
 
 /// This operation's own budget: one probe may shell out to every runtime binary
 /// on the machine, so it is far longer than a control-plane round trip.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(45);
 
 pub struct RuntimeCatalogRequest {
-    pub host: HostId,
-    pub daemon_instance: DaemonInstanceId,
+    custody: HostDataPlaneCustody,
     pub force: bool,
+}
+
+impl RuntimeCatalogRequest {
+    pub fn new(custody: HostDataPlaneCustody, force: bool) -> Self {
+        Self { custody, force }
+    }
 }
 
 pub enum RuntimeCatalogOutcome {
@@ -58,13 +63,12 @@ pub enum RuntimeCatalogOutcome {
 /// machines spell their daemon instance identically.
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::identity::{DaemonInstanceId, HostId};
+/// use silverhand_backend_server::daemon_delivery::HostDataPlaneCustody;
 /// use silverhand_backend_server::host_control::runtime_catalog::RuntimeCatalog;
 ///
-/// fn forge() -> RuntimeCatalog {
+/// fn forge(custody: HostDataPlaneCustody) -> RuntimeCatalog {
 ///     RuntimeCatalog {
-///         host: HostId::parse("host-2").unwrap(),
-///         instance: DaemonInstanceId::parse("instance-1").unwrap(),
+///         custody,
 ///         runtimes: Vec::new(),
 ///         detected_at: 1,
 ///     }
@@ -72,22 +76,20 @@ pub enum RuntimeCatalogOutcome {
 /// ```
 ///
 /// ```
-/// use silverhand_backend_core::identity::{DaemonInstanceId, HostId};
+/// use silverhand_backend_server::daemon_delivery::HostDataPlaneCustody;
 /// use silverhand_backend_server::host_control::runtime_catalog::{
 ///     CatalogCoordinateMismatch, CatalogView, RuntimeCatalog,
 /// };
 ///
 /// fn read<'a>(
 ///     catalog: &'a RuntimeCatalog,
-///     host: &HostId,
-///     instance: &DaemonInstanceId,
+///     custody: &HostDataPlaneCustody,
 /// ) -> Result<CatalogView<'a>, CatalogCoordinateMismatch> {
-///     catalog.rows_for(host, instance)
+///     catalog.rows_for(custody)
 /// }
 /// ```
 pub struct RuntimeCatalog {
-    host: HostId,
-    instance: DaemonInstanceId,
+    custody: HostDataPlaneCustody,
     runtimes: Vec<DetectedRuntime>,
     detected_at: i64,
 }
@@ -95,14 +97,16 @@ pub struct RuntimeCatalog {
 impl RuntimeCatalog {
     pub fn rows_for(
         &self,
-        host: &HostId,
-        instance: &DaemonInstanceId,
+        custody: &HostDataPlaneCustody,
     ) -> Result<CatalogView<'_>, CatalogCoordinateMismatch> {
-        if &self.host != host {
+        if self.custody.host() != custody.host() {
             return Err(CatalogCoordinateMismatch::Host);
         }
-        if &self.instance != instance {
+        if self.custody.daemon_instance() != custody.daemon_instance() {
             return Err(CatalogCoordinateMismatch::DaemonInstance);
+        }
+        if self.custody != *custody {
+            return Err(CatalogCoordinateMismatch::ConnectionGeneration);
         }
         Ok(CatalogView {
             runtimes: &self.runtimes,
@@ -122,6 +126,7 @@ pub struct CatalogView<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogCoordinateMismatch {
     Host,
+    ConnectionGeneration,
     DaemonInstance,
 }
 
@@ -193,14 +198,13 @@ impl RuntimeDetectionReason {
 }
 
 pub async fn probe(
-    dispatch: &HostCommandDispatch,
+    dispatch: &OwningHostDataPlane,
     request: RuntimeCatalogRequest,
 ) -> RuntimeCatalogOutcome {
     let answer = match dispatch
-        .dispatch(HostCommand {
-            host: request.host.clone(),
-            expected_instance: request.daemon_instance.clone(),
-            kind: HostCommandKind::RuntimeCatalog,
+        .dispatch(HostDataPlaneRequest {
+            custody: request.custody.clone(),
+            kind: HostDataPlaneCommandKind::RuntimeCatalog,
             params: json!({ "force": request.force }),
             timeout: PROBE_TIMEOUT,
         })
@@ -211,32 +215,32 @@ pub async fn probe(
     };
     // The coordinate is bound before the payload is looked at, so an answer about
     // another machine or another custody cannot hide behind a decode failure.
-    let Ok(result) = answer.into_result_for(&request.host, &request.daemon_instance) else {
+    let Ok(result) = answer.into_result_for(&request.custody) else {
         return RuntimeCatalogOutcome::TransportContractViolation;
     };
     let Some((runtimes, detected_at)) = CatalogWire::decode(result) else {
         return RuntimeCatalogOutcome::DaemonInternalError;
     };
     RuntimeCatalogOutcome::Detected(RuntimeCatalog {
-        host: request.host,
-        instance: request.daemon_instance,
+        custody: request.custody,
         runtimes,
         detected_at,
     })
 }
 
-fn outcome_for(failure: HostCommandFailure) -> RuntimeCatalogOutcome {
+fn outcome_for(failure: HostDataPlaneFailure) -> RuntimeCatalogOutcome {
     match failure {
-        HostCommandFailure::NoCurrentDaemon
-        | HostCommandFailure::DaemonInstanceMismatch
-        | HostCommandFailure::NotDispatched => RuntimeCatalogOutcome::AttachPending,
-        HostCommandFailure::TimedOut => RuntimeCatalogOutcome::Timeout,
+        HostDataPlaneFailure::NoCurrentDaemon
+        | HostDataPlaneFailure::ConnectionGenerationMismatch
+        | HostDataPlaneFailure::DaemonInstanceMismatch
+        | HostDataPlaneFailure::NotDispatched => RuntimeCatalogOutcome::AttachPending,
+        HostDataPlaneFailure::TimedOut => RuntimeCatalogOutcome::Timeout,
         // The daemon was reachable and answered, but not with a catalog. TS folds
         // exactly this set into `daemon_internal_error` (502).
-        HostCommandFailure::Refused
-        | HostCommandFailure::Ambiguous
-        | HostCommandFailure::ProtocolCorruption
-        | HostCommandFailure::RegistryUnavailable => RuntimeCatalogOutcome::DaemonInternalError,
+        HostDataPlaneFailure::Refused
+        | HostDataPlaneFailure::Ambiguous
+        | HostDataPlaneFailure::ProtocolCorruption
+        | HostDataPlaneFailure::RegistryUnavailable => RuntimeCatalogOutcome::DaemonInternalError,
     }
 }
 
@@ -250,6 +254,9 @@ struct CatalogWire {
 impl CatalogWire {
     fn decode(value: Value) -> Option<(Vec<DetectedRuntime>, i64)> {
         let wire = serde_json::from_value::<Self>(value).ok()?;
+        if !js_safe_integer(wire.detected_at) {
+            return None;
+        }
         let runtimes = wire
             .runtimes
             .into_iter()
@@ -301,9 +308,10 @@ mod tests {
         // not sent" apart, and this operation deliberately does not: to a caller
         // waiting for a machine to be reachable they are one answer.
         for pending in [
-            HostCommandFailure::NoCurrentDaemon,
-            HostCommandFailure::DaemonInstanceMismatch,
-            HostCommandFailure::NotDispatched,
+            HostDataPlaneFailure::NoCurrentDaemon,
+            HostDataPlaneFailure::ConnectionGenerationMismatch,
+            HostDataPlaneFailure::DaemonInstanceMismatch,
+            HostDataPlaneFailure::NotDispatched,
         ] {
             assert!(matches!(
                 outcome_for(pending),
@@ -311,17 +319,17 @@ mod tests {
             ));
         }
         assert!(matches!(
-            outcome_for(HostCommandFailure::TimedOut),
+            outcome_for(HostDataPlaneFailure::TimedOut),
             RuntimeCatalogOutcome::Timeout
         ));
         // A refusal says the same thing about this one question as a round trip that
         // failed rather than being refused: the machine cannot say what it has
         // installed. TS folds the same set into `daemon_internal_error` (502).
         for unanswerable in [
-            HostCommandFailure::Refused,
-            HostCommandFailure::Ambiguous,
-            HostCommandFailure::ProtocolCorruption,
-            HostCommandFailure::RegistryUnavailable,
+            HostDataPlaneFailure::Refused,
+            HostDataPlaneFailure::Ambiguous,
+            HostDataPlaneFailure::ProtocolCorruption,
+            HostDataPlaneFailure::RegistryUnavailable,
         ] {
             assert!(matches!(
                 outcome_for(unanswerable),
