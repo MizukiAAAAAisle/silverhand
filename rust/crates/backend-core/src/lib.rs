@@ -25,6 +25,7 @@ pub mod human_auth_flows;
 pub mod identity;
 pub mod messaging;
 pub mod name_canonicalization;
+pub mod participant_handle_availability;
 pub mod persistence;
 pub mod policy;
 pub mod runtime_credential;

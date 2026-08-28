@@ -2,6 +2,7 @@
 //! HTTP, WebSocket and wire projection boundary.
 
 pub mod access;
+pub mod agent_name_availability;
 pub mod auth;
 pub mod avatar_blob;
 mod bearer;
