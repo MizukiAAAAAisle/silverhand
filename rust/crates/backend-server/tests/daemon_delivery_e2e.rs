@@ -4737,6 +4737,7 @@ async fn stale_generation_events_cannot_change_or_publish_successor_state() {
         status.active_agents,
         std::collections::HashSet::from([AgentId::parse(AGENT).unwrap()])
     );
+    assert_no_daemon_frame(&mut daemon).await;
 
     for (generation, retry_attempt, ts) in [(1, 1, 43), (2, 2, 44)] {
         send_product(
@@ -4785,6 +4786,7 @@ async fn stale_generation_events_cannot_change_or_publish_successor_state() {
     })
     .await
     .unwrap();
+    assert_no_daemon_frame(&mut daemon).await;
 
     live.close(None).await.unwrap();
     daemon.close(None).await.unwrap();
