@@ -44,6 +44,15 @@ pub(super) struct AgentDto {
     updated_at: i64,
 }
 
+impl AgentDto {
+    /// The derived cache-busted avatar URL (or `null`). Repeated at the TOP level of
+    /// the avatar-upload response body (`{ avatar_url, agent }`) exactly as the product
+    /// does, so both faces read the single derived value rather than recomputing it.
+    pub(super) fn avatar_url(&self) -> Option<String> {
+        self.avatar_url.clone()
+    }
+}
+
 pub(super) fn agent_dto(detail: &AgentDetailFacts) -> AgentDto {
     let projection = detail.projection();
     let id = detail.source().as_str().to_string();
