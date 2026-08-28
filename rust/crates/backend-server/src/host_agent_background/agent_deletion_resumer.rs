@@ -11,15 +11,33 @@
 //! [`ResumeOutcome`] to {drop the token, retry the whole chain} and does no domain
 //! reasoning of its own.
 //!
-//! ## What a generation is, and why it bounds retries
+//! ## What a generation is, and why the fence is bound to one
 //!
 //! An attempt can only make progress against the daemon connection that currently owns
 //! the agent's host: the purge fences that live transport. A *generation* is one such
-//! connection id. When a daemon reconnects it gets a fresh id, so a retry chain bound to
-//! the old generation is superseded — a stale timer that wakes finds a different id and
-//! does nothing — rather than racing the new transport. The retry ladder (`[1s, 5s,
-//! 30s]`) is per generation: a fresh connection starts the ladder over, because a
-//! reconnect is new evidence that a transient fault may now clear.
+//! connection id. The scheduler never dials a generation itself; it asks
+//! [`DeletionFenceBinder::bind`] for a fence pinned to the exact generation it means to
+//! run against. That fence verifies its generation again AT SEND, so a same-instance
+//! daemon replacement (a new generation on the same host) can never receive an older
+//! chain's purge — the durable delete stays structurally unreachable behind a fence ack
+//! for the generation that is actually live.
+//!
+//! When a daemon reconnects it gets a fresh id, so a retry chain bound to the old
+//! generation is superseded. The retry ladder (`[1s, 5s, 30s]`) is per generation: a
+//! fresh connection starts the ladder over, because a reconnect is new evidence that a
+//! transient fault may now clear.
+//!
+//! ## Coalescing owes a re-drive; terminal cleanup dispatches by token identity
+//!
+//! A trigger that arrives while an agent's attempt is already in flight cannot simply be
+//! dropped: the newer trigger may carry a newer marker (a re-created agent deleted
+//! again, whose `deletion_started_at` differs), or the live generation may have moved on.
+//! So a coalesced trigger records an ephemeral per-agent `rerun` bit and the single
+//! owner re-drives once more before releasing — there is never a second concurrent runner
+//! for one agent. Symmetrically, terminal cleanup compares the FULL attempt identity
+//! (agent + host + `deletion_started_at`): a `Superseded`/`Faulted`/`Deleted` arm clears
+//! the pending entry only when it still holds the exact token that just ran, so a
+//! concurrently-written newer token is driven, never clobbered.
 //!
 //! ## Fail-forward, so a lost attempt is safe
 //!
@@ -39,7 +57,7 @@ use silverhand_backend_core::{
     persistence::PersistenceFailure,
     teardown::{
         agent_delete_resume::{
-            AgentDeletionResidue, AgentQuiescePurge, ResidueFault, ResumeOutcome, RetryReason,
+            AgentDeletionFence, AgentDeletionResidue, ResidueFault, ResumeOutcome, RetryReason,
             resume_agent_deletion,
         },
         intent::{AgentDeletionAttempt, AgentDeletionLifecyclePort, pending_agent_deletions},
@@ -49,13 +67,22 @@ use tokio::task::JoinHandle;
 
 use crate::error;
 
-/// The live daemon connection generation that currently owns a host, if any.
+/// Binds a purge fence to the daemon connection generation that owns a host, and reports
+/// the live generation id for the scheduler's book-keeping.
 ///
-/// A generation is one attached connection id. The resumer only ever compares this id
-/// for equality — to bind a retry chain to a generation and to notice when a reconnect
-/// has superseded one — and never dials through it, so the port carries no command
-/// channel a caller could grow a second transport out of.
-pub trait HostConnections: Clone + Send + Sync + 'static {
+/// [`bind`](Self::bind) returns a fence ONLY while `connection_id` is still the live
+/// generation for `host`; a `None` means that generation has already been superseded, so
+/// the caller re-drives on the current one. The minted fence captures the generation as a
+/// transport capability and verifies it again at send, so nothing the scheduler holds can
+/// route a purge to a replacement. [`current_generation`](Self::current_generation) is a
+/// pure comparison value — the scheduler uses it to bind chains and notice reconnects,
+/// never to dial — so this port carries no command channel a caller could grow a second
+/// transport out of.
+pub trait DeletionFenceBinder: Clone + Send + Sync + 'static {
+    type Fence: AgentDeletionFence;
+
+    fn bind(&self, host: &HostId, connection_id: &str) -> Option<Self::Fence>;
+
     fn current_generation(&self, host: &HostId) -> Option<String>;
 }
 
@@ -70,7 +97,8 @@ pub enum DeletionRunOutcome {
     /// The control-plane rows are gone (this attempt committed them, or a concurrent
     /// completion already had). Any post-commit residue failure was carried and logged.
     Completed,
-    /// An attempt for this agent is already in flight; this trigger coalesced into it.
+    /// An attempt for this agent is already in flight; this trigger coalesced into it and
+    /// left the running owner a re-drive to honor before it releases.
     AlreadyRunning,
     /// The marker is retained and will be retried — either on the scheduled ladder for
     /// an attached host, or when the owning host next attaches.
@@ -99,8 +127,32 @@ struct Tracked {
     pending: HashMap<AgentId, AgentDeletionAttempt>,
     /// The agents whose attempt is running right now — the per-agent single-flight lock.
     in_flight: HashSet<AgentId>,
+    /// Agents whose in-flight owner owes one more re-drive because a trigger coalesced
+    /// while it ran. Ephemeral, never durable: it only exists to keep a coalesced trigger
+    /// from being silently lost.
+    rerun: HashSet<AgentId>,
     /// The live retry generation per host.
     generations: HashMap<HostId, Generation>,
+}
+
+/// What one iteration of the single-flight loop resolved to before scheduling is decided.
+enum DrivenOutcome {
+    Resolved(ResumeOutcome),
+    /// The captured generation was no longer live at bind time — nothing ran.
+    StaleGeneration,
+}
+
+/// The scheduler's decision for one single-flight iteration, computed under the lock.
+enum FlightStep {
+    /// Keep the single-flight lock and drive this token on this generation next.
+    Redrive {
+        attempt: AgentDeletionAttempt,
+        connection_id: String,
+    },
+    /// Release the lock and arm the host's retry ladder.
+    ArmLadder,
+    /// Release the lock and finish with this outcome.
+    Release(DeletionRunOutcome),
 }
 
 impl Tracked {
@@ -135,52 +187,167 @@ impl Tracked {
         self.install_generation(host, connection_id);
         true
     }
+
+    /// The live connection id currently owning `host`, as this worker's book-keeping sees
+    /// it.
+    fn current_connection(&self, host: &HostId) -> Option<String> {
+        self.generations
+            .get(host)
+            .map(|generation| generation.connection_id.clone())
+    }
+
+    /// Decide the next single-flight step for `ran` (driven on `ran_conn`) from its
+    /// classified `driven` outcome, mutating the pending/rerun/in_flight book-keeping.
+    ///
+    /// A coalesced re-drive owed for this agent is consumed here. Every terminal arm is
+    /// identity-guarded: it touches the pending entry ONLY when the map still holds the
+    /// exact token that ran, so a concurrently-written newer token is driven instead of
+    /// dropped. Releasing arms free the single-flight slot; a redrive keeps it.
+    fn next_flight_step(
+        &mut self,
+        agent: &AgentId,
+        host: &HostId,
+        ran: &AgentDeletionAttempt,
+        ran_conn: &str,
+        driven: &DrivenOutcome,
+    ) -> FlightStep {
+        let owed = self.rerun.remove(agent);
+        let current_gen = self.current_connection(host);
+        let pending = self.pending.get(agent).cloned();
+        let pending_is_ran = pending.as_ref() == Some(ran);
+
+        match driven {
+            DrivenOutcome::Resolved(ResumeOutcome::Deleted { .. } | ResumeOutcome::Faulted(_)) => {
+                let release =
+                    if matches!(driven, DrivenOutcome::Resolved(ResumeOutcome::Faulted(_))) {
+                        DeletionRunOutcome::Faulted
+                    } else {
+                        DeletionRunOutcome::Completed
+                    };
+                if pending_is_ran {
+                    // This token's row is resolved and it is still the one in memory: the
+                    // agent is done, clear everything.
+                    self.pending.remove(agent);
+                    self.rerun.remove(agent);
+                    self.in_flight.remove(agent);
+                    FlightStep::Release(release)
+                } else if let (Some(next), Some(cur)) = (pending, current_gen) {
+                    // A newer token was written while this one ran; drive it rather than
+                    // leaving it un-woken.
+                    FlightStep::Redrive {
+                        attempt: next,
+                        connection_id: cur,
+                    }
+                } else {
+                    self.in_flight.remove(agent);
+                    FlightStep::Release(release)
+                }
+            }
+            DrivenOutcome::Resolved(ResumeOutcome::Superseded) => match (pending, current_gen) {
+                // Our token lost the marker to a newer one. NEVER clear by agent id: drive
+                // the newer token on the live generation, or wait for it if the host is
+                // currently detached.
+                (Some(next), maybe_cur) if &next != ran => match maybe_cur {
+                    Some(cur) => FlightStep::Redrive {
+                        attempt: next,
+                        connection_id: cur,
+                    },
+                    None => {
+                        self.in_flight.remove(agent);
+                        FlightStep::Release(DeletionRunOutcome::Retained)
+                    }
+                },
+                // Only our now-dead token is in memory: drop just it and stop. A genuinely
+                // still-pending agent re-enters via `list_pending` or a fresh request.
+                (Some(_), _) => {
+                    self.pending.remove(agent);
+                    self.in_flight.remove(agent);
+                    FlightStep::Release(DeletionRunOutcome::Superseded)
+                }
+                (None, _) => {
+                    self.in_flight.remove(agent);
+                    FlightStep::Release(DeletionRunOutcome::Superseded)
+                }
+            },
+            DrivenOutcome::Resolved(ResumeOutcome::Retry(_)) => match (pending, current_gen) {
+                // A newer token is owed: drive it on the live generation now.
+                (Some(next), Some(cur)) if &next != ran => FlightStep::Redrive {
+                    attempt: next,
+                    connection_id: cur,
+                },
+                // Same token, but a coalesced re-drive is owed on a generation this attempt
+                // has not run against yet: re-drive immediately rather than after a delay.
+                (Some(_), Some(cur)) if owed && cur != ran_conn => FlightStep::Redrive {
+                    attempt: ran.clone(),
+                    connection_id: cur,
+                },
+                // Transient on the current generation: back off along the ladder.
+                (Some(_), Some(_)) => {
+                    self.in_flight.remove(agent);
+                    FlightStep::ArmLadder
+                }
+                // The host detached; retain the marker and wait for it to reattach.
+                _ => {
+                    self.in_flight.remove(agent);
+                    FlightStep::Release(DeletionRunOutcome::Retained)
+                }
+            },
+            DrivenOutcome::StaleGeneration => match (pending, current_gen) {
+                // A live generation owns the host: re-drive the latest pending token there
+                // (the newer one if a trigger overwrote it, else our own).
+                (Some(next), Some(cur)) => FlightStep::Redrive {
+                    attempt: next,
+                    connection_id: cur,
+                },
+                // No live generation: retain and wait for `on_host_ready`.
+                _ => {
+                    self.in_flight.remove(agent);
+                    FlightStep::Release(DeletionRunOutcome::Retained)
+                }
+            },
+        }
+    }
 }
 
 /// A durable-deletion worker. Cloning shares the one tracked state behind `Arc`; the
 /// dependencies are cheap handles onto shared authorities, never second roots.
-pub struct AgentDeletionResumer<L, Q, R, C> {
+pub struct AgentDeletionResumer<L, B, R> {
     tracked: Arc<Mutex<Tracked>>,
     lifecycle: L,
-    purge: Q,
+    binder: B,
     residue: R,
-    connections: C,
     retry_delays: Arc<[Duration]>,
 }
 
-impl<L, Q, R, C> Clone for AgentDeletionResumer<L, Q, R, C>
+impl<L, B, R> Clone for AgentDeletionResumer<L, B, R>
 where
     L: Clone,
-    Q: Clone,
+    B: Clone,
     R: Clone,
-    C: Clone,
 {
     fn clone(&self) -> Self {
         Self {
             tracked: Arc::clone(&self.tracked),
             lifecycle: self.lifecycle.clone(),
-            purge: self.purge.clone(),
+            binder: self.binder.clone(),
             residue: self.residue.clone(),
-            connections: self.connections.clone(),
             retry_delays: Arc::clone(&self.retry_delays),
         }
     }
 }
 
-impl<L, Q, R, C> AgentDeletionResumer<L, Q, R, C>
+impl<L, B, R> AgentDeletionResumer<L, B, R>
 where
     L: AgentDeletionLifecyclePort,
-    Q: AgentQuiescePurge,
+    B: DeletionFenceBinder,
     R: AgentDeletionResidue,
-    C: HostConnections,
 {
     /// Assemble the worker over production authorities with the default retry ladder.
-    pub fn new(lifecycle: L, purge: Q, residue: R, connections: C) -> Self {
+    pub fn new(lifecycle: L, binder: B, residue: R) -> Self {
         Self::with_retry_delays(
             lifecycle,
-            purge,
+            binder,
             residue,
-            connections,
             DEFAULT_RETRY_DELAYS_MS
                 .into_iter()
                 .map(Duration::from_millis)
@@ -192,17 +359,15 @@ where
     /// drive.
     pub fn with_retry_delays(
         lifecycle: L,
-        purge: Q,
+        binder: B,
         residue: R,
-        connections: C,
         retry_delays: Vec<Duration>,
     ) -> Self {
         Self {
             tracked: Arc::new(Mutex::new(Tracked::default())),
             lifecycle,
-            purge,
+            binder,
             residue,
-            connections,
             retry_delays: retry_delays.into(),
         }
     }
@@ -226,7 +391,7 @@ where
             hosts
         };
         for host in hosts {
-            if let Some(connection_id) = self.connections.current_generation(&host) {
+            if let Some(connection_id) = self.binder.current_generation(&host) {
                 self.on_host_ready(&host, &connection_id);
             }
         }
@@ -250,9 +415,10 @@ where
 
     /// Drive one marker right now — the explicit-request entry, e.g. behind a delete
     /// endpoint. The marker is retained under this worker before any IO, so a crash after
-    /// this returns still resumes. If the host is attached, the request resets that host's
-    /// ladder to a fresh immediate attempt; if it is not, the marker simply waits for the
-    /// host to attach.
+    /// this returns still resumes. The insert OVERWRITES any prior token for the agent, so
+    /// a fresh request supersedes a stale in-flight token by identity, never the reverse.
+    /// If the host is attached, the request resets that host's ladder to a fresh immediate
+    /// attempt; if it is not, the marker simply waits for the host to attach.
     pub async fn try_now(&self, attempt: AgentDeletionAttempt) -> DeletionRunOutcome {
         let host = attempt.host_id().clone();
         {
@@ -263,11 +429,8 @@ where
             tracked
                 .pending
                 .insert(attempt.agent_id().clone(), attempt.clone());
-            if tracked.in_flight.contains(attempt.agent_id()) {
-                return DeletionRunOutcome::AlreadyRunning;
-            }
         }
-        let Some(connection_id) = self.connections.current_generation(&host) else {
+        let Some(connection_id) = self.binder.current_generation(&host) else {
             // No live daemon owns the host: nothing to fence against yet. The marker is
             // retained and its host's `on_host_ready` will drive it.
             return DeletionRunOutcome::Retained;
@@ -281,7 +444,7 @@ where
             // ladder, even on the same connection.
             tracked.install_generation(&host, &connection_id);
         }
-        self.run_single_flight(&attempt).await
+        self.run_single_flight(&attempt, &connection_id).await
     }
 
     /// Stop scheduling and drop every pending timer. A restart loses in-flight attempts,
@@ -320,7 +483,7 @@ where
         }
         // The daemon may have been replaced between scheduling and waking; the live
         // registry is the authority on which connection owns the host now.
-        if self.connections.current_generation(&host).as_deref() != Some(connection_id.as_str()) {
+        if self.binder.current_generation(&host).as_deref() != Some(connection_id.as_str()) {
             return;
         }
         let attempts = {
@@ -333,69 +496,74 @@ where
                 .collect::<Vec<_>>()
         };
         for attempt in attempts {
-            self.run_single_flight(&attempt).await;
+            self.run_single_flight(&attempt, &connection_id).await;
         }
     }
 
-    /// Run one attempt under the per-agent single-flight lock, then apply its classified
-    /// outcome to the pending set and, for a retry, arm the host ladder. A marker already
-    /// in flight returns immediately — the running attempt owns the result and any retry.
-    async fn run_single_flight(&self, attempt: &AgentDeletionAttempt) -> DeletionRunOutcome {
+    /// Run one marker under the per-agent single-flight lock, re-driving in place while the
+    /// book-keeping still owes work for it, then map the final classified outcome.
+    ///
+    /// A marker already in flight coalesces: it records an owed re-drive and returns
+    /// immediately, so exactly one owner ever drives an agent and it honors the coalesced
+    /// trigger before releasing. The loop binds a fresh fence each iteration, so a stale
+    /// captured generation re-drives on the live one instead of committing against a
+    /// daemon that no longer owns the host.
+    async fn run_single_flight(
+        &self,
+        attempt: &AgentDeletionAttempt,
+        connection_id: &str,
+    ) -> DeletionRunOutcome {
+        let agent = attempt.agent_id().clone();
+        let host = attempt.host_id().clone();
         {
             let mut tracked = self.tracked.lock().expect("resumer state");
             if tracked.closed {
                 return DeletionRunOutcome::Closed;
             }
-            if !tracked.in_flight.insert(attempt.agent_id().clone()) {
+            if !tracked.in_flight.insert(agent.clone()) {
+                // Coalesce into the running owner and leave it a re-drive to honor.
+                tracked.rerun.insert(agent.clone());
                 return DeletionRunOutcome::AlreadyRunning;
             }
         }
 
-        let outcome =
-            resume_agent_deletion(&self.lifecycle, &self.purge, &self.residue, attempt).await;
+        let mut ran = attempt.clone();
+        let mut conn = connection_id.to_owned();
 
-        let agent = attempt.agent_id();
-        {
-            let mut tracked = self.tracked.lock().expect("resumer state");
-            tracked.in_flight.remove(agent);
-            match &outcome {
-                ResumeOutcome::Deleted { .. }
-                | ResumeOutcome::Superseded
-                | ResumeOutcome::Faulted(_) => {
-                    tracked.pending.remove(agent);
+        loop {
+            let driven = match self.binder.bind(&host, &conn) {
+                Some(fence) => DrivenOutcome::Resolved(
+                    resume_agent_deletion(&self.lifecycle, &fence, &self.residue, &ran).await,
+                ),
+                None => DrivenOutcome::StaleGeneration,
+            };
+
+            self.log_driven(&ran, &driven);
+
+            let step = {
+                let mut tracked = self.tracked.lock().expect("resumer state");
+                if tracked.closed {
+                    // Shutdown: release the slot and stop re-driving. The durable marker
+                    // makes the dropped attempt safe to rediscover on the next boot.
+                    tracked.in_flight.remove(&agent);
+                    return DeletionRunOutcome::Closed;
                 }
-                // A retry keeps the marker under this worker; the ladder is armed below,
-                // outside the lock, because arming re-enters it.
-                ResumeOutcome::Retry(_) => {}
-            }
-        }
+                tracked.next_flight_step(&agent, &host, &ran, &conn, &driven)
+            };
 
-        match outcome {
-            ResumeOutcome::Deleted { residue } => {
-                self.log_completed(attempt, &residue);
-                DeletionRunOutcome::Completed
-            }
-            ResumeOutcome::Superseded => {
-                tracing::info!(
-                    agent_id = %attempt.agent_id().as_str(),
-                    host_id = %attempt.host_id().as_str(),
-                    "agent deletion attempt superseded; the marker moved on, dropping this token"
-                );
-                DeletionRunOutcome::Superseded
-            }
-            ResumeOutcome::Retry(reason) => {
-                self.log_retry(attempt, &reason);
-                self.schedule_next_retry(attempt.host_id());
-                DeletionRunOutcome::Retained
-            }
-            ResumeOutcome::Faulted(failure) => {
-                tracing::error!(
-                    agent_id = %attempt.agent_id().as_str(),
-                    host_id = %attempt.host_id().as_str(),
-                    error_chain = %error::describe(&failure),
-                    "agent deletion hit an internal contract fault; dropping the in-memory token, the durable marker stays for a later boot"
-                );
-                DeletionRunOutcome::Faulted
+            match step {
+                FlightStep::Redrive {
+                    attempt: next,
+                    connection_id: next_conn,
+                } => {
+                    ran = next;
+                    conn = next_conn;
+                }
+                FlightStep::ArmLadder => {
+                    self.schedule_next_retry(&host);
+                    return DeletionRunOutcome::Retained;
+                }
+                FlightStep::Release(outcome) => return outcome,
             }
         }
     }
@@ -455,6 +623,40 @@ where
         generation.timer = Some(handle);
     }
 
+    /// Emit the log line for one driven iteration's classified outcome.
+    fn log_driven(&self, attempt: &AgentDeletionAttempt, driven: &DrivenOutcome) {
+        match driven {
+            DrivenOutcome::Resolved(ResumeOutcome::Deleted { residue }) => {
+                self.log_completed(attempt, residue);
+            }
+            DrivenOutcome::Resolved(ResumeOutcome::Retry(reason)) => {
+                self.log_retry(attempt, reason);
+            }
+            DrivenOutcome::Resolved(ResumeOutcome::Superseded) => {
+                tracing::info!(
+                    agent_id = %attempt.agent_id().as_str(),
+                    host_id = %attempt.host_id().as_str(),
+                    "agent deletion attempt superseded; the marker moved on, dropping this token"
+                );
+            }
+            DrivenOutcome::Resolved(ResumeOutcome::Faulted(failure)) => {
+                tracing::error!(
+                    agent_id = %attempt.agent_id().as_str(),
+                    host_id = %attempt.host_id().as_str(),
+                    error_chain = %error::describe(failure),
+                    "agent deletion hit an internal contract fault; dropping the in-memory token, the durable marker stays for a later boot"
+                );
+            }
+            DrivenOutcome::StaleGeneration => {
+                tracing::info!(
+                    agent_id = %attempt.agent_id().as_str(),
+                    host_id = %attempt.host_id().as_str(),
+                    "agent deletion could not fence the captured daemon generation; it was superseded, re-driving on the live one or awaiting a reconnect"
+                );
+            }
+        }
+    }
+
     fn log_completed(&self, attempt: &AgentDeletionAttempt, residue: &[ResidueFault]) {
         for fault in residue {
             tracing::warn!(
@@ -490,7 +692,7 @@ where
 mod tests {
     use std::{
         io,
-        sync::atomic::{AtomicUsize, Ordering::SeqCst},
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
     };
 
     use silverhand_backend_core::{
@@ -508,6 +710,7 @@ mod tests {
             write::AgentTornDown,
         },
     };
+    use tokio::sync::Notify;
 
     use super::*;
 
@@ -559,12 +762,14 @@ mod tests {
         ))
     }
 
-    /// A lifecycle port whose `list_pending` and `complete` are configurable, counting
-    /// completes so a test can prove the commit was or was not reached.
+    /// A lifecycle port whose `list_pending` is configurable and whose `complete` answer
+    /// can be pinned per `deletion_started_at`, so a test can make one token lose the
+    /// marker (`AttemptLost`) while a newer one commits.
     #[derive(Clone)]
     struct FakeLifecycle {
         pending: Arc<Mutex<Vec<PersistedDeletionIntent>>>,
         complete: Arc<Mutex<CompleteDeletion>>,
+        complete_by_started_at: Arc<Mutex<HashMap<i64, CompleteDeletion>>>,
         completes: Arc<AtomicUsize>,
     }
 
@@ -573,8 +778,16 @@ mod tests {
             Self {
                 pending: Arc::new(Mutex::new(pending)),
                 complete: Arc::new(Mutex::new(complete)),
+                complete_by_started_at: Arc::new(Mutex::new(HashMap::new())),
                 completes: Arc::new(AtomicUsize::new(0)),
             }
+        }
+
+        fn pin_complete(&self, started_at: i64, outcome: CompleteDeletion) {
+            self.complete_by_started_at
+                .lock()
+                .expect("overrides")
+                .insert(started_at, outcome);
         }
     }
 
@@ -597,46 +810,136 @@ mod tests {
 
         async fn complete(
             &self,
-            _attempt: &AgentDeletionAttempt,
+            attempt: &AgentDeletionAttempt,
         ) -> Result<CompleteDeletion, TeardownFailure> {
             self.completes.fetch_add(1, SeqCst);
+            if let Some(outcome) = self
+                .complete_by_started_at
+                .lock()
+                .expect("overrides")
+                .get(&attempt.deletion_started_at())
+            {
+                return Ok(outcome.clone());
+            }
             Ok(self.complete.lock().expect("complete").clone())
         }
     }
 
-    /// A purge that can be flipped to fail, counting every call.
-    #[derive(Clone)]
-    struct FakePurge {
-        calls: Arc<AtomicUsize>,
-        fail: Arc<Mutex<bool>>,
+    /// The one shared daemon fake: the live generation per host, the purge frames that
+    /// actually reached a generation, and a one-shot gate a test can block the first purge
+    /// on to interleave a concurrent trigger.
+    #[derive(Clone, Default)]
+    struct FakeDaemon {
+        generations: Arc<Mutex<HashMap<String, String>>>,
+        frames: Arc<Mutex<Vec<(String, String)>>>,
+        attempts: Arc<AtomicUsize>,
+        fail: Arc<AtomicBool>,
+        gate: Arc<Notify>,
+        gate_armed: Arc<AtomicBool>,
     }
 
-    impl FakePurge {
-        fn new(fail: bool) -> Self {
-            Self {
-                calls: Arc::new(AtomicUsize::new(0)),
-                fail: Arc::new(Mutex::new(fail)),
-            }
+    impl FakeDaemon {
+        fn attach(&self, host_id: &str, connection_id: &str) {
+            self.generations
+                .lock()
+                .expect("generations")
+                .insert(host_id.to_owned(), connection_id.to_owned());
         }
 
         fn set_fail(&self, fail: bool) {
-            *self.fail.lock().expect("fail") = fail;
+            self.fail.store(fail, SeqCst);
+        }
+
+        /// Block the next purge until [`release_gate`](Self::release_gate).
+        fn arm_gate(&self) {
+            self.gate_armed.store(true, SeqCst);
+        }
+
+        fn release_gate(&self) {
+            self.gate.notify_waiters();
+        }
+
+        fn attempts(&self) -> usize {
+            self.attempts.load(SeqCst)
+        }
+
+        fn frames_to(&self, connection_id: &str) -> usize {
+            self.frames
+                .lock()
+                .expect("frames")
+                .iter()
+                .filter(|(conn, _)| conn == connection_id)
+                .count()
+        }
+
+        fn live(&self, host_id: &str) -> Option<String> {
+            self.generations
+                .lock()
+                .expect("generations")
+                .get(host_id)
+                .cloned()
         }
     }
 
-    impl AgentQuiescePurge for FakePurge {
-        async fn quiesce_and_purge(
-            &self,
-            _host: &HostId,
-            _agent: &AgentId,
-        ) -> Result<(), QuiescePurgeFailure> {
-            self.calls.fetch_add(1, SeqCst);
-            if *self.fail.lock().expect("fail") {
+    /// A fence pinned to the generation it was bound on. It verifies that generation is
+    /// still live AT SEND — mirroring the production transport — so a frame lands only on
+    /// the connection the fence captured, never on a replacement.
+    #[derive(Clone)]
+    struct FakeFence {
+        daemon: FakeDaemon,
+        host: String,
+        connection_id: String,
+    }
+
+    impl AgentDeletionFence for FakeFence {
+        async fn quiesce_and_purge(&self, agent: &AgentId) -> Result<(), QuiescePurgeFailure> {
+            self.daemon.attempts.fetch_add(1, SeqCst);
+            if self.daemon.gate_armed.swap(false, SeqCst) {
+                self.daemon.gate.notified().await;
+            }
+            if self.daemon.fail.load(SeqCst) {
                 return Err(QuiescePurgeFailure::from_source(io::Error::other(
                     "daemon detached",
                 )));
             }
+            if self.daemon.live(&self.host).as_deref() != Some(self.connection_id.as_str()) {
+                return Err(QuiescePurgeFailure::from_source(io::Error::other(
+                    "connection generation superseded before purge",
+                )));
+            }
+            self.daemon
+                .frames
+                .lock()
+                .expect("frames")
+                .push((self.connection_id.clone(), agent.as_str().to_owned()));
             Ok(())
+        }
+    }
+
+    /// Binds a fence only while the requested generation is still live, and reports the
+    /// live generation for the scheduler's book-keeping.
+    #[derive(Clone)]
+    struct FakeBinder {
+        daemon: FakeDaemon,
+    }
+
+    impl DeletionFenceBinder for FakeBinder {
+        type Fence = FakeFence;
+
+        fn bind(&self, host: &HostId, connection_id: &str) -> Option<FakeFence> {
+            if self.daemon.live(host.as_str()).as_deref() == Some(connection_id) {
+                Some(FakeFence {
+                    daemon: self.daemon.clone(),
+                    host: host.as_str().to_owned(),
+                    connection_id: connection_id.to_owned(),
+                })
+            } else {
+                None
+            }
+        }
+
+        fn current_generation(&self, host: &HostId) -> Option<String> {
+            self.daemon.live(host.as_str())
         }
     }
 
@@ -659,36 +962,10 @@ mod tests {
         }
     }
 
-    /// A settable view of which connection currently owns each host.
-    #[derive(Clone, Default)]
-    struct FakeConnections {
-        generations: Arc<Mutex<HashMap<String, String>>>,
-    }
-
-    impl FakeConnections {
-        fn attach(&self, host_id: &str, connection_id: &str) {
-            self.generations
-                .lock()
-                .expect("generations")
-                .insert(host_id.to_owned(), connection_id.to_owned());
-        }
-    }
-
-    impl HostConnections for FakeConnections {
-        fn current_generation(&self, host: &HostId) -> Option<String> {
-            self.generations
-                .lock()
-                .expect("generations")
-                .get(host.as_str())
-                .cloned()
-        }
-    }
-
     struct Harness {
-        resumer: AgentDeletionResumer<FakeLifecycle, FakePurge, FakeResidue, FakeConnections>,
+        resumer: AgentDeletionResumer<FakeLifecycle, FakeBinder, FakeResidue>,
         lifecycle: FakeLifecycle,
-        purge: FakePurge,
-        connections: FakeConnections,
+        daemon: FakeDaemon,
     }
 
     fn build(
@@ -697,13 +974,14 @@ mod tests {
         fail: bool,
     ) -> Harness {
         let lifecycle = FakeLifecycle::new(pending, complete);
-        let purge = FakePurge::new(fail);
-        let connections = FakeConnections::default();
+        let daemon = FakeDaemon::default();
+        daemon.set_fail(fail);
         let resumer = AgentDeletionResumer::with_retry_delays(
             lifecycle.clone(),
-            purge.clone(),
+            FakeBinder {
+                daemon: daemon.clone(),
+            },
             FakeResidue::default(),
-            connections.clone(),
             vec![
                 Duration::from_millis(1_000),
                 Duration::from_millis(5_000),
@@ -713,8 +991,7 @@ mod tests {
         Harness {
             resumer,
             lifecycle,
-            purge,
-            connections,
+            daemon,
         }
     }
 
@@ -726,26 +1003,35 @@ mod tests {
     }
 
     /// Mint the durable attempt the only way one can be minted: from a marker the port
-    /// produced for this exact agent.
-    async fn attempt(lifecycle: &FakeLifecycle, agent_id: &str) -> AgentDeletionAttempt {
-        let BeginDeletion::Started(attempt) = begin_agent_deletion(lifecycle, &agent(agent_id), 5)
-            .await
-            .expect("begin")
+    /// produced for this exact agent, at `started_at`.
+    async fn attempt_at(
+        lifecycle: &FakeLifecycle,
+        agent_id: &str,
+        started_at: i64,
+    ) -> AgentDeletionAttempt {
+        let BeginDeletion::Started(attempt) =
+            begin_agent_deletion(lifecycle, &agent(agent_id), started_at)
+                .await
+                .expect("begin")
         else {
             panic!("expected a started attempt");
         };
         attempt
     }
 
+    async fn attempt(lifecycle: &FakeLifecycle, agent_id: &str) -> AgentDeletionAttempt {
+        attempt_at(lifecycle, agent_id, 5).await
+    }
+
     #[tokio::test(start_paused = true)]
     async fn recover_drives_a_pending_marker_on_a_connected_host() {
         let h = build(vec![intent("a1", "h1", 5)], CompleteDeletion::Gone, false);
-        h.connections.attach("h1", "conn-1");
+        h.daemon.attach("h1", "conn-1");
 
         h.resumer.recover().await.expect("recover");
         settle().await;
 
-        assert_eq!(h.purge.calls.load(SeqCst), 1);
+        assert_eq!(h.daemon.attempts(), 1);
         assert_eq!(h.lifecycle.completes.load(SeqCst), 1);
     }
 
@@ -755,31 +1041,27 @@ mod tests {
         // No connection for h1 yet.
         h.resumer.recover().await.expect("recover");
         settle().await;
-        assert_eq!(
-            h.purge.calls.load(SeqCst),
-            0,
-            "a detached host does no daemon IO"
-        );
+        assert_eq!(h.daemon.attempts(), 0, "a detached host does no daemon IO");
 
         // The host attaches; now the marker is driven.
-        h.connections.attach("h1", "conn-1");
+        h.daemon.attach("h1", "conn-1");
         h.resumer.on_host_ready(&host("h1"), "conn-1");
         settle().await;
 
-        assert_eq!(h.purge.calls.load(SeqCst), 1);
+        assert_eq!(h.daemon.attempts(), 1);
         assert_eq!(h.lifecycle.completes.load(SeqCst), 1);
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_failed_purge_never_reaches_the_commit_and_arms_the_ladder() {
         let h = build(vec![], CompleteDeletion::Gone, true);
-        h.connections.attach("h1", "conn-1");
+        h.daemon.attach("h1", "conn-1");
         let attempt = attempt(&h.lifecycle, "a1").await;
 
         let outcome = h.resumer.try_now(attempt).await;
 
         assert_eq!(outcome, DeletionRunOutcome::Retained);
-        assert_eq!(h.purge.calls.load(SeqCst), 1);
+        assert_eq!(h.daemon.attempts(), 1);
         assert_eq!(
             h.lifecycle.completes.load(SeqCst),
             0,
@@ -790,7 +1072,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn the_retry_ladder_walks_one_five_thirty_then_stops() {
         let h = build(vec![], CompleteDeletion::Gone, true);
-        h.connections.attach("h1", "conn-1");
+        h.daemon.attach("h1", "conn-1");
         let attempt = attempt(&h.lifecycle, "a1").await;
 
         // Immediate request attempt.
@@ -798,48 +1080,48 @@ mod tests {
             h.resumer.try_now(attempt).await,
             DeletionRunOutcome::Retained
         );
-        assert_eq!(h.purge.calls.load(SeqCst), 1);
+        assert_eq!(h.daemon.attempts(), 1);
 
         // Let the first armed timer register its sleep before the clock moves.
         settle().await;
         for (advance_ms, expected_calls) in [(999, 1), (1, 2), (5_000, 3), (30_000, 4)] {
             tokio::time::advance(Duration::from_millis(advance_ms)).await;
             settle().await;
-            assert_eq!(h.purge.calls.load(SeqCst), expected_calls);
+            assert_eq!(h.daemon.attempts(), expected_calls);
         }
 
         // Ladder exhausted: further time triggers nothing until a reconnect.
         tokio::time::advance(Duration::from_secs(300)).await;
         settle().await;
-        assert_eq!(h.purge.calls.load(SeqCst), 4);
+        assert_eq!(h.daemon.attempts(), 4);
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_reconnect_restarts_a_stalled_ladder() {
         let h = build(vec![], CompleteDeletion::Gone, true);
-        h.connections.attach("h1", "conn-1");
+        h.daemon.attach("h1", "conn-1");
         let attempt = attempt(&h.lifecycle, "a1").await;
         h.resumer.try_now(attempt).await;
-        assert_eq!(h.purge.calls.load(SeqCst), 1);
+        assert_eq!(h.daemon.attempts(), 1);
 
-        // The daemon reconnects on a new generation: the old scheduled retry is
-        // superseded and the new generation takes a fresh immediate attempt.
-        h.connections.attach("h1", "conn-2");
+        // The daemon reconnects on a new generation: the old scheduled retry is superseded
+        // and the new generation takes a fresh immediate attempt.
+        h.daemon.attach("h1", "conn-2");
         h.resumer.on_host_ready(&host("h1"), "conn-2");
         settle().await;
-        assert_eq!(h.purge.calls.load(SeqCst), 2);
+        assert_eq!(h.daemon.attempts(), 2);
 
         // The superseded conn-1 timer must not also fire when its old delay elapses.
         tokio::time::advance(Duration::from_millis(1_000)).await;
         settle().await;
         // Only conn-2's fresh ladder step fired.
-        assert_eq!(h.purge.calls.load(SeqCst), 3);
+        assert_eq!(h.daemon.attempts(), 3);
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_duplicate_trigger_coalesces_into_the_running_attempt() {
         let h = build(vec![], CompleteDeletion::Gone, false);
-        h.connections.attach("h1", "conn-1");
+        h.daemon.attach("h1", "conn-1");
         let attempt = attempt(&h.lifecycle, "a1").await;
 
         // Two ready signals plus a request all name the same agent; only one commit runs.
@@ -862,7 +1144,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_lost_attempt_is_dropped_not_retried() {
         let h = build(vec![], CompleteDeletion::AttemptLost, false);
-        h.connections.attach("h1", "conn-1");
+        h.daemon.attach("h1", "conn-1");
         let attempt = attempt(&h.lifecycle, "a1").await;
 
         let outcome = h.resumer.try_now(attempt).await;
@@ -871,48 +1153,45 @@ mod tests {
         // No retry is armed for a superseded token.
         tokio::time::advance(Duration::from_secs(300)).await;
         settle().await;
-        assert_eq!(h.purge.calls.load(SeqCst), 1);
+        assert_eq!(h.daemon.attempts(), 1);
         assert_eq!(h.lifecycle.completes.load(SeqCst), 1);
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_committed_marker_runs_the_terminal_announcement() {
         let h = build(vec![], torn_down("a1", "h1"), false);
-        h.connections.attach("h1", "conn-1");
-        let residue_announced = {
-            // Rebuild with a residue we can observe.
-            let residue = FakeResidue::default();
-            let resumer = AgentDeletionResumer::with_retry_delays(
-                h.lifecycle.clone(),
-                h.purge.clone(),
-                residue.clone(),
-                h.connections.clone(),
-                vec![Duration::from_millis(1_000)],
-            );
-            let attempt = attempt(&h.lifecycle, "a1").await;
-            assert_eq!(
-                resumer.try_now(attempt).await,
-                DeletionRunOutcome::Completed
-            );
-            residue.announced.load(SeqCst)
-        };
-        assert_eq!(residue_announced, 1);
+        h.daemon.attach("h1", "conn-1");
+        let residue = FakeResidue::default();
+        let resumer = AgentDeletionResumer::with_retry_delays(
+            h.lifecycle.clone(),
+            FakeBinder {
+                daemon: h.daemon.clone(),
+            },
+            residue.clone(),
+            vec![Duration::from_millis(1_000)],
+        );
+        let attempt = attempt(&h.lifecycle, "a1").await;
+        assert_eq!(
+            resumer.try_now(attempt).await,
+            DeletionRunOutcome::Completed
+        );
+        assert_eq!(residue.announced.load(SeqCst), 1);
     }
 
     #[tokio::test(start_paused = true)]
     async fn close_stops_the_ladder_and_refuses_new_work() {
         let h = build(vec![], CompleteDeletion::Gone, true);
-        h.connections.attach("h1", "conn-1");
+        h.daemon.attach("h1", "conn-1");
         let attempt = attempt(&h.lifecycle, "a1").await;
         h.resumer.try_now(attempt.clone()).await;
-        assert_eq!(h.purge.calls.load(SeqCst), 1);
+        assert_eq!(h.daemon.attempts(), 1);
 
         h.resumer.close();
 
         // The armed retry never fires after close.
         tokio::time::advance(Duration::from_secs(300)).await;
         settle().await;
-        assert_eq!(h.purge.calls.load(SeqCst), 1);
+        assert_eq!(h.daemon.attempts(), 1);
 
         // And a fresh request is refused.
         assert_eq!(h.resumer.try_now(attempt).await, DeletionRunOutcome::Closed);
@@ -921,12 +1200,12 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_transient_completion_fault_recovers_when_the_next_attempt_succeeds() {
         let h = build(vec![], CompleteDeletion::Gone, false);
-        h.connections.attach("h1", "conn-1");
+        h.daemon.attach("h1", "conn-1");
         let attempt = attempt(&h.lifecycle, "a1").await;
 
         // First purge fails → retry armed; then the fault clears and the ladder step
         // completes it.
-        h.purge.set_fail(true);
+        h.daemon.set_fail(true);
         assert_eq!(
             h.resumer.try_now(attempt).await,
             DeletionRunOutcome::Retained
@@ -935,9 +1214,117 @@ mod tests {
 
         // Let the armed timer register its sleep before the clock moves.
         settle().await;
-        h.purge.set_fail(false);
+        h.daemon.set_fail(false);
         tokio::time::advance(Duration::from_millis(1_000)).await;
         settle().await;
         assert_eq!(h.lifecycle.completes.load(SeqCst), 1);
+    }
+
+    // α — a reconnect DURING an in-flight purge: the captured fence refuses at send
+    // (verify-at-send stale) and the coalesced ready trigger is not lost. Without the
+    // rerun bit the successor's trigger would be dropped as `AlreadyRunning` and the
+    // marker would strand until a boot.
+    #[tokio::test(start_paused = true)]
+    async fn a_generation_change_mid_purge_redrives_on_the_live_generation() {
+        let h = build(vec![], CompleteDeletion::Gone, false);
+        h.daemon.attach("h1", "conn-1");
+        let attempt = attempt(&h.lifecycle, "a1").await;
+
+        // Block A's purge on conn-1 while it holds the single-flight lock.
+        h.daemon.arm_gate();
+        let worker = h.resumer.clone();
+        let a = tokio::spawn(async move { worker.try_now(attempt).await });
+        settle().await;
+
+        // A new generation takes the host, and its ready signal coalesces into A.
+        h.daemon.attach("h1", "conn-2");
+        h.resumer.on_host_ready(&host("h1"), "conn-2");
+        settle().await;
+
+        // Release A: its conn-1 fence refuses at send, and the owed re-drive runs it on
+        // conn-2 to completion — with no wall-clock time.
+        h.daemon.release_gate();
+        let outcome = a.await.expect("A task");
+
+        assert_eq!(outcome, DeletionRunOutcome::Completed);
+        assert_eq!(
+            h.daemon.frames_to("conn-1"),
+            0,
+            "the stale generation gets no frame"
+        );
+        assert_eq!(h.daemon.frames_to("conn-2"), 1);
+        assert_eq!(h.lifecycle.completes.load(SeqCst), 1);
+    }
+
+    // β — entering with a connection id that is already stale: bind returns None and the
+    // loop re-drives on the live generation rather than committing against a dead one.
+    #[tokio::test(start_paused = true)]
+    async fn a_stale_bind_redrives_on_the_live_generation() {
+        let h = build(vec![], CompleteDeletion::Gone, false);
+        // conn-B is live; conn-A is already gone.
+        h.daemon.attach("h1", "conn-B");
+        let attempt = attempt(&h.lifecycle, "a1").await;
+
+        // Seed the worker as if conn-B's generation and this marker were already tracked,
+        // then drive the marker on the STALE conn-A.
+        {
+            let mut tracked = h.resumer.tracked.lock().expect("state");
+            tracked.install_generation(&host("h1"), "conn-B");
+            tracked.pending.insert(agent("a1"), attempt.clone());
+        }
+        let outcome = h.resumer.run_single_flight(&attempt, "conn-A").await;
+
+        assert_eq!(outcome, DeletionRunOutcome::Completed);
+        assert_eq!(h.daemon.frames_to("conn-A"), 0);
+        assert_eq!(h.daemon.frames_to("conn-B"), 1);
+        assert_eq!(h.lifecycle.completes.load(SeqCst), 1);
+    }
+
+    // γ — the terminal-identity discriminator. A is in flight; `try_now(B)` overwrites the
+    // tracked pending token with a NEWER marker and coalesces. A then loses the marker
+    // (`AttemptLost` → Superseded). A unified terminal clear-by-agent-id would delete B's
+    // fresh token and strand it; the identity-guarded clear must instead drive B to
+    // completion — with no boot, no reconnect and no third trigger.
+    #[tokio::test(start_paused = true)]
+    async fn a_superseding_token_written_mid_flight_is_driven_not_clobbered() {
+        let h = build(vec![], CompleteDeletion::Gone, false);
+        h.daemon.attach("h1", "conn-1");
+        // A (started_at 5) loses the marker; B (started_at 9) commits.
+        h.lifecycle.pin_complete(5, CompleteDeletion::AttemptLost);
+        h.lifecycle.pin_complete(9, CompleteDeletion::Gone);
+        let a_attempt = attempt_at(&h.lifecycle, "a1", 5).await;
+        let b_attempt = attempt_at(&h.lifecycle, "a1", 9).await;
+
+        // Block A's purge while it owns the single-flight lock.
+        h.daemon.arm_gate();
+        let worker = h.resumer.clone();
+        let a = tokio::spawn(async move { worker.try_now(a_attempt).await });
+        settle().await;
+
+        // B's request overwrites the pending token and coalesces (no second runner).
+        assert_eq!(
+            h.resumer.try_now(b_attempt).await,
+            DeletionRunOutcome::AlreadyRunning
+        );
+
+        // Release A: A is superseded, and the SAME owner drives B to completion.
+        h.daemon.release_gate();
+        let outcome = a.await.expect("A task");
+
+        assert_eq!(outcome, DeletionRunOutcome::Completed);
+        assert_eq!(
+            h.daemon.frames_to("conn-1"),
+            2,
+            "both A and B purged on conn-1; B was not clobbered by A's terminal cleanup"
+        );
+        assert_eq!(
+            h.lifecycle.completes.load(SeqCst),
+            2,
+            "A's lost completion and B's winning completion both ran"
+        );
+        assert!(
+            h.resumer.tracked.lock().expect("state").pending.is_empty(),
+            "B's committed token is cleared once it truly completes"
+        );
     }
 }

@@ -15,12 +15,16 @@
 //! opposite of the computer cascade, which purges after its commit best-effort because
 //! the rows that could name those bytes are themselves going away. So:
 //!
-//!  1. [`AgentQuiescePurge`] fences the agent on its owning host, quiesces every child
-//!     — existing AND any that arrive mid-purge — and removes the home tree. This is
-//!     the SINGLE child authority: there is no per-seat stop on this path, which is
-//!     why [`AgentDeletionResidue`] has no such method to call.
+//!  1. [`AgentDeletionFence`] fences the agent on the EXACT daemon custody captured
+//!     when the attempt began, quiesces every child — existing AND any that arrive
+//!     mid-purge — and removes the home tree. This is the SINGLE child authority:
+//!     there is no per-seat stop on this path, which is why [`AgentDeletionResidue`]
+//!     has no such method to call.
 //!  2. Only if the purge SUCCEEDS does [`intent::complete_agent_deletion`] take the
-//!     compare-and-set that captures and deletes the rows.
+//!     compare-and-set that captures and deletes the rows. The purge acknowledgement
+//!     is carried into that call as a sealed [`intent::PurgeReceipt`], so the commit
+//!     is structurally unreachable without a real fence ack — not a re-check of which
+//!     generation is live, which between purge and commit could never be atomic.
 //!  3. The announcement and the blob sweep are post-commit residue: best-effort,
 //!     collected and logged, NEVER rolled back and never a false failure.
 //!
@@ -36,13 +40,13 @@ use std::{error::Error, fmt, future::Future};
 
 use crate::{
     host_runtime::aftermath::CustodyEffectFailure,
-    identity::{AgentId, HostId},
+    identity::AgentId,
     persistence::PersistenceFailure,
     teardown::{
         contract::TeardownFailure,
         facts::StoredBlobRef,
         intent::{
-            AgentDeletionAttempt, AgentDeletionLifecyclePort, CompleteDeletion,
+            AgentDeletionAttempt, AgentDeletionLifecyclePort, CompleteDeletion, PurgeReceipt,
             complete_agent_deletion,
         },
         write::AgentTornDown,
@@ -50,17 +54,24 @@ use crate::{
 };
 
 /// The owning-host precommit fence + quiescence + home purge, narrowed to the
-/// single-agent path.
+/// single-agent path and bound to ONE captured daemon connection generation.
+///
+/// A concrete fence is minted against the exact daemon custody that owned the agent's
+/// host when the attempt began; it carries that generation as a transport capability,
+/// not as an observed value it re-reads. That is why this method takes no host: there
+/// is no host coordinate for it to re-resolve, so a same-instance replacement cannot
+/// receive this agent's purge — the fence sends only on the generation it captured and
+/// fails closed otherwise.
 ///
 /// Its success is the gate that lets the durable delete commit. ANY failure keeps the
-/// marker and is retried, so the failure carries no branch-worthy taxonomy: the
-/// resumer never asks WHICH purge fault occurred, only whether the gate opened. That
-/// is deliberate — a `quiesce_failed`, a `partial_purge`, a transport hiccup and a
-/// detached host all mean the same thing to a fail-forward marker: not yet, try again.
-pub trait AgentQuiescePurge: Clone + Send + Sync + 'static {
+/// marker and is retried, so the failure carries no branch-worthy taxonomy: the resumer
+/// never asks WHICH purge fault occurred, only whether the gate opened. That is
+/// deliberate — a `quiesce_failed`, a `partial_purge`, a transport hiccup, a detached
+/// host and a superseded generation all mean the same thing to a fail-forward marker:
+/// not yet, try again on whatever generation next owns the host.
+pub trait AgentDeletionFence: Clone + Send + Sync + 'static {
     fn quiesce_and_purge(
         &self,
-        host: &HostId,
         agent: &AgentId,
     ) -> impl Future<Output = Result<(), QuiescePurgeFailure>> + Send;
 }
@@ -183,28 +194,31 @@ pub enum ResumeOutcome {
 /// domain sequence a scheduler drives, and it is safe to call again on the same
 /// attempt because the purge is idempotent and the completing CAS is keyed on this
 /// exact attempt.
-pub async fn resume_agent_deletion<L, Q, R>(
+pub async fn resume_agent_deletion<L, F, R>(
     lifecycle: &L,
-    purge: &Q,
+    fence: &F,
     residue: &R,
     attempt: &AgentDeletionAttempt,
 ) -> ResumeOutcome
 where
     L: AgentDeletionLifecyclePort,
-    Q: AgentQuiescePurge,
+    F: AgentDeletionFence,
     R: AgentDeletionResidue,
 {
-    // 1. Fence, quiesce and purge on the owning host. Fails closed: a failure here
-    //    means nothing downstream runs and the marker is retried untouched.
-    if let Err(failure) = purge
-        .quiesce_and_purge(attempt.host_id(), attempt.agent_id())
-        .await
-    {
+    // 1. Fence, quiesce and purge on the captured generation. Fails closed: a failure
+    //    here — a transient fault OR a generation that a replacement has taken — means
+    //    nothing downstream runs and the marker is retried untouched.
+    if let Err(failure) = fence.quiesce_and_purge(attempt.agent_id()).await {
         return ResumeOutcome::Retry(RetryReason::Purge(failure));
     }
 
-    // 2. Only now — the daemon is fenced — take the durable capture+delete.
-    let committed = match complete_agent_deletion(lifecycle, attempt).await {
+    // 2. The fence acked on the captured custody. That acknowledgement — carried as a
+    //    sealed [`PurgeReceipt`], the sole key `complete_agent_deletion` accepts — is
+    //    what admits the durable capture+delete. There is deliberately no liveness
+    //    re-check between here and the commit: the completing CAS is itself atomic and
+    //    keyed on this attempt's marker, and a check-then-commit could never be.
+    let committed = match complete_agent_deletion(lifecycle, attempt, PurgeReceipt::sealed()).await
+    {
         Ok(outcome) => outcome,
         Err(TeardownFailure::Persistence(persistence)) => {
             return ResumeOutcome::Retry(RetryReason::Persistence(persistence));
@@ -264,6 +278,7 @@ mod tests {
     use super::*;
     use crate::{
         agent_lifecycle::MaterializationStatus,
+        identity::HostId,
         persistence::PersistenceFailure,
         teardown::{
             contract::TeardownContractViolation,
@@ -346,17 +361,13 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct FakePurge {
+    struct FakeFence {
         steps: Steps,
         fail: bool,
     }
 
-    impl AgentQuiescePurge for FakePurge {
-        async fn quiesce_and_purge(
-            &self,
-            _host: &HostId,
-            _agent: &AgentId,
-        ) -> Result<(), QuiescePurgeFailure> {
+    impl AgentDeletionFence for FakeFence {
+        async fn quiesce_and_purge(&self, _agent: &AgentId) -> Result<(), QuiescePurgeFailure> {
             self.steps.record("purge");
             if self.fail {
                 return Err(QuiescePurgeFailure::from_source(std::io::Error::other(
@@ -465,7 +476,7 @@ mod tests {
         let mut port = lifecycle(Ok(CompleteDeletion::Gone));
         port.steps = steps.clone();
         let attempt = attempt(&port).await;
-        let purge = FakePurge {
+        let purge = FakeFence {
             steps: steps.clone(),
             fail: false,
         };
@@ -482,7 +493,7 @@ mod tests {
         let mut port = lifecycle(Ok(CompleteDeletion::Gone));
         port.steps = steps.clone();
         let attempt = attempt(&port).await;
-        let purge = FakePurge {
+        let purge = FakeFence {
             steps: steps.clone(),
             fail: true,
         };
@@ -502,7 +513,7 @@ mod tests {
         let residue = FakeResidue::default();
         let outcome = resume_agent_deletion(
             &port,
-            &FakePurge {
+            &FakeFence {
                 steps: Steps::default(),
                 fail: false,
             },
@@ -529,7 +540,7 @@ mod tests {
         };
         let outcome = resume_agent_deletion(
             &port,
-            &FakePurge {
+            &FakeFence {
                 steps: Steps::default(),
                 fail: false,
             },
@@ -560,7 +571,7 @@ mod tests {
         let residue = FakeResidue::default();
         let outcome = resume_agent_deletion(
             &port,
-            &FakePurge {
+            &FakeFence {
                 steps: Steps::default(),
                 fail: false,
             },
@@ -583,7 +594,7 @@ mod tests {
         let attempt = attempt(&port).await;
         let outcome = resume_agent_deletion(
             &port,
-            &FakePurge {
+            &FakeFence {
                 steps: Steps::default(),
                 fail: false,
             },
@@ -602,7 +613,7 @@ mod tests {
         let attempt = attempt(&port).await;
         let outcome = resume_agent_deletion(
             &port,
-            &FakePurge {
+            &FakeFence {
                 steps: Steps::default(),
                 fail: false,
             },
@@ -626,7 +637,7 @@ mod tests {
         let attempt = attempt(&port).await;
         let outcome = resume_agent_deletion(
             &port,
-            &FakePurge {
+            &FakeFence {
                 steps: Steps::default(),
                 fail: false,
             },

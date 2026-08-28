@@ -13,7 +13,7 @@ use silverhand_backend_core::{
     host_runtime::aftermath::CustodyEffectFailure,
     identity::{AgentId, HostId},
     teardown::{
-        agent_delete_resume::{AgentDeletionResidue, AgentQuiescePurge, QuiescePurgeFailure},
+        agent_delete_resume::AgentDeletionResidue,
         computer_delete::ComputerCascadeEffects,
         facts::{AgentRuntimeSessionFacts, StoredBlobRef},
         intent::AgentDeletionLifecyclePort,
@@ -141,30 +141,14 @@ where
     }
 }
 
-/// The single-agent deletion resumer reuses this ONE composite for all three of its
-/// core faces rather than composing a second purge root, announcer or blob adapter.
-///
-/// The narrow single-agent traits it satisfies here — [`AgentQuiescePurge`] and
-/// [`AgentDeletionResidue`] — deliberately expose no `stop_runtime_seat`, so a resumer
-/// wired to this value CANNOT reach the per-seat stop the [`ComputerCascadeEffects`]
-/// face also carries: the single-agent fence-then-commit order (purge quiesces every
-/// child; complete deletes the rows; residue announces and sweeps) is enforced by which
-/// methods are callable, not by a test.
-impl<A> AgentQuiescePurge for ProductionComputerCascadeEffects<A>
-where
-    A: AgentDeletedAnnouncement,
-{
-    async fn quiesce_and_purge(
-        &self,
-        host: &HostId,
-        agent: &AgentId,
-    ) -> Result<(), QuiescePurgeFailure> {
-        <Self as ComputerCascadeEffects>::purge_host_local_files(self, host, agent)
-            .await
-            .map_err(QuiescePurgeFailure::from_source)
-    }
-}
-
+/// The single-agent deletion resumer reuses this ONE composite for its post-commit
+/// residue face rather than composing a second announcer or blob adapter. The purge that
+/// fences the agent before commit is NOT reached through this value at all: it travels a
+/// generation-pinned `DaemonAgentDeletionFence` the resumer's fence binder mints, so a
+/// resumer wired here cannot reach the per-seat stop or the bare-host purge the
+/// [`ComputerCascadeEffects`] face also carries. The single-agent fence-then-commit order
+/// (a generation-verified purge quiesces every child; complete deletes the rows; residue
+/// announces and sweeps) is enforced by which methods are callable, not by a test.
 impl<A> AgentDeletionResidue for ProductionComputerCascadeEffects<A>
 where
     A: AgentDeletedAnnouncement,
@@ -179,9 +163,9 @@ where
 }
 
 /// Assemble the production single-agent deletion resumer over already-composed
-/// authorities: the durable lifecycle port, the one cascade composite (its purge and
-/// residue faces, cloned — never a second root), and the daemon connection-generation
-/// view.
+/// authorities: the durable lifecycle port, the daemon fence binder (which mints the
+/// generation-pinned purge fence from the one registry), and the cascade composite's
+/// residue face (cloned — never a second root).
 ///
 /// This is the mountable root, and it is deliberately left UNMOUNTED here. The final
 /// integration wires it in three places it must not reach from this crate: call
@@ -194,17 +178,12 @@ pub fn production_agent_deletion_resumer<L, A>(
     lifecycle: L,
     effects: ProductionComputerCascadeEffects<A>,
     connections: DaemonHostConnections,
-) -> AgentDeletionResumer<
-    L,
-    ProductionComputerCascadeEffects<A>,
-    ProductionComputerCascadeEffects<A>,
-    DaemonHostConnections,
->
+) -> AgentDeletionResumer<L, DaemonHostConnections, ProductionComputerCascadeEffects<A>>
 where
     L: AgentDeletionLifecyclePort,
     A: AgentDeletedAnnouncement,
 {
-    AgentDeletionResumer::new(lifecycle, effects.clone(), effects, connections)
+    AgentDeletionResumer::new(lifecycle, connections, effects)
 }
 
 #[derive(Debug)]
