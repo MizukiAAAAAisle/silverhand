@@ -38,6 +38,7 @@ use silverhand_backend_core::access::{
     WorkspaceGovernance, WorkspaceGovernanceFacts, WorkspaceGovernanceFactsRead, WorkspaceRole,
     WorkspaceUserMembership, governance_ceiling, human_enrollment_authorized,
 };
+use silverhand_backend_core::agent_peer_profile::PeerTargetMembership;
 use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
@@ -57,6 +58,16 @@ const SELECT_MEMBERSHIP_JOINED_AT: &str =
     "SELECT joined_at FROM workspace_members WHERE workspace_id = ? AND agent_id = ?";
 const INSERT_CAPABILITY: &str = "INSERT OR IGNORE INTO workspace_agent_capabilities \
      (workspace_id, agent_id, capability) VALUES (?, ?, ?)";
+
+// The peer-profile target read's membership edge: EXACTLY the regular
+// `workspace_members` pair, nothing wider. An agent's private home (a
+// `workspaces.owner_agent_id` row) can never carry a `workspace_members` entry —
+// the schema's `workspace_members_no_agent_home_insert` trigger aborts one — so
+// this answers `false` for the home even when the caller's workspace horizon can
+// see it, keying purely on the regular edge. Parity with the TS
+// `workspaces.isMember` COUNT read.
+const SELECT_AGENT_IS_WORKSPACE_MEMBER: &str =
+    "SELECT EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id = ? AND agent_id = ?)";
 
 // Human enrollment writes the `workspace_users` roster row rather than
 // `workspace_members`. The actor's role is re-read under the same lock to
@@ -429,6 +440,27 @@ impl WorkspaceGovernanceFactsRead for SqliteAccessStore {
         self.governance_facts(principal, workspace_id)
             .await
             .map_err(PersistenceFailure::from_source)
+    }
+}
+
+impl PeerTargetMembership for SqliteAccessStore {
+    /// The peer-profile target's membership edge, reusing this store's pool and
+    /// `workspace_members` authority — no second membership model. Keyed on the
+    /// exact `(workspace_id, agent_id)` pair, regular edge only: an agent's home
+    /// workspace carries no such row, so it is `false` here even where the
+    /// caller's horizon can see the home.
+    async fn agent_is_member(
+        &self,
+        workspace: &WorkspaceId,
+        agent: &AgentId,
+    ) -> Result<bool, PersistenceFailure> {
+        let present: i64 = sqlx::query_scalar(SELECT_AGENT_IS_WORKSPACE_MEMBER)
+            .bind(workspace.as_str())
+            .bind(agent.as_str())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        Ok(present != 0)
     }
 }
 
