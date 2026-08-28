@@ -51,7 +51,7 @@ where
 {
     let host = match admit(&state, raw_host, principal).await {
         Ok(host) => host,
-        Err(response) => return response,
+        Err(refusal) => return refusal.into_response(),
     };
     let custody = match resolve(&state, &host) {
         Ok(custody) => custody,
@@ -71,7 +71,7 @@ where
 {
     let host = match admit(&state, raw_host, principal).await {
         Ok(host) => host,
-        Err(response) => return response,
+        Err(refusal) => return refusal.into_response(),
     };
     let Some(config) = read_body(request.into_body())
         .await
@@ -92,34 +92,56 @@ async fn admit<R>(
     state: &ProxyState<R>,
     raw_host: String,
     principal: Option<Extension<UserId>>,
-) -> Result<HostId, Response>
+) -> Result<HostId, AdmitRefusal>
 where
     R: ComputerReadModel,
 {
     let Some(Extension(requester)) = principal else {
         tracing::error!("host-proxy-config route reached without its human principal fact");
-        return Err(internal_error());
+        return Err(AdmitRefusal::Internal);
     };
     let Ok(host) = HostId::parse(raw_host) else {
-        return Err(coded("host not found", Some("host_not_found"), 404));
+        return Err(AdmitRefusal::HostNotFound);
     };
     let record = match state.computers.read_computer(host.clone()).await {
         Ok(record) => record,
         Err(cause) => {
             tracing::error!(error_chain = %error::describe(&cause), "host-proxy-config read failed");
-            return Err(internal_error());
+            return Err(AdmitRefusal::Internal);
         }
     };
     let Some(owned) = find_owned_computer(&requester, record) else {
-        return Err(coded("host not found", Some("host_not_found"), 404));
+        return Err(AdmitRefusal::HostNotFound);
     };
     if owned.record().revoked_at.is_some() {
-        return Err(coded("host has been revoked", Some("host_revoked"), 409));
+        return Err(AdmitRefusal::Revoked);
     }
     if owned.record().finalized_at.is_none() {
-        return Err(coded("host is not active", Some("host_not_active"), 409));
+        return Err(AdmitRefusal::NotActive);
     }
     Ok(host)
+}
+
+/// Route-local admission refusal. `admit` keeps a small fieldless verdict rather
+/// than an eagerly-built `Response` so its `Result` stays cheap (`result_large_err`),
+/// then this projects to the exact same HTTP boundary the inline responses did.
+/// The two internal arms have already logged at their detection site.
+enum AdmitRefusal {
+    Internal,
+    HostNotFound,
+    Revoked,
+    NotActive,
+}
+
+impl IntoResponse for AdmitRefusal {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Internal => internal_error(),
+            Self::HostNotFound => coded("host not found", Some("host_not_found"), 404),
+            Self::Revoked => coded("host has been revoked", Some("host_revoked"), 409),
+            Self::NotActive => coded("host is not active", Some("host_not_active"), 409),
+        }
+    }
 }
 
 fn resolve<R>(
