@@ -4011,6 +4011,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn production_status_adapter_never_re_resolves_captured_custody_by_host_and_instance() {
+        let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+        let host = HostId::parse("host-1").unwrap();
+        let instance = DaemonInstanceId::parse("instance-1").unwrap();
+
+        let (a_commands, _a_receive) = mpsc::channel(4);
+        let (a_close, _a_close_receive) = watch::channel(None);
+        let connection_a = registry
+            .reserve(host.as_str(), a_commands, a_close)
+            .unwrap();
+        assert!(
+            registry
+                .attach(
+                    host.as_str(),
+                    &connection_a,
+                    AttachedDaemon {
+                        daemon_instance: instance.clone(),
+                        host_name: "host-a".to_owned(),
+                    },
+                )
+                .unwrap()
+        );
+        let data_plane = OwningHostDataPlane {
+            registry: registry.clone(),
+        };
+        let captured_a = DaemonCustody::attached_custody(&data_plane, &host)
+            .unwrap()
+            .expect("connection A is attached");
+        assert_eq!(captured_a.connection_id, connection_a);
+
+        registry.remove(host.as_str(), &connection_a);
+        let (b_commands, mut b_receive) = mpsc::channel(4);
+        let (b_close, _b_close_receive) = watch::channel(None);
+        let connection_b = registry
+            .reserve(host.as_str(), b_commands, b_close)
+            .unwrap();
+        assert!(
+            registry
+                .attach(
+                    host.as_str(),
+                    &connection_b,
+                    AttachedDaemon {
+                        daemon_instance: instance,
+                        host_name: "host-b".to_owned(),
+                    },
+                )
+                .unwrap()
+        );
+
+        // This call crosses the production DaemonCustody adapter and the real
+        // OwningHostDataPlane pre-send check. An implementation that discards A's
+        // connection id and re-resolves by host+same-instance queues host_status on
+        // B, then waits for B's answer. Preserve the queue assertion even if the
+        // probe times out so that mutation fails on the generation leak itself.
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(50),
+            DaemonCustody::probe_status(&data_plane, host, captured_a),
+        )
+        .await;
+        assert!(matches!(
+            b_receive.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            outcome.expect("captured A must settle without waiting on B"),
+            StatusSnapshotOutcome::Disconnected
+        ));
+    }
+
+    #[tokio::test]
     async fn disconnect_outranks_a_saturated_command_fifo_and_stays_generation_bound() {
         let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
         let (old_sender, mut old_receiver) = mpsc::channel(1);
