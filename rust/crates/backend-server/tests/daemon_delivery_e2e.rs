@@ -2406,7 +2406,7 @@ async fn the_unmounted_host_management_router_composes_sqlite_live_transport_and
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["availability"], "available");
     assert_eq!(body["snapshot"]["daemon_pid"], 4_242);
-    assert_eq!(body["agents"][0]["online"], "online");
+    assert_eq!(body["agents"][0]["online"], "offline");
 
     let proxy_app = app.clone();
     let proxy_read = tokio::spawn(async move {
@@ -2523,6 +2523,7 @@ async fn a_status_snapshot_rides_the_wire_the_deployed_daemon_answers_and_binds_
 #[tokio::test]
 async fn the_seed_store_asks_the_attached_custody_and_every_handle_reads_what_it_kept() {
     let fixture = fixture("host-status-seed.sqlite").await;
+    let mut viewer_events = connect_event_scope(fixture.address, "viewer:user-1").await;
     // Two handles from the one runtime. Everything below seeds through the first and
     // reads through the second: a store built a second time would answer this host
     // from facts it never saw.
@@ -2586,10 +2587,14 @@ async fn the_seed_store_asks_the_attached_custody_and_every_handle_reads_what_it
     assert_eq!(status.daemon_version, "1.2.3");
     assert_eq!(status.started_at, 1_700_000_000_000);
     assert!(status.uptime_ms >= 90_000);
-    assert_eq!(
-        status.active_agents,
-        std::collections::HashSet::from([AgentId::parse("agent-1").unwrap()])
-    );
+    // Hydration completed with an empty runtime set, so the event-fed owner
+    // overrides the pre-hydrate active-agent ids carried by the status seed.
+    assert!(status.active_agents.is_empty());
+
+    let seeded = next_json(&mut viewer_events).await;
+    assert_eq!(seeded["scope"], "viewer:user-1");
+    assert_eq!(seeded["kind"], "host_connection_changed");
+    assert_eq!(seeded["payload"], json!({ "host_id": "host-1" }));
 
     // Its process did not restart, so it is not asked again — and the read surface
     // never asks at all.
@@ -2610,6 +2615,125 @@ async fn the_seed_store_asks_the_attached_custody_and_every_handle_reads_what_it
         SeedRead::Disconnected
     );
 
+    fixture.controller.close().await;
+    viewer_events.close(None).await.unwrap();
+    fixture.event_controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn same_daemon_instance_reconnect_requires_a_fresh_connection_generation_seed() {
+    let fixture = fixture("host-status-same-instance-reconnect.sqlite").await;
+    let seeds = fixture.controller.host_status_seeds();
+    let mut first = connect(fixture.address).await;
+    complete_attachment(&mut first, &fixture.controller).await;
+    assert!(matches!(
+        seeds.read(&host_id("host-1")),
+        Ok(SeedRead::Seeded(_))
+    ));
+    first.close(None).await.unwrap();
+    wait_for_free_host_slot(&fixture.controller).await;
+
+    let mut replacement = connect(fixture.address).await;
+    complete_attachment_transport_until(&mut replacement, &fixture.controller, "instance-test", 1)
+        .await;
+    assert_eq!(seeds.read(&host_id("host-1")).unwrap(), SeedRead::NotSeeded);
+    let command = next_json(&mut replacement).await;
+    assert_eq!(command["kind"], "host_status");
+    respond(
+        &mut replacement,
+        &command,
+        json!({
+            "os": "generation-b",
+            "os_arch": "arm64",
+            "daemon_pid": 4_243,
+            "daemon_version": "1.2.4",
+            "started_at": 1_700_000_000_100_i64,
+            "uptime_ms": 1,
+            "active_agent_ids": [],
+        }),
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Ok(SeedRead::Seeded(status)) = seeds.read(&host_id("host-1"))
+                && status.os == "generation-b"
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    replacement.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn status_seed_timeout_is_driven_through_the_one_second_retry_to_seal() {
+    let fixture = fixture("host-status-production-retry.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment_transport_until(&mut socket, &fixture.controller, "instance-test", 1).await;
+    let first = next_json(&mut socket).await;
+    assert_eq!(first["kind"], "host_status");
+    let started = tokio::time::Instant::now();
+
+    let retry = tokio::time::timeout(std::time::Duration::from_secs(13), async {
+        loop {
+            match socket.next().await.unwrap().unwrap() {
+                Message::Text(text) => {
+                    let frame: Value = serde_json::from_str(&text).unwrap();
+                    if frame["kind"] == "host_status" {
+                        break frame;
+                    }
+                }
+                Message::Ping(payload) => socket.send(Message::Pong(payload)).await.unwrap(),
+                other => panic!("unexpected daemon frame: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("the production retry driver must wake after timeout + 1 second");
+    assert!(started.elapsed() >= std::time::Duration::from_secs(11));
+    respond(
+        &mut socket,
+        &retry,
+        json!({
+            "os": "retried",
+            "daemon_pid": 42,
+            "daemon_version": "test",
+            "started_at": 100,
+            "uptime_ms": 11_000,
+            "active_agent_ids": [],
+        }),
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !matches!(
+            fixture
+                .controller
+                .host_status_seeds()
+                .read(&host_id("host-1")),
+            Ok(SeedRead::Seeded(_))
+        ) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "retry response did not seal: {:?}",
+            fixture
+                .controller
+                .host_status_seeds()
+                .read(&host_id("host-1"))
+        )
+    });
+
+    socket.close(None).await.unwrap();
     fixture.controller.close().await;
     fixture.server.abort();
 }
@@ -3648,6 +3772,10 @@ async fn hydrated_product_frames_reach_durable_live_and_coordinator_owners_once(
     let mut presence = connect_event_scope(fixture.address, "viewer:user-1").await;
     let mut daemon = connect(fixture.address).await;
     complete_attachment(&mut daemon, &fixture.controller).await;
+    let seed_landed = next_json(&mut presence).await;
+    assert_eq!(seed_landed["scope"], "viewer:user-1");
+    assert_eq!(seed_landed["kind"], "host_connection_changed");
+    assert_eq!(seed_landed["payload"], json!({ "host_id": "host-1" }));
 
     let effects = fixture.effects.clone();
     let start = tokio::spawn(async move {
@@ -4042,6 +4170,7 @@ async fn hydrated_run_state_is_the_cold_authority_and_session_init_drains_once()
     )
     .await;
     wait_for_attachment(&fixture.controller).await;
+    answer_status_seed(&mut daemon, &fixture.controller, "host-1").await;
 
     send_product(
         &mut daemon,
@@ -4596,6 +4725,18 @@ async fn stale_generation_events_cannot_change_or_publish_successor_state() {
     let only_state = next_json(&mut live).await;
     assert_eq!(only_state["kind"], "agent_activity");
     assert_eq!(only_state["payload"]["runId"], "successor-run");
+    let SeedRead::Seeded(status) = fixture
+        .controller
+        .host_status_seeds()
+        .read(&host_id("host-1"))
+        .unwrap()
+    else {
+        panic!("status seed is available")
+    };
+    assert_eq!(
+        status.active_agents,
+        std::collections::HashSet::from([AgentId::parse(AGENT).unwrap()])
+    );
 
     for (generation, retry_attempt, ts) in [(1, 1, 43), (2, 2, 44)] {
         send_product(
@@ -4626,6 +4767,24 @@ async fn stale_generation_events_cannot_change_or_publish_successor_state() {
     .await
     .unwrap();
     assert_eq!(projected_generation, 2);
+
+    send_runtime_exit(&mut daemon, 2, true, 45).await;
+    assert_eq!(next_json(&mut live).await["kind"], "agent_status");
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Ok(SeedRead::Seeded(status)) = fixture
+                .controller
+                .host_status_seeds()
+                .read(&host_id("host-1"))
+                && status.active_agents.is_empty()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
 
     live.close(None).await.unwrap();
     daemon.close(None).await.unwrap();

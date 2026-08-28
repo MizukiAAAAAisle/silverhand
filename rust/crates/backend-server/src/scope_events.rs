@@ -246,6 +246,12 @@ enum ProductEvent {
     DirectPairsChanged {
         conversation_id: String,
     },
+    /// A named host's attachment/read model changed. Viewer-private invalidation:
+    /// the payload carries no status value, and clients refetch the authoritative
+    /// host status route.
+    HostConnectionChanged {
+        host_id: String,
+    },
     AgentActivity(Value),
     AgentStatus(Value),
     AgentInitTimeout(Value),
@@ -650,6 +656,19 @@ impl ScopeEventHub {
             EventScope::Viewer(viewer.clone()),
             ProductEvent::DirectPairsChanged {
                 conversation_id: conversation.as_str().to_owned(),
+            },
+        )
+    }
+
+    pub(crate) fn publish_host_connection_changed(
+        &self,
+        viewer: &UserId,
+        host: &HostId,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::HostConnectionChanged {
+                host_id: host.as_str().to_owned(),
             },
         )
     }
@@ -2999,6 +3018,7 @@ mod tests {
             .handle(
                 "host-1",
                 &daemon,
+                "connection-test",
                 RuntimeProductEvent::Parsed(RuntimeParsedEvent {
                     coordinate: RuntimeCoordinate {
                         runtime_scope: RuntimeScopeWire::Agent {
@@ -6580,6 +6600,7 @@ mod tests {
     /// an explicit enumeration can tell a renamed or newly-added kind from a supported one.
     const SUPPORTED_EVENT_KINDS: &[&str] = &[
         "direct_pairs_changed",
+        "host_connection_changed",
         "agent_activity",
         "agent_status",
         "agent_init_timeout",
@@ -6605,6 +6626,7 @@ mod tests {
     fn wire_kind(event: &ProductEvent) -> &'static str {
         match event {
             ProductEvent::DirectPairsChanged { .. } => "direct_pairs_changed",
+            ProductEvent::HostConnectionChanged { .. } => "host_connection_changed",
             ProductEvent::AgentActivity(_) => "agent_activity",
             ProductEvent::AgentStatus(_) => "agent_status",
             ProductEvent::AgentInitTimeout(_) => "agent_init_timeout",
@@ -6637,6 +6659,9 @@ mod tests {
         let samples = [
             ProductEvent::DirectPairsChanged {
                 conversation_id: "c-1".to_owned(),
+            },
+            ProductEvent::HostConnectionChanged {
+                host_id: "host-1".to_owned(),
             },
             ProductEvent::AgentActivity(json!({ "message_id": "m-1" })),
             ProductEvent::AgentStatus(json!({ "status": "active" })),

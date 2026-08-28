@@ -232,3 +232,105 @@ fn refusal(reason: UpdateComputerRefusal) -> Response {
     )
         .into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use axum::{body::Body, http::Request};
+    use silverhand_backend_core::host_runtime::{
+        computer::{ComputerRecord, HostKind, ProvisioningSource},
+        update::{UpdateComputerDecision, UpdateComputerTransaction},
+    };
+    use tower::ServiceExt;
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct WrongWitness;
+
+    impl UpdateComputerUnitOfWork for WrongWitness {
+        async fn update_computer<D>(
+            &self,
+            _computer: HostId,
+            _decide: D,
+        ) -> Result<
+            UpdateComputerTransaction,
+            silverhand_backend_core::persistence::PersistenceFailure,
+        >
+        where
+            D: FnOnce(Option<ComputerRecord>) -> UpdateComputerDecision + Send,
+        {
+            let before = record("host-1", None, None);
+            Ok(UpdateComputerTransaction::Committed {
+                before,
+                committed: record("host-2", Some("Studio"), Some(777)),
+            })
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingEffect(Arc<AtomicUsize>);
+
+    impl HostLabelChangeEffect for RecordingEffect {
+        async fn agents_changed(
+            &self,
+            _computer: &HostId,
+        ) -> Result<(), HostLabelChangeEffectFailure> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct Clock;
+
+    impl ProcessClock for Clock {
+        fn now_unix_millis(&self) -> i64 {
+            777
+        }
+    }
+
+    fn record(id: &str, label: Option<&str>, finalized_at: Option<i64>) -> ComputerRecord {
+        ComputerRecord {
+            id: HostId::parse(id).unwrap(),
+            name: "stable".to_owned(),
+            kind: HostKind::Remote,
+            created_at: 1,
+            owner: Some(UserId::parse("owner").unwrap()),
+            installation_id: None,
+            last_seen_at: None,
+            activated_at: Some(2),
+            finalized_at,
+            revoked_at: None,
+            provisioning_source: ProvisioningSource::UserInvite,
+            display_label: label.map(str::to_owned),
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_committed_witness_is_safe_500_and_never_publishes() {
+        let effect = RecordingEffect::default();
+        let mut request = Request::builder()
+            .method("PATCH")
+            .uri("/api/hosts/host-1")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"display_label":"Studio"}"#))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(UserId::parse("owner").unwrap());
+        let response = router(UpdateComputer::new(WrongWitness), effect.clone(), Clock)
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(effect.0.load(Ordering::SeqCst), 0);
+    }
+}

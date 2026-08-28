@@ -141,10 +141,7 @@ fn validate_transaction(
                 Err(PersistenceFailure::from_source(InvalidUpdateWitness))
             }
         },
-        UpdateComputerTransaction::Committed {
-            before,
-            committed,
-        } => {
+        UpdateComputerTransaction::Committed { before, committed } => {
             let UpdateComputerDecision::Write {
                 display_label,
                 finalized_at,

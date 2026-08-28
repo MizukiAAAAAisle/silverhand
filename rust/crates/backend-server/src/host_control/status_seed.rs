@@ -1,7 +1,7 @@
-//! Process-local host status seed, isolated per (host, daemon instance).
+//! Process-local host status seed, isolated per host connection generation.
 //!
-//! Concurrent requests for one daemon instance collapse into a single in-flight
-//! attempt. A new instance reuses neither the previous one's success nor its
+//! Concurrent requests for one connection generation collapse into a single in-flight
+//! attempt. A new connection reuses neither the previous one's success nor its
 //! position in the retry ladder. Failure is never cached: a refused attempt leaves
 //! nothing a later read could be served from, and the deployed ladder is
 //! `[1, 2, 5, 10, 30]` seconds.
@@ -18,7 +18,7 @@
 //! deferral hands out a [`RetryTicket`] that only this leaf can mint, and a retry
 //! must present the exact one outstanding; the first admission consumes it under the
 //! same lock that admits. So what is guaranteed here is *one valid wake identity and
-//! one in-flight attempt per `(host, instance)`* — not one external sleeper. A driver
+//! one in-flight attempt per `(host, connection generation)`* — not one external sleeper. A driver
 //! may hold any number of timers for the same ticket, and every wake but one settles
 //! as [`SeedAttempt::StaleWake`] without a frame. Collapsing those timers is a
 //! resource concern for whoever owns them; correctness does not rest on it, and this
@@ -34,24 +34,11 @@
 //! that reason describes a past attempt, and keeping it would be exactly the
 //! negative cache this contract forbids.
 //!
-//! Three shape differences from the deployed TypeScript. The first two are not
-//! observable; the third is, deliberately, because TS conflates two facts that are
-//! distinct here:
-//!
-//!   * TS fires an `onSeeded` callback so the composition root can re-publish
-//!     `host_connection_changed`. Here a landed seed is the [`SeedAttempt::Sealed`]
-//!     outcome instead, so the announce edge is the caller's own return value rather
-//!     than a callback invoked while this leaf holds its lock.
-//!   * TS's `close()` cancels pending retry timers. There are none to cancel here.
-//!   * TS keys a seed on the connection id, and every `ready` mints a new one, so
-//!     "an attach happened" and "the generation changed" are one statement there.
-//!     Here they are two: a daemon instance is per boot, not per socket, so a
-//!     same-process reconnect arrives on the same instance. Everything this leaf
-//!     keeps is therefore keyed on `(host, instance)` and only a *different* attached
-//!     instance clears it. A socket flap inherits the seal and the position in the
-//!     ladder; a dropped connection is not evidence about the process behind it, and
-//!     backoff earned by a daemon that answers badly must not be escapable by
-//!     reconnecting. Disconnection is read as absence, never as a reason to forget.
+//! The production driver owns sleeping and the post-seal invalidation. It consumes
+//! every [`SeedAttempt::Deferred`] ticket through the bounded retry ladder, stops a
+//! chain when its exact connection generation is replaced, and publishes
+//! `host_connection_changed` only after [`SeedAttempt::Sealed`]. A publish failure
+//! is post-seed residue: it cannot undo the already sealed memory fact.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -71,9 +58,9 @@ use crate::host_control::status_snapshot::{
 };
 
 /// The deployed ladder. Six attempts, five waits, ~48s of patience, and then this
-/// custody stays unseeded for the rest of its boot: a bounded schedule is the whole
-/// point, so there is no terminal repeat, and reconnecting a socket does not buy a
-/// daemon a fresh allowance.
+/// custody stays unseeded for the rest of its connection generation: a bounded
+/// schedule is the whole point, so there is no terminal repeat. A newly admitted
+/// connection id is a new generation with its own ladder.
 const SEED_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_secs(1),
     Duration::from_secs(2),
@@ -87,13 +74,13 @@ const SEED_RETRY_DELAYS: [Duration; 5] = [
 /// leaf a probe and a custody answer that disagree, and the leaf itself cannot reach
 /// past the port for a raw command.
 pub(crate) trait DaemonCustody: Send + Sync {
-    /// Which daemon instance holds this host right now — the *attached* custody, not
+    /// Which exact daemon connection holds this host right now — the *attached* custody, not
     /// a reserved slot. A socket that has not proven its protocol has no facts to be
     /// asked for, and a seed filed against it would be filed against nothing.
-    fn attached_instance(
+    fn attached_custody(
         &self,
         host: &HostId,
-    ) -> Result<Option<DaemonInstanceId>, CustodyUnavailable>;
+    ) -> Result<Option<AttachedStatusCustody>, CustodyUnavailable>;
 
     /// Ask one named custody for its status. What the answer means is the snapshot
     /// leaf's contract; this leaf only decides whether to ask and what to keep.
@@ -108,6 +95,23 @@ pub(crate) trait DaemonCustody: Send + Sync {
         &'a self,
         request: StatusSnapshotRequest,
     ) -> Pin<Box<dyn Future<Output = StatusSnapshotOutcome> + Send + 'a>>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AttachedStatusCustody {
+    pub(crate) daemon_instance: DaemonInstanceId,
+    pub(crate) connection_id: String,
+}
+
+pub(crate) trait HostRuntimeActivity: Send + Sync {
+    /// `None` means this exact connection has not completed hydration yet, so the
+    /// seed answer remains the pre-hydrate fallback. `Some` is the current
+    /// event-fed active set, including an intentionally empty set.
+    fn active_agents(
+        &self,
+        host: &HostId,
+        custody: &AttachedStatusCustody,
+    ) -> Result<Option<HashSet<AgentId>>, CustodyUnavailable>;
 }
 
 /// The custody authority cannot be read right now.
@@ -148,7 +152,7 @@ impl From<CustodyUnavailable> for SeedFailure {
     }
 }
 
-/// Names the one wake a `(host, instance)` is currently waiting for.
+/// Names the one wake a `(host, connection generation)` is currently waiting for.
 ///
 /// Minted only by this leaf and opaque on purpose: a driver can present a ticket it
 /// was handed, and nothing else. The value is unique across the whole store, so a
@@ -194,7 +198,7 @@ pub enum SeedAttempt {
         ticket: RetryTicket,
     },
     /// No seed and the ladder is spent. Reads stay unseeded until this host is held
-    /// by a different daemon instance.
+    /// by a new connection generation.
     Exhausted,
 }
 
@@ -202,10 +206,8 @@ pub enum SeedAttempt {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SeedRead {
     Seeded(SeededStatus),
-    /// No daemon is attached. Nothing is discarded by observing that: the facts and
-    /// the ladder belong to the instance that earned them, so a reconnect of the same
-    /// daemon process continues where it left off and only a different instance
-    /// replaces them.
+    /// No daemon is attached. Nothing is discarded by the read itself; a later attach
+    /// carries a new generation and replaces the old entry at admission.
     Disconnected,
     /// A daemon is attached and its facts have not landed yet — or its ladder ran
     /// out. Never a fabricated value, and never the reason a past attempt failed.
@@ -228,9 +230,9 @@ pub struct SeededStatus {
     /// never compared to this server's, so neither NTP jump can warp the figure, and
     /// a monotonic hold cannot run backwards.
     pub uptime_ms: i64,
-    /// Authoritative at seed time only: the pre-hydrate fallback for liveness. A
-    /// consumer maintaining an event-fed set for this same custody owns the
-    /// precedence between the two, and this leaf never merges them.
+    /// The seed answer is the pre-hydrate fallback. Once the existing runtime-event
+    /// owner has a current-generation hydrated set, [`HostStatusSeeds::read`]
+    /// replaces this field with that set; it never unions two authorities.
     pub active_agents: HashSet<AgentId>,
 }
 
@@ -252,6 +254,7 @@ struct Schedule {
 /// nothing else, so no count and no deadline can become a value a reader is served.
 struct SeedState {
     instance: DaemonInstanceId,
+    connection_id: String,
     sealed: Option<Sealed>,
     in_flight: Option<AttemptId>,
     failed: usize,
@@ -259,9 +262,10 @@ struct SeedState {
 }
 
 impl SeedState {
-    fn new(instance: DaemonInstanceId) -> Self {
+    fn new(instance: DaemonInstanceId, connection_id: String) -> Self {
         Self {
             instance,
+            connection_id,
             sealed: None,
             in_flight: None,
             failed: 0,
@@ -314,7 +318,7 @@ fn take_id(next_id: &mut u64) -> Result<u64, SeedFailure> {
     Ok(id)
 }
 
-/// The claim one attempt holds on a `(host, instance)` while its frame is out.
+/// The claim one attempt holds on a `(host, connection generation)` while its frame is out.
 ///
 /// Released exactly once, by whichever comes first: the attempt settling, or the future
 /// being dropped before it could. A cancelled attempt learned nothing, so dropping
@@ -326,6 +330,7 @@ struct AttemptGuard {
     store: Arc<Mutex<SeedStore>>,
     host: String,
     instance: DaemonInstanceId,
+    connection_id: String,
     id: AttemptId,
     released: bool,
 }
@@ -339,7 +344,10 @@ impl AttemptGuard {
     ) -> Option<&'a mut SeedState> {
         self.released = true;
         let state = states.get_mut(&self.host)?;
-        if state.instance != self.instance || state.in_flight != Some(self.id) {
+        if state.instance != self.instance
+            || state.connection_id != self.connection_id
+            || state.in_flight != Some(self.id)
+        {
             return None;
         }
         state.in_flight = None;
@@ -407,16 +415,21 @@ enum Admission {
 pub struct HostStatusSeeds {
     store: Arc<Mutex<SeedStore>>,
     custody: Arc<dyn DaemonCustody>,
+    activity: Arc<dyn HostRuntimeActivity>,
 }
 
 impl HostStatusSeeds {
-    pub(crate) fn new(custody: Arc<dyn DaemonCustody>) -> Self {
+    pub(crate) fn new(
+        custody: Arc<dyn DaemonCustody>,
+        activity: Arc<dyn HostRuntimeActivity>,
+    ) -> Self {
         Self {
             store: Arc::new(Mutex::new(SeedStore {
                 states: HashMap::new(),
                 next_id: 0,
             })),
             custody,
+            activity,
         }
     }
 
@@ -434,7 +447,7 @@ impl HostStatusSeeds {
         // Observed from inside this critical section, like every other custody
         // observation in this leaf, so the answer a decision is taken from cannot have
         // been overtaken by a mutation that ran between the two.
-        let Some(attached) = self.custody.attached_instance(host)? else {
+        let Some(attached) = self.custody.attached_custody(host)? else {
             // Absence is not a reason to forget. The entry belongs to a daemon
             // instance, and this host has no attached one to answer for right now.
             return Ok(SeedRead::Disconnected);
@@ -442,7 +455,10 @@ impl HostStatusSeeds {
         let Some(sealed) = store
             .states
             .get(host.as_str())
-            .filter(|state| state.instance == attached)
+            .filter(|state| {
+                state.instance == attached.daemon_instance
+                    && state.connection_id == attached.connection_id
+            })
             .and_then(|state| state.sealed.as_ref())
         else {
             return Ok(SeedRead::NotSeeded);
@@ -451,11 +467,11 @@ impl HostStatusSeeds {
         // read by naming the host and custody it was answered on.
         let facts = sealed
             .snapshot
-            .facts_for(host, &attached)
+            .facts_for(host, &attached.daemon_instance)
             .map_err(|_| SeedFailure::Misattributed)?;
         let held = Instant::now().saturating_duration_since(sealed.held_since);
         Ok(SeedRead::Seeded(SeededStatus {
-            daemon_instance: attached,
+            daemon_instance: attached.daemon_instance.clone(),
             os: facts.os.to_owned(),
             os_arch: facts.os_arch.map(str::to_owned),
             daemon_pid: facts.daemon_pid,
@@ -464,14 +480,17 @@ impl HostStatusSeeds {
             uptime_ms: facts
                 .uptime_ms_at_answer
                 .saturating_add(i64::try_from(held.as_millis()).unwrap_or(i64::MAX)),
-            active_agents: facts.active_agents.clone(),
+            active_agents: self
+                .activity
+                .active_agents(host, &attached)?
+                .unwrap_or_else(|| facts.active_agents.clone()),
         }))
     }
 
     /// A daemon just attached: seed it now, or re-arm whatever this custody was
     /// already waiting for. An attach carries no ticket because it is not the
-    /// continuation of anything, and it resets nothing: this daemon's ladder and its
-    /// seal belong to its instance, not to the socket that just came up.
+    /// continuation of anything. A new connection id replaces the prior ladder and
+    /// seal even when the daemon instance is unchanged.
     pub async fn seed_on_attach(
         &self,
         host: &HostId,
@@ -526,7 +545,10 @@ impl HostStatusSeeds {
         // needs the attaches to be ordered before it can license a deletion; asked from
         // inside the critical section that does the deleting, it needs no ordering at
         // all — it is the current custody by the time the entry moves.
-        if self.custody.attached_instance(host)?.as_ref() != Some(instance) {
+        let Some(attached) = self.custody.attached_custody(host)? else {
+            return Ok(Admission::Settled(SeedAttempt::Superseded));
+        };
+        if &attached.daemon_instance != instance {
             return Ok(Admission::Settled(SeedAttempt::Superseded));
         }
         let SeedStore { states, next_id } = &mut *store;
@@ -536,15 +558,28 @@ impl HostStatusSeeds {
         // position in the ladder. This is the only edge in this leaf that replaces an
         // entry, and the caller has just been confirmed as the custody that holds the
         // host, so what is cleared here is always a generation that is already gone.
-        if states
-            .get(key)
-            .is_some_and(|state| state.instance != *instance)
+        if wake.is_some()
+            && states.get(key).is_some_and(|state| {
+                state.instance != attached.daemon_instance
+                    || state.connection_id != attached.connection_id
+            })
+        {
+            return Ok(Admission::Settled(SeedAttempt::Superseded));
+        }
+        if wake.is_none()
+            && states.get(key).is_some_and(|state| {
+                state.instance != attached.daemon_instance
+                    || state.connection_id != attached.connection_id
+            })
         {
             states.remove(key);
         }
-        let state = states
-            .entry(key.to_owned())
-            .or_insert_with(|| SeedState::new(instance.clone()));
+        let state = states.entry(key.to_owned()).or_insert_with(|| {
+            SeedState::new(
+                attached.daemon_instance.clone(),
+                attached.connection_id.clone(),
+            )
+        });
         if let Some(ticket) = wake {
             // A wake speaks for one deferral. Anything else is a duplicate, a late
             // arrival, or a ticket from a generation that no longer exists.
@@ -583,6 +618,7 @@ impl HostStatusSeeds {
             store: Arc::clone(&self.store),
             host: key.to_owned(),
             instance: instance.clone(),
+            connection_id: attached.connection_id,
             id,
             released: false,
         }))
@@ -608,7 +644,10 @@ impl HostStatusSeeds {
         // answer from a custody that no longer holds the host may neither be stored nor
         // restore a ladder, and asking from inside this critical section is what makes
         // the answer current rather than a snapshot taken while the lock was open.
-        if self.custody.attached_instance(host)?.as_ref() != Some(instance) {
+        let Some(attached) = self.custody.attached_custody(host)? else {
+            return Ok(SeedAttempt::Superseded);
+        };
+        if &attached.daemon_instance != instance || attached.connection_id != guard.connection_id {
             return Ok(SeedAttempt::Superseded);
         }
         match outcome {
@@ -658,7 +697,7 @@ impl HostStatusSeeds {
                             host_id = %host.as_str(),
                             daemon_instance = %instance.as_str(),
                             attempts,
-                            "host status seed retries exhausted; the custody stays unseeded for the rest of this daemon instance"
+                            "host status seed retries exhausted; the custody stays unseeded for the rest of this connection generation"
                         );
                         Ok(SeedAttempt::Exhausted)
                     }
@@ -699,6 +738,8 @@ mod tests {
     /// stands in only for this leaf's own schedule and seal arms.
     struct Daemon {
         attached: Mutex<Option<DaemonInstanceId>>,
+        connection: Mutex<Option<String>>,
+        live_agents: Mutex<Option<HashSet<AgentId>>>,
         /// Answers per custody, so a test with two frames out is not also writing down
         /// the order in which they happen to settle.
         answers: Mutex<HashMap<String, VecDeque<(StatusSnapshotOutcome, WhenServed)>>>,
@@ -721,16 +762,22 @@ mod tests {
     }
 
     impl DaemonCustody for Daemon {
-        fn attached_instance(
+        fn attached_custody(
             &self,
             _host: &HostId,
-        ) -> Result<Option<DaemonInstanceId>, CustodyUnavailable> {
+        ) -> Result<Option<AttachedStatusCustody>, CustodyUnavailable> {
             let current = self.attached.lock().unwrap().clone();
+            let connection = self.connection.lock().unwrap().clone();
             self.observe();
             if self.broken.load(Ordering::SeqCst) {
                 return Err(CustodyUnavailable);
             }
-            Ok(current)
+            Ok(current
+                .zip(connection)
+                .map(|(daemon_instance, connection_id)| AttachedStatusCustody {
+                    connection_id,
+                    daemon_instance,
+                }))
         }
 
         fn probe_status<'a>(
@@ -776,6 +823,16 @@ mod tests {
         }
     }
 
+    impl HostRuntimeActivity for Daemon {
+        fn active_agents(
+            &self,
+            _host: &HostId,
+            _custody: &AttachedStatusCustody,
+        ) -> Result<Option<HashSet<AgentId>>, CustodyUnavailable> {
+            Ok(self.live_agents.lock().unwrap().clone())
+        }
+    }
+
     impl Daemon {
         /// Every custody observation in this leaf must be taken while its caller holds
         /// the seed store: that is the linearization point, and an answer taken outside
@@ -800,11 +857,20 @@ mod tests {
                 let SeedStore { states, next_id } = &mut *open;
                 let id =
                     AttemptId(take_id(next_id).expect("a test does not exhaust identities here"));
-                let mut state = SeedState::new(successor.clone());
+                let mut state = SeedState::new(
+                    successor.clone(),
+                    format!("connection:{}", successor.as_str()),
+                );
                 state.in_flight = Some(id);
                 states.insert(host().as_str().to_owned(), state);
                 drop(open);
                 *self.attached.lock().unwrap() = Some(successor);
+                *self.connection.lock().unwrap() = self
+                    .attached
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|instance| format!("connection:{}", instance.as_str()));
                 return;
             }
             assert!(
@@ -838,6 +904,17 @@ mod tests {
 
         fn set_attached(&self, instance: Option<&str>) {
             *self.attached.lock().unwrap() = instance.map(instance_id);
+            *self.connection.lock().unwrap() =
+                instance.map(|instance| format!("connection:{instance}"));
+        }
+
+        fn set_generation(&self, instance: &str, connection: &str) {
+            *self.attached.lock().unwrap() = Some(instance_id(instance));
+            *self.connection.lock().unwrap() = Some(connection.to_owned());
+        }
+
+        fn set_live_agents(&self, agents: Option<HashSet<AgentId>>) {
+            *self.live_agents.lock().unwrap() = agents;
         }
 
         fn answer(&self, instance: &str, outcome: StatusSnapshotOutcome, when_served: WhenServed) {
@@ -891,6 +968,8 @@ mod tests {
     fn seeds(attached: Option<&str>) -> (HostStatusSeeds, Arc<Daemon>) {
         let daemon = Arc::new(Daemon {
             attached: Mutex::new(attached.map(instance_id)),
+            connection: Mutex::new(attached.map(|instance| format!("connection:{instance}"))),
+            live_agents: Mutex::new(None),
             answers: Mutex::new(HashMap::new()),
             frames: Mutex::new(Vec::new()),
             held: Mutex::new(HashSet::new()),
@@ -900,7 +979,7 @@ mod tests {
             opened: AtomicUsize::new(0),
             tripwire: AtomicBool::new(true),
         });
-        let seeds = HostStatusSeeds::new(daemon.clone());
+        let seeds = HostStatusSeeds::new(daemon.clone(), daemon.clone());
         daemon.watching(&seeds);
         (seeds, daemon)
     }
@@ -942,6 +1021,13 @@ mod tests {
         )
     }
 
+    fn answered_with(instance: &str, overrides: Value) -> StatusSnapshotOutcome {
+        StatusSnapshotOutcome::Answered(
+            decode_for_tests(status(overrides), host(), instance_id(instance))
+                .expect("the fixture status decodes"),
+        )
+    }
+
     fn unreachable() -> StatusSnapshotOutcome {
         StatusSnapshotOutcome::Unreachable(UnreachableReason::Timeout)
     }
@@ -967,6 +1053,124 @@ mod tests {
             Admission::Probe(guard) => guard,
             Admission::Settled(attempt) => panic!("expected an admission, got {attempt:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn same_instance_reconnect_is_a_new_seed_generation() {
+        let (seeds, daemon) = seeds(Some("instance-1"));
+        let instance = instance_id("instance-1");
+        daemon.answer(
+            "instance-1",
+            answered_with("instance-1", json!({ "os": "generation-a" })),
+            WhenServed::Unchanged,
+        );
+        assert_eq!(
+            seeds.seed_on_attach(&host(), &instance).await,
+            Ok(SeedAttempt::Sealed)
+        );
+        assert_eq!(seeded(seeds.read(&host()).unwrap()).os, "generation-a");
+
+        daemon.set_generation("instance-1", "connection-b");
+        assert_eq!(seeds.read(&host()).unwrap(), SeedRead::NotSeeded);
+        daemon.answer(
+            "instance-1",
+            answered_with("instance-1", json!({ "os": "generation-b" })),
+            WhenServed::Unchanged,
+        );
+        assert_eq!(
+            seeds.seed_on_attach(&host(), &instance).await,
+            Ok(SeedAttempt::Sealed)
+        );
+        assert_eq!(seeded(seeds.read(&host()).unwrap()).os, "generation-b");
+    }
+
+    #[tokio::test]
+    async fn old_generation_late_answer_cannot_overwrite_its_same_instance_successor() {
+        let (seeds, daemon) = seeds(Some("instance-1"));
+        let instance = instance_id("instance-1");
+        daemon.answer(
+            "instance-1",
+            answered_with("instance-1", json!({ "os": "late-a" })),
+            WhenServed::Unchanged,
+        );
+        daemon.answer(
+            "instance-1",
+            answered_with("instance-1", json!({ "os": "current-b" })),
+            WhenServed::Unchanged,
+        );
+        daemon.hold("instance-1");
+        let old = tokio::spawn({
+            let seeds = seeds.clone();
+            let instance = instance.clone();
+            async move { seeds.seed_on_attach(&host(), &instance).await }
+        });
+        daemon.frames_reach(1).await;
+
+        daemon.set_generation("instance-1", "connection-b");
+        let current = tokio::spawn({
+            let seeds = seeds.clone();
+            let instance = instance.clone();
+            async move { seeds.seed_on_attach(&host(), &instance).await }
+        });
+        daemon.frames_reach(2).await;
+        daemon.release("instance-1");
+        assert_eq!(old.await.unwrap(), Ok(SeedAttempt::Superseded));
+        assert_eq!(current.await.unwrap(), Ok(SeedAttempt::Sealed));
+        assert_eq!(
+            seeds
+                .store
+                .lock()
+                .unwrap()
+                .states
+                .get(host().as_str())
+                .unwrap()
+                .connection_id,
+            "connection-b"
+        );
+    }
+
+    #[tokio::test]
+    async fn hydrated_event_activity_overrides_seed_fallback_and_can_remove_online_agents() {
+        let (seeds, daemon) = seeds(Some("instance-1"));
+        let instance = instance_id("instance-1");
+        daemon.answer("instance-1", answered("instance-1"), WhenServed::Unchanged);
+        assert_eq!(
+            seeds.seed_on_attach(&host(), &instance).await,
+            Ok(SeedAttempt::Sealed)
+        );
+        assert_eq!(
+            seeded(seeds.read(&host()).unwrap()).active_agents,
+            HashSet::from([AgentId::parse("agent-1").unwrap()])
+        );
+
+        daemon.set_live_agents(Some(HashSet::from([AgentId::parse("agent-2").unwrap()])));
+        assert_eq!(
+            seeded(seeds.read(&host()).unwrap()).active_agents,
+            HashSet::from([AgentId::parse("agent-2").unwrap()])
+        );
+        daemon.set_live_agents(Some(HashSet::new()));
+        assert!(
+            seeded(seeds.read(&host()).unwrap())
+                .active_agents
+                .is_empty()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn old_generation_retry_ticket_never_sends_on_same_instance_successor() {
+        let (seeds, daemon) = seeds(Some("instance-1"));
+        let instance = instance_id("instance-1");
+        daemon.answer("instance-1", unreachable(), WhenServed::Unchanged);
+        let (_, ticket) = deferral(seeds.seed_on_attach(&host(), &instance).await);
+        assert_eq!(daemon.frames(), 1);
+
+        daemon.set_generation("instance-1", "connection-b");
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(
+            seeds.retry(&host(), &instance, ticket).await,
+            Ok(SeedAttempt::Superseded)
+        );
+        assert_eq!(daemon.frames(), 1);
     }
 
     /// Which attempt the host is currently kept by, read directly: no outcome names an
@@ -1088,11 +1292,11 @@ mod tests {
         assert_eq!(seeds.read(&host()).unwrap(), SeedRead::NotSeeded);
     }
 
-    /// The falsifier for the axis this leaf is keyed on: a socket is not a daemon. If
-    /// reconnecting reset anything, a daemon that flaps while answering badly would
-    /// never be held to the ladder it earned.
+    /// A transient unreadable observation alone does not mint a new generation. The
+    /// exact same custody keeps the ladder it earned until registry admission says a
+    /// different connection holds the host.
     #[tokio::test(start_paused = true)]
-    async fn a_socket_flap_inherits_the_ladder_the_daemon_earned() {
+    async fn transient_absence_of_the_same_generation_preserves_its_ladder() {
         let (seeds, daemon) = seeds(Some("instance-1"));
         let instance = instance_id("instance-1");
         daemon.answer("instance-1", unreachable(), WhenServed::Unchanged);
@@ -1104,10 +1308,9 @@ mod tests {
         assert_eq!(after, Duration::from_secs(2));
         assert_eq!(daemon.frames(), 2);
 
-        // The connection drops and the same daemon process comes back. Reconnecting is
-        // not evidence that its answers got healthier, so the deferral stands: no
-        // frame, the delay that is left of it, and the wake already owed rather than a
-        // new one an attach could keep minting.
+        // The fake authority briefly cannot observe the exact same generation. Once
+        // that same token is visible again, the deferral stands: no frame and no new
+        // ticket.
         daemon.set_attached(None);
         assert_eq!(seeds.read(&host()).unwrap(), SeedRead::Disconnected);
         daemon.set_attached(Some("instance-1"));
@@ -1418,7 +1621,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn an_answer_outlives_a_socket_flap_of_the_daemon_it_was_asked_of() {
+    async fn an_answer_survives_a_transient_absence_of_its_exact_generation() {
         let (seeds, daemon) = seeds(Some("instance-1"));
         daemon.hold("instance-1");
         daemon.answer("instance-1", answered("instance-1"), WhenServed::Unchanged);
@@ -1433,16 +1636,14 @@ mod tests {
         // Let the frame leave and stop short of its answer.
         daemon.frames_reach(1).await;
 
-        // The connection drops while the frame is out, a read observes the absence, and
-        // the very same process comes back.
+        // The authority temporarily reports absence, then restores the exact same
+        // generation while its answer is still in flight.
         daemon.set_attached(None);
         assert_eq!(seeds.read(&host()).unwrap(), SeedRead::Disconnected);
         daemon.set_attached(Some("instance-1"));
 
         daemon.release("instance-1");
-        // The answer describes a process that is still there, so it is filed rather
-        // than thrown away, and the reconnect is not asked a second time for facts it
-        // already has.
+        // The answer still names the current generation, so it is filed.
         assert_eq!(seeding.await.unwrap(), Ok(SeedAttempt::Sealed));
         assert_eq!(
             seeded(seeds.read(&host()).unwrap()).daemon_instance,
@@ -1536,11 +1737,10 @@ mod tests {
         assert_eq!(daemon.frames(), 2);
     }
 
-    /// The same axis from the read side: observing that a socket is gone says nothing
-    /// about the process behind it, so absence discards nothing. Only a different
-    /// process replaces what this one answered.
+    /// Read-only absence does not itself mutate state. A new admitted connection
+    /// generation is what replaces a seal.
     #[tokio::test(start_paused = true)]
-    async fn a_seal_survives_a_socket_flap_and_only_a_new_instance_replaces_it() {
+    async fn a_seal_survives_transient_absence_but_not_a_new_generation() {
         let (seeds, daemon) = seeds(Some("instance-1"));
         daemon.answer("instance-1", answered("instance-1"), WhenServed::Unchanged);
         assert_eq!(
@@ -1550,9 +1750,8 @@ mod tests {
             Ok(SeedAttempt::Sealed)
         );
 
-        // The connection drops. There is nothing to serve while it is gone, and
-        // saying so is not a reason to forget: the same process coming back is served
-        // from what it already answered, and is not asked again.
+        // The fake authority reports absence then restores the same generation; the
+        // read itself neither deletes nor reseeds it.
         daemon.set_attached(None);
         assert_eq!(seeds.read(&host()).unwrap(), SeedRead::Disconnected);
         daemon.set_attached(Some("instance-1"));
@@ -1568,8 +1767,7 @@ mod tests {
         );
         assert_eq!(daemon.frames(), 1);
 
-        // A restart is different evidence. Those facts describe a process that is
-        // gone, so they are neither served nor kept, and the host is asked again.
+        // A different generation is different evidence and must be asked again.
         daemon.set_attached(Some("instance-2"));
         assert_eq!(seeds.read(&host()).unwrap(), SeedRead::NotSeeded);
         daemon.answer("instance-2", answered("instance-2"), WhenServed::Unchanged);

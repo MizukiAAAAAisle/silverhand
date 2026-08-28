@@ -99,9 +99,7 @@ impl UpdateComputerUnitOfWork for SqliteHostRuntimeStore {
                     row_to_computer_record(&row).map_err(PersistenceFailure::from_source)?;
                 UpdateComputerTransaction::Committed {
                     before: before.ok_or_else(|| {
-                        PersistenceFailure::from_source(
-                            HostManagementStoreError::ComputerVanished,
-                        )
+                        PersistenceFailure::from_source(HostManagementStoreError::ComputerVanished)
                     })?,
                     committed,
                 }

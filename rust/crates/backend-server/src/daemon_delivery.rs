@@ -29,7 +29,7 @@ use silverhand_backend_core::{
         custody::{HostCredentialLookup, VerifyHostTokenFact, verify_host_token},
         rotation::{DaemonRotationAck, DaemonTokenRotationChannel, RotatedTokenDelivery},
     },
-    identity::{AgentId, ConversationId, DaemonInstanceId, HostId},
+    identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
     messaging::{
         CreatedMessage,
         collaboration::workspace_rename_messaging::{
@@ -66,7 +66,9 @@ use crate::{
     host_control::admission::{
         AdmissionUnavailable, DialerId, HostAdmission, ProtocolMismatch, RefusalNews, SlotOccupancy,
     },
-    host_control::status_seed::{CustodyUnavailable, DaemonCustody, HostStatusSeeds},
+    host_control::status_seed::{
+        AttachedStatusCustody, CustodyUnavailable, DaemonCustody, HostStatusSeeds, SeedAttempt,
+    },
     host_control::status_snapshot::{self, StatusSnapshotOutcome, StatusSnapshotRequest},
     host_runtime::detail::ConnectedHostName,
     messaging::references::MarkdownReferencePositions,
@@ -198,9 +200,16 @@ where
         event_hub: ScopeEventHub,
     ) -> Result<Self, DaemonDeliveryBuildError> {
         let registry = DaemonRegistry::new()?;
+        let events = DaemonRuntimeEventOwner::new(data.clone(), event_hub);
         Ok(Self {
             credentials,
-            events: DaemonRuntimeEventOwner::new(data.clone(), event_hub),
+            seeds: HostStatusSeeds::new(
+                Arc::new(OwningHostDataPlane {
+                    registry: registry.clone(),
+                }),
+                Arc::new(events.host_runtime_activity()),
+            ),
+            events,
             data,
             host_credentials,
             // One ledger per runtime, reading occupancy from the very registry the
@@ -208,11 +217,6 @@ where
             // is what makes "the writer and every reader are the same state" a
             // property of construction: there is no second place to build one.
             admission: HostAdmission::new(Arc::new(registry.clone())),
-            // One seed store per runtime, for the same reason: a second one would
-            // answer a host from an emptier set of facts than the one that seeded it.
-            seeds: HostStatusSeeds::new(Arc::new(OwningHostDataPlane {
-                registry: registry.clone(),
-            })),
             registry,
             config,
         })
@@ -282,10 +286,6 @@ where
         let hydrated = status
             .hydrated(attachment.daemon_instance.clone())
             .map_err(|source| DaemonDeliveryError::Hydration(Box::new(source)))?;
-        self.events
-            .hydrate(&attachment.host_id, hydrated)
-            .await
-            .map_err(|source| DaemonDeliveryError::Hydration(Box::new(source)))?;
         let persisted = self
             .data
             .current_custodies_for_host(attachment.host_id.clone())
@@ -297,6 +297,19 @@ where
             .iter()
             .cloned()
             .collect::<std::collections::HashSet<_>>();
+        self.events
+            .hydrate(
+                &attachment.host_id,
+                &attachment.daemon_instance,
+                &attachment.connection_id,
+                active_set
+                    .iter()
+                    .map(|principal| principal.agent().clone())
+                    .collect(),
+                hydrated,
+            )
+            .await
+            .map_err(|source| DaemonDeliveryError::Hydration(Box::new(source)))?;
         let persisted_set = persisted
             .iter()
             .cloned()
@@ -809,15 +822,18 @@ impl SlotOccupancy for DaemonRegistry {
 /// snapshot leaf, so the seed layer gets a probe whose contract it does not own and
 /// cannot restate.
 impl DaemonCustody for OwningHostDataPlane {
-    fn attached_instance(
+    fn attached_custody(
         &self,
         host: &HostId,
-    ) -> Result<Option<DaemonInstanceId>, CustodyUnavailable> {
+    ) -> Result<Option<AttachedStatusCustody>, CustodyUnavailable> {
         Ok(self
             .registry
             .attachment(host.as_str())
             .map_err(|_| CustodyUnavailable)?
-            .map(|attachment| attachment.daemon_instance))
+            .map(|attachment| AttachedStatusCustody {
+                daemon_instance: attachment.daemon_instance,
+                connection_id: attachment.connection_id,
+            }))
     }
 
     fn probe_status<'a>(
@@ -2102,8 +2118,10 @@ where
         signed_unix_millis(SystemTime::now()),
     )
     .await;
-    let host_id = match verified {
-        Ok(VerifyHostTokenFact::Accepted { host_id, .. }) => host_id,
+    let (host_id, owner_user_id) = match verified {
+        Ok(VerifyHostTokenFact::Accepted {
+            host_id, user_id, ..
+        }) => (host_id, user_id),
         Ok(VerifyHostTokenFact::Rejected(_)) => return StatusCode::UNAUTHORIZED.into_response(),
         Err(cause) => {
             tracing::error!(
@@ -2134,6 +2152,7 @@ where
                 socket,
                 runtime,
                 host_id,
+                owner_user_id,
                 connection_id,
                 commands,
                 receive,
@@ -2146,6 +2165,7 @@ async fn connection<C, D, H>(
     mut socket: WebSocket,
     runtime: DaemonDeliveryRuntime<C, D, H>,
     host_id: String,
+    owner_user_id: UserId,
     connection_id: String,
     control: mpsc::Sender<ConnectionControl>,
     mut commands: mpsc::Receiver<ConnectionControl>,
@@ -2260,18 +2280,65 @@ async fn connection<C, D, H>(
                             // seed owner rechecks custody after every await and drops a
                             // late answer if this socket is replaced.
                             let seeds = runtime.seeds.clone();
+                            let seed_events = runtime.events.clone();
+                            let seed_registry = runtime.registry.clone();
                             let seed_host = HostId::parse(host_id.clone())
                                 .expect("authenticated host ids are validated at lookup");
                             let seed_instance = ready.daemon_instance.clone();
+                            let seed_connection_id = connection_id.clone();
+                            let seed_owner = owner_user_id.clone();
                             tokio::spawn(async move {
-                                if let Err(cause) =
-                                    seeds.seed_on_attach(&seed_host, &seed_instance).await
-                                {
-                                    tracing::error!(
-                                        error_chain = %error::describe(&cause),
-                                        host_id = %seed_host.as_str(),
-                                        "host status seed chain failed"
-                                    );
+                                let mut attempt = seeds
+                                    .seed_on_attach(&seed_host, &seed_instance)
+                                    .await;
+                                loop {
+                                    match attempt {
+                                        Ok(SeedAttempt::Deferred { after, ticket }) => {
+                                            if !wait_for_seed_retry_or_replacement(
+                                                &seed_registry,
+                                                &seed_host,
+                                                &seed_connection_id,
+                                                after,
+                                            )
+                                            .await
+                                            {
+                                                break;
+                                            }
+                                            attempt = seeds
+                                                .retry(&seed_host, &seed_instance, ticket)
+                                                .await;
+                                        }
+                                        Ok(SeedAttempt::Sealed) => {
+                                            if let Err(cause) = seed_events
+                                                .publish_host_connection_changed(
+                                                    &seed_owner,
+                                                    &seed_host,
+                                                )
+                                            {
+                                                tracing::error!(
+                                                    error_chain = %error::describe(&cause),
+                                                    host_id = %seed_host.as_str(),
+                                                    "host status seed landed but connection invalidation failed"
+                                                );
+                                            }
+                                            break;
+                                        }
+                                        Ok(
+                                            SeedAttempt::AlreadySealed
+                                            | SeedAttempt::AlreadyInFlight
+                                            | SeedAttempt::Superseded
+                                            | SeedAttempt::StaleWake
+                                            | SeedAttempt::Exhausted,
+                                        ) => break,
+                                        Err(cause) => {
+                                            tracing::error!(
+                                                error_chain = %error::describe(&cause),
+                                                host_id = %seed_host.as_str(),
+                                                "host status seed chain failed"
+                                            );
+                                            break;
+                                        }
+                                    }
                                 }
                             });
                         }
@@ -2480,7 +2547,13 @@ async fn connection<C, D, H>(
                                 }))).await;
                                 break;
                             };
-                            finalize_runtime_event(&runtime, &host_id, Some(instance), event).await;
+                            finalize_runtime_event(
+                                &runtime,
+                                &host_id,
+                                &connection_id,
+                                Some(instance),
+                                event,
+                            ).await;
                         }
                         Ok(DaemonFrame::Product(event)) => {
                             let Some(instance) = attached.as_ref() else {
@@ -2490,7 +2563,11 @@ async fn connection<C, D, H>(
                                 }))).await;
                                 break;
                             };
-                            match runtime.events.handle(&host_id, instance, event).await {
+                            match runtime
+                                .events
+                                .handle(&host_id, instance, &connection_id, event)
+                                .await
+                            {
                                 Ok(RuntimeEventDirective::None) => {}
                                 Ok(RuntimeEventDirective::Drain {
                                     conversation,
@@ -2572,7 +2649,9 @@ async fn connection<C, D, H>(
     if let Some(instance) = attached
         .as_ref()
         .or_else(|| compatible.as_ref().map(|ready| &ready.daemon_instance))
-        && let Err(cause) = runtime.events.detach_daemon(&host_id, instance)
+        && let Err(cause) = runtime
+            .events
+            .detach_daemon(&host_id, instance, &connection_id)
     {
         tracing::error!(
             error_chain = %error::describe(&cause),
@@ -2587,6 +2666,35 @@ async fn connection<C, D, H>(
             error_chain = %error::describe(&cause),
             "daemon disconnect inbox lease release failed"
         );
+    }
+}
+
+async fn wait_for_seed_retry_or_replacement(
+    registry: &DaemonRegistry,
+    host: &HostId,
+    connection_id: &str,
+    after: Duration,
+) -> bool {
+    let deadline = Instant::now() + after;
+    loop {
+        let changed = registry.changed.notified();
+        if registry
+            .slot_connection_id(host.as_str())
+            .ok()
+            .flatten()
+            .as_deref()
+            != Some(connection_id)
+        {
+            return false;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => return registry
+                .slot_connection_id(host.as_str())
+                .ok()
+                .flatten()
+                .as_deref() == Some(connection_id),
+            _ = changed => {}
+        }
     }
 }
 
@@ -2763,6 +2871,7 @@ async fn commit_consumed_event<C, D, H>(
 async fn finalize_runtime_event<C, D, H>(
     runtime: &DaemonDeliveryRuntime<C, D, H>,
     host_id: &str,
+    connection_id: &str,
     attached: Option<&DaemonInstanceId>,
     event: RuntimeExitEvent,
 ) where
@@ -2827,6 +2936,7 @@ async fn finalize_runtime_event<C, D, H>(
             };
             match runtime.events.complete_exit_state(
                 &admission,
+                connection_id,
                 &result,
                 conversation,
                 event.code,
@@ -3754,7 +3864,10 @@ mod tests {
         });
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_secs(10)).await;
-        assert!(matches!(second.await.unwrap(), Err(CommandDispatchError::TimedOut)));
+        assert!(matches!(
+            second.await.unwrap(),
+            Err(CommandDispatchError::TimedOut)
+        ));
 
         // Releasing the stalled first write lets the FIFO advance. The second
         // request is already expired and its receiver is cancelled, so the exact
@@ -4042,6 +4155,9 @@ mod tests {
                 .events
                 .hydrate(
                     "host-1",
+                    principal.clone().custody().daemon_instance(),
+                    "connection-test",
+                    [principal.agent().clone()].into_iter().collect(),
                     vec![HydratedRuntime {
                         principal,
                         run_state: Some(wire),
