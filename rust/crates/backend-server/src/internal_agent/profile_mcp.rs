@@ -18,8 +18,8 @@
 //! POST config validation via [`parse_mcp_config`], the probe request schema), the
 //! wire projection of a probe outcome, and the mapping of a data-plane fault code
 //! to an HTTP status. It does NOT own the transport: the production
-//! [`AgentProfileMcpDataPlane`] adapter is #2224's correlated-RPC data-plane, wired
-//! at convergence. Deterministic fakes prove the handler orchestration; they do NOT
+//! [`AgentProfileMcpDataPlane`] adapter is #2231's, reusing #2224's correlated-RPC
+//! data-plane root, wired at convergence. Deterministic fakes prove the handler orchestration; they do NOT
 //! make it mounted or effect-complete, and this lane copies none of #2224's
 //! dispatch machinery.
 //!
@@ -59,7 +59,7 @@ pub const PROFILE_MCP_PROBE_PATH: &str = "/internal/agents/{aid}/profile/mcp/pro
 const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
 
 /// Mount the three MCP routes generic over the data-plane port, so tests drive them
-/// with a driver-free fake and the composition root wires the #2224 adapter AND the
+/// with a driver-free fake and the composition root wires the #2231 adapter AND the
 /// runtime-credential layer that self-pins `{aid}`. This builder yields the bare
 /// routes; route registration and that layer are a separate integration seam.
 pub fn profile_mcp_router<D>(data_plane: D) -> Router
@@ -90,7 +90,7 @@ fn missing_credential(route: &str) -> Response {
 }
 
 /// Render a data-plane fault as the product's `{ error, code }` envelope at the
-/// status its code maps to. `code` is a CLOSED taxonomy (#2224's adapter already
+/// status its code maps to. `code` is a CLOSED taxonomy (#2231's adapter already
 /// folded any unclassified upstream error into `DaemonInternalError`), so both
 /// the status and the stable wire token are exhaustive matches — nothing an
 /// adapter produces can widen the CLI's `code` union or leak a raw upstream string.

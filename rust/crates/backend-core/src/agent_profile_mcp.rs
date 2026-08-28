@@ -31,7 +31,7 @@ use crate::wire_number::JsSafeInteger;
 /// JSON consumer exactly, so this newtype admits only `0..=JsSafeInteger::MAX`
 /// and reuses [`JsSafeInteger`] for the binary64 precision boundary — it adds
 /// only the nonnegative semantics on top. A raw `u64` never crosses the port:
-/// the #2224 production decoder rejects a negative / `MAX + 1` / non-integer
+/// the #2231 production decoder rejects a negative / `MAX + 1` / non-integer
 /// daemon result as protocol-invalid (folded into
 /// [`McpDataPlaneFaultCode::DaemonInternalError`]), so an unrepresentable count
 /// can never reach the wire.
@@ -130,12 +130,12 @@ pub struct McpProbeOutcome {
 ///
 /// The `code` is a CLOSED taxonomy: the CLI's `{error, code}` union is a stable
 /// contract, so the port can never leak an arbitrary upstream string — every
-/// unknown/transport/protocol error the #2224 adapter cannot classify collapses
+/// unknown/transport/protocol error the #2231 adapter cannot classify collapses
 /// to [`McpDataPlaneFaultCode::DaemonInternalError`] (mirroring TS
 /// `mapDataPlaneError`, which rewrites any unrecognized failure to
 /// `daemon_internal_error`). The `backend-server` adapter maps each variant
 /// exhaustively to an HTTP status and its stable wire token. This is a
-/// CROSS-LANE interface: the #2224 adapter produces it directly, no wrapper.
+/// CROSS-LANE interface: the #2231 adapter produces it directly, no wrapper.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct McpDataPlaneFault {
     pub code: McpDataPlaneFaultCode,
@@ -143,7 +143,7 @@ pub struct McpDataPlaneFault {
 }
 
 /// The closed set of MCP data-plane fault codes actually reachable on these
-/// three routes. A code outside this set does not exist on the wire: the #2224
+/// three routes. A code outside this set does not exist on the wire: the #2231
 /// adapter folds any raw/transport/protocol error it cannot classify into
 /// [`Self::DaemonInternalError`], so the CLI's stable `code` union stays closed
 /// and no adapter can widen it.
