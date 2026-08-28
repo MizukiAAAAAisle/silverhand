@@ -149,6 +149,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // `host_agent` submodules, already covered by the `host_agent` entry. UNMOUNTED
     // until a later integration.
     ("backend-server", "agent_name_availability"),
+    // #task:2225 — the single crate-root full-`AgentDto` authority: the
+    // `agentRowToDto` projector plus the shared post-commit `reproject_committed_agent`
+    // face every mutating agent face runs. Crate-root, not a `host_agent` submodule, so
+    // it is not owned by one route family's namespace (#task:2226's internal faces
+    // consume the same face). `pub(crate)`, no route of its own, UNMOUNTED.
+    ("backend-server", "agent_wire"),
     ("backend-server", "clock"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
@@ -1097,7 +1103,13 @@ fn g4_the_seam_touches_only_crate_roots_and_only_as_declarations() {
     ));
 
     for (crate_dir, namespace) in SEAM_ROOT_MODULES {
-        let declaration = format!("pub mod {namespace};");
+        // A seam root module is a `mod` declaration at exactly one root. Its visibility
+        // is orthogonal to that invariant: most are `pub mod`, but a crate-private
+        // shared authority (e.g. `agent_wire`) is `pub(crate) mod` and is still declared
+        // exactly once. Accept either spelling; the fork guard below stays visibility-
+        // agnostic via `declares_or_reexports`.
+        let pub_declaration = format!("pub mod {namespace};");
+        let crate_declaration = format!("pub(crate) mod {namespace};");
         let root = rust_root()
             .join("crates")
             .join(crate_dir)
@@ -1106,7 +1118,10 @@ fn g4_the_seam_touches_only_crate_roots_and_only_as_declarations() {
         assert_eq!(
             source
                 .lines()
-                .filter(|line| line.trim() == declaration)
+                .filter(|line| {
+                    let line = line.trim();
+                    line == pub_declaration || line == crate_declaration
+                })
                 .count(),
             1,
             "{} must declare {namespace} exactly once",

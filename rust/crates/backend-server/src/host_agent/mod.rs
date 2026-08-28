@@ -11,12 +11,11 @@
 //! `agent presence` cold read ([`agent_presence`]), and the authenticated
 //! `GET /api/agents` list cold read ([`agent_list`]).
 //!
-//! `agent_wire` is a `pub(crate)` module: the full-`AgentDto` projector and the
-//! shared post-commit `reproject_committed_agent` face are the single crate-private
-//! authority every face that returns an agent goes through — the sibling
-//! [`agent_detail`] and [`agent_list`] cold reads, the [`agent_patch`] and
-//! [`agent_avatar_write`] mutating faces, and #task:2226's internal avatar faces.
-//! It is `pub(crate)`, not `pub`: shared crate-wide, but not a public API surface.
+//! The full-`AgentDto` projector and the shared post-commit
+//! `reproject_committed_agent` face — the single crate authority every face that
+//! returns an agent goes through — live at the crate root ([`crate::agent_wire`]),
+//! not here: they are shared across route families (this one and #task:2226's
+//! internal faces), so they are not owned by any one family's namespace.
 
 pub mod agent_avatar;
 pub mod agent_avatar_write;
@@ -25,7 +24,6 @@ pub mod agent_list;
 pub mod agent_patch;
 pub mod agent_presence;
 pub mod agent_stop;
-pub(crate) mod agent_wire;
 pub mod availability;
 pub mod host_attachment;
 mod online_viewers;

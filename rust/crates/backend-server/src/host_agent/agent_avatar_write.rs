@@ -71,7 +71,7 @@ use crate::clock::ProcessClock;
 use crate::error;
 
 use super::agent_avatar::AGENT_AVATAR_PATH;
-use super::agent_wire::{AgentDto, reproject_committed_agent};
+use crate::agent_wire::{AgentDto, reproject_committed_agent};
 
 /// The anti-enumeration refusal string, pinned to the TypeScript handler.
 const AGENT_NOT_FOUND: &str = "agent not found";

@@ -30,6 +30,7 @@ use serde::Serialize;
 use silverhand_backend_core::{
     agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     identity::AgentId,
+    name_canonicalization::is_ecmascript_trim_whitespace,
     persistence::PersistenceFailure,
 };
 
@@ -175,9 +176,14 @@ impl ReprojectFault {
 
 /// `row.host_display_label?.trim() || row.host_name || null`: the trimmed label when
 /// it is non-empty after trimming, else the host name when non-empty, else null.
+///
+/// The trim mirrors `String.prototype.trim()`, NOT Rust's Unicode `White_Space`: it
+/// folds against the SAME ECMA-262 whitespace set the name envelope uses
+/// ([`is_ecmascript_trim_whitespace`]), so `U+FEFF` trims and `U+0085` does not —
+/// the two diverge under a naive `str::trim()`.
 fn host_label(display_label: Option<&str>, host_name: Option<&str>) -> Option<String> {
     if let Some(label) = display_label {
-        let trimmed = label.trim();
+        let trimmed = label.trim_matches(is_ecmascript_trim_whitespace);
         if !trimmed.is_empty() {
             return Some(trimmed.to_string());
         }
@@ -335,6 +341,32 @@ mod tests {
         ] {
             assert_eq!(value[key], Value::Null, "{key} should serialize as null");
         }
+    }
+
+    /// The `host_label` coalesce trims against the ECMA-262 whitespace set, not Rust's
+    /// Unicode `White_Space`. Bidirectional discriminator that a naive `str::trim()`
+    /// fails BOTH ways: `U+FEFF` IS ECMAScript whitespace (JS trims it; Rust does not),
+    /// and `U+0085` is NOT (JS keeps it; Rust would strip it).
+    #[test]
+    fn host_label_trims_the_ecmascript_whitespace_set_not_rusts() {
+        // U+FEFF must be trimmed away, leaving the bare label — a `str::trim()` would
+        // keep it, since FEFF is not Unicode White_Space.
+        assert_eq!(
+            host_label(Some("\u{FEFF}Host One\u{FEFF}"), Some("host-name")),
+            Some("Host One".to_owned())
+        );
+        // U+0085 must survive — a `str::trim()` would strip it, since NEL is Unicode
+        // White_Space, and the label would then differ from `String.prototype.trim()`.
+        assert_eq!(
+            host_label(Some("\u{0085}Host One\u{0085}"), Some("host-name")),
+            Some("\u{0085}Host One\u{0085}".to_owned())
+        );
+        // A label that is only ECMAScript whitespace collapses to empty and falls
+        // through to the host name.
+        assert_eq!(
+            host_label(Some("\u{FEFF}\u{3000}"), Some("host-name")),
+            Some("host-name".to_owned())
+        );
     }
 
     #[derive(Clone)]

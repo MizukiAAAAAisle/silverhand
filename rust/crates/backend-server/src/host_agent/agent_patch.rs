@@ -79,7 +79,7 @@ use silverhand_backend_core::{
 use crate::clock::ProcessClock;
 use crate::error;
 
-use super::agent_wire::{AgentDto, reproject_committed_agent};
+use crate::agent_wire::{AgentDto, reproject_committed_agent};
 
 /// The product route template, in axum's `{id}` capture syntax.
 pub const AGENT_PATCH_PATH: &str = "/api/agents/{id}";

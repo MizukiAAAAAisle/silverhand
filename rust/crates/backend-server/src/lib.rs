@@ -3,6 +3,7 @@
 
 pub mod access;
 pub mod agent_name_availability;
+pub(crate) mod agent_wire;
 pub mod auth;
 pub mod avatar_blob;
 mod bearer;
