@@ -37,3 +37,5 @@ pub mod lifecycle;
 pub mod read;
 pub mod revoke;
 pub mod rotation;
+pub mod status;
+pub mod update;
