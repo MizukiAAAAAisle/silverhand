@@ -89,7 +89,7 @@ fn computer_times_are_js_safe(record: &ComputerRecord) -> bool {
             record.finalized_at,
         ])
         .flatten()
-        .all(crate::host_control::js_safe_integer)
+        .all(crate::host_control::wire_number::js_safe_integer)
 }
 
 use axum::response::IntoResponse;

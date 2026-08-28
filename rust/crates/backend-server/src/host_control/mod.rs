@@ -19,10 +19,4 @@ pub mod proxy_config;
 pub mod runtime_catalog;
 pub mod status_seed;
 pub mod status_snapshot;
-
-/// Last integer every JavaScript client can receive without binary64 rounding.
-pub(crate) const JS_SAFE_INTEGER_MAX: i64 = 9_007_199_254_740_991;
-
-pub(crate) fn js_safe_integer(value: i64) -> bool {
-    (-JS_SAFE_INTEGER_MAX..=JS_SAFE_INTEGER_MAX).contains(&value)
-}
+pub(crate) mod wire_number;

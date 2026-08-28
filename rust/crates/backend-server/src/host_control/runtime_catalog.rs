@@ -27,7 +27,7 @@ use crate::daemon_delivery::{
     OwningHostDataPlane,
 };
 
-use super::js_safe_integer;
+use super::wire_number::js_safe_integer;
 
 /// This operation's own budget: one probe may shell out to every runtime binary
 /// on the machine, so it is far longer than a control-plane round trip.

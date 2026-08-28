@@ -38,7 +38,7 @@ use crate::daemon_delivery::{
     OwningHostDataPlane,
 };
 
-use super::js_safe_integer;
+use super::wire_number::js_safe_integer;
 
 /// This operation's own budget. A control-plane round trip that reads facts the
 /// daemon already holds, so it is far shorter than the catalog's probe.

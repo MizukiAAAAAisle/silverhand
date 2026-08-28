@@ -19,8 +19,8 @@ use crate::{
     error,
     host_control::{
         admission::HostAdmission,
-        js_safe_integer,
         status_seed::{HostStatusSeeds, SeedRead, SeededStatus},
+        wire_number::js_safe_integer,
     },
 };
 
