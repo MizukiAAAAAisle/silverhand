@@ -298,36 +298,45 @@ pub struct CommittedAgentRow {
     pub updated_at: i64,
 }
 
-/// The raw outcome of a tuning write, decided under the adapter's write lock. The
-/// port re-admits the request against the row's CURRENT runtime inside the same lock,
-/// so legality is never a stale pre-read verdict.
+/// The raw outcome of a tuning write, decided under the adapter's write lock. Every
+/// arm carries only DB-observable WITNESSES — the before-image the decision was read
+/// against, and the committed columns — never a product verdict and never an
+/// adapter-minted admitted intent. The domain re-derives the verdict from the witness
+/// by replaying the SAME pure rule (see [`update_agent_profile_and_announce`]), so a
+/// buggy or lying adapter cannot mint a product refusal or seal an unwarranted write.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AgentProfileRowWrite {
     /// No such agent row — the route maps this to a product `404`.
     NoSuchAgent,
-    /// The request was refused by the tuning legality judged against the LOCKED
-    /// current runtime/model/effort — the route's typed product `400`. No column was
-    /// written and no announce is owed.
-    TuningRejected(TuningRejection),
-    /// The row was updated and `updated_at` stamped to `now_ms`. Carries the intent
-    /// the port admitted under the lock AND the committed columns, so the outer
-    /// orchestration can seal the one against the other. A tuning edit always writes
-    /// (it always bumps `updated_at`), so it never reports a no-op; the avatar-clear
-    /// capability, which CAN be an idempotent no-op, gets its own `Unchanged` arm when
-    /// it lands.
+    /// No column was written. Carries the before-image runtime/model/effort the port
+    /// read under its lock — a WITNESS, not a verdict. For a tuning edit the only
+    /// warranted reason to write nothing is a legality refusal, so the domain replays
+    /// the rule against `before`: a refusal mints the typed product `400`; anything the
+    /// rule would ADMIT means a warranted write was withheld — an untrustworthy fact.
+    Unchanged { before: AgentTuningContext },
+    /// The row was updated and `updated_at` stamped to `now_ms`. Carries the before-image
+    /// the port judged against AND the committed columns — both WITNESSES. The domain
+    /// replays the rule against `before` to confirm the write was warranted and to
+    /// RE-DERIVE the admitted intent it seals `row` against; the adapter never hands over
+    /// an admitted intent of its own.
     Committed {
-        admitted: AdmittedAgentProfileEdit,
+        before: AgentTuningContext,
         row: CommittedAgentRow,
     },
 }
 
 /// The atomic `agents`-row tuning write. The adapter, under ONE write lock: reads the
-/// row's current runtime/model/effort, re-admits `request` against it through the
-/// canonical [`admit_public_tuning_edit`] (a refusal is [`AgentProfileRowWrite::TuningRejected`],
-/// zero UPDATE), then applies the admitted `SET` columns, stamps `updated_at = now_ms`,
-/// and returns the committed columns via `RETURNING`. Because the port takes the RAW
-/// request — never a pre-sealed edit — there is nothing a caller could admit against a
-/// stale snapshot; the only legality verdict is the one taken inside the lock.
+/// row's current runtime/model/effort into a before-image, re-admits `request` against
+/// it through the canonical [`admit_public_tuning_edit`] to decide WHETHER to write
+/// (a refusal writes nothing), then, on an admit, applies the `SET` columns, stamps
+/// `updated_at = now_ms`, and returns the committed columns via `RETURNING`. It reports
+/// only WITNESSES — [`AgentProfileRowWrite::Unchanged`] carries the before-image it read,
+/// [`AgentProfileRowWrite::Committed`] carries that before-image and the committed row —
+/// never the product verdict and never an admitted intent of its own. The domain
+/// re-derives both by replaying the rule against the witnessed before-image, so a buggy
+/// or lying adapter can neither mint a refusal nor seal an unwarranted write. Because the
+/// port takes the RAW request, there is nothing a caller could admit against a stale
+/// snapshot; the only legality read is the one taken inside the lock.
 pub trait AgentProfileWriteUnitOfWork: Clone + Send + Sync + 'static {
     fn admit_and_apply_tuning_edit(
         &self,
@@ -434,12 +443,23 @@ pub enum AgentProfileWriteError {
 /// Apply a public tuning PATCH and, on a genuine commit, fire the `agent_changed`
 /// announce. The RAW request is handed to the write port, which admits it against the
 /// row's CURRENT runtime under its write lock (so two concurrent edits can never
-/// compose an illegal final row from mutually-stale snapshots); a legality refusal is
-/// [`AgentProfileUpdateOutcome::TuningRejected`], carrying zero write and zero
-/// announce. On a commit, the committed row is SEALED against the intent the port
-/// admitted — same id, `updated_at` stamped to `now_ms`, every touched column equal to
-/// the intent — before the announce fires; a mismatch is an untrustworthy write
-/// (safe-500), never a silent success.
+/// compose an illegal final row from mutually-stale snapshots) and reports only
+/// WITNESSES: the before-image it read, plus the committed row on a write. The domain,
+/// NOT the adapter, decides the product answer by replaying the SAME pure
+/// [`admit_public_tuning_edit`] against the witnessed before-image:
+/// - [`AgentProfileRowWrite::Unchanged`] must replay to a refusal → the typed product
+///   `400` ([`AgentProfileUpdateOutcome::TuningRejected`]), zero write and zero
+///   announce. If the rule would instead ADMIT, a warranted write was withheld — an
+///   untrustworthy fact (safe-500).
+/// - [`AgentProfileRowWrite::Committed`] must replay to an admit → the admitted intent
+///   the replay yields SEALS the committed row (same id, `updated_at` stamped to
+///   `now_ms`, every touched column equal to the intent) before the announce fires. If
+///   the rule would instead REFUSE, an unwarranted write happened — untrustworthy
+///   (safe-500), never a silent success.
+///
+/// Neither the product verdict nor the sealing intent is ever taken from the adapter,
+/// so a buggy or lying persistence layer cannot fabricate a refusal or launder an
+/// illegal write past the domain.
 pub async fn update_agent_profile_and_announce<W, S>(
     writes: &W,
     announce_sink: &S,
@@ -456,10 +476,22 @@ where
         .await?
     {
         AgentProfileRowWrite::NoSuchAgent => Ok(AgentProfileUpdateOutcome::NoSuchAgent),
-        AgentProfileRowWrite::TuningRejected(rejection) => {
-            Ok(AgentProfileUpdateOutcome::TuningRejected(rejection))
+        AgentProfileRowWrite::Unchanged { before } => {
+            // The adapter wrote nothing and reported the before-image it read. The
+            // domain replays the rule against that witness to decide the verdict: a
+            // refusal is the typed product 400; an admit means a warranted write was
+            // silently withheld, which is untrustworthy.
+            match admit_public_tuning_edit(&before, request.clone()) {
+                Err(rejection) => Ok(AgentProfileUpdateOutcome::TuningRejected(rejection)),
+                Ok(_) => Err(AgentProfileWriteError::UntrustworthyWriteFact),
+            }
         }
-        AgentProfileRowWrite::Committed { admitted, row } => {
+        AgentProfileRowWrite::Committed { before, row } => {
+            // A committed write MUST have been warranted: the rule replayed against the
+            // witnessed before-image has to ADMIT, and the intent it yields — not any
+            // intent from the adapter — is what seals the row.
+            let admitted = admit_public_tuning_edit(&before, request.clone())
+                .map_err(|_| AgentProfileWriteError::UntrustworthyWriteFact)?;
             seal_profile_write(subject, &admitted, &row, now_ms)?;
             let announce = announce(announce_sink, subject).await;
             Ok(AgentProfileUpdateOutcome::Committed(
@@ -783,15 +815,12 @@ mod tests {
         }
     }
 
-    fn admitted() -> AdmittedAgentProfileEdit {
-        admit_public_tuning_edit(&ctx(RuntimeKind::Codex), request()).unwrap()
-    }
-
-    /// The `Committed` arm the port returns: the intent it admitted paired with the
-    /// committed columns, for the outer seal.
+    /// The `Committed` arm the port returns: the before-image it judged against (codex
+    /// baseline, against which [`request`] is legal) paired with the committed columns.
+    /// The domain replays the rule against `before` to re-derive the sealing intent.
     fn committed_outcome(row: CommittedAgentRow) -> AgentProfileRowWrite {
         AgentProfileRowWrite::Committed {
-            admitted: admitted(),
+            before: ctx(RuntimeKind::Codex),
             row,
         }
     }
@@ -808,23 +837,75 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_tuning_rejected_under_the_lock_is_carried_and_never_announces() {
-        // The port refused the edit against the LOCKED current runtime; the
-        // orchestration surfaces the typed refusal and fires no announce.
-        let rejection = TuningRejection::ReasoningEffortInvalidForRuntime {
-            runtime: RuntimeKind::Codex,
-            reasoning_effort: "ultra".to_owned(),
-            model: Some("gpt-5.6-terra".to_owned()),
+    async fn an_unchanged_witness_whose_before_refuses_is_a_typed_rejection_and_never_announces() {
+        // The port wrote nothing and reported the before-image it read under the lock.
+        // The DOMAIN — not the adapter — replays the pure rule against that witness to
+        // mint the product refusal: Claude exposes no reasoning control, so `high` is
+        // out of range. Zero announce.
+        let before = ctx(RuntimeKind::Claude);
+        let request = AgentTuningEdit {
+            reasoning_effort: FieldEdit::Set("high".to_owned()),
+            ..leave_all()
         };
-        let writes = FakeWrites(AgentProfileRowWrite::TuningRejected(rejection.clone()));
+        let writes = FakeWrites(AgentProfileRowWrite::Unchanged { before });
         let sink = FakeSink::new(false);
-        let outcome = update_agent_profile_and_announce(&writes, &sink, &agent(), &request(), NOW)
+        let outcome = update_agent_profile_and_announce(&writes, &sink, &agent(), &request, NOW)
             .await
             .unwrap();
         let AgentProfileUpdateOutcome::TuningRejected(carried) = outcome else {
             panic!("expected TuningRejected");
         };
-        assert_eq!(carried, rejection);
+        assert_eq!(
+            carried,
+            TuningRejection::ReasoningEffortInvalidForRuntime {
+                runtime: RuntimeKind::Claude,
+                reasoning_effort: "high".to_owned(),
+                model: None,
+            }
+        );
+        assert_eq!(sink.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_witness_whose_before_would_admit_is_untrustworthy() {
+        // Liar adapter: it wrote nothing, but the rule replayed against the witnessed
+        // before-image ADMITS the request — a warranted write was silently withheld.
+        // The domain refuses to launder that into a product refusal. Deleting the core
+        // replay would let this pass wrongly.
+        let writes = FakeWrites(AgentProfileRowWrite::Unchanged {
+            before: ctx(RuntimeKind::Codex), // request() is legal here
+        });
+        let sink = FakeSink::new(false);
+        let result =
+            update_agent_profile_and_announce(&writes, &sink, &agent(), &request(), NOW).await;
+        assert!(matches!(
+            result,
+            Err(AgentProfileWriteError::UntrustworthyWriteFact)
+        ));
+        assert_eq!(sink.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_committed_witness_whose_before_refuses_is_untrustworthy() {
+        // Liar adapter: it claims a commit, but the rule replayed against the witnessed
+        // before-image REFUSES the request — no legal write could have happened. The
+        // domain rejects the write and fires no announce. Deleting the core replay would
+        // let this pass wrongly.
+        let request = AgentTuningEdit {
+            reasoning_effort: FieldEdit::Set("high".to_owned()),
+            ..leave_all()
+        };
+        let writes = FakeWrites(AgentProfileRowWrite::Committed {
+            before: ctx(RuntimeKind::Claude),
+            row: committed_row(NOW),
+        });
+        let sink = FakeSink::new(false);
+        let result =
+            update_agent_profile_and_announce(&writes, &sink, &agent(), &request, NOW).await;
+        assert!(matches!(
+            result,
+            Err(AgentProfileWriteError::UntrustworthyWriteFact)
+        ));
         assert_eq!(sink.calls(), 0);
     }
 

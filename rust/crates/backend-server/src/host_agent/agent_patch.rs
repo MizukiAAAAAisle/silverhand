@@ -587,11 +587,13 @@ mod tests {
 
     /// A write unit of work that models the real adapter: it admits the RAW request
     /// UNDER the lock against a configured current tuning `context` (defaulting to the
-    /// codex/`gpt-5.6-sol` full state), then either seals the admitted edit onto a base
-    /// row so every touched column, the id, and `updated_at = now` match the seal, or
-    /// carries the typed rejection back with no commit. The authoritative under-lock
-    /// enforcement (and its concurrent falsifier) lives in the sqlite adapter's tests;
-    /// here we only need a faithful outcome to check the handler's response mapping.
+    /// codex/`gpt-5.6-sol` full state) to decide the branch, then reports only the
+    /// WITNESSES the real port does — the before-image it read, plus, on an admit, a
+    /// base row sealed so every touched column, the id, and `updated_at = now` match the
+    /// core replay's seal. It never returns a product verdict; the core re-derives that
+    /// from the before-image. The authoritative under-lock enforcement (and its
+    /// concurrent falsifier) lives in the sqlite adapter's tests; here we only need a
+    /// faithful outcome to check the handler's response mapping.
     #[derive(Clone)]
     struct SealingWrites {
         outcome: WriteOutcome,
@@ -637,10 +639,14 @@ mod tests {
                     "write boom",
                 ))),
                 WriteOutcome::Commits => {
-                    // The lock is held: admit against the current context. A rejection
-                    // commits nothing.
+                    // The lock is held: admit against the current context to decide the
+                    // branch, then report only the WITNESS — the before-image, plus the
+                    // committed row on an admit. The verdict itself is the core's to
+                    // re-derive from `before`; this fake never returns it.
                     match admit_public_tuning_edit(&self.context, request.clone()) {
-                        Err(rejection) => Ok(AgentProfileRowWrite::TuningRejected(rejection)),
+                        Err(_rejection) => Ok(AgentProfileRowWrite::Unchanged {
+                            before: self.context.clone(),
+                        }),
                         Ok(edit) => {
                             let display_name = match edit.display_name() {
                                 RequiredEdit::Leave => "Base Name".to_owned(),
@@ -656,7 +662,7 @@ mod tests {
                                 updated_at: now_ms,
                             };
                             Ok(AgentProfileRowWrite::Committed {
-                                admitted: edit,
+                                before: self.context.clone(),
                                 row,
                             })
                         }

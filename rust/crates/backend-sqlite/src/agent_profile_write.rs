@@ -5,28 +5,32 @@
 //! database: it opens a pool against a schema that already exists and migrates or
 //! seeds nothing. It owns no product *rules* — the runtime tuning gate lives in
 //! [`silverhand_backend_core::agent_profile_write::admit_public_tuning_edit`] and
-//! there is only one copy of it. But this port is the sole place that gate can be
-//! replayed against the fact it will write: it takes the RAW
-//! [`AgentTuningEdit`] request and, inside its own write lock, reads the LOCKED
-//! current `runtime`/`model`/`reasoning_effort` and admits against those. A verdict
-//! reached against a pre-read snapshot could go stale between the read and the
-//! `UPDATE`; admitting under the lock makes the fact the gate judged the same fact
-//! the row commits, so two concurrent PATCHes can never compose an illegal final
-//! runtime state. There is no external admitted verdict this adapter trusts.
+//! there is only one copy of it. This port is where that gate is read against the
+//! fact it will write — it takes the RAW [`AgentTuningEdit`] request and, inside its
+//! own write lock, reads the LOCKED current `runtime`/`model`/`reasoning_effort` to
+//! decide WHETHER to write — but it does NOT mint the product verdict. A verdict is
+//! the domain's to derive: this adapter reports only DB-observable WITNESSES (the
+//! before-image it read, and the committed row on a write), and the core use case
+//! replays the same gate against that witness. Reading under the lock makes the fact
+//! the gate judged the same fact the row commits, so two concurrent PATCHes can never
+//! compose an illegal final runtime state; reporting a witness (not a verdict) keeps a
+//! buggy adapter from fabricating a refusal the core cannot replay.
 //!
 //! The whole write is one `BEGIN IMMEDIATE` transaction. First a locked
 //! `SELECT runtime, model, reasoning_effort WHERE id = ?`: no row →
 //! [`AgentProfileRowWrite::NoSuchAgent`] (the surface's `404`, zero `UPDATE`); a row
 //! whose `runtime` cannot be decoded is a persistence-integrity fault. Then
-//! `admit_public_tuning_edit` against that locked context: a rejection returns
-//! [`AgentProfileRowWrite::TuningRejected`] with zero `UPDATE` and zero announce; an
-//! admitted edit drives the `UPDATE`. Only the columns the admitted edit names are
-//! placed in the `SET` clause — a `Leave` is omitted, a `Clear` writes `NULL`, a
-//! `Set` binds the value — and `updated_at` is always stamped to `now_ms`, so a
-//! committed tuning write always bumps the row's instant (matching
-//! `agent-service.ts`'s always-touch update). The committed columns are projected
-//! from the write's OWN `RETURNING` row — never a post-commit re-read — so the core
-//! seal binds the fact this write produced.
+//! `admit_public_tuning_edit` against that locked context decides only the branch: a
+//! refusal returns [`AgentProfileRowWrite::Unchanged`] carrying the before-image, with
+//! zero `UPDATE` — NOT the rejection itself, which the core re-derives; an admitted
+//! edit drives the `UPDATE`. Only the columns the admitted edit names are placed in
+//! the `SET` clause — a `Leave` is omitted, a `Clear` writes `NULL`, a `Set` binds the
+//! value — and `updated_at` is always stamped to `now_ms`, so a committed tuning write
+//! always bumps the row's instant (matching `agent-service.ts`'s always-touch update).
+//! The committed columns are projected from the write's OWN `RETURNING` row — never a
+//! post-commit re-read — and returned alongside the before-image as
+//! [`AgentProfileRowWrite::Committed`], so the core replay can re-derive the admitted
+//! intent and seal the fact this write produced.
 //!
 //! The clock stays in the application: `now_ms` is passed in, exactly as the other
 //! write stores take it. Every driver error and every committed row whose id cannot
@@ -169,14 +173,16 @@ impl SqliteAgentProfileWrite {
             reasoning_effort: current.try_get("reasoning_effort")?,
         };
 
-        // Replay the ONE pure rule against the locked context. A rejection leaves the
-        // row untouched: no UPDATE is issued, so `updated_at` does not move and the
-        // caller announces nothing.
+        // Replay the ONE pure rule against the locked context to decide the branch. A
+        // rejection leaves the row untouched: no UPDATE is issued, so `updated_at` does
+        // not move. This adapter does NOT return the rejection — the product verdict is
+        // the domain's to re-derive from the before-image witness; it returns only the
+        // WITNESS it read.
         let admitted = match admit_public_tuning_edit(&context, request.clone()) {
             Ok(admitted) => admitted,
-            Err(rejection) => {
+            Err(_rejection) => {
                 tx.commit().await?;
-                return Ok(AgentProfileRowWrite::TuningRejected(rejection));
+                return Ok(AgentProfileRowWrite::Unchanged { before: context });
             }
         };
 
@@ -239,7 +245,7 @@ impl SqliteAgentProfileWrite {
 
         tx.commit().await?;
         Ok(AgentProfileRowWrite::Committed {
-            admitted,
+            before: context,
             row: committed,
         })
     }
@@ -557,10 +563,16 @@ INSERT INTO agents (id, name, display_name, runtime, model, reasoning_effort, ho
             )
             .await
             .unwrap();
-        assert!(
-            matches!(b, AgentProfileRowWrite::TuningRejected(_)),
-            "B must be re-rejected under the lock, got {b:?}"
-        );
+        // Refused under the lock → the adapter writes nothing and reports the LOCKED
+        // before-image it read (codex + `terra` + `high`), NOT a verdict. The domain
+        // replays the rule against this witness to mint the 400; a `terra + ultra` row
+        // is never composed.
+        let AgentProfileRowWrite::Unchanged { before } = b else {
+            panic!("B must report an Unchanged witness under the lock, got {b:?}");
+        };
+        assert_eq!(before.runtime, RuntimeKind::Codex);
+        assert_eq!(before.model.as_deref(), Some("gpt-5.6-terra"));
+        assert_eq!(before.reasoning_effort.as_deref(), Some("high"));
         // Zero UPDATE: model, effort, and the instant are exactly as A left them —
         // the illegal `terra + ultra` combination never reached the row.
         let (_, _, model_b, _, effort_b, updated_b) = stored(&adapter, "agent-3").await;
