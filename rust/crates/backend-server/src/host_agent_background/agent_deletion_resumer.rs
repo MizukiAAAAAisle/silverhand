@@ -39,6 +39,12 @@
 //! the pending entry only when it still holds the exact token that just ran, so a
 //! concurrently-written newer token is driven, never clobbered.
 //!
+//! Full-token identity governs dispatch, not just cleanup: when a re-drive switches to a
+//! superseding token, the host migrates with it. Every iteration derives its host from the
+//! token it is about to run and binds a fence on THAT host's generation, so a re-created
+//! agent whose new marker names a different computer is purged there — never on the host a
+//! prior attempt happened to run against.
+//!
 //! ## Fail-forward, so a lost attempt is safe
 //!
 //! Losing an in-flight attempt to a crash or shutdown is not a lost deletion: the marker
@@ -135,13 +141,6 @@ struct Tracked {
     generations: HashMap<HostId, Generation>,
 }
 
-/// What one iteration of the single-flight loop resolved to before scheduling is decided.
-enum DrivenOutcome {
-    Resolved(ResumeOutcome),
-    /// The captured generation was no longer live at bind time — nothing ran.
-    StaleGeneration,
-}
-
 /// The scheduler's decision for one single-flight iteration, computed under the lock.
 enum FlightStep {
     /// Keep the single-flight lock and drive this token on this generation next.
@@ -197,33 +196,42 @@ impl Tracked {
     }
 
     /// Decide the next single-flight step for `ran` (driven on `ran_conn`) from its
-    /// classified `driven` outcome, mutating the pending/rerun/in_flight book-keeping.
+    /// classified `outcome`, mutating the pending/rerun/in_flight book-keeping.
     ///
     /// A coalesced re-drive owed for this agent is consumed here. Every terminal arm is
     /// identity-guarded: it touches the pending entry ONLY when the map still holds the
     /// exact token that ran, so a concurrently-written newer token is driven instead of
     /// dropped. Releasing arms free the single-flight slot; a redrive keeps it.
+    ///
+    /// A re-drive resolves its generation from the host of the token it will run, not
+    /// from `ran`'s: a superseding token can name a DIFFERENT computer, and driving it on
+    /// `ran`'s host would fence and purge on the wrong daemon. Only the same-token owed
+    /// re-drive and the ladder decision use `ran`'s own generation.
     fn next_flight_step(
         &mut self,
         agent: &AgentId,
-        host: &HostId,
         ran: &AgentDeletionAttempt,
         ran_conn: &str,
-        driven: &DrivenOutcome,
+        outcome: &ResumeOutcome,
     ) -> FlightStep {
         let owed = self.rerun.remove(agent);
-        let current_gen = self.current_connection(host);
         let pending = self.pending.get(agent).cloned();
         let pending_is_ran = pending.as_ref() == Some(ran);
+        // The live generation of `ran`'s own host — for same-token decisions and the ladder.
+        let ran_gen = self.current_connection(ran.host_id());
+        // The live generation of the freshest pending token's host, which may be a
+        // different computer than `ran`'s: its re-drive must fence THAT host's generation.
+        let next_gen = pending
+            .as_ref()
+            .and_then(|next| self.current_connection(next.host_id()));
 
-        match driven {
-            DrivenOutcome::Resolved(ResumeOutcome::Deleted { .. } | ResumeOutcome::Faulted(_)) => {
-                let release =
-                    if matches!(driven, DrivenOutcome::Resolved(ResumeOutcome::Faulted(_))) {
-                        DeletionRunOutcome::Faulted
-                    } else {
-                        DeletionRunOutcome::Completed
-                    };
+        match outcome {
+            ResumeOutcome::Deleted { .. } | ResumeOutcome::Faulted(_) => {
+                let release = if matches!(outcome, ResumeOutcome::Faulted(_)) {
+                    DeletionRunOutcome::Faulted
+                } else {
+                    DeletionRunOutcome::Completed
+                };
                 if pending_is_ran {
                     // This token's row is resolved and it is still the one in memory: the
                     // agent is done, clear everything.
@@ -231,9 +239,9 @@ impl Tracked {
                     self.rerun.remove(agent);
                     self.in_flight.remove(agent);
                     FlightStep::Release(release)
-                } else if let (Some(next), Some(cur)) = (pending, current_gen) {
-                    // A newer token was written while this one ran; drive it rather than
-                    // leaving it un-woken.
+                } else if let (Some(next), Some(cur)) = (pending, next_gen) {
+                    // A newer token was written while this one ran; drive it on its own
+                    // host's generation rather than leaving it un-woken.
                     FlightStep::Redrive {
                         attempt: next,
                         connection_id: cur,
@@ -243,10 +251,10 @@ impl Tracked {
                     FlightStep::Release(release)
                 }
             }
-            DrivenOutcome::Resolved(ResumeOutcome::Superseded) => match (pending, current_gen) {
+            ResumeOutcome::Superseded => match (pending, next_gen) {
                 // Our token lost the marker to a newer one. NEVER clear by agent id: drive
-                // the newer token on the live generation, or wait for it if the host is
-                // currently detached.
+                // the newer token on ITS host's live generation, or wait for it if that
+                // host is currently detached.
                 (Some(next), maybe_cur) if &next != ran => match maybe_cur {
                     Some(cur) => FlightStep::Redrive {
                         attempt: next,
@@ -269,37 +277,33 @@ impl Tracked {
                     FlightStep::Release(DeletionRunOutcome::Superseded)
                 }
             },
-            DrivenOutcome::Resolved(ResumeOutcome::Retry(_)) => match (pending, current_gen) {
-                // A newer token is owed: drive it on the live generation now.
-                (Some(next), Some(cur)) if &next != ran => FlightStep::Redrive {
-                    attempt: next,
-                    connection_id: cur,
+            ResumeOutcome::Retry(_) => match pending {
+                // A newer token is owed: drive it on ITS host's live generation now, or
+                // retain it if that host has detached.
+                Some(next) if &next != ran => match next_gen {
+                    Some(cur) => FlightStep::Redrive {
+                        attempt: next,
+                        connection_id: cur,
+                    },
+                    None => {
+                        self.in_flight.remove(agent);
+                        FlightStep::Release(DeletionRunOutcome::Retained)
+                    }
                 },
                 // Same token, but a coalesced re-drive is owed on a generation this attempt
                 // has not run against yet: re-drive immediately rather than after a delay.
-                (Some(_), Some(cur)) if owed && cur != ran_conn => FlightStep::Redrive {
-                    attempt: ran.clone(),
-                    connection_id: cur,
-                },
-                // Transient on the current generation: back off along the ladder.
-                (Some(_), Some(_)) => {
+                Some(_) if owed && ran_gen.as_deref().is_some_and(|cur| cur != ran_conn) => {
+                    FlightStep::Redrive {
+                        attempt: ran.clone(),
+                        connection_id: ran_gen.expect("ran_gen is Some in this arm"),
+                    }
+                }
+                // Transient on `ran`'s current generation: back off along its ladder.
+                Some(_) if ran_gen.is_some() => {
                     self.in_flight.remove(agent);
                     FlightStep::ArmLadder
                 }
                 // The host detached; retain the marker and wait for it to reattach.
-                _ => {
-                    self.in_flight.remove(agent);
-                    FlightStep::Release(DeletionRunOutcome::Retained)
-                }
-            },
-            DrivenOutcome::StaleGeneration => match (pending, current_gen) {
-                // A live generation owns the host: re-drive the latest pending token there
-                // (the newer one if a trigger overwrote it, else our own).
-                (Some(next), Some(cur)) => FlightStep::Redrive {
-                    attempt: next,
-                    connection_id: cur,
-                },
-                // No live generation: retain and wait for `on_host_ready`.
                 _ => {
                     self.in_flight.remove(agent);
                     FlightStep::Release(DeletionRunOutcome::Retained)
@@ -505,16 +509,17 @@ where
     ///
     /// A marker already in flight coalesces: it records an owed re-drive and returns
     /// immediately, so exactly one owner ever drives an agent and it honors the coalesced
-    /// trigger before releasing. The loop binds a fresh fence each iteration, so a stale
-    /// captured generation re-drives on the live one instead of committing against a
-    /// daemon that no longer owns the host.
+    /// trigger before releasing. Each iteration derives its host from the token it is about
+    /// to run — a re-drive may have switched to a token on a DIFFERENT computer — and binds
+    /// a fresh fence on that host. A stale captured generation does not spin on the
+    /// scheduler ledger: it asks the binder for the host's LIVE generation and re-drives
+    /// there, or releases and waits for `on_host_ready` when the host has detached.
     async fn run_single_flight(
         &self,
         attempt: &AgentDeletionAttempt,
         connection_id: &str,
     ) -> DeletionRunOutcome {
         let agent = attempt.agent_id().clone();
-        let host = attempt.host_id().clone();
         {
             let mut tracked = self.tracked.lock().expect("resumer state");
             if tracked.closed {
@@ -531,14 +536,60 @@ where
         let mut conn = connection_id.to_owned();
 
         loop {
-            let driven = match self.binder.bind(&host, &conn) {
-                Some(fence) => DrivenOutcome::Resolved(
-                    resume_agent_deletion(&self.lifecycle, &fence, &self.residue, &ran).await,
-                ),
-                None => DrivenOutcome::StaleGeneration,
+            // The host follows the token every iteration: a re-drive that switched to a
+            // superseding token on another computer must fence THAT host, never the one a
+            // prior iteration ran against.
+            let host = ran.host_id().clone();
+
+            let Some(fence) = self.binder.bind(&host, &conn) else {
+                // The generation we captured is no longer live. Consult the binder's LIVE
+                // generation — never the scheduler ledger, which can lag a reconnect and
+                // would busy-loop if fed back — for the freshest pending token's host.
+                self.log_stale(&ran);
+                let next = {
+                    let mut tracked = self.tracked.lock().expect("resumer state");
+                    if tracked.closed {
+                        tracked.in_flight.remove(&agent);
+                        return DeletionRunOutcome::Closed;
+                    }
+                    tracked.pending.get(&agent).cloned()
+                };
+                let Some(next) = next else {
+                    // Nothing pending for this agent any more: release and let a durable
+                    // marker, if any, be rediscovered on the next boot.
+                    let mut tracked = self.tracked.lock().expect("resumer state");
+                    tracked.in_flight.remove(&agent);
+                    return DeletionRunOutcome::Retained;
+                };
+                match self.binder.current_generation(next.host_id()) {
+                    Some(live) => {
+                        let mut tracked = self.tracked.lock().expect("resumer state");
+                        if tracked.closed {
+                            tracked.in_flight.remove(&agent);
+                            return DeletionRunOutcome::Closed;
+                        }
+                        // Track the live generation so a later ladder step reasons about the
+                        // same id, then re-drive the freshest token on it. This makes
+                        // progress: the binder just reported this id live, so the next bind
+                        // opens — never the stale conn we entered with.
+                        tracked.adopt_generation(next.host_id(), &live);
+                        ran = next;
+                        conn = live;
+                    }
+                    None => {
+                        // The freshest token's host is detached: keep the durable marker and
+                        // let its `on_host_ready` drive it, rather than spinning.
+                        let mut tracked = self.tracked.lock().expect("resumer state");
+                        tracked.in_flight.remove(&agent);
+                        return DeletionRunOutcome::Retained;
+                    }
+                }
+                continue;
             };
 
-            self.log_driven(&ran, &driven);
+            let outcome =
+                resume_agent_deletion(&self.lifecycle, &fence, &self.residue, &ran).await;
+            self.log_resolved(&ran, &outcome);
 
             let step = {
                 let mut tracked = self.tracked.lock().expect("resumer state");
@@ -548,7 +599,7 @@ where
                     tracked.in_flight.remove(&agent);
                     return DeletionRunOutcome::Closed;
                 }
-                tracked.next_flight_step(&agent, &host, &ran, &conn, &driven)
+                tracked.next_flight_step(&agent, &ran, &conn, &outcome)
             };
 
             match step {
@@ -623,23 +674,23 @@ where
         generation.timer = Some(handle);
     }
 
-    /// Emit the log line for one driven iteration's classified outcome.
-    fn log_driven(&self, attempt: &AgentDeletionAttempt, driven: &DrivenOutcome) {
-        match driven {
-            DrivenOutcome::Resolved(ResumeOutcome::Deleted { residue }) => {
+    /// Emit the log line for one resolved iteration's classified outcome.
+    fn log_resolved(&self, attempt: &AgentDeletionAttempt, outcome: &ResumeOutcome) {
+        match outcome {
+            ResumeOutcome::Deleted { residue } => {
                 self.log_completed(attempt, residue);
             }
-            DrivenOutcome::Resolved(ResumeOutcome::Retry(reason)) => {
+            ResumeOutcome::Retry(reason) => {
                 self.log_retry(attempt, reason);
             }
-            DrivenOutcome::Resolved(ResumeOutcome::Superseded) => {
+            ResumeOutcome::Superseded => {
                 tracing::info!(
                     agent_id = %attempt.agent_id().as_str(),
                     host_id = %attempt.host_id().as_str(),
                     "agent deletion attempt superseded; the marker moved on, dropping this token"
                 );
             }
-            DrivenOutcome::Resolved(ResumeOutcome::Faulted(failure)) => {
+            ResumeOutcome::Faulted(failure) => {
                 tracing::error!(
                     agent_id = %attempt.agent_id().as_str(),
                     host_id = %attempt.host_id().as_str(),
@@ -647,14 +698,16 @@ where
                     "agent deletion hit an internal contract fault; dropping the in-memory token, the durable marker stays for a later boot"
                 );
             }
-            DrivenOutcome::StaleGeneration => {
-                tracing::info!(
-                    agent_id = %attempt.agent_id().as_str(),
-                    host_id = %attempt.host_id().as_str(),
-                    "agent deletion could not fence the captured daemon generation; it was superseded, re-driving on the live one or awaiting a reconnect"
-                );
-            }
         }
+    }
+
+    /// Emit the log line when a captured generation was no longer live at bind time.
+    fn log_stale(&self, attempt: &AgentDeletionAttempt) {
+        tracing::info!(
+            agent_id = %attempt.agent_id().as_str(),
+            host_id = %attempt.host_id().as_str(),
+            "agent deletion could not fence the captured daemon generation; it was superseded, re-driving on the live one or awaiting a reconnect"
+        );
     }
 
     fn log_completed(&self, attempt: &AgentDeletionAttempt, residue: &[ResidueFault]) {
@@ -770,6 +823,7 @@ mod tests {
         pending: Arc<Mutex<Vec<PersistedDeletionIntent>>>,
         complete: Arc<Mutex<CompleteDeletion>>,
         complete_by_started_at: Arc<Mutex<HashMap<i64, CompleteDeletion>>>,
+        host_by_started_at: Arc<Mutex<HashMap<i64, HostId>>>,
         completes: Arc<AtomicUsize>,
     }
 
@@ -779,6 +833,7 @@ mod tests {
                 pending: Arc::new(Mutex::new(pending)),
                 complete: Arc::new(Mutex::new(complete)),
                 complete_by_started_at: Arc::new(Mutex::new(HashMap::new())),
+                host_by_started_at: Arc::new(Mutex::new(HashMap::new())),
                 completes: Arc::new(AtomicUsize::new(0)),
             }
         }
@@ -789,6 +844,15 @@ mod tests {
                 .expect("overrides")
                 .insert(started_at, outcome);
         }
+
+        /// Mint the marker for `started_at` on `host_id` instead of the default `h1`, so a
+        /// re-created agent's newer token can name a different computer.
+        fn pin_host(&self, started_at: i64, host_id: HostId) {
+            self.host_by_started_at
+                .lock()
+                .expect("host overrides")
+                .insert(started_at, host_id);
+        }
     }
 
     impl AgentDeletionLifecyclePort for FakeLifecycle {
@@ -797,9 +861,16 @@ mod tests {
             agent_id: &AgentId,
             started_at: i64,
         ) -> Result<BeginDeletionRecord, PersistenceFailure> {
+            let host_id = self
+                .host_by_started_at
+                .lock()
+                .expect("host overrides")
+                .get(&started_at)
+                .cloned()
+                .unwrap_or_else(|| host("h1"));
             Ok(BeginDeletionRecord::Started(PersistedDeletionIntent {
                 agent_id: agent_id.clone(),
-                host_id: host("h1"),
+                host_id,
                 deletion_started_at: started_at,
             }))
         }
@@ -1325,6 +1396,118 @@ mod tests {
         assert!(
             h.resumer.tracked.lock().expect("state").pending.is_empty(),
             "B's committed token is cleared once it truly completes"
+        );
+    }
+
+    // δ — the cross-host discriminator. A re-created agent's newer token names a DIFFERENT
+    // computer. A is in flight on h1; `try_now(B)` overwrites the pending token with B on
+    // h2 and coalesces. A then loses the marker (`AttemptLost` → Superseded). The owed
+    // re-drive must run B on h2's own generation; a host-fixed loop would carry B's agent
+    // back to h1 and purge the wrong daemon.
+    #[tokio::test(start_paused = true)]
+    async fn a_superseding_token_on_a_new_host_purges_only_its_own_host() {
+        let h = build(vec![], CompleteDeletion::Gone, false);
+        h.daemon.attach("h1", "conn-h1");
+        h.daemon.attach("h2", "conn-h2");
+        // A (started_at 5) lives on h1 and loses the marker; B (started_at 9) lives on h2
+        // and commits.
+        h.lifecycle.pin_host(5, host("h1"));
+        h.lifecycle.pin_host(9, host("h2"));
+        h.lifecycle.pin_complete(5, CompleteDeletion::AttemptLost);
+        h.lifecycle.pin_complete(9, CompleteDeletion::Gone);
+        let a_attempt = attempt_at(&h.lifecycle, "a1", 5).await;
+        let b_attempt = attempt_at(&h.lifecycle, "a1", 9).await;
+        assert_eq!(a_attempt.host_id().as_str(), "h1");
+        assert_eq!(b_attempt.host_id().as_str(), "h2");
+
+        // Block A's purge on h1 while it owns the single-flight lock.
+        h.daemon.arm_gate();
+        let worker = h.resumer.clone();
+        let a = tokio::spawn(async move { worker.try_now(a_attempt).await });
+        settle().await;
+
+        // B's request (the re-created agent, now living on h2) overwrites the pending token
+        // and coalesces (no second runner).
+        assert_eq!(
+            h.resumer.try_now(b_attempt).await,
+            DeletionRunOutcome::AlreadyRunning
+        );
+
+        // Release A: A purges h1 and loses the marker, and the SAME owner drives B on h2 to
+        // completion — no wall-clock time, no reconnect, no third trigger.
+        h.daemon.release_gate();
+        let outcome = a.await.expect("A task");
+
+        assert_eq!(outcome, DeletionRunOutcome::Completed);
+        assert_eq!(
+            h.daemon.frames_to("conn-h1"),
+            1,
+            "only A purged h1; B was never carried to A's host"
+        );
+        assert_eq!(
+            h.daemon.frames_to("conn-h2"),
+            1,
+            "B purged its own host h2"
+        );
+        assert_eq!(
+            h.lifecycle.completes.load(SeqCst),
+            2,
+            "A's lost completion and B's winning completion both ran"
+        );
+    }
+
+    // ε₁ — a stale bind consults the binder's LIVE generation, not the scheduler ledger.
+    // The registry has already moved h1 to conn-B, but the ledger still holds conn-A
+    // because no `on_host_ready(conn-B)` has updated it yet — a legal event window. Driving
+    // on the stale conn-A must re-drive on the binder's live conn-B. Feeding the ledger's
+    // conn-A back (bind None → ledger conn-A → bind None …) would busy-loop with no await.
+    #[tokio::test(start_paused = true)]
+    async fn a_stale_ledger_generation_redrives_on_binder_live_truth() {
+        let h = build(vec![], CompleteDeletion::Gone, false);
+        h.daemon.attach("h1", "conn-B");
+        let attempt = attempt(&h.lifecycle, "a1").await;
+        {
+            let mut tracked = h.resumer.tracked.lock().expect("state");
+            tracked.install_generation(&host("h1"), "conn-A");
+            tracked.pending.insert(agent("a1"), attempt.clone());
+        }
+
+        let outcome = h.resumer.run_single_flight(&attempt, "conn-A").await;
+
+        assert_eq!(outcome, DeletionRunOutcome::Completed);
+        assert_eq!(h.daemon.frames_to("conn-A"), 0, "the dead ledger id gets no frame");
+        assert_eq!(h.daemon.frames_to("conn-B"), 1);
+        assert_eq!(h.lifecycle.completes.load(SeqCst), 1);
+    }
+
+    // ε₂ — a stale bind whose host has no live generation retains without spinning. The
+    // ledger still holds a dead conn-A but the binder reports the host detached: the loop
+    // must release the single-flight and wait for `on_host_ready`, never spin on conn-A.
+    // Under paused time a busy-loop would hang the test; termination is the assertion.
+    #[tokio::test(start_paused = true)]
+    async fn a_stale_bind_with_a_detached_host_retains_without_spinning() {
+        let h = build(vec![], CompleteDeletion::Gone, false);
+        // No connection for h1: the binder's live generation is None.
+        let attempt = attempt(&h.lifecycle, "a1").await;
+        {
+            let mut tracked = h.resumer.tracked.lock().expect("state");
+            tracked.install_generation(&host("h1"), "conn-A");
+            tracked.pending.insert(agent("a1"), attempt.clone());
+        }
+
+        let outcome = h.resumer.run_single_flight(&attempt, "conn-A").await;
+
+        assert_eq!(outcome, DeletionRunOutcome::Retained);
+        assert_eq!(h.daemon.attempts(), 0, "nothing was purged");
+        assert_eq!(h.lifecycle.completes.load(SeqCst), 0);
+        assert!(
+            !h.resumer
+                .tracked
+                .lock()
+                .expect("state")
+                .in_flight
+                .contains(&agent("a1")),
+            "the single-flight slot is released for `on_host_ready` to re-drive"
         );
     }
 }
