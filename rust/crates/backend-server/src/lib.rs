@@ -21,6 +21,7 @@ pub mod ops;
 pub mod password_hasher;
 pub mod runtime_credential;
 pub mod scope_events;
+pub mod scope_runtime_stop;
 pub mod users;
 pub mod workspace_detail;
 pub mod workspace_metadata_write;

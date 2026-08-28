@@ -88,6 +88,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "cold_read"),
     ("backend-core", "host_resources_read"),
     ("backend-core", "policy"),
+    // #task:2227 — exact host + runtime-scope + generation stop capability and its
+    // production owning-host data-plane adapter. It is consumed by the later bulk
+    // stop vertical, not activated as a route in this ticket.
+    ("backend-core", "scope_runtime_stop"),
     ("backend-core", "teardown"),
     ("backend-core", "user_presence_cold_read"),
     ("backend-core", "user_presence_last_seen"),
@@ -130,6 +134,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "users"),
     ("backend-server", "ops"),
     ("backend-server", "password_hasher"),
+    ("backend-server", "scope_runtime_stop"),
     ("backend-server", "workspace_detail"),
     ("backend-server", "workspace_metadata_write"),
     ("backend-server", "workspace_name_availability"),

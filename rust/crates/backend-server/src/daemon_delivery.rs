@@ -27,6 +27,7 @@ use silverhand_backend_core::{
     host_runtime::{
         aftermath::{CustodyEffectFailure, DaemonConnectionControl},
         custody::{HostCredentialLookup, VerifyHostTokenFact, verify_host_token},
+        read::ComputerReadModel,
         rotation::{DaemonRotationAck, DaemonTokenRotationChannel, RotatedTokenDelivery},
     },
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
@@ -77,6 +78,7 @@ use crate::{
         RuntimeStartHandoff, RuntimeStartTransport, RuntimeStopTransport,
     },
     scope_events::ScopeEventHub,
+    scope_runtime_stop::ProductionScopeRuntimeStop,
 };
 
 include!(concat!(env!("OUT_DIR"), "/daemon_admission.rs"));
@@ -168,6 +170,22 @@ impl<C, D, H> DaemonDeliveryRuntime<C, D, H> {
         crate::daemon_events::DaemonRuntimeEventError,
     > {
         self.events.conversation_run_states(conversation)
+    }
+
+    /// The exact-seat stop adapter bound to the persisted host facts and live daemon
+    /// registry owned by this runtime. Neither authority is accepted from the caller,
+    /// so a composition root cannot accidentally splice different host worlds.
+    pub fn scope_runtime_stop(&self) -> ProductionScopeRuntimeStop<H>
+    where
+        H: ComputerReadModel,
+    {
+        ProductionScopeRuntimeStop::new(
+            self.host_credentials.clone(),
+            OwningHostDataPlane {
+                registry: self.registry.clone(),
+            },
+            self.config.command_timeout,
+        )
     }
 }
 
@@ -1077,7 +1095,7 @@ impl DaemonCascadeEffects {
             .map_err(|source| {
                 CustodyEffectFailure::from_source(CascadeDaemonError::Command(source))
             })?;
-        if !valid_runtime_stop_result(&result) {
+        if !crate::scope_runtime_stop::valid_result(&result) {
             return Err(CustodyEffectFailure::from_source(
                 CascadeDaemonError::InvalidRuntimeStopResponse,
             ));
@@ -1412,6 +1430,7 @@ impl DaemonAttachment {
 pub(crate) enum HostDataPlaneCommandKind {
     HostStatus,
     RuntimeCatalog,
+    RuntimeStop,
     ProxyConfigGet,
     ProxyConfigSet,
     RotateToken,
@@ -1420,9 +1439,10 @@ pub(crate) enum HostDataPlaneCommandKind {
 impl HostDataPlaneCommandKind {
     /// Every variant, so the response envelope admits exactly the kinds this face can
     /// send. A variant missing here is not silently tolerated: nothing could answer it.
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::HostStatus,
         Self::RuntimeCatalog,
+        Self::RuntimeStop,
         Self::ProxyConfigGet,
         Self::ProxyConfigSet,
         Self::RotateToken,
@@ -1432,6 +1452,7 @@ impl HostDataPlaneCommandKind {
         match self {
             Self::HostStatus => "host_status",
             Self::RuntimeCatalog => "host_runtime_catalog",
+            Self::RuntimeStop => "runtime_stop",
             Self::ProxyConfigGet => "host_proxy_config_get",
             Self::ProxyConfigSet => "host_proxy_config_set",
             Self::RotateToken => "rotate_token",
@@ -1879,23 +1900,11 @@ impl RuntimeStopTransport for StopTransport {
             )
             .await
             .map_err(StopTransportError::Command)?;
-        if !valid_runtime_stop_result(&result) {
+        if !crate::scope_runtime_stop::valid_result(&result) {
             return Err(StopTransportError::InvalidResponse);
         }
         Ok(())
     }
-}
-
-fn valid_runtime_stop_result(result: &Value) -> bool {
-    let Some(object) = result.as_object() else {
-        return false;
-    };
-    object.len() == 3
-        && object.get("mode").and_then(Value::as_str) == Some("hard")
-        && object.get("stopped").and_then(Value::as_bool).is_some()
-        && object
-            .get("exit_code")
-            .is_some_and(|value| value.is_null() || value.as_i64().is_some())
 }
 
 fn valid_agent_files_purge_result(result: &Value) -> bool {
@@ -3723,7 +3732,7 @@ fn spawn_options(plan: &RuntimeSpawnPlan, token: &str) -> Value {
     Value::Object(object)
 }
 
-fn scope_wire(scope: &RuntimeScope) -> Value {
+pub(crate) fn scope_wire(scope: &RuntimeScope) -> Value {
     match scope {
         RuntimeScope::ConversationSlot { agent, source } => json!({
             "kind": "conversation", "conversation_id": source.as_str(), "agent_id": agent.as_str()
@@ -3892,7 +3901,8 @@ mod tests {
         runtime_credential::{ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime},
     };
     use silverhand_backend_sqlite::{
-        runtime_credential::SqliteRuntimeCustodyStore, runtime_delivery::SqliteRuntimeDeliveryStore,
+        host_runtime::SqliteHostRuntimeStore, runtime_credential::SqliteRuntimeCustodyStore,
+        runtime_delivery::SqliteRuntimeDeliveryStore,
     };
     use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
 
@@ -4078,6 +4088,541 @@ mod tests {
             outcome.expect("captured A must settle without waiting on B"),
             StatusSnapshotOutcome::Disconnected
         ));
+    }
+
+    mod scope_runtime_stop_adapter {
+        use std::{io, thread};
+
+        use silverhand_backend_core::{
+            host_runtime::{
+                computer::{ComputerRecord, HostKind, ProvisioningSource},
+                read::ComputerReadModel,
+            },
+            identity::{AgentId, ConversationId, UserId},
+            scope_runtime_stop::{
+                ScopeRuntimeStopOutcome, ScopeRuntimeStopPort, ScopeRuntimeStopRefusal,
+                ScopeRuntimeStopTarget,
+            },
+        };
+
+        use crate::scope_runtime_stop::{
+            ProductionScopeRuntimeStop, ScopeRuntimeStopFailure, stop_captured,
+        };
+
+        use super::*;
+
+        #[derive(Clone)]
+        struct StopComputerRead {
+            record: Option<ComputerRecord>,
+            fails: bool,
+        }
+
+        impl ComputerReadModel for StopComputerRead {
+            async fn list_for_owner(
+                &self,
+                _owner: UserId,
+            ) -> Result<Vec<ComputerRecord>, PersistenceFailure> {
+                unreachable!("exact-host runtime stop never lists computers")
+            }
+
+            async fn read_computer(
+                &self,
+                _computer: HostId,
+            ) -> Result<Option<ComputerRecord>, PersistenceFailure> {
+                if self.fails {
+                    Err(PersistenceFailure::from_source(io::Error::other(
+                        "host read failed",
+                    )))
+                } else {
+                    Ok(self.record.clone())
+                }
+            }
+        }
+
+        fn computer(
+            id: &str,
+            activated_at: Option<i64>,
+            finalized_at: Option<i64>,
+            revoked_at: Option<i64>,
+        ) -> ComputerRecord {
+            ComputerRecord {
+                id: HostId::parse(id).unwrap(),
+                name: id.to_owned(),
+                kind: HostKind::Remote,
+                created_at: 1,
+                owner: Some(UserId::parse("owner-1").unwrap()),
+                installation_id: None,
+                last_seen_at: None,
+                activated_at,
+                finalized_at,
+                revoked_at,
+                provisioning_source: ProvisioningSource::UserInvite,
+                display_label: None,
+            }
+        }
+
+        fn target(host: &str, scope: RuntimeScope, generation: i64) -> ScopeRuntimeStopTarget {
+            ScopeRuntimeStopTarget::new(
+                HostId::parse(host).unwrap(),
+                scope,
+                silverhand_backend_core::runtime_credential::RuntimeGeneration::new(generation)
+                    .unwrap(),
+            )
+        }
+
+        fn attach(
+            registry: &DaemonRegistry,
+            host: &HostId,
+            instance: DaemonInstanceId,
+            capacity: usize,
+        ) -> (String, mpsc::Receiver<ConnectionControl>) {
+            let (commands, receive) = mpsc::channel(capacity);
+            let (close, _close_receive) = watch::channel(None);
+            let connection = registry.reserve(host.as_str(), commands, close).unwrap();
+            assert!(
+                registry
+                    .attach(
+                        host.as_str(),
+                        &connection,
+                        AttachedDaemon {
+                            daemon_instance: instance,
+                            host_name: host.as_str().to_owned(),
+                        },
+                    )
+                    .unwrap()
+            );
+            (connection, receive)
+        }
+
+        fn plane(registry: &DaemonRegistry) -> OwningHostDataPlane {
+            OwningHostDataPlane {
+                registry: registry.clone(),
+            }
+        }
+
+        fn adapter(
+            record: Option<ComputerRecord>,
+            registry: &DaemonRegistry,
+        ) -> ProductionScopeRuntimeStop<StopComputerRead> {
+            ProductionScopeRuntimeStop::new(
+                StopComputerRead {
+                    record,
+                    fails: false,
+                },
+                plane(registry),
+                Duration::from_secs(10),
+            )
+        }
+
+        async fn receive_runtime_stop(
+            receive: &mut mpsc::Receiver<ConnectionControl>,
+        ) -> CommandRequest {
+            let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
+                panic!("runtime stop must enter the command FIFO")
+            };
+            assert_eq!(command.kind, "runtime_stop");
+            command
+        }
+
+        fn success() -> Value {
+            json!({ "mode": "hard", "stopped": true, "exit_code": 0 })
+        }
+
+        #[tokio::test]
+        async fn exact_host_scope_and_generation_reach_only_the_captured_hosts_fifo() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host_a = HostId::parse("host-a").unwrap();
+            let host_b = HostId::parse("host-b").unwrap();
+            let instance = DaemonInstanceId::parse("same-instance").unwrap();
+            let (_connection_a, mut receive_a) = attach(&registry, &host_a, instance.clone(), 4);
+            let (_connection_b, mut receive_b) = attach(&registry, &host_b, instance, 4);
+            let stop = adapter(Some(computer("host-a", Some(1), Some(2), None)), &registry);
+            let exact = target(
+                "host-a",
+                RuntimeScope::ConversationSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                    source: ConversationId::parse("conversation-a").unwrap(),
+                },
+                17,
+            );
+
+            let call = tokio::spawn(async move { stop.hard_stop(&exact).await });
+            let command = receive_runtime_stop(&mut receive_a).await;
+            assert_eq!(
+                command.params,
+                json!({
+                    "runtime_scope": {
+                        "kind": "conversation",
+                        "conversation_id": "conversation-a",
+                        "agent_id": "agent-a",
+                    },
+                    "runtime_generation": 17,
+                    "mode": "hard",
+                })
+            );
+            assert!(matches!(
+                receive_b.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ));
+            command.response.send(Ok(success())).unwrap();
+            assert_eq!(call.await.unwrap().unwrap(), Ok(ScopeRuntimeStopOutcome));
+        }
+
+        #[tokio::test]
+        async fn agent_slot_keeps_its_exact_shape_and_generation() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host = HostId::parse("host-a").unwrap();
+            let (_connection, mut receive) = attach(
+                &registry,
+                &host,
+                DaemonInstanceId::parse("instance-a").unwrap(),
+                4,
+            );
+            let stop = adapter(Some(computer("host-a", Some(1), Some(2), None)), &registry);
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                23,
+            );
+
+            let call = tokio::spawn(async move { stop.hard_stop(&exact).await });
+            let command = receive_runtime_stop(&mut receive).await;
+            assert_eq!(
+                command.params,
+                json!({
+                    "runtime_scope": { "kind": "agent", "agent_id": "agent-a" },
+                    "runtime_generation": 23,
+                    "mode": "hard",
+                })
+            );
+            command.response.send(Ok(success())).unwrap();
+            assert_eq!(call.await.unwrap().unwrap(), Ok(ScopeRuntimeStopOutcome));
+        }
+
+        #[tokio::test]
+        async fn production_composition_binds_the_sqlite_host_facts_to_its_own_registry() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("scope-runtime-stop.sqlite");
+            let mut database = crate::current_schema::create_current_schema(&path).await;
+            sqlx::query(
+                "INSERT INTO users (id, name, display_name, created_at, updated_at)
+                 VALUES ('owner-1', 'owner-1', 'Owner', 1, 1)",
+            )
+            .execute(&mut database)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO hosts
+                    (id, name, kind, created_at, user_id, activated_at, finalized_at,
+                     provisioning_source)
+                 VALUES ('host-a', 'host-a', 'remote', 1, 'owner-1', 2, 3, 'user_invite')",
+            )
+            .execute(&mut database)
+            .await
+            .unwrap();
+            database.close().await.unwrap();
+
+            let runtime = DaemonDeliveryRuntime::new(
+                RuntimeCredentialAuthority::production(
+                    SqliteRuntimeCustodyStore::open(&path).await.unwrap(),
+                ),
+                SqliteRuntimeDeliveryStore::open(&path).await.unwrap(),
+                SqliteHostRuntimeStore::open(&path).await.unwrap(),
+                DaemonDeliveryConfig::production(),
+                ScopeEventHub::production().unwrap(),
+            )
+            .unwrap();
+            let host = HostId::parse("host-a").unwrap();
+            let (_connection, mut receive) = attach(
+                &runtime.registry,
+                &host,
+                DaemonInstanceId::parse("instance-a").unwrap(),
+                4,
+            );
+            let stop = runtime.scope_runtime_stop();
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                29,
+            );
+
+            let call = tokio::spawn(async move { stop.hard_stop(&exact).await });
+            let command = receive_runtime_stop(&mut receive).await;
+            assert_eq!(command.params["runtime_generation"], 29);
+            command.response.send(Ok(success())).unwrap();
+            assert_eq!(call.await.unwrap().unwrap(), Ok(ScopeRuntimeStopOutcome));
+        }
+
+        #[tokio::test]
+        async fn same_instance_successor_cannot_receive_a_stop_captured_for_its_predecessor() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host = HostId::parse("host-a").unwrap();
+            let instance = DaemonInstanceId::parse("instance-shared").unwrap();
+            let (connection_a, _receive_a) = attach(&registry, &host, instance.clone(), 4);
+            let data_plane = plane(&registry);
+            let captured_a = data_plane.resolve(&host).unwrap().unwrap();
+
+            registry.remove(host.as_str(), &connection_a);
+            let (_connection_b, mut receive_b) = attach(&registry, &host, instance, 4);
+            let outcome = stop_captured(
+                &data_plane,
+                captured_a,
+                &RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                silverhand_backend_core::runtime_credential::RuntimeGeneration::new(31).unwrap(),
+                Duration::from_secs(10),
+            )
+            .await;
+
+            assert_eq!(
+                outcome.unwrap(),
+                Err(ScopeRuntimeStopRefusal::HostAttachPending)
+            );
+            assert!(matches!(
+                receive_b.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ));
+        }
+
+        #[tokio::test]
+        async fn persisted_lifecycle_refusals_short_circuit_before_the_registry() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let poisoned = Arc::clone(&registry.state);
+            let _ = thread::spawn(move || {
+                let _guard = poisoned.lock().unwrap();
+                panic!("poison registry for the discriminator");
+            })
+            .join();
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                1,
+            );
+
+            for (record, expected) in [
+                (None, ScopeRuntimeStopRefusal::HostMissing),
+                (
+                    Some(computer("host-a", None, None, None)),
+                    ScopeRuntimeStopRefusal::HostPendingAttach,
+                ),
+                (
+                    Some(computer("host-a", Some(1), None, None)),
+                    ScopeRuntimeStopRefusal::HostPendingAttach,
+                ),
+                (
+                    Some(computer("host-a", Some(1), Some(2), Some(3))),
+                    ScopeRuntimeStopRefusal::HostRevoked,
+                ),
+            ] {
+                assert_eq!(
+                    adapter(record, &registry).hard_stop(&exact).await.unwrap(),
+                    Err(expected)
+                );
+            }
+
+            assert!(matches!(
+                adapter(Some(computer("host-a", Some(1), Some(2), None)), &registry)
+                    .hard_stop(&exact)
+                    .await,
+                Err(ScopeRuntimeStopFailure::RegistryUnavailable)
+            ));
+        }
+
+        #[tokio::test]
+        async fn active_without_attachment_is_the_only_live_placement_refusal() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                1,
+            );
+            assert_eq!(
+                adapter(Some(computer("host-a", Some(1), Some(2), None)), &registry)
+                    .hard_stop(&exact)
+                    .await
+                    .unwrap(),
+                Err(ScopeRuntimeStopRefusal::HostAttachPending)
+            );
+        }
+
+        #[tokio::test]
+        async fn returned_host_facts_are_bound_to_the_requested_host_before_dispatch() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host = HostId::parse("host-a").unwrap();
+            let (_connection, mut receive) = attach(
+                &registry,
+                &host,
+                DaemonInstanceId::parse("instance-a").unwrap(),
+                4,
+            );
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                1,
+            );
+            let outcome = adapter(Some(computer("host-b", Some(1), Some(2), None)), &registry)
+                .hard_stop(&exact)
+                .await;
+
+            assert!(matches!(
+                outcome,
+                Err(ScopeRuntimeStopFailure::HostFactsMismatch { expected, actual })
+                    if expected.as_str() == "host-a" && actual.as_str() == "host-b"
+            ));
+            assert!(matches!(
+                receive.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ));
+        }
+
+        #[tokio::test]
+        async fn queue_saturation_is_a_hard_not_dispatched_failure() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host = HostId::parse("host-a").unwrap();
+            let (_connection, _receive) = attach(
+                &registry,
+                &host,
+                DaemonInstanceId::parse("instance-a").unwrap(),
+                1,
+            );
+            let attachment = registry.attachment(host.as_str()).unwrap().unwrap();
+            let (response, _receive_response) = oneshot::channel();
+            attachment
+                .commands
+                .try_send(ConnectionControl::Command(CommandRequest {
+                    kind: "host_status",
+                    params: json!({}),
+                    deadline: Instant::now() + Duration::from_secs(60),
+                    response,
+                }))
+                .unwrap();
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                1,
+            );
+
+            assert!(matches!(
+                adapter(Some(computer("host-a", Some(1), Some(2), None)), &registry)
+                    .hard_stop(&exact)
+                    .await,
+                Err(ScopeRuntimeStopFailure::NotDispatched)
+            ));
+        }
+
+        #[tokio::test]
+        async fn daemon_refusal_ambiguous_completion_and_bad_response_are_hard_faults() {
+            #[derive(Clone, Copy)]
+            enum Answer {
+                Refused,
+                Drop,
+                Invalid,
+            }
+
+            for (suffix, answer) in [
+                ("refused", Answer::Refused),
+                ("drop", Answer::Drop),
+                ("invalid", Answer::Invalid),
+            ] {
+                let registry = DaemonRegistry::with_process_epoch(format!("test-epoch-{suffix}"));
+                let host = HostId::parse(format!("host-{suffix}")).unwrap();
+                let (_connection, mut receive) = attach(
+                    &registry,
+                    &host,
+                    DaemonInstanceId::parse(format!("instance-{suffix}")).unwrap(),
+                    4,
+                );
+                let stop = adapter(
+                    Some(computer(host.as_str(), Some(1), Some(2), None)),
+                    &registry,
+                );
+                let exact = target(
+                    host.as_str(),
+                    RuntimeScope::AgentSlot {
+                        agent: AgentId::parse("agent-a").unwrap(),
+                    },
+                    1,
+                );
+                let call = tokio::spawn(async move { stop.hard_stop(&exact).await });
+                let command = receive_runtime_stop(&mut receive).await;
+                match answer {
+                    Answer::Refused => command
+                        .response
+                        .send(Err(CommandDispatchError::DaemonRefused(
+                            CommandRefusal::Response,
+                        )))
+                        .unwrap(),
+                    Answer::Drop => drop(command.response),
+                    Answer::Invalid => command
+                        .response
+                        .send(Ok(json!({
+                            "mode": "hard",
+                            "stopped": true,
+                            "exit_code": 0,
+                            "extra": true,
+                        })))
+                        .unwrap(),
+                }
+                let outcome = call.await.unwrap();
+                assert!(matches!(
+                    (answer, outcome),
+                    (Answer::Refused, Err(ScopeRuntimeStopFailure::DaemonRefused))
+                        | (Answer::Drop, Err(ScopeRuntimeStopFailure::Ambiguous))
+                        | (
+                            Answer::Invalid,
+                            Err(ScopeRuntimeStopFailure::ProtocolCorruption)
+                        )
+                ));
+            }
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn timeout_is_a_hard_fault_not_a_placement_refusal() {
+            let registry = DaemonRegistry::with_process_epoch("test-epoch".to_owned());
+            let host = HostId::parse("host-a").unwrap();
+            let (_connection, mut receive) = attach(
+                &registry,
+                &host,
+                DaemonInstanceId::parse("instance-a").unwrap(),
+                4,
+            );
+            let stop = ProductionScopeRuntimeStop::new(
+                StopComputerRead {
+                    record: Some(computer("host-a", Some(1), Some(2), None)),
+                    fails: false,
+                },
+                plane(&registry),
+                Duration::from_secs(5),
+            );
+            let exact = target(
+                "host-a",
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
+                1,
+            );
+            let call = tokio::spawn(async move { stop.hard_stop(&exact).await });
+            let _held_response = receive_runtime_stop(&mut receive).await.response;
+            tokio::time::advance(Duration::from_secs(5)).await;
+
+            assert!(matches!(
+                call.await.unwrap(),
+                Err(ScopeRuntimeStopFailure::TimedOut)
+            ));
+        }
     }
 
     #[tokio::test]
@@ -4604,6 +5149,7 @@ mod tests {
                 HostDataPlaneCommandKind::RuntimeCatalog,
                 "host_runtime_catalog",
             ),
+            (HostDataPlaneCommandKind::RuntimeStop, "runtime_stop"),
             (
                 HostDataPlaneCommandKind::ProxyConfigGet,
                 "host_proxy_config_get",
