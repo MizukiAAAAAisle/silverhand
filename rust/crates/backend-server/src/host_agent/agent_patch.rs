@@ -79,7 +79,7 @@ use silverhand_backend_core::{
 use crate::clock::ProcessClock;
 use crate::error;
 
-use super::agent_wire::{AgentDto, agent_dto};
+use crate::agent_wire::{AgentDto, reproject_committed_agent};
 
 /// The product route template, in axum's `{id}` capture syntax.
 pub const AGENT_PATCH_PATH: &str = "/api/agents/{id}";
@@ -253,40 +253,16 @@ where
         );
     }
 
-    // PROJECT: re-read the committed row through the canonical projector so the wire
-    // (avatar_url cache-buster included) reflects the just-stamped `updated_at`.
-    let projected = match state.reads.read_agent_detail(&id).await {
-        Ok(Some(detail)) => detail,
-        Ok(None) => {
-            // A concurrent delete raced the projection. The write is durable, but no
-            // trustworthy DTO exists — honest post-commit residue, the safe 500.
-            tracing::error!(
-                agent_id = id.as_str(),
-                "agent-patch committed but the row was gone before it could be projected"
-            );
-            return internal_error();
-        }
-        Err(cause) => {
-            tracing::error!(
-                error_chain = %error::describe(&cause),
-                "agent-patch post-write projection read failed"
-            );
-            return internal_error();
-        }
+    // PROJECT: re-read the committed row through the shared canonical face so the wire
+    // (avatar_url cache-buster included) reflects the just-stamped `updated_at`. Every
+    // post-commit fault — a raced delete, a wrong-row resolve, a read failure — is the
+    // safe 500 the face logs at the boundary.
+    let dto = match reproject_committed_agent(&state.reads, &id).await {
+        Ok(dto) => dto,
+        Err(fault) => return fault.into_safe_500("agent-patch", &id),
     };
-    if projected.source() != &id {
-        tracing::error!(
-            requested = id.as_str(),
-            resolved = projected.source().as_str(),
-            "agent-patch projection resolved for the wrong agent"
-        );
-        return internal_error();
-    }
 
-    Json(AgentUpdateResponse {
-        agent: agent_dto(&projected),
-    })
-    .into_response()
+    Json(AgentUpdateResponse { agent: dto }).into_response()
 }
 
 // ===========================================================================

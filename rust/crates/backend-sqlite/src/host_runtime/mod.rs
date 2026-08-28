@@ -25,6 +25,8 @@ use sqlx::{
 };
 use thiserror::Error;
 
+mod management;
+
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 
 #[derive(Clone)]

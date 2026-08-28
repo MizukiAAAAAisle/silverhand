@@ -121,7 +121,10 @@ pub(super) fn internal_error() -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR_BODY).into_response()
 }
 
-fn placement_refusal(refusal: RuntimePlacementRefusal) -> Response {
+/// The canonical placement-refusal → HTTP `{error, code}` mapper. Made
+/// `pub(crate)` so the agent-scoped bulk stop maps its own placement refusals
+/// through the ONE authority rather than re-minting the status/code vocabulary.
+pub(crate) fn placement_refusal(refusal: RuntimePlacementRefusal) -> Response {
     let (status, code, message) = match refusal {
         RuntimePlacementRefusal::HostMissing => (
             StatusCode::NOT_FOUND,
