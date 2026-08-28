@@ -14,6 +14,7 @@
 //!  - `intent` is the durable deletion-intent lifecycle.
 //!  - `runtime_transition` is the durable runtime-transition lock lifecycle.
 
+mod agent_materialization;
 mod cascade;
 mod decode;
 mod facts;
