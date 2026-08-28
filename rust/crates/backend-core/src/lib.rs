@@ -35,6 +35,7 @@ pub mod policy;
 pub mod runtime_credential;
 pub mod runtime_delivery;
 pub mod runtime_event;
+pub mod runtime_transition;
 pub mod scope_event;
 pub mod scope_runtime_stop;
 pub mod teardown;

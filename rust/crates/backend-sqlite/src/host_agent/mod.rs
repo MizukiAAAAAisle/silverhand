@@ -12,11 +12,13 @@
 //!  - `teardown` owns the single trait surface for the agent write axis.
 //!  - `cascade` is the computer axis the trait delegates to.
 //!  - `intent` is the durable deletion-intent lifecycle.
+//!  - `runtime_transition` is the durable runtime-transition lock lifecycle.
 
 mod cascade;
 mod decode;
 mod facts;
 mod intent;
+mod runtime_transition;
 mod store;
 mod teardown;
 

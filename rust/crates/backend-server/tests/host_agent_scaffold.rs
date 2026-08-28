@@ -111,6 +111,11 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // production owning-host data-plane adapter. It is consumed by the later bulk
     // stop vertical, not activated as a route in this ticket.
     ("backend-core", "scope_runtime_stop"),
+    // #task:2225 — the durable runtime-transition lock (begin/complete/abort) behind
+    // the public runtime-switch route. A distinct write authority from the profile
+    // row writer, keyed on the lock columns; its SQLite adapter rides the existing
+    // `host_agent` store. UNMOUNTED until a later integration.
+    ("backend-core", "runtime_transition"),
     ("backend-core", "teardown"),
     ("backend-core", "user_presence_cold_read"),
     ("backend-core", "user_presence_last_seen"),
