@@ -38,6 +38,7 @@
 use crate::{
     agent_avatar::{
         AgentAvatarAssignment, AgentAvatarBlobPointer, AgentAvatarBlobStore, AgentAvatarRow,
+        OwnedAgentAvatarBlob,
     },
     agent_profile_write::{
         AgentChangedAnnounce, AgentChangedSink, AgentProfileRowWrite, AgentProfileWriteError,
@@ -168,7 +169,7 @@ where
         Ok(write) => write,
         Err(failure) => {
             // Persistence faulted after the put: clean the fresh orphan, carry its fate.
-            let orphan_cleanup = cleanup_agent_blob(blobs, &pointer).await;
+            let orphan_cleanup = cleanup_agent_blob(blobs, subject, &pointer).await;
             return AgentAvatarUploadOutcome::WriteFaulted {
                 cause: AgentProfileWriteError::Persistence(failure),
                 orphan_cleanup,
@@ -178,13 +179,13 @@ where
 
     match write {
         AgentProfileRowWrite::NoSuchAgent => {
-            let orphan_cleanup = cleanup_agent_blob(blobs, &pointer).await;
+            let orphan_cleanup = cleanup_agent_blob(blobs, subject, &pointer).await;
             AgentAvatarUploadOutcome::NoSuchAgent { orphan_cleanup }
         }
         AgentProfileRowWrite::Unchanged { before: _ } => {
             // An upload's decision returns Some, so a write that changed nothing means a
             // warranted write was withheld — an untrustworthy fact. Clean the orphan.
-            let orphan_cleanup = cleanup_agent_blob(blobs, &pointer).await;
+            let orphan_cleanup = cleanup_agent_blob(blobs, subject, &pointer).await;
             AgentAvatarUploadOutcome::WriteFaulted {
                 cause: AgentProfileWriteError::UntrustworthyWriteFact,
                 orphan_cleanup,
@@ -213,7 +214,7 @@ where
             // the committed pointer and is kept.
             let blob_cleanup = match before.avatar {
                 AgentAvatarRow::Present { pointer: prior, .. } => {
-                    cleanup_agent_blob(blobs, &prior).await
+                    cleanup_agent_blob(blobs, subject, &prior).await
                 }
                 AgentAvatarRow::Absent => BlobCleanup::NothingToClean,
             };
@@ -305,7 +306,7 @@ where
             };
             let admitted = admit_avatar_removal();
             seal_agent_row(subject, &before, &admitted, &row, now_ms)?;
-            let blob_cleanup = cleanup_agent_blob(blobs, &prior).await;
+            let blob_cleanup = cleanup_agent_blob(blobs, subject, &prior).await;
             let announce = announce_agent_changed(announce_sink, subject).await;
             Ok(AgentAvatarClearOutcome::Cleared(AnnouncedAgentAvatarWrite {
                 agent_id: row.id,
@@ -322,12 +323,21 @@ where
 
 /// Run the best-effort post-commit blob delete and fold its result into a
 /// [`BlobCleanup`] (a failure is carried, never propagated — the DB pointer is already
-/// authoritative). Mirrors the user path's `cleanup_blob`, over the agent custody.
-async fn cleanup_agent_blob<B>(blobs: &B, pointer: &AgentAvatarBlobPointer) -> BlobCleanup
+/// authoritative). Mirrors the user path's `cleanup_blob`, over the agent custody. The
+/// `owner` is the agent whose lifecycle warrants the delete (the write subject); binding
+/// it means a prior/fresh pointer that has been cross-wired to ANOTHER agent's key is
+/// refused by the adapter rather than deleting that agent's blob — the refusal rides the
+/// carried `BlobCleanup::Failed` fate for the boundary to log.
+async fn cleanup_agent_blob<B>(
+    blobs: &B,
+    owner: &AgentId,
+    pointer: &AgentAvatarBlobPointer,
+) -> BlobCleanup
 where
     B: AgentAvatarBlobStore,
 {
-    match blobs.delete(pointer).await {
+    let owned = OwnedAgentAvatarBlob::new(owner.clone(), pointer.clone());
+    match blobs.delete(&owned).await {
         Ok(()) => BlobCleanup::Deleted,
         Err(failure) => BlobCleanup::Failed(failure),
     }
@@ -349,7 +359,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        agent_avatar::AgentAvatarBlobRead,
+        agent_avatar::{AgentAvatarBlobRead, OwnedAgentAvatarBlob},
         agent_profile_write::{
             AdmittedAgentProfileEdit, AgentChangedAnnounceFailure, AgentRowBefore,
             AgentTuningContext, CommittedAgentRow,
@@ -410,7 +420,7 @@ mod tests {
     impl AgentAvatarBlobRead for FakeBlobs {
         async fn read(
             &self,
-            _pointer: &AgentAvatarBlobPointer,
+            _blob: &OwnedAgentAvatarBlob,
         ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
             Ok(AvatarBlobReadOutcome::Missing)
         }
@@ -428,8 +438,11 @@ mod tests {
             Ok(ptr(&format!("agents/mint/blob-{n}")))
         }
 
-        async fn delete(&self, pointer: &AgentAvatarBlobPointer) -> Result<(), AvatarStorageFailure> {
-            self.deletes.lock().unwrap().push(pointer.as_str().to_owned());
+        async fn delete(&self, blob: &OwnedAgentAvatarBlob) -> Result<(), AvatarStorageFailure> {
+            self.deletes
+                .lock()
+                .unwrap()
+                .push(blob.pointer().as_str().to_owned());
             if self.fail_delete {
                 #[derive(Debug, Error)]
                 #[error("blob backend down")]

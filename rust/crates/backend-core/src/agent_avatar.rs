@@ -93,15 +93,47 @@ impl AgentAvatarBlobPointer {
     }
 }
 
-/// The narrow READ capability for agent avatar blobs, keyed by the agent-owned
-/// [`AgentAvatarBlobPointer`]. It is deliberately read-only and agent-specific: the
+/// An agent avatar blob coordinate BOUND to the agent that owns it. The read and delete
+/// capabilities accept ONLY this — never a bare [`AgentAvatarBlobPointer`] — so custody is
+/// carried by the value, not asserted by a convention at the call site. A bare pointer is
+/// a "some agent's key" token; this pairs it with the SPECIFIC owner whose row (or `put`
+/// subject) produced it. The production adapter verifies the physical key lies in THIS
+/// owner's namespace before it touches the store, so a cross-wired or corrupted
+/// `agents.avatar_storage_key` holding another agent's OTHERWISE-legal key can never read
+/// or delete that agent's blob through this custody.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OwnedAgentAvatarBlob {
+    owner: AgentId,
+    pointer: AgentAvatarBlobPointer,
+}
+
+impl OwnedAgentAvatarBlob {
+    /// Bind `pointer` to the `owner` agent that vouches for it (the requested id on a
+    /// serve, the write subject on a cleanup). The binding is a CLAIM the adapter must
+    /// verify against the physical key; this constructor does not itself parse paths.
+    pub fn new(owner: AgentId, pointer: AgentAvatarBlobPointer) -> Self {
+        Self { owner, pointer }
+    }
+
+    pub fn owner(&self) -> &AgentId {
+        &self.owner
+    }
+
+    pub fn pointer(&self) -> &AgentAvatarBlobPointer {
+        &self.pointer
+    }
+}
+
+/// The narrow READ capability for agent avatar blobs, keyed by the owner-bound
+/// [`OwnedAgentAvatarBlob`]. It is deliberately read-only and agent-specific: the
 /// byte fetch never mints or deletes, and never sees the user pointer. The
-/// production adapter shares its key→bytes plumbing with the user read, but the
-/// domain capability is its own.
+/// production adapter shares its key→bytes plumbing with the user read, but it
+/// verifies the key belongs to the bound owner BEFORE reading, so the domain
+/// capability is its own and its custody is per-owner, not merely per-family.
 pub trait AgentAvatarBlobRead: Clone + Send + Sync + 'static {
     fn read(
         &self,
-        pointer: &AgentAvatarBlobPointer,
+        blob: &OwnedAgentAvatarBlob,
     ) -> impl Future<Output = Result<AvatarBlobReadOutcome, AvatarStorageFailure>> + Send;
 }
 
@@ -123,12 +155,14 @@ pub trait AgentAvatarBlobStore: AgentAvatarBlobRead {
         bytes: Vec<u8>,
     ) -> impl Future<Output = Result<AgentAvatarBlobPointer, AvatarStorageFailure>> + Send;
 
-    /// Best-effort delete. A failure never flips an already-committed pointer write
-    /// (the DB pointer is authoritative), but the orchestration CARRIES its fate for
-    /// the boundary to log rather than dropping it.
+    /// Best-effort delete of an OWNER-BOUND blob. A failure never flips an
+    /// already-committed pointer write (the DB pointer is authoritative), but the
+    /// orchestration CARRIES its fate for the boundary to log rather than dropping it. A
+    /// key outside the bound owner's namespace is REFUSED before the store is touched, so
+    /// a cross-wired pointer can never delete another agent's blob.
     fn delete(
         &self,
-        pointer: &AgentAvatarBlobPointer,
+        blob: &OwnedAgentAvatarBlob,
     ) -> impl Future<Output = Result<(), AvatarStorageFailure>> + Send;
 }
 
@@ -310,7 +344,11 @@ where
             content_type,
         } => (pointer, content_type),
     };
-    match blobs.read(&pointer).await {
+    // Bind the pointer to the requested (== source) owner: the adapter verifies the
+    // physical key lies in THIS agent's namespace before reading, so a cross-wired key
+    // inside A's own row that physically addresses B's blob is refused, not served.
+    let owned = OwnedAgentAvatarBlob::new(agent.clone(), pointer);
+    match blobs.read(&owned).await {
         Ok(AvatarBlobReadOutcome::Found(bytes)) => Ok(AgentAvatarFetchOutcome::Found {
             bytes,
             content_type,
@@ -321,7 +359,7 @@ where
         // NOT the product 404 an absent pointer gets.
         Ok(AvatarBlobReadOutcome::Missing) => Ok(AgentAvatarFetchOutcome::StorageUnavailable {
             cause: AvatarStorageFailure::from_source(DanglingAgentAvatarBlob(
-                pointer.as_str().to_owned(),
+                owned.pointer().as_str().to_owned(),
             )),
         }),
         Err(cause) => Ok(AgentAvatarFetchOutcome::StorageUnavailable { cause }),
@@ -451,7 +489,7 @@ mod tests {
     impl AgentAvatarBlobRead for FakeBlob {
         async fn read(
             &self,
-            _pointer: &AgentAvatarBlobPointer,
+            _blob: &OwnedAgentAvatarBlob,
         ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
             self.read.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if self.fail {

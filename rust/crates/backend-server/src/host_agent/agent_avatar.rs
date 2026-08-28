@@ -241,6 +241,7 @@ mod tests {
     use silverhand_backend_core::{
         agent_avatar::{
             AgentAvatarBlobPointer, AgentAvatarBlobRead, AgentAvatarRow, AgentAvatarServeRef,
+            OwnedAgentAvatarBlob,
         },
         agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         agent_lifecycle::MaterializationStatus,
@@ -402,7 +403,7 @@ mod tests {
     impl AgentAvatarBlobRead for FakeBlob {
         async fn read(
             &self,
-            _pointer: &AgentAvatarBlobPointer,
+            _blob: &OwnedAgentAvatarBlob,
         ) -> Result<AvatarBlobReadOutcome, AvatarStorageFailure> {
             self.calls.fetch_add(1, SeqCst);
             if self.fail {
