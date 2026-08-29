@@ -30,13 +30,16 @@ use silverhand_backend_filesystem::{
     blob_store::LocalBlobStore, runtime_detection::MachineRuntimeDetector,
 };
 use silverhand_backend_server::{
-    access,
+    access, agent_name_availability,
     auth::{PublicJsonUnauthorized, require_human_session},
     avatar_blob::SingleKindAvatarBlobs,
     clock::SystemProcessClock,
     daemon_delivery::{DaemonDeliveryController, DaemonDeliveryRuntime},
     direct_pairs,
-    host_agent::{agent_detail, agent_list, agent_presence, availability},
+    host_agent::{
+        agent_avatar, agent_avatar_write, agent_detail, agent_list, agent_patch, agent_presence,
+        availability,
+    },
     host_agent_background::presence_grace_timer::PresenceGraceTimers,
     host_control::management::{self, update::ScopeEventHostLabelChange},
     host_resources, host_runtime,
@@ -77,9 +80,11 @@ use silverhand_backend_server::{
 use silverhand_backend_sqlite::{
     access::SqliteAccessStore,
     agent_availability_read::SqliteAgentAvailabilityColdRead,
+    agent_avatar_read::SqliteAgentAvatarRead,
     agent_detail_read::SqliteAgentDetailColdRead,
     agent_list_read::SqliteAgentListColdRead,
     agent_presence_read::SqliteAgentPresenceColdRead,
+    agent_profile_write::SqliteAgentProfileWrite,
     auth::SqliteSessionStore,
     computer_agents_read::SqliteComputerAgentsRead,
     credential::SqliteCredentialStore,
@@ -492,6 +497,18 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         SqliteAgentPresenceColdRead::open(&config.database_path),
     )
     .await?;
+    // #2234 CP2 — the profile-write unit-of-work shared by `PATCH /api/agents/{id}` and
+    // both avatar writes, and the avatar serve-ref read for `GET /api/agents/{id}/avatar`.
+    let agent_profile_write = open(
+        "agent profile write",
+        SqliteAgentProfileWrite::open(&config.database_path),
+    )
+    .await?;
+    let agent_avatar_read = open(
+        "agent avatar read",
+        SqliteAgentAvatarRead::open(&config.database_path),
+    )
+    .await?;
     let presence_cold_read = open(
         "presence cold read",
         SqliteUserPresenceColdRead::open(&config.database_path),
@@ -834,7 +851,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // authority the outer perimeter uses.
     let human_auth_router = human_auth::router(
         HumanAuthDeps {
-            handles: handle_namespace,
+            handles: handle_namespace.clone(),
             emails: user_store.clone(),
             hasher: SpawnBlockingHasher::new(Argon2idPasswordHasher::production(OsEntropy)),
             registration: human_registration,
@@ -861,7 +878,11 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // contract names. Like `human_auth`, `users::router` self-applies
     // `require_human_session` (all four routes are behind it), so it mounts at the TOP
     // LEVEL, not inside `human_products`.
-    let avatar_blobs = SingleKindAvatarBlobs::new(blob_store, StorageKind::Local);
+    let avatar_blobs = SingleKindAvatarBlobs::new(blob_store.clone(), StorageKind::Local);
+    // #2234 CP2 — the ONE avatar-blob root the three agent-avatar faces share (GET
+    // serve, POST upload, DELETE clear), over the SAME `LocalBlobStore` the human
+    // avatar family uses, under the ambient `StorageKind::Local`.
+    let agent_avatar_blobs = SingleKindAvatarBlobs::new(blob_store, StorageKind::Local);
     let users_router = users::router(
         UsersDeps {
             directory: user_store.clone(),
@@ -906,10 +927,36 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
                 agent_availability_cold_read,
                 daemon_controller.clone(),
             ))
-            .merge(agent_detail::router(agent_detail_cold_read))
+            .merge(agent_detail::router(agent_detail_cold_read.clone()))
             .merge(agent_list::router(agent_list_cold_read))
             .merge(agent_presence::router(
                 agent_presence_cold_read,
+                SystemProcessClock,
+            ))
+            // #2234 CP2 — the thin public-agent write faces (#2225), behind the SAME
+            // `require_human_session` perimeter as the agent read routes above. PATCH and
+            // both avatar writes share ONE `SqliteAgentProfileWrite` authority and the ONE
+            // production `agent_changed` hub sink; all three avatar faces (GET serve +
+            // POST upload + DELETE clear) share ONE `SingleKindAvatarBlobs` root over the
+            // ONE `LocalBlobStore`. PATCH accumulates onto the `/api/agents/{id}` node the
+            // GET detail route owns (disjoint methods merge; GET stays the detail handler).
+            .merge(agent_name_availability::router(handle_namespace))
+            .merge(agent_patch::router(
+                agent_detail_cold_read.clone(),
+                agent_profile_write.clone(),
+                hub.agent_changed_sink(),
+                SystemProcessClock,
+            ))
+            .merge(agent_avatar::router(
+                agent_detail_cold_read.clone(),
+                agent_avatar_read,
+                agent_avatar_blobs.clone(),
+            ))
+            .merge(agent_avatar_write::router(
+                agent_detail_cold_read,
+                agent_profile_write,
+                agent_avatar_blobs,
+                hub.agent_changed_sink(),
                 SystemProcessClock,
             ))
             .merge(channel_directory::router(channel_directory_read))
@@ -1598,6 +1645,42 @@ mod tests {
         let mut response = Vec::new();
         client.read_to_end(&mut response).await.unwrap();
         String::from_utf8(response).unwrap()
+    }
+
+    /// Like [`http_over_tcp`] but carries an explicit `Content-Type` and a RAW byte
+    /// body, and returns the whole response as bytes — so a multipart upload and a
+    /// binary avatar-serve response both round-trip without a lossy UTF-8 coercion.
+    async fn http_over_tcp_typed(
+        address: SocketAddr,
+        method: &str,
+        path: &str,
+        bearer: Option<&str>,
+        content_type: &str,
+        body: &[u8],
+    ) -> Vec<u8> {
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+        let authorization = bearer
+            .map(|value| format!("Authorization: {value}\r\n"))
+            .unwrap_or_default();
+        let head = format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{authorization}Content-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        client.write_all(head.as_bytes()).await.unwrap();
+        client.write_all(body).await.unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.unwrap();
+        response
+    }
+
+    /// Split a raw HTTP response into its (lossy-decoded) head and its raw body bytes.
+    fn split_http_response(response: &[u8]) -> (String, Vec<u8>) {
+        let separator = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("an HTTP response has a header/body separator");
+        let head = String::from_utf8_lossy(&response[..separator]).into_owned();
+        (head, response[separator + 4..].to_vec())
     }
 
     #[test]
@@ -3450,16 +3533,16 @@ mod tests {
 
     /// Gate 2 of the CP2 convergence closure — the #2195 host-agent control-plane lane
     /// as a bidirectionally CLOSED universe of 54, every entry itemized `(method, path)`
-    /// in a named table that is mechanically checksummed: the five tables' lengths are
-    /// pinned (`20`/`4`/`26`/`3`/`1`), every `(method, path)` across the union is unique,
+    /// in a named table that is mechanically checksummed: the four tables' lengths are
+    /// pinned (`25`/`4`/`23`/`2`), every `(method, path)` across the union is unique,
     /// landed is disjoint from residual, and the union is exactly `54`. This is the
     /// lane's ORIGINAL owned total (it still counts the three dynamic host reads since
     /// handed to #2198). Deleting a row, or copying one between tables, breaks the
-    /// checksum — `(20 + 4) + (26 + 3 + 1) == 54` is an assertion, not prose.
+    /// checksum — `(25 + 4) + (23 + 2) == 54` is an assertion, not prose.
     ///
-    /// Every one of the 30 residual routes is FALSIFIABLE — none rests on an
+    /// Every one of the 25 residual routes is FALSIFIABLE — none rests on an
     /// unfalsifiable anon `401`:
-    /// * The 20 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
+    /// * The 25 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
     ///   perimeter → anon `401` (includes #2218's authenticated `/api/runtimes`, three of
     ///   #2219's four host-custody routes: list, claim-or-create, and
     ///   `{id}/rotate-token`; the fourth, `connect-token/resolve`, is allowlisted and
@@ -3467,7 +3550,9 @@ mod tests {
     ///   `GET /api/hosts/{id}`, revoke, connect-token rotate, and delete
     ///   `DELETE /api/hosts/{id}`; and the six #2234 CP1 host-management routes: update
     ///   `PATCH /api/hosts/{id}`, disconnect, proxy-config `GET`+`PUT`, runtime-catalog
-    ///   and status).
+    ///   and status; and the five #2234 CP2 public-agent thin faces: name-availability
+    ///   `GET /api/agents/name-availability`, `PATCH /api/agents/{id}`, and the three
+    ///   avatar faces `GET`+`POST`+`DELETE /api/agents/{id}/avatar`).
     ///   Deleting any one's `.merge(...)` flips it to `404` and reddens this gate
     ///   (delete-landed RED).
     /// * The 4 ANON-LANDED routes are mounted ahead of every perimeter → an anonymous
@@ -3478,31 +3563,26 @@ mod tests {
     ///   whose `error_code` body (asserted after the loop) proves it landed anonymously and
     ///   not behind the perimeter. Neither the guarded (bodiless) `401` nor the absent
     ///   `404`. Deleting any one's `.merge(...)` flips it to `404` and reddens this gate.
-    /// * 26 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
+    /// * 23 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
     ///   Mounting any one flips it to its perimeter's `401`/`405` and reddens this gate
     ///   (mount-residual RED).
-    /// * 3 METHOD-SHADOW residuals share a concrete path with a mounted sibling that
-    ///   answers a DIFFERENT method (the three `/api/agents` methods).
+    /// * 2 METHOD-SHADOW residuals share a concrete path with a mounted sibling that
+    ///   answers a DIFFERENT method (`POST /api/agents` behind the mounted `GET`, and
+    ///   `DELETE /api/agents/{id}` behind the mounted `GET`+`PATCH`).
     ///   Probed anonymously the perimeter's `.layer` answers
     ///   `401` before method dispatch (indistinguishable from mounted), so this gate
     ///   probes them AUTHENTICATED (real seeded bearer): the perimeter passes and the
     ///   path's `MethodRouter` bears the truth → `405 METHOD_NOT_ALLOWED`. Mis-mounting
     ///   the residual method flips its answer to a handler status and reddens this gate.
-    /// * 1 STATIC-SHADOW residual (`GET /api/agents/name-availability`) collides with the
-    ///   mounted dynamic `GET /api/agents/{id}`. Probed AUTHENTICATED with a valid query,
-    ///   it falls through to that detail route's byte-exact absent answer
-    ///   (`404 {"error":"agent not found"}`). A real static `name-availability` registrar
-    ///   would take axum's static-segment priority over `{id}` and answer with its own
-    ///   payload, reddening this exact-body assert.
     ///
-    /// RESIDUAL routes are NEVER implemented in this lane — they are disproved (404, 405,
-    /// or the detail-route fallthrough), not built. A new registrar mounted into
+    /// RESIDUAL routes are NEVER implemented in this lane — they are disproved (404 or
+    /// 405), not built. A new registrar mounted into
     /// `prepare()` at any of these paths MUST move its row from residual to landed here
     /// (#2218 moved `/api/runtimes` to perimeter-landed and the three root faces to
     /// anon-landed).
     #[tokio::test]
     async fn the_host_agent_lane_stays_a_closed_universe_of_fifty_four() {
-        // The 20 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
+        // The 25 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
         // perimeter → anon 401.
         const LANDED: &[(&str, &str)] = &[
             ("GET", "/api/agents"),
@@ -3549,6 +3629,19 @@ mod tests {
             ("PUT", "/api/hosts/host-1/proxy-config"),
             ("GET", "/api/hosts/host-1/runtime-catalog"),
             ("GET", "/api/hosts/host-1/status"),
+            // Public-agent thin faces CP2, #2234 (#2225): mounted behind the human
+            // perimeter → anon 401. `name-availability` is now a REAL static route (it
+            // wins axum's static priority over `{id}`, so it is no longer a static-shadow
+            // residual); `PATCH /api/agents/{id}` accumulates onto the GET-detail `{id}`
+            // node (its authenticated GET-vs-PATCH dispatch is borne by the dedicated
+            // `/api/agents/{id}` shared-node gate below), so it is no longer a
+            // method-shadow residual; the three avatar faces are mounted on the
+            // `/api/agents/{id}/avatar` node (GET serve + POST upload + DELETE clear).
+            ("GET", "/api/agents/name-availability"),
+            ("PATCH", "/api/agents/agent-1"),
+            ("GET", "/api/agents/agent-1/avatar"),
+            ("POST", "/api/agents/agent-1/avatar"),
+            ("DELETE", "/api/agents/agent-1/avatar"),
         ];
         // The 4 ANON-LANDED routes: mounted ahead of every perimeter, so an anonymous
         // probe reaches the handler. #2218's server/info and health answer 200; readyz
@@ -3567,7 +3660,7 @@ mod tests {
                 StatusCode::UNAUTHORIZED,
             ),
         ];
-        // 26 RESIDUAL routes whose path matches no mounted route → anon 404.
+        // 23 RESIDUAL routes whose path matches no mounted route → anon 404.
         const CLEAN_RESIDUAL: &[(&str, &str)] = &[
             // routes.ts remaining (1)
             ("POST", "/auth/embedded-bootstrap"),
@@ -3575,13 +3668,11 @@ mod tests {
             // #2219, detail/revoke/connect-token-rotate/delete by #2223 CP5, and
             // disconnect/proxy-config(GET+PUT)/runtime-catalog/status + `PATCH /api/hosts/{id}`
             // by #2234 CP1 — all now perimeter-landed above)
-            // agents residual (16 of 20; name-availability, POST /api/agents,
-            // PATCH/DELETE /api/agents/{id} are shadowed, below)
+            // agents residual (13 of 20; name-availability + PATCH /api/agents/{id} are
+            // now perimeter-landed by #2234 CP2; the three avatar faces likewise; POST
+            // /api/agents and DELETE /api/agents/{id} remain method-shadowed, below)
             ("PUT", "/api/agents/agent-1/runtime"),
             ("POST", "/api/agents/agent-1/clear-session"),
-            ("POST", "/api/agents/agent-1/avatar"),
-            ("DELETE", "/api/agents/agent-1/avatar"),
-            ("GET", "/api/agents/agent-1/avatar"),
             ("GET", "/api/agents/agent-1/workspace/tree"),
             ("GET", "/api/agents/agent-1/workspace/file"),
             ("GET", "/api/agents/agent-1/profile/mcp"),
@@ -3606,25 +3697,19 @@ mod tests {
             // diagnostic (1)
             ("POST", "/internal/agents/agent-1/cli-trace"),
         ];
-        // 3 METHOD-SHADOW residuals: the path is mounted for a DIFFERENT method, so an
+        // 2 METHOD-SHADOW residuals: the path is mounted for a DIFFERENT method, so an
         // authenticated probe of the residual method hits the `MethodRouter` → 405.
         const METHOD_SHADOW_RESIDUAL: &[(&str, &str)] = &[
             ("POST", "/api/agents"),           // ← GET /api/agents (mounted)
-            ("PATCH", "/api/agents/agent-1"),  // ← GET /api/agents/{id} (mounted)
-            ("DELETE", "/api/agents/agent-1"), // ← GET /api/agents/{id} (mounted)
+            ("DELETE", "/api/agents/agent-1"), // ← GET+PATCH /api/agents/{id} (mounted)
         ];
-        // 1 STATIC-SHADOW residual: collides with the mounted dynamic `GET
-        // /api/agents/{id}`; an authenticated probe falls through to that route's absent
-        // answer (asserted below), not a static handler.
-        const STATIC_SHADOW_RESIDUAL: &[(&str, &str)] = &[("GET", "/api/agents/name-availability")];
 
-        // ── Mechanical checksum: (20 + 4) + (26 + 3 + 1) == 54, all unique, landed ∩
+        // ── Mechanical checksum: (25 + 4) + (23 + 2) == 54, all unique, landed ∩
         // residual = ∅ ──
-        assert_eq!(LANDED.len(), 20);
+        assert_eq!(LANDED.len(), 25);
         assert_eq!(ANON_LANDED.len(), 4);
-        assert_eq!(CLEAN_RESIDUAL.len(), 26);
-        assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 3);
-        assert_eq!(STATIC_SHADOW_RESIDUAL.len(), 1);
+        assert_eq!(CLEAN_RESIDUAL.len(), 23);
+        assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 2);
         let landed: std::collections::HashSet<(&str, &str)> = LANDED
             .iter()
             .copied()
@@ -3633,11 +3718,10 @@ mod tests {
         let residual: std::collections::HashSet<(&str, &str)> = CLEAN_RESIDUAL
             .iter()
             .chain(METHOD_SHADOW_RESIDUAL)
-            .chain(STATIC_SHADOW_RESIDUAL)
             .copied()
             .collect();
-        assert_eq!(landed.len(), 24, "landed rows are unique");
-        assert_eq!(residual.len(), 30, "residual rows are unique");
+        assert_eq!(landed.len(), 29, "landed rows are unique");
+        assert_eq!(residual.len(), 25, "residual rows are unique");
         assert!(
             landed.is_disjoint(&residual),
             "landed and residual are disjoint"
@@ -3655,7 +3739,7 @@ mod tests {
         let bearer = format!("Bearer {TOKEN}");
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // ── 20 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
+        // ── 25 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
         for (method, path) in LANDED {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(
@@ -3684,7 +3768,7 @@ mod tests {
             "anon resolve reaches its own handler, not the perimeter"
         );
 
-        // ── 26 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
+        // ── 23 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
         for (method, path) in CLEAN_RESIDUAL {
             let (status, _) = request(&router, method, path, None).await;
             assert_eq!(
@@ -3694,7 +3778,7 @@ mod tests {
             );
         }
 
-        // ── 3 METHOD-SHADOW RESIDUAL → AUTHENTICATED 405 (perimeter passes, the path's
+        // ── 2 METHOD-SHADOW RESIDUAL → AUTHENTICATED 405 (perimeter passes, the path's
         // MethodRouter bears the truth). Mis-mounting the residual method reddens this. ──
         for (method, path) in METHOD_SHADOW_RESIDUAL {
             let (status, body) = request(&router, method, path, Some(&bearer)).await;
@@ -3704,23 +3788,6 @@ mod tests {
                 "method-shadow residual {method} {path} must be method-unmounted (405): {body}"
             );
         }
-
-        // ── 1 STATIC-SHADOW RESIDUAL → AUTHENTICATED, valid query, falls through to the
-        // dynamic `GET /api/agents/{id}` detail route's byte-exact absent answer. A static
-        // `name-availability` registrar would win axum's static priority and answer
-        // otherwise, reddening this exact-body assert (static-mount RED). ──
-        let (status, body) = request(
-            &router,
-            "GET",
-            "/api/agents/name-availability?name=fresh-name",
-            Some(&bearer),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "static-shadow: {body}");
-        assert_eq!(
-            body, r#"{"error":"agent not found"}"#,
-            "static-shadow falls through to GET /api/agents/{{id}}, not a static route"
-        );
     }
 
     /// #2219: `/api/hosts` carries TWO methods on one path — `GET` (the newly mounted
@@ -4072,6 +4139,294 @@ mod tests {
             1,
             "the rename must publish exactly one app-scope event (only h-mgmt's agent), \
              not one per owner-agent: before={app_high_water_before} after={app_high_water_after}"
+        );
+
+        socket.close(None).await.unwrap();
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+    }
+
+    /// #2234 CP2 — the thin public-agent write faces (#2225) are MOUNTED and reachable,
+    /// and the shared-authority contract Cindy named is proven by real effect, not by
+    /// construction alone (the A6 no-op-mount lesson §3):
+    ///
+    ///  - `PATCH /api/agents/{id}` reaches the real profile-write authority (a durable
+    ///    `display_name` change, read back through the shared `/api/agents/{id}` GET)
+    ///    and publishes exactly one `agent_changed` on the ONE production hub;
+    ///  - the three avatar faces (`GET`+`POST`+`DELETE /api/agents/{id}/avatar`) ride the
+    ///    ONE `SingleKindAvatarBlobs` root through a genuine upload→read→clear closed
+    ///    loop — the bytes POSTed come back byte-identical on GET, then the DELETE clears
+    ///    them and the same GET becomes the `avatar not found` 404 — and the upload and
+    ///    the clear each publish exactly one `agent_changed` on that SAME hub;
+    ///  - the shared `/api/agents/{id}` node still dispatches GET to the detail handler
+    ///    (PATCH accumulated its method onto the node; it did not shadow the GET);
+    ///  - `GET /api/agents/name-availability` reaches the real handle namespace — the
+    ///    STATIC segment wins over the `{id}` template, so it is the availability probe,
+    ///    never the detail route's `agent not found`.
+    ///
+    /// The per-mutation app-scope high-water delta is the falsifier for a silent no-op
+    /// mount: were any write face left unmounted (or wired to a dead sink), its delta
+    /// would be 0; the durable read-backs prove the write authority itself was consulted.
+    #[tokio::test]
+    async fn the_composition_agent_write_faces_share_one_profile_authority_and_avatar_root() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let pool = SqlitePoolOptions::new()
+            .connect(fixture.path.to_str().unwrap())
+            .await
+            .unwrap();
+        // One creator-visible, ACTIVE agent `user-1` may edit — the single subject every
+        // CP2 face resolves. `materialization_status = 'active'` satisfies the
+        // active-only visibility view each face reads (see `seed_presence_agents`); the
+        // creator arm (`created_by_user_id = 'user-1'`) satisfies the edit authority.
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id) VALUES ('h-cp2', 'host-cp2', 'remote', 1, 'user-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, created_by_user_id, materialization_status) \
+             VALUES ('a-cp2', 'agent-cp2', 'qoder', 'h-cp2', 1, 1, 'user-1', 'active')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+
+        // Subscribe to the APP scope on the real production event WebSocket FIRST, so no
+        // `agent_changed` frame can slip past a late subscription (fresh-subscription
+        // high-water; A6 lesson §2).
+        let mut websocket_request = format!("ws://{address}{EVENT_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        websocket_request
+            .headers_mut()
+            .insert(ORIGIN, "http://localhost:5173".parse().unwrap());
+        websocket_request.headers_mut().insert(
+            COOKIE,
+            format!("{EVENT_WS_SESSION_COOKIE}={TOKEN}")
+                .parse()
+                .unwrap(),
+        );
+        websocket_request
+            .headers_mut()
+            .insert(DESKTOP_API_EPOCH_HEADER, MINIMUM_CLIENT_API_EPOCH.into());
+        let (mut socket, _) = connect_async(websocket_request).await.unwrap();
+        let authenticated = socket.next().await.unwrap().unwrap();
+        let ClientMessage::Text(authenticated) = authenticated else {
+            panic!("authenticated frame must be text");
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&authenticated).unwrap()["type"],
+            "authenticated"
+        );
+        socket
+            .send(ClientMessage::Text(
+                serde_json::json!({ "type": "subscribe", "scope": "app" })
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let subscribed = socket.next().await.unwrap().unwrap();
+        let ClientMessage::Text(subscribed) = subscribed else {
+            panic!("subscribed frame must be text");
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&subscribed).unwrap()["type"],
+            "subscribed"
+        );
+
+        let bearer = format!("Bearer {TOKEN}");
+
+        // ---- (1) PATCH rides the shared profile-write authority + `agent_changed` hub.
+        let before = fresh_scope_high_water(address, "app").await;
+        let response = http_over_tcp(
+            address,
+            "PATCH",
+            "/api/agents/a-cp2",
+            Some(&bearer),
+            r#"{"display_name":"Renamed CP2"}"#,
+        )
+        .await;
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK\r\n"),
+            "PATCH reaches the mounted profile-write face: {response}"
+        );
+        let body: serde_json::Value =
+            serde_json::from_str(response.split_once("\r\n\r\n").expect("body").1).unwrap();
+        assert_eq!(
+            body["agent"]["display_name"], "Renamed CP2",
+            "the profile-write authority committed the new label: {body}"
+        );
+        let after = fresh_scope_high_water(address, "app").await;
+        assert_eq!(
+            after - before,
+            1,
+            "PATCH publishes exactly one agent_changed on the shared hub: {before}→{after}"
+        );
+
+        // The change is durable through the SAME `/api/agents/{id}` node — GET still
+        // dispatches to the detail handler; PATCH accumulated its method, never shadowed
+        // the GET.
+        let detail = http_over_tcp(address, "GET", "/api/agents/a-cp2", Some(&bearer), "").await;
+        assert!(
+            detail.starts_with("HTTP/1.1 200 OK\r\n"),
+            "GET /api/agents/{{id}} stays the detail handler after PATCH accumulates: {detail}"
+        );
+        let detail: serde_json::Value =
+            serde_json::from_str(detail.split_once("\r\n\r\n").expect("body").1).unwrap();
+        assert_eq!(
+            detail["agent"]["display_name"], "Renamed CP2",
+            "the detail GET reads the durable committed label: {detail}"
+        );
+
+        // ---- (2) upload→read→clear closed loop over the ONE `SingleKindAvatarBlobs` root.
+        let avatar_bytes = b"PNGDATA-cp2-avatar-payload".to_vec();
+        let boundary = "XBOUNDARYCP2";
+        let mut multipart: Vec<u8> = Vec::new();
+        multipart.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        multipart.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"file\"; filename=\"a.png\"\r\n",
+        );
+        multipart.extend_from_slice(b"Content-Type: image/png\r\n\r\n");
+        multipart.extend_from_slice(&avatar_bytes);
+        multipart.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+        let before = fresh_scope_high_water(address, "app").await;
+        let upload = http_over_tcp_typed(
+            address,
+            "POST",
+            "/api/agents/a-cp2/avatar",
+            Some(&bearer),
+            &format!("multipart/form-data; boundary={boundary}"),
+            &multipart,
+        )
+        .await;
+        let (upload_head, upload_body) = split_http_response(&upload);
+        assert!(
+            upload_head.starts_with("HTTP/1.1 200 OK\r\n"),
+            "avatar upload reaches the mounted write face: {upload_head}"
+        );
+        let upload_body: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
+        assert!(
+            upload_body["avatar_url"]
+                .as_str()
+                .is_some_and(|url| url.starts_with("/api/agents/a-cp2/avatar?v=")),
+            "the upload response carries the cache-busted avatar_url: {upload_body}"
+        );
+        let after = fresh_scope_high_water(address, "app").await;
+        assert_eq!(
+            after - before,
+            1,
+            "the avatar upload publishes exactly one agent_changed on the shared hub: {before}→{after}"
+        );
+
+        // GET returns the SAME bytes off the SAME blob root — the write and the read
+        // faces share one `SingleKindAvatarBlobs`.
+        let served = http_over_tcp_typed(
+            address,
+            "GET",
+            "/api/agents/a-cp2/avatar",
+            Some(&bearer),
+            "application/json",
+            b"",
+        )
+        .await;
+        let (served_head, served_body) = split_http_response(&served);
+        assert!(
+            served_head.starts_with("HTTP/1.1 200 OK\r\n"),
+            "avatar GET serves the just-uploaded blob: {served_head}"
+        );
+        assert!(
+            served_head
+                .to_ascii_lowercase()
+                .contains("content-type: image/png"),
+            "the served avatar carries its stored content type: {served_head}"
+        );
+        assert_eq!(
+            served_body, avatar_bytes,
+            "the avatar GET returns the exact bytes the upload stored (one blob root)"
+        );
+
+        // DELETE clears the avatar and announces once.
+        let before = fresh_scope_high_water(address, "app").await;
+        let cleared = http_over_tcp(
+            address,
+            "DELETE",
+            "/api/agents/a-cp2/avatar",
+            Some(&bearer),
+            "",
+        )
+        .await;
+        assert!(
+            cleared.starts_with("HTTP/1.1 200 OK\r\n"),
+            "avatar DELETE reaches the mounted clear face: {cleared}"
+        );
+        let cleared: serde_json::Value =
+            serde_json::from_str(cleared.split_once("\r\n\r\n").expect("body").1).unwrap();
+        assert_eq!(
+            cleared["agent"]["id"], "a-cp2",
+            "the clear returns the subject's committed detail: {cleared}"
+        );
+        let after = fresh_scope_high_water(address, "app").await;
+        assert_eq!(
+            after - before,
+            1,
+            "the avatar clear publishes exactly one agent_changed on the shared hub: {before}→{after}"
+        );
+
+        // The SAME GET is now the `avatar not found` 404 — the clear removed the blob
+        // from the one root the serve face reads.
+        let gone = http_over_tcp(
+            address,
+            "GET",
+            "/api/agents/a-cp2/avatar",
+            Some(&bearer),
+            "",
+        )
+        .await;
+        assert!(
+            gone.starts_with("HTTP/1.1 404 Not Found\r\n"),
+            "the cleared avatar GET is 404: {gone}"
+        );
+        let gone: serde_json::Value =
+            serde_json::from_str(gone.split_once("\r\n\r\n").expect("body").1).unwrap();
+        assert_eq!(
+            gone["error"], "avatar not found",
+            "the closed loop ends at the leaf's avatar-not-found body: {gone}"
+        );
+
+        // ---- (3) name-availability reaches the real namespace: the static segment wins.
+        let availability = http_over_tcp(
+            address,
+            "GET",
+            "/api/agents/name-availability?name=freehandle",
+            Some(&bearer),
+            "",
+        )
+        .await;
+        assert!(
+            availability.starts_with("HTTP/1.1 200 OK\r\n"),
+            "name-availability is mounted behind the perimeter: {availability}"
+        );
+        let availability: serde_json::Value =
+            serde_json::from_str(availability.split_once("\r\n\r\n").expect("body").1).unwrap();
+        assert_eq!(
+            availability,
+            serde_json::json!({ "available": true, "reason": "available" }),
+            "the STATIC name-availability route wins over the {{id}} detail template \
+             (a shadow would answer the detail route's `agent not found`): {availability}"
         );
 
         socket.close(None).await.unwrap();
