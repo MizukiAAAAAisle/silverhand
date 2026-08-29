@@ -83,6 +83,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_detail_read"),
     ("backend-core", "agent_lifecycle"),
     ("backend-core", "agent_list_read"),
+    // #task:2229 — unmounted typed agent-materialize capability and its production
+    // exact-custody data-plane adapter. The later create vertical consumes this
+    // port; this ticket does not activate a route.
+    ("backend-core", "agent_materialize"),
     ("backend-core", "agent_presence_read"),
     // #task:2225 — the public agent-lifecycle and avatar route family (Rust Wave 3).
     // Core capability ports and orchestration for the handle-availability probe
@@ -160,6 +164,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // it is not owned by one route family's namespace (#task:2226's internal faces
     // consume the same face). `pub(crate)`, no route of its own, UNMOUNTED.
     ("backend-server", "agent_wire"),
+    // #task:2229 — the crate-root production `RuntimeControlPort` adapter plus the
+    // typed daemon codecs for agent materialize / runtime start / clear-session.
+    ("backend-server", "agent_materialize"),
     ("backend-server", "clock"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
@@ -172,6 +179,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "users"),
     ("backend-server", "ops"),
     ("backend-server", "password_hasher"),
+    // #task:2229 — unmounted runtime start/stop/clear production capability. It
+    // owns exact-custody commands, the ephemeral clear waiter, and committed
+    // clear settlement; the later route vertical is the activation owner.
+    ("backend-server", "runtime_control"),
     ("backend-server", "scope_runtime_stop"),
     ("backend-server", "workspace_detail"),
     ("backend-server", "workspace_metadata_write"),

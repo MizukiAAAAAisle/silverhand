@@ -33,6 +33,8 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 use silverhand_backend_core::identity::{AgentId, DaemonInstanceId, HostId};
 
+#[cfg(test)]
+use crate::daemon_delivery::{CommandRefusal, DaemonRefusalCode};
 use crate::daemon_delivery::{
     HostDataPlaneCommandKind, HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest,
     OwningHostDataPlane,
@@ -242,7 +244,7 @@ fn outcome_for(failure: HostDataPlaneFailure) -> StatusSnapshotOutcome {
             StatusSnapshotOutcome::Unreachable(UnreachableReason::Timeout)
         }
         // The daemon answered and this server could not read a status out of it.
-        HostDataPlaneFailure::Refused | HostDataPlaneFailure::ProtocolCorruption => {
+        HostDataPlaneFailure::Refused(_) | HostDataPlaneFailure::ProtocolCorruption => {
             StatusSnapshotOutcome::Unreachable(UnreachableReason::ProtocolError)
         }
         // Neither proven answered nor proven not sent. TS has no lock to poison and
@@ -386,7 +388,9 @@ mod tests {
         // same thing about this question as an unreadable frame: the daemon spoke
         // and this server cannot act on what it said.
         for spoke_unreadably in [
-            HostDataPlaneFailure::Refused,
+            HostDataPlaneFailure::Refused(CommandRefusal::Response(
+                DaemonRefusalCode::ShuttingDown,
+            )),
             HostDataPlaneFailure::ProtocolCorruption,
         ] {
             assert!(matches!(

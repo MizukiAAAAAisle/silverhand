@@ -111,7 +111,7 @@ fn outcome_for(failure: HostDataPlaneFailure) -> ProxyConfigOutcome {
         | HostDataPlaneFailure::DaemonInstanceMismatch
         | HostDataPlaneFailure::NotDispatched => ProxyConfigOutcome::AttachPending,
         HostDataPlaneFailure::TimedOut => ProxyConfigOutcome::Timeout,
-        HostDataPlaneFailure::Refused
+        HostDataPlaneFailure::Refused(_)
         | HostDataPlaneFailure::Ambiguous
         | HostDataPlaneFailure::ProtocolCorruption
         | HostDataPlaneFailure::RegistryUnavailable => ProxyConfigOutcome::DaemonInternalError,

@@ -22,6 +22,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::agents::runtime::RuntimeKind;
 
+#[cfg(test)]
+use crate::daemon_delivery::{CommandRefusal, DaemonRefusalCode};
 use crate::daemon_delivery::{
     HostDataPlaneCommandKind, HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest,
     OwningHostDataPlane,
@@ -237,7 +239,7 @@ fn outcome_for(failure: HostDataPlaneFailure) -> RuntimeCatalogOutcome {
         HostDataPlaneFailure::TimedOut => RuntimeCatalogOutcome::Timeout,
         // The daemon was reachable and answered, but not with a catalog. TS folds
         // exactly this set into `daemon_internal_error` (502).
-        HostDataPlaneFailure::Refused
+        HostDataPlaneFailure::Refused(_)
         | HostDataPlaneFailure::Ambiguous
         | HostDataPlaneFailure::ProtocolCorruption
         | HostDataPlaneFailure::RegistryUnavailable => RuntimeCatalogOutcome::DaemonInternalError,
@@ -324,7 +326,9 @@ mod tests {
         // failed rather than being refused: the machine cannot say what it has
         // installed. TS folds the same set into `daemon_internal_error` (502).
         for unanswerable in [
-            HostDataPlaneFailure::Refused,
+            HostDataPlaneFailure::Refused(CommandRefusal::Response(
+                DaemonRefusalCode::ShuttingDown,
+            )),
             HostDataPlaneFailure::Ambiguous,
             HostDataPlaneFailure::ProtocolCorruption,
             HostDataPlaneFailure::RegistryUnavailable,
