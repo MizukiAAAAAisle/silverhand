@@ -6,6 +6,10 @@ mod wire;
 /// bulk stop reuses this ONE authority instead of re-minting the status/code map.
 pub(crate) use wire::placement_refusal;
 
+/// The ONE clear-session success projection, re-exported so the agent-scope
+/// clear-session face renders the same body without re-minting it.
+pub(crate) use wire::clear_session_success;
+
 #[cfg(test)]
 mod tests;
 
@@ -30,8 +34,8 @@ use silverhand_backend_core::{
 };
 
 use wire::{
-    admission_refusal, clear_session_refusal, clear_session_success, hard_stop_refusal,
-    internal_error, invalid_target, legacy_stop_refusal, operation_success, start_refusal,
+    admission_refusal, clear_session_refusal, hard_stop_refusal, internal_error, invalid_target,
+    legacy_stop_refusal, operation_success, start_refusal,
 };
 
 pub const START_PATH: &str = "/api/channels/{id}/agents/{aid}/start";

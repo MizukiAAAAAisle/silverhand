@@ -23,7 +23,10 @@ pub(super) fn operation_success() -> Response {
     Json(json!({ "ok": true })).into_response()
 }
 
-pub(super) fn clear_session_success(outcome: &ClearSessionOutcome) -> Response {
+/// The success projection of a [`ClearSessionOutcome`] → `{ok, prev_cli_session_id,
+/// was_running}`. `pub(crate)` so the agent-scope clear-session face renders the ONE
+/// success shape rather than re-minting it (the wire body is scope-independent).
+pub(crate) fn clear_session_success(outcome: &ClearSessionOutcome) -> Response {
     Json(json!({
         "ok": true,
         "prev_cli_session_id": outcome.previous_cli_session().map(|id| id.as_str()),

@@ -19,6 +19,7 @@
 
 pub mod agent_avatar;
 pub mod agent_avatar_write;
+pub mod agent_clear_session;
 pub mod agent_detail;
 pub mod agent_list;
 pub mod agent_patch;
