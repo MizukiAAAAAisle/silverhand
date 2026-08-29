@@ -21,6 +21,7 @@ pub mod message_unread;
 mod notification;
 mod reaction;
 mod runtime_control;
+pub mod runtime_switch_coordination;
 mod saved;
 pub mod stale_message_resolution;
 pub mod thread_follow;

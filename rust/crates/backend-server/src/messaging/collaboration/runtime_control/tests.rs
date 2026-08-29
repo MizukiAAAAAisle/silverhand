@@ -14,8 +14,8 @@ use silverhand_backend_core::{
     identity::UserId,
     messaging::collaboration::{
         ClearSessionOutcome, ClearSessionProviderRefusal, CliSessionId, HardStopRuntimeOutcome,
-        HardStopRuntimeProviderRefusal, RuntimeControlPort, RuntimeControlTarget,
-        RuntimePlacementRefusal, StartRuntimeOutcome, StartRuntimeProviderRefusal,
+        HardStopRuntimeProviderRefusal, RuntimeControlPort, RuntimePlacementRefusal,
+        RuntimeSeatTarget, RuntimeStartTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal,
     },
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
@@ -84,7 +84,7 @@ impl RuntimeControlPort for Provider {
 
     async fn start(
         &self,
-        _target: &RuntimeControlTarget,
+        _target: &RuntimeStartTarget,
     ) -> Result<Result<StartRuntimeOutcome, StartRuntimeProviderRefusal>, Self::Error> {
         self.calls.lock().unwrap().push("start");
         match self.mode {
@@ -98,7 +98,7 @@ impl RuntimeControlPort for Provider {
 
     async fn hard_stop(
         &self,
-        _target: &RuntimeControlTarget,
+        _target: &RuntimeSeatTarget,
     ) -> Result<Result<HardStopRuntimeOutcome, HardStopRuntimeProviderRefusal>, Self::Error> {
         self.calls.lock().unwrap().push("hard_stop");
         match self.mode {
@@ -112,7 +112,7 @@ impl RuntimeControlPort for Provider {
 
     async fn clear_session(
         &self,
-        _target: &RuntimeControlTarget,
+        _target: &RuntimeSeatTarget,
     ) -> Result<Result<ClearSessionOutcome, ClearSessionProviderRefusal>, Self::Error> {
         self.calls.lock().unwrap().push("clear_session");
         match self.mode {

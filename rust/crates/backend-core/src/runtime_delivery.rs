@@ -5,7 +5,7 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    agents::runtime::RuntimeKind,
+    agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{AddressedPrincipals, FromKind, MessageContent, PrincipalKind, ReferencePositions},
     persistence::PersistenceFailure,
@@ -136,6 +136,7 @@ pub struct ClaimedInboxBatch {
 pub enum ClaimPendingInbox {
     Empty,
     StaleCustody,
+    Transitioning,
     Claimed(ClaimedInboxBatch),
 }
 
@@ -284,6 +285,21 @@ pub trait RuntimeDispatchReadPort: Clone + Send + Sync + 'static {
         agent: AgentId,
     ) -> impl Future<Output = Result<Option<RuntimeDispatchTarget>, PersistenceFailure>> + Send;
 
+    /// Resolve a runtime-*start* dispatch fact for an explicit start intent.
+    ///
+    /// Unlike [`Self::resolve_dispatch_target`] — which the delivery loop drives with a
+    /// conversation it has already established the agent has pending input in — a start
+    /// intent's `candidate_origin` is caller-supplied and unproven. The implementation
+    /// therefore validates the agent's participation against the canonical authority and
+    /// **read-derives** the returned origin from the matched row rather than echoing the
+    /// candidate. The scope arm is owned by the agent row, never the caller. A
+    /// non-participant resolves to `None` (zero wire).
+    fn resolve_start_dispatch(
+        &self,
+        agent: AgentId,
+        candidate_origin: ConversationId,
+    ) -> impl Future<Output = Result<Option<RuntimeDispatchTarget>, PersistenceFailure>> + Send;
+
     /// Returns every currently claimed slot placed on one host. Hydration must
     /// see old daemon generations as well as the newly attached daemon so a
     /// process restart cannot strand custody behind the previous instance id.
@@ -339,16 +355,52 @@ pub fn runtime_scope_for(
     conversation: ConversationId,
     session_scope: &str,
 ) -> Result<RuntimeScope, InvalidRuntimeSessionScope> {
-    match session_scope {
-        "conversation" => Ok(RuntimeScope::ConversationSlot {
+    match AgentSessionScope::parse(session_scope).ok_or(InvalidRuntimeSessionScope)? {
+        AgentSessionScope::Conversation => Ok(RuntimeScope::ConversationSlot {
             agent,
             source: conversation,
         }),
-        "agent" => Ok(RuntimeScope::AgentSlot { agent }),
-        _ => Err(InvalidRuntimeSessionScope),
+        AgentSessionScope::Agent => Ok(RuntimeScope::AgentSlot { agent }),
     }
 }
 
 #[derive(Debug, Error)]
 #[error("persisted runtime session scope is unsupported")]
 pub struct InvalidRuntimeSessionScope;
+
+#[cfg(test)]
+mod runtime_scope_for_tests {
+    use super::*;
+
+    fn agent() -> AgentId {
+        AgentId::parse("a1").unwrap()
+    }
+
+    fn conversation() -> ConversationId {
+        ConversationId::parse("c1").unwrap()
+    }
+
+    #[test]
+    fn each_declared_scope_routes_to_its_seat_coordinate() {
+        assert_eq!(
+            runtime_scope_for(agent(), conversation(), "conversation").unwrap(),
+            RuntimeScope::ConversationSlot {
+                agent: agent(),
+                source: conversation(),
+            }
+        );
+        assert_eq!(
+            runtime_scope_for(agent(), conversation(), "agent").unwrap(),
+            RuntimeScope::AgentSlot { agent: agent() }
+        );
+    }
+
+    #[test]
+    fn an_unknown_token_is_a_fault_not_a_default_seat() {
+        // The decoder owns no grammar of its own: any token the sole
+        // `AgentSessionScope::parse` authority rejects must surface as a fault
+        // rather than latch a default seat.
+        assert!(runtime_scope_for(agent(), conversation(), "workspace").is_err());
+        assert!(runtime_scope_for(agent(), conversation(), "").is_err());
+    }
+}

@@ -3,13 +3,18 @@ mod current_schema;
 #[path = "support/log_capture.rs"]
 mod log_capture;
 
-use axum::http::StatusCode;
+use axum::{
+    Router,
+    body::{Body, to_bytes},
+    http::{Request, StatusCode},
+};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
 use log_capture::LogBuffer;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
+    agents::runtime::RuntimeKind,
     auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
     blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
     host_runtime::aftermath::{CustodyEffectFailure, DaemonConnectionControl},
@@ -18,6 +23,12 @@ use silverhand_backend_core::{
         AddressedPrincipals, CreatedMessage, DirectLineAuthority, FromKind, MessageContent,
         MessageId, MessageSeq, PrincipalKind, ReferencePositions, SendActor, SendDestination,
         SendMessage, SendMessageDraft, SendMessageUnitOfWork,
+        collaboration::{
+            BoundRuntimeControlSeat, ClearSessionCommitReceipt, ClearSessionProviderRefusal,
+            ClearSessionRefusal, RuntimeControlAdmission, RuntimeControlAdmissionScope,
+            RuntimeControlPort, RuntimeControlSeatPort, RuntimeControlSeatSnapshot,
+            RuntimeSeatTarget, RuntimeStartTarget, clear_conversation_session,
+        },
         post_commit::{IdleStart, MainDelivery},
     },
     persistence::PersistenceFailure,
@@ -45,16 +56,19 @@ use silverhand_backend_core::{
 };
 use silverhand_backend_filesystem::blob_store::LocalBlobStore;
 use silverhand_backend_server::{
+    clock::ProcessClock,
     daemon_delivery::{
         DaemonDeliveryController, DaemonDeliveryEffects, DaemonDeliveryRuntime,
-        HOST_PROTOCOL_VERSION, HOST_WEBSOCKET_PATH, HostCommandDispatch, OUTBOUND_PROTOCOL_VERSION,
-        UPDATE_REQUIRED_CLOSE_REASON,
+        HOST_PROTOCOL_VERSION, HOST_WEBSOCKET_PATH, HostDataPlaneCustody,
+        OUTBOUND_PROTOCOL_VERSION, OwningHostDataPlane, UPDATE_REQUIRED_CLOSE_REASON,
     },
     host_control::admission::ProtocolMismatchRefusal,
+    host_control::management::{self, update::HostLabelChangeEffect},
+    host_control::proxy_config::{self, ProxyConfig, ProxyConfigOutcome, ProxyConfigRequest},
     host_control::runtime_catalog::{
         self, CatalogCoordinateMismatch, RuntimeCatalogOutcome, RuntimeCatalogRequest,
     },
-    host_control::status_seed::{HostStatusSeeds, SeedAttempt, SeedFailure, SeedRead},
+    host_control::status_seed::{SeedAttempt, SeedRead},
     host_control::status_snapshot::{
         self, SnapshotCoordinateMismatch, StatusSnapshotOutcome, StatusSnapshotRequest,
     },
@@ -62,6 +76,7 @@ use silverhand_backend_server::{
         cascade_effects::{AgentDeletedAnnouncement, ProductionComputerCascadeEffects},
         detail::ConnectedHostName,
     },
+    runtime_control::ProductionRuntimeControl,
     runtime_credential::RuntimeCredentialAuthority,
     scope_events::{
         AllowedOrigin, ConnectionLifecycle, DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH,
@@ -88,6 +103,7 @@ use tokio_tungstenite::{
         protocol::frame::coding::CloseCode,
     },
 };
+use tower::ServiceExt;
 
 /// A do-nothing lifecycle for tests that exercise the WS transport alone and do
 /// not assert on presence. Production wiring lives in `backend-app`; the crate's
@@ -116,6 +132,11 @@ type Effects = DaemonDeliveryEffects<
     CountingRuntimeDeliveryStore,
     SqliteHostRuntimeStore,
 >;
+type RuntimeControl = ProductionRuntimeControl<
+    SqliteRuntimeCustodyStore,
+    CountingRuntimeDeliveryStore,
+    SqliteHostRuntimeStore,
+>;
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 struct Fixture {
@@ -123,7 +144,9 @@ struct Fixture {
     path: std::path::PathBuf,
     address: std::net::SocketAddr,
     effects: Effects,
+    runtime_control: RuntimeControl,
     settlement_calls: Arc<AtomicUsize>,
+    clear_settlement_calls: Arc<AtomicUsize>,
     controller: DaemonDeliveryController,
     event_controller: EventWebSocketController,
     server: tokio::task::JoinHandle<()>,
@@ -136,6 +159,73 @@ impl SessionClock for FixedSessionClock {
     fn now_unix_millis(&self) -> i64 {
         10_000
     }
+}
+
+#[derive(Clone, Copy)]
+struct FixedManagementClock;
+
+impl ProcessClock for FixedManagementClock {
+    fn now_unix_millis(&self) -> i64 {
+        777
+    }
+}
+
+#[derive(Clone, Default)]
+struct RecordingHostLabelChange(Arc<AtomicUsize>);
+
+impl HostLabelChangeEffect for RecordingHostLabelChange {
+    async fn agents_changed(
+        &self,
+        _computer: &HostId,
+    ) -> Result<
+        (),
+        silverhand_backend_server::host_control::management::update::HostLabelChangeEffectFailure,
+    > {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+async fn management_app(fixture: &Fixture, label_change: RecordingHostLabelChange) -> Router {
+    let store = SqliteHostRuntimeStore::open(&fixture.path).await.unwrap();
+    management::router(
+        store.clone(),
+        store.clone(),
+        store,
+        label_change,
+        fixture.controller.owning_host_data_plane(),
+        fixture.controller.host_status_seeds(),
+        fixture.controller.host_admission(),
+        fixture.controller.connection_control(),
+        FixedManagementClock,
+    )
+}
+
+async fn management_request(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    body: &'static str,
+) -> (StatusCode, Value) {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(UserId::parse("user-1").unwrap());
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8(bytes.to_vec()).unwrap()))
+    };
+    (status, body)
 }
 
 async fn fixture(name: &str) -> Fixture {
@@ -160,9 +250,11 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
     db.close().await.unwrap();
     let custody = SqliteRuntimeCustodyStore::open(&path).await.unwrap();
     let settlement_calls = Arc::new(AtomicUsize::new(0));
+    let clear_settlement_calls = Arc::new(AtomicUsize::new(0));
     let data = CountingRuntimeDeliveryStore {
         inner: SqliteRuntimeDeliveryStore::open(&path).await.unwrap(),
         settlement_calls: settlement_calls.clone(),
+        clear_settlement_calls: clear_settlement_calls.clone(),
     };
     let hosts = SqliteHostRuntimeStore::open(&path).await.unwrap();
     let event_hub = ScopeEventHub::production().unwrap();
@@ -173,6 +265,7 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
         event_hub.clone(),
     )
     .unwrap();
+    let runtime_control = runtime.runtime_control();
     let effects = runtime.effects();
     let (daemon_router, controller) = runtime.router();
     let sessions = HumanSessionAuthenticator::new(
@@ -199,7 +292,9 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
         path,
         address,
         effects,
+        runtime_control,
         settlement_calls,
+        clear_settlement_calls,
         controller,
         event_controller,
         server,
@@ -210,6 +305,7 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
 struct CountingRuntimeDeliveryStore {
     inner: SqliteRuntimeDeliveryStore,
     settlement_calls: Arc<AtomicUsize>,
+    clear_settlement_calls: Arc<AtomicUsize>,
 }
 
 impl RuntimeDispatchReadPort for CountingRuntimeDeliveryStore {
@@ -223,11 +319,41 @@ impl RuntimeDispatchReadPort for CountingRuntimeDeliveryStore {
             .await
     }
 
+    async fn resolve_start_dispatch(
+        &self,
+        agent: AgentId,
+        candidate_origin: ConversationId,
+    ) -> Result<Option<RuntimeDispatchTarget>, PersistenceFailure> {
+        self.inner
+            .resolve_start_dispatch(agent, candidate_origin)
+            .await
+    }
+
     async fn current_custodies_for_host(
         &self,
         host_id: String,
     ) -> Result<Vec<RuntimePrincipal>, PersistenceFailure> {
         self.inner.current_custodies_for_host(host_id).await
+    }
+}
+
+impl RuntimeControlSeatPort for CountingRuntimeDeliveryStore {
+    type Error = PersistenceFailure;
+
+    async fn snapshot(
+        &self,
+        scope: &RuntimeScope,
+    ) -> Result<Option<RuntimeControlSeatSnapshot>, Self::Error> {
+        self.inner.snapshot(scope).await
+    }
+
+    async fn settle_clear(
+        &self,
+        target: &RuntimeSeatTarget,
+        before: &BoundRuntimeControlSeat,
+    ) -> Result<Option<ClearSessionCommitReceipt>, Self::Error> {
+        self.clear_settlement_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.settle_clear(target, before).await
     }
 }
 
@@ -694,11 +820,73 @@ async fn complete_attachment_until(
     instance_id: &str,
     attached: usize,
 ) {
+    complete_attachment_for_host_until(socket, controller, "host-1", instance_id, attached).await;
+}
+
+async fn complete_attachment_for_host_until(
+    socket: &mut Socket,
+    controller: &DaemonDeliveryController,
+    host: &str,
+    instance_id: &str,
+    attached: usize,
+) {
+    complete_attachment_transport_until(socket, controller, instance_id, attached).await;
+    answer_status_seed(socket, controller, host).await;
+}
+
+async fn complete_attachment_transport_until(
+    socket: &mut Socket,
+    controller: &DaemonDeliveryController,
+    instance_id: &str,
+    attached: usize,
+) {
     send_ready_with_instance(socket, OUTBOUND_PROTOCOL_VERSION, instance_id).await;
     let status = next_json(socket).await;
     assert_eq!(status["kind"], "runtime_status");
     respond(socket, &status, json!({ "runtimes": [] })).await;
     wait_for_attached_count(controller, attached).await;
+}
+
+async fn answer_status_seed(
+    socket: &mut Socket,
+    controller: &DaemonDeliveryController,
+    host: &str,
+) {
+    if matches!(
+        controller.host_status_seeds().read(&host_id(host)),
+        Ok(SeedRead::Seeded(_))
+    ) {
+        return;
+    }
+    let status = next_json(socket).await;
+    assert_eq!(status["kind"], "host_status");
+    respond(
+        socket,
+        &status,
+        json!({
+            "os": "macOS 14.5",
+            "os_arch": "arm64",
+            "daemon_pid": 4_242,
+            "daemon_version": "1.2.3",
+            "started_at": 1_700_000_000_000_i64,
+            "uptime_ms": 90_000,
+            "active_agent_ids": [AGENT],
+        }),
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if matches!(
+                controller.host_status_seeds().read(&host_id(host)),
+                Ok(SeedRead::Seeded(_))
+            ) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 async fn complete_named_attachment_until(
@@ -713,6 +901,7 @@ async fn complete_named_attachment_until(
     assert_eq!(status["kind"], "runtime_status");
     respond(socket, &status, json!({ "runtimes": [] })).await;
     wait_for_attached_count(controller, attached).await;
+    answer_status_seed(socket, controller, "host-1").await;
 }
 
 async fn wait_for_attachment(controller: &DaemonDeliveryController) {
@@ -809,7 +998,14 @@ async fn per_host_disconnect_is_idempotent_and_never_becomes_global_shutdown() {
     let mut selected = connect(fixture.address).await;
     complete_attachment_until(&mut selected, &fixture.controller, "instance-1", 1).await;
     let mut survivor = connect_with_token(fixture.address, TOKEN_2).await.unwrap();
-    complete_attachment_until(&mut survivor, &fixture.controller, "instance-2", 2).await;
+    complete_attachment_for_host_until(
+        &mut survivor,
+        &fixture.controller,
+        "host-2",
+        "instance-2",
+        2,
+    )
+    .await;
 
     let control = fixture.controller.connection_control();
     control.disconnect(host_id("host-1")).await.unwrap();
@@ -870,7 +1066,47 @@ async fn per_host_disconnect_is_idempotent_and_never_becomes_global_shutdown() {
     fixture.server.abort();
 }
 
+#[tokio::test]
+async fn user_disconnect_closes_only_the_captured_generation_with_its_product_reason() {
+    let fixture = fixture("user-host-disconnect.sqlite").await;
+    let mut selected = connect(fixture.address).await;
+    complete_attachment(&mut selected, &fixture.controller).await;
+
+    let control = fixture.controller.connection_control();
+    assert!(control.disconnect_user_managed(&host_id("host-1")).unwrap());
+    expect_close(
+        &mut selected,
+        CloseCode::Away,
+        HOST_DISCONNECTED_CLOSE_REASON_FOR_TEST,
+    )
+    .await;
+    wait_for_free_host_slot(&fixture.controller).await;
+    assert!(!control.disconnect_user_managed(&host_id("host-1")).unwrap());
+
+    let mut replacement = connect(fixture.address).await;
+    complete_attachment_with_instance(&mut replacement, &fixture.controller, "instance-new").await;
+    replacement
+        .send(Message::Text(
+            json!({
+                "direction": "daemon_to_server",
+                "type": "heartbeat",
+                "kind": "ping",
+                "ts": 91,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut replacement).await["echo_ts"], 91);
+
+    replacement.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
 const HOST_REVOKED_CLOSE_REASON_FOR_TEST: &str = "host_revoked";
+const HOST_DISCONNECTED_CLOSE_REASON_FOR_TEST: &str = "host_disconnected";
 
 #[derive(Clone)]
 struct RecordingDeletedAnnouncement {
@@ -1038,6 +1274,134 @@ fn runtime_scope() -> RuntimeScope {
         agent: AgentId::parse(AGENT).unwrap(),
         source: ConversationId::parse(CONVERSATION).unwrap(),
     }
+}
+
+fn runtime_control_start_target() -> RuntimeStartTarget {
+    RuntimeStartTarget::new(
+        UserId::parse("user-1").unwrap(),
+        AgentId::parse(AGENT).unwrap(),
+        ConversationId::parse(CONVERSATION).unwrap(),
+    )
+}
+
+/// A deterministic conversation-scope admission over the real fixture row. The
+/// seat target is minted only by the core `clear_conversation_session` use case
+/// (never a cross-crate `RuntimeSeatTarget::new`), so this e2e drives the same
+/// entry as production: full conversation ladder, then the row-owned
+/// conversation session scope.
+#[derive(Clone)]
+struct ClearAdmission;
+
+struct ClearAdmissionScope;
+
+impl RuntimeControlAdmissionScope for ClearAdmissionScope {
+    type Error = std::io::Error;
+
+    async fn conversation_exists(&mut self, _: &ConversationId) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    async fn agent_exists(&mut self, _: &AgentId) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    async fn agent_is_member(
+        &mut self,
+        _: &ConversationId,
+        _: &AgentId,
+    ) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    async fn actor_may_post(
+        &mut self,
+        _: &ConversationId,
+        _: &UserId,
+    ) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    async fn actor_may_edit_agent(&mut self, _: &UserId, _: &AgentId) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    async fn agent_session_scope(
+        &mut self,
+        _: &AgentId,
+    ) -> Result<
+        Option<silverhand_backend_core::agents::session_scope::AgentSessionScope>,
+        Self::Error,
+    > {
+        Ok(Some(
+            silverhand_backend_core::agents::session_scope::AgentSessionScope::Conversation,
+        ))
+    }
+
+    async fn finish(self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl RuntimeControlAdmission for ClearAdmission {
+    type Error = std::io::Error;
+    type Scope = ClearAdmissionScope;
+
+    async fn begin_snapshot(&self) -> Result<Self::Scope, Self::Error> {
+        Ok(ClearAdmissionScope)
+    }
+}
+
+async fn activate_host_for_runtime_control(path: &std::path::Path) {
+    let mut db = open(path).await;
+    assert_eq!(
+        sqlx::query("UPDATE hosts SET activated_at=1, finalized_at=1 WHERE id='host-1'")
+            .execute(&mut db)
+            .await
+            .unwrap()
+            .rows_affected(),
+        1
+    );
+    assert_eq!(
+        sqlx::query("UPDATE conversations SET latest_message_seq=1 WHERE id=?")
+            .bind(CONVERSATION)
+            .execute(&mut db)
+            .await
+            .unwrap()
+            .rows_affected(),
+        1,
+        "the seeded message and its stream head must describe one snapshot"
+    );
+}
+
+async fn start_through_runtime_control(
+    fixture: &Fixture,
+    socket: &mut Socket,
+    target: &RuntimeStartTarget,
+) -> i64 {
+    let control = fixture.runtime_control.clone();
+    let target = target.clone();
+    let call = tokio::spawn(async move { control.start(&target).await });
+    let command = next_json(socket).await;
+    assert_eq!(command["kind"], "runtime_start");
+    let generation = command["params"]["runtime_generation"].as_i64().unwrap();
+    respond(
+        socket,
+        &command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    call.await.unwrap().unwrap().unwrap();
+    generation
+}
+
+async fn wait_for_counter(counter: &AtomicUsize, expected: usize) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while counter.load(Ordering::SeqCst) != expected {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("counter did not reach its expected value");
 }
 
 async fn next_json(socket: &mut Socket) -> Value {
@@ -1981,31 +2345,31 @@ fn daemon_instance(raw: &str) -> DaemonInstanceId {
     DaemonInstanceId::parse(raw).unwrap()
 }
 
-fn catalog_request(host: &str, instance: &str, force: bool) -> RuntimeCatalogRequest {
-    RuntimeCatalogRequest {
-        host: host_id(host),
-        daemon_instance: daemon_instance(instance),
-        force,
-    }
+fn custody(dispatch: &OwningHostDataPlane, host: &str) -> HostDataPlaneCustody {
+    dispatch
+        .resolve(&host_id(host))
+        .expect("the registry is readable")
+        .expect("the host is attached")
+}
+
+fn catalog_request(custody: HostDataPlaneCustody, force: bool) -> RuntimeCatalogRequest {
+    RuntimeCatalogRequest::new(custody, force)
 }
 
 fn probe_in_background(
-    dispatch: &HostCommandDispatch,
+    dispatch: &OwningHostDataPlane,
     request: RuntimeCatalogRequest,
 ) -> tokio::task::JoinHandle<RuntimeCatalogOutcome> {
     let dispatch = dispatch.clone();
     tokio::spawn(async move { runtime_catalog::probe(&dispatch, request).await })
 }
 
-fn status_request(host: &str, instance: &str) -> StatusSnapshotRequest {
-    StatusSnapshotRequest {
-        host: host_id(host),
-        daemon_instance: daemon_instance(instance),
-    }
+fn status_request(custody: HostDataPlaneCustody) -> StatusSnapshotRequest {
+    StatusSnapshotRequest::new(custody)
 }
 
 fn status_probe_in_background(
-    dispatch: &HostCommandDispatch,
+    dispatch: &OwningHostDataPlane,
     request: StatusSnapshotRequest,
 ) -> tokio::task::JoinHandle<StatusSnapshotOutcome> {
     let dispatch = dispatch.clone();
@@ -2021,28 +2385,37 @@ async fn assert_no_daemon_frame(socket: &mut Socket) {
     );
 }
 
+fn proxy_get_in_background(
+    dispatch: &OwningHostDataPlane,
+    request: ProxyConfigRequest,
+) -> tokio::task::JoinHandle<ProxyConfigOutcome> {
+    let dispatch = dispatch.clone();
+    tokio::spawn(async move { proxy_config::get(&dispatch, request).await })
+}
+
+fn proxy_set_in_background(
+    dispatch: &OwningHostDataPlane,
+    request: ProxyConfigRequest,
+    config: ProxyConfig,
+) -> tokio::task::JoinHandle<ProxyConfigOutcome> {
+    let dispatch = dispatch.clone();
+    tokio::spawn(async move { proxy_config::set(&dispatch, request, config).await })
+}
+
 #[tokio::test]
-async fn a_stale_custody_or_unknown_host_is_refused_before_anything_reaches_the_wire() {
+async fn an_unknown_host_is_absent_without_putting_anything_on_another_hosts_wire() {
     let fixture = fixture("host-command-instance-gate.sqlite").await;
     let mut socket = connect(fixture.address).await;
     complete_attachment(&mut socket, &fixture.controller).await;
-    let dispatch = fixture.controller.host_commands();
+    let dispatch = fixture.controller.owning_host_data_plane();
 
-    // The custody this caller observed is not the one serving the host now; and a
-    // host with no attachment at all is the same answer, because in both cases
-    // there is nobody this request may be asked of.
-    for absent in [
-        catalog_request("host-1", "instance-stale", true),
-        catalog_request("host-2", "instance-test", true),
-    ] {
-        assert!(matches!(
-            runtime_catalog::probe(&dispatch, absent).await,
-            RuntimeCatalogOutcome::AttachPending
-        ));
-        assert_no_daemon_frame(&mut socket).await;
-    }
+    assert!(dispatch.resolve(&host_id("host-2")).unwrap().is_none());
+    assert_no_daemon_frame(&mut socket).await;
 
-    let probing = probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+    let probing = probe_in_background(
+        &dispatch,
+        catalog_request(custody(&dispatch, "host-1"), true),
+    );
     let command = next_json(&mut socket).await;
     assert_eq!(command["kind"], "host_runtime_catalog");
     assert_eq!(command["params"], json!({ "force": true }));
@@ -2056,7 +2429,7 @@ async fn a_stale_custody_or_unknown_host_is_refused_before_anything_reaches_the_
         panic!("the custody that is actually attached must answer")
     };
     let view = catalog
-        .rows_for(&host_id("host-1"), &daemon_instance("instance-test"))
+        .rows_for(&custody(&dispatch, "host-1"))
         .expect("the fact opens for the coordinate that asked for it");
     assert!(view.runtimes.is_empty());
     assert_eq!(view.detected_at, 5);
@@ -2067,21 +2440,214 @@ async fn a_stale_custody_or_unknown_host_is_refused_before_anything_reaches_the_
 }
 
 #[tokio::test]
+async fn proxy_config_get_and_set_share_the_real_generation_pinned_correlated_transport() {
+    let fixture = fixture("host-proxy-config-commands.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+    let dispatch = fixture.controller.owning_host_data_plane();
+
+    let reading = proxy_get_in_background(
+        &dispatch,
+        ProxyConfigRequest::new(custody(&dispatch, "host-1")),
+    );
+    let get = next_json(&mut socket).await;
+    assert_eq!(get["kind"], "host_proxy_config_get");
+    assert_eq!(get["params"], json!({}));
+    respond(
+        &mut socket,
+        &get,
+        json!({
+            "config": {
+                "proxy_url": null,
+                "proxy_runtimes": ["codex"]
+            }
+        }),
+    )
+    .await;
+    let ProxyConfigOutcome::Answered(config) = reading.await.unwrap() else {
+        panic!("proxy-config GET must decode its correlated answer")
+    };
+    assert_eq!(config.proxy_url, None);
+    assert_eq!(config.proxy_runtimes, vec![RuntimeKind::Codex]);
+
+    let writing = proxy_set_in_background(
+        &dispatch,
+        ProxyConfigRequest::new(custody(&dispatch, "host-1")),
+        ProxyConfig {
+            proxy_url: Some("http://127.0.0.1:7890".to_owned()),
+            proxy_runtimes: vec![RuntimeKind::Codex, RuntimeKind::Qoder],
+        },
+    );
+    let set = next_json(&mut socket).await;
+    assert_eq!(set["kind"], "host_proxy_config_set");
+    assert_eq!(
+        set["params"],
+        json!({
+            "proxy_url": "http://127.0.0.1:7890",
+            "proxy_runtimes": ["codex", "qoder"]
+        })
+    );
+    respond(
+        &mut socket,
+        &set,
+        json!({
+            "config": {
+                "proxy_url": "http://127.0.0.1:7890",
+                "proxy_runtimes": ["codex", "qoder"]
+            }
+        }),
+    )
+    .await;
+    let ProxyConfigOutcome::Answered(config) = writing.await.unwrap() else {
+        panic!("proxy-config SET must decode its correlated answer")
+    };
+    assert_eq!(config.proxy_url.as_deref(), Some("http://127.0.0.1:7890"));
+    assert_eq!(
+        config.proxy_runtimes,
+        vec![RuntimeKind::Codex, RuntimeKind::Qoder]
+    );
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn the_unmounted_host_management_router_composes_sqlite_live_transport_and_http_wires() {
+    let fixture = fixture("host-management-router.sqlite").await;
+    let mut db = open(&fixture.path).await;
+    sqlx::query(
+        "UPDATE hosts
+            SET activated_at = 2,
+                finalized_at = NULL,
+                provisioning_source = 'user_invite',
+                last_seen_at = 3
+          WHERE id = 'host-1'",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+
+    let announcements = RecordingHostLabelChange::default();
+    let app = management_app(&fixture, announcements.clone()).await;
+
+    // Shared GET/PUT path proves its authenticated method table rather than relying
+    // on an outer unauthenticated 401 to hide an accidental handler.
+    assert_eq!(
+        management_request(&app, "POST", "/api/hosts/host-1/proxy-config", "{}")
+            .await
+            .0,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+
+    let (status, body) = management_request(
+        &app,
+        "PATCH",
+        "/api/hosts/host-1",
+        r#"{"display_label":" Studio "}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["host"]["display_label"], "Studio");
+    assert_eq!(body["host"]["finalized_at"], 777);
+    assert_eq!(announcements.0.load(Ordering::SeqCst), 1);
+
+    // The host is active but offline. PUT parses before transport resolution just
+    // like TS: malformed input is a 400, while a valid GET reaches the typed offline
+    // data-plane outcome.
+    assert_eq!(
+        management_request(&app, "PUT", "/api/hosts/host-1/proxy-config", "{}")
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, body) =
+        management_request(&app, "GET", "/api/hosts/host-1/proxy-config", "").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error_code"], "computer_offline");
+
+    let (status, body) = management_request(&app, "GET", "/api/hosts/host-1/status", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["availability"], "disconnected");
+    assert_eq!(body["agents"][0]["online"], "offline");
+
+    let (status, body) = management_request(&app, "POST", "/api/hosts/host-1/disconnect", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["disconnected"], false);
+
+    let mut daemon = connect(fixture.address).await;
+    complete_attachment(&mut daemon, &fixture.controller).await;
+
+    let status_app = app.clone();
+    let (status, body) =
+        management_request(&status_app, "GET", "/api/hosts/host-1/status", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["availability"], "available");
+    assert_eq!(body["snapshot"]["daemon_pid"], 4_242);
+    assert_eq!(body["agents"][0]["online"], "offline");
+
+    let proxy_app = app.clone();
+    let proxy_read = tokio::spawn(async move {
+        management_request(&proxy_app, "GET", "/api/hosts/host-1/proxy-config", "").await
+    });
+    let command = next_json(&mut daemon).await;
+    assert_eq!(command["kind"], "host_proxy_config_get");
+    respond(
+        &mut daemon,
+        &command,
+        json!({ "config": { "proxy_url": null, "proxy_runtimes": ["codex"] } }),
+    )
+    .await;
+    let (status, body) = proxy_read.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["config"]["proxy_runtimes"], json!(["codex"]));
+
+    let catalog_app = app.clone();
+    let catalog_read = tokio::spawn(async move {
+        management_request(
+            &catalog_app,
+            "GET",
+            "/api/hosts/host-1/runtime-catalog?force=1",
+            "",
+        )
+        .await
+    });
+    let command = next_json(&mut daemon).await;
+    assert_eq!(command["kind"], "host_runtime_catalog");
+    assert_eq!(command["params"], json!({ "force": true }));
+    respond(
+        &mut daemon,
+        &command,
+        json!({ "runtimes": [], "detected_at": 5 }),
+    )
+    .await;
+    let (status, body) = catalog_read.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "runtimes": [], "detected_at": 5 }));
+
+    let (status, body) = management_request(&app, "POST", "/api/hosts/host-1/disconnect", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["disconnected"], true);
+    expect_close(
+        &mut daemon,
+        CloseCode::Away,
+        HOST_DISCONNECTED_CLOSE_REASON_FOR_TEST,
+    )
+    .await;
+
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
 async fn a_status_snapshot_rides_the_wire_the_deployed_daemon_answers_and_binds_its_facts() {
     let fixture = fixture("host-command-status-snapshot.sqlite").await;
     let mut socket = connect(fixture.address).await;
     complete_attachment(&mut socket, &fixture.controller).await;
-    let dispatch = fixture.controller.host_commands();
+    let dispatch = fixture.controller.owning_host_data_plane();
 
-    // Same transport as the catalog, different report: a custody nobody is serving
-    // is this operation's own no-reason arm, and nothing is asked of the machine.
-    assert!(matches!(
-        status_snapshot::probe(&dispatch, status_request("host-1", "instance-stale")).await,
-        StatusSnapshotOutcome::Disconnected
-    ));
-    assert_no_daemon_frame(&mut socket).await;
-
-    let probing = status_probe_in_background(&dispatch, status_request("host-1", "instance-test"));
+    let probing =
+        status_probe_in_background(&dispatch, status_request(custody(&dispatch, "host-1")));
     let command = next_json(&mut socket).await;
     // The literal pair the deployed daemon dispatches on. A rename on either side is
     // an unknown intent, not a decode failure.
@@ -2132,20 +2698,10 @@ async fn a_status_snapshot_rides_the_wire_the_deployed_daemon_answers_and_binds_
     fixture.server.abort();
 }
 
-fn seed_in_background(
-    seeds: &HostStatusSeeds,
-    host: &str,
-    instance: &str,
-) -> tokio::task::JoinHandle<Result<SeedAttempt, SeedFailure>> {
-    let seeds = seeds.clone();
-    let host = host_id(host);
-    let instance = daemon_instance(instance);
-    tokio::spawn(async move { seeds.seed_on_attach(&host, &instance).await })
-}
-
 #[tokio::test]
 async fn the_seed_store_asks_the_attached_custody_and_every_handle_reads_what_it_kept() {
     let fixture = fixture("host-status-seed.sqlite").await;
+    let mut viewer_events = connect_event_scope(fixture.address, "viewer:user-1").await;
     // Two handles from the one runtime. Everything below seeds through the first and
     // reads through the second: a store built a second time would answer this host
     // from facts it never saw.
@@ -2168,14 +2724,13 @@ async fn the_seed_store_asks_the_attached_custody_and_every_handle_reads_what_it
     );
     assert_no_daemon_frame(&mut socket).await;
 
-    complete_attachment(&mut socket, &fixture.controller).await;
+    complete_attachment_transport_until(&mut socket, &fixture.controller, "instance-test", 1).await;
     // Attached, and its facts have not landed: not a fault, and not a value.
     assert_eq!(
         reader.read(&host_id("host-1")).unwrap(),
         SeedRead::NotSeeded
     );
 
-    let seeding = seed_in_background(&seeds, "host-1", "instance-test");
     let command = next_json(&mut socket).await;
     assert_eq!(command["kind"], "host_status");
     respond(
@@ -2192,7 +2747,13 @@ async fn the_seed_store_asks_the_attached_custody_and_every_handle_reads_what_it
         }),
     )
     .await;
-    assert_eq!(seeding.await.unwrap(), Ok(SeedAttempt::Sealed));
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !matches!(reader.read(&host_id("host-1")), Ok(SeedRead::Seeded(_))) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
 
     let SeedRead::Seeded(status) = reader.read(&host_id("host-1")).unwrap() else {
         panic!("the handle that did not seed must read what the store kept")
@@ -2204,10 +2765,14 @@ async fn the_seed_store_asks_the_attached_custody_and_every_handle_reads_what_it
     assert_eq!(status.daemon_version, "1.2.3");
     assert_eq!(status.started_at, 1_700_000_000_000);
     assert!(status.uptime_ms >= 90_000);
-    assert_eq!(
-        status.active_agents,
-        std::collections::HashSet::from([AgentId::parse("agent-1").unwrap()])
-    );
+    // Hydration completed with an empty runtime set, so the event-fed owner
+    // overrides the pre-hydrate active-agent ids carried by the status seed.
+    assert!(status.active_agents.is_empty());
+
+    let seeded = next_json(&mut viewer_events).await;
+    assert_eq!(seeded["scope"], "viewer:user-1");
+    assert_eq!(seeded["kind"], "host_connection_changed");
+    assert_eq!(seeded["payload"], json!({ "host_id": "host-1" }));
 
     // Its process did not restart, so it is not asked again — and the read surface
     // never asks at all.
@@ -2229,6 +2794,125 @@ async fn the_seed_store_asks_the_attached_custody_and_every_handle_reads_what_it
     );
 
     fixture.controller.close().await;
+    viewer_events.close(None).await.unwrap();
+    fixture.event_controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn same_daemon_instance_reconnect_requires_a_fresh_connection_generation_seed() {
+    let fixture = fixture("host-status-same-instance-reconnect.sqlite").await;
+    let seeds = fixture.controller.host_status_seeds();
+    let mut first = connect(fixture.address).await;
+    complete_attachment(&mut first, &fixture.controller).await;
+    assert!(matches!(
+        seeds.read(&host_id("host-1")),
+        Ok(SeedRead::Seeded(_))
+    ));
+    first.close(None).await.unwrap();
+    wait_for_free_host_slot(&fixture.controller).await;
+
+    let mut replacement = connect(fixture.address).await;
+    complete_attachment_transport_until(&mut replacement, &fixture.controller, "instance-test", 1)
+        .await;
+    assert_eq!(seeds.read(&host_id("host-1")).unwrap(), SeedRead::NotSeeded);
+    let command = next_json(&mut replacement).await;
+    assert_eq!(command["kind"], "host_status");
+    respond(
+        &mut replacement,
+        &command,
+        json!({
+            "os": "generation-b",
+            "os_arch": "arm64",
+            "daemon_pid": 4_243,
+            "daemon_version": "1.2.4",
+            "started_at": 1_700_000_000_100_i64,
+            "uptime_ms": 1,
+            "active_agent_ids": [],
+        }),
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Ok(SeedRead::Seeded(status)) = seeds.read(&host_id("host-1"))
+                && status.os == "generation-b"
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    replacement.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn status_seed_timeout_is_driven_through_the_one_second_retry_to_seal() {
+    let fixture = fixture("host-status-production-retry.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment_transport_until(&mut socket, &fixture.controller, "instance-test", 1).await;
+    let first = next_json(&mut socket).await;
+    assert_eq!(first["kind"], "host_status");
+    let started = tokio::time::Instant::now();
+
+    let retry = tokio::time::timeout(std::time::Duration::from_secs(13), async {
+        loop {
+            match socket.next().await.unwrap().unwrap() {
+                Message::Text(text) => {
+                    let frame: Value = serde_json::from_str(&text).unwrap();
+                    if frame["kind"] == "host_status" {
+                        break frame;
+                    }
+                }
+                Message::Ping(payload) => socket.send(Message::Pong(payload)).await.unwrap(),
+                other => panic!("unexpected daemon frame: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("the production retry driver must wake after timeout + 1 second");
+    assert!(started.elapsed() >= std::time::Duration::from_secs(11));
+    respond(
+        &mut socket,
+        &retry,
+        json!({
+            "os": "retried",
+            "daemon_pid": 42,
+            "daemon_version": "test",
+            "started_at": 100,
+            "uptime_ms": 11_000,
+            "active_agent_ids": [],
+        }),
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !matches!(
+            fixture
+                .controller
+                .host_status_seeds()
+                .read(&host_id("host-1")),
+            Ok(SeedRead::Seeded(_))
+        ) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "retry response did not seal: {:?}",
+            fixture
+                .controller
+                .host_status_seeds()
+                .read(&host_id("host-1"))
+        )
+    });
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
     fixture.server.abort();
 }
 
@@ -2237,11 +2921,12 @@ async fn a_replacement_daemon_moves_the_expected_custody_and_strands_the_old_com
     let fixture = fixture("host-command-replacement.sqlite").await;
     let mut first = connect(fixture.address).await;
     complete_attachment_with_instance(&mut first, &fixture.controller, "instance-a").await;
-    let dispatch = fixture.controller.host_commands();
+    let dispatch = fixture.controller.owning_host_data_plane();
+    let first_custody = custody(&dispatch, "host-1");
 
     // The connection dies with the command on it, so whether the machine ran it is
     // unknowable: this operation may only report that the machine did not answer.
-    let in_flight = probe_in_background(&dispatch, catalog_request("host-1", "instance-a", true));
+    let in_flight = probe_in_background(&dispatch, catalog_request(first_custody.clone(), true));
     let command = next_json(&mut first).await;
     assert_eq!(command["kind"], "host_runtime_catalog");
     first.close(None).await.unwrap();
@@ -2252,19 +2937,23 @@ async fn a_replacement_daemon_moves_the_expected_custody_and_strands_the_old_com
     wait_for_free_host_slot(&fixture.controller).await;
 
     assert!(matches!(
-        runtime_catalog::probe(&dispatch, catalog_request("host-1", "instance-a", true)).await,
+        runtime_catalog::probe(&dispatch, catalog_request(first_custody.clone(), true)).await,
         RuntimeCatalogOutcome::AttachPending
     ));
 
     let mut second = connect(fixture.address).await;
-    complete_attachment_with_instance(&mut second, &fixture.controller, "instance-b").await;
+    // The daemon process identity is deliberately unchanged. Only the registry's
+    // connection generation moves, so this proves the expectedConnectionId-equivalent
+    // guard rather than an easier daemon-instance mismatch.
+    complete_attachment_with_instance(&mut second, &fixture.controller, "instance-a").await;
     assert!(matches!(
-        runtime_catalog::probe(&dispatch, catalog_request("host-1", "instance-a", true)).await,
+        runtime_catalog::probe(&dispatch, catalog_request(first_custody.clone(), true)).await,
         RuntimeCatalogOutcome::AttachPending
     ));
     assert_no_daemon_frame(&mut second).await;
 
-    let answered = probe_in_background(&dispatch, catalog_request("host-1", "instance-b", true));
+    let second_custody = custody(&dispatch, "host-1");
+    let answered = probe_in_background(&dispatch, catalog_request(second_custody.clone(), true));
     let command = next_json(&mut second).await;
     respond(
         &mut second,
@@ -2277,15 +2966,16 @@ async fn a_replacement_daemon_moves_the_expected_custody_and_strands_the_old_com
     };
     assert_eq!(
         catalog
-            .rows_for(&host_id("host-1"), &daemon_instance("instance-b"))
+            .rows_for(&second_custody)
             .expect("the fact opens for the custody that produced it")
             .detected_at,
         9
     );
-    // The stranded custody never produced these rows, so it cannot read them either.
+    // The stranded connection never produced these rows, even though the replacement
+    // daemon spells the same process instance.
     assert!(matches!(
-        catalog.rows_for(&host_id("host-1"), &daemon_instance("instance-a")),
-        Err(CatalogCoordinateMismatch::DaemonInstance)
+        catalog.rows_for(&first_custody),
+        Err(CatalogCoordinateMismatch::ConnectionGeneration)
     ));
 
     second.close(None).await.unwrap();
@@ -2298,9 +2988,12 @@ async fn an_answer_for_an_unknown_id_cannot_settle_the_command_in_flight() {
     let fixture = fixture("host-command-stray-answer.sqlite").await;
     let mut socket = connect(fixture.address).await;
     complete_attachment(&mut socket, &fixture.controller).await;
-    let dispatch = fixture.controller.host_commands();
+    let dispatch = fixture.controller.owning_host_data_plane();
 
-    let answered = probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+    let answered = probe_in_background(
+        &dispatch,
+        catalog_request(custody(&dispatch, "host-1"), true),
+    );
     let live = next_json(&mut socket).await;
 
     // Nothing is waiting for this id, so the frame is dropped: it may not settle the
@@ -2326,7 +3019,7 @@ async fn an_answer_for_an_unknown_id_cannot_settle_the_command_in_flight() {
     };
     assert_eq!(
         catalog
-            .rows_for(&host_id("host-1"), &daemon_instance("instance-test"))
+            .rows_for(&custody(&dispatch, "host-1"))
             .expect("the fact opens for the coordinate that asked for it")
             .detected_at,
         2
@@ -2387,11 +3080,13 @@ async fn a_timed_out_host_command_is_deregistered_before_its_late_answer_arrives
     let fixture = fixture("host-command-timeout-cleanup.sqlite").await;
     let mut socket = connect(fixture.address).await;
     complete_attachment(&mut socket, &fixture.controller).await;
-    let dispatch = fixture.controller.host_commands();
+    let dispatch = fixture.controller.owning_host_data_plane();
     let mut observed = Vec::new();
 
-    let abandoned =
-        probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+    let abandoned = probe_in_background(
+        &dispatch,
+        catalog_request(custody(&dispatch, "host-1"), true),
+    );
     let stale = next_daemon_command(&mut socket, &mut observed).await;
     assert_eq!(stale["kind"], "host_runtime_catalog");
 
@@ -2408,7 +3103,10 @@ async fn a_timed_out_host_command_is_deregistered_before_its_late_answer_arrives
         "the budget elapsed, so this operation may only report that nobody answered"
     );
 
-    let answered = probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+    let answered = probe_in_background(
+        &dispatch,
+        catalog_request(custody(&dispatch, "host-1"), true),
+    );
     let live = next_daemon_command(&mut socket, &mut observed).await;
     assert_ne!(live["id"], stale["id"]);
 
@@ -2436,7 +3134,7 @@ async fn a_timed_out_host_command_is_deregistered_before_its_late_answer_arrives
     };
     assert_eq!(
         catalog
-            .rows_for(&host_id("host-1"), &daemon_instance("instance-test"))
+            .rows_for(&custody(&dispatch, "host-1"))
             .expect("the fact opens for the coordinate that asked for it")
             .detected_at,
         7
@@ -2444,7 +3142,10 @@ async fn a_timed_out_host_command_is_deregistered_before_its_late_answer_arrives
 
     // The connection is still usable, proven by another round trip on it rather than
     // by the absence of something within some window.
-    let after = probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+    let after = probe_in_background(
+        &dispatch,
+        catalog_request(custody(&dispatch, "host-1"), true),
+    );
     let next = next_daemon_command(&mut socket, &mut observed).await;
     respond(
         &mut socket,
@@ -2457,7 +3158,7 @@ async fn a_timed_out_host_command_is_deregistered_before_its_late_answer_arrives
     };
     assert_eq!(
         catalog
-            .rows_for(&host_id("host-1"), &daemon_instance("instance-test"))
+            .rows_for(&custody(&dispatch, "host-1"))
             .expect("the fact opens for the coordinate that asked for it")
             .detected_at,
         11
@@ -2484,7 +3185,7 @@ async fn only_the_closed_refusal_set_settles_a_host_command_at_all() {
     let fixture = fixture("host-command-refusals.sqlite").await;
     let mut socket = connect(fixture.address).await;
     complete_attachment(&mut socket, &fixture.controller).await;
-    let dispatch = fixture.controller.host_commands();
+    let dispatch = fixture.controller.owning_host_data_plane();
 
     // Every admitted code means one thing to this operation — the machine cannot say
     // what it has installed — so what a socket can still prove is that each one
@@ -2498,8 +3199,10 @@ async fn only_the_closed_refusal_set_settles_a_host_command_at_all() {
         "shutting_down",
         "request_too_large",
     ] {
-        let refused =
-            probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+        let refused = probe_in_background(
+            &dispatch,
+            catalog_request(custody(&dispatch, "host-1"), true),
+        );
         let command = next_json(&mut socket).await;
         respond_error(
             &mut socket,
@@ -2516,8 +3219,10 @@ async fn only_the_closed_refusal_set_settles_a_host_command_at_all() {
         );
     }
 
-    let surviving =
-        probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+    let surviving = probe_in_background(
+        &dispatch,
+        catalog_request(custody(&dispatch, "host-1"), true),
+    );
     let command = next_json(&mut socket).await;
     respond(
         &mut socket,
@@ -2537,8 +3242,10 @@ async fn only_the_closed_refusal_set_settles_a_host_command_at_all() {
         json!({ "code": "banana", "message": "invented" }),
         json!({ "code": "agent_deleting", "message": "wrong vocabulary" }),
     ] {
-        let corrupt =
-            probe_in_background(&dispatch, catalog_request("host-1", "instance-test", true));
+        let corrupt = probe_in_background(
+            &dispatch,
+            catalog_request(custody(&dispatch, "host-1"), true),
+        );
         let command = next_json(&mut socket).await;
         respond_error(&mut socket, &command, error).await;
         assert!(matches!(
@@ -2565,9 +3272,12 @@ async fn the_runtime_catalog_probe_binds_its_answer_to_the_custody_that_produced
     let fixture = fixture("runtime-catalog-probe.sqlite").await;
     let mut socket = connect(fixture.address).await;
     complete_attachment(&mut socket, &fixture.controller).await;
-    let dispatch = fixture.controller.host_commands();
+    let dispatch = fixture.controller.owning_host_data_plane();
 
-    let probing = probe_in_background(&dispatch, catalog_request("host-1", "instance-test", false));
+    let probing = probe_in_background(
+        &dispatch,
+        catalog_request(custody(&dispatch, "host-1"), false),
+    );
     let command = next_json(&mut socket).await;
     assert_eq!(command["kind"], "host_runtime_catalog");
     assert_eq!(command["params"], json!({ "force": false }));
@@ -2591,7 +3301,7 @@ async fn the_runtime_catalog_probe_binds_its_answer_to_the_custody_that_produced
         panic!("a well-formed answer must be reported as a catalog")
     };
     let view = catalog
-        .rows_for(&host_id("host-1"), &daemon_instance("instance-test"))
+        .rows_for(&custody(&dispatch, "host-1"))
         .expect("the fact opens for the coordinate that asked for it");
     assert_eq!(view.detected_at, 1_700_000_000_000);
     assert_eq!(view.runtimes.len(), 1);
@@ -2629,12 +3339,19 @@ async fn two_hosts_spelling_one_daemon_instance_cannot_read_each_others_catalog(
     let mut owner = connect(fixture.address).await;
     complete_attachment_with_instance(&mut owner, &fixture.controller, "instance-shared").await;
     let mut other = connect_with_token(fixture.address, TOKEN_2).await.unwrap();
-    complete_attachment_until(&mut other, &fixture.controller, "instance-shared", 2).await;
-    let dispatch = fixture.controller.host_commands();
+    complete_attachment_for_host_until(
+        &mut other,
+        &fixture.controller,
+        "host-2",
+        "instance-shared",
+        2,
+    )
+    .await;
+    let dispatch = fixture.controller.owning_host_data_plane();
 
     let owner_probe = probe_in_background(
         &dispatch,
-        catalog_request("host-1", "instance-shared", true),
+        catalog_request(custody(&dispatch, "host-1"), true),
     );
     let owner_command = next_json(&mut owner).await;
     respond(
@@ -2649,7 +3366,7 @@ async fn two_hosts_spelling_one_daemon_instance_cannot_read_each_others_catalog(
 
     let other_probe = probe_in_background(
         &dispatch,
-        catalog_request("host-2", "instance-shared", true),
+        catalog_request(custody(&dispatch, "host-2"), true),
     );
     let other_command = next_json(&mut other).await;
     respond(
@@ -2662,17 +3379,16 @@ async fn two_hosts_spelling_one_daemon_instance_cannot_read_each_others_catalog(
         panic!("the other machine answered on its own wire")
     };
 
-    let shared = daemon_instance("instance-shared");
     assert_eq!(
         owner_catalog
-            .rows_for(&host_id("host-1"), &shared)
+            .rows_for(&custody(&dispatch, "host-1"))
             .expect("each fact opens for the machine that produced it")
             .detected_at,
         1
     );
     assert_eq!(
         other_catalog
-            .rows_for(&host_id("host-2"), &shared)
+            .rows_for(&custody(&dispatch, "host-2"))
             .expect("each fact opens for the machine that produced it")
             .detected_at,
         2
@@ -2681,11 +3397,11 @@ async fn two_hosts_spelling_one_daemon_instance_cannot_read_each_others_catalog(
     // the other's key, which is exactly what a seed keyed by (host, instance) would
     // then serve to the wrong host.
     assert!(matches!(
-        owner_catalog.rows_for(&host_id("host-2"), &shared),
+        owner_catalog.rows_for(&custody(&dispatch, "host-2")),
         Err(CatalogCoordinateMismatch::Host)
     ));
     assert!(matches!(
-        other_catalog.rows_for(&host_id("host-1"), &shared),
+        other_catalog.rows_for(&custody(&dispatch, "host-1")),
         Err(CatalogCoordinateMismatch::Host)
     ));
 
@@ -2808,6 +3524,7 @@ async fn authenticated_host_fences_colliding_daemon_instances_from_foreign_custo
     })
     .await
     .unwrap();
+    answer_status_seed(&mut foreign, &fixture.controller, "host-2").await;
 
     // The foreign host may describe the colliding daemon/scope, but its exit
     // CAS is stale. A following heartbeat is a deterministic processing
@@ -2991,6 +3708,145 @@ async fn runtime_exit_finalizes_only_the_exact_generation_and_never_its_successo
             .as_deref(),
         Some("instance-test")
     );
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn clear_session_waiter_settles_after_the_exact_runtime_exit_frame_commits() {
+    let fixture = fixture("clear-runtime-exit.sqlite").await;
+    activate_host_for_runtime_control(&fixture.path).await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+
+    let target = runtime_control_start_target();
+    let generation = start_through_runtime_control(&fixture, &mut socket, &target).await;
+    let control = fixture.runtime_control.clone();
+    let clear = tokio::spawn(async move {
+        clear_conversation_session(
+            &ClearAdmission,
+            &control,
+            UserId::parse("user-1").unwrap(),
+            AgentId::parse(AGENT).unwrap(),
+            ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let command = next_json(&mut socket).await;
+    assert_eq!(command["kind"], "runtime_clear_session");
+    assert_eq!(command["params"]["runtime_generation"], generation);
+
+    // The exit deliberately wins the response race. The production frame router
+    // must durably commit it and latch the waiter that was registered before send.
+    send_runtime_exit(&mut socket, generation, true, 111).await;
+    respond(&mut socket, &command, json!({ "cleared": true })).await;
+    let outcome = clear.await.unwrap().unwrap().unwrap();
+    assert!(outcome.was_running());
+    assert_eq!(outcome.previous_cli_session(), None);
+    assert_eq!(
+        fixture.clear_settlement_calls.load(Ordering::SeqCst),
+        1,
+        "one durable exit releases exactly one clear settlement"
+    );
+
+    let mut db = open(&fixture.path).await;
+    let slot = sqlx::query(
+        "SELECT claimed_by_daemon_instance_id, cli_session_id
+           FROM agent_runtime_slots
+          WHERE agent_id=? AND conversation_id=?",
+    )
+    .bind(AGENT)
+    .bind(CONVERSATION)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert!(
+        slot.get::<Option<String>, _>("claimed_by_daemon_instance_id")
+            .is_none()
+    );
+    assert!(slot.get::<Option<String>, _>("cli_session_id").is_none());
+    let audits: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM messages
+          WHERE conversation_id=? AND from_kind='system'
+            AND json_extract(metadata, '$.subtype')='session_cleared'",
+    )
+    .bind(CONVERSATION)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(audits, 1);
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn delivery_failed_frame_cannot_release_a_clear_session_waiter() {
+    let fixture = fixture("clear-delivery-failed.sqlite").await;
+    activate_host_for_runtime_control(&fixture.path).await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+
+    let target = runtime_control_start_target();
+    let generation = start_through_runtime_control(&fixture, &mut socket, &target).await;
+    let control = fixture.runtime_control.clone();
+    let clear = tokio::spawn(async move {
+        clear_conversation_session(
+            &ClearAdmission,
+            &control,
+            UserId::parse("user-1").unwrap(),
+            AgentId::parse(AGENT).unwrap(),
+            ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let command = next_json(&mut socket).await;
+    assert_eq!(command["kind"], "runtime_clear_session");
+    respond(&mut socket, &command, json!({ "cleared": true })).await;
+
+    send_delivery_failed(&mut socket, generation, "driver_refused", 120).await;
+    wait_for_counter(&fixture.settlement_calls, 1).await;
+    tokio::task::yield_now().await;
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(11)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+        clear.await.unwrap().unwrap(),
+        Err(ClearSessionRefusal::Provider(
+            ClearSessionProviderRefusal::Timeout
+        ))
+    );
+    assert_eq!(
+        fixture.clear_settlement_calls.load(Ordering::SeqCst),
+        0,
+        "delivery settlement is not runtime-exit evidence"
+    );
+
+    let mut db = open(&fixture.path).await;
+    let claimed: Option<String> = sqlx::query_scalar(
+        "SELECT claimed_by_daemon_instance_id
+           FROM agent_runtime_slots
+          WHERE agent_id=? AND conversation_id=?",
+    )
+    .bind(AGENT)
+    .bind(CONVERSATION)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(claimed.as_deref(), Some("instance-test"));
+    let audits: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM messages
+          WHERE conversation_id=? AND from_kind='system'
+            AND json_extract(metadata, '$.subtype')='session_cleared'",
+    )
+    .bind(CONVERSATION)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(audits, 0);
 
     socket.close(None).await.unwrap();
     fixture.controller.close().await;
@@ -3233,6 +4089,10 @@ async fn hydrated_product_frames_reach_durable_live_and_coordinator_owners_once(
     let mut presence = connect_event_scope(fixture.address, "viewer:user-1").await;
     let mut daemon = connect(fixture.address).await;
     complete_attachment(&mut daemon, &fixture.controller).await;
+    let seed_landed = next_json(&mut presence).await;
+    assert_eq!(seed_landed["scope"], "viewer:user-1");
+    assert_eq!(seed_landed["kind"], "host_connection_changed");
+    assert_eq!(seed_landed["payload"], json!({ "host_id": "host-1" }));
 
     let effects = fixture.effects.clone();
     let start = tokio::spawn(async move {
@@ -3627,6 +4487,7 @@ async fn hydrated_run_state_is_the_cold_authority_and_session_init_drains_once()
     )
     .await;
     wait_for_attachment(&fixture.controller).await;
+    answer_status_seed(&mut daemon, &fixture.controller, "host-1").await;
 
     send_product(
         &mut daemon,
@@ -4181,6 +5042,19 @@ async fn stale_generation_events_cannot_change_or_publish_successor_state() {
     let only_state = next_json(&mut live).await;
     assert_eq!(only_state["kind"], "agent_activity");
     assert_eq!(only_state["payload"]["runId"], "successor-run");
+    let SeedRead::Seeded(status) = fixture
+        .controller
+        .host_status_seeds()
+        .read(&host_id("host-1"))
+        .unwrap()
+    else {
+        panic!("status seed is available")
+    };
+    assert_eq!(
+        status.active_agents,
+        std::collections::HashSet::from([AgentId::parse(AGENT).unwrap()])
+    );
+    assert_no_daemon_frame(&mut daemon).await;
 
     for (generation, retry_attempt, ts) in [(1, 1, 43), (2, 2, 44)] {
         send_product(
@@ -4211,6 +5085,25 @@ async fn stale_generation_events_cannot_change_or_publish_successor_state() {
     .await
     .unwrap();
     assert_eq!(projected_generation, 2);
+
+    send_runtime_exit(&mut daemon, 2, true, 45).await;
+    assert_eq!(next_json(&mut live).await["kind"], "agent_status");
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Ok(SeedRead::Seeded(status)) = fixture
+                .controller
+                .host_status_seeds()
+                .read(&host_id("host-1"))
+                && status.active_agents.is_empty()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_no_daemon_frame(&mut daemon).await;
 
     live.close(None).await.unwrap();
     daemon.close(None).await.unwrap();

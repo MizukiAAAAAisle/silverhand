@@ -218,7 +218,7 @@ mod tests {
     use std::{path::PathBuf, time::Duration};
 
     use silverhand_backend_core::teardown::intent::{
-        BeginDeletion, begin_agent_deletion, complete_agent_deletion, pending_agent_deletions,
+        BeginDeletion, begin_agent_deletion, pending_agent_deletions,
     };
     use sqlx::Connection;
     use tempfile::TempDir;
@@ -426,7 +426,7 @@ mod tests {
         else {
             panic!("expected a started attempt");
         };
-        let outcome = complete_agent_deletion(&store, &attempt).await.unwrap();
+        let outcome = store.complete(&attempt).await.unwrap();
         assert!(matches!(outcome, CompleteDeletion::Committed(_)));
 
         let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM agents WHERE id = 'a1'")
@@ -454,7 +454,7 @@ mod tests {
             .await
             .unwrap();
 
-        let outcome = complete_agent_deletion(&store, &attempt).await.unwrap();
+        let outcome = store.complete(&attempt).await.unwrap();
         assert!(matches!(outcome, CompleteDeletion::AttemptLost));
         let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM agents WHERE id = 'a1'")
             .fetch_one(store.pool())
@@ -479,7 +479,7 @@ mod tests {
             .await
             .unwrap();
 
-        let outcome = complete_agent_deletion(&store, &attempt).await.unwrap();
+        let outcome = store.complete(&attempt).await.unwrap();
         assert!(matches!(outcome, CompleteDeletion::Gone));
     }
 }

@@ -14,7 +14,7 @@ use serde::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, DaemonInstanceId},
+    identity::{AgentId, ConversationId, DaemonInstanceId, HostId},
     persistence::PersistenceFailure,
     runtime_credential::{
         RuntimeCustody, RuntimeEventTime, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
@@ -28,7 +28,10 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::scope_events::{DaemonSideEvent, ScopeEventHub, ScopeEventHubError};
+use crate::{
+    host_control::status_seed::{AttachedStatusCustody, CustodyUnavailable, HostRuntimeActivity},
+    scope_events::{DaemonSideEvent, ScopeEventHub, ScopeEventHubError},
+};
 
 #[derive(Debug)]
 pub(crate) enum RuntimeEventDirective {
@@ -73,6 +76,21 @@ pub(crate) struct DaemonRuntimeEventOwner<P> {
 }
 
 impl<P> DaemonRuntimeEventOwner<P> {
+    pub(crate) fn host_runtime_activity(&self) -> HostRuntimeActivitySource {
+        HostRuntimeActivitySource {
+            state: Arc::clone(&self.state),
+        }
+    }
+
+    pub(crate) fn publish_host_connection_changed(
+        &self,
+        owner: &silverhand_backend_core::identity::UserId,
+        host: &HostId,
+    ) -> Result<(), DaemonRuntimeEventError> {
+        self.hub
+            .publish_host_connection_changed(owner, host)
+            .map_err(DaemonRuntimeEventError::from)
+    }
     /// Copy the complete live owner map under its single mutex, then release
     /// the lock before conversation filtering, verification and ordering. This
     /// gives callers one atomic owner snapshot without lengthening the daemon
@@ -160,6 +178,36 @@ struct RuntimeOwnerState {
     init_failed: HashSet<RuntimeEventAdmission>,
     fatal: HashSet<RuntimeEventAdmission>,
     clear_cli_session_on_exit: HashSet<RuntimeEventAdmission>,
+    host_activity: HashMap<String, HostActivityState>,
+}
+
+struct HostActivityState {
+    daemon_instance: DaemonInstanceId,
+    connection_id: String,
+    active_agents: HashSet<AgentId>,
+}
+
+#[derive(Clone)]
+pub(crate) struct HostRuntimeActivitySource {
+    state: Arc<Mutex<RuntimeOwnerState>>,
+}
+
+impl HostRuntimeActivity for HostRuntimeActivitySource {
+    fn active_agents(
+        &self,
+        host: &HostId,
+        custody: &AttachedStatusCustody,
+    ) -> Result<Option<HashSet<AgentId>>, CustodyUnavailable> {
+        let state = self.state.lock().map_err(|_| CustodyUnavailable)?;
+        Ok(state
+            .host_activity
+            .get(host.as_str())
+            .filter(|activity| {
+                activity.daemon_instance == custody.daemon_instance
+                    && activity.connection_id == custody.connection_id
+            })
+            .map(|activity| activity.active_agents.clone()))
+    }
 }
 
 #[derive(Clone)]
@@ -194,6 +242,9 @@ where
     pub(crate) async fn hydrate(
         &self,
         host_id: &str,
+        daemon_instance: &DaemonInstanceId,
+        connection_id: &str,
+        active_agents: HashSet<AgentId>,
         runtimes: Vec<HydratedRuntime>,
     ) -> Result<(), DaemonRuntimeEventError> {
         let mut state = self
@@ -236,6 +287,14 @@ where
                 );
             }
         }
+        state.host_activity.insert(
+            host_id.to_owned(),
+            HostActivityState {
+                daemon_instance: daemon_instance.clone(),
+                connection_id: connection_id.to_owned(),
+                active_agents,
+            },
+        );
         Ok(())
     }
 
@@ -243,6 +302,7 @@ where
         &self,
         host_id: &str,
         daemon: &DaemonInstanceId,
+        connection_id: &str,
     ) -> Result<(), DaemonRuntimeEventError> {
         let mut state = self
             .state
@@ -272,6 +332,11 @@ where
             admission.host_id() != host_id
                 || admission.principal().custody().daemon_instance() != daemon
         });
+        if state.host_activity.get(host_id).is_some_and(|activity| {
+            activity.daemon_instance == *daemon && activity.connection_id == connection_id
+        }) {
+            state.host_activity.remove(host_id);
+        }
         Ok(())
     }
 
@@ -279,6 +344,7 @@ where
         &self,
         host_id: &str,
         daemon: &DaemonInstanceId,
+        connection_id: &str,
         event: RuntimeProductEvent,
     ) -> Result<RuntimeEventDirective, DaemonRuntimeEventError> {
         match event {
@@ -301,6 +367,15 @@ where
                         state.fatal.remove(&admission);
                         state.clear_cli_session_on_exit.remove(&admission);
                     }
+                    let Some(activity) = state.host_activity.get_mut(host_id).filter(|activity| {
+                        activity.daemon_instance == *daemon
+                            && activity.connection_id == connection_id
+                    }) else {
+                        return Ok(RuntimeEventDirective::None);
+                    };
+                    activity
+                        .active_agents
+                        .insert(admission.principal().agent().clone());
                     state.runs.insert(admission, event.state.clone());
                 }
                 self.publish(
@@ -610,6 +685,7 @@ where
     pub(crate) fn complete_exit_state(
         &self,
         admission: &RuntimeEventAdmission,
+        connection_id: &str,
         result: &RuntimeExitCommitResult,
         conversation: ConversationId,
         code: Option<i64>,
@@ -628,6 +704,18 @@ where
             let clear_cli_session_id = state.clear_cli_session_on_exit.remove(admission);
             state.timeout_reasons.remove(admission);
             let run_state = state.runs.remove(admission);
+            if let Some(activity) =
+                state
+                    .host_activity
+                    .get_mut(admission.host_id())
+                    .filter(|activity| {
+                        activity.daemon_instance
+                            == *admission.principal().custody().daemon_instance()
+                            && activity.connection_id == connection_id
+                    })
+            {
+                activity.active_agents.remove(admission.principal().agent());
+            }
             (init_failed, fatal, clear_cli_session_id, run_state)
         };
         let status = runtime_exit_status(init_failed, fatal, intentional, code).as_str();

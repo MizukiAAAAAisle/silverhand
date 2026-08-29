@@ -83,11 +83,48 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_detail_read"),
     ("backend-core", "agent_lifecycle"),
     ("backend-core", "agent_list_read"),
+    // #task:2229 — unmounted typed agent-materialize capability and its production
+    // exact-custody data-plane adapter. The later create vertical consumes this
+    // port; this ticket does not activate a route.
+    ("backend-core", "agent_materialize"),
+    // #task:2225 — the single-UoW create/provision-and-activate authority: the core
+    // materialization writer plus the exhaustive `provision_and_activate` use case that
+    // seals both the agent and conversation arms. Core capability, UNMOUNTED until the
+    // create route is activated by a later integration.
+    ("backend-core", "agent_materialization"),
     ("backend-core", "agent_presence_read"),
+    // #task:2225 — the public agent-lifecycle and avatar route family (Rust Wave 3).
+    // Core capability ports and orchestration for the handle-availability probe
+    // (route 1, `participant_handle_availability`), the agent tuning/profile write
+    // (route 2, `agent_profile_write`), the agent avatar byte fetch (route 5,
+    // `agent_avatar`), and the agent avatar upload/clear lifecycle (routes 3/4,
+    // `agent_avatar_write`, which reuses the single `agent_profile_write` row writer).
+    // Their SQLite adapters and server route surfaces are the sibling entries below;
+    // all stay UNMOUNTED until a later integration wires them.
+    ("backend-core", "agent_avatar"),
+    ("backend-core", "agent_avatar_write"),
+    ("backend-core", "agent_profile_write"),
+    ("backend-core", "participant_handle_availability"),
+    // The agent-scoped bulk runtime stop (POST /api/agents/{id}/stop): its
+    // source-bound snapshot read port and the aggregation use case. It consumes
+    // #task:2227's `scope_runtime_stop` capability per seat and mints no new stop
+    // adapter or refusal vocabulary. Its SQLite adapter rides the existing
+    // `host_agent` store and its server route is the `host_agent::agent_stop`
+    // submodule; both stay UNMOUNTED until a later integration.
+    ("backend-core", "agent_bulk_stop"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
     ("backend-core", "host_resources_read"),
     ("backend-core", "policy"),
+    // #task:2227 — exact host + runtime-scope + generation stop capability and its
+    // production owning-host data-plane adapter. It is consumed by the later bulk
+    // stop vertical, not activated as a route in this ticket.
+    ("backend-core", "scope_runtime_stop"),
+    // #task:2225 — the durable runtime-transition lock (begin/complete/abort) behind
+    // the public runtime-switch route. A distinct write authority from the profile
+    // row writer, keyed on the lock columns; its SQLite adapter rides the existing
+    // `host_agent` store. UNMOUNTED until a later integration.
+    ("backend-core", "runtime_transition"),
     ("backend-core", "teardown"),
     ("backend-core", "user_presence_cold_read"),
     ("backend-core", "user_presence_last_seen"),
@@ -99,6 +136,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "workspace_metadata_write"),
     ("backend-core", "workspace_name"),
     ("backend-core", "workspace_name_availability"),
+    // Shared binary64-exact integer primitive. #task:2227's runtime-stop codec is
+    // the first migration consumer; domain positivity remains outside this module.
+    ("backend-core", "wire_number"),
     // #task:2193 CP2 — the human credentialed-session vertical (signup/login/
     // logout + self profile). Core bounded contexts and their ports; the SQLite
     // adapters and the server route surface are the sibling entries below. Mounted at
@@ -118,6 +158,20 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // under one ambient storage kind. An adapter like `clock` / `password_hasher`
     // below, so it belongs in this seam ledger but NOT `ACTIVATION_NAMESPACES`.
     ("backend-server", "avatar_blob"),
+    // #task:2225 — the crate-root route surface for the handle-availability probe
+    // (route 1). The tuning-write (route 2) and avatar (route 5) surfaces are
+    // `host_agent` submodules, already covered by the `host_agent` entry. UNMOUNTED
+    // until a later integration.
+    ("backend-server", "agent_name_availability"),
+    // #task:2225 — the single crate-root full-`AgentDto` authority: the
+    // `agentRowToDto` projector plus the shared post-commit `reproject_committed_agent`
+    // face every mutating agent face runs. Crate-root, not a `host_agent` submodule, so
+    // it is not owned by one route family's namespace (#task:2226's internal faces
+    // consume the same face). `pub(crate)`, no route of its own, UNMOUNTED.
+    ("backend-server", "agent_wire"),
+    // #task:2229 — the crate-root production `RuntimeControlPort` adapter plus the
+    // typed daemon codecs for agent materialize / runtime start / clear-session.
+    ("backend-server", "agent_materialize"),
     ("backend-server", "clock"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
@@ -130,6 +184,11 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "users"),
     ("backend-server", "ops"),
     ("backend-server", "password_hasher"),
+    // #task:2229 — unmounted runtime start/stop/clear production capability. It
+    // owns exact-custody commands, the ephemeral clear waiter, and committed
+    // clear settlement; the later route vertical is the activation owner.
+    ("backend-server", "runtime_control"),
+    ("backend-server", "scope_runtime_stop"),
     ("backend-server", "workspace_detail"),
     ("backend-server", "workspace_metadata_write"),
     ("backend-server", "workspace_name_availability"),
@@ -142,6 +201,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-sqlite", "agent_detail_read"),
     ("backend-sqlite", "agent_list_read"),
     ("backend-sqlite", "agent_presence_read"),
+    // #task:2225 — the SQLite adapters for the Wave 3 verticals: the agent avatar
+    // serve-ref read (route 5) and the agent tuning/profile row write (route 2). The
+    // handle-availability probe (route 1) reuses the existing `handle_namespace`
+    // adapter listed below.
+    ("backend-sqlite", "agent_avatar_read"),
+    ("backend-sqlite", "agent_profile_write"),
     ("backend-sqlite", "agent_view_acl"),
     ("backend-sqlite", "credential"),
     ("backend-sqlite", "handle_namespace"),
@@ -1059,7 +1124,13 @@ fn g4_the_seam_touches_only_crate_roots_and_only_as_declarations() {
     ));
 
     for (crate_dir, namespace) in SEAM_ROOT_MODULES {
-        let declaration = format!("pub mod {namespace};");
+        // A seam root module is a `mod` declaration at exactly one root. Its visibility
+        // is orthogonal to that invariant: most are `pub mod`, but a crate-private
+        // shared authority (e.g. `agent_wire`) is `pub(crate) mod` and is still declared
+        // exactly once. Accept either spelling; the fork guard below stays visibility-
+        // agnostic via `declares_or_reexports`.
+        let pub_declaration = format!("pub mod {namespace};");
+        let crate_declaration = format!("pub(crate) mod {namespace};");
         let root = rust_root()
             .join("crates")
             .join(crate_dir)
@@ -1068,7 +1139,10 @@ fn g4_the_seam_touches_only_crate_roots_and_only_as_declarations() {
         assert_eq!(
             source
                 .lines()
-                .filter(|line| line.trim() == declaration)
+                .filter(|line| {
+                    let line = line.trim();
+                    line == pub_declaration || line == crate_declaration
+                })
                 .count(),
             1,
             "{} must declare {namespace} exactly once",

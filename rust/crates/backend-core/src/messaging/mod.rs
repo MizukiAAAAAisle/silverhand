@@ -69,6 +69,7 @@ mod principal;
 
 pub(crate) use crate::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 
+pub mod agent_onboarding;
 pub mod attachments;
 pub mod collaboration;
 pub mod conversation_title;
@@ -111,7 +112,7 @@ pub use fact::{
 pub use freshness::StaleRefusal;
 pub use identity::{
     AttachmentId, EmptyIdentifier, InvalidSeq, MessageId, MessageSeq, NotificationId, ThreadRootId,
-    mint_conversation_id,
+    mint_agent_id, mint_conversation_id,
 };
 pub use pre_send::{
     AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, DeliveryIntent,

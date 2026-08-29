@@ -189,6 +189,7 @@ async fn mounted() -> Mounted {
                 agent: AgentId::parse(AGENT).unwrap(),
             },
             DaemonInstanceId::parse("daemon-1").unwrap(),
+            silverhand_backend_core::identity::ConversationId::parse("conversation0001").unwrap(),
             &transport,
         )
         .await

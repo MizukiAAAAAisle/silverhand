@@ -29,11 +29,14 @@ pub mod thread_follow;
 pub mod workspace_rename_messaging;
 
 pub use runtime_control::{
-    ClearSessionOutcome, ClearSessionProviderRefusal, ClearSessionRefusal, CliSessionId,
-    EmptyCliSessionId, HardStopRuntimeOutcome, HardStopRuntimeProviderRefusal,
-    HardStopRuntimeRefusal, RuntimeControlAdmission, RuntimeControlAdmissionRefusal,
-    RuntimeControlAdmissionScope, RuntimeControlFailure, RuntimeControlPort, RuntimeControlTarget,
-    RuntimePlacementRefusal, StartRuntimeOutcome, StartRuntimeProviderRefusal, StartRuntimeRefusal,
-    check_runtime_control_admission, clear_conversation_runtime_session,
-    hard_stop_conversation_runtime, start_conversation_runtime,
+    BoundRuntimeControlSeat, ClearSessionAuditWitness, ClearSessionCommitMismatch,
+    ClearSessionCommitReceipt, ClearSessionOutcome, ClearSessionProviderRefusal,
+    ClearSessionRefusal, CliSessionId, EmptyCliSessionId, HardStopRuntimeOutcome,
+    HardStopRuntimeProviderRefusal, HardStopRuntimeRefusal, RuntimeControlAdmission,
+    RuntimeControlAdmissionRefusal, RuntimeControlAdmissionScope, RuntimeControlFailure,
+    RuntimeControlObservedStatus, RuntimeControlPort, RuntimeControlSeatMismatch,
+    RuntimeControlSeatPort, RuntimeControlSeatSnapshot, RuntimePlacementRefusal, RuntimeSeatTarget,
+    RuntimeStartTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal, StartRuntimeRefusal,
+    check_runtime_control_admission, clear_agent_session, clear_conversation_session,
+    hard_stop_runtime, seal_clear_session_commit, start_runtime,
 };

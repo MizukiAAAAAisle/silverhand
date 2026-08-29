@@ -57,6 +57,10 @@ impl SqliteRuntimeCustodyStore {
             .begin_with(ROOT_WRITE_BEGIN)
             .await
             .map_err(persistence)?;
+        if !agent_transition_is_clear(&mut transaction, claim.scope().agent()).await? {
+            transaction.commit().await.map_err(persistence)?;
+            return Ok(None);
+        }
         let Some(slot) = read_slot(&mut transaction, claim.scope()).await? else {
             transaction.commit().await.map_err(persistence)?;
             return Ok(None);
@@ -85,12 +89,19 @@ impl SqliteRuntimeCustodyStore {
                     observed_status = 'starting',
                     observed_pid = NULL
               WHERE id = ? AND generation = ?
+                AND EXISTS (
+                    SELECT 1 FROM agents
+                     WHERE id = ?
+                       AND runtime_transition_target IS NULL
+                       AND runtime_transition_started_at IS NULL
+                )
               RETURNING cli_session_id",
         )
         .bind(next_generation.as_i64())
         .bind(claim.daemon_instance().as_str())
         .bind(slot.id)
         .bind(slot.generation.as_i64())
+        .bind(claim.scope().agent().as_str())
         .fetch_optional(&mut *transaction)
         .await
         .map_err(persistence)?
@@ -217,6 +228,28 @@ impl SqliteRuntimeCustodyStore {
         transaction.commit().await.map_err(persistence)?;
         Ok(true)
     }
+}
+
+async fn agent_transition_is_clear(
+    connection: &mut SqliteConnection,
+    agent: &silverhand_backend_core::identity::AgentId,
+) -> Result<bool, PersistenceFailure> {
+    let row = sqlx::query(
+        "SELECT runtime_transition_target, runtime_transition_started_at \
+           FROM agents WHERE id = ?",
+    )
+    .bind(agent.as_str())
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(persistence)?;
+    let Some(row) = row else { return Ok(false) };
+    let target: Option<String> = row
+        .try_get("runtime_transition_target")
+        .map_err(persistence)?;
+    let started_at: Option<i64> = row
+        .try_get("runtime_transition_started_at")
+        .map_err(persistence)?;
+    Ok(target.is_none() && started_at.is_none())
 }
 
 impl RuntimeCustodyPort for SqliteRuntimeCustodyStore {

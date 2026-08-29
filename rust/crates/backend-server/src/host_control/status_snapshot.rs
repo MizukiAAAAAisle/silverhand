@@ -33,17 +33,27 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 use silverhand_backend_core::identity::{AgentId, DaemonInstanceId, HostId};
 
+#[cfg(test)]
+use crate::daemon_delivery::{CommandRefusal, DaemonRefusalCode};
 use crate::daemon_delivery::{
-    HostCommand, HostCommandDispatch, HostCommandFailure, HostCommandKind,
+    HostDataPlaneCommandKind, HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest,
+    OwningHostDataPlane,
 };
+
+use super::wire_number::js_safe_integer;
 
 /// This operation's own budget. A control-plane round trip that reads facts the
 /// daemon already holds, so it is far shorter than the catalog's probe.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct StatusSnapshotRequest {
-    pub host: HostId,
-    pub daemon_instance: DaemonInstanceId,
+    custody: HostDataPlaneCustody,
+}
+
+impl StatusSnapshotRequest {
+    pub fn new(custody: HostDataPlaneCustody) -> Self {
+        Self { custody }
+    }
 }
 
 pub enum StatusSnapshotOutcome {
@@ -184,14 +194,14 @@ pub enum SnapshotCoordinateMismatch {
 }
 
 pub async fn probe(
-    dispatch: &HostCommandDispatch,
+    dispatch: &OwningHostDataPlane,
     request: StatusSnapshotRequest,
 ) -> StatusSnapshotOutcome {
+    let custody = &request.custody;
     let answer = match dispatch
-        .dispatch(HostCommand {
-            host: request.host.clone(),
-            expected_instance: request.daemon_instance.clone(),
-            kind: HostCommandKind::HostStatus,
+        .dispatch(HostDataPlaneRequest {
+            custody: custody.clone(),
+            kind: HostDataPlaneCommandKind::HostStatus,
             params: json!({}),
             timeout: PROBE_TIMEOUT,
         })
@@ -202,16 +212,20 @@ pub async fn probe(
     };
     // The coordinate is bound before the payload is looked at, so an answer about
     // another machine or another custody cannot hide behind a decode failure.
-    let Ok(result) = answer.into_result_for(&request.host, &request.daemon_instance) else {
+    let Ok(result) = answer.into_result_for(custody) else {
         return StatusSnapshotOutcome::TransportContractViolation;
     };
-    match StatusWire::decode(result, request.host, request.daemon_instance) {
+    match StatusWire::decode(
+        result,
+        custody.host().clone(),
+        custody.daemon_instance().clone(),
+    ) {
         Some(snapshot) => StatusSnapshotOutcome::Answered(snapshot),
         None => StatusSnapshotOutcome::Unreachable(UnreachableReason::ProtocolError),
     }
 }
 
-fn outcome_for(failure: HostCommandFailure) -> StatusSnapshotOutcome {
+fn outcome_for(failure: HostDataPlaneFailure) -> StatusSnapshotOutcome {
     match failure {
         // TS reaches the same answer by three routes — no admitted connection, a
         // custody replaced between resolution and send, and a socket already closed
@@ -222,19 +236,20 @@ fn outcome_for(failure: HostCommandFailure) -> StatusSnapshotOutcome {
         // full control channel and an exhausted command id. Both mean the frame
         // provably never left, which is what this arm says; both are retried by the
         // caller and neither is ever cached.
-        HostCommandFailure::NoCurrentDaemon
-        | HostCommandFailure::DaemonInstanceMismatch
-        | HostCommandFailure::NotDispatched => StatusSnapshotOutcome::Disconnected,
-        HostCommandFailure::TimedOut => {
+        HostDataPlaneFailure::NoCurrentDaemon
+        | HostDataPlaneFailure::ConnectionGenerationMismatch
+        | HostDataPlaneFailure::DaemonInstanceMismatch
+        | HostDataPlaneFailure::NotDispatched => StatusSnapshotOutcome::Disconnected,
+        HostDataPlaneFailure::TimedOut => {
             StatusSnapshotOutcome::Unreachable(UnreachableReason::Timeout)
         }
         // The daemon answered and this server could not read a status out of it.
-        HostCommandFailure::Refused | HostCommandFailure::ProtocolCorruption => {
+        HostDataPlaneFailure::Refused(_) | HostDataPlaneFailure::ProtocolCorruption => {
             StatusSnapshotOutcome::Unreachable(UnreachableReason::ProtocolError)
         }
         // Neither proven answered nor proven not sent. TS has no lock to poison and
         // no ambiguous settle, and folds every residual shape into the same reason.
-        HostCommandFailure::Ambiguous | HostCommandFailure::RegistryUnavailable => {
+        HostDataPlaneFailure::Ambiguous | HostDataPlaneFailure::RegistryUnavailable => {
             StatusSnapshotOutcome::Unreachable(UnreachableReason::DaemonUnreachable)
         }
     }
@@ -259,6 +274,12 @@ struct StatusWire {
 impl StatusWire {
     fn decode(value: Value, host: HostId, instance: DaemonInstanceId) -> Option<StatusSnapshot> {
         let wire = serde_json::from_value::<Self>(value).ok()?;
+        if ![wire.daemon_pid, wire.started_at, wire.uptime_ms]
+            .into_iter()
+            .all(js_safe_integer)
+        {
+            return None;
+        }
         // The daemon always composes something, falling back to platform and
         // release. A blank string is a daemon bug, and it is refused here rather
         // than rendered as an empty cell.
@@ -349,9 +370,10 @@ mod tests {
         // operation reports them as an absent machine, because its read surface has
         // something to say about an absent one and nothing to say about a fault.
         for absent in [
-            HostCommandFailure::NoCurrentDaemon,
-            HostCommandFailure::DaemonInstanceMismatch,
-            HostCommandFailure::NotDispatched,
+            HostDataPlaneFailure::NoCurrentDaemon,
+            HostDataPlaneFailure::ConnectionGenerationMismatch,
+            HostDataPlaneFailure::DaemonInstanceMismatch,
+            HostDataPlaneFailure::NotDispatched,
         ] {
             assert!(matches!(
                 outcome_for(absent),
@@ -359,15 +381,17 @@ mod tests {
             ));
         }
         assert!(matches!(
-            outcome_for(HostCommandFailure::TimedOut),
+            outcome_for(HostDataPlaneFailure::TimedOut),
             StatusSnapshotOutcome::Unreachable(UnreachableReason::Timeout)
         ));
         // A refusal for a command with no typed refusals is drift, and it says the
         // same thing about this question as an unreadable frame: the daemon spoke
         // and this server cannot act on what it said.
         for spoke_unreadably in [
-            HostCommandFailure::Refused,
-            HostCommandFailure::ProtocolCorruption,
+            HostDataPlaneFailure::Refused(CommandRefusal::Response(
+                DaemonRefusalCode::ShuttingDown,
+            )),
+            HostDataPlaneFailure::ProtocolCorruption,
         ] {
             assert!(matches!(
                 outcome_for(spoke_unreadably),
@@ -375,8 +399,8 @@ mod tests {
             ));
         }
         for residual in [
-            HostCommandFailure::Ambiguous,
-            HostCommandFailure::RegistryUnavailable,
+            HostDataPlaneFailure::Ambiguous,
+            HostDataPlaneFailure::RegistryUnavailable,
         ] {
             assert!(matches!(
                 outcome_for(residual),

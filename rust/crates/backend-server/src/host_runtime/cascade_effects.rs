@@ -13,13 +13,19 @@ use silverhand_backend_core::{
     host_runtime::aftermath::CustodyEffectFailure,
     identity::{AgentId, HostId},
     teardown::{
+        agent_delete_resume::AgentDeletionResidue,
         computer_delete::ComputerCascadeEffects,
         facts::{AgentRuntimeSessionFacts, StoredBlobRef},
+        intent::AgentDeletionLifecyclePort,
     },
 };
 use silverhand_backend_filesystem::blob_store::{LocalBlobStore, LocalBlobStoreError};
 
-use crate::{daemon_delivery::DaemonCascadeEffects, scope_events::ScopeEventHub};
+use crate::{
+    daemon_delivery::{DaemonCascadeEffects, DaemonHostConnections},
+    host_agent_background::agent_deletion_resumer::AgentDeletionResumer,
+    scope_events::ScopeEventHub,
+};
 
 /// The one cross-lane dependency: publish the terminal identity event for a
 /// deleted agent. Its concrete producer owns the event name, bytes and audience.
@@ -133,6 +139,51 @@ where
             .map(|_| ())
             .map_err(|source| CustodyEffectFailure::from_source(BlobForgetError::Delete(source)))
     }
+}
+
+/// The single-agent deletion resumer reuses this ONE composite for its post-commit
+/// residue face rather than composing a second announcer or blob adapter. The purge that
+/// fences the agent before commit is NOT reached through this value at all: it travels a
+/// generation-pinned `DaemonAgentDeletionFence` the resumer's fence binder mints, so a
+/// resumer wired here cannot reach the per-seat stop or the bare-host purge the
+/// [`ComputerCascadeEffects`] face also carries. The single-agent fence-then-commit order
+/// (a generation-verified purge quiesces every child; complete deletes the rows; residue
+/// announces and sweeps) is enforced by which methods are callable, not by a test.
+impl<A> AgentDeletionResidue for ProductionComputerCascadeEffects<A>
+where
+    A: AgentDeletedAnnouncement,
+{
+    async fn agent_deleted(&self, agent: &AgentId) -> Result<(), CustodyEffectFailure> {
+        <Self as ComputerCascadeEffects>::agent_deleted(self, agent).await
+    }
+
+    async fn forget_stored_blob(&self, blob: &StoredBlobRef) -> Result<(), CustodyEffectFailure> {
+        <Self as ComputerCascadeEffects>::forget_stored_blob(self, blob).await
+    }
+}
+
+/// Assemble the production single-agent deletion resumer over already-composed
+/// authorities: the durable lifecycle port, the daemon fence binder (which mints the
+/// generation-pinned purge fence from the one registry), and the cascade composite's
+/// residue face (cloned — never a second root).
+///
+/// This is the mountable root, and it is deliberately left UNMOUNTED here. The final
+/// integration wires it in three places it must not reach from this crate: call
+/// [`recover`](AgentDeletionResumer::recover) once after boot; call
+/// [`on_host_ready`](AgentDeletionResumer::on_host_ready) from the daemon attach path;
+/// and drive [`try_now`](AgentDeletionResumer::try_now) from the public delete endpoint,
+/// mapping [`DeletionRunOutcome`](crate::host_agent_background::agent_deletion_resumer::DeletionRunOutcome)
+/// to the response. Shutdown calls [`close`](AgentDeletionResumer::close).
+pub fn production_agent_deletion_resumer<L, A>(
+    lifecycle: L,
+    effects: ProductionComputerCascadeEffects<A>,
+    connections: DaemonHostConnections,
+) -> AgentDeletionResumer<L, DaemonHostConnections, ProductionComputerCascadeEffects<A>>
+where
+    L: AgentDeletionLifecyclePort,
+    A: AgentDeletedAnnouncement,
+{
+    AgentDeletionResumer::new(lifecycle, connections, effects)
 }
 
 #[derive(Debug)]

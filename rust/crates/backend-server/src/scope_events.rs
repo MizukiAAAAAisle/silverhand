@@ -31,6 +31,7 @@ use silverhand_backend_core::{
         WorkspaceRole,
     },
     agent_availability_read::AgentAvailabilityReadModel,
+    agent_profile_write::{AgentChangedAnnounceFailure, AgentChangedSink},
     auth::{AuthenticateHumanSession, SessionBearer},
     capability::agent_view::agent_viewer_user_ids,
     host_runtime::{
@@ -245,6 +246,12 @@ impl Error for EmptyOriginAllowlist {}
 enum ProductEvent {
     DirectPairsChanged {
         conversation_id: String,
+    },
+    /// A named host's attachment/read model changed. Viewer-private invalidation:
+    /// the payload carries no status value, and clients refetch the authoritative
+    /// host status route.
+    HostConnectionChanged {
+        host_id: String,
     },
     AgentActivity(Value),
     AgentStatus(Value),
@@ -610,6 +617,31 @@ impl ScopeEventHub {
         HubWorkspaceMetadataPublisher::new(self.clone(), audience)
     }
 
+    /// The public agent-tuning write's post-commit `agent_changed` announce, built
+    /// over THIS hub. Binds `backend-core`'s [`AgentChangedSink`] to the accepted
+    /// [`publish_agent_changed`](ScopeEventHub::publish_agent_changed) producer, so the
+    /// tuning PATCH's best-effort announce rides the SAME app-scope `{agent_id}` frame
+    /// as every other agent-identity change, never a second event authority.
+    /// [`HubAgentChangedSink::new`] stays crate-private, so nothing outside this seam
+    /// can construct a sink on a hub other than the one it owns.
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_server::scope_events::{HubAgentChangedSink, ScopeEventHub};
+    ///
+    /// let hub = ScopeEventHub::production().unwrap();
+    /// let _ = HubAgentChangedSink::new(hub);
+    /// ```
+    ///
+    /// ```
+    /// use silverhand_backend_server::scope_events::ScopeEventHub;
+    ///
+    /// let hub = ScopeEventHub::production().unwrap();
+    /// let _ = hub.agent_changed_sink();
+    /// ```
+    pub fn agent_changed_sink(&self) -> HubAgentChangedSink {
+        HubAgentChangedSink::new(self.clone())
+    }
+
     /// The custody context's post-commit availability fan-out, built over THIS hub.
     ///
     /// When a computer's custody moves, every agent on it changes availability
@@ -641,6 +673,17 @@ impl ScopeEventHub {
         HubAgentAvailabilityAnnouncer::new(self.clone(), computer_agents, view)
     }
 
+    /// The single-agent availability edge, built over THIS hub. Where
+    /// [`agent_availability_announcer`](ScopeEventHub::agent_availability_announcer)
+    /// fans a whole computer's roster out on custody moves, this seam invalidates
+    /// exactly ONE agent — the one the public delete route is tearing down — through
+    /// the SAME per-agent fan-out. [`HubAgentAvailabilityEdge::new`] stays
+    /// crate-private, so the edge cannot publish on a hub other than the one this
+    /// seam owns.
+    pub fn agent_availability_edge<V>(&self, view: V) -> HubAgentAvailabilityEdge<V> {
+        HubAgentAvailabilityEdge::new(self.clone(), view)
+    }
+
     pub fn publish_direct_pairs_changed(
         &self,
         viewer: &UserId,
@@ -650,6 +693,19 @@ impl ScopeEventHub {
             EventScope::Viewer(viewer.clone()),
             ProductEvent::DirectPairsChanged {
                 conversation_id: conversation.as_str().to_owned(),
+            },
+        )
+    }
+
+    pub(crate) fn publish_host_connection_changed(
+        &self,
+        viewer: &UserId,
+        host: &HostId,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::HostConnectionChanged {
+                host_id: host.as_str().to_owned(),
             },
         )
     }
@@ -1315,6 +1371,36 @@ impl<R: WorkspaceHumanAudienceReadPort> WorkspaceMetadataChangedSink
     }
 }
 
+/// The public agent-tuning write's post-commit `agent_changed` announce, over the
+/// real transport. A profile PATCH that commits owes clients the app-scope
+/// `{agent_id}` refresh hint; this narrow adapter binds `backend-core`'s
+/// [`AgentChangedSink`] to the ONE accepted producer
+/// ([`ScopeEventHub::publish_agent_changed`]) so the tuning write neither invents a
+/// second event authority nor hand-copies a `publishToScope`. Best-effort by the
+/// core contract: a transport failure is mapped to the source of an
+/// [`AgentChangedAnnounceFailure`] and returned, never swallowed and never allowed to
+/// flip an already-committed write. Its constructor stays crate-private, so a sink
+/// can only be minted through [`ScopeEventHub::agent_changed_sink`] on the hub that
+/// owns the transport.
+#[derive(Clone)]
+pub struct HubAgentChangedSink {
+    hub: ScopeEventHub,
+}
+
+impl HubAgentChangedSink {
+    pub(crate) fn new(hub: ScopeEventHub) -> Self {
+        Self { hub }
+    }
+}
+
+impl AgentChangedSink for HubAgentChangedSink {
+    async fn agent_changed(&self, agent: &AgentId) -> Result<(), AgentChangedAnnounceFailure> {
+        self.hub
+            .publish_agent_changed(agent)
+            .map_err(AgentChangedAnnounceFailure::from_source)
+    }
+}
+
 /// The custody context's post-commit availability fan-out, over the real
 /// transport: the production [`AgentAvailabilityAnnouncer`].
 ///
@@ -1403,52 +1489,118 @@ where
             .map_err(CustodyEffectFailure::from_source)?;
         let mut first_failure = None;
         for agent in &agents {
-            // Resolve the agent's viewer audience from the committed view ACL. A
-            // read failure for one agent is retained but does not abort the rest.
-            let view = match self.view.read_agent_view(agent).await {
-                Ok(view) => view,
-                Err(cause) => {
-                    if first_failure.is_none() {
-                        first_failure = Some(CustodyEffectFailure::from_source(cause));
-                    }
-                    continue;
-                }
-            };
-            // BIND the resolved facts to the requested agent BEFORE reading its
-            // audience — the same source==request bind the availability route makes
-            // (`host_agent::availability`). A view whose decoded source is a DIFFERENT
-            // agent is a resolver/splice defect: its ACL would send THIS agent's
-            // `agent_id` payload to some OTHER agent's viewers (leak + misdelivery)
-            // while missing this agent's true audience. Skip this agent's publish and
-            // retain it as a production failure; the remaining agents still run and
-            // the aggregate ends in Err. A short read (no row) has nothing to bind —
-            // it is the empty-audience arm below.
-            if let Some(facts) = view.as_ref()
-                && facts.source() != agent
+            // Each agent's audience runs through the ONE per-agent fan-out unit
+            // (source-bind, viewer oracle, per-viewer publish). A failure for one
+            // agent is retained but does not abort the rest.
+            if let Err(failure) =
+                publish_single_agent_availability(&self.hub, &self.view, agent).await
+                && first_failure.is_none()
             {
-                if first_failure.is_none() {
-                    first_failure = Some(CustodyEffectFailure::from_source(
-                        AgentAvailabilityAudienceMismatch {
-                            requested: agent.as_str().to_owned(),
-                            resolved: facts.source().as_str().to_owned(),
-                        },
-                    ));
-                }
-                continue;
-            }
-            let viewers = agent_viewer_user_ids(view.as_ref().map(|facts| facts.visibility()));
-            for viewer in &viewers {
-                if let Err(cause) = self.hub.publish_agent_availability_changed(viewer, agent)
-                    && first_failure.is_none()
-                {
-                    first_failure = Some(CustodyEffectFailure::from_source(cause));
-                }
+                first_failure = Some(failure);
             }
         }
         if let Some(failure) = first_failure {
             return Err(failure);
         }
         Ok(())
+    }
+}
+
+/// Publish an availability invalidation for ONE agent to its full committed viewer
+/// audience. The per-agent fan-out unit shared by the host-wide custody announcer
+/// ([`HubAgentAvailabilityAnnouncer`]) and the single-agent edge
+/// ([`HubAgentAvailabilityEdge`]) so both fire through the SAME source-bind,
+/// audience oracle, and per-viewer hub primitive — never a second fan-out path.
+///
+/// Resolves the agent's viewer audience from the committed view ACL, BINDS the
+/// resolved facts to the requested agent BEFORE reading its audience — the same
+/// source==request bind the availability route makes ([`crate::host_agent::availability`]).
+/// A view whose decoded source is a DIFFERENT agent is a resolver/splice defect:
+/// its ACL would send THIS agent's `agent_id` payload to some OTHER agent's viewers
+/// (leak + misdelivery) while missing this agent's true audience — fail closed
+/// with zero publish. A short read (no row) has nothing to bind: it is the
+/// empty-audience arm. Every admitted viewer is attempted; the first failure
+/// (read, source-bind, or publish) is returned after the whole audience has run so
+/// one dead hop cannot silently drop the rest.
+async fn publish_single_agent_availability<V>(
+    hub: &ScopeEventHub,
+    view: &V,
+    agent: &AgentId,
+) -> Result<(), CustodyEffectFailure>
+where
+    V: AgentAvailabilityReadModel,
+{
+    let view = view
+        .read_agent_view(agent)
+        .await
+        .map_err(CustodyEffectFailure::from_source)?;
+    if let Some(facts) = view.as_ref()
+        && facts.source() != agent
+    {
+        return Err(CustodyEffectFailure::from_source(
+            AgentAvailabilityAudienceMismatch {
+                requested: agent.as_str().to_owned(),
+                resolved: facts.source().as_str().to_owned(),
+            },
+        ));
+    }
+    let viewers = agent_viewer_user_ids(view.as_ref().map(|facts| facts.visibility()));
+    let mut first_failure = None;
+    for viewer in &viewers {
+        if let Err(cause) = hub.publish_agent_availability_changed(viewer, agent)
+            && first_failure.is_none()
+        {
+            first_failure = Some(CustodyEffectFailure::from_source(cause));
+        }
+    }
+    match first_failure {
+        Some(failure) => Err(failure),
+        None => Ok(()),
+    }
+}
+
+/// A narrow, single-agent availability-invalidation effect. One method: publish the
+/// availability change for exactly ONE agent to its committed viewer audience.
+///
+/// This is the seam the public agent-deletion route fires when a delete BEGINS —
+/// the agent flips out of `active`, so its viewers must recompute availability. It
+/// carries no host id and enumerates no roster: the deleted agent is the only one
+/// changing. Backed in production by [`HubAgentAvailabilityEdge`], which routes
+/// through the SAME [`publish_single_agent_availability`] fan-out the host-wide
+/// custody announcer uses, so there is exactly ONE availability audience
+/// authority — never a second.
+pub trait AgentAvailabilityEdge: Clone + Send + Sync + 'static {
+    fn agent_availability_changed(
+        &self,
+        agent: &AgentId,
+    ) -> impl std::future::Future<Output = Result<(), CustodyEffectFailure>> + Send;
+}
+
+/// The production [`AgentAvailabilityEdge`], bound to the ONE hub and the committed
+/// availability view. Its constructor stays crate-private so the single-agent
+/// fan-out cannot publish on a hub other than the one this seam owns, mirroring
+/// [`HubAgentAvailabilityAnnouncer`].
+#[derive(Clone)]
+pub struct HubAgentAvailabilityEdge<V> {
+    hub: ScopeEventHub,
+    view: V,
+}
+
+impl<V> HubAgentAvailabilityEdge<V> {
+    pub(crate) fn new(hub: ScopeEventHub, view: V) -> Self {
+        Self { hub, view }
+    }
+}
+
+impl<V> AgentAvailabilityEdge for HubAgentAvailabilityEdge<V>
+where
+    V: AgentAvailabilityReadModel + Clone + Send + Sync + 'static,
+{
+    async fn agent_availability_changed(
+        &self,
+        agent: &AgentId,
+    ) -> Result<(), CustodyEffectFailure> {
+        publish_single_agent_availability(&self.hub, &self.view, agent).await
     }
 }
 /// [`HubUnreadPublisher`]. It holds one such publisher and forwards the committed change
@@ -2999,6 +3151,7 @@ mod tests {
             .handle(
                 "host-1",
                 &daemon,
+                "connection-test",
                 RuntimeProductEvent::Parsed(RuntimeParsedEvent {
                     coordinate: RuntimeCoordinate {
                         runtime_scope: RuntimeScopeWire::Agent {
@@ -5570,7 +5723,33 @@ mod tests {
         );
     }
 
-    /// The production [`HubAgentDeletedAnnouncer`] — the composition-root glue that a
+    /// The production [`HubAgentChangedSink`] — the tuning PATCH's post-commit
+    /// announce adapter — lands the exact `{agent_id}`-only `agent_changed` frame on a
+    /// REAL subscription when driven through the `backend-core` `AgentChangedSink`
+    /// trait it satisfies. This is the real-hub discrimination gate: it proves the
+    /// production sink is a live producer over the accepted transport, not a trait +
+    /// test fake, and that it reuses the ONE `agent_changed` frame rather than a
+    /// second event.
+    #[tokio::test]
+    async fn hub_agent_changed_sink_lands_the_agent_changed_frame_on_a_real_subscription() {
+        use silverhand_backend_core::agent_profile_write::AgentChangedSink as _;
+
+        let hub = ScopeEventHub::test("epoch-1");
+        let mut app = hub.subscribe(EventScope::App).unwrap().receiver;
+
+        hub.agent_changed_sink()
+            .agent_changed(&agent())
+            .await
+            .unwrap();
+
+        let frame = app.recv().await.unwrap();
+        assert_eq!(frame.scope, "app");
+        assert_eq!(
+            serde_json::to_value(&frame.event).unwrap(),
+            json!({ "kind": "agent_changed", "payload": { "agent_id": "agent-1" } })
+        );
+    }
+
     /// committed computer cascade calls for each deleted agent — routes to the SAME
     /// app-scope `agent_changed` frame as the raw producer. Per the ratified A/B decision
     /// the terminal deletion reuses `agent_changed` rather than minting a distinct
@@ -6580,6 +6759,7 @@ mod tests {
     /// an explicit enumeration can tell a renamed or newly-added kind from a supported one.
     const SUPPORTED_EVENT_KINDS: &[&str] = &[
         "direct_pairs_changed",
+        "host_connection_changed",
         "agent_activity",
         "agent_status",
         "agent_init_timeout",
@@ -6605,6 +6785,7 @@ mod tests {
     fn wire_kind(event: &ProductEvent) -> &'static str {
         match event {
             ProductEvent::DirectPairsChanged { .. } => "direct_pairs_changed",
+            ProductEvent::HostConnectionChanged { .. } => "host_connection_changed",
             ProductEvent::AgentActivity(_) => "agent_activity",
             ProductEvent::AgentStatus(_) => "agent_status",
             ProductEvent::AgentInitTimeout(_) => "agent_init_timeout",
@@ -6637,6 +6818,9 @@ mod tests {
         let samples = [
             ProductEvent::DirectPairsChanged {
                 conversation_id: "c-1".to_owned(),
+            },
+            ProductEvent::HostConnectionChanged {
+                host_id: "host-1".to_owned(),
             },
             ProductEvent::AgentActivity(json!({ "message_id": "m-1" })),
             ProductEvent::AgentStatus(json!({ "status": "active" })),

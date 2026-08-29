@@ -4,10 +4,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::{Value, json};
+use silverhand_backend_core::identity::{AgentId, ConversationId};
 use silverhand_backend_core::messaging::collaboration::{
     ClearSessionOutcome, ClearSessionProviderRefusal, HardStopRuntimeProviderRefusal,
-    RuntimeControlAdmissionRefusal, RuntimeControlTarget, RuntimePlacementRefusal,
-    StartRuntimeProviderRefusal,
+    RuntimeControlAdmissionRefusal, RuntimePlacementRefusal, StartRuntimeProviderRefusal,
 };
 
 const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
@@ -23,7 +23,10 @@ pub(super) fn operation_success() -> Response {
     Json(json!({ "ok": true })).into_response()
 }
 
-pub(super) fn clear_session_success(outcome: &ClearSessionOutcome) -> Response {
+/// The success projection of a [`ClearSessionOutcome`] → `{ok, prev_cli_session_id,
+/// was_running}`. `pub(crate)` so the agent-scope clear-session face renders the ONE
+/// success shape rather than re-minting it (the wire body is scope-independent).
+pub(crate) fn clear_session_success(outcome: &ClearSessionOutcome) -> Response {
     Json(json!({
         "ok": true,
         "prev_cli_session_id": outcome.previous_cli_session().map(|id| id.as_str()),
@@ -48,6 +51,11 @@ pub(super) fn admission_refusal(refusal: RuntimeControlAdmissionRefusal) -> Resp
         RuntimeControlAdmissionRefusal::Forbidden => {
             json_response(StatusCode::FORBIDDEN, json!({ "error": "forbidden" }))
         }
+        RuntimeControlAdmissionRefusal::RuntimeScopeMismatch => coded(
+            StatusCode::CONFLICT,
+            "runtime_scope_mismatch",
+            "agent-scoped runtime operation targeted a conversation-scoped agent",
+        ),
     }
 }
 
@@ -85,7 +93,8 @@ pub(super) fn hard_stop_refusal(refusal: HardStopRuntimeProviderRefusal) -> Resp
 
 pub(super) fn clear_session_refusal(
     refusal: ClearSessionProviderRefusal,
-    target: &RuntimeControlTarget,
+    conversation: &ConversationId,
+    agent: &AgentId,
 ) -> Response {
     match refusal {
         ClearSessionProviderRefusal::Placement(refusal) => placement_refusal(refusal),
@@ -94,8 +103,8 @@ pub(super) fn clear_session_refusal(
             "clear_session_timeout",
             format!(
                 "clear-session for {}/{} timed out waiting for runtime_exit projection landed",
-                target.conversation().as_str(),
-                target.agent().as_str()
+                conversation.as_str(),
+                agent.as_str()
             ),
         ),
         ClearSessionProviderRefusal::InProgress => coded(
@@ -103,8 +112,8 @@ pub(super) fn clear_session_refusal(
             "clear_session_in_progress",
             format!(
                 "clear-session is already in progress for {}/{}",
-                target.conversation().as_str(),
-                target.agent().as_str()
+                conversation.as_str(),
+                agent.as_str()
             ),
         ),
     }
@@ -121,7 +130,10 @@ pub(super) fn internal_error() -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR_BODY).into_response()
 }
 
-fn placement_refusal(refusal: RuntimePlacementRefusal) -> Response {
+/// The canonical placement-refusal → HTTP `{error, code}` mapper. Made
+/// `pub(crate)` so the agent-scoped bulk stop maps its own placement refusals
+/// through the ONE authority rather than re-minting the status/code vocabulary.
+pub(crate) fn placement_refusal(refusal: RuntimePlacementRefusal) -> Response {
     let (status, code, message) = match refusal {
         RuntimePlacementRefusal::HostMissing => (
             StatusCode::NOT_FOUND,
@@ -179,7 +191,7 @@ fn json_response(status: StatusCode, body: Value) -> Response {
 #[cfg(test)]
 mod tests {
     use axum::body::to_bytes;
-    use silverhand_backend_core::identity::{AgentId, ConversationId, UserId};
+    use silverhand_backend_core::identity::{AgentId, ConversationId};
 
     use super::*;
 
@@ -191,11 +203,8 @@ mod tests {
 
     #[tokio::test]
     async fn every_typed_provider_refusal_has_a_named_status_and_code() {
-        let target = RuntimeControlTarget::new(
-            UserId::parse("user-1").unwrap(),
-            ConversationId::parse("conversation-1").unwrap(),
-            AgentId::parse("agent-1").unwrap(),
-        );
+        let conversation = ConversationId::parse("conversation-1").unwrap();
+        let agent = AgentId::parse("agent-1").unwrap();
         let placement = [
             (
                 RuntimePlacementRefusal::HostMissing,
@@ -285,7 +294,8 @@ mod tests {
             ),
         ];
         for (refusal, expected_status, expected_code) in clears {
-            let (status, body) = status_and_json(clear_session_refusal(refusal, &target)).await;
+            let (status, body) =
+                status_and_json(clear_session_refusal(refusal, &conversation, &agent)).await;
             assert_eq!(status, expected_status);
             assert_eq!(body["code"], expected_code);
         }

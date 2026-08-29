@@ -13,4 +13,6 @@
 //! closed set stays the answer to "what is a runtime" alone.
 
 pub mod runtime;
+pub mod runtime_capability;
 pub mod runtime_catalog;
+pub mod session_scope;

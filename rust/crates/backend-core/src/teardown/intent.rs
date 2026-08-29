@@ -239,6 +239,29 @@ where
         .collect())
 }
 
+/// Proof that a host-local purge fence acknowledged before a completion ran.
+///
+/// This is a structural obligation on the CALL CHAIN, not a claim about any fence
+/// implementation's honesty. Its only constructor is [`PurgeReceipt::sealed`], which is
+/// `pub(crate)` and minted at exactly one site — [`crate::teardown::agent_delete_resume`],
+/// immediately after the fence port returns `Ok`. Because [`complete_agent_deletion`]
+/// consumes one by value, the borrow checker makes "complete without first awaiting the
+/// fence" unwriteable from outside this crate: a server-side caller cannot name the type
+/// to mint it, so it must route through the resume free function that mints it in order.
+/// It does not, and cannot, prove that the fence actually quiesced the right daemon
+/// generation — the verify-at-send guard in the transport does that; this only proves the
+/// two steps were sequenced.
+pub struct PurgeReceipt {
+    _seal: (),
+}
+
+impl PurgeReceipt {
+    /// Minted only after a real fence `Ok`, from inside this crate. See the type doc.
+    pub(crate) fn sealed() -> Self {
+        Self { _seal: () }
+    }
+}
+
 /// Complete one attempt, and bind what came back to the attempt that asked.
 ///
 /// [`AgentTornDown`] is already sealed around the agent the write ran for, so this is
@@ -252,13 +275,18 @@ where
 /// calls [`AgentDeletionLifecyclePort::complete`] itself receives the committed arm
 /// unbound, so going through this function is an obligation on consumers, not
 /// something the type system takes away from them.
+///
+/// The [`PurgeReceipt`] argument is consumed to make the fence-then-commit order
+/// structural rather than documented: see that type.
 pub async fn complete_agent_deletion<P>(
     port: &P,
     attempt: &AgentDeletionAttempt,
+    receipt: PurgeReceipt,
 ) -> Result<CompleteDeletion, TeardownFailure>
 where
     P: AgentDeletionLifecyclePort,
 {
+    let PurgeReceipt { _seal: () } = receipt;
     let outcome = port.complete(attempt).await?;
     if let CompleteDeletion::Committed(torn) = &outcome {
         same_agent(attempt.agent_id(), &torn.facts().id)?;
@@ -462,7 +490,7 @@ mod tests {
         let port = lifecycle(BeginDeletionRecord::Started(intent("a1", "h1", 5)));
         let attempt = attempt(&port, "a1", 5).await;
         assert_eq!(
-            complete_agent_deletion(&port, &attempt)
+            complete_agent_deletion(&port, &attempt, PurgeReceipt::sealed())
                 .await
                 .expect("complete"),
             CompleteDeletion::Gone
@@ -476,7 +504,7 @@ mod tests {
         let attempt = attempt(&port, "a1", 5).await;
         port.complete = torn_down("a1", "h1");
         assert_eq!(
-            complete_agent_deletion(&port, &attempt)
+            complete_agent_deletion(&port, &attempt, PurgeReceipt::sealed())
                 .await
                 .expect("complete"),
             torn_down("a1", "h1")
@@ -490,7 +518,7 @@ mod tests {
         let mut port = lifecycle(BeginDeletionRecord::Started(intent("a1", "h1", 5)));
         let attempt = attempt(&port, "a1", 5).await;
         port.complete = torn_down("a2", "h1");
-        let failure = complete_agent_deletion(&port, &attempt)
+        let failure = complete_agent_deletion(&port, &attempt, PurgeReceipt::sealed())
             .await
             .expect_err("a spliced outcome is not an answer");
         assert_eq!(
@@ -510,7 +538,7 @@ mod tests {
         let mut port = lifecycle(BeginDeletionRecord::Started(intent("a1", "h1", 5)));
         let attempt = attempt(&port, "a1", 5).await;
         port.complete = torn_down("a1", "h2");
-        let failure = complete_agent_deletion(&port, &attempt)
+        let failure = complete_agent_deletion(&port, &attempt, PurgeReceipt::sealed())
             .await
             .expect_err("a spliced outcome is not an answer");
         assert_eq!(
