@@ -19,11 +19,13 @@ use silverhand_backend_core::{
     agent_materialization::{
         ActivationFlipRow, AgentArmProvisioningPort, AgentMaterializationLookup,
         AgentMaterializationWrite, DEPENDENT_GRAPH_FAILED_CODE, IdempotentReservationRow,
-        MaterializationFlipRow, RawAgentArmGraph, RawAgentArmProvision, RawConversationAgentEdge,
-        RawConversationArmGraph, RawConversationArmProvision, RawConversationUserEdge,
-        RawHomeWorkspaceRow, RawOnboardingDmRow, RawWorkspaceOwnerEdge, ReserveAgentInput,
-        ReserveRecord, ReservedAgentRow, STALE_MATERIALIZATION_FAILED_CODE, home_workspace_id_for,
+        MaterializationFlipRow, RawAgentArmGraph, RawConversationAgentEdge,
+        RawConversationArmGraph, RawConversationUserEdge, RawCreatorIdentity, RawHomeWorkspaceRow,
+        RawOnboardingDmRow, RawProvisionOutcome, RawWorkspaceOwnerEdge, ReserveAgentInput,
+        ReserveRecord, ReservedAgentRow, STALE_MATERIALIZATION_FAILED_CODE,
+        agent_home_workspace_description, home_workspace_id_for,
     },
+    agents::session_scope::AgentSessionScope,
     identity::{AgentId, ConversationId, UserId},
     messaging::{
         DirectPairMintIdentityMismatch, DirectPairOpenedFact, DirectPairOpenedPort,
@@ -348,10 +350,12 @@ const FLIP_TO_ACTIVE: &str = "UPDATE agents \
         AND materialization_status = 'pending_materialization' \
     RETURNING id, name, session_scope, created_by_user_id, materialization_status, created_at, updated_at";
 
-/// Read the creator's handle from its OWN `users` row, bound to the id the activation flip
-/// proved. Reads `name`, the canonical @-handle every principal is addressed by; an absent
-/// row is a broken FK invariant the provisioning unit of work surfaces as a fault.
-const READ_CREATOR_HANDLE: &str = "SELECT name FROM users WHERE id = ?";
+/// Read the creator's OWN identity from its `users` row, bound to the id the activation flip
+/// proved: both the row's `id` and its `name` (the canonical @-handle every principal is
+/// addressed by). The core use case source-binds the returned `id` against the activation
+/// creator before rendering the handle into the greeting; an absent row is a broken FK
+/// invariant the provisioning unit of work surfaces as a fault.
+const READ_CREATOR_IDENTITY: &str = "SELECT id, name FROM users WHERE id = ?";
 
 /// Project the activation flip after-image from its `RETURNING` row. The `AgentId` is
 /// decoded from the row's OWN `id`; the handle, scope, and creator ride back raw for the
@@ -390,18 +394,29 @@ async fn flip_to_active_on(
     }
 }
 
-/// Read the creator's handle on the caller's connection. `None` means no user row bears the
-/// creator id the flip proved — a broken FK invariant, which the provisioning unit of work
-/// maps to a fault rather than a product answer.
-async fn read_creator_handle_on(
+/// Read the creator's own-row identity on the caller's connection. `None` means no user row
+/// bears the creator id the flip proved — a broken FK invariant, which the provisioning unit
+/// of work maps to a fault rather than a product answer.
+async fn read_creator_identity_on(
     conn: &mut SqliteConnection,
     creator: &UserId,
-) -> Result<Option<String>, PersistenceFailure> {
-    sqlx::query_scalar::<_, String>(READ_CREATOR_HANDLE)
+) -> Result<Option<RawCreatorIdentity>, PersistenceFailure> {
+    let row = sqlx::query(READ_CREATOR_IDENTITY)
         .bind(creator.as_str())
         .fetch_optional(&mut *conn)
         .await
-        .map_err(PersistenceFailure::from_source)
+        .map_err(PersistenceFailure::from_source)?;
+    match row {
+        Some(row) => Ok(Some(RawCreatorIdentity {
+            source_user_id: row
+                .try_get::<String, _>("id")
+                .map_err(PersistenceFailure::from_source)?,
+            name: row
+                .try_get::<String, _>("name")
+                .map_err(PersistenceFailure::from_source)?,
+        })),
+        None => Ok(None),
+    }
 }
 
 /// Records whether the direct-pair open announced a freshly minted line, deriving
@@ -477,18 +492,20 @@ const INSERT_WORKSPACE_OWNER: &str = "INSERT INTO workspace_users \
 const INSERT_CONVERSATION_USER: &str = "INSERT INTO conversation_users \
         (conversation_id, user_id, joined_at) VALUES (?, ?, ?)";
 
-/// The home-workspace identity columns the domain binds ownership against.
-const READ_HOME_WORKSPACE_BACK: &str =
-    "SELECT id, owner_agent_id, owner_user_id FROM workspaces WHERE id = ?";
-/// The home-DM identity columns.
+/// Every column the writer touched on the home-workspace row, so the domain replays the
+/// committed row against its intent, not just ownership.
+const READ_HOME_WORKSPACE_BACK: &str = "SELECT id, name, name_key, description, owner_agent_id, \
+     owner_user_id, archived_at, created_at, updated_at FROM workspaces WHERE id = ?";
+/// Every column the writer touched on the home-DM row.
 const READ_DM_CHANNEL_BACK: &str = "SELECT id, workspace_id, placement_kind, roster_policy, \
-     title, title_key FROM conversations WHERE id = ?";
-/// The three roster edges, read back by their composite keys.
-const READ_CONVERSATION_AGENT_BACK: &str = "SELECT conversation_id, agent_id \
+     title, title_key, status, visibility, spawned_by_agent_id, closed_at, close_summary, \
+     created_at, updated_at FROM conversations WHERE id = ?";
+/// The three roster edges, read back by their composite keys, each with its join clock.
+const READ_CONVERSATION_AGENT_BACK: &str = "SELECT conversation_id, agent_id, joined_at \
      FROM conversation_agents WHERE conversation_id = ? AND agent_id = ?";
-const READ_WORKSPACE_OWNER_BACK: &str = "SELECT workspace_id, user_id, role \
+const READ_WORKSPACE_OWNER_BACK: &str = "SELECT workspace_id, user_id, role, joined_at \
      FROM workspace_users WHERE workspace_id = ? AND user_id = ?";
-const READ_CONVERSATION_USER_BACK: &str = "SELECT conversation_id, user_id \
+const READ_CONVERSATION_USER_BACK: &str = "SELECT conversation_id, user_id, joined_at \
      FROM conversation_users WHERE conversation_id = ? AND user_id = ?";
 
 /// A row the provisioning transaction read back is structurally broken — an id that will not
@@ -502,8 +519,14 @@ struct ProvisioningRowBroken(&'static str);
 fn raw_home_workspace_row(row: &SqliteRow) -> Result<RawHomeWorkspaceRow, sqlx::Error> {
     Ok(RawHomeWorkspaceRow {
         id: row.try_get::<String, _>("id")?,
+        name: row.try_get::<String, _>("name")?,
+        name_key: row.try_get::<Option<String>, _>("name_key")?,
+        description: row.try_get::<Option<String>, _>("description")?,
         owner_agent_id: row.try_get::<Option<String>, _>("owner_agent_id")?,
         owner_user_id: row.try_get::<Option<String>, _>("owner_user_id")?,
+        archived_at: row.try_get::<Option<i64>, _>("archived_at")?,
+        created_at: row.try_get::<i64, _>("created_at")?,
+        updated_at: row.try_get::<i64, _>("updated_at")?,
     })
 }
 
@@ -515,49 +538,51 @@ fn raw_onboarding_dm_row(row: &SqliteRow) -> Result<RawOnboardingDmRow, sqlx::Er
         roster_policy: row.try_get::<String, _>("roster_policy")?,
         title: row.try_get::<String, _>("title")?,
         title_key: row.try_get::<Option<String>, _>("title_key")?,
+        status: row.try_get::<String, _>("status")?,
+        visibility: row.try_get::<String, _>("visibility")?,
+        spawned_by_agent_id: row.try_get::<Option<String>, _>("spawned_by_agent_id")?,
+        closed_at: row.try_get::<Option<i64>, _>("closed_at")?,
+        close_summary: row.try_get::<Option<String>, _>("close_summary")?,
+        created_at: row.try_get::<i64, _>("created_at")?,
+        updated_at: row.try_get::<i64, _>("updated_at")?,
     })
 }
 
-/// Activate an agent-scoped reservation, provision its dependent graph, and hand back the RAW
-/// after-images — never a sealed verdict. This is the production authority boundary the core
-/// use case [`provision_and_activate_agent`] mints the verdict from.
-///
-/// The flip fires FIRST: a guard miss (`None`) means nothing has been written, so the whole
-/// transaction rolls back and this returns [`RawAgentArmProvision::Lost`]. A won flip's own
-/// after-image columns name the graph — the creator↔agent direct line (get-or-create, so a
-/// concurrent reopen resolves rather than conflicts) riding the row's OWN `created_at`, and
-/// the onboarding system message on that line riding `now_ms`. Every row read back is returned
-/// raw; the core use case subject-binds, replays, and seals. A dependent-write failure
-/// propagates as `Err`, and the port method that owns the transaction rolls it back — the core
-/// use case then drives the pending-only compensation.
-async fn provision_agent_scoped_on(
+/// Provision the AGENT-scoped dependent graph on an already-flipped, agent-scoped reservation,
+/// on the caller's connection inside its transaction. This is a pure WRITER: the flip fired in
+/// the dispatcher, so this never touches the reservation's status — it opens the creator↔agent
+/// direct line (get-or-create, so a concurrent reopen resolves rather than conflicts) riding
+/// the flipped row's OWN `created_at`, and writes the onboarding system message on that line
+/// riding `now_ms`. Every row read back is returned raw; the core use case subject-binds,
+/// source-binds the creator identity, replays the minted candidate, and seals. A dependent-
+/// write failure propagates as `Err`, and the dispatcher that owns the transaction rolls it
+/// back — the core use case then drives the pending-only compensation.
+async fn write_agent_graph_on(
     conn: &mut SqliteConnection,
-    agent: &AgentId,
+    flip: ActivationFlipRow,
     candidate_direct_line: ConversationId,
     onboarding_message_id: MessageId,
     now_ms: i64,
-) -> Result<RawAgentArmProvision, PersistenceFailure> {
-    let Some(flip) = flip_to_active_on(conn, agent, now_ms).await? else {
-        return Ok(RawAgentArmProvision::Lost);
-    };
-
-    // The creator and agent identities ride the flip's OWN after-image columns; the adapter
-    // needs them to WRITE the graph, and returns them (and the participants it opened the pair
-    // against) raw so the core use case can re-derive and check the same facts from the seal.
+) -> Result<RawAgentArmGraph, PersistenceFailure> {
+    // The creator and agent identities ride the flip's OWN after-image columns; the writer
+    // needs them to WRITE the graph, and returns the creator's own-row identity (and the
+    // participants it opened the pair against) raw so the core use case can re-derive and
+    // source-bind the same facts from the seal.
     let creator = super::decode::user_id(flip.created_by_user_id.clone())
         .map_err(PersistenceFailure::from_source)?;
-    let creator_handle_raw = read_creator_handle_on(conn, &creator)
+    let creator_identity = read_creator_identity_on(conn, &creator)
         .await?
         .ok_or_else(|| {
             PersistenceFailure::from_source(ProvisioningRowBroken(
                 "activation creator names no user row to greet on the direct line",
             ))
         })?;
-    let creator_handle = ParticipantHandle::parse(creator_handle_raw.as_str()).map_err(|_| {
-        PersistenceFailure::from_source(ProvisioningRowBroken(
-            "activation creator's stored handle is not addressable",
-        ))
-    })?;
+    let creator_handle =
+        ParticipantHandle::parse(creator_identity.name.as_str()).map_err(|_| {
+            PersistenceFailure::from_source(ProvisioningRowBroken(
+                "activation creator's stored handle is not addressable",
+            ))
+        })?;
     let agent_handle = ParticipantHandle::parse(flip.name.as_str()).map_err(|_| {
         PersistenceFailure::from_source(ProvisioningRowBroken(
             "activated agent's stored handle is not addressable",
@@ -602,37 +627,29 @@ async fn provision_agent_scoped_on(
     );
     let onboarding = crate::messaging::append_onboarding_system_message_on(conn, &intent).await?;
 
-    Ok(RawAgentArmProvision::Provisioned(Box::new(
-        RawAgentArmGraph {
-            flip,
-            creator_handle: creator_handle_raw,
-            direct_line,
-            direct_line_participants: participants,
-            pair_created: recorder.pair_created(),
-            onboarding,
-        },
-    )))
+    Ok(RawAgentArmGraph {
+        flip,
+        creator: creator_identity,
+        direct_line,
+        direct_line_participants: participants,
+        pair_created: recorder.pair_created(),
+        onboarding,
+    })
 }
 
-/// Activate a conversation-scoped reservation, provision its home-workspace dependent graph,
-/// and hand back the RAW after-images. The conversation-arm twin of
-/// [`provision_agent_scoped_on`], minted by [`provision_and_activate_conversation`].
-///
-/// The flip fires FIRST (guard miss → `Lost`, nothing written). A won flip writes, all on
-/// `now_ms`: the agent's personal home workspace, its `Onboarding` DM channel, the three
-/// roster edges (agent-in-DM, creator-owns-workspace, creator-in-DM), and the onboarding
-/// message on the DM. Every row is read back raw and returned; the core use case seals.
-async fn provision_conversation_scoped_on(
+/// Provision the CONVERSATION-scoped dependent graph on an already-flipped, conversation-scoped
+/// reservation. The conversation-arm twin of [`write_agent_graph_on`]: a pure WRITER (the flip
+/// fired in the dispatcher). It writes, all on `now_ms`: the agent's personal home workspace,
+/// its `Onboarding` DM channel, the three roster edges (agent-in-DM, creator-owns-workspace,
+/// creator-in-DM), and the onboarding message on the DM. Every row is read back raw and
+/// returned; the core use case seals every touched column against intent.
+async fn write_conversation_graph_on(
     conn: &mut SqliteConnection,
-    agent: &AgentId,
+    flip: ActivationFlipRow,
     dm_channel_id: ConversationId,
     onboarding_message_id: MessageId,
     now_ms: i64,
-) -> Result<RawConversationArmProvision, PersistenceFailure> {
-    let Some(flip) = flip_to_active_on(conn, agent, now_ms).await? else {
-        return Ok(RawConversationArmProvision::Lost);
-    };
-
+) -> Result<RawConversationArmGraph, PersistenceFailure> {
     let creator = super::decode::user_id(flip.created_by_user_id.clone())
         .map_err(PersistenceFailure::from_source)?;
     let agent_handle = ParticipantHandle::parse(flip.name.as_str()).map_err(|_| {
@@ -641,13 +658,13 @@ async fn provision_conversation_scoped_on(
         ))
     })?;
     // The one derivation both this write and the core seal compute, so neither recites the
-    // other's literal id.
+    // other's literal id or description string.
     let home_id = home_workspace_id_for(&flip.agent_id);
-    let description = format!("Personal home workspace for {}", flip.name);
+    let description = agent_home_workspace_description(agent_handle.as_str());
 
     sqlx::query(INSERT_HOME_WORKSPACE)
         .bind(home_id.as_str())
-        .bind(flip.name.as_str())
+        .bind(agent_handle.as_str())
         .bind(description)
         .bind(flip.agent_id.as_str())
         .bind(now_ms)
@@ -728,6 +745,9 @@ async fn provision_conversation_scoped_on(
             agent_id: row
                 .try_get::<String, _>("agent_id")
                 .map_err(PersistenceFailure::from_source)?,
+            joined_at: row
+                .try_get::<i64, _>("joined_at")
+                .map_err(PersistenceFailure::from_source)?,
         }
     };
     let owner_edge = {
@@ -747,6 +767,9 @@ async fn provision_conversation_scoped_on(
             role: row
                 .try_get::<String, _>("role")
                 .map_err(PersistenceFailure::from_source)?,
+            joined_at: row
+                .try_get::<i64, _>("joined_at")
+                .map_err(PersistenceFailure::from_source)?,
         }
     };
     let user_edge = {
@@ -763,89 +786,78 @@ async fn provision_conversation_scoped_on(
             user_id: row
                 .try_get::<String, _>("user_id")
                 .map_err(PersistenceFailure::from_source)?,
+            joined_at: row
+                .try_get::<i64, _>("joined_at")
+                .map_err(PersistenceFailure::from_source)?,
         }
     };
 
-    Ok(RawConversationArmProvision::Provisioned(Box::new(
-        RawConversationArmGraph {
-            flip,
-            home_workspace: home_row,
-            dm_channel: dm_row,
-            agent_on_dm: agent_edge,
-            creator_workspace_owner: owner_edge,
-            creator_on_dm: user_edge,
-            onboarding,
-        },
-    )))
+    Ok(RawConversationArmGraph {
+        flip,
+        home_workspace: home_row,
+        dm_channel: dm_row,
+        agent_on_dm: agent_edge,
+        creator_workspace_owner: owner_edge,
+        creator_on_dm: user_edge,
+        onboarding,
+    })
 }
 
 impl AgentArmProvisioningPort for SqliteHostAgentStore {
-    async fn provision_agent_scoped(
+    async fn provision_and_activate(
         &self,
         agent: &AgentId,
         candidate_direct_line: ConversationId,
+        candidate_dm_channel: ConversationId,
         onboarding_message_id: MessageId,
         now_ms: i64,
-    ) -> Result<RawAgentArmProvision, PersistenceFailure> {
+    ) -> Result<RawProvisionOutcome, PersistenceFailure> {
         let mut tx = self
             .begin_root_write()
             .await
             .map_err(PersistenceFailure::from_source)?;
-        match provision_agent_scoped_on(
-            &mut tx,
-            agent,
-            candidate_direct_line,
-            onboarding_message_id,
-            now_ms,
-        )
-        .await
-        {
-            // A guard miss wrote nothing; drop the transaction rather than commit an empty one.
-            Ok(RawAgentArmProvision::Lost) => {
+
+        // Flip ONCE. A guard miss wrote nothing; drop the empty transaction and report `Lost`.
+        let Some(flip) = flip_to_active_on(&mut tx, agent, now_ms).await? else {
+            drop(tx);
+            return Ok(RawProvisionOutcome::Lost);
+        };
+
+        // The row's OWN session scope — read from the flip's `RETURNING`, never chosen by the
+        // caller — selects the arm to write. A scope this provisioner cannot classify writes
+        // NOTHING: roll the flip back so the row stays pending, and report `UnrecognizedScope`.
+        let outcome = match AgentSessionScope::parse(&flip.session_scope) {
+            Some(AgentSessionScope::Agent) => write_agent_graph_on(
+                &mut tx,
+                flip,
+                candidate_direct_line,
+                onboarding_message_id,
+                now_ms,
+            )
+            .await
+            .map(|graph| RawProvisionOutcome::Agent(Box::new(graph))),
+            Some(AgentSessionScope::Conversation) => write_conversation_graph_on(
+                &mut tx,
+                flip,
+                candidate_dm_channel,
+                onboarding_message_id,
+                now_ms,
+            )
+            .await
+            .map(|graph| RawProvisionOutcome::Conversation(Box::new(graph))),
+            None => {
                 drop(tx);
-                Ok(RawAgentArmProvision::Lost)
+                return Ok(RawProvisionOutcome::UnrecognizedScope);
             }
+        };
+
+        match outcome {
             Ok(provisioned) => {
                 tx.commit().await.map_err(PersistenceFailure::from_source)?;
                 Ok(provisioned)
             }
             // A dependent-write failure: roll the whole flip-and-graph back and surface the
             // cause. The core use case drives the pending-only compensation.
-            Err(error) => {
-                drop(tx);
-                Err(error)
-            }
-        }
-    }
-
-    async fn provision_conversation_scoped(
-        &self,
-        agent: &AgentId,
-        dm_channel_id: ConversationId,
-        onboarding_message_id: MessageId,
-        now_ms: i64,
-    ) -> Result<RawConversationArmProvision, PersistenceFailure> {
-        let mut tx = self
-            .begin_root_write()
-            .await
-            .map_err(PersistenceFailure::from_source)?;
-        match provision_conversation_scoped_on(
-            &mut tx,
-            agent,
-            dm_channel_id,
-            onboarding_message_id,
-            now_ms,
-        )
-        .await
-        {
-            Ok(RawConversationArmProvision::Lost) => {
-                drop(tx);
-                Ok(RawConversationArmProvision::Lost)
-            }
-            Ok(provisioned) => {
-                tx.commit().await.map_err(PersistenceFailure::from_source)?;
-                Ok(provisioned)
-            }
             Err(error) => {
                 drop(tx);
                 Err(error)
@@ -887,11 +899,10 @@ mod tests {
     use silverhand_backend_core::{
         agent_lifecycle::MaterializationStatus,
         agent_materialization::{
-            AgentArmActivation, ConversationArmActivation, DEPENDENT_GRAPH_FAILED_CODE,
-            FailOutcome, IdempotencyKey, MaterializationFault, ReopenOutcome, ReserveOutcome,
-            fail_materialization, find_idempotent_reservation, mark_stale_materializations_failed,
-            provision_and_activate_agent, provision_and_activate_conversation,
-            reopen_failed_materialization, reserve_agent,
+            DEPENDENT_GRAPH_FAILED_CODE, FailOutcome, IdempotencyKey, MaterializationFault,
+            ProvisionedActivation, ReopenOutcome, ReserveOutcome, fail_materialization,
+            find_idempotent_reservation, mark_stale_materializations_failed,
+            provision_and_activate, reopen_failed_materialization, reserve_agent,
         },
         agents::runtime::RuntimeKind,
         agents::session_scope::AgentSessionScope,
@@ -1302,17 +1313,18 @@ mod tests {
         let path = seed_schema(&dir, "activate.db", &seed).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
-        let outcome = provision_and_activate_agent(
+        let outcome = provision_and_activate(
             &store,
             &agent("a1"),
             ConversationId::parse("pair-new").unwrap(),
+            ConversationId::parse("dm-unused").unwrap(),
             MessageId::parse("msg-onboard").unwrap(),
             99,
         )
         .await
         .unwrap();
 
-        let AgentArmActivation::Provisioned(fact) = outcome else {
+        let ProvisionedActivation::Agent(fact) = outcome else {
             panic!("expected a provisioned agent arm");
         };
         assert_eq!(fact.agent_id(), &agent("a1"));
@@ -1395,16 +1407,17 @@ mod tests {
             let path = seed_schema(&dir, &format!("lost-{status}.db"), &seed).await;
             let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
-            let outcome = provision_and_activate_agent(
+            let outcome = provision_and_activate(
                 &store,
                 &agent("a1"),
                 ConversationId::parse("pair-new").unwrap(),
+                ConversationId::parse("dm-unused").unwrap(),
                 MessageId::parse("msg-onboard").unwrap(),
                 99,
             )
             .await
             .unwrap();
-            assert_eq!(outcome, AgentArmActivation::Lost);
+            assert_eq!(outcome, ProvisionedActivation::Lost);
 
             // The guarded flip changed no row: the status is untouched, no line was minted, no
             // onboarding message written, and no compensating fail was stamped.
@@ -1431,16 +1444,17 @@ mod tests {
         // An absent row is likewise `Lost`, with nothing written.
         let path = seed_schema(&dir, "lost-absent.db", &base_seed()).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
-        let outcome = provision_and_activate_agent(
+        let outcome = provision_and_activate(
             &store,
             &agent("missing"),
             ConversationId::parse("pair-new").unwrap(),
+            ConversationId::parse("dm-unused").unwrap(),
             MessageId::parse("msg-onboard").unwrap(),
             99,
         )
         .await
         .unwrap();
-        assert_eq!(outcome, AgentArmActivation::Lost);
+        assert_eq!(outcome, ProvisionedActivation::Lost);
     }
 
     #[tokio::test]
@@ -1460,10 +1474,11 @@ mod tests {
         let path = seed_schema(&dir, "dependent-fail.db", &seed).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
-        let fault = provision_and_activate_agent(
+        let fault = provision_and_activate(
             &store,
             &agent("a1"),
             ConversationId::parse("pair-new").unwrap(),
+            ConversationId::parse("dm-unused").unwrap(),
             MessageId::parse("msg-onboard").unwrap(),
             99,
         )
@@ -1642,9 +1657,10 @@ mod tests {
         let path = seed_schema(&dir, "activate-conversation.db", &seed).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
-        let outcome = provision_and_activate_conversation(
+        let outcome = provision_and_activate(
             &store,
             &agent("a1"),
+            ConversationId::parse("pair-unused").unwrap(),
             ConversationId::parse("dm-onboard").unwrap(),
             MessageId::parse("msg-onboard").unwrap(),
             99,
@@ -1652,7 +1668,7 @@ mod tests {
         .await
         .unwrap();
 
-        let ConversationArmActivation::Provisioned(fact) = outcome else {
+        let ProvisionedActivation::Conversation(fact) = outcome else {
             panic!("expected a provisioned conversation arm");
         };
         assert_eq!(fact.agent_id(), &agent("a1"));
@@ -1772,16 +1788,17 @@ mod tests {
         let path = seed_schema(&dir, "conversation-lost.db", &seed).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
 
-        let outcome = provision_and_activate_conversation(
+        let outcome = provision_and_activate(
             &store,
             &agent("a1"),
+            ConversationId::parse("pair-unused").unwrap(),
             ConversationId::parse("dm-onboard").unwrap(),
             MessageId::parse("msg-onboard").unwrap(),
             99,
         )
         .await
         .unwrap();
-        assert_eq!(outcome, ConversationArmActivation::Lost);
+        assert_eq!(outcome, ProvisionedActivation::Lost);
 
         // The guarded flip changed no row: no home workspace, DM, or onboarding message written.
         let workspaces: i64 =
@@ -1802,5 +1819,157 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(msgs, 0);
+    }
+
+    #[tokio::test]
+    async fn the_raw_port_dispatches_the_arm_from_the_flipped_rows_own_scope() {
+        // The caller does not choose the arm — the port reads the flipped row's OWN session_scope
+        // inside the transaction and dispatches accordingly. The same call, differing only in the
+        // seeded row's scope, produces different arms and touches different tables.
+        let dir = tempfile::tempdir().unwrap();
+
+        // An agent-scoped row yields the agent arm: a direct pair is minted, and NO home
+        // workspace is created.
+        {
+            let mut seed = base_seed();
+            seed.push(seed_scoped_agent(
+                "a1",
+                "pending_materialization",
+                "agent",
+                10,
+            ));
+            let path = seed_schema(&dir, "dispatch-agent.db", &seed).await;
+            let store = SqliteHostAgentStore::open(&path).await.unwrap();
+
+            let outcome = store
+                .provision_and_activate(
+                    &agent("a1"),
+                    ConversationId::parse("pair-new").unwrap(),
+                    ConversationId::parse("dm-unused").unwrap(),
+                    MessageId::parse("msg-onboard").unwrap(),
+                    99,
+                )
+                .await
+                .unwrap();
+            assert!(
+                matches!(outcome, RawProvisionOutcome::Agent(_)),
+                "an agent-scoped row must dispatch the agent arm, got {outcome:?}"
+            );
+            let pairs: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE id = 'pair-new'")
+                    .fetch_one(store.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(pairs, 1, "the agent arm mints the direct pair");
+            let workspaces: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM workspaces WHERE id = 'wsah_a1'")
+                    .fetch_one(store.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(workspaces, 0, "the agent arm writes no home workspace");
+        }
+
+        // A conversation-scoped row yields the conversation arm: a home workspace is created, and
+        // the candidate direct pair is never minted.
+        {
+            let mut seed = base_seed();
+            seed.push(seed_scoped_agent(
+                "a1",
+                "pending_materialization",
+                "conversation",
+                10,
+            ));
+            let path = seed_schema(&dir, "dispatch-conversation.db", &seed).await;
+            let store = SqliteHostAgentStore::open(&path).await.unwrap();
+
+            let outcome = store
+                .provision_and_activate(
+                    &agent("a1"),
+                    ConversationId::parse("pair-unused").unwrap(),
+                    ConversationId::parse("dm-onboard").unwrap(),
+                    MessageId::parse("msg-onboard").unwrap(),
+                    99,
+                )
+                .await
+                .unwrap();
+            assert!(
+                matches!(outcome, RawProvisionOutcome::Conversation(_)),
+                "a conversation-scoped row must dispatch the conversation arm, got {outcome:?}"
+            );
+            let workspaces: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM workspaces WHERE id = 'wsah_a1'")
+                    .fetch_one(store.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(
+                workspaces, 1,
+                "the conversation arm mints the home workspace"
+            );
+            let pairs: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE id = 'pair-unused'")
+                    .fetch_one(store.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(pairs, 0, "the conversation arm never mints the direct pair");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_raw_port_rolls_a_dependent_failure_back_to_a_still_pending_row() {
+        // The port's transaction is atomic and it does NOT itself stamp the failure — that is the
+        // core use case's compensating step. On a dependent-write collision the whole transaction
+        // rolls back: the flip is undone (the row is STILL pending, not `active`, not `failed`)
+        // and zero dependent rows survive.
+        let dir = tempfile::tempdir().unwrap();
+        let mut seed = base_seed();
+        seed.push(seed_scoped_agent(
+            "a1",
+            "pending_materialization",
+            "agent",
+            1,
+        ));
+        seed.push(EXISTING_PAIR.to_string());
+        seed.push(CLASH_MESSAGE.to_string());
+        let path = seed_schema(&dir, "raw-rollback.db", &seed).await;
+        let store = SqliteHostAgentStore::open(&path).await.unwrap();
+
+        let err = store
+            .provision_and_activate(
+                &agent("a1"),
+                ConversationId::parse("pair-new").unwrap(),
+                ConversationId::parse("dm-unused").unwrap(),
+                MessageId::parse("msg-onboard").unwrap(),
+                99,
+            )
+            .await
+            .unwrap_err();
+        let _ = err; // a PersistenceFailure — the caller (core) decides how to compensate.
+
+        // The flip rolled back: the row is left exactly pending, with no failure stamp. Had the
+        // port committed the flip before the dependent write failed, this would read `active`.
+        let (status, code): (String, Option<String>) = sqlx::query_as(
+            "SELECT materialization_status, materialization_failed_code FROM agents WHERE id = 'a1'",
+        )
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(status, "pending_materialization");
+        assert_eq!(code, None);
+
+        // Zero dependent rows survive: the candidate line was never minted and the pre-existing
+        // line still holds exactly its one seeded message.
+        let candidate: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE id = 'pair-new'")
+                .fetch_one(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(candidate, 0);
+        let existing_msgs: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id = 'existing-pair'",
+        )
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+        assert_eq!(existing_msgs, 1);
     }
 }
