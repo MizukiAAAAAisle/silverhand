@@ -72,7 +72,7 @@ use silverhand_backend_core::{
     identity::{AgentId, Principal, UserId},
     messaging::collaboration::RuntimeControlPort,
     name_canonicalization::is_ecmascript_trim_whitespace,
-    runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustodyPort},
+    runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustodyReadPort},
     runtime_transition::{
         RuntimeTransitionInboxWrite, RuntimeTransitionSeatRead, RuntimeTransitionWrite,
     },
@@ -183,7 +183,7 @@ where
     W: RuntimeTransitionWrite,
     Seats: RuntimeTransitionSeatRead,
     Inboxes: RuntimeTransitionInboxWrite,
-    Cust: RuntimeCustodyPort,
+    Cust: RuntimeCustodyReadPort,
     Focus: AgentSlotPresentationFocusPort,
     P: RuntimeControlPort + Clone + Send + Sync + 'static,
     Changed: AgentChangedSink,
@@ -253,7 +253,7 @@ where
     W: RuntimeTransitionWrite,
     Seats: RuntimeTransitionSeatRead,
     Inboxes: RuntimeTransitionInboxWrite,
-    Cust: RuntimeCustodyPort,
+    Cust: RuntimeCustodyReadPort,
     Focus: AgentSlotPresentationFocusPort,
     P: RuntimeControlPort + Clone + Send + Sync + 'static,
     Changed: AgentChangedSink,
@@ -692,10 +692,7 @@ mod tests {
             HardStopRuntimeProviderRefusal, RuntimeSeatTarget, RuntimeStartTarget,
             StartRuntimeOutcome, StartRuntimeProviderRefusal,
         },
-        runtime_credential::{
-            ClaimRuntimeCustody, ClaimedRuntime, FinalizeRuntimeCustody, RuntimePrincipal,
-            RuntimeScope,
-        },
+        runtime_credential::{RuntimePrincipal, RuntimeScope},
         runtime_transition::{
             AbortTransition, BeginTransitionRecord, CompleteTransitionRecord,
             RuntimeTransitionCommit, RuntimeTransitionInboxReclaimRecord, RuntimeTransitionLock,
@@ -901,14 +898,7 @@ mod tests {
         }
     }
 
-    impl RuntimeCustodyPort for Unreached {
-        async fn claim_or_current(
-            &self,
-            _claim: ClaimRuntimeCustody,
-        ) -> Result<Option<ClaimedRuntime>, silverhand_backend_core::persistence::PersistenceFailure>
-        {
-            unreachable!("custody must not run in these tests")
-        }
+    impl RuntimeCustodyReadPort for Unreached {
         async fn current(
             &self,
             _scope: RuntimeScope,
@@ -916,18 +906,6 @@ mod tests {
             Option<RuntimePrincipal>,
             silverhand_backend_core::persistence::PersistenceFailure,
         > {
-            unreachable!("custody must not run in these tests")
-        }
-        async fn is_current(
-            &self,
-            _principal: RuntimePrincipal,
-        ) -> Result<bool, silverhand_backend_core::persistence::PersistenceFailure> {
-            unreachable!("custody must not run in these tests")
-        }
-        async fn finalize(
-            &self,
-            _finalization: FinalizeRuntimeCustody,
-        ) -> Result<bool, silverhand_backend_core::persistence::PersistenceFailure> {
             unreachable!("custody must not run in these tests")
         }
     }

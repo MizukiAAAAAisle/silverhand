@@ -296,6 +296,26 @@ pub trait RuntimeCustodyPort: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<bool, PersistenceFailure>> + Send;
 }
 
+/// The read-only slice of custody the runtime-switch saga depends on.
+///
+/// The switch route consults live custody only to source-bind the AgentSlot presentation
+/// focus before a clear (see [`crate::agent_runtime_switch`]); it never claims, linearizes,
+/// or finalizes. Depending on the full [`RuntimeCustodyPort`] would hand the product route
+/// the mutating capability: `claim_or_current` bypasses bearer reservation / token
+/// activation, and `finalize` bypasses the credential authority's own token revoke, scope
+/// guards, and presentation-focus cleanup. A credential authority therefore exposes only
+/// this read face to the switch route, delegating to its existing public `current`, so the
+/// mutating escape hatch can never leave the authority's boundary.
+pub trait RuntimeCustodyReadPort: Clone + Send + Sync + 'static {
+    /// Returns the current claimed principal, or `None` for a missing or unclaimed slot.
+    /// Persisted coordinate corruption is an infrastructure failure, never a
+    /// missing-principal result.
+    fn current(
+        &self,
+        scope: RuntimeScope,
+    ) -> impl Future<Output = Result<Option<RuntimePrincipal>, PersistenceFailure>> + Send;
+}
+
 /// Process-owned presentation focus for an exact live AgentSlot generation.
 ///
 /// ConversationSlot already carries its semantic source in [`RuntimePrincipal`], so

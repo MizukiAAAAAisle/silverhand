@@ -37,13 +37,14 @@ use silverhand_backend_server::{
     daemon_delivery::{DaemonDeliveryController, DaemonDeliveryRuntime, DaemonHostConnections},
     direct_pairs,
     host_agent::{
-        agent_avatar, agent_avatar_write, agent_delete, agent_detail, agent_list, agent_patch,
-        agent_presence, availability,
+        agent_avatar, agent_avatar_write, agent_clear_session, agent_delete, agent_detail,
+        agent_list, agent_patch, agent_presence, agent_runtime_switch, availability,
     },
     host_agent_background::{
         agent_deletion_resumer::AgentDeletionResumer, presence_grace_timer::PresenceGraceTimers,
     },
     host_control::management::{self, update::ScopeEventHostLabelChange},
+    host_control::runtime_availability::DataPlaneRuntimeAvailabilityProbe,
     host_resources, host_runtime,
     human_auth::{self, HumanAuthDeps},
     messaging::{
@@ -680,6 +681,13 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     let conversation_agent_activity_read = messaging_store.conversation_agent_activity();
     let activity_read_model = messaging_store.activity_read_model();
     let agent_run_states_admission = messaging_store.channel_lifecycle();
+    // #2234 CP4: the two runtime write faces' messaging-store dependencies, captured (like
+    // the read doors below) before `send_routers` moves the store — each `&self` builder
+    // clones only the shared pool, never a second authority. clear-session's seat admission
+    // ladder and runtime-switch's conversation-coordination read both ride the ONE
+    // `MessagingStore`.
+    let agent_clear_session_admission = messaging_store.runtime_control_admission();
+    let agent_switch_coordination = messaging_store.switch_conversation_coordination();
     // Wave 3A checkpoint A3: the five message navigation/search read doors ride the SAME
     // `MessagingStore` (each `&self` builder clones only the shared pool, no second
     // authority), captured before `send_routers` moves the store as the send UoW. The
@@ -862,10 +870,30 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     let agent_delete_residue = cascade_effects.clone();
     let agent_delete_availability =
         hub.agent_availability_edge(agent_availability_cold_read.clone());
+    // #2234 CP4: the runtime-switch saga's four host-agent ports, captured before the
+    // host-delete unit-of-work below moves `host_agent_store`. The switch snapshot read and
+    // the three durable transition ports (lock write, seat read, inbox-reclaim write) are the
+    // SAME ONE `SqliteHostAgentStore` the delete path holds — a clone shares its pool, so the
+    // transition lock, seat, and inbox reclaim are ONE durable authority, never a second
+    // store the fence could diverge across.
+    let agent_switch_snapshot = host_agent_store.clone();
+    let agent_switch_transitions = host_agent_store.clone();
+    let agent_switch_seats = host_agent_store.clone();
+    let agent_switch_inboxes = host_agent_store.clone();
     // The daemon websocket router, built now that the resumer exists: the resumer is its
     // MANDATORY host-ready observer. Binder (from `host_connections()`) and observer are
     // the same resumer over the same runtime registry — one generation truth.
     let daemon_router = daemon_runtime.router(std::sync::Arc::new(deletion_resumer.clone()));
+    // #2234 CP4: ONE production runtime control for both agent runtime write faces.
+    // clear-session (POST .../clear-session) and runtime-switch (PUT .../runtime) each hold a
+    // clone of this SAME `ProductionRuntimeControl`, so both reach the one sealed-seat clear,
+    // the one data-plane, and the one `RuntimeClearSessionWaiters` — constructed exactly once
+    // here, never a second control. The switch's live-availability probe reuses the existing
+    // typed `owning_host_data_plane()` accessor: only the `OwningHostDataPlane` capability
+    // escapes, never the raw registry/dispatcher.
+    let runtime_control = daemon_runtime.runtime_control();
+    let agent_switch_availability =
+        DataPlaneRuntimeAvailabilityProbe::new(daemon_controller.owning_host_data_plane());
     let host_delete = host_runtime::delete::router(DeleteComputer::new(
         host_agent_store.clone(),
         host_agent_store,
@@ -1020,6 +1048,36 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
                 deletion_resumer.clone(),
                 agent_delete_residue,
                 agent_delete_availability,
+                SystemProcessClock,
+            ))
+            // #2234 CP4 — the two agent runtime write faces, behind the SAME
+            // `require_human_session` perimeter as the reads and the other writes above.
+            // clear-session and runtime-switch hold the ONE `ProductionRuntimeControl`
+            // (`runtime_control` clones), so both reach the one sealed-seat clear path.
+            // runtime-switch's five #2232 owners resolve from exactly the two genuine
+            // authorities and no more: transition-lock/seat/inbox + snapshot are the ONE
+            // `SqliteHostAgentStore`; custody + presentation-focus are the ONE
+            // `RuntimeCredentialAuthority` — custody exposed only through its read-only
+            // `RuntimeCustodyReadPort` face, so `claim_or_current`/`finalize` can never leave
+            // the authority. Each accumulates onto its own `.../clear-session` and
+            // `.../runtime` path node (disjoint from the `{id}` node above).
+            .merge(agent_clear_session::router(
+                agent_detail_cold_read.clone(),
+                agent_clear_session_admission,
+                runtime_control.clone(),
+            ))
+            .merge(agent_runtime_switch::router(
+                agent_detail_cold_read.clone(),
+                agent_switch_snapshot,
+                agent_switch_availability,
+                agent_switch_coordination,
+                agent_switch_transitions,
+                agent_switch_seats,
+                agent_switch_inboxes,
+                runtime_credentials.clone(),
+                runtime_credentials.clone(),
+                runtime_control,
+                hub.agent_changed_sink(),
                 SystemProcessClock,
             ))
             .merge(agent_avatar::router(
@@ -3139,7 +3197,7 @@ mod tests {
         // The sixty-seven human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
-        const HUMAN_PERIMETER_DOORS: [(&str, &str); 67] = [
+        const HUMAN_PERIMETER_DOORS: [(&str, &str); 69] = [
             ("POST", "/api/hosts"),
             // #2219 CP4 host-custody batch B — the three perimeter-guarded custody doors.
             // `GET /api/hosts` shares the path node with the invite POST above, so its anon
@@ -3278,8 +3336,15 @@ mod tests {
             // daemon-attach `on_host_ready`, shutdown close) is borne by
             // `the_composition_agent_deletion_resumer_drives_the_full_production_lifecycle`.
             ("DELETE", "/api/agents/agent-1"),
+            // #2234 CP4: the two agent runtime write faces on their own path nodes (distinct
+            // from the `{id}` node above). Anon → the perimeter 401; the authenticated reach
+            // through the shared production `ProductionRuntimeControl` (and the switch saga's
+            // durable commit) is borne by
+            // `the_composition_agent_runtime_control_faces_reach_the_shared_production_control`.
+            ("POST", "/api/agents/agent-1/clear-session"),
+            ("PUT", "/api/agents/agent-1/runtime"),
         ];
-        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 67);
+        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 69);
         for (method, path) in HUMAN_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -3664,7 +3729,7 @@ mod tests {
     ///
     /// Every one of the 54 routes is FALSIFIABLE — none rests on an
     /// unfalsifiable anon `401`:
-    /// * The 26 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
+    /// * The 28 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
     ///   perimeter → anon `401` (includes #2218's authenticated `/api/runtimes`, three of
     ///   #2219's four host-custody routes: list, claim-or-create, and
     ///   `{id}/rotate-token`; the fourth, `connect-token/resolve`, is allowlisted and
@@ -3705,7 +3770,7 @@ mod tests {
     /// anon-landed).
     #[tokio::test]
     async fn the_host_agent_lane_stays_a_closed_universe_of_fifty_four() {
-        // The 26 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
+        // The 28 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
         // perimeter → anon 401.
         const LANDED: &[(&str, &str)] = &[
             ("GET", "/api/agents"),
@@ -3772,6 +3837,14 @@ mod tests {
             // the CP2 write-faces gate pins) and its full production lifecycle are borne by
             // `the_composition_agent_deletion_resumer_drives_the_full_production_lifecycle`.
             ("DELETE", "/api/agents/agent-1"),
+            // #2234 CP4: the two runtime write faces, now MOUNTED behind the human perimeter
+            // → anon 401, each on its own path node. Their authenticated reach through the ONE
+            // shared production `ProductionRuntimeControl` (clear-session's sealed-seat clear;
+            // the switch saga's durable transition commit + exactly-once `agent_changed`) is
+            // borne by
+            // `the_composition_agent_runtime_control_faces_reach_the_shared_production_control`.
+            ("POST", "/api/agents/agent-1/clear-session"),
+            ("PUT", "/api/agents/agent-1/runtime"),
         ];
         // The 4 ANON-LANDED routes: mounted ahead of every perimeter, so an anonymous
         // probe reaches the handler. #2218's server/info and health answer 200; readyz
@@ -3790,7 +3863,7 @@ mod tests {
                 StatusCode::UNAUTHORIZED,
             ),
         ];
-        // 23 RESIDUAL routes whose path matches no mounted route → anon 404.
+        // 21 RESIDUAL routes whose path matches no mounted route → anon 404.
         const CLEAN_RESIDUAL: &[(&str, &str)] = &[
             // routes.ts remaining (1)
             ("POST", "/auth/embedded-bootstrap"),
@@ -3798,12 +3871,10 @@ mod tests {
             // #2219, detail/revoke/connect-token-rotate/delete by #2223 CP5, and
             // disconnect/proxy-config(GET+PUT)/runtime-catalog/status + `PATCH /api/hosts/{id}`
             // by #2234 CP1 — all now perimeter-landed above)
-            // agents residual (13 of 20; name-availability + PATCH /api/agents/{id} are
+            // agents residual (11 of 20; name-availability + PATCH /api/agents/{id} are
             // now perimeter-landed by #2234 CP2; the three avatar faces likewise; DELETE
-            // /api/agents/{id} is now perimeter-landed by #2234 CP3; POST /api/agents
-            // remains method-shadowed, below)
-            ("PUT", "/api/agents/agent-1/runtime"),
-            ("POST", "/api/agents/agent-1/clear-session"),
+            // /api/agents/{id} by #2234 CP3; clear-session + PUT .../runtime by #2234 CP4;
+            // POST /api/agents remains method-shadowed, below)
             ("GET", "/api/agents/agent-1/workspace/tree"),
             ("GET", "/api/agents/agent-1/workspace/file"),
             ("GET", "/api/agents/agent-1/profile/mcp"),
@@ -3834,11 +3905,11 @@ mod tests {
             ("POST", "/api/agents"), // ← GET /api/agents (mounted)
         ];
 
-        // ── Mechanical checksum: (26 + 4) + (23 + 1) == 54, all unique, landed ∩
+        // ── Mechanical checksum: (28 + 4) + (21 + 1) == 54, all unique, landed ∩
         // residual = ∅ ──
-        assert_eq!(LANDED.len(), 26);
+        assert_eq!(LANDED.len(), 28);
         assert_eq!(ANON_LANDED.len(), 4);
-        assert_eq!(CLEAN_RESIDUAL.len(), 23);
+        assert_eq!(CLEAN_RESIDUAL.len(), 21);
         assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 1);
         let landed: std::collections::HashSet<(&str, &str)> = LANDED
             .iter()
@@ -3850,8 +3921,8 @@ mod tests {
             .chain(METHOD_SHADOW_RESIDUAL)
             .copied()
             .collect();
-        assert_eq!(landed.len(), 30, "landed rows are unique");
-        assert_eq!(residual.len(), 24, "residual rows are unique");
+        assert_eq!(landed.len(), 32, "landed rows are unique");
+        assert_eq!(residual.len(), 22, "residual rows are unique");
         assert!(
             landed.is_disjoint(&residual),
             "landed and residual are disjoint"
@@ -3869,7 +3940,7 @@ mod tests {
         let bearer = format!("Bearer {TOKEN}");
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // ── 26 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
+        // ── 28 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
         for (method, path) in LANDED {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(
@@ -4951,6 +5022,348 @@ mod tests {
         socket2.close(None).await.unwrap();
         shutdown2_tx.send(()).unwrap();
         boot2_running.await.unwrap().unwrap();
+    }
+
+    /// Seed the topology the CP4 runtime-control gate drives: one online host (both
+    /// `activated_at` and `finalized_at` set, so its lifecycle resolves to `Active` — the
+    /// placement gate `clear_session`/switch enforce) with a `long_lived` credential whose hash
+    /// is `HOST_TOKEN_HASH` (so the same daemon the other gates use can attach), plus
+    ///
+    /// * `a-clear` — an AGENT-scope agent (its AgentSlot is the subject of `POST /clear-session`),
+    /// * `a-switch` — a CONVERSATION-scope member of `conv-cp4` (its ConversationSlot is the
+    ///   subject of `PUT /runtime`; a live conversation seat is always re-driven after a
+    ///   committed switch, so the post-commit `runtime_start` re-drive is guaranteed to dispatch).
+    ///
+    /// Their runtime slots are left IDLE here (auto-created, no claimed generation), so they are
+    /// NOT current custodies at daemon-attach hydration and survive it untouched. The gate makes
+    /// them LIVE via [`activate_runtime_control_slots`] only AFTER the daemon has attached and
+    /// hydrated — a slot claimed before attach would be reconciled to idle (finalized `Crashed`)
+    /// because the freshly-attached daemon reports no active runtime for it.
+    async fn seed_runtime_control_agents(path: &Path) {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id, activated_at, finalized_at) \
+             VALUES ('h-online', 'host-online', 'remote', 1, 'user-1', 1, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO host_credentials (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at) \
+             VALUES ('cred-online', 'h-online', ?, 'long_lived', NULL, NULL, NULL)",
+        )
+        .bind(HOST_TOKEN_HASH)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+                 created_by_user_id, materialization_status, session_scope) VALUES \
+                 ('a-clear', 'a-clear', 'claude', 'h-online', 1, 1, 'Clear', 'user-1', 'active', 'agent'), \
+                 ('a-switch', 'a-switch', 'claude', 'h-online', 1, 1, 'Switch', 'user-1', 'active', 'conversation')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at) \
+                 VALUES ('ws-cp4', 'Space', 'space', 'user-1', 0, 0); \
+             INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, \
+                 status, visibility, created_at, updated_at, latest_message_seq) \
+                 VALUES ('conv-cp4', 'ws-cp4', 'workspace', 'open', 'General', 'general', 'open', 'private', 0, 0, 1); \
+             INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) \
+                 VALUES ('conv-cp4', 'a-switch', 0);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    /// Claim both seeded runtime slots LIVE (`observed_status='active'`, generation `1`, owned by
+    /// `instance-cp4` — the instance the gate's daemon announces) with an exact CLI session id.
+    /// Called AFTER attach so hydration cannot reconcile them away; from here the switch's seat
+    /// read sees a genuinely live conversation seat (re-driven post-commit) and clear-session sees
+    /// a live agent seat (`was_running`).
+    async fn activate_runtime_control_slots(path: &Path) {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE agent_runtime_slots SET generation=1, claimed_by_daemon_instance_id='instance-cp4', \
+                 observed_status='active', cli_session_id='session-clear' \
+               WHERE agent_id='a-clear' AND conversation_id IS NULL; \
+             UPDATE agent_runtime_slots SET generation=1, claimed_by_daemon_instance_id='instance-cp4', \
+                 observed_status='active', cli_session_id='session-switch' \
+               WHERE agent_id='a-switch' AND conversation_id='conv-cp4';",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    /// Drive a connected daemon socket like a REAL daemon for the runtime-control faces:
+    /// answer hydration (`runtime_status`), the promotion-edge `host_status` probe (and
+    /// signal `attached` once, so the gate can wait for the host to be `Active` before it
+    /// dispatches), the forced availability `host_runtime_catalog` (target `codex` PRESENT,
+    /// so the switch clears its deterministic-absence gate), every `runtime_clear_session`
+    /// (`{"cleared":false}` — the already-idle daemon answer that still drives the real
+    /// control through custody `finalize` → durable `settle_clear`), and every post-commit
+    /// `runtime_start` with a decode-rejecting `{"started":false}` so the switch's re-drive
+    /// counts a `restart_failure` WITHOUT rolling back the committed transition.
+    async fn service_runtime_control_commands<S>(
+        mut socket: tokio_tungstenite::WebSocketStream<S>,
+        stop: std::sync::Arc<tokio::sync::Notify>,
+        attached: std::sync::Arc<tokio::sync::Notify>,
+    ) -> tokio_tungstenite::WebSocketStream<S>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        loop {
+            tokio::select! {
+                () = stop.notified() => break,
+                command = next_daemon_json(&mut socket) => {
+                    let result = match command["kind"].as_str() {
+                        Some("runtime_status") => serde_json::json!({ "runtimes": [] }),
+                        Some("host_status") => {
+                            // The promotion edge: custody is attached by the time this fires,
+                            // so it is the signal the gate waits on before dispatching.
+                            attached.notify_one();
+                            serde_json::json!({
+                                "os": "linux",
+                                "daemon_pid": 1,
+                                "daemon_version": "0.0.0-test",
+                                "started_at": 0,
+                                "uptime_ms": 0,
+                                "active_agent_ids": [],
+                            })
+                        }
+                        // Forced availability probe: `codex` is PRESENT, so the transition's
+                        // deterministic-absence gate defers to the daemon spawn last-line.
+                        Some("host_runtime_catalog") => serde_json::json!({
+                            "runtimes": [ {
+                                "kind": "codex",
+                                "state": "present",
+                                "reason": "resolved",
+                                "installed": true,
+                                "binary": "/usr/bin/codex",
+                                "version": "1.0.0",
+                            } ],
+                            "detected_at": 1_700_000_000_000_i64,
+                        }),
+                        // The already-idle clear answer: nothing was awaited on an exit, but the
+                        // real control still finalizes custody and durably settles the seat.
+                        Some("runtime_clear_session") => serde_json::json!({ "cleared": false }),
+                        // A decode-rejecting start result: the post-commit re-drive counts one
+                        // `restart_failure` and NEVER reverts the committed switch.
+                        Some("runtime_start") => serde_json::json!({ "started": false }),
+                        other => panic!("unexpected daemon command kind: {other:?}"),
+                    };
+                    socket
+                        .send(ClientMessage::Text(
+                            serde_json::json!({
+                                "direction": "daemon_to_server",
+                                "type": "command_response",
+                                "id": command["id"],
+                                "kind": command["kind"],
+                                "result": result,
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+        socket
+    }
+
+    /// The #2234 CP4 close: `POST /api/agents/{id}/clear-session` and `PUT
+    /// /api/agents/{id}/runtime` are not merely mounted behind the human perimeter — each
+    /// reaches the ONE `ProductionRuntimeControl` the composition builds (constructed once
+    /// in `prepare()` and cloned to both routes) and drives it against a REAL daemon
+    /// attaching through the mounted host WS. This is the composition/reachability
+    /// obligation (A6 no-op-mount lesson), reduced to two product facts over one attached
+    /// host; delete EITHER `.merge(...)` from `prepare()`'s human chain and the matching
+    /// fact reddens (a `404`/`405`, never these bodies):
+    ///
+    /// 1. **clear-session reaches command → durable settle/audit.** `a-clear` owns a live
+    ///    claimed AgentSlot. The composed route reads that live seat through the production
+    ///    control (proved by `was_running:true` + the exact seeded `prev_cli_session_id`),
+    ///    passes the `Active` placement gate, dispatches the real `runtime_clear_session`
+    ///    command to the attached daemon (the servicer must answer it — a no-op mount could
+    ///    not), and — on the already-idle `{"cleared":false}` answer — finalizes custody and
+    ///    durably settles, returning `200 {"ok":true,...}`. (The exit-waiter *await* branch
+    ///    is a `ProductionRuntimeControl` internal owned by the backend-server e2e
+    ///    `clear_session_waiter_settles_after_the_exact_runtime_exit_frame_commits`; this
+    ///    composition gate proves the mount reaches the real command→settle path, well
+    ///    beyond a `401`/`405`.)
+    /// 2. **runtime-switch truly commits, announces once, and does not roll back.** `a-switch`
+    ///    (runtime `claude`) is switched to `codex`. The saga probes availability
+    ///    (`host_runtime_catalog`, codex PRESENT), clears its live ConversationSlot through
+    ///    the SAME production control (`cleared_sessions >= 1`), commits `runtime=codex` +
+    ///    tuning, publishes `agent_changed` EXACTLY ONCE (fresh app-scope high-water delta
+    ///    `== 1`), then re-drives the conversation seat with a `runtime_start` the daemon
+    ///    FAILS (`restart_failures >= 1`). The committed runtime survives that post-commit
+    ///    failure: a fresh `GET` still reads `codex`, proving the re-drive never reverted the
+    ///    transition.
+    #[tokio::test]
+    async fn the_composition_agent_runtime_control_faces_reach_the_shared_production_control() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_runtime_control_agents(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router.clone();
+        let bearer = format!("Bearer {TOKEN}");
+
+        // Serve over real TCP so a real daemon can attach through the mounted host WS; the
+        // in-process `router` clone shares the served app's state (the one production control,
+        // the daemon registry), exactly as the CP3 gate relies on.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+
+        // Drive the REAL admission→attachment handshake for `instance-cp4` (the instance that
+        // owns both seeded seats' custody).
+        let mut ws_request = format!("ws://{address}{HOST_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        ws_request.headers_mut().insert(
+            tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+            format!("Bearer {HOST_TOKEN}").parse().unwrap(),
+        );
+        let (socket, _) = connect_async(ws_request).await.unwrap();
+        {
+            use futures_util::SinkExt;
+            let mut socket = socket;
+            socket
+                .send(ClientMessage::Text(
+                    serde_json::json!({
+                        "direction": "daemon_to_server",
+                        "type": "event",
+                        "kind": "ready",
+                        "protocol_version": OUTBOUND_PROTOCOL_VERSION,
+                        "daemon_version": "test",
+                        "daemon_id": "daemon-cp4",
+                        "instance_id": "instance-cp4",
+                        "host_descriptor": { "name": "CP4 host", "kind": "remote" },
+                        "capabilities": [],
+                        "daemon_pid": 7,
+                        "started_at": 100,
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+
+            // Background servicer answers hydration + the runtime-control commands; wait for the
+            // promotion-edge `host_status` so custody is attached before we dispatch.
+            let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+            let attached = std::sync::Arc::new(tokio::sync::Notify::new());
+            let servicer = tokio::spawn(service_runtime_control_commands(
+                socket,
+                stop.clone(),
+                attached.clone(),
+            ));
+            tokio::time::timeout(std::time::Duration::from_secs(5), attached.notified())
+                .await
+                .expect("the daemon must attach (host_status probe) before the gate dispatches");
+
+            // Claim both seats LIVE now that hydration is done — a pre-attach claim would have
+            // been reconciled to idle when this daemon reported no active runtime for it.
+            activate_runtime_control_slots(&fixture.path).await;
+
+            // ── Fact 1: clear-session reaches the real command → durable settle. ──
+            let (status, body) = request(
+                &router,
+                "POST",
+                "/api/agents/a-clear/clear-session",
+                Some(&bearer),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "clear-session must reach the mounted production control: {body}"
+            );
+            let cleared: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(cleared["ok"], true, "clear-session settled: {body}");
+            assert_eq!(
+                cleared["was_running"], true,
+                "the route read the LIVE claimed agent seat through the production control: {body}"
+            );
+            assert_eq!(
+                cleared["prev_cli_session_id"], "session-clear",
+                "the durable settle carried the exact seeded live session: {body}"
+            );
+
+            // ── Fact 2: runtime-switch commits, announces once, and survives the restart failure. ──
+            let app_high_water_before = fresh_scope_high_water(address, "app").await;
+            let (status, body) = request_with_body(
+                &router,
+                "PUT",
+                "/api/agents/a-switch/runtime",
+                Some(&bearer),
+                Body::from(
+                    r#"{"runtime":"codex","model":null,"reasoning_effort":null,"fast_mode":null}"#,
+                ),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "runtime-switch must reach the mounted production control: {body}"
+            );
+            let switched: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                switched["agent"]["runtime"], "codex",
+                "the switch committed the target runtime: {body}"
+            );
+            assert!(
+                switched["cleared_sessions"].as_u64().unwrap() >= 1,
+                "the old-runtime live seat was cleared through the same production control: {body}"
+            );
+            assert!(
+                switched["restart_failures"].as_u64().unwrap() >= 1,
+                "the post-commit re-drive dispatched runtime_start and counted its failure: {body}"
+            );
+
+            // Durability: the committed transition stands despite the restart failure.
+            let (status, body) =
+                request(&router, "GET", "/api/agents/a-switch", Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "a-switch detail: {body}");
+            let detail: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                detail["agent"]["runtime"], "codex",
+                "the post-commit restart failure did NOT roll back the committed runtime: {body}"
+            );
+
+            // Exactly one app-scope `agent_changed` for the whole switch.
+            let app_high_water_after = fresh_scope_high_water(address, "app").await;
+            assert_eq!(
+                app_high_water_after - app_high_water_before,
+                1,
+                "runtime switch publishes agent_changed exactly once"
+            );
+
+            // Wind the servicer down and shut the app cleanly.
+            stop.notify_one();
+            let mut socket = servicer.await.unwrap();
+            socket.close(None).await.unwrap();
+        }
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
     }
 
     /// #2219 real-authority binding — the invite→resolve chain proves BOTH placement and

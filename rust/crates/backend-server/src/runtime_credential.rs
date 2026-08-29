@@ -23,7 +23,8 @@ use silverhand_backend_core::{
     persistence::PersistenceFailure,
     runtime_credential::{
         AgentSlotPresentationFocusPort, ClaimRuntimeCustody, FinalizeRuntimeCustody,
-        RuntimeCustodyPort, RuntimeEventTime, RuntimeFinalStatus, RuntimePrincipal, RuntimeScope,
+        RuntimeCustodyPort, RuntimeCustodyReadPort, RuntimeEventTime, RuntimeFinalStatus,
+        RuntimePrincipal, RuntimeScope,
     },
     runtime_event::{
         CommitRuntimeExit, DaemonEventDurablePort, RuntimeExitCommitResult, RuntimeExitDisposition,
@@ -600,6 +601,24 @@ where
             .await
             .get(&principal)
             .cloned())
+    }
+}
+
+/// The switch route reads live custody through the authority, never the raw store: this
+/// hands it exactly `current` (its source-bind read) while `claim_or_current`/`finalize`
+/// stay sealed inside the authority, so a product route can never bypass the token,
+/// scope-guard, and presentation-focus invariants those mutations enforce.
+impl<C, E, K> RuntimeCustodyReadPort for RuntimeCredentialAuthority<C, E, K>
+where
+    C: RuntimeCustodyPort,
+    E: RuntimeEntropy,
+    K: ProcessClock,
+{
+    async fn current(
+        &self,
+        scope: RuntimeScope,
+    ) -> Result<Option<RuntimePrincipal>, PersistenceFailure> {
+        RuntimeCredentialAuthority::current(self, scope).await
     }
 }
 

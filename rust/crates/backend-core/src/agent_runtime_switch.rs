@@ -53,7 +53,7 @@ use crate::{
     identity::{AgentId, ConversationId, HostId},
     messaging::collaboration::{RuntimeControlPort, RuntimeSeatTarget, RuntimeStartTarget},
     persistence::PersistenceFailure,
-    runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustodyPort, RuntimeScope},
+    runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustodyReadPort, RuntimeScope},
     runtime_event::RuntimeObservedStatus,
     runtime_transition::{
         AbortTransition, BeginTransition, CommittedRuntimeTransition, CompleteTransition,
@@ -314,7 +314,7 @@ where
     W: RuntimeTransitionWrite,
     Seats: RuntimeTransitionSeatRead,
     Inboxes: RuntimeTransitionInboxWrite,
-    Cust: RuntimeCustodyPort,
+    Cust: RuntimeCustodyReadPort,
     Focus: AgentSlotPresentationFocusPort,
     P: RuntimeControlPort,
     Changed: AgentChangedSink,
@@ -423,7 +423,7 @@ where
     Coord: SwitchConversationCoordination,
     Seats: RuntimeTransitionSeatRead,
     Inboxes: RuntimeTransitionInboxWrite,
-    Cust: RuntimeCustodyPort,
+    Cust: RuntimeCustodyReadPort,
     Focus: AgentSlotPresentationFocusPort,
     W: RuntimeTransitionWrite,
     P: RuntimeControlPort,
@@ -618,7 +618,7 @@ async fn capture_agent_focus<Cust, Focus>(
     session_scope: AgentSessionScope,
 ) -> Result<Option<ConversationId>, SwitchAgentRuntimeError>
 where
-    Cust: RuntimeCustodyPort,
+    Cust: RuntimeCustodyReadPort,
     Focus: AgentSlotPresentationFocusPort,
 {
     if session_scope != AgentSessionScope::Agent {
@@ -834,8 +834,7 @@ mod tests {
             RuntimeSeatTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal,
         },
         runtime_credential::{
-            ClaimRuntimeCustody, ClaimedRuntime, FinalizeRuntimeCustody, RuntimeCustody,
-            RuntimeGeneration, RuntimePrincipal,
+            RuntimeCustody, RuntimeGeneration, RuntimePrincipal,
         },
         runtime_transition::{
             BeginTransitionRecord, CompleteTransitionRecord, RuntimeTransitionAfterImage,
@@ -1146,13 +1145,7 @@ mod tests {
             }
         }
     }
-    impl RuntimeCustodyPort for Custody {
-        async fn claim_or_current(
-            &self,
-            _claim: ClaimRuntimeCustody,
-        ) -> Result<Option<ClaimedRuntime>, PersistenceFailure> {
-            unreachable!("switch saga never claims custody")
-        }
+    impl RuntimeCustodyReadPort for Custody {
         async fn current(
             &self,
             _scope: RuntimeScope,
@@ -1161,18 +1154,6 @@ mod tests {
                 Ok(principal) => Ok(principal.clone()),
                 Err(()) => Err(boom()),
             }
-        }
-        async fn is_current(
-            &self,
-            _principal: RuntimePrincipal,
-        ) -> Result<bool, PersistenceFailure> {
-            unreachable!("switch saga never linearizes custody directly")
-        }
-        async fn finalize(
-            &self,
-            _finalization: FinalizeRuntimeCustody,
-        ) -> Result<bool, PersistenceFailure> {
-            unreachable!("switch saga never finalizes custody")
         }
     }
 
