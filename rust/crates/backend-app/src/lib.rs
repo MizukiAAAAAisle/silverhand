@@ -2991,8 +2991,9 @@ mod tests {
     /// mounted table. It enumerates every `(method, path)` `prepare()` mounts across
     /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195 + #2198 + #2218 + the
     /// #2219 CP4 batch-B custody doors + the #2223 CP3 workspace-metadata / human-`me`
-    /// doors + the #2223 CP4 directory/avatar doors + the #2223 CP5 host residual doors) as
-    /// seventy-three entries — sixty-one behind the human
+    /// doors + the #2223 CP4 directory/avatar doors + the #2223 CP5 host residual doors +
+    /// the #2234 CP1 host-management doors + the #2234 CP2 public-agent write doors) as
+    /// seventy-eight entries — sixty-six behind the human
     /// session perimeter (including #2218's authenticated `/api/runtimes`, the three #2219
     /// host custody/credential doors, the four #2223 CP5 host residual doors: detail,
     /// revoke, connect-token rotate and delete, the six #2234 CP1 host-management doors:
@@ -3008,7 +3009,7 @@ mod tests {
     /// handler's own status (never the perimeter's bodiless `401`), and never the `404`
     /// fallback. Removing any mounted route's
     /// `.merge(...)` from `prepare()` flips its entry to `404` and reddens this gate.
-    /// The tables are named consts with per-table `assert_eq!(len)` (61 / 3 / 2, plus
+    /// The tables are named consts with per-table `assert_eq!(len)` (66 / 3 / 2, plus
     /// the four #2218/#2219 anon faces asserted by exact status/body and the #2223 CP3
     /// signup/login/logout trio asserted by presence-plus-handler-reach) so a mis-added or
     /// mis-deleted row reddens the count directly.
@@ -3034,10 +3035,10 @@ mod tests {
         let router = app.router;
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // The sixty-one human-perimeter product doors. Anonymous (no bearer) → the human
+        // The sixty-six human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
-        const HUMAN_PERIMETER_DOORS: [(&str, &str); 61] = [
+        const HUMAN_PERIMETER_DOORS: [(&str, &str); 66] = [
             ("POST", "/api/hosts"),
             // #2219 CP4 host-custody batch B — the three perimeter-guarded custody doors.
             // `GET /api/hosts` shares the path node with the invite POST above, so its anon
@@ -3156,8 +3157,22 @@ mod tests {
             ("POST", "/api/me/avatar"),
             ("DELETE", "/api/me/avatar"),
             ("GET", "/api/users/user-1/avatar"),
+            // #2234 CP2: the five #2225 public-agent write doors, behind the same human
+            // perimeter as the agent read routes above. `PATCH /api/agents/{id}`
+            // accumulates onto the GET-detail `{id}` node (line above); the three avatar
+            // methods share one `/api/agents/{id}/avatar` node (GET serve + POST upload +
+            // DELETE clear, disjoint methods); the static `name-availability` GET coexists
+            // with the `{id}` param node (matchit static-over-param). Anon on each → the
+            // perimeter's bodiless 401; the authenticated per-method dispatch (GET stays
+            // detail, PATCH commits, the avatar round-trip, static route wins) is borne by
+            // `the_composition_agent_write_faces_share_one_profile_authority_and_avatar_root`.
+            ("GET", "/api/agents/name-availability"),
+            ("PATCH", "/api/agents/agent-1"),
+            ("GET", "/api/agents/agent-1/avatar"),
+            ("POST", "/api/agents/agent-1/avatar"),
+            ("DELETE", "/api/agents/agent-1/avatar"),
         ];
-        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 61);
+        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 66);
         for (method, path) in HUMAN_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
