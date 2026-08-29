@@ -6445,6 +6445,32 @@ mod tests {
                 .await
                 .expect("the aftermath runtime-start leg must reach the daemon");
 
+            // The agent-scoped arm greets the agent on the direct line it just opened with its
+            // creator, so its onboarding delivery is what exercises the DIRECT-PAIR branch of the
+            // participation predicate in production (the workspace arm exercises the roster
+            // branch). Wait for that `runtime_deliver` to land: it crosses because the composed
+            // adapter enqueued the durable inbox row — whose ensure witnessed message-in-pair AND
+            // the endpoint participation — ahead of the wake. Break that seam and the poll times
+            // out (Empty → NoPending → no command).
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if count_kind(&seen, "runtime_deliver") >= 1 {
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect(
+                "the agent-arm onboarding deliver leg must reach the daemon as runtime_deliver",
+            );
+            assert_eq!(
+                count_kind(&seen, "runtime_deliver"),
+                1,
+                "the agent-arm onboarding deliver leg hit the daemon exactly once"
+            );
+            let deliver_after_create = count_kind(&seen, "runtime_deliver");
+
             // The NEW HubDirectPairsChanged sink fired exactly once for the fresh pair.
             let viewer_after_create = fresh_scope_high_water(address, "viewer:self").await;
             assert_eq!(
@@ -6494,6 +6520,12 @@ mod tests {
                 count_kind(&seen, "agent_materialize"),
                 1,
                 "the echo does not re-run the real materialize"
+            );
+            assert_eq!(
+                count_kind(&seen, "runtime_deliver"),
+                deliver_after_create,
+                "the idempotent echo re-drives no onboarding delivery (ensure conflicts, wake \
+                 finds no pending row)"
             );
             pool.close().await;
 

@@ -135,6 +135,14 @@ const SELECT_USER_PARTICIPATES: &str = "SELECT 1 FROM conversations c WHERE c.id
 
 const SELECT_MESSAGE_IN_CONVERSATION: &str = "SELECT id, thread_root_id, from_kind, \
      from_agent_id, from_user_id FROM messages WHERE conversation_id = ? AND id = ?";
+/// The onboarding inbox-ensure's message witness: the row must belong to THIS conversation
+/// (the `WHERE`) AND be a genuine onboarding system message. It returns exactly the two
+/// columns that discriminate the shape — `from_kind` and the metadata blob — which the ensure
+/// path decodes through the ONE metadata grammar and judges through the domain's ONE shape
+/// recognizer. No unused columns ride along, and no ordinary same-conversation message can
+/// satisfy it.
+const SELECT_ONBOARDING_MESSAGE_SHAPE_IN_CONVERSATION: &str =
+    "SELECT from_kind, metadata FROM messages WHERE conversation_id = ? AND id = ?";
 const SELECT_AGENT_ID_BY_NAME: &str = "SELECT id FROM agents WHERE name = ?";
 const SELECT_CONVERSATION_PLACE: &str =
     "SELECT workspace_id, title FROM conversations WHERE id = ?";
@@ -410,16 +418,36 @@ pub struct SqliteOnboardingInboxEnsure<E = HostEnvironment> {
 /// relationship the caller named is not a committed fact.
 #[derive(Debug, Error)]
 pub enum OnboardingInboxEnsureError {
-    /// The (message, conversation, agent) triple the route supplied is not a committed
-    /// relationship: the message does not belong to that conversation, or the agent is not a
-    /// current participant of it. Reported rather than written, so a liar caller or a
-    /// concurrent membership change cannot manufacture a cross-conversation inbox debt.
-    #[error("onboarding delivery has no participation witness for the requested message")]
-    NoParticipationWitness,
+    /// A witness the ensure depends on did not hold: the message is not in the named
+    /// conversation, the message is not an onboarding system message, or the agent is not a
+    /// current participant. Reported rather than written — and named by WHICH fact failed, so
+    /// the error chain never lies — so a liar caller or a concurrent membership change cannot
+    /// manufacture a cross-conversation inbox debt.
+    #[error("onboarding delivery witness did not hold")]
+    WitnessMismatch(#[from] DeliveryWitnessMismatch),
     #[error("database operation failed")]
     Sql(#[from] sqlx::Error),
     #[error("the clock this write stamps with could not answer")]
     Environment(#[from] EnvironmentUnavailable),
+}
+
+/// The three distinct facts the onboarding inbox-ensure witnesses before it writes, named
+/// apart so a fault reports the ONE that actually failed rather than fusing them. Each is a
+/// committed-fact check, not a caller assertion: the message's home conversation, the message's
+/// onboarding shape, and the agent's current participation.
+#[derive(Debug, Error)]
+pub enum DeliveryWitnessMismatch {
+    /// The message does not belong to the conversation the route named.
+    #[error("the message does not belong to the named conversation")]
+    Message,
+    /// The message is in the conversation but is not a genuine onboarding system message
+    /// (wrong `from_kind`, or metadata that is not exactly the onboarding subtype).
+    #[error("the message is not an onboarding system message: {reason}")]
+    OnboardingShape { reason: &'static str },
+    /// The message and its shape hold, but the agent is not a current participant of the
+    /// conversation (no workspace roster row and no direct-pair endpoint).
+    #[error("the agent is not a current participant of the conversation")]
+    Participation,
 }
 
 impl<E> OnboardingInboxEnsure for SqliteOnboardingInboxEnsure<E>
@@ -451,16 +479,28 @@ impl<E: SendClock> SqliteOnboardingInboxEnsure<E> {
         // snapshot — a participation revoked mid-flight cannot slip a row past the gate.
         let mut tx = self.pool.begin().await?;
 
-        // Witness 1 — the message belongs to THIS conversation (reusing the reply-target
-        // resolver's read, not the route-supplied ids as if they were a relationship).
-        let message_in_conversation = sqlx::query(SELECT_MESSAGE_IN_CONVERSATION)
+        // Witness 1 — the message belongs to THIS conversation AND is a genuine onboarding
+        // system message. One read returns the two discriminating columns; the shape is judged
+        // by the domain's ONE recognizer over the ONE metadata decode, so this narrow door
+        // cannot be tricked into enqueuing an ordinary same-conversation message a participant
+        // happened to send. A row absent from the conversation and a row of the wrong shape are
+        // named apart in the fault.
+        let message = sqlx::query(SELECT_ONBOARDING_MESSAGE_SHAPE_IN_CONVERSATION)
             .bind(conversation.as_str())
             .bind(onboarding_message.as_str())
             .fetch_optional(&mut *tx)
             .await?;
-        if message_in_conversation.is_none() {
-            return Err(OnboardingInboxEnsureError::NoParticipationWitness);
-        }
+        let Some(message) = message else {
+            return Err(DeliveryWitnessMismatch::Message.into());
+        };
+        let from_kind: String = message.try_get("from_kind")?;
+        let metadata: Option<String> = message.try_get("metadata")?;
+        let digest = decode_onboarding_metadata_digest(metadata.as_deref());
+        messaging::agent_onboarding::recognize_onboarding_shape(&from_kind, &digest).map_err(
+            |mismatch| DeliveryWitnessMismatch::OnboardingShape {
+                reason: mismatch.reason(),
+            },
+        )?;
 
         // Witness 2 — the agent is a current participant of that conversation, via the ONE
         // canonical participation predicate the send path's `is_agent_participant` uses
@@ -473,7 +513,7 @@ impl<E: SendClock> SqliteOnboardingInboxEnsure<E> {
             .fetch_optional(&mut *tx)
             .await?;
         if participates.is_none() {
-            return Err(OnboardingInboxEnsureError::NoParticipationWitness);
+            return Err(DeliveryWitnessMismatch::Participation.into());
         }
 
         // The witnesses hold: enqueue the durable turn. The SAME idempotent writer the send
@@ -853,27 +893,14 @@ pub(crate) async fn append_onboarding_system_message_on(
 
     // The metadata's JSON encoding is this layer's concern (it serialized it on the way in),
     // so it decodes the blob into a `{subtype, has_extra_keys}` digest and hands the domain
-    // the discriminator, not the blob — the domain has no serde. `subtype` is the value under
-    // that key; `has_extra_keys` is true when the object carries ANY other key, so the seal
-    // can assert the metadata is EXACTLY the onboarding subtype and nothing more.
-    let (subtype, has_extra_keys) = match message_row
-        .try_get::<Option<String>, _>("metadata")
-        .map_err(driver)?
-        .as_deref()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-    {
-        Some(serde_json::Value::Object(map)) => {
-            let subtype = map
-                .get("subtype")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned);
-            let has_extra_keys = map.keys().any(|key| key != "subtype");
-            (subtype, has_extra_keys)
-        }
-        // A non-object (or absent/unparseable) metadata carries no subtype; whether it is
-        // "extra" beyond the onboarding subtype is moot — the missing subtype already refuses.
-        _ => (None, false),
-    };
+    // the discriminator, not the blob — the domain has no serde. This is the ONE decode, shared
+    // with the post-commit inbox-ensure's shape witness, so the JSON grammar is never spelled twice.
+    let digest = decode_onboarding_metadata_digest(
+        message_row
+            .try_get::<Option<String>, _>("metadata")
+            .map_err(driver)?
+            .as_deref(),
+    );
 
     Ok(messaging::agent_onboarding::OnboardingWriteWitness {
         id: message_row.try_get::<String, _>("id").map_err(driver)?,
@@ -910,13 +937,37 @@ pub(crate) async fn append_onboarding_system_message_on(
         cc_source_message_id: message_row
             .try_get::<Option<String>, _>("cc_source_message_id")
             .map_err(driver)?,
-        metadata: messaging::agent_onboarding::OnboardingMetadataDigest {
-            subtype,
-            has_extra_keys,
-        },
+        metadata: digest,
         seq: message_row.try_get::<i64, _>("seq").map_err(driver)?,
         head_latest_seq,
     })
+}
+
+/// Decode a stored message's metadata blob into the digest the onboarding domain judges — the
+/// `subtype` under that key, and whether the object carried ANY other key. This is the ONE
+/// metadata decode, used by both the write-back seal and the post-commit inbox-ensure's shape
+/// witness, so the JSON grammar the domain reasons about is never spelled twice. A non-object,
+/// absent, or unparseable blob carries no subtype (the missing subtype already refuses).
+fn decode_onboarding_metadata_digest(
+    raw: Option<&str>,
+) -> messaging::agent_onboarding::OnboardingMetadataDigest {
+    match raw.and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok()) {
+        Some(serde_json::Value::Object(map)) => {
+            let subtype = map
+                .get("subtype")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            let has_extra_keys = map.keys().any(|key| key != "subtype");
+            messaging::agent_onboarding::OnboardingMetadataDigest {
+                subtype,
+                has_extra_keys,
+            }
+        }
+        _ => messaging::agent_onboarding::OnboardingMetadataDigest {
+            subtype: None,
+            has_extra_keys: false,
+        },
+    }
 }
 
 /// Open a direct pair on a caller-provided connection, composing the get-or-create mint
@@ -3048,6 +3099,256 @@ mod tests {
         assert!(!witness.metadata.has_extra_keys);
         assert_eq!(witness.seq, 1);
         assert_eq!(witness.head_latest_seq, 1);
+    }
+
+    /// Seed the graph the onboarding inbox-ensure witnesses run against: a workspace
+    /// conversation with `agent-ws` on its roster, a direct-pair line with `agent-dp` as an
+    /// endpoint, a non-participant `agent-out`, and four messages — a genuine onboarding system
+    /// message in each conversation, plus (in the workspace line) an ordinary agent message and
+    /// a system message whose subtype is NOT onboarding. Returns the store built over the same
+    /// database so a test can exercise the real `onboarding_inbox_ensure()` builder path.
+    async fn seed_onboarding_ensure_graph(path: &std::path::Path) -> MessagingStore {
+        let mut conn = crate::current_schema::create_current_schema(path).await;
+        for statement in [
+            "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
+            "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-1', \
+             'human', 'Human', 0, 0)",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+             created_by_user_id) VALUES ('agent-ws', 'wsagent', 'claude', 'host-1', 0, 0, 'Ws', \
+             'user-1')",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+             created_by_user_id) VALUES ('agent-dp', 'dpagent', 'claude', 'host-1', 0, 0, 'Dp', \
+             'user-1')",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+             created_by_user_id) VALUES ('agent-out', 'outagent', 'claude', 'host-1', 0, 0, 'Out', \
+             'user-1')",
+            "INSERT INTO workspaces (id, name, name_key, created_at, updated_at) VALUES \
+             ('workspace-1', 'Space', 'space', 0, 0)",
+            "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, \
+             title_key, status, visibility, created_at, updated_at, latest_message_seq) VALUES \
+             ('conv-ws', 'workspace-1', 'workspace', 'open', 'Chan', 'chan', 'open', 'private', 0, \
+             0, 3)",
+            "INSERT INTO conversations (id, placement_kind, roster_policy, title, status, \
+             endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, created_at, \
+             updated_at, latest_message_seq) VALUES ('conv-dp', 'direct_pair', 'fixed', 'DM', \
+             'open', 'agent', 'agent-dp', 'human', 'user-1', 0, 0, 1)",
+            "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES \
+             ('conv-ws', 'agent-ws', 0)",
+            // A genuine onboarding system message in each line: system from-kind, metadata that
+            // is EXACTLY the onboarding subtype.
+            "INSERT INTO messages (id, conversation_id, from_kind, content, metadata, seq, \
+             created_at) VALUES ('msg-ws', 'conv-ws', 'system', 'hi', '{\"subtype\":\"onboarding\"}', \
+             1, 0)",
+            "INSERT INTO messages (id, conversation_id, from_kind, content, metadata, seq, \
+             created_at) VALUES ('msg-dp', 'conv-dp', 'system', 'hi', '{\"subtype\":\"onboarding\"}', \
+             1, 0)",
+            // An ORDINARY agent message a participant sent into the same line — the shape witness
+            // must refuse it even though message-in-conversation and participation both hold.
+            "INSERT INTO messages (id, conversation_id, from_kind, from_agent_id, content, seq, \
+             created_at) VALUES ('msg-ordinary', 'conv-ws', 'agent', 'agent-ws', 'chatter', 2, 0)",
+            // A system message carrying a DIFFERENT subtype — right from-kind, wrong metadata.
+            "INSERT INTO messages (id, conversation_id, from_kind, content, metadata, seq, \
+             created_at) VALUES ('msg-wrongsub', 'conv-ws', 'system', 'x', '{\"subtype\":\"reply\"}', \
+             3, 0)",
+        ] {
+            sqlx::query(statement).execute(&mut conn).await.unwrap();
+        }
+        drop(conn);
+        MessagingStore::open(path).await.unwrap()
+    }
+
+    async fn inbox_row_count(store: &MessagingStore) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM conversation_inboxes")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap()
+    }
+
+    fn conv(raw: &str) -> ConversationId {
+        ConversationId::parse(raw).unwrap()
+    }
+    fn agent(raw: &str) -> AgentId {
+        AgentId::parse(raw).unwrap()
+    }
+    fn msg(raw: &str) -> MessageId {
+        MessageId::parse(raw).unwrap()
+    }
+
+    /// The happy path across BOTH placement arms: an onboarding message plus a genuine
+    /// participant — a workspace roster row in one line, a direct-pair endpoint in the other —
+    /// each enqueues exactly one undelivered turn. This is what proves the ONE participation
+    /// predicate is really being consumed on both arms, not just the workspace one.
+    #[tokio::test]
+    async fn the_inbox_ensure_enqueues_a_turn_for_a_participant_of_either_placement() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ensure-happy.sqlite");
+        let store = seed_onboarding_ensure_graph(&path).await;
+        let ensure = store.onboarding_inbox_ensure();
+
+        ensure
+            .ensure_inner(&conv("conv-ws"), &agent("agent-ws"), &msg("msg-ws"))
+            .await
+            .expect("a roster participant's onboarding message enqueues");
+        ensure
+            .ensure_inner(&conv("conv-dp"), &agent("agent-dp"), &msg("msg-dp"))
+            .await
+            .expect("a direct-pair endpoint's onboarding message enqueues");
+
+        // Two undelivered turns, one per line, bound to the onboarding message.
+        let rows: Vec<(String, String, String, Option<i64>)> = sqlx::query_as(
+            "SELECT conversation_id, agent_id, message_id, delivered_at FROM conversation_inboxes \
+             ORDER BY conversation_id",
+        )
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "conv-dp".to_owned(),
+                    "agent-dp".to_owned(),
+                    "msg-dp".to_owned(),
+                    None
+                ),
+                (
+                    "conv-ws".to_owned(),
+                    "agent-ws".to_owned(),
+                    "msg-ws".to_owned(),
+                    None
+                ),
+            ]
+        );
+    }
+
+    /// A message that is not in the named conversation — and an id that names no message at all
+    /// — fault as `Message` and write nothing. The route's supplied ids are treated as a claim
+    /// to be witnessed, never as a relationship.
+    #[tokio::test]
+    async fn an_ensure_for_a_message_outside_the_conversation_faults_and_writes_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ensure-wrong-conv.sqlite");
+        let store = seed_onboarding_ensure_graph(&path).await;
+        let ensure = store.onboarding_inbox_ensure();
+
+        // `msg-ws` is a real onboarding message, but it lives in conv-ws, not conv-dp.
+        let cross = ensure
+            .ensure_inner(&conv("conv-dp"), &agent("agent-dp"), &msg("msg-ws"))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            cross,
+            OnboardingInboxEnsureError::WitnessMismatch(DeliveryWitnessMismatch::Message)
+        ));
+
+        // An id that names no row at all.
+        let unknown = ensure
+            .ensure_inner(&conv("conv-ws"), &agent("agent-ws"), &msg("msg-nope"))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            unknown,
+            OnboardingInboxEnsureError::WitnessMismatch(DeliveryWitnessMismatch::Message)
+        ));
+
+        assert_eq!(inbox_row_count(&store).await, 0);
+    }
+
+    /// An agent that is not a participant of the conversation faults as `Participation` and
+    /// writes nothing, even for a genuine onboarding message.
+    #[tokio::test]
+    async fn an_ensure_for_a_nonparticipant_faults_and_writes_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ensure-nonparticipant.sqlite");
+        let store = seed_onboarding_ensure_graph(&path).await;
+        let ensure = store.onboarding_inbox_ensure();
+
+        let fault = ensure
+            .ensure_inner(&conv("conv-ws"), &agent("agent-out"), &msg("msg-ws"))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            fault,
+            OnboardingInboxEnsureError::WitnessMismatch(DeliveryWitnessMismatch::Participation)
+        ));
+        assert_eq!(inbox_row_count(&store).await, 0);
+    }
+
+    /// The core of the P0 fix: a message that is in the conversation and whose agent
+    /// participates, but that is NOT an onboarding message — an ordinary agent message, or a
+    /// system message with the wrong subtype — is refused as `OnboardingShape` and writes
+    /// nothing. Without the shape witness this narrow door would be a generic delivery writer.
+    #[tokio::test]
+    async fn an_ensure_for_an_ordinary_or_wrong_subtype_message_is_refused_as_wrong_shape() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ensure-wrong-shape.sqlite");
+        let store = seed_onboarding_ensure_graph(&path).await;
+        let ensure = store.onboarding_inbox_ensure();
+
+        for message in ["msg-ordinary", "msg-wrongsub"] {
+            let fault = ensure
+                .ensure_inner(&conv("conv-ws"), &agent("agent-ws"), &msg(message))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    fault,
+                    OnboardingInboxEnsureError::WitnessMismatch(
+                        DeliveryWitnessMismatch::OnboardingShape { .. }
+                    )
+                ),
+                "{message} should be refused as the wrong shape, got {fault:?}"
+            );
+        }
+        assert_eq!(inbox_row_count(&store).await, 0);
+    }
+
+    /// The ensure is idempotent: re-running it over a row that already exists conflicts on the
+    /// unique delivery index and DOES NOTHING — it never resets the delivered / failed / lease
+    /// columns a drain or a failure has since written. A re-driven create leg cannot resurrect a
+    /// completed delivery.
+    #[tokio::test]
+    async fn an_ensure_over_an_existing_row_leaves_its_delivery_columns_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ensure-idempotent.sqlite");
+        let store = seed_onboarding_ensure_graph(&path).await;
+
+        // A prior delivery already ran: the row is delivered, once leased, and now failed.
+        sqlx::query(
+            "INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id, \
+             delivered_at, failed_at, in_flight_owner, delivery_kind, created_at) VALUES \
+             ('conv-ws', 'agent-ws', 'msg-ws', 555, 777, 'daemon-9', 'turn', 111)",
+        )
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+        store
+            .onboarding_inbox_ensure()
+            .ensure_inner(&conv("conv-ws"), &agent("agent-ws"), &msg("msg-ws"))
+            .await
+            .expect("a witnessed ensure over an existing row succeeds");
+
+        // Still exactly one row, and every delivery-state column is exactly as the prior
+        // delivery left it — the ON CONFLICT DO NOTHING wrote nothing new.
+        let row: (i64, Option<i64>, Option<i64>, Option<String>, String, i64) = sqlx::query_as(
+            "SELECT count(*) OVER (), delivered_at, failed_at, in_flight_owner, delivery_kind, \
+             created_at FROM conversation_inboxes WHERE conversation_id = 'conv-ws' AND agent_id = \
+             'agent-ws' AND message_id = 'msg-ws'",
+        )
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, 1, "the ensure created a duplicate row");
+        assert_eq!(row.1, Some(555), "delivered_at was reset");
+        assert_eq!(row.2, Some(777), "failed_at was reset");
+        assert_eq!(
+            row.3.as_deref(),
+            Some("daemon-9"),
+            "the lease owner was reset"
+        );
+        assert_eq!(row.4, "turn");
+        assert_eq!(row.5, 111, "created_at was overwritten");
     }
 
     /// The entitlement read must stay bounded by the NAMES A BODY USED. It runs while

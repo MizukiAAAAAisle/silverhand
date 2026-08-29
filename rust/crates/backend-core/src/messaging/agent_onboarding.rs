@@ -151,11 +151,16 @@ impl OnboardingSystemMessage {
                 reason: "written timestamp differs from the stamped clock",
             });
         }
-        if witness.from_kind != ONBOARDING_FROM_KIND {
-            return Err(OnboardingWriteMismatch {
-                reason: "written message is not a system message",
-            });
-        }
+        // The from-kind and metadata SHAPE is judged by the ONE recognizer, so a write-time
+        // seal and a read-time recognition can never disagree on what "an onboarding message"
+        // is. The remaining checks below are write-time-only invariants (the exact rendered
+        // body, the minted id, the stamped clock, the stream-head position) that a caller
+        // holding only a committed id cannot re-derive.
+        recognize_onboarding_shape(&witness.from_kind, &witness.metadata).map_err(|mismatch| {
+            OnboardingWriteMismatch {
+                reason: mismatch.reason(),
+            }
+        })?;
         if witness.from_agent_id.is_some() || witness.from_user_id.is_some() {
             return Err(OnboardingWriteMismatch {
                 reason: "written system message carries a from-participant",
@@ -177,16 +182,6 @@ impl OnboardingSystemMessage {
         if witness.cc_source_message_id.is_some() {
             return Err(OnboardingWriteMismatch {
                 reason: "written onboarding message carries a cc source",
-            });
-        }
-        if witness.metadata.subtype.as_deref() != Some(ONBOARDING_SUBTYPE) {
-            return Err(OnboardingWriteMismatch {
-                reason: "written metadata does not carry the onboarding subtype",
-            });
-        }
-        if witness.metadata.has_extra_keys {
-            return Err(OnboardingWriteMismatch {
-                reason: "written metadata carries keys beyond the onboarding subtype",
             });
         }
         if witness.seq < 1 {
@@ -270,6 +265,53 @@ pub struct OnboardingWriteMismatch {
 impl OnboardingWriteMismatch {
     /// The static label describing which after-image check failed, for a caller that folds
     /// this into its own boundary-logged fault.
+    pub fn reason(&self) -> &'static str {
+        self.reason
+    }
+}
+
+/// Recognise a stored row's SHAPE as an onboarding system message from only the two columns
+/// that discriminate it — the `from_kind` and the decoded metadata digest. This is the
+/// read-time twin of the from-kind/metadata checks [`OnboardingSystemMessage::seal_written`]
+/// makes at write time: a caller that holds a committed message id but not the rendered
+/// intent (the post-commit inbox-ensure) cannot re-derive the body, id, clock, or stream
+/// position, but it CAN — and must — refuse to treat an ordinary same-conversation message as
+/// an onboarding one. Both callers route through this ONE function and the ONE spelling of the
+/// from-kind and subtype, so the shape rule can never drift between the seal and the recognizer.
+pub fn recognize_onboarding_shape(
+    from_kind: &str,
+    metadata: &OnboardingMetadataDigest,
+) -> Result<(), OnboardingShapeMismatch> {
+    if from_kind != ONBOARDING_FROM_KIND {
+        return Err(OnboardingShapeMismatch {
+            reason: "message is not a system message",
+        });
+    }
+    if metadata.subtype.as_deref() != Some(ONBOARDING_SUBTYPE) {
+        return Err(OnboardingShapeMismatch {
+            reason: "metadata does not carry the onboarding subtype",
+        });
+    }
+    if metadata.has_extra_keys {
+        return Err(OnboardingShapeMismatch {
+            reason: "metadata carries keys beyond the onboarding subtype",
+        });
+    }
+    Ok(())
+}
+
+/// Why a stored row is not recognised as an onboarding system message. Distinct from
+/// [`OnboardingWriteMismatch`] because it names only the shape (from-kind + metadata) a
+/// read-time caller can judge, not the full write-time after-image.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("row is not an onboarding system message: {reason}")]
+pub struct OnboardingShapeMismatch {
+    reason: &'static str,
+}
+
+impl OnboardingShapeMismatch {
+    /// The static label describing which shape check failed, for a caller that folds this
+    /// into its own boundary-logged fault.
     pub fn reason(&self) -> &'static str {
         self.reason
     }
@@ -540,5 +582,33 @@ mod tests {
         witness.seq = 0;
         witness.head_latest_seq = 0;
         assert!(intent().seal_written(witness).is_err());
+    }
+
+    #[test]
+    fn the_shape_recognizer_accepts_only_a_system_onboarding_row() {
+        let onboarding = OnboardingMetadataDigest {
+            subtype: Some(ONBOARDING_SUBTYPE.to_owned()),
+            has_extra_keys: false,
+        };
+        // The genuine shape: a system message whose metadata is exactly the onboarding subtype.
+        assert!(recognize_onboarding_shape(ONBOARDING_FROM_KIND, &onboarding).is_ok());
+        // An ordinary agent/user message in the same line is refused, so the read-time door
+        // cannot be tricked into enqueuing arbitrary same-conversation traffic.
+        assert!(recognize_onboarding_shape("agent", &onboarding).is_err());
+        assert!(recognize_onboarding_shape("user", &onboarding).is_err());
+        // A system message carrying a different (or absent) subtype is not onboarding.
+        for subtype in [None, Some(String::new()), Some("reply".to_owned())] {
+            let digest = OnboardingMetadataDigest {
+                subtype,
+                has_extra_keys: false,
+            };
+            assert!(recognize_onboarding_shape(ONBOARDING_FROM_KIND, &digest).is_err());
+        }
+        // The onboarding subtype plus any other key is not the exact onboarding shape.
+        let with_extra = OnboardingMetadataDigest {
+            subtype: Some(ONBOARDING_SUBTYPE.to_owned()),
+            has_extra_keys: true,
+        };
+        assert!(recognize_onboarding_shape(ONBOARDING_FROM_KIND, &with_extra).is_err());
     }
 }
