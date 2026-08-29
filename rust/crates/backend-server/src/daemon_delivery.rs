@@ -5675,6 +5675,14 @@ mod tests {
             unreachable!("clear never resolves a start target")
         }
 
+        async fn resolve_start_dispatch(
+            &self,
+            _agent: AgentId,
+            _candidate_origin: ConversationId,
+        ) -> Result<Option<RuntimeDispatchTarget>, PersistenceFailure> {
+            unreachable!("clear never resolves a start target")
+        }
+
         async fn current_custodies_for_host(
             &self,
             _host_id: String,
@@ -5688,7 +5696,7 @@ mod tests {
 
         async fn snapshot(
             &self,
-            _target: &silverhand_backend_core::messaging::collaboration::RuntimeControlTarget,
+            _target: &silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot>,
             Self::Error,
@@ -5698,7 +5706,7 @@ mod tests {
 
         async fn settle_clear(
             &self,
-            _target: &silverhand_backend_core::messaging::collaboration::RuntimeControlTarget,
+            _target: &silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
             before: &silverhand_backend_core::messaging::collaboration::BoundRuntimeControlSeat,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::ClearSessionCommitReceipt>,
@@ -5772,14 +5780,14 @@ mod tests {
         receive: mpsc::Receiver<ConnectionControl>,
         waiters: crate::runtime_control::RuntimeClearSessionWaiters,
         principal: RuntimePrincipal,
-        target: silverhand_backend_core::messaging::collaboration::RuntimeControlTarget,
+        target: silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
         settles: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     fn production_clear_fixture() -> ProductionClearFixture {
         use silverhand_backend_core::messaging::collaboration::{
             CliSessionId, RuntimeControlObservedStatus, RuntimeControlSeatSnapshot,
-            RuntimeControlTarget,
+            RuntimeSeatTarget,
         };
         let registry = DaemonRegistry::with_process_epoch("clear-production".to_owned());
         let host = HostId::parse("host-a").unwrap();
@@ -5835,10 +5843,11 @@ mod tests {
             receive,
             waiters,
             principal,
-            target: RuntimeControlTarget::new(
+            target: RuntimeSeatTarget::new(
                 UserId::parse("user-1").unwrap(),
-                ConversationId::parse("conversation-a").unwrap(),
-                AgentId::parse("agent-a").unwrap(),
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-a").unwrap(),
+                },
             ),
             settles,
         }
@@ -5969,10 +5978,18 @@ mod tests {
     impl RuntimeDispatchReadPort for StartSeat {
         async fn resolve_dispatch_target(
             &self,
-            conversation: ConversationId,
-            agent: AgentId,
+            _conversation: ConversationId,
+            _agent: AgentId,
         ) -> Result<Option<RuntimeDispatchTarget>, PersistenceFailure> {
-            assert_eq!(conversation, self.0.conversation);
+            unreachable!("start resolves through resolve_start_dispatch")
+        }
+
+        async fn resolve_start_dispatch(
+            &self,
+            agent: AgentId,
+            candidate_origin: ConversationId,
+        ) -> Result<Option<RuntimeDispatchTarget>, PersistenceFailure> {
+            assert_eq!(candidate_origin, self.0.conversation);
             assert_eq!(agent, *self.0.plan.scope.agent());
             Ok(Some(self.0.clone()))
         }
@@ -5990,7 +6007,7 @@ mod tests {
 
         async fn snapshot(
             &self,
-            _target: &silverhand_backend_core::messaging::collaboration::RuntimeControlTarget,
+            _target: &silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot>,
             Self::Error,
@@ -6000,7 +6017,7 @@ mod tests {
 
         async fn settle_clear(
             &self,
-            _target: &silverhand_backend_core::messaging::collaboration::RuntimeControlTarget,
+            _target: &silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
             _before: &silverhand_backend_core::messaging::collaboration::BoundRuntimeControlSeat,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::ClearSessionCommitReceipt>,
@@ -6014,7 +6031,7 @@ mod tests {
     async fn runtime_control_start_traverses_typed_codec_and_production_fifo() {
         use silverhand_backend_core::{
             agents::runtime::RuntimeKind,
-            messaging::collaboration::{RuntimeControlPort, RuntimeControlTarget},
+            messaging::collaboration::{RuntimeControlPort, RuntimeStartTarget},
             runtime_delivery::{RuntimeAgentSpec, RuntimeSpawnPlan},
         };
         let registry = DaemonRegistry::with_process_epoch("start-production".to_owned());
@@ -6065,8 +6082,7 @@ mod tests {
             crate::runtime_control::RuntimeClearSessionWaiters::default(),
             Duration::from_secs(30),
         );
-        let target =
-            RuntimeControlTarget::new(UserId::parse("user-1").unwrap(), conversation, agent);
+        let target = RuntimeStartTarget::new(UserId::parse("user-1").unwrap(), agent, conversation);
         let call = tokio::spawn(async move { control.start(&target).await });
         let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
             panic!("runtime_start must enter the production FIFO")

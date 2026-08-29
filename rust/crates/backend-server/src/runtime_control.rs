@@ -20,8 +20,8 @@ use silverhand_backend_core::{
     messaging::collaboration::{
         BoundRuntimeControlSeat, ClearSessionOutcome, ClearSessionProviderRefusal,
         HardStopRuntimeOutcome, HardStopRuntimeProviderRefusal, RuntimeControlPort,
-        RuntimeControlSeatPort, RuntimeControlTarget, RuntimePlacementRefusal, StartRuntimeOutcome,
-        StartRuntimeProviderRefusal, seal_clear_session_commit,
+        RuntimeControlSeatPort, RuntimePlacementRefusal, RuntimeSeatTarget, RuntimeStartTarget,
+        StartRuntimeOutcome, StartRuntimeProviderRefusal, seal_clear_session_commit,
     },
     persistence::PersistenceFailure,
     runtime_credential::{
@@ -233,7 +233,7 @@ where
 {
     async fn seat(
         &self,
-        target: &RuntimeControlTarget,
+        target: &RuntimeSeatTarget,
     ) -> Result<BoundRuntimeControlSeat, RuntimeControlAdapterFailure> {
         self.seats
             .snapshot(target)
@@ -297,22 +297,28 @@ where
 
     async fn start(
         &self,
-        target: &RuntimeControlTarget,
+        target: &RuntimeStartTarget,
     ) -> Result<Result<StartRuntimeOutcome, StartRuntimeProviderRefusal>, Self::Error> {
+        // The start intent carries no scope: the arm is owned by the agent row and the
+        // presentation origin is read-derived from the participation authority. A
+        // non-participant candidate resolves to no seat (zero wire).
         let dispatch = self
             .seats
-            .resolve_dispatch_target(target.conversation().clone(), target.agent().clone())
+            .resolve_start_dispatch(target.agent().clone(), target.presentation_origin().clone())
             .await?
             .ok_or(RuntimeControlAdapterFailure::MissingSeat)?;
         let host = HostId::parse(dispatch.host_id.clone())
             .map_err(|_| RuntimeControlAdapterFailure::DispatchTargetMismatch)?;
-        if dispatch.conversation != *target.conversation()
+        // Exact two-axis bind against the resolved fact. Now non-vacuous: the
+        // conversation is read-derived (not echoed) and the arm is row-owned, so a
+        // fabricated focus cannot slip through the AgentSlot arm.
+        if dispatch.conversation != *target.presentation_origin()
             || dispatch.plan.scope.agent() != target.agent()
             || dispatch
                 .plan
                 .scope
                 .source()
-                .is_some_and(|source| source != target.conversation())
+                .is_some_and(|source| source != target.presentation_origin())
         {
             return Err(RuntimeControlAdapterFailure::DispatchTargetMismatch);
         }
@@ -358,7 +364,7 @@ where
 
     async fn hard_stop(
         &self,
-        target: &RuntimeControlTarget,
+        target: &RuntimeSeatTarget,
     ) -> Result<Result<HardStopRuntimeOutcome, HardStopRuntimeProviderRefusal>, Self::Error> {
         let before = self.seat(target).await?;
         let stop_target = ScopeRuntimeStopTarget::new(
@@ -377,7 +383,7 @@ where
 
     async fn clear_session(
         &self,
-        target: &RuntimeControlTarget,
+        target: &RuntimeSeatTarget,
     ) -> Result<Result<ClearSessionOutcome, ClearSessionProviderRefusal>, Self::Error> {
         let before = self.seat(target).await?;
         if let Err(refusal) = self.placement(before.host()).await? {

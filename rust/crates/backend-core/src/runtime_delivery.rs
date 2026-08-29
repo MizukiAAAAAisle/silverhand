@@ -284,6 +284,21 @@ pub trait RuntimeDispatchReadPort: Clone + Send + Sync + 'static {
         agent: AgentId,
     ) -> impl Future<Output = Result<Option<RuntimeDispatchTarget>, PersistenceFailure>> + Send;
 
+    /// Resolve a runtime-*start* dispatch fact for an explicit start intent.
+    ///
+    /// Unlike [`Self::resolve_dispatch_target`] — which the delivery loop drives with a
+    /// conversation it has already established the agent has pending input in — a start
+    /// intent's `candidate_origin` is caller-supplied and unproven. The implementation
+    /// therefore validates the agent's participation against the canonical authority and
+    /// **read-derives** the returned origin from the matched row rather than echoing the
+    /// candidate. The scope arm is owned by the agent row, never the caller. A
+    /// non-participant resolves to `None` (zero wire).
+    fn resolve_start_dispatch(
+        &self,
+        agent: AgentId,
+        candidate_origin: ConversationId,
+    ) -> impl Future<Output = Result<Option<RuntimeDispatchTarget>, PersistenceFailure>> + Send;
+
     /// Returns every currently claimed slot placed on one host. Hydration must
     /// see old daemon generations as well as the newly attached daemon so a
     /// process restart cannot strand custody behind the previous instance id.

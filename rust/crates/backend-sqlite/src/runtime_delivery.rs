@@ -11,7 +11,7 @@ use silverhand_backend_core::{
         collaboration::{
             BoundRuntimeControlSeat, ClearSessionAuditWitness, ClearSessionCommitReceipt,
             CliSessionId, RuntimeControlObservedStatus, RuntimeControlSeatPort,
-            RuntimeControlSeatSnapshot, RuntimeControlTarget,
+            RuntimeControlSeatSnapshot, RuntimeSeatTarget,
         },
         environment::SendClock,
     },
@@ -521,8 +521,15 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
 
     async fn snapshot(
         &self,
-        target: &RuntimeControlTarget,
+        target: &RuntimeSeatTarget,
     ) -> Result<Option<RuntimeControlSeatSnapshot>, Self::Error> {
+        // The seat coordinate already names its arm and (for a conversation seat)
+        // its source; bind that source directly so the row lookup matches the exact
+        // seat rather than echoing a presentation candidate.
+        let seat_source = match target.scope() {
+            RuntimeScope::ConversationSlot { source, .. } => Some(source.as_str()),
+            RuntimeScope::AgentSlot { .. } => None,
+        };
         let Some(row) = sqlx::query(
             "SELECT a.id AS agent_id, a.name AS agent_name, a.host_id, a.session_scope, \
                     s.conversation_id, s.generation, s.claimed_by_daemon_instance_id, \
@@ -533,7 +540,7 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
                    OR (a.session_scope = 'agent' AND s.conversation_id IS NULL))",
         )
         .bind(target.agent().as_str())
-        .bind(target.conversation().as_str())
+        .bind(seat_source)
         .fetch_optional(&self.pool)
         .await
         .map_err(persistence)?
@@ -610,7 +617,7 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
 
     async fn settle_clear(
         &self,
-        target: &RuntimeControlTarget,
+        target: &RuntimeSeatTarget,
         before: &BoundRuntimeControlSeat,
     ) -> Result<Option<ClearSessionCommitReceipt>, Self::Error> {
         let should_audit = before.was_running() || before.previous_cli_session().is_some();
@@ -842,6 +849,33 @@ impl RuntimeDispatchReadPort for SqliteRuntimeDeliveryStore {
         agent: AgentId,
     ) -> Result<Option<RuntimeDispatchTarget>, PersistenceFailure> {
         self.resolve_target(conversation, agent).await
+    }
+
+    async fn resolve_start_dispatch(
+        &self,
+        agent: AgentId,
+        candidate_origin: ConversationId,
+    ) -> Result<Option<RuntimeDispatchTarget>, PersistenceFailure> {
+        // Canonical participation authority: workspace roster OR direct-pair endpoint,
+        // one predicate shared with the send gate. A non-participant matches no row, so
+        // a fabricated candidate origin yields None (zero wire) rather than reaching the
+        // dispatch plan.
+        let Some(origin) =
+            sqlx::query_scalar::<_, String>(crate::messaging::SELECT_AGENT_PARTICIPATION_ORIGIN)
+                .bind(candidate_origin.as_str())
+                .bind(agent.as_str())
+                .bind(agent.as_str())
+                .bind(agent.as_str())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(persistence)?
+        else {
+            return Ok(None);
+        };
+        // Read-derive the origin from the matched row rather than echoing the request
+        // candidate, then build the dispatch fact for the row-owned scope arm.
+        let origin = ConversationId::parse(origin).map_err(PersistenceFailure::from_source)?;
+        self.resolve_target(origin, agent).await
     }
 
     async fn current_custodies_for_host(
@@ -2563,7 +2597,7 @@ mod runtime_control_seat_tests {
     use silverhand_backend_core::{
         identity::UserId,
         messaging::collaboration::{
-            RuntimeControlSeatPort, RuntimeControlTarget, seal_clear_session_commit,
+            RuntimeControlSeatPort, RuntimeSeatTarget, seal_clear_session_commit,
         },
     };
     use sqlx::{Connection, Executor};
@@ -2604,18 +2638,29 @@ mod runtime_control_seat_tests {
         (directory, store)
     }
 
-    fn target(conversation: &str, agent: &str) -> RuntimeControlTarget {
-        RuntimeControlTarget::new(
+    fn conv_seat(conversation: &str, agent: &str) -> RuntimeSeatTarget {
+        RuntimeSeatTarget::new(
             UserId::parse("user-1").unwrap(),
-            ConversationId::parse(conversation).unwrap(),
-            AgentId::parse(agent).unwrap(),
+            RuntimeScope::ConversationSlot {
+                agent: AgentId::parse(agent).unwrap(),
+                source: ConversationId::parse(conversation).unwrap(),
+            },
+        )
+    }
+
+    fn agent_seat(agent: &str) -> RuntimeSeatTarget {
+        RuntimeSeatTarget::new(
+            UserId::parse("user-1").unwrap(),
+            RuntimeScope::AgentSlot {
+                agent: AgentId::parse(agent).unwrap(),
+            },
         )
     }
 
     #[tokio::test]
     async fn conversation_clear_cas_audit_and_receipt_are_one_commit() {
         let (_directory, store) = seeded().await;
-        let target = target("conversation-1", "agent-conv");
+        let target = conv_seat("conversation-1", "agent-conv");
         let before = store
             .snapshot(&target)
             .await
@@ -2662,7 +2707,7 @@ mod runtime_control_seat_tests {
     #[tokio::test]
     async fn agent_clear_writes_only_the_agent_control_audit() {
         let (_directory, store) = seeded().await;
-        let target = target("conversation-1", "agent-seat");
+        let target = agent_seat("agent-seat");
         let before = store
             .snapshot(&target)
             .await
@@ -2691,6 +2736,75 @@ mod runtime_control_seat_tests {
     }
 
     #[tokio::test]
+    async fn start_dispatch_gates_on_participation_and_read_derives_the_row_owned_arm() {
+        let (_directory, store) = seeded().await;
+
+        // A conversation-scoped member resolves to a ConversationSlot bound to the
+        // read-derived origin — the same conversation, but proven through the
+        // participation authority rather than echoed.
+        let dispatch = store
+            .resolve_start_dispatch(
+                AgentId::parse("agent-conv").unwrap(),
+                ConversationId::parse("conversation-1").unwrap(),
+            )
+            .await
+            .unwrap()
+            .expect("a participating conversation agent resolves a dispatch");
+        assert_eq!(dispatch.conversation.as_str(), "conversation-1");
+        assert_eq!(
+            dispatch.plan.scope,
+            RuntimeScope::ConversationSlot {
+                agent: AgentId::parse("agent-conv").unwrap(),
+                source: ConversationId::parse("conversation-1").unwrap(),
+            }
+        );
+
+        // An agent-scoped member still resolves, but the arm is the row-owned
+        // AgentSlot — the caller never selected it. The origin is validated even
+        // though the seat carries no conversation coordinate: previously this arm
+        // skipped the participation gate entirely.
+        let dispatch = store
+            .resolve_start_dispatch(
+                AgentId::parse("agent-seat").unwrap(),
+                ConversationId::parse("conversation-1").unwrap(),
+            )
+            .await
+            .unwrap()
+            .expect("a participating agent-scoped agent resolves a dispatch");
+        assert_eq!(dispatch.conversation.as_str(), "conversation-1");
+        assert_eq!(
+            dispatch.plan.scope,
+            RuntimeScope::AgentSlot {
+                agent: AgentId::parse("agent-seat").unwrap(),
+            }
+        );
+
+        // The P0-2 falsifier: conversation-2 exists and the agent exists, but the
+        // agent is not a participant. A fabricated candidate origin must resolve to
+        // no seat (zero wire) instead of echoing into a dispatch fact.
+        assert!(
+            store
+                .resolve_start_dispatch(
+                    AgentId::parse("agent-conv").unwrap(),
+                    ConversationId::parse("conversation-2").unwrap(),
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .resolve_start_dispatch(
+                    AgentId::parse("agent-seat").unwrap(),
+                    ConversationId::parse("conversation-2").unwrap(),
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn already_idle_empty_session_still_cas_settles_without_an_audit() {
         let (_directory, store) = seeded().await;
         sqlx::query(
@@ -2700,7 +2814,7 @@ mod runtime_control_seat_tests {
         .execute(&store.pool)
         .await
         .unwrap();
-        let target = target("conversation-1", "agent-seat");
+        let target = agent_seat("agent-seat");
         let before = store
             .snapshot(&target)
             .await
@@ -2724,7 +2838,7 @@ mod runtime_control_seat_tests {
     #[tokio::test]
     async fn successor_generation_rejects_old_settlement_without_residue() {
         let (_directory, store) = seeded().await;
-        let target = target("conversation-1", "agent-seat");
+        let target = agent_seat("agent-seat");
         let before = store
             .snapshot(&target)
             .await
@@ -2775,7 +2889,7 @@ mod runtime_control_seat_tests {
         .execute(&store.pool)
         .await
         .unwrap();
-        let target = target("conversation-1", "agent-seat");
+        let target = agent_seat("agent-seat");
         let before = store
             .snapshot(&target)
             .await
@@ -2801,7 +2915,7 @@ mod runtime_control_seat_tests {
         let (_directory, store) = seeded().await;
         assert!(
             store
-                .snapshot(&target("conversation-2", "agent-conv"))
+                .snapshot(&conv_seat("conversation-2", "agent-conv"))
                 .await
                 .unwrap()
                 .is_none()

@@ -26,7 +26,7 @@ use silverhand_backend_core::{
         collaboration::{
             BoundRuntimeControlSeat, ClearSessionCommitReceipt, ClearSessionProviderRefusal,
             RuntimeControlPort, RuntimeControlSeatPort, RuntimeControlSeatSnapshot,
-            RuntimeControlTarget,
+            RuntimeSeatTarget, RuntimeStartTarget,
         },
         post_commit::{IdleStart, MainDelivery},
     },
@@ -318,6 +318,16 @@ impl RuntimeDispatchReadPort for CountingRuntimeDeliveryStore {
             .await
     }
 
+    async fn resolve_start_dispatch(
+        &self,
+        agent: AgentId,
+        candidate_origin: ConversationId,
+    ) -> Result<Option<RuntimeDispatchTarget>, PersistenceFailure> {
+        self.inner
+            .resolve_start_dispatch(agent, candidate_origin)
+            .await
+    }
+
     async fn current_custodies_for_host(
         &self,
         host_id: String,
@@ -331,14 +341,14 @@ impl RuntimeControlSeatPort for CountingRuntimeDeliveryStore {
 
     async fn snapshot(
         &self,
-        target: &RuntimeControlTarget,
+        target: &RuntimeSeatTarget,
     ) -> Result<Option<RuntimeControlSeatSnapshot>, Self::Error> {
         self.inner.snapshot(target).await
     }
 
     async fn settle_clear(
         &self,
-        target: &RuntimeControlTarget,
+        target: &RuntimeSeatTarget,
         before: &BoundRuntimeControlSeat,
     ) -> Result<Option<ClearSessionCommitReceipt>, Self::Error> {
         self.clear_settlement_calls.fetch_add(1, Ordering::SeqCst);
@@ -1265,12 +1275,16 @@ fn runtime_scope() -> RuntimeScope {
     }
 }
 
-fn runtime_control_target() -> RuntimeControlTarget {
-    RuntimeControlTarget::new(
+fn runtime_control_start_target() -> RuntimeStartTarget {
+    RuntimeStartTarget::new(
         UserId::parse("user-1").unwrap(),
-        ConversationId::parse(CONVERSATION).unwrap(),
         AgentId::parse(AGENT).unwrap(),
+        ConversationId::parse(CONVERSATION).unwrap(),
     )
+}
+
+fn runtime_control_seat_target() -> RuntimeSeatTarget {
+    RuntimeSeatTarget::new(UserId::parse("user-1").unwrap(), runtime_scope())
 }
 
 async fn activate_host_for_runtime_control(path: &std::path::Path) {
@@ -1298,7 +1312,7 @@ async fn activate_host_for_runtime_control(path: &std::path::Path) {
 async fn start_through_runtime_control(
     fixture: &Fixture,
     socket: &mut Socket,
-    target: &RuntimeControlTarget,
+    target: &RuntimeStartTarget,
 ) -> i64 {
     let control = fixture.runtime_control.clone();
     let target = target.clone();
@@ -3643,10 +3657,10 @@ async fn clear_session_waiter_settles_after_the_exact_runtime_exit_frame_commits
     let mut socket = connect(fixture.address).await;
     complete_attachment(&mut socket, &fixture.controller).await;
 
-    let target = runtime_control_target();
+    let target = runtime_control_start_target();
     let generation = start_through_runtime_control(&fixture, &mut socket, &target).await;
     let control = fixture.runtime_control.clone();
-    let clear_target = target.clone();
+    let clear_target = runtime_control_seat_target();
     let clear = tokio::spawn(async move { control.clear_session(&clear_target).await });
     let command = next_json(&mut socket).await;
     assert_eq!(command["kind"], "runtime_clear_session");
@@ -3704,10 +3718,10 @@ async fn delivery_failed_frame_cannot_release_a_clear_session_waiter() {
     let mut socket = connect(fixture.address).await;
     complete_attachment(&mut socket, &fixture.controller).await;
 
-    let target = runtime_control_target();
+    let target = runtime_control_start_target();
     let generation = start_through_runtime_control(&fixture, &mut socket, &target).await;
     let control = fixture.runtime_control.clone();
-    let clear_target = target.clone();
+    let clear_target = runtime_control_seat_target();
     let clear = tokio::spawn(async move { control.clear_session(&clear_target).await });
     let command = next_json(&mut socket).await;
     assert_eq!(command["kind"], "runtime_clear_session");

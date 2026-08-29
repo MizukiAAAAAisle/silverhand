@@ -1,6 +1,7 @@
 //! One-snapshot SQLite admission for conversation runtime control.
 
 use silverhand_backend_core::{
+    agents::session_scope::AgentSessionScope,
     identity::{AgentId, ConversationId, UserId},
     messaging::collaboration::{RuntimeControlAdmission, RuntimeControlAdmissionScope},
 };
@@ -23,6 +24,7 @@ const SELECT_WORKSPACE_HUMAN_PARTICIPATION: &str = "SELECT \
     AND EXISTS(SELECT 1 FROM conversation_users WHERE conversation_id = ? AND user_id = ?) \
     AS participates";
 const SELECT_AGENT_CREATOR: &str = "SELECT created_by_user_id FROM agents WHERE id = ?";
+const SELECT_AGENT_SESSION_SCOPE: &str = "SELECT session_scope FROM agents WHERE id = ?";
 const SELECT_USER_EXISTS: &str = "SELECT 1 FROM users WHERE id = ?";
 
 #[derive(Clone)]
@@ -38,6 +40,8 @@ pub enum RuntimeControlAdmissionStoreError {
     InvalidConversationPlacement,
     #[error("stored direct-pair endpoint is malformed")]
     MalformedDirectPairEndpoint,
+    #[error("stored agent session scope is outside the declared vocabulary")]
+    UnrecognizedSessionScope,
 }
 
 impl<E> MessagingStore<E> {
@@ -160,6 +164,25 @@ impl RuntimeControlAdmissionScope for SqliteRuntimeControlSnapshot {
         Ok(creator.as_deref() == Some(actor.as_str()))
     }
 
+    async fn agent_session_scope(
+        &mut self,
+        agent: &AgentId,
+    ) -> Result<Option<AgentSessionScope>, Self::Error> {
+        let Some(raw): Option<String> = sqlx::query_scalar(SELECT_AGENT_SESSION_SCOPE)
+            .bind(agent.as_str())
+            .fetch_optional(&mut *self.tx)
+            .await?
+        else {
+            // No agent row: the seat operation refuses as AgentNotFound. An
+            // unrecognized token, by contrast, is a stored fault (below), never
+            // silently collapsed to this absent case.
+            return Ok(None);
+        };
+        AgentSessionScope::parse(&raw)
+            .map(Some)
+            .ok_or(RuntimeControlAdmissionStoreError::UnrecognizedSessionScope)
+    }
+
     async fn finish(self) -> Result<(), Self::Error> {
         self.tx.commit().await?;
         Ok(())
@@ -229,8 +252,8 @@ mod tests {
         messaging::collaboration::{
             ClearSessionOutcome, ClearSessionProviderRefusal, HardStopRuntimeOutcome,
             HardStopRuntimeProviderRefusal, RuntimeControlAdmissionRefusal,
-            RuntimeControlAdmissionScope, RuntimeControlPort, RuntimeControlTarget,
-            StartRuntimeOutcome, StartRuntimeProviderRefusal, start_conversation_runtime,
+            RuntimeControlAdmissionScope, RuntimeControlPort, RuntimeSeatTarget, RuntimeStartTarget,
+            StartRuntimeOutcome, StartRuntimeProviderRefusal, start_runtime,
         },
     };
     use sqlx::{
@@ -279,11 +302,11 @@ mod tests {
         (directory, store)
     }
 
-    fn target() -> RuntimeControlTarget {
-        RuntimeControlTarget::new(
+    fn target() -> RuntimeStartTarget {
+        RuntimeStartTarget::new(
             UserId::parse("user-1").unwrap(),
-            ConversationId::parse("conversation-1").unwrap(),
             AgentId::parse("agent-1").unwrap(),
+            ConversationId::parse("conversation-1").unwrap(),
         )
     }
 
@@ -296,7 +319,7 @@ mod tests {
 
         assert!(
             snapshot
-                .conversation_exists(target.conversation())
+                .conversation_exists(target.presentation_origin())
                 .await
                 .unwrap()
         );
@@ -317,13 +340,13 @@ mod tests {
         assert!(snapshot.agent_exists(target.agent()).await.unwrap());
         assert!(
             snapshot
-                .agent_is_member(target.conversation(), target.agent())
+                .agent_is_member(target.presentation_origin(), target.agent())
                 .await
                 .unwrap()
         );
         assert!(
             snapshot
-                .actor_may_post(target.conversation(), target.actor())
+                .actor_may_post(target.presentation_origin(), target.actor())
                 .await
                 .unwrap()
         );
@@ -338,13 +361,13 @@ mod tests {
         let mut fresh = admission.begin_snapshot().await.unwrap();
         assert!(
             !fresh
-                .agent_is_member(target.conversation(), target.agent())
+                .agent_is_member(target.presentation_origin(), target.agent())
                 .await
                 .unwrap()
         );
         assert!(
             !fresh
-                .actor_may_post(target.conversation(), target.actor())
+                .actor_may_post(target.presentation_origin(), target.actor())
                 .await
                 .unwrap()
         );
@@ -369,7 +392,7 @@ mod tests {
 
         async fn start(
             &self,
-            _target: &RuntimeControlTarget,
+            _target: &RuntimeStartTarget,
         ) -> Result<Result<StartRuntimeOutcome, StartRuntimeProviderRefusal>, Self::Error> {
             let connection = tokio::time::timeout(Duration::from_secs(1), self.pool.acquire())
                 .await
@@ -381,7 +404,7 @@ mod tests {
 
         async fn hard_stop(
             &self,
-            _target: &RuntimeControlTarget,
+            _target: &RuntimeSeatTarget,
         ) -> Result<
             Result<
                 silverhand_backend_core::messaging::collaboration::HardStopRuntimeOutcome,
@@ -394,7 +417,7 @@ mod tests {
 
         async fn clear_session(
             &self,
-            _target: &RuntimeControlTarget,
+            _target: &RuntimeSeatTarget,
         ) -> Result<
             Result<
                 silverhand_backend_core::messaging::collaboration::ClearSessionOutcome,
@@ -429,7 +452,7 @@ mod tests {
             calls: Arc::clone(&calls),
         };
         assert_eq!(
-            start_conversation_runtime(&admission, &provider, target())
+            start_runtime(&admission, &provider, target())
                 .await
                 .unwrap(),
             Ok(StartRuntimeOutcome)
@@ -445,7 +468,7 @@ mod tests {
 
         async fn start(
             &self,
-            _target: &RuntimeControlTarget,
+            _target: &RuntimeStartTarget,
         ) -> Result<Result<StartRuntimeOutcome, StartRuntimeProviderRefusal>, Self::Error> {
             *self.0.lock().unwrap() += 1;
             Ok(Ok(StartRuntimeOutcome))
@@ -453,7 +476,7 @@ mod tests {
 
         async fn hard_stop(
             &self,
-            _target: &RuntimeControlTarget,
+            _target: &RuntimeSeatTarget,
         ) -> Result<Result<HardStopRuntimeOutcome, HardStopRuntimeProviderRefusal>, Self::Error>
         {
             unreachable!()
@@ -461,17 +484,17 @@ mod tests {
 
         async fn clear_session(
             &self,
-            _target: &RuntimeControlTarget,
+            _target: &RuntimeSeatTarget,
         ) -> Result<Result<ClearSessionOutcome, ClearSessionProviderRefusal>, Self::Error> {
             unreachable!()
         }
     }
 
-    fn target_for(actor: &str, conversation: &str, agent: &str) -> RuntimeControlTarget {
-        RuntimeControlTarget::new(
+    fn target_for(actor: &str, conversation: &str, agent: &str) -> RuntimeStartTarget {
+        RuntimeStartTarget::new(
             UserId::parse(actor).unwrap(),
-            ConversationId::parse(conversation).unwrap(),
             AgentId::parse(agent).unwrap(),
+            ConversationId::parse(conversation).unwrap(),
         )
     }
 
@@ -480,7 +503,7 @@ mod tests {
         let (_directory, store) = seeded().await;
         let provider = CountingProvider::default();
         assert_eq!(
-            start_conversation_runtime(
+            start_runtime(
                 &store.runtime_control_admission(),
                 &provider,
                 target_for("user-1", "conversation-fixed", "agent-1"),
@@ -492,7 +515,7 @@ mod tests {
         assert_eq!(*provider.0.lock().unwrap(), 1);
 
         assert_eq!(
-            start_conversation_runtime(
+            start_runtime(
                 &store.runtime_control_admission(),
                 &provider,
                 target_for("user-1", "pair-1", "agent-2"),

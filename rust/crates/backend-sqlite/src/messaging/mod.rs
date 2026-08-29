@@ -105,6 +105,14 @@ pub(crate) const SELECT_AGENT_PARTICIPATING_SET: &str = concat!(
      WHERE ",
     agent_participation_predicate!()
 );
+/// The runtime-start coordinate on the same participation predicate: it returns the
+/// matched conversation's OWN id (`c.id`, `c.id = ?` point form), so the start-dispatch
+/// resolver read-derives its presentation origin from the participation row rather than
+/// echoing the request candidate. A non-participant matches no row → `None` → zero wire.
+pub(crate) const SELECT_AGENT_PARTICIPATION_ORIGIN: &str = concat!(
+    "SELECT c.id FROM conversations c WHERE c.id = ? AND ",
+    agent_participation_predicate!()
+);
 /// The human arm carries two facts for a channel — the seat AND workspace
 /// membership — so a seat that outlived a workspace removal admits nobody.
 const SELECT_USER_PARTICIPATES: &str = "SELECT 1 FROM conversations c WHERE c.id = ? AND \
