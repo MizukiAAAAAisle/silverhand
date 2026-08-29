@@ -2909,10 +2909,12 @@ mod tests {
     /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195 + #2198 + #2218 + the
     /// #2219 CP4 batch-B custody doors + the #2223 CP3 workspace-metadata / human-`me`
     /// doors + the #2223 CP4 directory/avatar doors + the #2223 CP5 host residual doors) as
-    /// sixty-seven entries — fifty-five behind the human
+    /// seventy-three entries — sixty-one behind the human
     /// session perimeter (including #2218's authenticated `/api/runtimes`, the three #2219
     /// host custody/credential doors, the four #2223 CP5 host residual doors: detail,
-    /// revoke, connect-token rotate and delete, the four #2223 CP3 workspace-metadata /
+    /// revoke, connect-token rotate and delete, the six #2234 CP1 host-management doors:
+    /// update `PATCH /api/hosts/{id}`, disconnect, proxy-config GET+PUT, runtime-catalog
+    /// and status, the four #2223 CP3 workspace-metadata /
     /// detail doors, the `me` pair, and the four #2223 CP4 directory/avatar doors), three
     /// behind the runtime
     /// credential perimeter, the two authenticated WebSockets, and seven ANONYMOUS faces
@@ -2923,7 +2925,7 @@ mod tests {
     /// handler's own status (never the perimeter's bodiless `401`), and never the `404`
     /// fallback. Removing any mounted route's
     /// `.merge(...)` from `prepare()` flips its entry to `404` and reddens this gate.
-    /// The tables are named consts with per-table `assert_eq!(len)` (55 / 3 / 2, plus
+    /// The tables are named consts with per-table `assert_eq!(len)` (61 / 3 / 2, plus
     /// the four #2218/#2219 anon faces asserted by exact status/body and the #2223 CP3
     /// signup/login/logout trio asserted by presence-plus-handler-reach) so a mis-added or
     /// mis-deleted row reddens the count directly.
@@ -2949,7 +2951,7 @@ mod tests {
         let router = app.router;
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // The fifty-five human-perimeter product doors. Anonymous (no bearer) → the human
+        // The sixty-one human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
         const HUMAN_PERIMETER_DOORS: [(&str, &str); 61] = [
@@ -3033,7 +3035,7 @@ mod tests {
             // `GET` and `DELETE /api/hosts/{id}` share one path node (detail + teardown,
             // disjoint methods); anon presence here witnesses only the shared path-guard,
             // and the authenticated GET→detail / DELETE→teardown / unregistered→405 dispatch
-            // is borne by `the_api_hosts_id_path_dispatches_get_to_detail_and_delete_to_teardown`.
+            // is borne by `the_api_hosts_id_path_dispatches_get_detail_patch_update_and_delete_teardown`.
             ("GET", "/api/hosts/host-1"),
             ("DELETE", "/api/hosts/host-1"),
             ("POST", "/api/hosts/host-1/revoke"),
@@ -3042,7 +3044,7 @@ mod tests {
             // `PATCH /api/hosts/{id}` accumulates onto the CP5 GET+DELETE node (disjoint
             // method); anon presence here witnesses the shared path-guard, and the
             // authenticated PATCH→update dispatch is borne by
-            // `the_api_hosts_id_path_dispatches_get_to_detail_and_delete_to_teardown`.
+            // `the_api_hosts_id_path_dispatches_get_detail_patch_update_and_delete_teardown`.
             ("PATCH", "/api/hosts/host-1"),
             ("POST", "/api/hosts/host-1/disconnect"),
             ("GET", "/api/hosts/host-1/proxy-config"),
@@ -3500,7 +3502,7 @@ mod tests {
     /// anon-landed).
     #[tokio::test]
     async fn the_host_agent_lane_stays_a_closed_universe_of_fifty_four() {
-        // The 14 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
+        // The 20 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
         // perimeter → anon 401.
         const LANDED: &[(&str, &str)] = &[
             ("GET", "/api/agents"),
@@ -3528,9 +3530,10 @@ mod tests {
             // mounted behind the human perimeter → anon 401. `GET /api/hosts/{id}` (detail)
             // and `DELETE /api/hosts/{id}` (teardown) share the `{id}` node with disjoint
             // methods; here each is probed anon (401, perimeter), and their GET→detail /
-            // DELETE→teardown / unregistered-method→405 dispatch is borne by the dedicated
-            // `/api/hosts/{id}` two-arm gate below. `PATCH /api/hosts/{id}` is now a
-            // method-shadow residual (the node exists for GET+DELETE only), asserted below.
+            // DELETE→teardown dispatch is borne by the dedicated
+            // `/api/hosts/{id}` shared-node gate below. `PATCH /api/hosts/{id}` is now a
+            // THIRD method on that same node (mounted by #2234 CP1, immediately below), no
+            // longer a method-shadow residual.
             ("GET", "/api/hosts/host-1"),
             ("DELETE", "/api/hosts/host-1"),
             ("POST", "/api/hosts/host-1/revoke"),
@@ -3564,7 +3567,7 @@ mod tests {
                 StatusCode::UNAUTHORIZED,
             ),
         ];
-        // 36 RESIDUAL routes whose path matches no mounted route → anon 404.
+        // 26 RESIDUAL routes whose path matches no mounted route → anon 404.
         const CLEAN_RESIDUAL: &[(&str, &str)] = &[
             // routes.ts remaining (1)
             ("POST", "/auth/embedded-bootstrap"),
@@ -3801,7 +3804,7 @@ mod tests {
     /// success bodies are key-disjoint (`host` vs `host_id`+`deleted`), so a mount that
     /// accidentally pointed both methods at one handler reddens here.
     #[tokio::test]
-    async fn the_api_hosts_id_path_dispatches_get_to_detail_and_delete_to_teardown() {
+    async fn the_api_hosts_id_path_dispatches_get_detail_patch_update_and_delete_teardown() {
         let fixture = fixture(true).await;
         seed_human(&fixture.path).await;
         // One owner-managed (remote + user_invite), dependent-free computer owned by the
@@ -3896,6 +3899,165 @@ mod tests {
             body, r#"{"error":"host not found","error_code":"host_not_found"}"#,
             "the teardown really removed the row"
         );
+    }
+
+    /// #2234 CP1 no-op-mount discriminator (A6 lesson §1): a *successful* PATCH rename
+    /// must drive the real post-commit `ScopeEventHostLabelChange` chain end to end —
+    /// the production `SqliteComputerAgentsRead` roster read → the SAME production
+    /// `ScopeEventHub` → an app-scoped `agent_changed` frame — none of which the
+    /// dispatch test above exercises (its user-invite host exits at the PendingAttach
+    /// pre-write refusal, before any commit or effect). Here the owner-managed host is
+    /// already finalized (`finalized_at` set ⇒ `finalizing == false`), so the rename
+    /// takes the clean `Write`/`Renamed` path and fires the effect. We prove three
+    /// things at once: (1) the label change is durable (the committed reprojection in
+    /// the PATCH response carries the new label), and (2) the effect published a frame
+    /// for EXACTLY the host's own agent — a second agent bound to a different host of
+    /// the same owner is silent, proving the roster read is host-scoped, not owner- or
+    /// app-wide. A silent no-op mount would deliver no frame at all.
+    #[tokio::test]
+    async fn the_composition_host_rename_publishes_agent_changed_for_only_the_hosts_own_agents() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let pool = SqlitePoolOptions::new()
+            .connect(fixture.path.to_str().unwrap())
+            .await
+            .unwrap();
+        // An owner-managed (remote + user_invite) computer that has ALREADY finalized
+        // its first attachment (`activated_at` + `finalized_at` set) ⇒ `finalizing`
+        // is false, so a valid rename reaches the real `Write` and returns `Renamed`.
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id, provisioning_source, activated_at, finalized_at) \
+             VALUES ('h-mgmt', 'mgmt', 'remote', 1, 'user-1', 'user_invite', 1, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // A second owner-managed computer, so its agent proves host-scoping (same owner,
+        // different host_id) — it must NOT receive a frame from h-mgmt's rename.
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id, provisioning_source, activated_at, finalized_at) \
+             VALUES ('h-peer', 'peer', 'remote', 1, 'user-1', 'user_invite', 1, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, created_by_user_id) \
+             VALUES ('agent-on-mgmt', 'on-mgmt', 'qoder', 'h-mgmt', 1, 1, 'user-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, created_by_user_id) \
+             VALUES ('agent-on-peer', 'on-peer', 'qoder', 'h-peer', 1, 1, 'user-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+
+        // Subscribe to the APP scope on the real production event WebSocket FIRST, so
+        // the `agent_changed` frame the rename publishes cannot slip past a late
+        // subscription (fresh-subscription high-water; A6 lesson §2).
+        let mut websocket_request = format!("ws://{address}{EVENT_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        websocket_request
+            .headers_mut()
+            .insert(ORIGIN, "http://localhost:5173".parse().unwrap());
+        websocket_request.headers_mut().insert(
+            COOKIE,
+            format!("{EVENT_WS_SESSION_COOKIE}={TOKEN}")
+                .parse()
+                .unwrap(),
+        );
+        websocket_request
+            .headers_mut()
+            .insert(DESKTOP_API_EPOCH_HEADER, MINIMUM_CLIENT_API_EPOCH.into());
+        let (mut socket, _) = connect_async(websocket_request).await.unwrap();
+        let authenticated = socket.next().await.unwrap().unwrap();
+        let ClientMessage::Text(authenticated) = authenticated else {
+            panic!("authenticated frame must be text");
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&authenticated).unwrap()["type"],
+            "authenticated"
+        );
+        socket
+            .send(ClientMessage::Text(
+                serde_json::json!({ "type": "subscribe", "scope": "app" })
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let subscribed = socket.next().await.unwrap().unwrap();
+        let ClientMessage::Text(subscribed) = subscribed else {
+            panic!("subscribed frame must be text");
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&subscribed).unwrap()["type"],
+            "subscribed"
+        );
+
+        // A valid rename → the real `UpdateComputer` domain takes the `Write`/`Renamed`
+        // path (finalized host, so no PendingAttach), commits, and the committed
+        // reprojection is returned as `{"host": HostDto}` with the new label.
+        let response = http_over_tcp(
+            address,
+            "PATCH",
+            "/api/hosts/h-mgmt",
+            Some(&format!("Bearer {TOKEN}")),
+            r#"{"display_label":"renamed-host"}"#,
+        )
+        .await;
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK\r\n"),
+            "PATCH rename must succeed on the finalized owner host: {response}"
+        );
+        let body = response
+            .split_once("\r\n\r\n")
+            .expect("response has a body")
+            .1;
+        let renamed: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            renamed["host"]["id"], "h-mgmt",
+            "PATCH returns the committed host detail: {body}"
+        );
+        assert_eq!(
+            renamed["host"]["display_label"], "renamed-host",
+            "the label change is durable in the committed reprojection: {body}"
+        );
+
+        // The real effect published EXACTLY the host's own agent on the app scope.
+        let event = socket.next().await.unwrap().unwrap();
+        let ClientMessage::Text(event) = event else {
+            panic!("agent_changed frame must be text");
+        };
+        let event: serde_json::Value = serde_json::from_str(&event).unwrap();
+        assert_eq!(
+            event["scope"], "app",
+            "agent_changed is app-scoped: {event}"
+        );
+        assert_eq!(event["kind"], "agent_changed", "{event}");
+        assert_eq!(
+            event["payload"]["agent_id"], "agent-on-mgmt",
+            "the roster read is host-scoped: only h-mgmt's agent, never h-peer's: {event}"
+        );
+
+        socket.close(None).await.unwrap();
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
     }
 
     /// #2219 real-authority binding — the invite→resolve chain proves BOTH placement and
