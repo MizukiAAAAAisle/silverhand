@@ -296,6 +296,19 @@ pub trait RuntimeCustodyPort: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<bool, PersistenceFailure>> + Send;
 }
 
+/// Process-owned presentation focus for an exact live AgentSlot generation.
+///
+/// ConversationSlot already carries its semantic source in [`RuntimePrincipal`], so
+/// this face deliberately answers only AgentSlot principals. Implementations must
+/// re-check durable current custody before exposing a process-local entry: a stale map
+/// entry may exist after a racing exit, but it can never become visible again.
+pub trait AgentSlotPresentationFocusPort: Clone + Send + Sync + 'static {
+    fn agent_slot_presentation_focus(
+        &self,
+        principal: RuntimePrincipal,
+    ) -> impl Future<Output = Result<Option<ConversationId>, PersistenceFailure>> + Send;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

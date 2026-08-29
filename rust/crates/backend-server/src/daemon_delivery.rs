@@ -423,6 +423,7 @@ where
             .dispatch_start(
                 target.plan.scope.clone(),
                 transport.attachment.daemon_instance.clone(),
+                target.conversation.clone(),
                 &transport,
             )
             .await
@@ -469,6 +470,7 @@ where
             .dispatch_start(
                 target.plan.scope.clone(),
                 transport.attachment.daemon_instance.clone(),
+                target.conversation.clone(),
                 &transport,
             )
             .await
@@ -2226,6 +2228,11 @@ where
                     DeliveryTransportError::StaleCustody,
                 ));
             }
+            ClaimPendingInbox::Transitioning => {
+                return Err(RuntimeDispatchFailure::ProvenNotDispatched(
+                    DeliveryTransportError::Transitioning,
+                ));
+            }
         };
         let params = runtime_deliver_params(&self.target, handoff, &batch);
         match self
@@ -2289,6 +2296,7 @@ async fn rollback_batch<D: RuntimeInboxCustodyPort>(
 enum DeliveryTransportError {
     NoPending,
     StaleCustody,
+    Transitioning,
     DaemonRefused,
     InvalidResponse,
     Transport,
@@ -2300,6 +2308,7 @@ impl fmt::Display for DeliveryTransportError {
         formatter.write_str(match self {
             Self::NoPending => "runtime inbox has no pending delivery",
             Self::StaleCustody => "runtime custody changed before inbox claim",
+            Self::Transitioning => "runtime transition fenced the inbox claim",
             Self::DaemonRefused => "daemon refused runtime delivery custody",
             Self::InvalidResponse => "daemon returned an invalid runtime delivery response",
             Self::Transport => "runtime delivery transport failed",
@@ -6203,6 +6212,7 @@ mod tests {
         use silverhand_backend_core::{
             agents::runtime::RuntimeKind,
             messaging::collaboration::{RuntimeControlPort, RuntimeStartTarget},
+            runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustody},
             runtime_delivery::{RuntimeAgentSpec, RuntimeSpawnPlan},
         };
         let registry = DaemonRegistry::with_process_epoch("start-production".to_owned());
@@ -6244,8 +6254,19 @@ mod tests {
             plane.clone(),
             Duration::from_secs(30),
         );
+        let credentials = RuntimeCredentialAuthority::production(StartCustody);
+        let focus = credentials.clone();
+        let expected_principal = RuntimePrincipal::for_scope(
+            RuntimeScope::AgentSlot {
+                agent: agent.clone(),
+            },
+            RuntimeCustody::new(
+                silverhand_backend_core::runtime_credential::RuntimeGeneration::new(1).unwrap(),
+                DaemonInstanceId::parse("daemon-a").unwrap(),
+            ),
+        );
         let control = crate::runtime_control::ProductionRuntimeControl::new(
-            RuntimeCredentialAuthority::production(StartCustody),
+            credentials,
             seats,
             computers,
             plane,
@@ -6254,6 +6275,46 @@ mod tests {
             Duration::from_secs(30),
         );
         let target = RuntimeStartTarget::new(UserId::parse("user-1").unwrap(), agent, conversation);
+
+        let invalid_control = control.clone();
+        let invalid_target = target.clone();
+        let invalid = tokio::spawn(async move { invalid_control.start(&invalid_target).await });
+        let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
+            panic!("invalid runtime_start must enter the production FIFO")
+        };
+        command.response.send(Ok(json!({"started":true}))).unwrap();
+        assert!(invalid.await.unwrap().is_err());
+        assert_eq!(
+            focus
+                .agent_slot_presentation_focus(expected_principal.clone())
+                .await
+                .unwrap(),
+            None
+        );
+
+        let cooldown_control = control.clone();
+        let cooldown_target = target.clone();
+        let cooldown = tokio::spawn(async move { cooldown_control.start(&cooldown_target).await });
+        let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
+            panic!("cooldown runtime_start must enter the production FIFO")
+        };
+        command
+            .response
+            .send(Ok(json!({
+                "started":false,
+                "reason":"init_cooldown",
+                "cooldown_until":7
+            })))
+            .unwrap();
+        assert!(cooldown.await.unwrap().unwrap().is_ok());
+        assert_eq!(
+            focus
+                .agent_slot_presentation_focus(expected_principal.clone())
+                .await
+                .unwrap(),
+            None
+        );
+
         let call = tokio::spawn(async move { control.start(&target).await });
         let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
             panic!("runtime_start must enter the production FIFO")
@@ -6271,6 +6332,13 @@ mod tests {
             .send(Ok(json!({"started":true,"pid":42,"started_at":7})))
             .unwrap();
         assert!(call.await.unwrap().unwrap().is_ok());
+        assert_eq!(
+            focus
+                .agent_slot_presentation_focus(expected_principal)
+                .await
+                .unwrap(),
+            Some(ConversationId::parse("conversation-a").unwrap())
+        );
     }
 
     #[test]

@@ -27,12 +27,17 @@
 
 use silverhand_backend_core::{
     agents::runtime::RuntimeKind,
-    identity::AgentId,
+    identity::{AgentId, ConversationId},
     persistence::PersistenceFailure,
+    runtime_credential::RuntimeScope,
+    runtime_event::RuntimeObservedStatus,
     runtime_transition::{
         AbortTransition, BeginTransitionRecord, CompleteTransitionRecord,
-        RuntimeTransitionAfterImage, RuntimeTransitionCommit, RuntimeTransitionLock,
-        RuntimeTransitionLockRow, RuntimeTransitionWrite,
+        RuntimeTransitionAfterImage, RuntimeTransitionCommit, RuntimeTransitionInboxReclaimRecord,
+        RuntimeTransitionInboxReclaimRow, RuntimeTransitionInboxWrite, RuntimeTransitionLock,
+        RuntimeTransitionLockRow, RuntimeTransitionSeatRead, RuntimeTransitionSeatRow,
+        RuntimeTransitionSeatSnapshotRecord, RuntimeTransitionSeatSnapshotRow,
+        RuntimeTransitionWrite,
     },
 };
 use sqlx::{Row, sqlite::SqliteRow};
@@ -79,6 +84,22 @@ const COMPLETE_TRANSITION_CAS: &str = "UPDATE agents \
     RETURNING id, runtime, model, reasoning_effort, fast_mode, updated_at, \
               runtime_transition_target, runtime_transition_started_at";
 
+const SELECT_HELD_TRANSITION: &str = "SELECT id, runtime_transition_target, \
+        runtime_transition_started_at FROM agents WHERE id = ?";
+
+const RECLAIM_INBOX_LEASES: &str = "UPDATE conversation_inboxes \
+        SET in_flight_owner = NULL, in_flight_at = NULL \
+      WHERE agent_id = ? \
+        AND delivered_at IS NULL AND failed_at IS NULL \
+        AND in_flight_owner IS NOT NULL \
+        AND EXISTS ( \
+            SELECT 1 FROM agents \
+             WHERE id = ? \
+               AND runtime_transition_target = ? \
+               AND runtime_transition_started_at = ? \
+        ) \
+    RETURNING conversation_id";
+
 /// The writer was reserved and every precondition the pre-read observed still held, yet
 /// the acquiring compare-and-set returned no row. Under `BEGIN IMMEDIATE` nothing else
 /// can have written the row, so this is a broken invariant, not a product answer.
@@ -114,6 +135,26 @@ fn begin_lock_row(row: &SqliteRow) -> Result<RuntimeTransitionLockRow, sqlx::Err
         target: row.try_get::<String, _>("runtime_transition_target")?,
         started_at: row.try_get::<i64, _>("runtime_transition_started_at")?,
     })
+}
+
+fn held_lock_row(row: &SqliteRow) -> Result<Option<RuntimeTransitionLockRow>, sqlx::Error> {
+    let Some(target) = row.try_get::<Option<String>, _>("runtime_transition_target")? else {
+        return Ok(None);
+    };
+    let Some(started_at) = row.try_get::<Option<i64>, _>("runtime_transition_started_at")? else {
+        return Ok(None);
+    };
+    Ok(Some(RuntimeTransitionLockRow {
+        agent_id: super::decode::agent_id(row.try_get::<String, _>("id")?)?,
+        target,
+        started_at,
+    }))
+}
+
+fn marker_matches(lock: &RuntimeTransitionLock, row: &RuntimeTransitionLockRow) -> bool {
+    &row.agent_id == lock.agent_id()
+        && row.target == lock.target().as_str()
+        && row.started_at == lock.started_at()
 }
 
 /// Project the committed after-image from the `complete` `RETURNING` row. The id rides
@@ -231,6 +272,133 @@ impl RuntimeTransitionWrite for SqliteHostAgentStore {
         };
         tx.commit().await.map_err(PersistenceFailure::from_source)?;
         Ok(record)
+    }
+}
+
+impl RuntimeTransitionInboxWrite for SqliteHostAgentStore {
+    async fn reclaim_transition_inboxes(
+        &self,
+        lock: &RuntimeTransitionLock,
+    ) -> Result<RuntimeTransitionInboxReclaimRecord, PersistenceFailure> {
+        let mut tx = self
+            .begin_root_write()
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        let Some(row) = sqlx::query(SELECT_HELD_TRANSITION)
+            .bind(lock.agent_id().as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(PersistenceFailure::from_source)?
+        else {
+            tx.commit().await.map_err(PersistenceFailure::from_source)?;
+            return Ok(RuntimeTransitionInboxReclaimRecord::Lost);
+        };
+        let Some(witness) = held_lock_row(&row).map_err(PersistenceFailure::from_source)? else {
+            tx.commit().await.map_err(PersistenceFailure::from_source)?;
+            return Ok(RuntimeTransitionInboxReclaimRecord::Lost);
+        };
+        if !marker_matches(lock, &witness) {
+            tx.commit().await.map_err(PersistenceFailure::from_source)?;
+            return Ok(RuntimeTransitionInboxReclaimRecord::Lost);
+        }
+
+        // The EXISTS guard is deliberately repeated on the mutation itself. The
+        // BEGIN IMMEDIATE reservation makes the pre-read stable, while this final CAS
+        // line is the mutation-killing proof that a stale token cannot clear leases.
+        let rows = sqlx::query(RECLAIM_INBOX_LEASES)
+            .bind(lock.agent_id().as_str())
+            .bind(lock.agent_id().as_str())
+            .bind(lock.target().as_str())
+            .bind(lock.started_at())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        let mut conversations = rows
+            .into_iter()
+            .map(|row| {
+                ConversationId::parse(row.try_get::<String, _>("conversation_id")?)
+                    .map_err(super::decode::decode_error)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(PersistenceFailure::from_source)?;
+        conversations.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        conversations.dedup();
+        tx.commit().await.map_err(PersistenceFailure::from_source)?;
+        Ok(RuntimeTransitionInboxReclaimRecord::Reclaimed(
+            RuntimeTransitionInboxReclaimRow {
+                lock: witness,
+                conversations,
+            },
+        ))
+    }
+}
+
+impl RuntimeTransitionSeatRead for SqliteHostAgentStore {
+    async fn read_transition_seats(
+        &self,
+        lock: &RuntimeTransitionLock,
+    ) -> Result<RuntimeTransitionSeatSnapshotRecord, PersistenceFailure> {
+        let mut tx = self
+            .pool()
+            .begin()
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        let Some(row) = sqlx::query(SELECT_HELD_TRANSITION)
+            .bind(lock.agent_id().as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(PersistenceFailure::from_source)?
+        else {
+            tx.commit().await.map_err(PersistenceFailure::from_source)?;
+            return Ok(RuntimeTransitionSeatSnapshotRecord::Lost);
+        };
+        let Some(witness) = held_lock_row(&row).map_err(PersistenceFailure::from_source)? else {
+            tx.commit().await.map_err(PersistenceFailure::from_source)?;
+            return Ok(RuntimeTransitionSeatSnapshotRecord::Lost);
+        };
+        if !marker_matches(lock, &witness) {
+            tx.commit().await.map_err(PersistenceFailure::from_source)?;
+            return Ok(RuntimeTransitionSeatSnapshotRecord::Lost);
+        }
+        let rows = sqlx::query(
+            "SELECT agent_id, conversation_id, observed_status, cli_session_id \
+               FROM agent_runtime_slots WHERE agent_id = ? ORDER BY id",
+        )
+        .bind(lock.agent_id().as_str())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(PersistenceFailure::from_source)?;
+        let seats = rows
+            .into_iter()
+            .map(|row| {
+                let agent = super::decode::agent_id(row.try_get::<String, _>("agent_id")?)?;
+                let conversation = row.try_get::<Option<String>, _>("conversation_id")?;
+                let scope = match conversation {
+                    Some(source) => RuntimeScope::ConversationSlot {
+                        agent,
+                        source: ConversationId::parse(source)
+                            .map_err(super::decode::decode_error)?,
+                    },
+                    None => RuntimeScope::AgentSlot { agent },
+                };
+                let observed_status =
+                    RuntimeObservedStatus::parse(&row.try_get::<String, _>("observed_status")?)
+                        .map_err(super::decode::decode_error)?;
+                Ok(RuntimeTransitionSeatRow {
+                    scope,
+                    observed_status,
+                    cli_session_id: row.try_get("cli_session_id")?,
+                })
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()
+            .map_err(PersistenceFailure::from_source)?;
+        tx.commit().await.map_err(PersistenceFailure::from_source)?;
+        Ok(RuntimeTransitionSeatSnapshotRecord::Snapshot(
+            RuntimeTransitionSeatSnapshotRow {
+                lock: witness,
+                seats,
+            },
+        ))
     }
 }
 

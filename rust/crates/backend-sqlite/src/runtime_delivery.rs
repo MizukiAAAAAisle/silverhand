@@ -37,7 +37,7 @@ use silverhand_backend_core::{
     },
 };
 use sqlx::{
-    Row, Sqlite, SqlitePool, Transaction,
+    Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use thiserror::Error;
@@ -123,6 +123,10 @@ impl SqliteRuntimeDeliveryStore {
             .begin_with(ROOT_WRITE_BEGIN)
             .await
             .map_err(persistence)?;
+        if !agent_transition_is_clear(&mut tx, principal.agent()).await? {
+            tx.commit().await.map_err(persistence)?;
+            return Ok(ClaimPendingInbox::Transitioning);
+        }
         if !principal_is_current(&mut tx, &host_id, &principal).await? {
             tx.commit().await.map_err(persistence)?;
             return Ok(ClaimPendingInbox::StaleCustody);
@@ -252,12 +256,19 @@ impl SqliteRuntimeDeliveryStore {
                     SET in_flight_owner = ?, in_flight_at = ?
                   WHERE id = ? AND conversation_id = ? AND agent_id = ?
                     AND delivered_at IS NULL AND failed_at IS NULL
-                    AND in_flight_owner IS NULL",
+                    AND in_flight_owner IS NULL
+                    AND EXISTS (
+                        SELECT 1 FROM agents
+                         WHERE id = ?
+                           AND runtime_transition_target IS NULL
+                           AND runtime_transition_started_at IS NULL
+                    )",
             )
             .bind(owner.as_str())
             .bind(now_ms)
             .bind(delivery.id().as_i64())
             .bind(conversation.as_str())
+            .bind(principal.agent().as_str())
             .bind(principal.agent().as_str())
             .execute(&mut *tx)
             .await
@@ -428,6 +439,28 @@ impl SqliteRuntimeDeliveryStore {
             presence_viewers,
         ))
     }
+}
+
+async fn agent_transition_is_clear(
+    connection: &mut SqliteConnection,
+    agent: &AgentId,
+) -> Result<bool, PersistenceFailure> {
+    let row = sqlx::query(
+        "SELECT runtime_transition_target, runtime_transition_started_at \
+           FROM agents WHERE id = ?",
+    )
+    .bind(agent.as_str())
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(persistence)?;
+    let Some(row) = row else { return Ok(false) };
+    let target: Option<String> = row
+        .try_get("runtime_transition_target")
+        .map_err(persistence)?;
+    let started_at: Option<i64> = row
+        .try_get("runtime_transition_started_at")
+        .map_err(persistence)?;
+    Ok(target.is_none() && started_at.is_none())
 }
 
 impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {

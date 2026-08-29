@@ -136,6 +136,7 @@ pub struct ClaimedInboxBatch {
 pub enum ClaimPendingInbox {
     Empty,
     StaleCustody,
+    Transitioning,
     Claimed(ClaimedInboxBatch),
 }
 

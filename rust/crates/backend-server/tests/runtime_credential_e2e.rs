@@ -23,8 +23,12 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
+    agents::runtime::RuntimeKind,
     identity::{AgentId, ConversationId, DaemonInstanceId},
-    runtime_credential::{RuntimeFinalStatus, RuntimePrincipal, RuntimeScope},
+    runtime_credential::{
+        AgentSlotPresentationFocusPort, RuntimeFinalStatus, RuntimePrincipal, RuntimeScope,
+    },
+    runtime_transition::{BeginTransition, begin_runtime_transition},
 };
 use silverhand_backend_server::{
     clock::ProcessClock,
@@ -34,7 +38,9 @@ use silverhand_backend_server::{
         RuntimeStartTransport, RuntimeStopTransport, require_runtime_credential,
     },
 };
-use silverhand_backend_sqlite::runtime_credential::SqliteRuntimeCustodyStore;
+use silverhand_backend_sqlite::{
+    host_agent::SqliteHostAgentStore, runtime_credential::SqliteRuntimeCustodyStore,
+};
 use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
 use tempfile::TempDir;
 use thiserror::Error;
@@ -321,12 +327,135 @@ impl RuntimeStopTransport for StopTransport {
 async fn issue(authority: &Authority, scope: RuntimeScope, daemon_instance: &str) -> StartRecord {
     let transport = StartTransport::new(StartOutcome::Accepted);
     let principal = authority
-        .dispatch_start(scope, daemon(daemon_instance), &transport)
+        .dispatch_start(scope, daemon(daemon_instance), origin(), &transport)
         .await
         .unwrap();
     let record = transport.last();
     assert_eq!(record.principal, principal);
     record
+}
+
+fn origin() -> ConversationId {
+    ConversationId::parse(SOURCE).unwrap()
+}
+
+#[tokio::test]
+async fn held_transition_marker_refuses_before_custody_mutation_or_transport() {
+    let fixture = fixture().await;
+    let transitions = SqliteHostAgentStore::open(&fixture.path).await.unwrap();
+    let BeginTransition::Started(_lock) = begin_runtime_transition(
+        &transitions,
+        &AgentId::parse(CONVERSATION_AGENT).unwrap(),
+        RuntimeKind::Claude,
+        50,
+    )
+    .await
+    .unwrap() else {
+        panic!("transition lock");
+    };
+    let mut db = open(&fixture.path).await;
+    let before: (i64, Option<String>, String, i64) = sqlx::query_as(
+        "SELECT generation, claimed_by_daemon_instance_id, observed_status, \
+                (SELECT count(*) FROM agent_runtime_events WHERE agent_id=?) \
+           FROM agent_runtime_slots WHERE agent_id=? AND conversation_id=?",
+    )
+    .bind(CONVERSATION_AGENT)
+    .bind(CONVERSATION_AGENT)
+    .bind(SOURCE)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    let transport = StartTransport::new(StartOutcome::Accepted);
+    let result = fixture
+        .authority
+        .dispatch_start(
+            conversation_scope(),
+            daemon("daemon-1"),
+            origin(),
+            &transport,
+        )
+        .await;
+    assert!(matches!(result, Err(RuntimeStartFailure::MissingSlot)));
+    assert_eq!(transport.call_count(), 0);
+    let after: (i64, Option<String>, String, i64) = sqlx::query_as(
+        "SELECT generation, claimed_by_daemon_instance_id, observed_status, \
+                (SELECT count(*) FROM agent_runtime_events WHERE agent_id=?) \
+           FROM agent_runtime_slots WHERE agent_id=? AND conversation_id=?",
+    )
+    .bind(CONVERSATION_AGENT)
+    .bind(CONVERSATION_AGENT)
+    .bind(SOURCE)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn a_real_current_custody_started_retry_installs_and_updates_agent_slot_focus() {
+    let fixture = fixture().await;
+    let ambiguous = StartTransport::new(StartOutcome::Ambiguous);
+    let result = fixture
+        .authority
+        .dispatch_start(agent_scope(), daemon("daemon-agent"), origin(), &ambiguous)
+        .await;
+    assert!(matches!(result, Err(RuntimeStartFailure::Ambiguous(_))));
+    let principal = ambiguous.last().principal;
+    assert_eq!(
+        fixture
+            .authority
+            .agent_slot_presentation_focus(principal.clone())
+            .await
+            .unwrap(),
+        None
+    );
+
+    let retry_origin = ConversationId::parse("target-2").unwrap();
+    let retry = StartTransport::new(StartOutcome::Accepted);
+    let retried = fixture
+        .authority
+        .dispatch_start(
+            agent_scope(),
+            daemon("daemon-agent"),
+            retry_origin.clone(),
+            &retry,
+        )
+        .await
+        .unwrap();
+    assert_eq!(retried, principal);
+    assert_eq!(retry.last().principal, principal);
+    assert_eq!(
+        fixture
+            .authority
+            .agent_slot_presentation_focus(principal.clone())
+            .await
+            .unwrap(),
+        Some(retry_origin)
+    );
+
+    let latest_origin = ConversationId::parse("focus-latest").unwrap();
+    let repeat = StartTransport::new(StartOutcome::Accepted);
+    assert_eq!(
+        fixture
+            .authority
+            .dispatch_start(
+                agent_scope(),
+                daemon("daemon-agent"),
+                latest_origin.clone(),
+                &repeat,
+            )
+            .await
+            .unwrap(),
+        principal
+    );
+    assert_eq!(
+        fixture
+            .authority
+            .agent_slot_presentation_focus(principal)
+            .await
+            .unwrap(),
+        Some(latest_origin)
+    );
 }
 
 #[derive(Clone)]
@@ -537,7 +666,7 @@ async fn proven_non_dispatch_compensates_but_ambiguous_dispatch_remains_live() {
     let proven = StartTransport::new(StartOutcome::ProvenNotDispatched);
     let failure = fixture
         .authority
-        .dispatch_start(conversation_scope(), daemon("daemon-1"), &proven)
+        .dispatch_start(conversation_scope(), daemon("daemon-1"), origin(), &proven)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -557,7 +686,7 @@ async fn proven_non_dispatch_compensates_but_ambiguous_dispatch_remains_live() {
     let ambiguous = StartTransport::new(StartOutcome::Ambiguous);
     let failure = fixture
         .authority
-        .dispatch_start(agent_scope(), daemon("daemon-agent"), &ambiguous)
+        .dispatch_start(agent_scope(), daemon("daemon-agent"), origin(), &ambiguous)
         .await
         .unwrap_err();
     assert!(matches!(failure, RuntimeStartFailure::Ambiguous(_)));
@@ -598,7 +727,7 @@ async fn proven_non_dispatch_compensates_but_ambiguous_dispatch_remains_live() {
     let retry = StartTransport::new(StartOutcome::ProvenNotDispatched);
     let _ = fixture
         .authority
-        .dispatch_start(conversation_scope(), daemon("daemon-2"), &retry)
+        .dispatch_start(conversation_scope(), daemon("daemon-2"), origin(), &retry)
         .await
         .unwrap_err();
     assert_eq!(
@@ -636,7 +765,12 @@ async fn same_scope_lifecycle_is_serial_but_different_scopes_progress_independen
         let transport = blocked.clone();
         tokio::spawn(async move {
             authority
-                .dispatch_start(conversation_scope(), daemon("daemon-1"), &transport)
+                .dispatch_start(
+                    conversation_scope(),
+                    daemon("daemon-1"),
+                    origin(),
+                    &transport,
+                )
                 .await
         })
     };
@@ -645,9 +779,12 @@ async fn same_scope_lifecycle_is_serial_but_different_scopes_progress_independen
     let independent = StartTransport::new(StartOutcome::Accepted);
     let independent_principal = timeout(
         HANG_LIMIT,
-        fixture
-            .authority
-            .dispatch_start(agent_scope(), daemon("daemon-agent"), &independent),
+        fixture.authority.dispatch_start(
+            agent_scope(),
+            daemon("daemon-agent"),
+            origin(),
+            &independent,
+        ),
     )
     .await
     .expect("a different scope must not wait for the blocked conversation scope")
@@ -663,7 +800,12 @@ async fn same_scope_lifecycle_is_serial_but_different_scopes_progress_independen
         let transport = successor.clone();
         tokio::spawn(async move {
             authority
-                .dispatch_start(conversation_scope(), daemon("daemon-1"), &transport)
+                .dispatch_start(
+                    conversation_scope(),
+                    daemon("daemon-1"),
+                    origin(),
+                    &transport,
+                )
                 .await
         })
     };
@@ -703,7 +845,12 @@ async fn hydrate_reconcile_cannot_finalize_a_same_scope_handoff_in_flight() {
         let transport = blocked.clone();
         tokio::spawn(async move {
             authority
-                .dispatch_start(conversation_scope(), daemon("daemon-1"), &transport)
+                .dispatch_start(
+                    conversation_scope(),
+                    daemon("daemon-1"),
+                    origin(),
+                    &transport,
+                )
                 .await
         })
     };
@@ -900,7 +1047,12 @@ async fn entropy_failure_happens_before_a_custody_claim() {
     let authority = RuntimeCredentialAuthority::new(fixture.store, FailingEntropy, FixedClock);
     let transport = StartTransport::new(StartOutcome::Accepted);
     let failure = authority
-        .dispatch_start(conversation_scope(), daemon("daemon-1"), &transport)
+        .dispatch_start(
+            conversation_scope(),
+            daemon("daemon-1"),
+            origin(),
+            &transport,
+        )
         .await
         .unwrap_err();
     assert!(matches!(
