@@ -1,0 +1,1609 @@
+//! Authenticated create face for `POST /api/agents`: the public agent-provisioning
+//! saga — reserve → materialize on the host → provision the dependent graph — behind
+//! a wire-admission gate, wrapped around the core [`create_agent`] unit of work.
+//!
+//! ## The ladder (parity with `application/create-agent.ts` + `routes/agents.ts`)
+//!
+//!  1. PRINCIPAL — the human principal is proof the authenticating perimeter ran; its
+//!     ABSENCE is a composition fault, not a product request, so it takes a fail-closed
+//!     `500` reading nothing. Create has NO visibility/authority ladder: any
+//!     authenticated caller may create, and the principal IS the creator. This router
+//!     stays UNMOUNTED; mounting the real bearer perimeter is the composition root's
+//!     job. The auth gate staying pre-body matches the ratified admission ordering.
+//!  2. WIRE ADMISSION (body) — parse against `CreateAgentInputSchema`: the handle
+//!     grammar, the runtime enum, the reasoning-effort token shape AND its
+//!     runtime/model allowlist, the fast-mode runtime allowlist, and the session-scope
+//!     enum. A malformed body, a type mismatch, an out-of-range value, and any illegal
+//!     combo all collapse to ONE terminal `400 {"error":"invalid input"}`. (The Zod
+//!     `issues` array is deliberately dropped — the ratified `PATCH /api/agents`
+//!     precedent; no consumer branches on it.) `host_id: ""` is FALSY in the TS
+//!     placement check, so an empty host maps to `None` (default placement), never a
+//!     named host.
+//!  3. WIRE ADMISSION (Idempotency-Key header, design §14 Q1) — the header MUST be
+//!     present and match `/^[A-Za-z0-9_-]{1,64}$/`. Absent/empty → `400`
+//!     `idempotency_key_missing`; present-but-malformed → `400`
+//!     `idempotency_key_malformed`. Body admission precedes key admission, matching TS.
+//!  4. UNIT OF WORK — hand the admitted input, key, and `?retry=true` flag to the core
+//!     [`create_agent`], which owns the whole saga: idempotency dispatch, in-core
+//!     placement (returning a typed [`RuntimePlacementRefusal`], mapped through the ONE
+//!     canonical [`placement_refusal`] authority — an improvement over the TS
+//!     error-sniffing), handle/connectivity gates, the reserve INSERT, the host
+//!     materialize dispatch, and the flip-active + dependent-graph provisioning
+//!     transaction. It returns a sealed [`CreateAgentOutcome`] or a safe-`500`
+//!     [`CreateAgentFault`].
+//!  5. RESPOND + EFFECTS — map the outcome to its exact HTTP body; on the `Created`
+//!     arm (and ONLY it) reproject the committed agent through the canonical
+//!     `agent_detail` projector and fire the best-effort post-commit effects in the TS
+//!     order. `Echo` reprojects too but fires nothing (the effects ran on the original
+//!     creation). Every fault is a detail-free safe `500`.
+//!
+//! ## Post-commit effects (parity with `buildPostCommitEffects`)
+//!
+//! Fired ONLY on `Created`, best-effort (a failure is logged, never flips the `201`):
+//!
+//!  - `direct_pairs_changed(creator, direct_line)` — agent-scoped arm ONLY, and ONLY
+//!    when the creator↔agent pair was freshly minted (`pair_created`). A resolved
+//!    existing line is not new to the creator, so no edge fires.
+//!  - `agent_changed(agent)` — the app-scope announce.
+//!  - `deliver(destination, agent, onboarding_message_id)` — the onboarding message.
+//!  - `start(destination, agent)` — the runtime auto-start.
+//!
+//! The order matches TS: the agent arm prepends the direct-pairs edge to
+//! `[announce, deliver, start]`; the conversation arm fires the last three only.
+//!
+//! ## Named divergences, reachability-priced (flagged for review)
+//!
+//!  - **`materializeFailed` message is synthesized per-code.** The core carries only
+//!    the failure `code`, not the raw driver message TS passes through verbatim, so
+//!    this route synthesizes a stable per-code string. No client branches on the
+//!    message (the `code` is the actionable signal); the status map is reproduced
+//!    exactly.
+//!  - **A `MaterializeTransport` fault is a safe `500` (row left pending).** The core
+//!    classifies only host REFUSALS into `MaterializeFailed` codes; a transport break
+//!    is a fault and the row is left pending for the boot sweep, rather than TS's
+//!    transport→`host_attach_pending`/`materialize_timeout` classification + flip.
+//!  - **`corruptGraph` is a detail-free bare-text `500`**, not the TS JSON
+//!    `{error:message, code:'internal_error'}`. All faults share the lane's bare `500`.
+//!  - **`NameTaken` folds the two TS messages into one** fixed `agent name already
+//!    exists` (code `agent_name_taken`), since the core carries no message.
+
+use std::future::Future;
+use std::sync::Arc;
+
+use axum::{
+    Json, Router,
+    body::Bytes,
+    extract::{Extension, RawQuery, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    routing::post,
+};
+use serde::Serialize;
+use serde_json::json;
+use silverhand_backend_core::{
+    agent_creation::{
+        AgentGraphRead, CreateAgentFault, CreateAgentInput, CreateAgentOutcome, CreateAgentPorts,
+        CreatedAgent, CreatedArm, CreatedCoordinates, EchoedAgent, HostConnectivity,
+        MaterializeFailureCode, create_agent,
+    },
+    agent_detail_read::AgentDetailReadModel,
+    agent_materialization::{
+        AgentArmProvisioningPort, AgentMaterializationLookup, AgentMaterializationWrite,
+        IdempotencyKey,
+    },
+    agent_materialize::AgentMaterializePort,
+    agent_profile_write::AgentChangedSink,
+    agents::{
+        runtime::RuntimeKind,
+        runtime_capability::{reasoning_effort_valid_for_runtime, runtime_supports_fast_mode},
+        session_scope::AgentSessionScope,
+    },
+    host_runtime::read::ComputerReadModel,
+    identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
+    messaging::{
+        MessageId,
+        environment::SendEntropy,
+        post_commit::{EffectFailure, RuntimeStart},
+    },
+    user_identity::ParticipantHandle,
+};
+
+use crate::agent_wire::{AgentDto, reproject_committed_agent};
+use crate::clock::ProcessClock;
+use crate::error;
+use crate::messaging::collaboration::runtime_control::placement_refusal;
+
+/// The product route template. `POST` on the collection; the composition root mounts it
+/// alongside the `GET` list on the same path at mount time.
+pub const AGENT_CREATE_PATH: &str = "/api/agents";
+
+// ===========================================================================
+// The two route-local post-commit effect ports
+// ===========================================================================
+
+/// Deliver the onboarding system message to its destination conversation. The core
+/// hands the route a loose `(conversation, agent, message)` coordinate — consistent
+/// with [`RuntimeStart`] — because the onboarding message id is already sealed out of
+/// the provisioning transaction; no existing core delivery port takes this triple (the
+/// mention-copy delivery binds its conversation from a sealed message value). Declared
+/// here as the create face's narrow view; the production adapter is a named seam at
+/// mount.
+pub trait OnboardingDelivery: Clone + Send + Sync + 'static {
+    fn deliver(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        message: &MessageId,
+    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+}
+
+/// Publish the creator's direct-pairs invalidation when a fresh creator↔agent pair
+/// opened. No core trait exists for this (only the concrete hub method), so the create
+/// face declares its narrow view; the production adapter is a named seam at mount.
+pub trait DirectPairsChanged: Clone + Send + Sync + 'static {
+    fn direct_pairs_changed(
+        &self,
+        viewer: &UserId,
+        conversation: &ConversationId,
+    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+}
+
+// ===========================================================================
+// Router + state
+// ===========================================================================
+
+#[allow(clippy::type_complexity)]
+struct StateInner<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL> {
+    computers: C,
+    connectivity: N,
+    handles: H,
+    materialization: M,
+    materialize: R,
+    provisioning: V,
+    graph: G,
+    entropy: E,
+    reads: RD,
+    sink: S,
+    runtime_start: RS,
+    onboarding: OD,
+    direct_pairs: DP,
+    clock: CL,
+}
+
+#[allow(clippy::type_complexity)]
+struct CreateState<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>(
+    Arc<StateInner<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>>,
+);
+
+impl<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL> Clone
+    for CreateState<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>
+{
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+/// Compose the UNMOUNTED create face over its ports: the eight core authorities the
+/// [`create_agent`] unit of work drives, the detail read model the post-commit
+/// reprojection rides, and the four post-commit effect sinks. Every port is injected;
+/// mounting the real adapters (and, for [`OnboardingDelivery`]/[`DirectPairsChanged`],
+/// the named production seams) is the composition root's job.
+#[allow(clippy::too_many_arguments)]
+pub fn router<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>(
+    computers: C,
+    connectivity: N,
+    handles: H,
+    materialization: M,
+    materialize: R,
+    provisioning: V,
+    graph: G,
+    entropy: E,
+    reads: RD,
+    sink: S,
+    runtime_start: RS,
+    onboarding: OD,
+    direct_pairs: DP,
+    clock: CL,
+) -> Router
+where
+    C: ComputerReadModel,
+    N: HostConnectivity + Send + Sync + 'static,
+    H: AgentMaterializationLookupHandles,
+    M: AgentMaterializationLookup + AgentMaterializationWrite + Send + Sync + 'static,
+    R: AgentMaterializePort,
+    V: AgentArmProvisioningPort + Send + Sync + 'static,
+    G: AgentGraphRead + Send + Sync + 'static,
+    E: SendEntropy + Send + Sync + 'static,
+    RD: AgentDetailReadModel + Send + Sync + 'static,
+    S: AgentChangedSink,
+    RS: RuntimeStart + Send + Sync + 'static,
+    OD: OnboardingDelivery,
+    DP: DirectPairsChanged,
+    CL: ProcessClock,
+{
+    let state = CreateState(Arc::new(StateInner {
+        computers,
+        connectivity,
+        handles,
+        materialization,
+        materialize,
+        provisioning,
+        graph,
+        entropy,
+        reads,
+        sink,
+        runtime_start,
+        onboarding,
+        direct_pairs,
+        clock,
+    }));
+    Router::new()
+        .route(
+            AGENT_CREATE_PATH,
+            post(agent_create::<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>),
+        )
+        .with_state(state)
+}
+
+/// A blanket-satisfied alias: the handle namespace read already carries the full
+/// `Clone`/`Send`/`Sync`/`'static` bundle by its own supertrait bounds, named here only
+/// to keep the `router` where-clause readable.
+pub trait AgentMaterializationLookupHandles:
+    silverhand_backend_core::human_auth_flows::HandleNamespaceRead
+{
+}
+impl<T> AgentMaterializationLookupHandles for T where
+    T: silverhand_backend_core::human_auth_flows::HandleNamespaceRead
+{
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+async fn agent_create<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>(
+    State(state): State<CreateState<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>>,
+    principal: Option<Extension<UserId>>,
+    headers: HeaderMap,
+    RawQuery(raw_query): RawQuery,
+    body: Bytes,
+) -> Response
+where
+    C: ComputerReadModel,
+    N: HostConnectivity + Send + Sync + 'static,
+    H: AgentMaterializationLookupHandles,
+    M: AgentMaterializationLookup + AgentMaterializationWrite + Send + Sync + 'static,
+    R: AgentMaterializePort,
+    V: AgentArmProvisioningPort + Send + Sync + 'static,
+    G: AgentGraphRead + Send + Sync + 'static,
+    E: SendEntropy + Send + Sync + 'static,
+    RD: AgentDetailReadModel + Send + Sync + 'static,
+    S: AgentChangedSink,
+    RS: RuntimeStart + Send + Sync + 'static,
+    OD: OnboardingDelivery,
+    DP: DirectPairsChanged,
+    CL: ProcessClock,
+{
+    let inner = &state.0;
+
+    // PRINCIPAL — the auth gate; its absence is a composition fault, not a request.
+    let Some(Extension(actor)) = principal else {
+        tracing::error!("agent-create route reached without its human principal fact");
+        return internal_error();
+    };
+
+    // WIRE ADMISSION (body) — one terminal `invalid input` for every field/combo fault.
+    let Some(input) = parse_create_input(&body) else {
+        return invalid_input();
+    };
+
+    // WIRE ADMISSION (Idempotency-Key header) — after the body, matching TS.
+    let key = match parse_idempotency_key(&headers) {
+        Ok(key) => key,
+        Err(rejection) => return rejection.into_response(),
+    };
+
+    let retry = wants_retry(&raw_query);
+    let now_ms = inner.clock.now_unix_millis();
+
+    let ports = CreateAgentPorts {
+        computers: &inner.computers,
+        connectivity: &inner.connectivity,
+        handles: &inner.handles,
+        materialization: &inner.materialization,
+        materialize: &inner.materialize,
+        provisioning: &inner.provisioning,
+        graph: &inner.graph,
+        entropy: &inner.entropy,
+    };
+
+    let result = create_agent(&ports, &actor, &key, input, retry, now_ms).await;
+
+    finish(
+        result,
+        &inner.reads,
+        &inner.sink,
+        &inner.runtime_start,
+        &inner.onboarding,
+        &inner.direct_pairs,
+        &actor,
+    )
+    .await
+}
+
+/// Map the unit-of-work result to its HTTP response, reprojecting the committed agent
+/// and firing the post-commit effects on the `Created` arm. Isolated from the port
+/// wiring so the outcome→HTTP contract and the effect fan-out are tested directly.
+#[allow(clippy::too_many_arguments)]
+async fn finish<RD, S, RS, OD, DP>(
+    result: Result<CreateAgentOutcome, CreateAgentFault>,
+    reads: &RD,
+    sink: &S,
+    runtime_start: &RS,
+    onboarding: &OD,
+    direct_pairs: &DP,
+    actor: &UserId,
+) -> Response
+where
+    RD: AgentDetailReadModel,
+    S: AgentChangedSink,
+    RS: RuntimeStart,
+    OD: OnboardingDelivery,
+    DP: DirectPairsChanged,
+{
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(fault) => {
+            tracing::error!(
+                error_chain = %error::describe(&fault),
+                "agent-create unit of work faulted"
+            );
+            return internal_error();
+        }
+    };
+
+    match outcome {
+        CreateAgentOutcome::Created(created) => {
+            let CreatedAgent { agent_id, arm } = created;
+            let dto = match reproject_committed_agent(reads, &agent_id).await {
+                Ok(dto) => dto,
+                Err(fault) => return fault.into_safe_500("agent-create", &agent_id),
+            };
+
+            // Post-commit effects, best-effort, in the TS order. A failure is logged,
+            // never flips the `201` — the write is durable.
+            if let CreatedArm::Agent {
+                direct_line,
+                pair_created,
+                ..
+            } = &arm
+                && *pair_created
+                && let Err(failure) = direct_pairs.direct_pairs_changed(actor, direct_line).await
+            {
+                tracing::error!(
+                    agent_id = agent_id.as_str(),
+                    error_chain = %error::describe(&failure),
+                    "agent-create direct-pairs edge failed"
+                );
+            }
+            if let Err(failure) = sink.agent_changed(&agent_id).await {
+                tracing::error!(
+                    agent_id = agent_id.as_str(),
+                    error_chain = %error::describe(&failure),
+                    "agent-create agent_changed announce failed"
+                );
+            }
+            if let Err(failure) = onboarding
+                .deliver(arm.destination(), &agent_id, arm.onboarding_message_id())
+                .await
+            {
+                tracing::error!(
+                    agent_id = agent_id.as_str(),
+                    error_chain = %error::describe(&failure),
+                    "agent-create onboarding delivery failed"
+                );
+            }
+            if let Err(failure) = runtime_start.start(arm.destination(), &agent_id).await {
+                tracing::error!(
+                    agent_id = agent_id.as_str(),
+                    error_chain = %error::describe(&failure),
+                    "agent-create runtime start failed"
+                );
+            }
+
+            coordinates_response(StatusCode::CREATED, dto, &arm.coordinates())
+        }
+        CreateAgentOutcome::Echo(echoed) => {
+            let EchoedAgent {
+                agent_id,
+                coordinates,
+            } = echoed;
+            let dto = match reproject_committed_agent(reads, &agent_id).await {
+                Ok(dto) => dto,
+                Err(fault) => return fault.into_safe_500("agent-create-echo", &agent_id),
+            };
+            coordinates_response(StatusCode::OK, dto, &coordinates)
+        }
+        CreateAgentOutcome::InProgress => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "an in-flight materialize for this key is still pending",
+                "code": "materialization_in_progress",
+            })),
+        )
+            .into_response(),
+        CreateAgentOutcome::PreviouslyFailed {
+            failed_code,
+            failed_at,
+        } => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": format!(
+                    "previous materialize attempt failed ({failed_code}); resend with ?retry=true to retry this row, or use a fresh Idempotency-Key for a new attempt"
+                ),
+                "code": "materialization_previously_failed",
+                "failed_code": failed_code,
+                "failed_at": failed_at,
+            })),
+        )
+            .into_response(),
+        CreateAgentOutcome::MetadataMismatch { field } => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!(
+                    "Idempotency-Key reuse: request body differs from the original at field '{}'. Use a fresh Idempotency-Key for a different agent.",
+                    field.as_str()
+                ),
+                "code": "idempotency_metadata_mismatch",
+                "mismatched_field": field.as_str(),
+            })),
+        )
+            .into_response(),
+        CreateAgentOutcome::RetryTargetNotFound => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "no prior agent found for this Idempotency-Key; use a fresh-key POST to create a new agent",
+                "code": "retry_target_not_found",
+            })),
+        )
+            .into_response(),
+        CreateAgentOutcome::RetryTargetNotFailed => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "agent row is no longer in failed state; refresh and try again",
+                "code": "retry_target_not_failed",
+            })),
+        )
+            .into_response(),
+        CreateAgentOutcome::NameTaken => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "agent name already exists", "code": "agent_name_taken" })),
+        )
+            .into_response(),
+        CreateAgentOutcome::PlacementRefused(refusal) => placement_refusal(refusal),
+        CreateAgentOutcome::HostAttachPending => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "host runtime is not currently attached",
+                "code": "host_attach_pending",
+            })),
+        )
+            .into_response(),
+        CreateAgentOutcome::MaterializeFailed { code } => (
+            materialize_failure_status(code),
+            Json(json!({ "error": materialize_failure_message(code), "code": code.as_str() })),
+        )
+            .into_response(),
+    }
+}
+
+/// The `{ agent, agent_home_workspace_id, dm_channel_id, onboarding_message_id }` body
+/// the `Created` (`201`) and `Echo` (`200`) arms share. The three coordinates are all
+/// `null` for an agent-scoped agent and all present for a conversation-scoped one.
+fn coordinates_response(
+    status: StatusCode,
+    agent: AgentDto,
+    coords: &CreatedCoordinates,
+) -> Response {
+    (
+        status,
+        Json(CoordinatesResponse {
+            agent,
+            agent_home_workspace_id: coords
+                .agent_home_workspace_id
+                .as_ref()
+                .map(WorkspaceId::as_str),
+            dm_channel_id: coords.dm_channel_id.as_ref().map(ConversationId::as_str),
+            onboarding_message_id: coords.onboarding_message_id.as_ref().map(MessageId::as_str),
+        }),
+    )
+        .into_response()
+}
+
+#[derive(Serialize)]
+struct CoordinatesResponse<'a> {
+    agent: AgentDto,
+    agent_home_workspace_id: Option<&'a str>,
+    dm_channel_id: Option<&'a str>,
+    onboarding_message_id: Option<&'a str>,
+}
+
+/// The HTTP status for each host-materialize failure code (parity with the route's
+/// `mapAgentCreateFailureToStatus`). The core enum has no `dependent_row_insert_failed`
+/// — that path is a [`CreateAgentFault`] safe `500` here, not a materialize code.
+fn materialize_failure_status(code: MaterializeFailureCode) -> StatusCode {
+    match code {
+        MaterializeFailureCode::DaemonInternalError => StatusCode::BAD_GATEWAY,
+        MaterializeFailureCode::HostAttachPending => StatusCode::SERVICE_UNAVAILABLE,
+        MaterializeFailureCode::MaterializeTimeout => StatusCode::GATEWAY_TIMEOUT,
+        MaterializeFailureCode::AgentDirCollision => StatusCode::CONFLICT,
+        MaterializeFailureCode::FsQuotaExceeded => StatusCode::INSUFFICIENT_STORAGE,
+        MaterializeFailureCode::FsUnavailable => StatusCode::BAD_GATEWAY,
+        MaterializeFailureCode::UnsupportedTemplate => StatusCode::BAD_REQUEST,
+        MaterializeFailureCode::UnsupportedRuntime => StatusCode::BAD_REQUEST,
+        MaterializeFailureCode::DaemonShuttingDown => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+/// A stable per-code message. DIVERGENCE (flagged): the core carries only the failure
+/// `code`, not the raw driver message the TS route echoes; no client branches on the
+/// message string, so a synthesized per-code sentence preserves the observable `code`
+/// contract without inventing driver detail.
+fn materialize_failure_message(code: MaterializeFailureCode) -> &'static str {
+    match code {
+        MaterializeFailureCode::DaemonInternalError => {
+            "the host daemon failed to materialize the agent"
+        }
+        MaterializeFailureCode::HostAttachPending => "host runtime is not currently attached",
+        MaterializeFailureCode::MaterializeTimeout => {
+            "the host daemon did not acknowledge the materialize in time"
+        }
+        MaterializeFailureCode::AgentDirCollision => {
+            "the agent directory already exists on the host"
+        }
+        MaterializeFailureCode::FsQuotaExceeded => {
+            "the host has no free space to materialize the agent"
+        }
+        MaterializeFailureCode::FsUnavailable => "the host filesystem is unavailable",
+        MaterializeFailureCode::UnsupportedTemplate => {
+            "the host does not support the requested agent template"
+        }
+        MaterializeFailureCode::UnsupportedRuntime => {
+            "the host does not support the requested runtime"
+        }
+        MaterializeFailureCode::DaemonShuttingDown => "the host daemon is shutting down",
+    }
+}
+
+// ===========================================================================
+// Body admission
+// ===========================================================================
+
+/// The raw JSON shape. `#[serde(default)]` on every field makes them all optional at
+/// the deserialize layer (so the required-field rules live below), and unknown keys are
+/// ignored — mirroring Zod `.object`'s strip-unknown. A type mismatch (e.g. a number
+/// where a string/bool is expected) fails the whole parse → `invalid input`.
+#[derive(serde::Deserialize)]
+struct RawCreateBody {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    runtime: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    reasoning_effort: Option<String>,
+    #[serde(default)]
+    fast_mode: Option<bool>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    host_id: Option<String>,
+    #[serde(default)]
+    session_scope: Option<String>,
+}
+
+/// Admit the body against `CreateAgentInputSchema` + its `superRefine`. `None` is the
+/// ONE terminal `invalid input` for every fault (issues dropped, PATCH precedent). All
+/// format legality is settled HERE, before the core value is built (the core trusts it).
+fn parse_create_input(body: &Bytes) -> Option<CreateAgentInput> {
+    let raw: RawCreateBody = serde_json::from_slice(body).ok()?;
+
+    // `name` and `runtime` are required; the handle grammar and the runtime enum are
+    // the field-level schemas.
+    let name = ParticipantHandle::parse(raw.name?.as_str()).ok()?;
+    let runtime = RuntimeKind::parse(&raw.runtime?)?;
+
+    // `reasoning_effort`: the token SHAPE (ReasoningEffortTokenSchema) then the
+    // runtime/model allowlist (the superRefine). A present token must clear both.
+    if let Some(token) = raw.reasoning_effort.as_deref()
+        && !is_reasoning_token(token)
+    {
+        return None;
+    }
+    if !reasoning_effort_valid_for_runtime(
+        runtime,
+        raw.reasoning_effort.as_deref(),
+        raw.model.as_deref(),
+    ) {
+        return None;
+    }
+
+    // `fast_mode`: only a fast-mode-capable runtime may carry the tri-state at all.
+    if raw.fast_mode.is_some() && !runtime_supports_fast_mode(runtime) {
+        return None;
+    }
+
+    // `session_scope`: the enum, when present. Absent defaults to Conversation in core.
+    let session_scope = match raw.session_scope.as_deref() {
+        None => None,
+        Some(scope) => Some(AgentSessionScope::parse(scope)?),
+    };
+
+    // `host_id`: empty/absent → default placement (TS truthy check); a non-empty string
+    // always parses (the id newtype rejects only the empty string) and lets core
+    // placement decide ownership/attachment.
+    let host_id = match raw.host_id.as_deref() {
+        Some(host) if !host.is_empty() => Some(HostId::parse(host).ok()?),
+        _ => None,
+    };
+
+    Some(CreateAgentInput {
+        name,
+        runtime,
+        model: raw.model,
+        reasoning_effort: raw.reasoning_effort,
+        fast_mode: raw.fast_mode,
+        description: raw.description,
+        host_id,
+        session_scope,
+    })
+}
+
+/// `ReasoningEffortTokenSchema`: `.min(1).max(32)` code units, `/^[a-z][a-z0-9_-]*$/`.
+/// Every legal token is ASCII, so byte length equals code-unit length.
+fn is_reasoning_token(token: &str) -> bool {
+    let length = token.chars().count();
+    if !(REASONING_TOKEN_MIN..=REASONING_TOKEN_MAX).contains(&length) {
+        return false;
+    }
+    let mut chars = token.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_lowercase() {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
+const REASONING_TOKEN_MIN: usize = 1;
+const REASONING_TOKEN_MAX: usize = 32;
+
+/// Parse the `Idempotency-Key` header (design §14 Q1). Absent or empty → the `missing`
+/// refusal (TS `!raw` treats an empty string as absent); present but not matching
+/// `/^[A-Za-z0-9_-]{1,64}$/` → `malformed`.
+/// Why an `Idempotency-Key` header was refused. A cheap descriptor rather than an
+/// eagerly-built `Response`, so the `Result` stays small (`result_large_err`) and the
+/// helper is unit-testable by code — the `400` body is built at the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdempotencyKeyRejection {
+    /// Header absent, or present but the empty string (TS `!raw`).
+    Missing,
+    /// Present but not matching `/^[A-Za-z0-9_-]{1,64}$/`.
+    Malformed,
+}
+
+impl IdempotencyKeyRejection {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Missing => idempotency_error(
+                IDEMPOTENCY_KEY_MISSING_CODE,
+                IDEMPOTENCY_KEY_MISSING_MESSAGE,
+            ),
+            Self::Malformed => idempotency_error(
+                IDEMPOTENCY_KEY_MALFORMED_CODE,
+                IDEMPOTENCY_KEY_MALFORMED_MESSAGE,
+            ),
+        }
+    }
+}
+
+fn parse_idempotency_key(headers: &HeaderMap) -> Result<IdempotencyKey, IdempotencyKeyRejection> {
+    match headers.get("Idempotency-Key") {
+        None => Err(IdempotencyKeyRejection::Missing),
+        Some(value) => {
+            // A present but non-visible-ASCII header can never match the pattern.
+            let raw = value
+                .to_str()
+                .map_err(|_| IdempotencyKeyRejection::Malformed)?;
+            if raw.is_empty() {
+                return Err(IdempotencyKeyRejection::Missing);
+            }
+            IdempotencyKey::parse(raw).map_err(|_| IdempotencyKeyRejection::Malformed)
+        }
+    }
+}
+
+/// `c.req.query('retry') === 'true'`: the single key matched literally, absent → false.
+/// Shared shape with the delete face's retry flag.
+fn wants_retry(raw_query: &Option<String>) -> bool {
+    let Some(query) = raw_query else {
+        return false;
+    };
+    query.split('&').any(|pair| {
+        let mut kv = pair.splitn(2, '=');
+        kv.next() == Some("retry") && kv.next() == Some("true")
+    })
+}
+
+// ===========================================================================
+// Responses
+// ===========================================================================
+
+const INVALID_INPUT: &str = "invalid input";
+const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
+
+const IDEMPOTENCY_KEY_MISSING_CODE: &str = "idempotency_key_missing";
+const IDEMPOTENCY_KEY_MISSING_MESSAGE: &str =
+    "POST /api/agents requires Idempotency-Key header (1..64 chars, [A-Za-z0-9_-])";
+const IDEMPOTENCY_KEY_MALFORMED_CODE: &str = "idempotency_key_malformed";
+const IDEMPOTENCY_KEY_MALFORMED_MESSAGE: &str =
+    "Idempotency-Key must match /^[A-Za-z0-9_-]{1,64}$/ (per design §14 Q1)";
+
+fn invalid_input() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": INVALID_INPUT })),
+    )
+        .into_response()
+}
+
+fn idempotency_error(code: &'static str, message: &'static str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": message, "code": code })),
+    )
+        .into_response()
+}
+
+fn internal_error() -> Response {
+    (StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR_BODY).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering::SeqCst},
+        },
+    };
+
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use serde_json::{Value, json};
+    use silverhand_backend_core::{
+        agent_creation::MetadataField,
+        agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
+        agent_lifecycle::MaterializationStatus,
+        agent_materialization::{
+            IdempotentReservationRow, MaterializationFlipRow, RawProvisionOutcome,
+            ReserveAgentInput, ReserveRecord,
+        },
+        agent_materialize::{
+            AgentMaterializeReceipt, AgentMaterializeRefusal, AgentMaterializeTarget,
+        },
+        agent_profile_write::{AgentChangedAnnounceFailure, AgentChangedSink},
+        agents::runtime::RuntimeKind,
+        host_runtime::{computer::ComputerRecord, read::ComputerReadModel},
+        human_auth_flows::HandleNamespaceRead,
+        identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
+        messaging::{
+            MessageId,
+            collaboration::RuntimePlacementRefusal,
+            environment::{EnvironmentUnavailable, SendEntropy},
+            post_commit::{EffectFailure, RuntimeStart},
+        },
+        persistence::PersistenceFailure,
+        user_identity::ParticipantHandle,
+    };
+    use tower::ServiceExt;
+
+    use super::*;
+
+    // ---- helpers ----
+
+    fn user(id: &str) -> UserId {
+        UserId::parse(id).expect("user id")
+    }
+    fn agent(id: &str) -> AgentId {
+        AgentId::parse(id).expect("agent id")
+    }
+    fn conversation(id: &str) -> ConversationId {
+        ConversationId::parse(id).expect("conversation id")
+    }
+    fn message(id: &str) -> MessageId {
+        MessageId::parse(id).expect("message id")
+    }
+    fn workspace(id: &str) -> WorkspaceId {
+        WorkspaceId::parse(id).expect("workspace id")
+    }
+
+    // ---- admission unit tests ----
+
+    fn body(json: Value) -> Bytes {
+        Bytes::from(serde_json::to_vec(&json).unwrap())
+    }
+
+    #[test]
+    fn a_minimal_agent_scoped_body_admits() {
+        let input = parse_create_input(&body(json!({ "name": "alice", "runtime": "codex" })))
+            .expect("admits");
+        assert_eq!(input.name, ParticipantHandle::parse("alice").unwrap());
+        assert_eq!(input.runtime, RuntimeKind::Codex);
+        assert!(input.host_id.is_none());
+        assert!(input.session_scope.is_none());
+    }
+
+    #[test]
+    fn unknown_keys_are_stripped_not_rejected() {
+        assert!(
+            parse_create_input(&body(
+                json!({ "name": "alice", "runtime": "codex", "surprise": 1 })
+            ))
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn a_missing_name_or_runtime_is_invalid() {
+        assert!(parse_create_input(&body(json!({ "runtime": "codex" }))).is_none());
+        assert!(parse_create_input(&body(json!({ "name": "alice" }))).is_none());
+    }
+
+    #[test]
+    fn a_bad_runtime_enum_is_invalid() {
+        assert!(parse_create_input(&body(json!({ "name": "alice", "runtime": "nope" }))).is_none());
+    }
+
+    #[test]
+    fn a_bad_handle_grammar_is_invalid() {
+        assert!(
+            parse_create_input(&body(json!({ "name": "has space", "runtime": "codex" }))).is_none()
+        );
+    }
+
+    #[test]
+    fn a_type_mismatch_is_invalid() {
+        // `fast_mode` must be a boolean; a string fails the whole deserialize.
+        assert!(
+            parse_create_input(&body(
+                json!({ "name": "alice", "runtime": "codex", "fast_mode": "yes" })
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn malformed_json_is_invalid() {
+        assert!(parse_create_input(&Bytes::from_static(b"not json")).is_none());
+    }
+
+    #[test]
+    fn a_reasoning_token_with_a_bad_shape_is_invalid() {
+        // Uppercase fails the `^[a-z]` shape before the allowlist is even consulted.
+        assert!(
+            parse_create_input(&body(
+                json!({ "name": "a", "runtime": "codex", "reasoning_effort": "HIGH" })
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn a_reasoning_token_not_in_the_runtime_allowlist_is_invalid() {
+        // Claude has no reasoning options; any token is out of the allowlist.
+        assert!(
+            parse_create_input(&body(
+                json!({ "name": "a", "runtime": "claude", "reasoning_effort": "high" })
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn fast_mode_on_a_non_capable_runtime_is_invalid() {
+        // Only Codex accepts fast_mode; Claude with any fast_mode present is invalid.
+        assert!(
+            parse_create_input(&body(
+                json!({ "name": "a", "runtime": "claude", "fast_mode": false })
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn a_bad_session_scope_is_invalid() {
+        assert!(
+            parse_create_input(&body(
+                json!({ "name": "a", "runtime": "codex", "session_scope": "team" })
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn an_empty_host_id_defaults_placement_a_non_empty_one_is_carried() {
+        let empty = parse_create_input(&body(
+            json!({ "name": "a", "runtime": "codex", "host_id": "" }),
+        ))
+        .unwrap();
+        assert!(empty.host_id.is_none());
+        let named = parse_create_input(&body(
+            json!({ "name": "a", "runtime": "codex", "host_id": "h1" }),
+        ))
+        .unwrap();
+        assert_eq!(named.host_id, Some(HostId::parse("h1").unwrap()));
+    }
+
+    #[test]
+    fn idempotency_header_missing_empty_malformed_and_valid() {
+        let absent = HeaderMap::new();
+        assert_eq!(
+            parse_idempotency_key(&absent),
+            Err(IdempotencyKeyRejection::Missing)
+        );
+
+        let mut empty = HeaderMap::new();
+        empty.insert("Idempotency-Key", "".parse().unwrap());
+        assert_eq!(
+            parse_idempotency_key(&empty),
+            Err(IdempotencyKeyRejection::Missing),
+            "a present-but-empty header is `missing`, matching TS `!raw`"
+        );
+
+        let mut malformed = HeaderMap::new();
+        malformed.insert("Idempotency-Key", "bad key!".parse().unwrap());
+        assert_eq!(
+            parse_idempotency_key(&malformed),
+            Err(IdempotencyKeyRejection::Malformed)
+        );
+
+        let mut good = HeaderMap::new();
+        good.insert("Idempotency-Key", "abc-123_DEF".parse().unwrap());
+        assert!(parse_idempotency_key(&good).is_ok());
+    }
+
+    // ---- finish() fakes ----
+
+    fn projection() -> AgentDetailProjection {
+        AgentDetailProjection {
+            name: "alice".to_owned(),
+            display_name: "Alice".to_owned(),
+            runtime: RuntimeKind::Codex,
+            model: Some("gpt-5.6-sol".to_owned()),
+            reasoning_effort: Some("high".to_owned()),
+            fast_mode: Some(false),
+            host_id: "h1".to_owned(),
+            host_display_label: Some("Host One".to_owned()),
+            host_name: Some("host-one".to_owned()),
+            description: Some("desc".to_owned()),
+            session_scope: "conversation".to_owned(),
+            avatar_storage_key: None,
+            materialization_failed_code: None,
+            materialization_failed_at: None,
+            deletion_started_at: None,
+            created_at: 1000,
+            updated_at: 2000,
+        }
+    }
+
+    #[derive(Clone)]
+    struct FakeReads {
+        present: bool,
+    }
+    impl AgentDetailReadModel for FakeReads {
+        async fn read_agent_detail(
+            &self,
+            agent_id: &AgentId,
+        ) -> Result<Option<AgentDetailFacts>, PersistenceFailure> {
+            if self.present {
+                Ok(Some(AgentDetailFacts::from_source(
+                    agent_id.clone(),
+                    user("creator-1"),
+                    [],
+                    [],
+                    MaterializationStatus::Active,
+                    projection(),
+                )))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct FakeSink {
+        calls: Arc<AtomicUsize>,
+    }
+    impl AgentChangedSink for FakeSink {
+        async fn agent_changed(&self, _agent: &AgentId) -> Result<(), AgentChangedAnnounceFailure> {
+            self.calls.fetch_add(1, SeqCst);
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct FakeStart {
+        calls: Arc<AtomicUsize>,
+        last: Arc<Mutex<Option<(ConversationId, AgentId)>>>,
+    }
+    impl RuntimeStart for FakeStart {
+        async fn start(
+            &self,
+            conversation: &ConversationId,
+            agent: &AgentId,
+        ) -> Result<(), EffectFailure> {
+            self.calls.fetch_add(1, SeqCst);
+            *self.last.lock().unwrap() = Some((conversation.clone(), agent.clone()));
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct FakeDeliver {
+        calls: Arc<AtomicUsize>,
+        last: Arc<Mutex<Option<(ConversationId, AgentId, MessageId)>>>,
+    }
+    impl OnboardingDelivery for FakeDeliver {
+        async fn deliver(
+            &self,
+            conversation: &ConversationId,
+            agent: &AgentId,
+            msg: &MessageId,
+        ) -> Result<(), EffectFailure> {
+            self.calls.fetch_add(1, SeqCst);
+            *self.last.lock().unwrap() = Some((conversation.clone(), agent.clone(), msg.clone()));
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct FakeDirectPairs {
+        calls: Arc<AtomicUsize>,
+        last: Arc<Mutex<Option<(UserId, ConversationId)>>>,
+    }
+    impl DirectPairsChanged for FakeDirectPairs {
+        async fn direct_pairs_changed(
+            &self,
+            viewer: &UserId,
+            conversation: &ConversationId,
+        ) -> Result<(), EffectFailure> {
+            self.calls.fetch_add(1, SeqCst);
+            *self.last.lock().unwrap() = Some((viewer.clone(), conversation.clone()));
+            Ok(())
+        }
+    }
+
+    struct Effects {
+        sink: FakeSink,
+        start: FakeStart,
+        deliver: FakeDeliver,
+        direct_pairs: FakeDirectPairs,
+    }
+    impl Effects {
+        fn new() -> Self {
+            Self {
+                sink: FakeSink {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                },
+                start: FakeStart {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    last: Arc::new(Mutex::new(None)),
+                },
+                deliver: FakeDeliver {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    last: Arc::new(Mutex::new(None)),
+                },
+                direct_pairs: FakeDirectPairs {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    last: Arc::new(Mutex::new(None)),
+                },
+            }
+        }
+        fn counts(&self) -> (usize, usize, usize, usize) {
+            (
+                self.direct_pairs.calls.load(SeqCst),
+                self.sink.calls.load(SeqCst),
+                self.deliver.calls.load(SeqCst),
+                self.start.calls.load(SeqCst),
+            )
+        }
+    }
+
+    struct Parsed {
+        status: StatusCode,
+        json: Value,
+        raw: String,
+    }
+
+    async fn drive(
+        result: Result<CreateAgentOutcome, CreateAgentFault>,
+        present: bool,
+        fx: &Effects,
+    ) -> Parsed {
+        let reads = FakeReads { present };
+        let response = finish(
+            result,
+            &reads,
+            &fx.sink,
+            &fx.start,
+            &fx.deliver,
+            &fx.direct_pairs,
+            &user("creator-1"),
+        )
+        .await;
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let raw = String::from_utf8(bytes.to_vec()).unwrap();
+        let json = serde_json::from_str(&raw).unwrap_or(Value::Null);
+        Parsed { status, json, raw }
+    }
+
+    fn created_agent_arm(pair_created: bool) -> CreateAgentOutcome {
+        CreateAgentOutcome::Created(CreatedAgent {
+            agent_id: agent("a1"),
+            arm: CreatedArm::Agent {
+                direct_line: conversation("dl-1"),
+                onboarding_message_id: message("m-1"),
+                pair_created,
+            },
+        })
+    }
+
+    fn created_conversation_arm() -> CreateAgentOutcome {
+        CreateAgentOutcome::Created(CreatedAgent {
+            agent_id: agent("a1"),
+            arm: CreatedArm::Conversation {
+                home_workspace: workspace("wsah_a1"),
+                dm_channel: conversation("onb-1"),
+                onboarding_message_id: message("m-1"),
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn created_agent_arm_is_201_with_null_coordinates_and_all_four_effects() {
+        let fx = Effects::new();
+        let reply = drive(Ok(created_agent_arm(true)), true, &fx).await;
+        assert_eq!(reply.status, StatusCode::CREATED);
+        assert!(reply.json["agent"].is_object());
+        assert!(reply.json["agent_home_workspace_id"].is_null());
+        assert!(reply.json["dm_channel_id"].is_null());
+        assert!(reply.json["onboarding_message_id"].is_null());
+        // direct_pairs, announce, deliver, start — each exactly once.
+        assert_eq!(fx.counts(), (1, 1, 1, 1));
+        assert_eq!(
+            *fx.direct_pairs.last.lock().unwrap(),
+            Some((user("creator-1"), conversation("dl-1")))
+        );
+        assert_eq!(
+            *fx.deliver.last.lock().unwrap(),
+            Some((conversation("dl-1"), agent("a1"), message("m-1")))
+        );
+        assert_eq!(
+            *fx.start.last.lock().unwrap(),
+            Some((conversation("dl-1"), agent("a1")))
+        );
+    }
+
+    #[tokio::test]
+    async fn created_agent_arm_without_a_fresh_pair_fires_no_direct_pairs_edge() {
+        let fx = Effects::new();
+        let reply = drive(Ok(created_agent_arm(false)), true, &fx).await;
+        assert_eq!(reply.status, StatusCode::CREATED);
+        // No direct-pairs edge; announce/deliver/start still fire.
+        assert_eq!(fx.counts(), (0, 1, 1, 1));
+    }
+
+    #[tokio::test]
+    async fn created_conversation_arm_is_201_with_present_coordinates_and_no_direct_pairs() {
+        let fx = Effects::new();
+        let reply = drive(Ok(created_conversation_arm()), true, &fx).await;
+        assert_eq!(reply.status, StatusCode::CREATED);
+        assert_eq!(reply.json["agent_home_workspace_id"], "wsah_a1");
+        assert_eq!(reply.json["dm_channel_id"], "onb-1");
+        assert_eq!(reply.json["onboarding_message_id"], "m-1");
+        // Conversation arm: no direct-pairs edge; the DM is the destination.
+        assert_eq!(fx.counts(), (0, 1, 1, 1));
+        assert_eq!(
+            *fx.deliver.last.lock().unwrap(),
+            Some((conversation("onb-1"), agent("a1"), message("m-1")))
+        );
+    }
+
+    #[tokio::test]
+    async fn echo_is_200_and_fires_no_effects() {
+        let fx = Effects::new();
+        let reply = drive(
+            Ok(CreateAgentOutcome::Echo(EchoedAgent {
+                agent_id: agent("a1"),
+                coordinates: CreatedCoordinates {
+                    agent_home_workspace_id: Some(workspace("wsah_a1")),
+                    dm_channel_id: Some(conversation("onb-1")),
+                    onboarding_message_id: Some(message("m-1")),
+                },
+            })),
+            true,
+            &fx,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.json["dm_channel_id"], "onb-1");
+        assert_eq!(fx.counts(), (0, 0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn a_reproject_that_vanished_is_a_safe_500_with_no_effects() {
+        let fx = Effects::new();
+        // `present: false` → the committed agent cannot be reprojected → safe 500.
+        let reply = drive(Ok(created_agent_arm(true)), false, &fx).await;
+        assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(fx.counts(), (0, 0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn the_terminal_conflict_and_refusal_arms_map_to_their_exact_bodies() {
+        let fx = Effects::new();
+
+        let in_progress = drive(Ok(CreateAgentOutcome::InProgress), true, &fx).await;
+        assert_eq!(in_progress.status, StatusCode::CONFLICT);
+        assert_eq!(in_progress.json["code"], "materialization_in_progress");
+
+        let prev = drive(
+            Ok(CreateAgentOutcome::PreviouslyFailed {
+                failed_code: "fs_unavailable".to_owned(),
+                failed_at: 4242,
+            }),
+            true,
+            &fx,
+        )
+        .await;
+        assert_eq!(prev.status, StatusCode::CONFLICT);
+        assert_eq!(prev.json["code"], "materialization_previously_failed");
+        assert_eq!(prev.json["failed_code"], "fs_unavailable");
+        assert_eq!(prev.json["failed_at"], 4242);
+        assert!(
+            prev.json["error"]
+                .as_str()
+                .unwrap()
+                .contains("previous materialize attempt failed (fs_unavailable)")
+        );
+
+        let mismatch = drive(
+            Ok(CreateAgentOutcome::MetadataMismatch {
+                field: MetadataField::Runtime,
+            }),
+            true,
+            &fx,
+        )
+        .await;
+        assert_eq!(mismatch.status, StatusCode::BAD_REQUEST);
+        assert_eq!(mismatch.json["code"], "idempotency_metadata_mismatch");
+        assert_eq!(mismatch.json["mismatched_field"], "runtime");
+
+        let not_found = drive(Ok(CreateAgentOutcome::RetryTargetNotFound), true, &fx).await;
+        assert_eq!(not_found.status, StatusCode::NOT_FOUND);
+        assert_eq!(not_found.json["code"], "retry_target_not_found");
+
+        let not_failed = drive(Ok(CreateAgentOutcome::RetryTargetNotFailed), true, &fx).await;
+        assert_eq!(not_failed.status, StatusCode::CONFLICT);
+        assert_eq!(not_failed.json["code"], "retry_target_not_failed");
+
+        let name_taken = drive(Ok(CreateAgentOutcome::NameTaken), true, &fx).await;
+        assert_eq!(name_taken.status, StatusCode::CONFLICT);
+        assert_eq!(name_taken.json["code"], "agent_name_taken");
+        assert_eq!(name_taken.json["error"], "agent name already exists");
+
+        let host_pending = drive(Ok(CreateAgentOutcome::HostAttachPending), true, &fx).await;
+        assert_eq!(host_pending.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(host_pending.json["code"], "host_attach_pending");
+
+        // No terminal arm fires an effect.
+        assert_eq!(fx.counts(), (0, 0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn a_placement_refusal_maps_through_the_canonical_mapper() {
+        let fx = Effects::new();
+        let reply = drive(
+            Ok(CreateAgentOutcome::PlacementRefused(
+                RuntimePlacementRefusal::HostMissing,
+            )),
+            true,
+            &fx,
+        )
+        .await;
+        // The canonical mapper owns the exact status/body; assert it is a client 4xx
+        // and not a generic 500, and that no effect fired.
+        assert!(reply.status.is_client_error());
+        assert_eq!(fx.counts(), (0, 0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn each_materialize_failure_code_maps_to_its_status() {
+        let fx = Effects::new();
+        let cases = [
+            (MaterializeFailureCode::DaemonInternalError, 502),
+            (MaterializeFailureCode::HostAttachPending, 503),
+            (MaterializeFailureCode::MaterializeTimeout, 504),
+            (MaterializeFailureCode::AgentDirCollision, 409),
+            (MaterializeFailureCode::FsQuotaExceeded, 507),
+            (MaterializeFailureCode::FsUnavailable, 502),
+            (MaterializeFailureCode::UnsupportedTemplate, 400),
+            (MaterializeFailureCode::UnsupportedRuntime, 400),
+            (MaterializeFailureCode::DaemonShuttingDown, 503),
+        ];
+        for (code, status) in cases {
+            let reply = drive(
+                Ok(CreateAgentOutcome::MaterializeFailed { code }),
+                true,
+                &fx,
+            )
+            .await;
+            assert_eq!(reply.status.as_u16(), status, "code {}", code.as_str());
+            assert_eq!(reply.json["code"], code.as_str());
+            assert!(reply.json["error"].is_string());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_fault_is_a_detail_free_bare_text_500() {
+        let fx = Effects::new();
+        let reply = drive(
+            Err(CreateAgentFault::CorruptGraph {
+                reason: "active conversation-scoped row with no home DM",
+            }),
+            true,
+            &fx,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(reply.raw, "Internal Server Error");
+        assert!(!reply.raw.contains("home DM"));
+        assert_eq!(fx.counts(), (0, 0, 0, 0));
+    }
+
+    // ---- end-to-end router wiring ----
+    //
+    // One oneshot proves the 14-generic router composes and the handler glue
+    // (principal → body → key → create_agent → finish) wires end-to-end. It drives the
+    // retry-with-no-reservation path, which reaches `RetryTargetNotFound` after touching
+    // ONLY the materialization lookup — every other core port is inert.
+
+    #[derive(Clone)]
+    struct InertCore;
+
+    impl ComputerReadModel for InertCore {
+        async fn list_for_owner(
+            &self,
+            _owner: UserId,
+        ) -> Result<Vec<ComputerRecord>, PersistenceFailure> {
+            unreachable!("placement is never reached on the retry-not-found path")
+        }
+        async fn read_computer(
+            &self,
+            _computer: HostId,
+        ) -> Result<Option<ComputerRecord>, PersistenceFailure> {
+            unreachable!("placement is never reached on the retry-not-found path")
+        }
+    }
+    impl HostConnectivity for InertCore {
+        async fn is_attached(&self, _host: &HostId) -> Result<bool, PersistenceFailure> {
+            unreachable!("connectivity is never reached on the retry-not-found path")
+        }
+    }
+    impl HandleNamespaceRead for InertCore {
+        async fn is_handle_taken(
+            &self,
+            _handle: &ParticipantHandle,
+        ) -> Result<bool, PersistenceFailure> {
+            unreachable!("handle read is never reached on the retry-not-found path")
+        }
+    }
+    impl AgentMaterializationLookup for InertCore {
+        async fn find_by_idempotency(
+            &self,
+            _creator: &UserId,
+            _key: &IdempotencyKey,
+        ) -> Result<Option<IdempotentReservationRow>, PersistenceFailure> {
+            Ok(None)
+        }
+    }
+    impl AgentMaterializationWrite for InertCore {
+        async fn reserve(
+            &self,
+            _input: &ReserveAgentInput,
+            _now_ms: i64,
+        ) -> Result<ReserveRecord, PersistenceFailure> {
+            unreachable!("reserve is never reached on the retry-not-found path")
+        }
+        async fn fail(
+            &self,
+            _agent: &AgentId,
+            _failed_code: &str,
+            _failed_at: i64,
+            _now_ms: i64,
+        ) -> Result<Option<MaterializationFlipRow>, PersistenceFailure> {
+            unreachable!("fail is never reached on the retry-not-found path")
+        }
+        async fn reopen_failed(
+            &self,
+            _agent: &AgentId,
+            _now_ms: i64,
+        ) -> Result<Option<MaterializationFlipRow>, PersistenceFailure> {
+            unreachable!("reopen is never reached on the retry-not-found path")
+        }
+        async fn mark_stale_failed(
+            &self,
+            _cutoff_created_at: i64,
+            _failed_at: i64,
+            _now_ms: i64,
+        ) -> Result<Vec<MaterializationFlipRow>, PersistenceFailure> {
+            unreachable!("stale sweep is never reached on the retry-not-found path")
+        }
+    }
+    impl AgentMaterializePort for InertCore {
+        type Error = Infallible;
+        async fn materialize(
+            &self,
+            _target: &AgentMaterializeTarget,
+        ) -> Result<Result<AgentMaterializeReceipt, AgentMaterializeRefusal>, Self::Error> {
+            unreachable!("materialize is never reached on the retry-not-found path")
+        }
+    }
+    impl AgentArmProvisioningPort for InertCore {
+        async fn provision_and_activate(
+            &self,
+            _agent: &AgentId,
+            _candidate_direct_line: ConversationId,
+            _candidate_dm_channel: ConversationId,
+            _onboarding_message_id: MessageId,
+            _now_ms: i64,
+        ) -> Result<RawProvisionOutcome, PersistenceFailure> {
+            unreachable!("provision is never reached on the retry-not-found path")
+        }
+        async fn fail_after_rolled_back_provision(
+            &self,
+            _agent: &AgentId,
+            _failed_at: i64,
+            _now_ms: i64,
+        ) -> Result<Option<MaterializationFlipRow>, PersistenceFailure> {
+            unreachable!("compensation is never reached on the retry-not-found path")
+        }
+    }
+    impl SendEntropy for InertCore {
+        fn fill(&self, _buffer: &mut [u8]) -> Result<(), EnvironmentUnavailable> {
+            unreachable!("entropy is never reached on the retry-not-found path")
+        }
+    }
+    impl AgentGraphRead for InertCore {
+        async fn find_home_dm_channel(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<Option<ConversationId>, PersistenceFailure> {
+            unreachable!("graph read is never reached on the retry-not-found path")
+        }
+        async fn find_first_onboarding_message(
+            &self,
+            _dm: &ConversationId,
+        ) -> Result<Option<MessageId>, PersistenceFailure> {
+            unreachable!("graph read is never reached on the retry-not-found path")
+        }
+    }
+
+    #[derive(Clone)]
+    struct FixedClock;
+    impl ProcessClock for FixedClock {
+        fn now_unix_millis(&self) -> i64 {
+            7000
+        }
+    }
+
+    fn wired_router() -> Router {
+        router(
+            InertCore,
+            InertCore,
+            InertCore,
+            InertCore,
+            InertCore,
+            InertCore,
+            InertCore,
+            InertCore,
+            FakeReads { present: true },
+            FakeSink {
+                calls: Arc::new(AtomicUsize::new(0)),
+            },
+            FakeStart {
+                calls: Arc::new(AtomicUsize::new(0)),
+                last: Arc::new(Mutex::new(None)),
+            },
+            FakeDeliver {
+                calls: Arc::new(AtomicUsize::new(0)),
+                last: Arc::new(Mutex::new(None)),
+            },
+            FakeDirectPairs {
+                calls: Arc::new(AtomicUsize::new(0)),
+                last: Arc::new(Mutex::new(None)),
+            },
+            FixedClock,
+        )
+    }
+
+    async fn oneshot(request: Request<Body>) -> (StatusCode, String) {
+        let response = wired_router().oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_retry_with_no_reservation_wires_through_to_404() {
+        let request = Request::post("/api/agents?retry=true")
+            .header("content-type", "application/json")
+            .header("Idempotency-Key", "fresh-key-1")
+            .extension(user("creator-1"))
+            .body(Body::from(
+                serde_json::to_vec(&json!({ "name": "alice", "runtime": "codex" })).unwrap(),
+            ))
+            .unwrap();
+        let (status, body) = oneshot(request).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let json: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["code"], "retry_target_not_found");
+    }
+
+    #[tokio::test]
+    async fn a_missing_principal_is_a_safe_500() {
+        let request = Request::post("/api/agents")
+            .header("content-type", "application/json")
+            .header("Idempotency-Key", "fresh-key-1")
+            .body(Body::from(
+                serde_json::to_vec(&json!({ "name": "alice", "runtime": "codex" })).unwrap(),
+            ))
+            .unwrap();
+        let (status, body) = oneshot(request).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body, "Internal Server Error");
+    }
+
+    #[tokio::test]
+    async fn a_malformed_body_is_400_invalid_input_before_the_key_check() {
+        // No Idempotency-Key header at all, but the body fault wins (body precedes key).
+        let request = Request::post("/api/agents")
+            .header("content-type", "application/json")
+            .extension(user("creator-1"))
+            .body(Body::from("not json"))
+            .unwrap();
+        let (status, body) = oneshot(request).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let json: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["error"], "invalid input");
+    }
+
+    #[tokio::test]
+    async fn a_missing_idempotency_key_is_400_after_a_valid_body() {
+        let request = Request::post("/api/agents")
+            .header("content-type", "application/json")
+            .extension(user("creator-1"))
+            .body(Body::from(
+                serde_json::to_vec(&json!({ "name": "alice", "runtime": "codex" })).unwrap(),
+            ))
+            .unwrap();
+        let (status, body) = oneshot(request).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let json: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["code"], "idempotency_key_missing");
+    }
+}
