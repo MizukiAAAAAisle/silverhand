@@ -673,6 +673,17 @@ impl ScopeEventHub {
         HubAgentAvailabilityAnnouncer::new(self.clone(), computer_agents, view)
     }
 
+    /// The single-agent availability edge, built over THIS hub. Where
+    /// [`agent_availability_announcer`](ScopeEventHub::agent_availability_announcer)
+    /// fans a whole computer's roster out on custody moves, this seam invalidates
+    /// exactly ONE agent — the one the public delete route is tearing down — through
+    /// the SAME per-agent fan-out. [`HubAgentAvailabilityEdge::new`] stays
+    /// crate-private, so the edge cannot publish on a hub other than the one this
+    /// seam owns.
+    pub fn agent_availability_edge<V>(&self, view: V) -> HubAgentAvailabilityEdge<V> {
+        HubAgentAvailabilityEdge::new(self.clone(), view)
+    }
+
     pub fn publish_direct_pairs_changed(
         &self,
         viewer: &UserId,
@@ -1478,52 +1489,118 @@ where
             .map_err(CustodyEffectFailure::from_source)?;
         let mut first_failure = None;
         for agent in &agents {
-            // Resolve the agent's viewer audience from the committed view ACL. A
-            // read failure for one agent is retained but does not abort the rest.
-            let view = match self.view.read_agent_view(agent).await {
-                Ok(view) => view,
-                Err(cause) => {
-                    if first_failure.is_none() {
-                        first_failure = Some(CustodyEffectFailure::from_source(cause));
-                    }
-                    continue;
-                }
-            };
-            // BIND the resolved facts to the requested agent BEFORE reading its
-            // audience — the same source==request bind the availability route makes
-            // (`host_agent::availability`). A view whose decoded source is a DIFFERENT
-            // agent is a resolver/splice defect: its ACL would send THIS agent's
-            // `agent_id` payload to some OTHER agent's viewers (leak + misdelivery)
-            // while missing this agent's true audience. Skip this agent's publish and
-            // retain it as a production failure; the remaining agents still run and
-            // the aggregate ends in Err. A short read (no row) has nothing to bind —
-            // it is the empty-audience arm below.
-            if let Some(facts) = view.as_ref()
-                && facts.source() != agent
+            // Each agent's audience runs through the ONE per-agent fan-out unit
+            // (source-bind, viewer oracle, per-viewer publish). A failure for one
+            // agent is retained but does not abort the rest.
+            if let Err(failure) =
+                publish_single_agent_availability(&self.hub, &self.view, agent).await
+                && first_failure.is_none()
             {
-                if first_failure.is_none() {
-                    first_failure = Some(CustodyEffectFailure::from_source(
-                        AgentAvailabilityAudienceMismatch {
-                            requested: agent.as_str().to_owned(),
-                            resolved: facts.source().as_str().to_owned(),
-                        },
-                    ));
-                }
-                continue;
-            }
-            let viewers = agent_viewer_user_ids(view.as_ref().map(|facts| facts.visibility()));
-            for viewer in &viewers {
-                if let Err(cause) = self.hub.publish_agent_availability_changed(viewer, agent)
-                    && first_failure.is_none()
-                {
-                    first_failure = Some(CustodyEffectFailure::from_source(cause));
-                }
+                first_failure = Some(failure);
             }
         }
         if let Some(failure) = first_failure {
             return Err(failure);
         }
         Ok(())
+    }
+}
+
+/// Publish an availability invalidation for ONE agent to its full committed viewer
+/// audience. The per-agent fan-out unit shared by the host-wide custody announcer
+/// ([`HubAgentAvailabilityAnnouncer`]) and the single-agent edge
+/// ([`HubAgentAvailabilityEdge`]) so both fire through the SAME source-bind,
+/// audience oracle, and per-viewer hub primitive — never a second fan-out path.
+///
+/// Resolves the agent's viewer audience from the committed view ACL, BINDS the
+/// resolved facts to the requested agent BEFORE reading its audience — the same
+/// source==request bind the availability route makes ([`crate::host_agent::availability`]).
+/// A view whose decoded source is a DIFFERENT agent is a resolver/splice defect:
+/// its ACL would send THIS agent's `agent_id` payload to some OTHER agent's viewers
+/// (leak + misdelivery) while missing this agent's true audience — fail closed
+/// with zero publish. A short read (no row) has nothing to bind: it is the
+/// empty-audience arm. Every admitted viewer is attempted; the first failure
+/// (read, source-bind, or publish) is returned after the whole audience has run so
+/// one dead hop cannot silently drop the rest.
+async fn publish_single_agent_availability<V>(
+    hub: &ScopeEventHub,
+    view: &V,
+    agent: &AgentId,
+) -> Result<(), CustodyEffectFailure>
+where
+    V: AgentAvailabilityReadModel,
+{
+    let view = view
+        .read_agent_view(agent)
+        .await
+        .map_err(CustodyEffectFailure::from_source)?;
+    if let Some(facts) = view.as_ref()
+        && facts.source() != agent
+    {
+        return Err(CustodyEffectFailure::from_source(
+            AgentAvailabilityAudienceMismatch {
+                requested: agent.as_str().to_owned(),
+                resolved: facts.source().as_str().to_owned(),
+            },
+        ));
+    }
+    let viewers = agent_viewer_user_ids(view.as_ref().map(|facts| facts.visibility()));
+    let mut first_failure = None;
+    for viewer in &viewers {
+        if let Err(cause) = hub.publish_agent_availability_changed(viewer, agent)
+            && first_failure.is_none()
+        {
+            first_failure = Some(CustodyEffectFailure::from_source(cause));
+        }
+    }
+    match first_failure {
+        Some(failure) => Err(failure),
+        None => Ok(()),
+    }
+}
+
+/// A narrow, single-agent availability-invalidation effect. One method: publish the
+/// availability change for exactly ONE agent to its committed viewer audience.
+///
+/// This is the seam the public agent-deletion route fires when a delete BEGINS —
+/// the agent flips out of `active`, so its viewers must recompute availability. It
+/// carries no host id and enumerates no roster: the deleted agent is the only one
+/// changing. Backed in production by [`HubAgentAvailabilityEdge`], which routes
+/// through the SAME [`publish_single_agent_availability`] fan-out the host-wide
+/// custody announcer uses, so there is exactly ONE availability audience
+/// authority — never a second.
+pub trait AgentAvailabilityEdge: Clone + Send + Sync + 'static {
+    fn agent_availability_changed(
+        &self,
+        agent: &AgentId,
+    ) -> impl std::future::Future<Output = Result<(), CustodyEffectFailure>> + Send;
+}
+
+/// The production [`AgentAvailabilityEdge`], bound to the ONE hub and the committed
+/// availability view. Its constructor stays crate-private so the single-agent
+/// fan-out cannot publish on a hub other than the one this seam owns, mirroring
+/// [`HubAgentAvailabilityAnnouncer`].
+#[derive(Clone)]
+pub struct HubAgentAvailabilityEdge<V> {
+    hub: ScopeEventHub,
+    view: V,
+}
+
+impl<V> HubAgentAvailabilityEdge<V> {
+    pub(crate) fn new(hub: ScopeEventHub, view: V) -> Self {
+        Self { hub, view }
+    }
+}
+
+impl<V> AgentAvailabilityEdge for HubAgentAvailabilityEdge<V>
+where
+    V: AgentAvailabilityReadModel + Clone + Send + Sync + 'static,
+{
+    async fn agent_availability_changed(
+        &self,
+        agent: &AgentId,
+    ) -> Result<(), CustodyEffectFailure> {
+        publish_single_agent_availability(&self.hub, &self.view, agent).await
     }
 }
 /// [`HubUnreadPublisher`]. It holds one such publisher and forwards the committed change
