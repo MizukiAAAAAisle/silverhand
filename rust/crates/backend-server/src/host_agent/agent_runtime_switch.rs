@@ -55,6 +55,7 @@ use serde::Serialize;
 use serde_json::Value;
 use silverhand_backend_core::{
     agent_detail_read::AgentDetailReadModel,
+    agent_profile_write::AgentChangedSink,
     agent_runtime_switch::{
         RuntimeAvailabilityProbe, RuntimeAvailabilityProbeFault, SwitchAgentRuntimeConfig,
         SwitchAgentRuntimeError, SwitchAgentRuntimeRequest, SwitchAgentSnapshotRead,
@@ -103,7 +104,7 @@ const REASONING_TOKEN_MAX: usize = 32;
 const KNOWN_KEYS: [&str; 4] = ["runtime", "model", "reasoning_effort", "fast_mode"];
 
 #[allow(clippy::type_complexity)]
-struct SwitchState<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, C> {
+struct SwitchState<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, Changed, C> {
     reads: Reads,
     snap: Snap,
     availability: Avail,
@@ -114,14 +115,15 @@ struct SwitchState<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P,
     custody: Cust,
     focus: Focus,
     control: P,
+    changed: Changed,
     clock: C,
 }
 
 // A manual `Clone` (not `derive`) so the bound is on the FIELDS, not on phantom
 // type-parameter `Clone` bounds the derive would add — every port is already `Clone` by
 // its own supertrait, so this is a field-wise clone with no extra where-clause noise.
-impl<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, C> Clone
-    for SwitchState<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, C>
+impl<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, Changed, C> Clone
+    for SwitchState<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, Changed, C>
 where
     Reads: Clone,
     Snap: Clone,
@@ -133,6 +135,7 @@ where
     Cust: Clone,
     Focus: Clone,
     P: Clone,
+    Changed: Clone,
     C: Clone,
 {
     fn clone(&self) -> Self {
@@ -147,16 +150,18 @@ where
             custody: self.custody.clone(),
             focus: self.focus.clone(),
             control: self.control.clone(),
+            changed: self.changed.clone(),
             clock: self.clock.clone(),
         }
     }
 }
 
-/// Build the `PUT /api/agents/{id}/runtime` router over the ladder read model, the nine
-/// saga ports, and the clock. Every generic is a narrow typed port; the concrete
-/// production backings (and the bearer perimeter) are the composition root's to mount.
+/// Build the `PUT /api/agents/{id}/runtime` router over the ladder read model, the ten saga
+/// ports (the nine transition ports plus the post-commit `agent_changed` sink), and the
+/// clock. Every generic is a narrow typed port; the concrete production backings (and the
+/// bearer perimeter) are the composition root's to mount.
 #[allow(clippy::too_many_arguments)]
-pub fn router<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, C>(
+pub fn router<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, Changed, C>(
     reads: Reads,
     snap: Snap,
     availability: Avail,
@@ -167,6 +172,7 @@ pub fn router<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, C>(
     custody: Cust,
     focus: Focus,
     control: P,
+    changed: Changed,
     clock: C,
 ) -> Router
 where
@@ -180,6 +186,7 @@ where
     Cust: RuntimeCustodyPort,
     Focus: AgentSlotPresentationFocusPort,
     P: RuntimeControlPort + Clone + Send + Sync + 'static,
+    Changed: AgentChangedSink,
     C: ProcessClock,
 {
     Router::new()
@@ -196,6 +203,7 @@ where
                 Cust,
                 Focus,
                 P,
+                Changed,
                 C,
             >),
         )
@@ -210,16 +218,30 @@ where
             custody,
             focus,
             control,
+            changed,
             clock,
         })
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-async fn agent_runtime_switch<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, C>(
+async fn agent_runtime_switch<
+    Reads,
+    Snap,
+    Avail,
+    Coord,
+    W,
+    Seats,
+    Inboxes,
+    Cust,
+    Focus,
+    P,
+    Changed,
+    C,
+>(
     Path(agent_id): Path<String>,
     viewer: Option<Extension<UserId>>,
     State(state): State<
-        SwitchState<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, C>,
+        SwitchState<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, Changed, C>,
     >,
     body: Bytes,
 ) -> Response
@@ -234,6 +256,7 @@ where
     Cust: RuntimeCustodyPort,
     Focus: AgentSlotPresentationFocusPort,
     P: RuntimeControlPort + Clone + Send + Sync + 'static,
+    Changed: AgentChangedSink,
     C: ProcessClock,
 {
     let Some(Extension(viewer)) = viewer else {
@@ -324,6 +347,7 @@ where
         &state.custody,
         &state.focus,
         &state.control,
+        &state.changed,
         &request,
         now_ms,
     )
@@ -570,8 +594,9 @@ fn switch_error_response(
 
 /// The daemon data-plane fault envelope, byte-identical to the availability faults the
 /// create face and the standalone catalog dispatch report, so one HTTP status renders per
-/// cause. A transport-contract violation has no distinct TS switch-path arm (the daemon
-/// catch-all folds it), so it collapses into `daemon_internal_error` here.
+/// cause. A transport-contract violation is NOT a daemon-attributed fault — it is OUR
+/// contract with the transport breaking — so it is the lane's fail-closed bare `500`, the
+/// same disposition [`SwitchAgentRuntimeError::Fault`] gets, never a `502` blaming the daemon.
 fn availability_response(fault: RuntimeAvailabilityProbeFault) -> Response {
     match fault {
         RuntimeAvailabilityProbeFault::AttachPending => coded(
@@ -584,12 +609,12 @@ fn availability_response(fault: RuntimeAvailabilityProbeFault) -> Response {
             "daemon request timed out".to_owned(),
             "daemon_timeout",
         ),
-        RuntimeAvailabilityProbeFault::DaemonInternalError
-        | RuntimeAvailabilityProbeFault::TransportContractViolation => coded(
+        RuntimeAvailabilityProbeFault::DaemonInternalError => coded(
             StatusCode::BAD_GATEWAY,
             "daemon request failed".to_owned(),
             "daemon_internal_error",
         ),
+        RuntimeAvailabilityProbeFault::TransportContractViolation => internal_error(),
     }
 }
 
@@ -927,6 +952,20 @@ mod tests {
         }
     }
 
+    impl AgentChangedSink for Unreached {
+        async fn agent_changed(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<(), silverhand_backend_core::agent_profile_write::AgentChangedAnnounceFailure>
+        {
+            // Every test here stops at the ladder, admission, or the saga PREFLIGHT — none reaches
+            // a commit, and the `agent_changed` hint fires ONLY after a commit. So a consulted sink
+            // would be a pre-commit-announce regression, caught loudly here rather than silently
+            // recorded. The announce semantics themselves are covered by the core saga tests.
+            unreachable!("agent_changed must not run before a commit in these tests")
+        }
+    }
+
     // ---- fixtures ----
 
     fn codex_projection() -> AgentDetailProjection {
@@ -992,6 +1031,7 @@ mod tests {
         let response = router(
             reads,
             snap,
+            Unreached,
             Unreached,
             Unreached,
             Unreached,
@@ -1360,17 +1400,24 @@ mod tests {
                 StatusCode::BAD_GATEWAY,
                 json!({ "error": "daemon request failed", "code": "daemon_internal_error" }),
             ),
-            (
-                RuntimeAvailabilityProbeFault::TransportContractViolation,
-                StatusCode::BAD_GATEWAY,
-                json!({ "error": "daemon request failed", "code": "daemon_internal_error" }),
-            ),
         ];
         for (fault, status, body) in cases {
             let (got_status, got_body) = mapped(SwitchAgentRuntimeError::Availability(fault)).await;
             assert_eq!(got_status, status, "fault {fault:?}");
             assert_eq!(parsed(&got_body), body, "fault {fault:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_transport_contract_violation_is_the_fail_closed_bare_500() {
+        // NOT a daemon-attributed 502: a broken transport contract is our own invariant
+        // failing, so it renders the lane's bare 500, the same as `Fault`.
+        let (status, body) = mapped(SwitchAgentRuntimeError::Availability(
+            RuntimeAvailabilityProbeFault::TransportContractViolation,
+        ))
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body, "Internal Server Error");
     }
 
     #[tokio::test]

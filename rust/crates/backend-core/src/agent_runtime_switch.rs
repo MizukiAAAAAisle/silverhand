@@ -42,7 +42,10 @@
 
 use std::future::Future;
 
+use futures_util::future::join_all;
+
 use crate::{
+    agent_profile_write::AgentChangedSink,
     agents::{
         runtime::RuntimeKind, runtime_catalog::SELECTABLE_RUNTIMES,
         session_scope::AgentSessionScope,
@@ -268,7 +271,7 @@ impl From<RuntimeTransitionFault> for SwitchAgentRuntimeError {
 /// Transition one agent to another runtime. See the module docs for the phase shape and the
 /// invariants each phase holds.
 #[allow(clippy::too_many_arguments)]
-pub async fn switch_agent_runtime<R, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P>(
+pub async fn switch_agent_runtime<R, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, Changed>(
     reads: &R,
     availability: &Avail,
     coordination: &Coord,
@@ -278,6 +281,7 @@ pub async fn switch_agent_runtime<R, Avail, Coord, W, Seats, Inboxes, Cust, Focu
     custody: &Cust,
     focus: &Focus,
     control: &P,
+    changed: &Changed,
     request: &SwitchAgentRuntimeRequest,
     now_ms: i64,
 ) -> Result<SwitchAgentRuntimeCommitted, SwitchAgentRuntimeError>
@@ -291,6 +295,7 @@ where
     Cust: RuntimeCustodyPort,
     Focus: AgentSlotPresentationFocusPort,
     P: RuntimeControlPort,
+    Changed: AgentChangedSink,
 {
     let agent = &request.agent;
     let target = request.config.runtime;
@@ -328,6 +333,7 @@ where
         focus,
         transitions,
         control,
+        changed,
         request,
         now_ms,
         &lock,
@@ -342,12 +348,16 @@ where
                 abort_runtime_transition(transitions, &lock).await
             {
                 // Best effort: restore the previously-live pairs under the UNCHANGED old runtime.
-                // The original failure remains the response; a later retry can finish the switch.
-                for conversation in restore {
-                    let restart =
-                        RuntimeStartTarget::new(request.actor.clone(), agent.clone(), conversation);
-                    let _ = control.start(&restart).await;
-                }
+                // Fan them out concurrently — as with the clear/restart passes, a serial loop would
+                // amplify the abort aftermath to O(pair_count x per-start latency); the original
+                // failure remains the response and a later retry can finish the switch.
+                let restarts = restore
+                    .into_iter()
+                    .map(|conversation| {
+                        RuntimeStartTarget::new(request.actor.clone(), agent.clone(), conversation)
+                    })
+                    .collect::<Vec<_>>();
+                let _ = join_all(restarts.iter().map(|restart| control.start(restart))).await;
             }
             Err(error)
         }
@@ -372,7 +382,7 @@ impl From<SwitchAgentRuntimeError> for Unwound {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_locked<R, Coord, Seats, Inboxes, Cust, Focus, W, P>(
+async fn run_locked<R, Coord, Seats, Inboxes, Cust, Focus, W, P, Changed>(
     reads: &R,
     coordination: &Coord,
     seats: &Seats,
@@ -381,6 +391,7 @@ async fn run_locked<R, Coord, Seats, Inboxes, Cust, Focus, W, P>(
     focus: &Focus,
     transitions: &W,
     control: &P,
+    changed: &Changed,
     request: &SwitchAgentRuntimeRequest,
     now_ms: i64,
     lock: &RuntimeTransitionLock,
@@ -394,6 +405,7 @@ where
     Focus: AgentSlotPresentationFocusPort,
     W: RuntimeTransitionWrite,
     P: RuntimeControlPort,
+    Changed: AgentChangedSink,
 {
     let agent = &request.agent;
     let target = request.config.runtime;
@@ -468,16 +480,18 @@ where
         ));
     }
 
-    // Clear every old-runtime session. ALL are attempted (no short-circuit) so a stuck seat does
-    // not hide behind an earlier failure; a single failure then aborts without committing.
-    let mut clear_failed = false;
-    for seat_target in &to_clear {
-        match control.clear_session(seat_target).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(_refusal)) => clear_failed = true,
-            Err(_transport) => clear_failed = true,
-        }
-    }
+    // Clear every old-runtime session CONCURRENTLY, mirroring the TypeScript `Promise.allSettled`:
+    // ALL are attempted (no short-circuit) so a stuck seat neither hides behind an earlier failure
+    // nor serializes the clears into an O(seat_count x per-clear latency) lock-hold window. Every
+    // outcome is then settled; a single failure (refusal or transport) aborts without committing.
+    let clear_failed = join_all(
+        to_clear
+            .iter()
+            .map(|seat_target| control.clear_session(seat_target)),
+    )
+    .await
+    .into_iter()
+    .any(|outcome| !matches!(outcome, Ok(Ok(_))));
     if clear_failed {
         return Err(Unwound {
             error: SwitchAgentRuntimeError::SessionClearFailed,
@@ -507,6 +521,15 @@ where
                 });
             }
         };
+
+    // ── Announce the committed change BEFORE the possibly-blocking restart aftermath. ──
+    // The runtime column has moved and the lock is released, so publish the app-scope
+    // `agent_changed` hint exactly once, keyed on the SEALED committed agent id — the same
+    // best-effort effect the tuning PATCH fires after its guarded commit. It is a
+    // cache-invalidation hint, so a delivery failure is swallowed here and NEVER flips the
+    // committed result; firing it before `dispatch_resume` keeps a slow restart pass from delaying
+    // the notification.
+    let _ = changed.agent_changed(committed.agent_id()).await;
 
     // ── Re-drive (post-commit): NEVER reverts the committed transition. ──
     // The plan foundation — live-before pairs and sealed reclaimed conversations — is already
@@ -641,12 +664,20 @@ where
     )
     .await;
 
+    // Restart the resume set CONCURRENTLY (count-only, no rollback): the committed switch stands
+    // no matter how many restarts succeed, so — like the clear pass — a serial loop would only
+    // amplify the request latency to O(conversation_count x per-start latency). Each provider
+    // refusal or transport error is counted, never retried and never reverting the switch.
+    let restarts = resume
+        .into_iter()
+        .map(|conversation| {
+            RuntimeStartTarget::new(request.actor.clone(), request.agent.clone(), conversation)
+        })
+        .collect::<Vec<_>>();
     let mut restarted = 0usize;
     let mut restart_failures = 0usize;
-    for conversation in resume {
-        let restart =
-            RuntimeStartTarget::new(request.actor.clone(), request.agent.clone(), conversation);
-        match control.start(&restart).await {
+    for outcome in join_all(restarts.iter().map(|restart| control.start(restart))).await {
+        match outcome {
             Ok(Ok(_)) => restarted += 1,
             Ok(Err(_)) | Err(_) => restart_failures += 1,
         }
@@ -1325,6 +1356,128 @@ mod tests {
         }
     }
 
+    // ── agent_changed sink fake ──────────────────────────────────────────
+
+    /// Records every `agent_changed` publish, in order; `fail` makes the announce error so a test
+    /// can prove the committed switch still stands when the best-effort hint fails.
+    #[derive(Clone)]
+    struct ChangedSink {
+        announced: Arc<Mutex<Vec<AgentId>>>,
+        fail: bool,
+    }
+    impl ChangedSink {
+        fn ok() -> Self {
+            Self {
+                announced: Arc::new(Mutex::new(Vec::new())),
+                fail: false,
+            }
+        }
+        fn failing() -> Self {
+            Self {
+                announced: Arc::new(Mutex::new(Vec::new())),
+                fail: true,
+            }
+        }
+        fn announced(&self) -> Vec<AgentId> {
+            self.announced.lock().unwrap().clone()
+        }
+    }
+    impl AgentChangedSink for ChangedSink {
+        async fn agent_changed(
+            &self,
+            agent: &AgentId,
+        ) -> Result<(), crate::agent_profile_write::AgentChangedAnnounceFailure> {
+            self.announced.lock().unwrap().push(agent.clone());
+            if self.fail {
+                Err(
+                    crate::agent_profile_write::AgentChangedAnnounceFailure::from_source(
+                        NeverFails,
+                    ),
+                )
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    // ── concurrency discriminator fake ───────────────────────────────────
+
+    /// Enter one phase's critical section: bump the in-flight count, record the running peak,
+    /// then park exactly once on `yield_now` before releasing. The guards are dropped at the end
+    /// of each block, never held across the await, so a serial caller sees a peak of 1 while the
+    /// concurrent `join_all` lets every sibling enter before any resumes and the peak reaches the
+    /// call count. Determinism rides `yield_now`, never a wall-clock sleep.
+    async fn gated(active: &Mutex<usize>, peak: &Mutex<usize>) {
+        {
+            let mut running = active.lock().unwrap();
+            *running += 1;
+            let mut high_water = peak.lock().unwrap();
+            *high_water = (*high_water).max(*running);
+        }
+        tokio::task::yield_now().await;
+        {
+            let mut running = active.lock().unwrap();
+            *running -= 1;
+        }
+    }
+
+    /// A control port that yields inside every clear and start so a fan-out is observable, tracking
+    /// the peak simultaneous in-flight calls per phase. All calls succeed; the test reads only the
+    /// peaks to tell concurrent fan-out (peak == seat/target count) from a serial loop (peak == 1).
+    #[derive(Clone)]
+    struct GatedControl {
+        clear_active: Arc<Mutex<usize>>,
+        clear_peak: Arc<Mutex<usize>>,
+        start_active: Arc<Mutex<usize>>,
+        start_peak: Arc<Mutex<usize>>,
+    }
+    impl GatedControl {
+        fn new() -> Self {
+            Self {
+                clear_active: Arc::new(Mutex::new(0)),
+                clear_peak: Arc::new(Mutex::new(0)),
+                start_active: Arc::new(Mutex::new(0)),
+                start_peak: Arc::new(Mutex::new(0)),
+            }
+        }
+        fn clear_peak(&self) -> usize {
+            *self.clear_peak.lock().unwrap()
+        }
+        fn start_peak(&self) -> usize {
+            *self.start_peak.lock().unwrap()
+        }
+    }
+    impl RuntimeControlPort for GatedControl {
+        type Error = NeverFails;
+
+        async fn start(
+            &self,
+            _target: &RuntimeStartTarget,
+        ) -> Result<Result<StartRuntimeOutcome, StartRuntimeProviderRefusal>, Self::Error> {
+            gated(&self.start_active, &self.start_peak).await;
+            Ok(Ok(StartRuntimeOutcome))
+        }
+        async fn hard_stop(
+            &self,
+            _target: &RuntimeSeatTarget,
+        ) -> Result<
+            Result<
+                crate::messaging::collaboration::HardStopRuntimeOutcome,
+                crate::messaging::collaboration::HardStopRuntimeProviderRefusal,
+            >,
+            Self::Error,
+        > {
+            unreachable!("switch saga never hard-stops")
+        }
+        async fn clear_session(
+            &self,
+            _target: &RuntimeSeatTarget,
+        ) -> Result<Result<ClearSessionOutcome, ClearSessionProviderRefusal>, Self::Error> {
+            gated(&self.clear_active, &self.clear_peak).await;
+            Ok(Ok(ClearSessionOutcome::committed(None, true)))
+        }
+    }
+
     // ── the assembled saga call ──────────────────────────────────────────
 
     struct Harness {
@@ -1342,6 +1495,16 @@ mod tests {
             &self,
             request: &SwitchAgentRuntimeRequest,
         ) -> Result<SwitchAgentRuntimeCommitted, SwitchAgentRuntimeError> {
+            self.run_with_changed(request, &ChangedSink::ok()).await
+        }
+
+        /// Same as [`run`], but with a caller-held sink so a test can assert the post-commit
+        /// `agent_changed` publish count and that a failing sink never flips the committed result.
+        async fn run_with_changed(
+            &self,
+            request: &SwitchAgentRuntimeRequest,
+            changed: &ChangedSink,
+        ) -> Result<SwitchAgentRuntimeCommitted, SwitchAgentRuntimeError> {
             switch_agent_runtime(
                 &self.reads,
                 &self.probe,
@@ -1352,6 +1515,7 @@ mod tests {
                 &self.custody,
                 &self.focus,
                 &self.control,
+                changed,
                 request,
                 NOW,
             )
@@ -2141,6 +2305,7 @@ mod tests {
             &Custody::absent(),
             &Focus::unused(),
             &RefusingStart(Control::new()),
+            &ChangedSink::ok(),
             &req,
             NOW,
         )
@@ -2150,6 +2315,171 @@ mod tests {
         assert_eq!(
             committed.restart_failures, 1,
             "the refusal is counted, not rolled back"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // The committed change publishes `agent_changed` exactly once, keyed on the
+    // sealed committed id, best-effort — after commit, before the restart aftermath.
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_committed_switch_announces_agent_changed_once_keyed_on_the_committed_agent() {
+        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
+        let harness = Harness {
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
+            probe: Probe::available(),
+            coordination: Coordination::default(),
+            transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![conv_seat(
+                "c-a",
+                RuntimeObservedStatus::Active,
+                true,
+            )]),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
+            control: Control::new(),
+        };
+        let sink = ChangedSink::ok();
+        harness.run_with_changed(&req, &sink).await.expect("commit");
+        assert_eq!(
+            sink.announced(),
+            vec![agent(AGENT)],
+            "exactly one hint, keyed on the committed agent id"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lost_commit_announces_no_agent_changed() {
+        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
+        let harness = Harness {
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
+            probe: Probe::available(),
+            coordination: Coordination::default(),
+            transitions: Transitions::new(
+                BeginTransitionRecord::Locked(lock_row()),
+                CompleteTransitionRecord::Lost,
+            ),
+            facts: TransitionFacts::with_seats(vec![conv_seat(
+                "c-a",
+                RuntimeObservedStatus::Active,
+                true,
+            )]),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
+            control: Control::new(),
+        };
+        let sink = ChangedSink::ok();
+        assert_eq!(
+            harness.run_with_changed(&req, &sink).await,
+            Err(SwitchAgentRuntimeError::TransitionLost)
+        );
+        assert!(
+            sink.announced().is_empty(),
+            "no commit, no hint — the row belongs to whoever owns the lock now"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pre_commit_clear_failure_announces_no_agent_changed() {
+        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
+        let harness = Harness {
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
+            probe: Probe::available(),
+            coordination: Coordination::default(),
+            transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![conv_seat(
+                "c-a",
+                RuntimeObservedStatus::Active,
+                true,
+            )]),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
+            control: Control::scripting(vec![ClearScript::Refuse]),
+        };
+        let sink = ChangedSink::ok();
+        assert_eq!(
+            harness.run_with_changed(&req, &sink).await,
+            Err(SwitchAgentRuntimeError::SessionClearFailed)
+        );
+        assert!(
+            sink.announced().is_empty(),
+            "aborted before commit — nothing changed, so no hint"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_agent_changed_sink_never_flips_the_committed_switch() {
+        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
+        let harness = Harness {
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
+            probe: Probe::available(),
+            coordination: Coordination::default(),
+            transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![conv_seat(
+                "c-a",
+                RuntimeObservedStatus::Active,
+                true,
+            )]),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
+            control: Control::new(),
+        };
+        let sink = ChangedSink::failing();
+        let committed = harness
+            .run_with_changed(&req, &sink)
+            .await
+            .expect("the committed switch stands despite a failing best-effort hint");
+        assert_eq!(committed.cleared_sessions, 1);
+        assert_eq!(
+            sink.announced(),
+            vec![agent(AGENT)],
+            "the hint was still attempted exactly once"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Clears (pre-commit) and restarts (post-commit) fan out concurrently, not serially.
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn clears_and_restarts_fan_out_concurrently_not_serially() {
+        // Two live conversation seats → two clears pre-commit and two restarts post-commit. Under
+        // the `join_all` fan-out both siblings enter their critical section before either resumes,
+        // so each phase's peak in-flight count reaches 2; a serial loop would cap it at 1.
+        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
+        let facts = TransitionFacts::with_seats(vec![
+            conv_seat("c-a", RuntimeObservedStatus::Active, true),
+            conv_seat("c-b", RuntimeObservedStatus::Active, true),
+        ]);
+        let control = GatedControl::new();
+        let committed = switch_agent_runtime(
+            &SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
+            &Probe::available(),
+            &Coordination::default(),
+            &Transitions::committing(),
+            &facts,
+            &facts,
+            &Custody::absent(),
+            &Focus::unused(),
+            &control,
+            &ChangedSink::ok(),
+            &req,
+            NOW,
+        )
+        .await
+        .expect("commit");
+        assert_eq!(committed.cleared_sessions, 2);
+        assert_eq!(committed.restarted_conversations, 2);
+        assert_eq!(
+            control.clear_peak(),
+            2,
+            "both clears were in-flight simultaneously, not serialized"
+        );
+        assert_eq!(
+            control.start_peak(),
+            2,
+            "both restarts were in-flight simultaneously, not serialized"
         );
     }
 }
