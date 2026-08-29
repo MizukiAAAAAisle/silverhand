@@ -434,6 +434,12 @@ pub struct EmptyCliSessionId;
 pub struct ClearSessionOutcome {
     previous_cli_session: Option<CliSessionId>,
     was_running: bool,
+    /// The conversation the cleared AgentSlot was presenting at clear time, when the
+    /// provider observed one. This is a LIVE runtime-host coordinate, not a durable
+    /// fact, so the durable seat path ([`seal_clear_session_commit`]) never carries it;
+    /// only the daemon clear adapter reports it, and the runtime-switch saga reuses it
+    /// as a fallback restart target — always re-checked against participation before use.
+    focus_conversation_id: Option<ConversationId>,
 }
 
 impl ClearSessionOutcome {
@@ -441,6 +447,22 @@ impl ClearSessionOutcome {
         Self {
             previous_cli_session,
             was_running,
+            focus_conversation_id: None,
+        }
+    }
+
+    /// A clear whose provider also observed the AgentSlot's presentation focus. Distinct
+    /// from [`Self::committed`] so the durable-seat sealer cannot accidentally invent a
+    /// focus it never witnessed.
+    pub fn committed_presenting(
+        previous_cli_session: Option<CliSessionId>,
+        was_running: bool,
+        focus_conversation_id: Option<ConversationId>,
+    ) -> Self {
+        Self {
+            previous_cli_session,
+            was_running,
+            focus_conversation_id,
         }
     }
 
@@ -450,6 +472,10 @@ impl ClearSessionOutcome {
 
     pub fn was_running(&self) -> bool {
         self.was_running
+    }
+
+    pub fn focus_conversation_id(&self) -> Option<&ConversationId> {
+        self.focus_conversation_id.as_ref()
     }
 }
 

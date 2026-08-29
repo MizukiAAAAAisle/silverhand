@@ -17,6 +17,7 @@ pub mod agent_list_read;
 pub mod agent_materialization;
 pub mod agent_materialize;
 pub mod agent_presence_read;
+pub mod agent_runtime_switch;
 pub mod agent_profile_write;
 pub mod agents;
 pub mod auth;
