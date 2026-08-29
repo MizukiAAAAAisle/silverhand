@@ -25,7 +25,9 @@ use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
     agents::runtime::RuntimeKind,
     identity::{AgentId, ConversationId, DaemonInstanceId},
-    runtime_credential::{RuntimeFinalStatus, RuntimePrincipal, RuntimeScope},
+    runtime_credential::{
+        AgentSlotPresentationFocusPort, RuntimeFinalStatus, RuntimePrincipal, RuntimeScope,
+    },
     runtime_transition::{BeginTransition, begin_runtime_transition},
 };
 use silverhand_backend_server::{
@@ -387,6 +389,73 @@ async fn held_transition_marker_refuses_before_custody_mutation_or_transport() {
     .await
     .unwrap();
     assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn a_real_current_custody_started_retry_installs_and_updates_agent_slot_focus() {
+    let fixture = fixture().await;
+    let ambiguous = StartTransport::new(StartOutcome::Ambiguous);
+    let result = fixture
+        .authority
+        .dispatch_start(agent_scope(), daemon("daemon-agent"), origin(), &ambiguous)
+        .await;
+    assert!(matches!(result, Err(RuntimeStartFailure::Ambiguous(_))));
+    let principal = ambiguous.last().principal;
+    assert_eq!(
+        fixture
+            .authority
+            .agent_slot_presentation_focus(principal.clone())
+            .await
+            .unwrap(),
+        None
+    );
+
+    let retry_origin = ConversationId::parse("target-2").unwrap();
+    let retry = StartTransport::new(StartOutcome::Accepted);
+    let retried = fixture
+        .authority
+        .dispatch_start(
+            agent_scope(),
+            daemon("daemon-agent"),
+            retry_origin.clone(),
+            &retry,
+        )
+        .await
+        .unwrap();
+    assert_eq!(retried, principal);
+    assert_eq!(retry.last().principal, principal);
+    assert_eq!(
+        fixture
+            .authority
+            .agent_slot_presentation_focus(principal.clone())
+            .await
+            .unwrap(),
+        Some(retry_origin)
+    );
+
+    let latest_origin = ConversationId::parse("focus-latest").unwrap();
+    let repeat = StartTransport::new(StartOutcome::Accepted);
+    assert_eq!(
+        fixture
+            .authority
+            .dispatch_start(
+                agent_scope(),
+                daemon("daemon-agent"),
+                latest_origin.clone(),
+                &repeat,
+            )
+            .await
+            .unwrap(),
+        principal
+    );
+    assert_eq!(
+        fixture
+            .authority
+            .agent_slot_presentation_focus(principal)
+            .await
+            .unwrap(),
+        Some(latest_origin)
+    );
 }
 
 #[derive(Clone)]

@@ -48,7 +48,7 @@
 //! fence, not a full ABA defense — a reacquire that lands on the *same* millisecond
 //! stamp is out of scope, because `started_at` is a wall clock, not a unique attempt id.
 
-use std::future::Future;
+use std::{collections::HashSet, future::Future};
 
 use thiserror::Error;
 
@@ -376,6 +376,16 @@ impl RuntimeTransitionSeatSnapshot {
         {
             return Err(RuntimeTransitionFault::SeatSnapshotWitnessMismatch {
                 reason: "seat snapshot contains a scope owned by another agent",
+            });
+        }
+        let mut scopes = HashSet::with_capacity(row.seats.len());
+        if row
+            .seats
+            .iter()
+            .any(|seat| !scopes.insert(seat.scope.clone()))
+        {
+            return Err(RuntimeTransitionFault::SeatSnapshotWitnessMismatch {
+                reason: "seat snapshot contains the same runtime scope more than once",
             });
         }
         Ok(Self {
@@ -926,5 +936,61 @@ mod tests {
             reclaim_runtime_transition_inboxes(&facts, &lock).await,
             Err(RuntimeTransitionFault::InboxReclaimWitnessMismatch { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn transition_seat_snapshot_rejects_exact_duplicates_but_keeps_mixed_arms() {
+        let (_port, lock) = a_sealed_lock().await;
+        let conversation = RuntimeScope::ConversationSlot {
+            agent: agent("a1"),
+            source: ConversationId::parse("c1").unwrap(),
+        };
+        let agent_slot = RuntimeScope::AgentSlot { agent: agent("a1") };
+        let seat = |scope| RuntimeTransitionSeatRow {
+            scope,
+            observed_status: RuntimeObservedStatus::Active,
+            cli_session_id: None,
+        };
+        let facts = |seats| ScriptedTransitionFacts {
+            seats: RuntimeTransitionSeatSnapshotRecord::Snapshot(
+                RuntimeTransitionSeatSnapshotRow {
+                    lock: RuntimeTransitionLockRow {
+                        agent_id: agent("a1"),
+                        target: "codex".to_owned(),
+                        started_at: 5,
+                    },
+                    seats,
+                },
+            ),
+            reclaim: RuntimeTransitionInboxReclaimRecord::Lost,
+        };
+
+        for duplicate in [conversation.clone(), agent_slot.clone()] {
+            assert!(matches!(
+                read_runtime_transition_seats(
+                    &facts(vec![seat(duplicate.clone()), seat(duplicate)]),
+                    &lock,
+                )
+                .await,
+                Err(RuntimeTransitionFault::SeatSnapshotWitnessMismatch { .. })
+            ));
+        }
+
+        let ReadRuntimeTransitionSeats::Snapshot(snapshot) = read_runtime_transition_seats(
+            &facts(vec![seat(conversation.clone()), seat(agent_slot.clone())]),
+            &lock,
+        )
+        .await
+        .unwrap() else {
+            panic!("exactly one seat from each arm must remain a valid snapshot");
+        };
+        assert_eq!(
+            snapshot
+                .seats()
+                .iter()
+                .map(|seat| &seat.scope)
+                .collect::<Vec<_>>(),
+            vec![&conversation, &agent_slot]
+        );
     }
 }

@@ -503,8 +503,7 @@ where
         let principal = handoff.principal.clone();
         match transport.dispatch(&handoff).await {
             Ok(()) => {
-                if handoff.newly_claimed && matches!(&principal, RuntimePrincipal::AgentSlot { .. })
-                {
+                if matches!(&principal, RuntimePrincipal::AgentSlot { .. }) {
                     let mut focus = self.presentation_focus.write().await;
                     focus.retain(|existing, _| {
                         existing.agent() != principal.agent() || existing.source().is_some()
@@ -897,6 +896,12 @@ mod tests {
             &self,
             claim: ClaimRuntimeCustody,
         ) -> Result<Option<ClaimedRuntime>, PersistenceFailure> {
+            if let Some(current) = self.current.lock().unwrap().clone().filter(|principal| {
+                principal.scope() == *claim.scope()
+                    && principal.custody().daemon_instance() == claim.daemon_instance()
+            }) {
+                return Ok(Some(ClaimedRuntime::new(current, false)));
+            }
             let generation = {
                 let mut next = self.next_generation.lock().unwrap();
                 *next += 1;
@@ -1013,10 +1018,54 @@ mod tests {
         let ambiguous = custody.current(agent_slot()).await.unwrap().unwrap();
         assert_eq!(
             authority
-                .agent_slot_presentation_focus(ambiguous)
+                .agent_slot_presentation_focus(ambiguous.clone())
                 .await
                 .unwrap(),
             None
+        );
+
+        let retry_origin = origin("conversation-retry");
+        let retried = authority
+            .dispatch_start(
+                agent_slot(),
+                daemon("daemon-ambiguous"),
+                retry_origin.clone(),
+                &FocusTransport {
+                    result: StartResult::Started,
+                    custody: custody.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(retried, ambiguous);
+        assert_eq!(
+            authority
+                .agent_slot_presentation_focus(retried.clone())
+                .await
+                .unwrap(),
+            Some(retry_origin)
+        );
+
+        let latest_origin = origin("conversation-latest");
+        let same_principal = authority
+            .dispatch_start(
+                agent_slot(),
+                daemon("daemon-ambiguous"),
+                latest_origin.clone(),
+                &FocusTransport {
+                    result: StartResult::Started,
+                    custody: custody.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(same_principal, retried);
+        assert_eq!(
+            authority
+                .agent_slot_presentation_focus(same_principal)
+                .await
+                .unwrap(),
+            Some(latest_origin)
         );
 
         let c1 = origin("conversation-1");
