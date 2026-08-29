@@ -46,18 +46,20 @@ impl RuntimeStartTarget {
     }
 }
 
-/// A seat-operation coordinate (clear-session / hard-stop / snapshot / settle).
-/// It carries the row-owned [`RuntimeScope`], which is always minted from a fact
-/// (route admission reading the persisted session scope, or a seat read fact for
-/// runtime-switch) — never selected by the caller. Exact scope equality binds it
-/// to the durable seat, so an agent-scoped seat can never match a conversation.
+/// The persistence-layer address of a runtime seat: the acting human plus the
+/// row-owned [`RuntimeScope`]. Unlike [`RuntimeSeatTarget`] it carries **no admission
+/// seal** — it is freely constructible, because it names a seat coordinate the way a
+/// repository key names a row, not an authorization. The admission guarantee lives one
+/// layer up at the [`RuntimeControlPort`] boundary, whose methods consume a sealed
+/// `RuntimeSeatTarget`; the lower [`RuntimeControlSeatPort`] (persistence) only needs
+/// the coordinate to read and settle the durable seat, so it takes this value.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RuntimeSeatTarget {
+pub struct RuntimeSeatCoordinate {
     actor: UserId,
     scope: RuntimeScope,
 }
 
-impl RuntimeSeatTarget {
+impl RuntimeSeatCoordinate {
     pub fn new(actor: UserId, scope: RuntimeScope) -> Self {
         Self { actor, scope }
     }
@@ -72,6 +74,52 @@ impl RuntimeSeatTarget {
 
     pub fn agent(&self) -> &AgentId {
         self.scope.agent()
+    }
+}
+
+/// A seat-operation coordinate (clear-session / hard-stop / snapshot / settle).
+/// It carries the row-owned [`RuntimeScope`], which is always minted from a fact
+/// (route admission reading the persisted session scope, or a seat read fact for
+/// runtime-switch) — never selected by the caller. Exact scope equality binds it
+/// to the durable seat, so an agent-scoped seat can never match a conversation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeSeatTarget {
+    coordinate: RuntimeSeatCoordinate,
+}
+
+impl RuntimeSeatTarget {
+    /// Mint a seat target from a row-owned [`RuntimeScope`]. Deliberately
+    /// crate-private and with no test escape hatch: a `RuntimeScope` is
+    /// authoritative only when derived from a fact — route admission reading the
+    /// immutable persisted session scope, or an internal seat-fact read for
+    /// runtime-switch. A public (or test-only cross-crate) constructor would let a
+    /// caller hand-pick an arm and re-open the caller-selected-scope hole this type
+    /// exists to close, so the only mint sites are the admission use cases below,
+    /// and downstream tests reach a target only by driving those use cases. The
+    /// persistence layer never receives this seal; it operates on the unsealed
+    /// [`RuntimeSeatCoordinate`] via [`Self::coordinate`].
+    pub(crate) fn new(actor: UserId, scope: RuntimeScope) -> Self {
+        Self {
+            coordinate: RuntimeSeatCoordinate::new(actor, scope),
+        }
+    }
+
+    /// The persistence-layer coordinate this admitted target authorizes. The seat
+    /// port consumes this; the seal (crate-private [`Self::new`]) stays above.
+    pub fn coordinate(&self) -> &RuntimeSeatCoordinate {
+        &self.coordinate
+    }
+
+    pub fn actor(&self) -> &UserId {
+        self.coordinate.actor()
+    }
+
+    pub fn scope(&self) -> &RuntimeScope {
+        self.coordinate.scope()
+    }
+
+    pub fn agent(&self) -> &AgentId {
+        self.coordinate.agent()
     }
 }
 
@@ -129,7 +177,7 @@ impl RuntimeControlSeatSnapshot {
 
     pub fn bind(
         self,
-        target: &RuntimeSeatTarget,
+        coordinate: &RuntimeSeatCoordinate,
     ) -> Result<BoundRuntimeControlSeat, RuntimeControlSeatMismatch> {
         // Exact scope equality: `RuntimeScope` distinguishes the two arms by
         // construction, so an `AgentSlot` seat can never satisfy a
@@ -137,7 +185,7 @@ impl RuntimeControlSeatSnapshot {
         // seat is pinned to its exact source conversation. This closes the old
         // `is_none_or` hole where an agent-scoped seat accepted any conversation.
         let coordinate_matches =
-            self.scope == *target.scope() && &self.agent == self.scope.agent();
+            self.scope == *coordinate.scope() && &self.agent == self.scope.agent();
         if !coordinate_matches || self.agent_name.is_empty() {
             return Err(RuntimeControlSeatMismatch);
         }
@@ -264,12 +312,12 @@ pub trait RuntimeControlSeatPort: Clone + Send + Sync + 'static {
 
     fn snapshot(
         &self,
-        target: &RuntimeSeatTarget,
+        coordinate: &RuntimeSeatCoordinate,
     ) -> impl Future<Output = Result<Option<RuntimeControlSeatSnapshot>, Self::Error>> + Send;
 
     fn settle_clear(
         &self,
-        target: &RuntimeSeatTarget,
+        coordinate: &RuntimeSeatCoordinate,
         before: &BoundRuntimeControlSeat,
     ) -> impl Future<Output = Result<Option<ClearSessionCommitReceipt>, Self::Error>> + Send;
 }
@@ -341,6 +389,10 @@ pub enum RuntimeControlAdmissionRefusal {
     AgentNotFound,
     AgentNotMember,
     Forbidden,
+    /// The persisted session scope does not match the endpoint that was used: an
+    /// agent-scoped endpoint was invoked for a conversation-scoped agent. Produced
+    /// only by [`admit_agent_seat`]; never by a conversation operation or start.
+    RuntimeScopeMismatch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -591,51 +643,77 @@ async fn admit_start<A: RuntimeControlAdmission>(
     finish_with(snapshot, decision).await
 }
 
-/// Resolve the row-owned seat scope and admit the seat operation over it.
-///
-/// The candidate conversation comes from the request; the *arm* comes solely from
-/// the immutable persisted `session_scope`. A conversation-scoped agent runs the
-/// conversation ladder against its own source conversation; an agent-scoped agent
-/// runs the agent ladder with zero conversation reads. The returned
-/// [`RuntimeScope`] is therefore always a fact, never a caller selection.
-async fn admit_seat<A: RuntimeControlAdmission>(
+/// Admit a **conversation** seat operation. The admission ladder is chosen by the
+/// endpoint, not by the persisted arm: the full five-question conversation ladder
+/// always runs against the request conversation, whatever the agent's session
+/// scope. Only after it passes does the immutable persisted `session_scope` decide
+/// which seat the operation lands on — `ConversationSlot` sourced at this
+/// conversation, or the agent's single `AgentSlot`. The returned [`RuntimeScope`]
+/// is therefore a fact, never a caller selection.
+async fn admit_conversation_seat<A: RuntimeControlAdmission>(
     admission: &A,
     actor: &UserId,
     agent: &AgentId,
-    candidate: &ConversationId,
+    conversation: &ConversationId,
 ) -> Result<Result<RuntimeScope, RuntimeControlAdmissionRefusal>, A::Error> {
     let mut snapshot = admission.begin_snapshot().await?;
     let decision = async {
-        let Some(session_scope) = snapshot.agent_session_scope(agent).await? else {
-            return Ok(Err(RuntimeControlAdmissionRefusal::AgentNotFound));
-        };
-        match session_scope {
-            AgentSessionScope::Conversation => {
-                let scope = RuntimeScope::ConversationSlot {
-                    agent: agent.clone(),
-                    source: candidate.clone(),
-                };
-                match run_conversation_ladder(&mut snapshot, actor, agent, candidate).await? {
-                    Some(refusal) => Ok(Err(refusal)),
-                    None => Ok(Ok(scope)),
-                }
-            }
-            AgentSessionScope::Agent => {
-                let scope = RuntimeScope::AgentSlot {
-                    agent: agent.clone(),
-                };
-                match run_agent_ladder(&mut snapshot, actor, agent).await? {
-                    Some(refusal) => Ok(Err(refusal)),
-                    None => Ok(Ok(scope)),
-                }
-            }
+        if let Some(refusal) =
+            run_conversation_ladder(&mut snapshot, actor, agent, conversation).await?
+        {
+            return Ok(Err(refusal));
+        }
+        // The ladder proved the agent row exists; the arm is owned solely by its
+        // persisted session scope. A conversation-scoped agent lands on its
+        // ConversationSlot sourced at this admitted conversation; an agent-scoped
+        // agent lands on its single conversation-independent AgentSlot.
+        match snapshot.agent_session_scope(agent).await? {
+            None => Ok(Err(RuntimeControlAdmissionRefusal::AgentNotFound)),
+            Some(AgentSessionScope::Conversation) => Ok(Ok(RuntimeScope::ConversationSlot {
+                agent: agent.clone(),
+                source: conversation.clone(),
+            })),
+            Some(AgentSessionScope::Agent) => Ok(Ok(RuntimeScope::AgentSlot {
+                agent: agent.clone(),
+            })),
         }
     }
     .await;
     finish_with(snapshot, decision).await
 }
 
-/// Run the ordered seat admission without constructing a provider command.
+/// Admit an **agent** seat operation. The endpoint carries no conversation, so the
+/// agent ladder runs with **zero** conversation reads (existence + edit only), and
+/// the persisted session scope must be agent-scoped: a conversation-scoped agent
+/// reached through an agent endpoint is refused [`RuntimeScopeMismatch`] with no
+/// provider effect. The returned [`RuntimeScope`] is always the agent's single
+/// `AgentSlot`.
+async fn admit_agent_seat<A: RuntimeControlAdmission>(
+    admission: &A,
+    actor: &UserId,
+    agent: &AgentId,
+) -> Result<Result<RuntimeScope, RuntimeControlAdmissionRefusal>, A::Error> {
+    let mut snapshot = admission.begin_snapshot().await?;
+    let decision = async {
+        if let Some(refusal) = run_agent_ladder(&mut snapshot, actor, agent).await? {
+            return Ok(Err(refusal));
+        }
+        match snapshot.agent_session_scope(agent).await? {
+            None => Ok(Err(RuntimeControlAdmissionRefusal::AgentNotFound)),
+            Some(AgentSessionScope::Conversation) => {
+                Ok(Err(RuntimeControlAdmissionRefusal::RuntimeScopeMismatch))
+            }
+            Some(AgentSessionScope::Agent) => Ok(Ok(RuntimeScope::AgentSlot {
+                agent: agent.clone(),
+            })),
+        }
+    }
+    .await;
+    finish_with(snapshot, decision).await
+}
+
+/// Run the ordered conversation-seat admission without constructing a provider
+/// command.
 ///
 /// The stop wire uses this only for a legacy body it must reject *after* the
 /// published product checks. It returns no reusable capability: an admitted
@@ -645,11 +723,13 @@ pub async fn check_runtime_control_admission<A: RuntimeControlAdmission>(
     admission: &A,
     actor: &UserId,
     agent: &AgentId,
-    candidate: &ConversationId,
+    conversation: &ConversationId,
 ) -> Result<Option<RuntimeControlAdmissionRefusal>, A::Error> {
-    Ok(admit_seat(admission, actor, agent, candidate)
-        .await?
-        .err())
+    Ok(
+        admit_conversation_seat(admission, actor, agent, conversation)
+            .await?
+            .err(),
+    )
 }
 
 pub async fn start_runtime<A, P>(
@@ -682,7 +762,7 @@ pub async fn hard_stop_runtime<A, P>(
     provider: &P,
     actor: UserId,
     agent: AgentId,
-    candidate: ConversationId,
+    conversation: ConversationId,
 ) -> Result<
     Result<HardStopRuntimeOutcome, HardStopRuntimeRefusal>,
     RuntimeControlFailure<A::Error, P::Error>,
@@ -691,7 +771,7 @@ where
     A: RuntimeControlAdmission,
     P: RuntimeControlPort,
 {
-    let scope = match admit_seat(admission, &actor, &agent, &candidate)
+    let scope = match admit_conversation_seat(admission, &actor, &agent, &conversation)
         .await
         .map_err(RuntimeControlFailure::Admission)?
     {
@@ -706,12 +786,14 @@ where
         .map(|result| result.map_err(HardStopRuntimeRefusal::Provider))
 }
 
-pub async fn clear_runtime_session<A, P>(
+/// Clear a runtime session through a **conversation** endpoint. Runs the full
+/// conversation ladder, then acts on the row-owned seat.
+pub async fn clear_conversation_session<A, P>(
     admission: &A,
     provider: &P,
     actor: UserId,
     agent: AgentId,
-    candidate: ConversationId,
+    conversation: ConversationId,
 ) -> Result<
     Result<ClearSessionOutcome, ClearSessionRefusal>,
     RuntimeControlFailure<A::Error, P::Error>,
@@ -720,13 +802,54 @@ where
     A: RuntimeControlAdmission,
     P: RuntimeControlPort,
 {
-    let scope = match admit_seat(admission, &actor, &agent, &candidate)
+    let scope = match admit_conversation_seat(admission, &actor, &agent, &conversation)
         .await
         .map_err(RuntimeControlFailure::Admission)?
     {
         Ok(scope) => scope,
         Err(refusal) => return Ok(Err(ClearSessionRefusal::Admission(refusal))),
     };
+    clear_session_with_scope(provider, actor, scope).await
+}
+
+/// Clear a runtime session through an **agent** endpoint. Carries no conversation:
+/// runs the agent ladder with zero conversation reads and requires an agent-scoped
+/// row, then acts on the agent's single seat.
+pub async fn clear_agent_session<A, P>(
+    admission: &A,
+    provider: &P,
+    actor: UserId,
+    agent: AgentId,
+) -> Result<
+    Result<ClearSessionOutcome, ClearSessionRefusal>,
+    RuntimeControlFailure<A::Error, P::Error>,
+>
+where
+    A: RuntimeControlAdmission,
+    P: RuntimeControlPort,
+{
+    let scope = match admit_agent_seat(admission, &actor, &agent)
+        .await
+        .map_err(RuntimeControlFailure::Admission)?
+    {
+        Ok(scope) => scope,
+        Err(refusal) => return Ok(Err(ClearSessionRefusal::Admission(refusal))),
+    };
+    clear_session_with_scope(provider, actor, scope).await
+}
+
+async fn clear_session_with_scope<E, P>(
+    provider: &P,
+    actor: UserId,
+    scope: RuntimeScope,
+) -> Result<
+    Result<ClearSessionOutcome, ClearSessionRefusal>,
+    RuntimeControlFailure<E, <P as RuntimeControlPort>::Error>,
+>
+where
+    E: Error + Send + Sync + 'static,
+    P: RuntimeControlPort,
+{
     let target = RuntimeSeatTarget::new(actor, scope);
     provider
         .clear_session(&target)
@@ -766,7 +889,7 @@ mod tests {
             RuntimeControlObservedStatus::Active,
             "agent".to_owned(),
         )
-        .bind(&target)
+        .bind(target.coordinate())
         .unwrap();
         let receipt = |scope, generation, previous, was_running, committed, audit| {
             ClearSessionCommitReceipt::decoded(
@@ -1103,7 +1226,7 @@ mod tests {
             Ok(HardStopRuntimeOutcome)
         );
         assert_eq!(
-            clear_runtime_session(&admission, &provider, actor(), agent(), convo())
+            clear_conversation_session(&admission, &provider, actor(), agent(), convo())
                 .await
                 .unwrap(),
             Ok(ClearSessionOutcome::committed(None, false))
@@ -1171,7 +1294,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            clear_runtime_session(&admission, &refusing, actor(), agent(), convo())
+            clear_conversation_session(&admission, &refusing, actor(), agent(), convo())
                 .await
                 .unwrap(),
             Err(ClearSessionRefusal::Provider(
@@ -1227,52 +1350,137 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_scoped_seat_reads_the_row_arm_and_consults_no_conversation() {
+    async fn agent_endpoint_reads_the_row_arm_and_consults_no_conversation() {
         let mut admission = admission([true; 5]);
         admission.session_scope = Some(AgentSessionScope::Agent);
         let provider = provider(&admission, false);
         assert_eq!(
-            clear_runtime_session(&admission, &provider, actor(), agent(), convo())
+            clear_agent_session(&admission, &provider, actor(), agent())
                 .await
                 .unwrap(),
             Ok(ClearSessionOutcome::committed(None, false))
         );
-        // The arm is owned by the row: an agent-scoped seat runs the existence and
-        // edit questions only — never a conversation existence/membership/post read.
+        // The agent endpoint carries no conversation: the agent ladder runs the
+        // existence and edit questions only, then the row arm is read — never a
+        // conversation existence/membership/post read.
         assert_eq!(
             admission.calls.lock().unwrap().as_slice(),
-            ["session_scope", "agent", "edit", "finish"]
+            ["agent", "edit", "session_scope", "finish"]
         );
     }
 
     #[tokio::test]
-    async fn conversation_scoped_seat_runs_the_full_ladder_against_the_candidate() {
-        let admission = admission([true; 5]);
+    async fn agent_endpoint_refuses_a_conversation_scoped_agent_with_zero_provider() {
+        // A conversation-scoped agent reached through the conversation-less agent
+        // endpoint is a scope mismatch: refuse with no provider effect.
+        let admission = admission([true; 5]); // default session_scope = Conversation
         let provider = provider(&admission, false);
-        assert!(
-            clear_runtime_session(&admission, &provider, actor(), agent(), convo())
+        assert_eq!(
+            clear_agent_session(&admission, &provider, actor(), agent())
                 .await
-                .unwrap()
-                .is_ok()
+                .unwrap(),
+            Err(ClearSessionRefusal::Admission(
+                RuntimeControlAdmissionRefusal::RuntimeScopeMismatch
+            ))
         );
+        assert!(provider.calls.lock().unwrap().is_empty());
         assert_eq!(
             admission.calls.lock().unwrap().as_slice(),
-            [
-                "session_scope",
-                "conversation",
-                "agent",
-                "membership",
-                "post",
-                "edit",
-                "finish"
-            ]
+            ["agent", "edit", "session_scope", "finish"]
         );
     }
 
     #[tokio::test]
-    async fn a_seat_operation_on_an_absent_agent_row_refuses_before_any_side_effect() {
-        let mut admission = admission([true; 5]);
-        admission.session_scope = None;
+    async fn conversation_endpoint_runs_the_full_ladder_whatever_the_row_arm() {
+        // The endpoint — not the persisted arm — chooses the ladder. A
+        // conversation-scoped agent lands on its ConversationSlot; an agent-scoped
+        // agent reached through the same conversation endpoint STILL runs the full
+        // conversation ladder and then lands on its AgentSlot.
+        struct CapturingProvider {
+            scope: Mutex<Option<RuntimeScope>>,
+            finished: Arc<AtomicBool>,
+        }
+        impl RuntimeControlPort for CapturingProvider {
+            type Error = Failure;
+
+            async fn start(
+                &self,
+                _: &RuntimeStartTarget,
+            ) -> Result<Result<StartRuntimeOutcome, StartRuntimeProviderRefusal>, Self::Error>
+            {
+                unreachable!("this test only clears")
+            }
+
+            async fn hard_stop(
+                &self,
+                _: &RuntimeSeatTarget,
+            ) -> Result<Result<HardStopRuntimeOutcome, HardStopRuntimeProviderRefusal>, Self::Error>
+            {
+                unreachable!("this test only clears")
+            }
+
+            async fn clear_session(
+                &self,
+                target: &RuntimeSeatTarget,
+            ) -> Result<Result<ClearSessionOutcome, ClearSessionProviderRefusal>, Self::Error>
+            {
+                assert!(self.finished.load(Ordering::Acquire));
+                *self.scope.lock().unwrap() = Some(target.scope().clone());
+                Ok(Ok(ClearSessionOutcome::committed(None, false)))
+            }
+        }
+
+        for (arm, expected_scope) in [
+            (
+                AgentSessionScope::Conversation,
+                RuntimeScope::ConversationSlot {
+                    agent: agent(),
+                    source: convo(),
+                },
+            ),
+            (
+                AgentSessionScope::Agent,
+                RuntimeScope::AgentSlot { agent: agent() },
+            ),
+        ] {
+            let mut admission = admission([true; 5]);
+            admission.session_scope = Some(arm);
+            let provider = CapturingProvider {
+                scope: Mutex::new(None),
+                finished: Arc::clone(&admission.finished),
+            };
+            assert!(
+                clear_conversation_session(&admission, &provider, actor(), agent(), convo())
+                    .await
+                    .unwrap()
+                    .is_ok()
+            );
+            assert_eq!(
+                admission.calls.lock().unwrap().as_slice(),
+                [
+                    "conversation",
+                    "agent",
+                    "membership",
+                    "post",
+                    "edit",
+                    "session_scope",
+                    "finish"
+                ]
+            );
+            assert_eq!(
+                provider.scope.lock().unwrap().as_ref(),
+                Some(&expected_scope)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_conversation_operation_on_an_absent_agent_refuses_before_any_side_effect() {
+        // The endpoint's own ladder owns existence: an absent agent fails the
+        // ladder's agent-existence question, so the row arm is never consulted.
+        let mut answers = [true; 5];
+        answers[1] = false; // agent_exists
+        let admission = admission(answers);
         let provider = provider(&admission, false);
         assert_eq!(
             hard_stop_runtime(&admission, &provider, actor(), agent(), convo())
@@ -1285,7 +1493,7 @@ mod tests {
         assert!(provider.calls.lock().unwrap().is_empty());
         assert_eq!(
             admission.calls.lock().unwrap().as_slice(),
-            ["session_scope", "finish"]
+            ["conversation", "agent", "finish"]
         );
     }
 
@@ -1309,7 +1517,7 @@ mod tests {
                 "agent".to_owned(),
             )
         };
-        let agent_arm = RuntimeSeatTarget::new(
+        let agent_arm = RuntimeSeatCoordinate::new(
             actor(),
             RuntimeScope::AgentSlot {
                 agent: AgentId::parse("agent-1").unwrap(),
@@ -1320,7 +1528,7 @@ mod tests {
             RuntimeControlSeatMismatch
         );
         // The wrong conversation is likewise rejected.
-        let other_conversation = RuntimeSeatTarget::new(
+        let other_conversation = RuntimeSeatCoordinate::new(
             actor(),
             RuntimeScope::ConversationSlot {
                 agent: AgentId::parse("agent-1").unwrap(),
@@ -1332,7 +1540,7 @@ mod tests {
             RuntimeControlSeatMismatch
         );
         // The exact coordinate binds.
-        let exact = RuntimeSeatTarget::new(
+        let exact = RuntimeSeatCoordinate::new(
             actor(),
             RuntimeScope::ConversationSlot {
                 agent: AgentId::parse("agent-1").unwrap(),

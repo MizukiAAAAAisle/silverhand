@@ -235,12 +235,15 @@ where
         &self,
         target: &RuntimeSeatTarget,
     ) -> Result<BoundRuntimeControlSeat, RuntimeControlAdapterFailure> {
+        // The seat port operates on the unsealed coordinate; the admission seal
+        // stays at this `RuntimeControlPort` boundary.
+        let coordinate = target.coordinate();
         self.seats
-            .snapshot(target)
+            .snapshot(coordinate)
             .await
             .map_err(|source| RuntimeControlAdapterFailure::Infrastructure(Box::new(source)))?
             .ok_or(RuntimeControlAdapterFailure::MissingSeat)?
-            .bind(target)
+            .bind(coordinate)
             .map_err(|_| RuntimeControlAdapterFailure::SeatFactsMismatch)
     }
 
@@ -437,7 +440,7 @@ where
         }
         let receipt = self
             .seats
-            .settle_clear(target, &before)
+            .settle_clear(target.coordinate(), &before)
             .await
             .map_err(|source| RuntimeControlAdapterFailure::Infrastructure(Box::new(source)))?
             .ok_or(RuntimeControlAdapterFailure::StaleSettlement)?;

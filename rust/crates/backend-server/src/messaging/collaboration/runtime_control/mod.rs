@@ -25,7 +25,7 @@ use silverhand_backend_core::{
     messaging::collaboration::{
         ClearSessionRefusal, HardStopRuntimeRefusal, RuntimeControlAdmission, RuntimeControlPort,
         RuntimeStartTarget, StartRuntimeRefusal, check_runtime_control_admission,
-        clear_runtime_session, hard_stop_runtime, start_runtime,
+        clear_conversation_session, hard_stop_runtime, start_runtime,
     },
 };
 
@@ -195,7 +195,7 @@ where
         Ok(coordinates) => coordinates,
         Err(InvalidTarget) => return invalid_target(),
     };
-    match clear_runtime_session(
+    match clear_conversation_session(
         &state.0.admission,
         &state.0.provider,
         actor,

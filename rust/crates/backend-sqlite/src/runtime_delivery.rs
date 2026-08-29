@@ -11,7 +11,7 @@ use silverhand_backend_core::{
         collaboration::{
             BoundRuntimeControlSeat, ClearSessionAuditWitness, ClearSessionCommitReceipt,
             CliSessionId, RuntimeControlObservedStatus, RuntimeControlSeatPort,
-            RuntimeControlSeatSnapshot, RuntimeSeatTarget,
+            RuntimeControlSeatSnapshot, RuntimeSeatCoordinate,
         },
         environment::SendClock,
     },
@@ -76,6 +76,11 @@ impl SqliteRuntimeDeliveryStore {
         conversation: ConversationId,
         agent: AgentId,
     ) -> Result<Option<RuntimeDispatchTarget>, PersistenceFailure> {
+        // Trusted seat coordinate: only the existing delivery coordinator uses this
+        // path, and it already holds pending-inbox custody as its precondition, so
+        // the conversation is an established seat rather than a request candidate.
+        // One read transaction still spans the whole projection.
+        let mut tx = self.pool.begin().await.map_err(persistence)?;
         let Some(agent_row) = sqlx::query(
             "SELECT a.name, a.runtime, a.model, a.reasoning_effort, a.fast_mode,
                     a.host_id, a.session_scope, s.cli_session_id
@@ -88,106 +93,15 @@ impl SqliteRuntimeDeliveryStore {
         )
         .bind(conversation.as_str())
         .bind(agent.as_str())
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(persistence)?
         else {
             return Ok(None);
         };
-        let session_scope: String = agent_row.try_get("session_scope").map_err(persistence)?;
-        let scope = runtime_scope_for(agent.clone(), conversation.clone(), &session_scope)
-            .map_err(PersistenceFailure::from_source)?;
-        let runtime: String = agent_row.try_get("runtime").map_err(persistence)?;
-        let runtime = RuntimeKind::parse(&runtime)
-            .ok_or_else(|| PersistenceFailure::from_source(InvalidPersistedRuntimeKind))?;
-        let agent_spec = RuntimeAgentSpec {
-            id: agent.clone(),
-            name: agent_row.try_get("name").map_err(persistence)?,
-            runtime,
-            model: agent_row.try_get("model").map_err(persistence)?,
-            reasoning_effort: agent_row.try_get("reasoning_effort").map_err(persistence)?,
-            fast_mode: agent_row
-                .try_get::<Option<i64>, _>("fast_mode")
-                .map_err(persistence)?
-                .map(|value| value != 0),
-            cli_session_id: agent_row.try_get("cli_session_id").map_err(persistence)?,
-        };
-        let host_id: String = agent_row.try_get("host_id").map_err(persistence)?;
-        if host_id.is_empty() {
-            return Err(PersistenceFailure::from_source(
-                InvalidPersistedRuntimeTarget,
-            ));
-        }
-
-        let workspace_memory_index = read_workspace_memory_index(&self.pool, &agent).await?;
-        let (workspace, session) = match &scope {
-            RuntimeScope::AgentSlot { .. } => (None, None),
-            RuntimeScope::ConversationSlot { .. } => {
-                let Some(row) = sqlx::query(
-                    "SELECT c.placement_kind, c.roster_policy, c.title,
-                            c.spawned_by_agent_id, c.workspace_id,
-                            w.name AS workspace_name
-                       FROM conversations c
-                       LEFT JOIN workspaces w ON w.id = c.workspace_id
-                      WHERE c.id = ?",
-                )
-                .bind(conversation.as_str())
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(persistence)?
-                else {
-                    return Ok(None);
-                };
-                let placement_raw: String = row.try_get("placement_kind").map_err(persistence)?;
-                let placement = decode_placement(&placement_raw)?;
-                let roster_raw: String = row.try_get("roster_policy").map_err(persistence)?;
-                let roster = decode_roster(&roster_raw)?;
-                let workspace_id: Option<String> =
-                    row.try_get("workspace_id").map_err(persistence)?;
-                let workspace_name: Option<String> =
-                    row.try_get("workspace_name").map_err(persistence)?;
-                let workspace = match (workspace_id, workspace_name) {
-                    (Some(id), Some(name)) => Some(RuntimeWorkspaceRef::decoded(
-                        WorkspaceId::parse(id).map_err(PersistenceFailure::from_source)?,
-                        name,
-                    )),
-                    (None, None) if placement == RuntimePlacement::DirectPair => None,
-                    _ => {
-                        return Err(PersistenceFailure::from_source(
-                            InvalidPersistedRuntimeTarget,
-                        ));
-                    }
-                };
-                let spawned_by_agent = row
-                    .try_get::<Option<String>, _>("spawned_by_agent_id")
-                    .map_err(persistence)?
-                    .map(AgentId::parse)
-                    .transpose()
-                    .map_err(PersistenceFailure::from_source)?;
-                let members = read_members(&self.pool, &conversation, placement).await?;
-                let session = RuntimeSessionSpec {
-                    conversation: conversation.clone(),
-                    placement,
-                    roster,
-                    title: row.try_get("title").map_err(persistence)?,
-                    spawned_by_agent,
-                    members,
-                };
-                (workspace, Some(session))
-            }
-        };
-
-        Ok(Some(RuntimeDispatchTarget {
-            host_id,
-            conversation,
-            plan: RuntimeSpawnPlan {
-                scope,
-                agent: agent_spec,
-                workspace,
-                workspace_memory_index,
-                session,
-            },
-        }))
+        let target = project_dispatch(&mut tx, &agent, &conversation, agent_row).await?;
+        tx.commit().await.map_err(persistence)?;
+        Ok(target)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -521,12 +435,12 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
 
     async fn snapshot(
         &self,
-        target: &RuntimeSeatTarget,
+        coordinate: &RuntimeSeatCoordinate,
     ) -> Result<Option<RuntimeControlSeatSnapshot>, Self::Error> {
         // The seat coordinate already names its arm and (for a conversation seat)
         // its source; bind that source directly so the row lookup matches the exact
         // seat rather than echoing a presentation candidate.
-        let seat_source = match target.scope() {
+        let seat_source = match coordinate.scope() {
             RuntimeScope::ConversationSlot { source, .. } => Some(source.as_str()),
             RuntimeScope::AgentSlot { .. } => None,
         };
@@ -539,7 +453,7 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
               WHERE a.id = ? AND ((a.session_scope = 'conversation' AND s.conversation_id = ?) \
                    OR (a.session_scope = 'agent' AND s.conversation_id IS NULL))",
         )
-        .bind(target.agent().as_str())
+        .bind(coordinate.agent().as_str())
         .bind(seat_source)
         .fetch_optional(&self.pool)
         .await
@@ -617,7 +531,7 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
 
     async fn settle_clear(
         &self,
-        target: &RuntimeSeatTarget,
+        coordinate: &RuntimeSeatCoordinate,
         before: &BoundRuntimeControlSeat,
     ) -> Result<Option<ClearSessionCommitReceipt>, Self::Error> {
         let should_audit = before.was_running() || before.previous_cli_session().is_some();
@@ -740,7 +654,7 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
                         .map_or_else(|| "none".to_owned(), |value| format!("{value}..."));
                     let content = format!(
                         "@{} cleared @{}'s CLI session context (prev session: {}). Next start will use a fresh session; pending deliveries remain queued.",
-                        target.actor().as_str(),
+                        coordinate.actor().as_str(),
                         before.agent_name(),
                         previous_label,
                     );
@@ -748,7 +662,7 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
                         "subtype": "session_cleared",
                         "agent_id": before.agent().as_str(),
                         "agent_name": before.agent_name(),
-                        "actor_user_id": target.actor().as_str(),
+                        "actor_user_id": coordinate.actor().as_str(),
                         "previous_cli_session_id_prefix": prefix,
                         "was_running": before.was_running(),
                     }))
@@ -761,7 +675,7 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
                     )
                     .bind(audit_message.as_ref().expect("conversation audit id").as_str())
                     .bind(source.as_str())
-                    .bind(target.actor().as_str())
+                    .bind(coordinate.actor().as_str())
                     .bind(content)
                     .bind(metadata)
                     .bind(sequence)
@@ -807,7 +721,7 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
                     )
                     .bind(agent.as_str())
                     .bind(before.generation().as_i64())
-                    .bind(target.actor().as_str())
+                    .bind(coordinate.actor().as_str())
                     .bind(i64::from(before.was_running()))
                     .bind(prefix)
                     .bind(occurred_at)
@@ -856,26 +770,37 @@ impl RuntimeDispatchReadPort for SqliteRuntimeDeliveryStore {
         agent: AgentId,
         candidate_origin: ConversationId,
     ) -> Result<Option<RuntimeDispatchTarget>, PersistenceFailure> {
-        // Canonical participation authority: workspace roster OR direct-pair endpoint,
-        // one predicate shared with the send gate. A non-participant matches no row, so
-        // a fabricated candidate origin yields None (zero wire) rather than reaching the
-        // dispatch plan.
-        let Some(origin) =
-            sqlx::query_scalar::<_, String>(crate::messaging::SELECT_AGENT_PARTICIPATION_ORIGIN)
-                .bind(candidate_origin.as_str())
-                .bind(agent.as_str())
-                .bind(agent.as_str())
-                .bind(agent.as_str())
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(persistence)?
+        // Guarded start/switch-restart path. The candidate origin is a request-time
+        // (or captured, possibly-stale) coordinate, so participation must be proven
+        // and the origin read-derived HERE — and the whole projection must observe a
+        // single consistent snapshot. One read transaction spans the participation
+        // gate, the row-owned scope, the read-derived origin, and every spawn-plan
+        // read, so participation cannot be revoked in an interleaving window between
+        // reads. A non-participant matches no row → None → zero wire.
+        let mut tx = self.pool.begin().await.map_err(persistence)?;
+        let Some(agent_row) = sqlx::query(crate::messaging::SELECT_START_DISPATCH_SPEC)
+            .bind(candidate_origin.as_str())
+            .bind(agent.as_str())
+            .bind(agent.as_str())
+            .bind(agent.as_str())
+            .bind(agent.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(persistence)?
         else {
             return Ok(None);
         };
-        // Read-derive the origin from the matched row rather than echoing the request
-        // candidate, then build the dispatch fact for the row-owned scope arm.
-        let origin = ConversationId::parse(origin).map_err(PersistenceFailure::from_source)?;
-        self.resolve_target(origin, agent).await
+        // The presentation origin is the matched participation row's own id, never
+        // the request candidate echoed back independently of the gate.
+        let origin = ConversationId::parse(
+            agent_row
+                .try_get::<String, _>("origin")
+                .map_err(persistence)?,
+        )
+        .map_err(PersistenceFailure::from_source)?;
+        let target = project_dispatch(&mut tx, &agent, &origin, agent_row).await?;
+        tx.commit().await.map_err(persistence)?;
+        Ok(target)
     }
 
     async fn current_custodies_for_host(
@@ -2282,8 +2207,113 @@ fn instruction_wire(instruction: DeliveryInstruction) -> &'static str {
     }
 }
 
+/// Project a dispatch target from an already-fetched agent-spec row, running every
+/// remaining spawn-plan read on the SAME connection as the front-door fetch. Both
+/// dispatch entry points open one read transaction and pass `&mut *tx` here, so the
+/// scope arm, origin, and all enrichment reads are one consistent snapshot.
+async fn project_dispatch(
+    conn: &mut sqlx::sqlite::SqliteConnection,
+    agent: &AgentId,
+    origin: &ConversationId,
+    agent_row: sqlx::sqlite::SqliteRow,
+) -> Result<Option<RuntimeDispatchTarget>, PersistenceFailure> {
+    let session_scope: String = agent_row.try_get("session_scope").map_err(persistence)?;
+    let scope = runtime_scope_for(agent.clone(), origin.clone(), &session_scope)
+        .map_err(PersistenceFailure::from_source)?;
+    let runtime: String = agent_row.try_get("runtime").map_err(persistence)?;
+    let runtime = RuntimeKind::parse(&runtime)
+        .ok_or_else(|| PersistenceFailure::from_source(InvalidPersistedRuntimeKind))?;
+    let agent_spec = RuntimeAgentSpec {
+        id: agent.clone(),
+        name: agent_row.try_get("name").map_err(persistence)?,
+        runtime,
+        model: agent_row.try_get("model").map_err(persistence)?,
+        reasoning_effort: agent_row.try_get("reasoning_effort").map_err(persistence)?,
+        fast_mode: agent_row
+            .try_get::<Option<i64>, _>("fast_mode")
+            .map_err(persistence)?
+            .map(|value| value != 0),
+        cli_session_id: agent_row.try_get("cli_session_id").map_err(persistence)?,
+    };
+    let host_id: String = agent_row.try_get("host_id").map_err(persistence)?;
+    if host_id.is_empty() {
+        return Err(PersistenceFailure::from_source(
+            InvalidPersistedRuntimeTarget,
+        ));
+    }
+
+    let workspace_memory_index = read_workspace_memory_index(&mut *conn, agent).await?;
+    let (workspace, session) = match &scope {
+        RuntimeScope::AgentSlot { .. } => (None, None),
+        RuntimeScope::ConversationSlot { .. } => {
+            let Some(row) = sqlx::query(
+                "SELECT c.placement_kind, c.roster_policy, c.title,
+                        c.spawned_by_agent_id, c.workspace_id,
+                        w.name AS workspace_name
+                   FROM conversations c
+                   LEFT JOIN workspaces w ON w.id = c.workspace_id
+                  WHERE c.id = ?",
+            )
+            .bind(origin.as_str())
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(persistence)?
+            else {
+                return Ok(None);
+            };
+            let placement_raw: String = row.try_get("placement_kind").map_err(persistence)?;
+            let placement = decode_placement(&placement_raw)?;
+            let roster_raw: String = row.try_get("roster_policy").map_err(persistence)?;
+            let roster = decode_roster(&roster_raw)?;
+            let workspace_id: Option<String> = row.try_get("workspace_id").map_err(persistence)?;
+            let workspace_name: Option<String> =
+                row.try_get("workspace_name").map_err(persistence)?;
+            let workspace = match (workspace_id, workspace_name) {
+                (Some(id), Some(name)) => Some(RuntimeWorkspaceRef::decoded(
+                    WorkspaceId::parse(id).map_err(PersistenceFailure::from_source)?,
+                    name,
+                )),
+                (None, None) if placement == RuntimePlacement::DirectPair => None,
+                _ => {
+                    return Err(PersistenceFailure::from_source(
+                        InvalidPersistedRuntimeTarget,
+                    ));
+                }
+            };
+            let spawned_by_agent = row
+                .try_get::<Option<String>, _>("spawned_by_agent_id")
+                .map_err(persistence)?
+                .map(AgentId::parse)
+                .transpose()
+                .map_err(PersistenceFailure::from_source)?;
+            let members = read_members(&mut *conn, origin, placement).await?;
+            let session = RuntimeSessionSpec {
+                conversation: origin.clone(),
+                placement,
+                roster,
+                title: row.try_get("title").map_err(persistence)?,
+                spawned_by_agent,
+                members,
+            };
+            (workspace, Some(session))
+        }
+    };
+
+    Ok(Some(RuntimeDispatchTarget {
+        host_id,
+        conversation: origin.clone(),
+        plan: RuntimeSpawnPlan {
+            scope,
+            agent: agent_spec,
+            workspace,
+            workspace_memory_index,
+            session,
+        },
+    }))
+}
+
 async fn read_workspace_memory_index(
-    pool: &SqlitePool,
+    conn: &mut sqlx::sqlite::SqliteConnection,
     agent: &AgentId,
 ) -> Result<Vec<RuntimeWorkspaceRef>, PersistenceFailure> {
     let rows = sqlx::query(
@@ -2295,7 +2325,7 @@ async fn read_workspace_memory_index(
     )
     .bind(agent.as_str())
     .bind(agent.as_str())
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .map_err(persistence)?;
     rows.into_iter()
@@ -2310,7 +2340,7 @@ async fn read_workspace_memory_index(
 }
 
 async fn read_members(
-    pool: &SqlitePool,
+    conn: &mut sqlx::sqlite::SqliteConnection,
     conversation: &ConversationId,
     placement: RuntimePlacement,
 ) -> Result<Vec<RuntimeMember>, PersistenceFailure> {
@@ -2327,7 +2357,7 @@ async fn read_members(
         )
         .bind(conversation.as_str())
         .bind(conversation.as_str())
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await
         .map_err(persistence)?,
         RuntimePlacement::DirectPair => sqlx::query(
@@ -2351,7 +2381,7 @@ async fn read_members(
         )
         .bind(conversation.as_str())
         .bind(conversation.as_str())
-        .fetch_all(pool)
+        .fetch_all(&mut *conn)
         .await
         .map_err(persistence)?,
     };
@@ -2597,7 +2627,7 @@ mod runtime_control_seat_tests {
     use silverhand_backend_core::{
         identity::UserId,
         messaging::collaboration::{
-            RuntimeControlSeatPort, RuntimeSeatTarget, seal_clear_session_commit,
+            RuntimeControlSeatPort, RuntimeSeatCoordinate, seal_clear_session_commit,
         },
     };
     use sqlx::{Connection, Executor};
@@ -2638,8 +2668,8 @@ mod runtime_control_seat_tests {
         (directory, store)
     }
 
-    fn conv_seat(conversation: &str, agent: &str) -> RuntimeSeatTarget {
-        RuntimeSeatTarget::new(
+    fn conv_seat(conversation: &str, agent: &str) -> RuntimeSeatCoordinate {
+        RuntimeSeatCoordinate::new(
             UserId::parse("user-1").unwrap(),
             RuntimeScope::ConversationSlot {
                 agent: AgentId::parse(agent).unwrap(),
@@ -2648,8 +2678,8 @@ mod runtime_control_seat_tests {
         )
     }
 
-    fn agent_seat(agent: &str) -> RuntimeSeatTarget {
-        RuntimeSeatTarget::new(
+    fn agent_seat(agent: &str) -> RuntimeSeatCoordinate {
+        RuntimeSeatCoordinate::new(
             UserId::parse("user-1").unwrap(),
             RuntimeScope::AgentSlot {
                 agent: AgentId::parse(agent).unwrap(),

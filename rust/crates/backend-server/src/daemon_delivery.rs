@@ -5696,7 +5696,7 @@ mod tests {
 
         async fn snapshot(
             &self,
-            _target: &silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
+            _coordinate: &silverhand_backend_core::messaging::collaboration::RuntimeSeatCoordinate,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot>,
             Self::Error,
@@ -5706,7 +5706,7 @@ mod tests {
 
         async fn settle_clear(
             &self,
-            _target: &silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
+            _coordinate: &silverhand_backend_core::messaging::collaboration::RuntimeSeatCoordinate,
             before: &silverhand_backend_core::messaging::collaboration::BoundRuntimeControlSeat,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::ClearSessionCommitReceipt>,
@@ -5780,14 +5780,99 @@ mod tests {
         receive: mpsc::Receiver<ConnectionControl>,
         waiters: crate::runtime_control::RuntimeClearSessionWaiters,
         principal: RuntimePrincipal,
-        target: silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
+        actor: UserId,
+        agent: AgentId,
         settles: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    /// A deterministic agent-scope admission fake. The seat target is minted only
+    /// by the core `clear_agent_session` use case (never a cross-crate
+    /// `RuntimeSeatTarget::new`), so these production-provider tests drive the same
+    /// entry as production: agent ladder (existence + edit), then the row-owned
+    /// `agent` session scope. Conversation reads are `unreachable!` — an agent-scope
+    /// clear touches no conversation.
+    #[derive(Clone)]
+    struct AgentSeatAdmission {
+        agent: AgentId,
+    }
+
+    struct AgentSeatAdmissionScope {
+        agent: AgentId,
+    }
+
+    impl silverhand_backend_core::messaging::collaboration::RuntimeControlAdmissionScope
+        for AgentSeatAdmissionScope
+    {
+        type Error = std::io::Error;
+
+        async fn conversation_exists(
+            &mut self,
+            _: &silverhand_backend_core::identity::ConversationId,
+        ) -> Result<bool, Self::Error> {
+            unreachable!("agent-scope clear reads no conversation")
+        }
+
+        async fn agent_exists(&mut self, agent: &AgentId) -> Result<bool, Self::Error> {
+            Ok(agent == &self.agent)
+        }
+
+        async fn agent_is_member(
+            &mut self,
+            _: &silverhand_backend_core::identity::ConversationId,
+            _: &AgentId,
+        ) -> Result<bool, Self::Error> {
+            unreachable!("agent-scope clear checks no membership")
+        }
+
+        async fn actor_may_post(
+            &mut self,
+            _: &silverhand_backend_core::identity::ConversationId,
+            _: &UserId,
+        ) -> Result<bool, Self::Error> {
+            unreachable!("agent-scope clear runs no post gate")
+        }
+
+        async fn actor_may_edit_agent(
+            &mut self,
+            _: &UserId,
+            agent: &AgentId,
+        ) -> Result<bool, Self::Error> {
+            Ok(agent == &self.agent)
+        }
+
+        async fn agent_session_scope(
+            &mut self,
+            agent: &AgentId,
+        ) -> Result<
+            Option<silverhand_backend_core::agents::session_scope::AgentSessionScope>,
+            Self::Error,
+        > {
+            Ok((agent == &self.agent).then_some(
+                silverhand_backend_core::agents::session_scope::AgentSessionScope::Agent,
+            ))
+        }
+
+        async fn finish(self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    impl silverhand_backend_core::messaging::collaboration::RuntimeControlAdmission
+        for AgentSeatAdmission
+    {
+        type Error = std::io::Error;
+        type Scope = AgentSeatAdmissionScope;
+
+        async fn begin_snapshot(&self) -> Result<Self::Scope, Self::Error> {
+            Ok(AgentSeatAdmissionScope {
+                agent: self.agent.clone(),
+            })
+        }
     }
 
     fn production_clear_fixture() -> ProductionClearFixture {
         use silverhand_backend_core::messaging::collaboration::{
             CliSessionId, RuntimeControlObservedStatus, RuntimeControlSeatSnapshot,
-            RuntimeSeatTarget,
         };
         let registry = DaemonRegistry::with_process_epoch("clear-production".to_owned());
         let host = HostId::parse("host-a").unwrap();
@@ -5843,12 +5928,8 @@ mod tests {
             receive,
             waiters,
             principal,
-            target: RuntimeSeatTarget::new(
-                UserId::parse("user-1").unwrap(),
-                RuntimeScope::AgentSlot {
-                    agent: AgentId::parse("agent-a").unwrap(),
-                },
-            ),
+            actor: UserId::parse("user-1").unwrap(),
+            agent: AgentId::parse("agent-a").unwrap(),
             settles,
         }
     }
@@ -5856,19 +5937,27 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn clear_ack_alone_times_out_without_settlement_and_finally_releases_single_flight() {
         use silverhand_backend_core::messaging::collaboration::{
-            ClearSessionProviderRefusal, RuntimeControlPort,
+            ClearSessionProviderRefusal, ClearSessionRefusal, clear_agent_session,
         };
         let ProductionClearFixture {
             control,
             mut receive,
             waiters,
             principal,
-            target,
+            actor,
+            agent,
             settles,
         } = production_clear_fixture();
+        let admission = AgentSeatAdmission {
+            agent: agent.clone(),
+        };
         let first_control = control.clone();
-        let first_target = target.clone();
-        let first = tokio::spawn(async move { first_control.clear_session(&first_target).await });
+        let first_admission = admission.clone();
+        let first_actor = actor.clone();
+        let first_agent = agent.clone();
+        let first = tokio::spawn(async move {
+            clear_agent_session(&first_admission, &first_control, first_actor, first_agent).await
+        });
         let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
             panic!("clear must enter the production FIFO")
         };
@@ -5876,8 +5965,15 @@ mod tests {
         assert_eq!(command.params["runtime_generation"], 7);
         command.response.send(Ok(json!({"cleared":true}))).unwrap();
 
-        let concurrent = control.clear_session(&target).await.unwrap();
-        assert_eq!(concurrent, Err(ClearSessionProviderRefusal::InProgress));
+        let concurrent = clear_agent_session(&admission, &control, actor.clone(), agent.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            concurrent,
+            Err(ClearSessionRefusal::Provider(
+                ClearSessionProviderRefusal::InProgress
+            ))
+        );
         waiters.notify_exit(&RuntimePrincipal::for_scope(
             principal.scope(),
             silverhand_backend_core::runtime_credential::RuntimeCustody::new(
@@ -5888,13 +5984,19 @@ mod tests {
         tokio::time::advance(Duration::from_secs(10)).await;
         assert_eq!(
             first.await.unwrap().unwrap(),
-            Err(ClearSessionProviderRefusal::Timeout)
+            Err(ClearSessionRefusal::Provider(
+                ClearSessionProviderRefusal::Timeout
+            ))
         );
         assert_eq!(settles.load(std::sync::atomic::Ordering::SeqCst), 0);
 
         let retry_control = control.clone();
-        let retry_target = target.clone();
-        let retry = tokio::spawn(async move { retry_control.clear_session(&retry_target).await });
+        let retry_admission = admission.clone();
+        let retry_actor = actor.clone();
+        let retry_agent = agent.clone();
+        let retry = tokio::spawn(async move {
+            clear_agent_session(&retry_admission, &retry_control, retry_actor, retry_agent).await
+        });
         let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
             panic!("finally cleanup must admit a retry")
         };
@@ -5905,16 +6007,23 @@ mod tests {
 
     #[tokio::test]
     async fn exact_exit_before_clear_response_is_latched_then_settled() {
-        use silverhand_backend_core::messaging::collaboration::RuntimeControlPort;
+        use silverhand_backend_core::messaging::collaboration::clear_agent_session;
         let ProductionClearFixture {
             control,
             mut receive,
             waiters,
             principal,
-            target,
+            actor,
+            agent,
             settles,
         } = production_clear_fixture();
-        let call = tokio::spawn(async move { control.clear_session(&target).await });
+        let admission = AgentSeatAdmission {
+            agent: agent.clone(),
+        };
+        let call =
+            tokio::spawn(
+                async move { clear_agent_session(&admission, &control, actor, agent).await },
+            );
         let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
             panic!("clear must enter the production FIFO")
         };
@@ -6007,7 +6116,7 @@ mod tests {
 
         async fn snapshot(
             &self,
-            _target: &silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
+            _coordinate: &silverhand_backend_core::messaging::collaboration::RuntimeSeatCoordinate,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot>,
             Self::Error,
@@ -6017,7 +6126,7 @@ mod tests {
 
         async fn settle_clear(
             &self,
-            _target: &silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
+            _coordinate: &silverhand_backend_core::messaging::collaboration::RuntimeSeatCoordinate,
             _before: &silverhand_backend_core::messaging::collaboration::BoundRuntimeControlSeat,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::ClearSessionCommitReceipt>,

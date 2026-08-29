@@ -25,8 +25,9 @@ use silverhand_backend_core::{
         SendMessage, SendMessageDraft, SendMessageUnitOfWork,
         collaboration::{
             BoundRuntimeControlSeat, ClearSessionCommitReceipt, ClearSessionProviderRefusal,
+            ClearSessionRefusal, RuntimeControlAdmission, RuntimeControlAdmissionScope,
             RuntimeControlPort, RuntimeControlSeatPort, RuntimeControlSeatSnapshot,
-            RuntimeSeatTarget, RuntimeStartTarget,
+            RuntimeSeatCoordinate, RuntimeStartTarget, clear_conversation_session,
         },
         post_commit::{IdleStart, MainDelivery},
     },
@@ -341,18 +342,18 @@ impl RuntimeControlSeatPort for CountingRuntimeDeliveryStore {
 
     async fn snapshot(
         &self,
-        target: &RuntimeSeatTarget,
+        coordinate: &RuntimeSeatCoordinate,
     ) -> Result<Option<RuntimeControlSeatSnapshot>, Self::Error> {
-        self.inner.snapshot(target).await
+        self.inner.snapshot(coordinate).await
     }
 
     async fn settle_clear(
         &self,
-        target: &RuntimeSeatTarget,
+        coordinate: &RuntimeSeatCoordinate,
         before: &BoundRuntimeControlSeat,
     ) -> Result<Option<ClearSessionCommitReceipt>, Self::Error> {
         self.clear_settlement_calls.fetch_add(1, Ordering::SeqCst);
-        self.inner.settle_clear(target, before).await
+        self.inner.settle_clear(coordinate, before).await
     }
 }
 
@@ -1283,8 +1284,71 @@ fn runtime_control_start_target() -> RuntimeStartTarget {
     )
 }
 
-fn runtime_control_seat_target() -> RuntimeSeatTarget {
-    RuntimeSeatTarget::new(UserId::parse("user-1").unwrap(), runtime_scope())
+/// A deterministic conversation-scope admission over the real fixture row. The
+/// seat target is minted only by the core `clear_conversation_session` use case
+/// (never a cross-crate `RuntimeSeatTarget::new`), so this e2e drives the same
+/// entry as production: full conversation ladder, then the row-owned
+/// conversation session scope.
+#[derive(Clone)]
+struct ClearAdmission;
+
+struct ClearAdmissionScope;
+
+impl RuntimeControlAdmissionScope for ClearAdmissionScope {
+    type Error = std::io::Error;
+
+    async fn conversation_exists(&mut self, _: &ConversationId) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    async fn agent_exists(&mut self, _: &AgentId) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    async fn agent_is_member(
+        &mut self,
+        _: &ConversationId,
+        _: &AgentId,
+    ) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    async fn actor_may_post(
+        &mut self,
+        _: &ConversationId,
+        _: &UserId,
+    ) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    async fn actor_may_edit_agent(&mut self, _: &UserId, _: &AgentId) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    async fn agent_session_scope(
+        &mut self,
+        _: &AgentId,
+    ) -> Result<
+        Option<silverhand_backend_core::agents::session_scope::AgentSessionScope>,
+        Self::Error,
+    > {
+        Ok(Some(
+            silverhand_backend_core::agents::session_scope::AgentSessionScope::Conversation,
+        ))
+    }
+
+    async fn finish(self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl RuntimeControlAdmission for ClearAdmission {
+    type Error = std::io::Error;
+    type Scope = ClearAdmissionScope;
+
+    async fn begin_snapshot(&self) -> Result<Self::Scope, Self::Error> {
+        Ok(ClearAdmissionScope)
+    }
 }
 
 async fn activate_host_for_runtime_control(path: &std::path::Path) {
@@ -3660,8 +3724,16 @@ async fn clear_session_waiter_settles_after_the_exact_runtime_exit_frame_commits
     let target = runtime_control_start_target();
     let generation = start_through_runtime_control(&fixture, &mut socket, &target).await;
     let control = fixture.runtime_control.clone();
-    let clear_target = runtime_control_seat_target();
-    let clear = tokio::spawn(async move { control.clear_session(&clear_target).await });
+    let clear = tokio::spawn(async move {
+        clear_conversation_session(
+            &ClearAdmission,
+            &control,
+            UserId::parse("user-1").unwrap(),
+            AgentId::parse(AGENT).unwrap(),
+            ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
     let command = next_json(&mut socket).await;
     assert_eq!(command["kind"], "runtime_clear_session");
     assert_eq!(command["params"]["runtime_generation"], generation);
@@ -3721,8 +3793,16 @@ async fn delivery_failed_frame_cannot_release_a_clear_session_waiter() {
     let target = runtime_control_start_target();
     let generation = start_through_runtime_control(&fixture, &mut socket, &target).await;
     let control = fixture.runtime_control.clone();
-    let clear_target = runtime_control_seat_target();
-    let clear = tokio::spawn(async move { control.clear_session(&clear_target).await });
+    let clear = tokio::spawn(async move {
+        clear_conversation_session(
+            &ClearAdmission,
+            &control,
+            UserId::parse("user-1").unwrap(),
+            AgentId::parse(AGENT).unwrap(),
+            ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
     let command = next_json(&mut socket).await;
     assert_eq!(command["kind"], "runtime_clear_session");
     respond(&mut socket, &command, json!({ "cleared": true })).await;
@@ -3735,7 +3815,9 @@ async fn delivery_failed_frame_cannot_release_a_clear_session_waiter() {
     tokio::task::yield_now().await;
     assert_eq!(
         clear.await.unwrap().unwrap(),
-        Err(ClearSessionProviderRefusal::Timeout)
+        Err(ClearSessionRefusal::Provider(
+            ClearSessionProviderRefusal::Timeout
+        ))
     );
     assert_eq!(
         fixture.clear_settlement_calls.load(Ordering::SeqCst),

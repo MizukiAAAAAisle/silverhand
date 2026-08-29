@@ -105,13 +105,23 @@ pub(crate) const SELECT_AGENT_PARTICIPATING_SET: &str = concat!(
      WHERE ",
     agent_participation_predicate!()
 );
-/// The runtime-start coordinate on the same participation predicate: it returns the
-/// matched conversation's OWN id (`c.id`, `c.id = ?` point form), so the start-dispatch
-/// resolver read-derives its presentation origin from the participation row rather than
-/// echoing the request candidate. A non-participant matches no row → `None` → zero wire.
-pub(crate) const SELECT_AGENT_PARTICIPATION_ORIGIN: &str = concat!(
-    "SELECT c.id FROM conversations c WHERE c.id = ? AND ",
-    agent_participation_predicate!()
+/// The runtime-start dispatch spec on the participation predicate: participation gate,
+/// the row-owned scope arm (`a.session_scope`), the read-derived presentation origin
+/// (`c.id AS origin`, never the request candidate echoed back), the full agent spec,
+/// and the scope-matched CLI-session slot are all one atomic projection over a single
+/// read transaction. `c.id = ?` is the candidate point form; the predicate binds the
+/// agent three times; the trailing `WHERE a.id = ?` re-binds the agent. A non-participant
+/// matches no row → `None` → zero wire.
+pub(crate) const SELECT_START_DISPATCH_SPEC: &str = concat!(
+    "SELECT a.name, a.runtime, a.model, a.reasoning_effort, a.fast_mode, \
+     a.host_id, a.session_scope, s.cli_session_id, c.id AS origin \
+       FROM agents a \
+       JOIN conversations c ON c.id = ? AND ",
+    agent_participation_predicate!(),
+    " LEFT JOIN agent_runtime_slots s ON s.agent_id = a.id \
+        AND ((a.session_scope = 'agent' AND s.conversation_id IS NULL) \
+          OR (a.session_scope = 'conversation' AND s.conversation_id = c.id)) \
+      WHERE a.id = ?"
 );
 /// The human arm carries two facts for a channel — the seat AND workspace
 /// membership — so a seat that outlived a workspace removal admits nobody.

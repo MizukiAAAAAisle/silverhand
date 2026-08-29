@@ -48,6 +48,11 @@ pub(super) fn admission_refusal(refusal: RuntimeControlAdmissionRefusal) -> Resp
         RuntimeControlAdmissionRefusal::Forbidden => {
             json_response(StatusCode::FORBIDDEN, json!({ "error": "forbidden" }))
         }
+        RuntimeControlAdmissionRefusal::RuntimeScopeMismatch => coded(
+            StatusCode::CONFLICT,
+            "runtime_scope_mismatch",
+            "agent-scoped runtime operation targeted a conversation-scoped agent",
+        ),
     }
 }
 
