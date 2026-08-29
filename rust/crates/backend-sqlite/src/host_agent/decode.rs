@@ -13,6 +13,7 @@
 
 use silverhand_backend_core::{
     agent_lifecycle::MaterializationStatus,
+    agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
     host_runtime::computer::{HostKind, ProvisioningSource},
     identity::{AgentId, ConversationId, HostId, UserId},
     runtime_credential::RuntimeGeneration,
@@ -57,6 +58,14 @@ pub(super) fn observed_status(raw: &str) -> Result<RuntimeObservedStatus, sqlx::
     RuntimeObservedStatus::parse(raw).map_err(decode_error)
 }
 
+pub(super) fn runtime(raw: &str) -> Result<RuntimeKind, sqlx::Error> {
+    RuntimeKind::parse(raw).ok_or_else(|| decode_error(InvalidRuntimeKind))
+}
+
+pub(super) fn session_scope(raw: &str) -> Result<AgentSessionScope, sqlx::Error> {
+    AgentSessionScope::parse(raw).ok_or_else(|| decode_error(InvalidSessionScope))
+}
+
 pub(super) fn host_kind(raw: &str) -> Result<HostKind, sqlx::Error> {
     match raw {
         "local" => Ok(HostKind::Local),
@@ -81,6 +90,14 @@ struct InvalidHostKind;
 #[derive(Debug, Error)]
 #[error("persisted provisioning source is outside the closed set")]
 struct InvalidProvisioningSource;
+
+#[derive(Debug, Error)]
+#[error("persisted runtime is outside the closed set")]
+struct InvalidRuntimeKind;
+
+#[derive(Debug, Error)]
+#[error("persisted session scope is outside the closed set")]
+struct InvalidSessionScope;
 
 #[cfg(test)]
 mod tests {

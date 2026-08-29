@@ -16,6 +16,7 @@
 pub mod admission;
 pub mod management;
 pub mod proxy_config;
+pub mod runtime_availability;
 pub mod runtime_catalog;
 pub mod status_seed;
 pub mod status_snapshot;
