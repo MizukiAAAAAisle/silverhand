@@ -30,6 +30,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    agent_creation::OnboardingInboxEnsure,
     host_runtime::{
         aftermath::{CustodyEffectFailure, DaemonConnectionControl},
         custody::{HostCredentialLookup, VerifyHostTokenFact, verify_host_token},
@@ -38,7 +39,7 @@ use silverhand_backend_core::{
     },
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
     messaging::{
-        CreatedMessage,
+        CreatedMessage, MessageId,
         collaboration::workspace_rename_messaging::{
             BoundWorkspaceRenameMessage, WorkspaceRenameDeliveryPort,
         },
@@ -578,20 +579,22 @@ where
     }
 }
 
-/// #2234 CP6: the production `OnboardingDelivery` seam for `POST /api/agents`. The
-/// create route's post-commit onboarding leg is exactly the `(conversation, agent)` wake
-/// this effects facade already owns — the same private `DaemonDeliveryRuntime::deliver`
-/// primitive `RuntimeDelivery::deliver` forwards to after unwrapping a mention copy. The
-/// create route carries no mention copy (the agent reads its own committed inbox), so it
-/// binds this narrow view rather than `RuntimeDelivery`; both resolve to the ONE wake, so
-/// no second resolve/dispatch path is copied.
-impl<C, D, H> crate::host_agent::agent_create::OnboardingDelivery for DaemonDeliveryEffects<C, D, H>
+/// #2234 CP6: the daemon-side wake half of the create route's onboarding delivery. The
+/// create route's post-commit onboarding leg is a two-step effect — FIRST enqueue the
+/// durable `conversation_inboxes` row, THEN wake the agent — and this facade owns only the
+/// second step: the `(conversation, agent)` wake, the same private
+/// `DaemonDeliveryRuntime::deliver` primitive `RuntimeDelivery::deliver` forwards to after
+/// unwrapping a mention copy. It is exposed as an inherent method (not an
+/// `OnboardingDelivery` impl) because the create face's `OnboardingDelivery` contract now
+/// requires the enqueue-first step this facade deliberately does NOT perform; the composed
+/// [`OnboardingDeliveryAdapter`] below sequences the durable ensure ahead of this wake.
+impl<C, D, H> DaemonDeliveryEffects<C, D, H>
 where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
-    async fn deliver(
+    async fn wake(
         &self,
         conversation: &ConversationId,
         agent: &AgentId,
@@ -600,6 +603,51 @@ where
             .deliver(conversation, agent)
             .await
             .map_err(EffectFailure::from_source)
+    }
+}
+
+/// #2234 CP6: the production `OnboardingDelivery` seam for `POST /api/agents`, composed at
+/// mount from the two authorities the two-step contract needs. It mirrors the reference
+/// `deliverMessage(conversation, agent, messageId)`: FIRST call the single durable
+/// inbox-ensure authority (`Ensure`, the sqlite writer that proves — against committed rows,
+/// via the canonical participation predicate — that the message belongs to the conversation
+/// and the agent participates, then idempotently inserts the `conversation_inboxes` row),
+/// THEN wake the agent through the daemon effects facade so it drains that freshly-enqueued
+/// turn. The ensure runs first and short-circuits: if it faults (participation not witnessed,
+/// transport/db down) the wake is skipped, because waking without a durable row hands the
+/// agent nothing and the reference never wakes past a failed ensure either. Both halves are
+/// best-effort post-commit — the `201` is already sealed — so the composed failure is logged
+/// and dropped by the aftermath tracker, never rolled back.
+#[derive(Clone)]
+pub struct OnboardingDeliveryAdapter<Ensure, C, D, H> {
+    ensure: Ensure,
+    effects: DaemonDeliveryEffects<C, D, H>,
+}
+
+impl<Ensure, C, D, H> OnboardingDeliveryAdapter<Ensure, C, D, H> {
+    pub fn new(ensure: Ensure, effects: DaemonDeliveryEffects<C, D, H>) -> Self {
+        Self { ensure, effects }
+    }
+}
+
+impl<Ensure, C, D, H> crate::host_agent::agent_create::OnboardingDelivery
+    for OnboardingDeliveryAdapter<Ensure, C, D, H>
+where
+    Ensure: OnboardingInboxEnsure,
+    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
+    H: HostCredentialLookup,
+{
+    async fn deliver(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        onboarding_message: &MessageId,
+    ) -> Result<(), EffectFailure> {
+        self.ensure
+            .ensure(conversation, agent, onboarding_message)
+            .await?;
+        self.effects.wake(conversation, agent).await
     }
 }
 

@@ -70,6 +70,7 @@ use crate::{
         collaboration::RuntimePlacementRefusal,
         environment::{EnvironmentUnavailable, SendEntropy},
         mint_agent_id, mint_conversation_id,
+        post_commit::EffectFailure,
     },
     name_canonicalization::is_ecmascript_trim_whitespace,
     persistence::PersistenceFailure,
@@ -370,6 +371,29 @@ pub trait AgentGraphRead: Send + Sync {
         &self,
         dm: &ConversationId,
     ) -> impl Future<Output = Result<Option<MessageId>, PersistenceFailure>> + Send;
+}
+
+/// The durable half of onboarding delivery: ensure the `conversation_inboxes` row that owes
+/// the freshly created agent its onboarding turn, sealed by the SAME participation authority
+/// the send path uses. It exists so the create route's onboarding leg is a genuine
+/// enqueue-then-wake (mirroring the reference `deliverMessage`), not a bare wake against an
+/// empty inbox: the runtime does not read a committed inbox on boot, so without this row the
+/// wake finds nothing pending and the agent is never handed its turn.
+///
+/// The implementation must prove, against committed rows and NOT the route-supplied ids as if
+/// they were a relationship, that the message belongs to the conversation AND the agent is a
+/// current participant of it (roster row for a workspace placement, or a direct-pair
+/// endpoint). No witness → a typed failure the caller logs and drops; it must never write a
+/// cross-conversation inbox debt. Idempotent: an already-present row is a no-op success. This
+/// is a best-effort POST-COMMIT authority — the create response is already sealed, so a
+/// failure here is never rolled back into the provisioning transaction.
+pub trait OnboardingInboxEnsure: Clone + Send + Sync + 'static {
+    fn ensure(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        onboarding_message: &MessageId,
+    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
 /// The authorities the create unit of work drives. Each field is a distinct bounded

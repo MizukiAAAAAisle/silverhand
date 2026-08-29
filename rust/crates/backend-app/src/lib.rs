@@ -34,7 +34,10 @@ use silverhand_backend_server::{
     auth::{PublicJsonUnauthorized, require_human_session},
     avatar_blob::SingleKindAvatarBlobs,
     clock::SystemProcessClock,
-    daemon_delivery::{DaemonDeliveryController, DaemonDeliveryRuntime, DaemonHostConnections},
+    daemon_delivery::{
+        DaemonDeliveryController, DaemonDeliveryRuntime, DaemonHostConnections,
+        OnboardingDeliveryAdapter,
+    },
     direct_pairs,
     host_agent::{
         agent_avatar, agent_avatar_write, agent_clear_session, agent_create, agent_delete,
@@ -734,6 +737,13 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // moves the store below. The probe is the one thing readiness cannot answer from
     // cached boot state: a fully booted process can still have lost its database.
     let readiness_write_probe = messaging_store.write_probe();
+    // #2234 CP6: the create route's onboarding leg is a two-step post-commit effect
+    // (durable inbox-ensure THEN daemon wake). Its ensure half is the SAME `MessagingStore`
+    // pool, in a narrow role that composes three EXISTING statements — message-in-conversation
+    // read, canonical participation read, idempotent delivery insert — in one transaction, so
+    // it never parallel-copies the send fan-out's SQL. Captured here as a shared-pool handle
+    // before `write_doors` moves the store below.
+    let agent_create_onboarding_ensure = messaging_store.onboarding_inbox_ensure();
     // The thread-follow post-commit unread axis binds the SAME two authorities the
     // messaging aftermath's unread publisher binds — this `hub` and this `unread_read_model`
     // (cloned as a shared-pool handle, no second audience authority) — before the messaging
@@ -1152,10 +1162,13 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             // `HostEnvironment` entropy. The post-commit fan-out rides the SAME sinks its
             // siblings use — the ONE `agent_detail_cold_read` reprojection, the ONE
             // `agent_changed` hub sink, the ONE `DirectPairsChanged` hub edge (fired only on
-            // a fresh creator↔agent pair), and the daemon effects facade for BOTH the
-            // onboarding wake and the runtime start. The two remote legs are handed to the
-            // ONE owned `create_aftermath` boundary, so the `201` seals before either
-            // touches the host and shutdown cancels any in-flight leg.
+            // a fresh creator↔agent pair), the runtime start through the daemon effects
+            // facade, and — for the onboarding leg — the composed `OnboardingDeliveryAdapter`
+            // that runs the ONE durable inbox-ensure authority (proving message-in-conversation
+            // and canonical participation against committed rows) ahead of that SAME daemon
+            // wake, mirroring the reference `deliverMessage`'s ensure-then-wake. The two remote
+            // legs are handed to the ONE owned `create_aftermath` boundary, so the `201` seals
+            // before either touches the host and shutdown cancels any in-flight leg.
             .merge(agent_create::router(
                 agent_create_computers,
                 agent_create_handles,
@@ -1167,7 +1180,10 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
                 agent_detail_cold_read.clone(),
                 hub.agent_changed_sink(),
                 daemon_runtime.effects(),
-                daemon_runtime.effects(),
+                OnboardingDeliveryAdapter::new(
+                    agent_create_onboarding_ensure,
+                    daemon_runtime.effects(),
+                ),
                 hub.direct_pairs_changed_sink(),
                 create_aftermath.clone(),
                 SystemProcessClock,
@@ -5807,13 +5823,12 @@ mod tests {
     /// probe, tolerate the attach-time `host_runtime_catalog`, and — the point of the gate —
     /// answer `agent_materialize` with the schema-valid success the codec requires, so the
     /// production `ProductionAgentMaterialize` port completes and the saga proceeds to provision
-    /// the graph. Of the two post-commit aftermath legs, only `runtime_start` (which fires
-    /// `start_seen`) actually crosses this wire on a real create; the onboarding `deliver`
-    /// leg reaches `Empty` → `NoPending` (the create graph enqueues no runtime-inbox row) and
-    /// emits NO `runtime_deliver` command. A `runtime_deliver` arm is kept here anyway so that
-    /// if the model ever changes, the recorded-command count would catch it rather than
-    /// silently pass. Every create-effect command is RECORDED in `seen` so the gate can prove
-    /// the real wire was hit exactly once and that an idempotent echo replays none of it.
+    /// the graph. Both post-commit aftermath legs cross this wire on a real create: `runtime_start`
+    /// (which fires `start_seen`) AND the onboarding `runtime_deliver` — the onboarding adapter's
+    /// durable inbox-ensure enqueues the `conversation_inboxes` turn row BEFORE it wakes the agent,
+    /// so the wake's `claim_pending` finds a pending row and dispatches the delivery. Every
+    /// create-effect command is RECORDED in `seen` so the gate can prove the real wire was hit
+    /// exactly once each and that an idempotent echo replays none of it.
     async fn service_agent_create_commands<S>(
         mut socket: tokio_tungstenite::WebSocketStream<S>,
         stop: std::sync::Arc<tokio::sync::Notify>,
@@ -5946,14 +5961,17 @@ mod tests {
     /// the shutdown arm closed rejects post-shutdown legs.
     ///
     /// The four candidate post-commit effects are direct-pairs / agent_changed / onboarding
-    /// deliver / runtime start. This conversation-arm gate witnesses the two that are reachable
-    /// on it — `agent_changed` (app-scope high-water delta) and `runtime_start` — and their
-    /// zero-replay on echo. The direct-pairs frame belongs to the agent arm and is witnessed by
+    /// deliver / runtime start. This conversation-arm gate witnesses the three reachable on it —
+    /// `agent_changed` (app-scope high-water delta), `runtime_start`, and the onboarding
+    /// `runtime_deliver` — and their zero-replay on echo. The direct-pairs frame belongs to the
+    /// agent arm and is witnessed by
     /// `the_composition_agent_create_agent_arm_publishes_the_fresh_direct_pair`. The onboarding
-    /// deliver leg emits NO wire effect on a real create (`Empty` → `NoPending`, no
-    /// `conversation_inboxes` row is enqueued), so there is deliberately no `runtime_deliver`
-    /// assertion — asserting one would be a false witness for an effect the model does not
-    /// produce.
+    /// leg is a genuine two-step effect: the composed adapter's durable inbox-ensure writes the
+    /// `conversation_inboxes` turn row (proving message-in-conversation + canonical participation
+    /// against committed rows) and THEN wakes the agent, so `claim_pending` finds a pending row
+    /// and a `runtime_deliver` crosses the wire exactly once. Drop the ensure (wake alone) and the
+    /// row is absent → `claim_pending` returns `Empty` → no `runtime_deliver`: both the row assert
+    /// and the delivery-count assert redden, the A6 falsifier for the ensure authority.
     ///
     /// The handler-level orchestration (both legs scheduled, `201` sealed before the legs run,
     /// echo fires nothing, per-arm coordinates, direct-pairs gating) is proven by the leaf
@@ -6061,6 +6079,23 @@ mod tests {
                 .await
                 .expect("the aftermath runtime-start leg must reach the real daemon transport");
 
+            // The onboarding leg is best-effort and async, so wait for its `runtime_deliver`
+            // to land rather than snapshot before it arrives. It crosses because the composed
+            // adapter enqueued the durable inbox row ahead of the wake; drop the ensure and this
+            // poll times out (Empty → NoPending → no command), reddening the gate.
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if count_kind(&seen, "runtime_deliver") >= 1 {
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect(
+                "the onboarding deliver leg must reach the daemon transport as runtime_deliver",
+            );
+
             // The real materialize crossed the mounted host WS exactly once.
             assert_eq!(
                 count_kind(&seen, "agent_materialize"),
@@ -6072,15 +6107,15 @@ mod tests {
                 1,
                 "the aftermath start leg hit the daemon exactly once"
             );
+            assert_eq!(
+                count_kind(&seen, "runtime_deliver"),
+                1,
+                "the onboarding deliver leg hit the daemon exactly once"
+            );
 
             // The inline post-commit `agent_changed` (app scope) fired EXACTLY once through
             // the real `hub.agent_changed_sink()` wired into `prepare()`. Break that sink (or
-            // strip the inline publish from the created arm) and this delta drops to 0. The
-            // onboarding `deliver` leg is intentionally NOT asserted here: on a real create
-            // the provision-graph writes the onboarding message but enqueues NO
-            // `conversation_inboxes` row, so `claim_pending` returns `Empty` → `NoPending` and
-            // no `runtime_deliver` command ever crosses the wire (the agent reads its own
-            // committed inbox when its runtime starts). See the CP6 model-gap note.
+            // strip the inline publish from the created arm) and this delta drops to 0.
             let app_after_create = fresh_scope_high_water(address, "app").await;
             assert_eq!(
                 app_after_create - app_before,
@@ -6142,6 +6177,25 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(agent_on_dm, 1, "the agent is a member of its onboarding DM");
+            // The onboarding leg's durable half: the composed adapter's inbox-ensure wrote the
+            // `conversation_inboxes` turn row binding THIS onboarding message to THIS conversation
+            // for THIS agent. Its presence (not merely the `runtime_deliver` on the wire) is the
+            // committed-fact witness that the ensure ran ahead of the wake; break the message-id
+            // thread or drop the ensure and no row exists here.
+            let inbox_row: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM conversation_inboxes WHERE conversation_id = ? AND agent_id = ? \
+                 AND message_id = ? AND delivery_kind = 'turn'",
+            )
+            .bind(&dm)
+            .bind(&agent_id)
+            .bind(&onboarding_message)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                inbox_row, 1,
+                "the onboarding adapter enqueued exactly one durable inbox turn for the agent"
+            );
             let creator_on_dm: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM conversation_users WHERE conversation_id = ? AND user_id = 'user-1'",
             )
@@ -6190,10 +6244,11 @@ mod tests {
             );
 
             // Idempotent replay: SAME key + body echoes 200 and replays NONE of the reachable
-            // post-commit effects — no second materialize, no second start leg, and no second
-            // app-scope `agent_changed` frame.
+            // post-commit effects — no second materialize, no second start leg, no second
+            // onboarding delivery, and no second app-scope `agent_changed` frame.
             let materialize_before = count_kind(&seen, "agent_materialize");
             let start_before = count_kind(&seen, "runtime_start");
+            let deliver_before = count_kind(&seen, "runtime_deliver");
             let (echo_status, echo_body) = post_create(
                 &router,
                 &bearer,
@@ -6227,6 +6282,14 @@ mod tests {
                 start_before,
                 "the echo schedules no second runtime-start leg"
             );
+            // Give any (erroneously) scheduled echo delivery leg a chance to reach the wire,
+            // then prove none did — the echo neither re-ensures the inbox row nor re-wakes.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            assert_eq!(
+                count_kind(&seen, "runtime_deliver"),
+                deliver_before,
+                "the echo schedules no second onboarding deliver leg"
+            );
             let app_after_echo = fresh_scope_high_water(address, "app").await;
             assert_eq!(
                 app_after_echo - app_after_create,
@@ -6246,6 +6309,20 @@ mod tests {
                     .await
                     .unwrap();
             assert_eq!(homes, 1, "the echo created no duplicate home workspace");
+            let inbox_rows_after_echo: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM conversation_inboxes WHERE conversation_id = ? AND agent_id = ? \
+                 AND message_id = ?",
+            )
+            .bind(&dm)
+            .bind(&agent_id)
+            .bind(&onboarding_message)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                inbox_rows_after_echo, 1,
+                "the echo enqueued no duplicate inbox turn (idempotent ensure, ON CONFLICT DO NOTHING)"
+            );
             pool.close().await;
 
             stop.notify_one();

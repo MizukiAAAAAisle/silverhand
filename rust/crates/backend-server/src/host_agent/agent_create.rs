@@ -131,21 +131,27 @@ pub const AGENT_CREATE_PATH: &str = "/api/agents";
 // The two route-local post-commit effect ports
 // ===========================================================================
 
-/// Wake the freshly created agent on its destination conversation so it acts on the
-/// onboarding message the provisioning transaction already committed to that
-/// conversation's inbox. This mirrors the real delivery authority
-/// (`DaemonDeliveryEffects::deliver`), whose wake primitive is `(conversation, agent)`:
-/// the agent reads its own committed inbox, so the onboarding message id is NOT a
-/// delivery parameter (TS threads it through `deliverMessage` but the daemon boundary
-/// drops it — carrying it here would be dead payload). No core trait fits the bare
-/// conversation-level wake — `RuntimeDelivery` is shaped for a sealed mention copy — so
-/// the create face declares its narrow view; the production adapter is a named seam at
-/// mount.
+/// Deliver the onboarding message to the freshly created agent on its destination
+/// conversation, mirroring the reference `deliverMessage(conversation, agent, messageId)`:
+/// FIRST ensure the durable `conversation_inboxes` row that binds this message to this
+/// conversation for this agent (idempotent, sealed by the agent's canonical participation
+/// in that conversation), THEN wake the agent so it drains its inbox. The onboarding
+/// message id is a load-bearing delivery parameter, not dead payload: the runtime does NOT
+/// read a committed inbox on boot (`runtime_start` is pure lifecycle) — delivery custody
+/// flows solely through this enqueue-then-wake, so without the durable row the wake finds
+/// nothing pending and the agent is never handed its onboarding turn.
+///
+/// It is a best-effort post-commit effect: the `201` is already sealed, so a failure here
+/// (participation not witnessed, transport down) is logged and dropped, never rolled back
+/// into the provisioning transaction. No core trait fits the two-step ensure-then-wake, so
+/// the create face declares its narrow view; the production adapter composes the single
+/// durable inbox-ensure authority with the daemon wake at mount.
 pub trait OnboardingDelivery: Clone + Send + Sync + 'static {
     fn deliver(
         &self,
         conversation: &ConversationId,
         agent: &AgentId,
+        onboarding_message: &MessageId,
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
@@ -427,12 +433,17 @@ where
             // host and a panic/fault in one can never swallow the other. Each leg logs
             // its own failure; the boxed future yields `()`.
             let destination = arm.destination().clone();
+            let onboarding_message = arm.onboarding_message_id().clone();
             aftermath.dispatch(Box::pin({
                 let onboarding = (*onboarding).clone();
                 let destination = destination.clone();
+                let onboarding_message = onboarding_message.clone();
                 let agent_id = agent_id.clone();
                 async move {
-                    if let Err(failure) = onboarding.deliver(&destination, &agent_id).await {
+                    if let Err(failure) = onboarding
+                        .deliver(&destination, &agent_id, &onboarding_message)
+                        .await
+                    {
                         tracing::error!(
                             agent_id = agent_id.as_str(),
                             error_chain = %error::describe(&failure),
@@ -1101,7 +1112,7 @@ mod tests {
     #[derive(Clone)]
     struct FakeDeliver {
         calls: Arc<AtomicUsize>,
-        last: Arc<Mutex<Option<(ConversationId, AgentId)>>>,
+        last: Arc<Mutex<Option<(ConversationId, AgentId, MessageId)>>>,
         panic: bool,
     }
     impl OnboardingDelivery for FakeDeliver {
@@ -1109,12 +1120,17 @@ mod tests {
             &self,
             conversation: &ConversationId,
             agent: &AgentId,
+            onboarding_message: &MessageId,
         ) -> Result<(), EffectFailure> {
             if self.panic {
                 panic!("deliver leg blew up");
             }
             self.calls.fetch_add(1, SeqCst);
-            *self.last.lock().unwrap() = Some((conversation.clone(), agent.clone()));
+            *self.last.lock().unwrap() = Some((
+                conversation.clone(),
+                agent.clone(),
+                onboarding_message.clone(),
+            ));
             Ok(())
         }
     }
@@ -1288,7 +1304,7 @@ mod tests {
         assert_eq!(fx.counts(), (1, 1, 1, 1));
         assert_eq!(
             *fx.deliver.last.lock().unwrap(),
-            Some((conversation("dl-1"), agent("a1")))
+            Some((conversation("dl-1"), agent("a1"), message("m-1")))
         );
         assert_eq!(
             *fx.start.last.lock().unwrap(),
@@ -1321,7 +1337,7 @@ mod tests {
         assert_eq!(fx.counts(), (0, 1, 1, 1));
         assert_eq!(
             *fx.deliver.last.lock().unwrap(),
-            Some((conversation("onb-1"), agent("a1")))
+            Some((conversation("onb-1"), agent("a1"), message("m-1")))
         );
     }
 

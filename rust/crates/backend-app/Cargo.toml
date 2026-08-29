@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 axum.workspace = true
+futures-util.workspace = true
 http-body-util.workspace = true
 silverhand-backend-core.workspace = true
 silverhand-backend-filesystem.workspace = true
@@ -26,7 +27,6 @@ tracing-subscriber.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-futures-util.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tokio-tungstenite.workspace = true

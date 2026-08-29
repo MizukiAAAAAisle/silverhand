@@ -20,19 +20,24 @@
 //!     resolves only after the runtime has DROPPED the leg's future, so when `close`
 //!     returns no leg can outlive the transport.
 //!   * **Settled legs are reaped without waiting for future traffic, and a panic is
-//!     never swallowed.** Each leg reaps its finished siblings the moment it settles and
-//!     reads their [`JoinError`], surfacing a panic as an operational signal. A burst of
-//!     legs followed by no further create therefore does not retain the whole batch until
-//!     shutdown, and a panicking leg is isolated to its own task (its siblings and any
-//!     later leg are untouched) yet still observed.
+//!     never swallowed.** Each leg catches its OWN unwind at the source (via
+//!     `catch_unwind`) and records it the instant it settles, so a panic is observed by
+//!     the panicking task itself rather than left latent on a [`JoinError`] for a later
+//!     sibling or `close` to read — a read the opportunistic handle prune could otherwise
+//!     drop first, permanently under-counting. Each settled leg still prunes its finished
+//!     siblings so a burst followed by no further create is not retained until shutdown,
+//!     and a panicking leg is isolated to its own task (its siblings and any later leg are
+//!     untouched).
 //!
 //! It is deliberately NOT a general task framework: it owns exactly the create aftermath,
 //! and stays a bespoke component until a second consumer justifies a shared abstraction.
 
+use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
 
+use futures_util::FutureExt;
 use silverhand_backend_server::host_agent::agent_create::{AftermathDispatch, AftermathLeg};
-use tokio::task::{JoinError, JoinHandle};
+use tokio::task::JoinHandle;
 
 /// The single create-aftermath tracker. A clone shares the one `Arc<Mutex<..>>` state, so
 /// the instance the route dispatches into and the instance `PreparedApp` closes at
@@ -51,9 +56,10 @@ struct TrackerState {
     /// prunes its finished siblings as soon as it completes, so the set does not grow
     /// unbounded across a long-lived process even without further dispatch traffic.
     legs: Vec<JoinHandle<()>>,
-    /// The count of legs observed to have PANICKED, read off their `JoinError`. Kept so a
-    /// panic is a visible operational signal rather than a silently-dropped handle, and so
-    /// a test can witness that observation.
+    /// The count of legs observed to have PANICKED, recorded by the panicking leg's OWN
+    /// task via `catch_unwind` the instant it unwinds. Kept so a panic is a visible
+    /// operational signal recorded at the source — never a silently-dropped handle whose
+    /// `JoinError` a prune could discard before it is read — and so a test can witness it.
     observed_panics: usize,
 }
 
@@ -83,22 +89,13 @@ impl CreateAftermath {
             state.closed = true;
             std::mem::take(&mut state.legs)
         };
-        let mut panicked = 0usize;
         for handle in handles {
             handle.abort();
-            // Resolves only after the runtime has dropped the leg's future: a leg that
-            // panicked before the abort landed still surfaces `is_panic`; an aborted one
-            // resolves `is_cancelled`, which is the expected, benign shutdown outcome.
-            if is_panic(handle.await) {
-                panicked += 1;
-            }
-        }
-        if panicked > 0 {
-            tracing::error!(panicked, "create-aftermath legs panicked before shutdown");
-            self.state
-                .lock()
-                .expect("create aftermath state")
-                .observed_panics += panicked;
+            // Resolves only after the runtime has DROPPED the leg's future: an aborted leg
+            // resolves cancelled, the benign shutdown outcome. A panic, had one occurred,
+            // was already caught and counted by the leg's own task (`dispatch` below), so
+            // `close` does not need to inspect the join outcome for it.
+            let _ = handle.await;
         }
     }
 
@@ -141,49 +138,45 @@ impl AftermathDispatch for CreateAftermath {
             return;
         }
         // Opportunistic prune keeps the common path bounded even before the self-reap
-        // below fires (e.g. the very first dispatch after a long idle).
+        // below fires (e.g. the very first dispatch after a long idle). It drops FINISHED
+        // handles without inspecting their join outcome, which is sound only because a
+        // panic is caught and counted at the source below — never left latent on a
+        // `JoinError` for this prune to discard unread.
         state.legs.retain(|handle| !handle.is_finished());
         let weak = Arc::downgrade(&self.state);
         state.legs.push(tokio::spawn(async move {
-            leg.await;
-            // Self-reap: the instant this leg settles it prunes its FINISHED siblings and
-            // reads their `JoinError`, so a burst that is never followed by another
-            // dispatch is not retained until shutdown, and a sibling panic is surfaced.
-            // Its own handle is not yet finished (this task is still running), so it stays
-            // until the next sibling settles or `close` drains it — a single residual
-            // handle, never the batch. Best-effort: skip if the tracker is gone.
-            let Some(state) = weak.upgrade() else {
-                return;
-            };
-            let finished: Vec<JoinHandle<()>> = {
-                let mut state = state.lock().expect("create aftermath state");
-                let (finished, live) = std::mem::take(&mut state.legs)
-                    .into_iter()
-                    .partition(JoinHandle::is_finished);
-                state.legs = live;
-                finished
-            };
-            let mut panicked = 0usize;
-            for handle in finished {
-                // Immediate: the handle is already finished, so the await does not block.
-                if is_panic(handle.await) {
-                    panicked += 1;
+            // Catch the leg's unwind in ITS OWN task, the instant it panics, and record it
+            // before this task settles. A panic is therefore observed by the panicking leg
+            // itself — it can never be dropped unread by the opportunistic prune above,
+            // which previously left `observed_panics` racy: if a panicked handle settled
+            // and a later dispatch pruned it before any sibling/`close` read its
+            // `JoinError`, the panic vanished. The leg is best-effort and its output
+            // unused, so asserting unwind-safety is sound: nothing downstream reads state
+            // the unwind might have torn.
+            if AssertUnwindSafe(leg).catch_unwind().await.is_err() {
+                tracing::error!("create-aftermath leg panicked");
+                if let Some(state) = weak.upgrade() {
+                    state
+                        .lock()
+                        .expect("create aftermath state")
+                        .observed_panics += 1;
                 }
             }
-            if panicked > 0 {
-                tracing::error!(panicked, "create-aftermath leg panicked");
+            // Self-reap: the instant this leg settles it prunes its FINISHED siblings, so a
+            // burst that is never followed by another dispatch is not retained until
+            // shutdown. Its own handle is still running (not finished), so it stays until
+            // the next sibling settles or `close` drains it — a single residual handle,
+            // never the batch. Panic accounting is already done above; this is purely
+            // handle-set bounding. Best-effort: skip if the tracker is gone.
+            if let Some(state) = weak.upgrade() {
                 state
                     .lock()
                     .expect("create aftermath state")
-                    .observed_panics += panicked;
+                    .legs
+                    .retain(|handle| !handle.is_finished());
             }
         }));
     }
-}
-
-/// A join outcome is a panic exactly when the task neither completed nor was cancelled.
-fn is_panic(result: Result<(), JoinError>) -> bool {
-    result.err().is_some_and(|error| error.is_panic())
 }
 
 #[cfg(test)]
@@ -345,17 +338,43 @@ mod tests {
         );
     }
 
-    /// A panicking leg is isolated to its own task: the runtime catches the panic, the
-    /// sibling leg still runs, the tracker's lock is not poisoned (a later dispatch still
-    /// works), AND the panic is observed rather than silently dropped — a later settling
-    /// leg reads the panicking leg's `JoinError` and records it.
+    /// A panicking leg is isolated to its own task AND observed AT THE SOURCE: the leg's
+    /// own task catches its unwind and records it the instant it settles, so observation
+    /// does NOT depend on a sibling or `close` later reading a `JoinError`. This pins the
+    /// race the previous design carried: let the panicking leg settle FIRST, then dispatch
+    /// a sibling whose opportunistic prune (`retain(!is_finished)`) drops the already-
+    /// finished panicked handle. Under the old "read the sibling's/close's `JoinError`"
+    /// scheme that prune discarded the panic unread and `observed_panics` stuck at `0`
+    /// (and without any sibling/close it never incremented at all — so the poll below would
+    /// hang). Now the count is already `1` before the prune ever runs, and the prune cannot
+    /// erase it because it lives in the tracker, not on the handle.
     #[tokio::test]
-    async fn a_panicking_leg_is_isolated_and_observed() {
+    async fn a_panicking_leg_is_observed_at_the_source_before_any_reaping() {
         let tracker = CreateAftermath::new();
         tracker.dispatch(Box::pin(async {
             panic!("leg blew up");
         }));
 
+        // The panicking leg records its OWN panic as it settles — no sibling, no close.
+        // (Old design: this poll would time out, because nothing had read the JoinError.)
+        let observed = timeout(Duration::from_secs(5), async {
+            loop {
+                if tracker.observed_panics() == 1 {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            observed.is_ok(),
+            "the panicking leg must record its own panic at the source, not wait for a \
+             sibling or close to read its JoinError"
+        );
+
+        // Now dispatch a sibling. Its dispatch runs the opportunistic prune, which drops
+        // the already-finished panicked handle — but the count already lives in the tracker
+        // and so cannot be lost, and the sibling still runs.
         let sibling_ran = Arc::new(AtomicUsize::new(0));
         let sibling_done = Arc::new(Notify::new());
         {
@@ -371,7 +390,9 @@ mod tests {
             .expect("the sibling leg must run despite the panicking leg");
         assert_eq!(sibling_ran.load(Ordering::SeqCst), 1);
 
-        // The tracker still accepts work — its Mutex was never poisoned by the panic.
+        // The tracker still accepts work — its Mutex was never poisoned by the panic — and
+        // the panic count is neither lost by the prune nor double-counted. No `close` was
+        // needed to make the observation.
         let later_ran = Arc::new(AtomicUsize::new(0));
         let later_done = Arc::new(Notify::new());
         {
@@ -386,14 +407,10 @@ mod tests {
             .await
             .expect("the tracker still dispatches after a panicking leg");
         assert_eq!(later_ran.load(Ordering::SeqCst), 1);
-
-        // Drain anything still settling, then confirm the panic was observed (either by a
-        // sibling's self-reap or by close reading the `JoinError`).
-        tracker.close().await;
         assert_eq!(
             tracker.observed_panics(),
             1,
-            "the panicking leg's JoinError was read, not silently dropped"
+            "exactly one panic observed, unaffected by the sibling's prune, no close needed"
         );
     }
 }

@@ -18,6 +18,7 @@ use std::{
 
 use std::collections::HashSet;
 
+use silverhand_backend_core::agent_creation::OnboardingInboxEnsure;
 use silverhand_backend_core::agents::session_scope::AgentSessionScope;
 use silverhand_backend_core::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 use silverhand_backend_core::messaging::{
@@ -393,6 +394,105 @@ pub struct MessagingStore<E = HostEnvironment> {
     environment: E,
 }
 
+/// The post-commit onboarding inbox-ensure authority (built by
+/// [`MessagingStore::onboarding_inbox_ensure`]). It holds the store's shared pool and clock
+/// and implements [`OnboardingInboxEnsure`] by composing three EXISTING statements — the
+/// message-in-conversation read, the agent-participation read, and the idempotent delivery
+/// insert — in one transaction, so it never parallel-copies the send path's SQL.
+#[derive(Clone)]
+pub struct SqliteOnboardingInboxEnsure<E = HostEnvironment> {
+    pool: SqlitePool,
+    environment: E,
+}
+
+/// Why an onboarding inbox-ensure could not be made. Wrapped in an [`EffectFailure`] so the
+/// create route's best-effort leg logs it and moves on; the row is never written when the
+/// relationship the caller named is not a committed fact.
+#[derive(Debug, Error)]
+pub enum OnboardingInboxEnsureError {
+    /// The (message, conversation, agent) triple the route supplied is not a committed
+    /// relationship: the message does not belong to that conversation, or the agent is not a
+    /// current participant of it. Reported rather than written, so a liar caller or a
+    /// concurrent membership change cannot manufacture a cross-conversation inbox debt.
+    #[error("onboarding delivery has no participation witness for the requested message")]
+    NoParticipationWitness,
+    #[error("database operation failed")]
+    Sql(#[from] sqlx::Error),
+    #[error("the clock this write stamps with could not answer")]
+    Environment(#[from] EnvironmentUnavailable),
+}
+
+impl<E> OnboardingInboxEnsure for SqliteOnboardingInboxEnsure<E>
+where
+    E: SendClock + Clone + Send + Sync + 'static,
+{
+    async fn ensure(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        onboarding_message: &MessageId,
+    ) -> Result<(), EffectFailure> {
+        self.ensure_inner(conversation, agent, onboarding_message)
+            .await
+            .map_err(EffectFailure::from_source)
+    }
+}
+
+impl<E: SendClock> SqliteOnboardingInboxEnsure<E> {
+    async fn ensure_inner(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        onboarding_message: &MessageId,
+    ) -> Result<(), OnboardingInboxEnsureError> {
+        // Stamp with the store's own clock, ahead of opening the transaction.
+        let now = self.environment.now_unix_ms()?;
+        // One transaction so the two witness reads and the insert see a single, consistent
+        // snapshot — a participation revoked mid-flight cannot slip a row past the gate.
+        let mut tx = self.pool.begin().await?;
+
+        // Witness 1 — the message belongs to THIS conversation (reusing the reply-target
+        // resolver's read, not the route-supplied ids as if they were a relationship).
+        let message_in_conversation = sqlx::query(SELECT_MESSAGE_IN_CONVERSATION)
+            .bind(conversation.as_str())
+            .bind(onboarding_message.as_str())
+            .fetch_optional(&mut *tx)
+            .await?;
+        if message_in_conversation.is_none() {
+            return Err(OnboardingInboxEnsureError::NoParticipationWitness);
+        }
+
+        // Witness 2 — the agent is a current participant of that conversation, via the ONE
+        // canonical participation predicate the send path's `is_agent_participant` uses
+        // (roster row for a workspace placement, or a direct-pair endpoint).
+        let participates: Option<i64> = sqlx::query_scalar(SELECT_AGENT_PARTICIPATES)
+            .bind(conversation.as_str())
+            .bind(agent.as_str())
+            .bind(agent.as_str())
+            .bind(agent.as_str())
+            .fetch_optional(&mut *tx)
+            .await?;
+        if participates.is_none() {
+            return Err(OnboardingInboxEnsureError::NoParticipationWitness);
+        }
+
+        // The witnesses hold: enqueue the durable turn. The SAME idempotent writer the send
+        // fan-out uses — a re-run (echo) conflicts on the unique delivery index and writes
+        // nothing new.
+        sqlx::query(ENSURE_INBOX_DELIVERY)
+            .bind(conversation.as_str())
+            .bind(agent.as_str())
+            .bind(onboarding_message.as_str())
+            .bind(DELIVERY_KIND_TURN)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+}
+
 /// Startup and driver failures, surfaced only to the composition root that opens
 /// the store. The port below never exposes it.
 #[derive(Debug, Error)]
@@ -468,6 +568,20 @@ impl<E> MessagingStore<E> {
     /// through a connection nothing else writes on.
     pub fn write_probe(&self) -> crate::write_probe::SqliteWriteProbe {
         crate::write_probe::SqliteWriteProbe::sharing(self.pool.clone())
+    }
+
+    /// The post-commit onboarding inbox-ensure authority for the database THIS store
+    /// writes to. Like every other narrow door it shares the store's own pool handle (no
+    /// second connection identity), and carries the store's clock so the ensured row's
+    /// `created_at` comes from the same authority every other write here uses.
+    pub fn onboarding_inbox_ensure(&self) -> SqliteOnboardingInboxEnsure<E>
+    where
+        E: Clone,
+    {
+        SqliteOnboardingInboxEnsure {
+            pool: self.pool.clone(),
+            environment: self.environment.clone(),
+        }
     }
 
     pub(crate) async fn open_with_busy_timeout(
