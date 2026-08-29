@@ -35,6 +35,7 @@ pub enum AgentMaterializeFailure {
     Ambiguous,
     ProtocolCorruption,
     AuthorityMismatch,
+    TargetCrossedCustody,
 }
 
 impl fmt::Display for AgentMaterializeFailure {
@@ -46,6 +47,9 @@ impl fmt::Display for AgentMaterializeFailure {
             Self::Ambiguous => "agent materialize outcome is ambiguous",
             Self::ProtocolCorruption => "daemon returned an invalid agent materialize response",
             Self::AuthorityMismatch => "agent materialize answer crossed its captured custody",
+            Self::TargetCrossedCustody => {
+                "agent materialize target names a different host than the captured custody"
+            }
         })
     }
 }
@@ -74,6 +78,13 @@ impl AgentMaterializePort for ProductionAgentMaterialize {
         captured: Self::Captured,
         target: &AgentMaterializeTarget,
     ) -> Result<Result<AgentMaterializeReceipt, AgentMaterializeRefusal>, Self::Error> {
+        // The captured custody is bound to ONE host; a target naming a different host would
+        // dispatch its params to the wrong daemon (the answer-side `into_result_for` bind
+        // only protects the reply, not the command). The saga always pairs them from one
+        // resolved host, so a divergence is a caller fault, not a product outcome.
+        if captured.host() != target.host() {
+            return Err(AgentMaterializeFailure::TargetCrossedCustody);
+        }
         let params = agent_materialize_codec::encode(target)
             .map_err(|_| AgentMaterializeFailure::InvalidRequest)?;
         materialize_captured(&self.data_plane, captured, params, self.timeout).await

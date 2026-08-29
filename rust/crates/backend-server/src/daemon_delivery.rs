@@ -5596,6 +5596,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn materialize_refuses_a_target_that_names_a_different_host_than_the_capture() {
+        use silverhand_backend_core::{
+            agent_materialize::{
+                AgentMaterializePort, AgentMaterializeTarget, AgentMaterializeTemplate,
+            },
+            agents::runtime::RuntimeKind,
+            identity::WorkspaceId,
+        };
+
+        // Both hosts are legitimately attached: A's capture and B's reserved target are each
+        // valid on their own. The single custody authority must still refuse the *pairing*
+        // before any send, so neither FIFO ever sees a byte.
+        let registry = DaemonRegistry::with_process_epoch("materialize-cross-host".to_owned());
+        let host_a = HostId::parse("host-a").unwrap();
+        let host_b = HostId::parse("host-b").unwrap();
+        let instance = DaemonInstanceId::parse("same-instance").unwrap();
+        let (_connection_a, mut receive_a) =
+            attach_for_command_test(&registry, &host_a, instance.clone());
+        let (_connection_b, mut receive_b) =
+            attach_for_command_test(&registry, &host_b, instance.clone());
+        let plane = OwningHostDataPlane {
+            registry: registry.clone(),
+        };
+        let adapter = crate::agent_materialize::ProductionAgentMaterialize::new(
+            plane.clone(),
+            Duration::from_secs(10),
+        );
+        let captured_a = adapter
+            .capture(&host_a)
+            .await
+            .unwrap()
+            .expect("host A is attached at capture time");
+        let target_b = AgentMaterializeTarget::reserved(
+            host_b.clone(),
+            AgentId::parse("agent-b").unwrap(),
+            WorkspaceId::parse("wsah_agent-b").unwrap(),
+            "Agent B".to_owned(),
+            RuntimeKind::Codex,
+            None,
+            None,
+            AgentMaterializeTemplate::Default,
+        );
+        assert!(matches!(
+            adapter.materialize(captured_a, &target_b).await,
+            Err(crate::agent_materialize::AgentMaterializeFailure::TargetCrossedCustody)
+        ));
+        assert!(matches!(
+            receive_a.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            receive_b.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
     async fn clear_command_replacement_is_attach_pending_and_successor_fifo_stays_empty() {
         let registry = DaemonRegistry::with_process_epoch("clear-test".to_owned());
         let host = HostId::parse("host-a").unwrap();
