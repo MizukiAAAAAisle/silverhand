@@ -5549,7 +5549,12 @@ mod tests {
             AgentMaterializeTemplate::Default,
         );
         let call_target = target.clone();
-        let call = tokio::spawn(async move { adapter.materialize(&call_target).await });
+        let captured = adapter
+            .capture(&host_a)
+            .await
+            .unwrap()
+            .expect("host A is attached at capture time");
+        let call = tokio::spawn(async move { adapter.materialize(captured, &call_target).await });
         let ConnectionControl::Command(command) = receive_a.recv().await.unwrap() else {
             panic!("materialize must enter host A FIFO")
         };

@@ -54,21 +54,29 @@ impl Error for AgentMaterializeFailure {}
 
 impl AgentMaterializePort for ProductionAgentMaterialize {
     type Error = AgentMaterializeFailure;
+    type Captured = crate::daemon_delivery::HostDataPlaneCustody;
+
+    async fn capture(
+        &self,
+        host: &silverhand_backend_core::identity::HostId,
+    ) -> Result<Option<Self::Captured>, Self::Error> {
+        // The single attachment truth: `resolve` answers `Some` custody exactly when a daemon
+        // owns the host right now. The saga holds this custody across its reserve write and
+        // hands it back to `materialize`, so the command lands on this exact daemon instance,
+        // never a replacement that attached in between.
+        self.data_plane
+            .resolve(host)
+            .map_err(|_| AgentMaterializeFailure::RegistryUnavailable)
+    }
 
     async fn materialize(
         &self,
+        captured: Self::Captured,
         target: &AgentMaterializeTarget,
     ) -> Result<Result<AgentMaterializeReceipt, AgentMaterializeRefusal>, Self::Error> {
         let params = agent_materialize_codec::encode(target)
             .map_err(|_| AgentMaterializeFailure::InvalidRequest)?;
-        let Some(custody) = self
-            .data_plane
-            .resolve(target.host())
-            .map_err(|_| AgentMaterializeFailure::RegistryUnavailable)?
-        else {
-            return Ok(Err(AgentMaterializeRefusal::HostAttachPending));
-        };
-        materialize_captured(&self.data_plane, custody, params, self.timeout).await
+        materialize_captured(&self.data_plane, captured, params, self.timeout).await
     }
 }
 

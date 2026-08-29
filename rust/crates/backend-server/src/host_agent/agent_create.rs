@@ -27,8 +27,9 @@
 //!     [`create_agent`], which owns the whole saga: idempotency dispatch, in-core
 //!     placement (returning a typed [`RuntimePlacementRefusal`], mapped through the ONE
 //!     canonical [`placement_refusal`] authority — an improvement over the TS
-//!     error-sniffing), handle/connectivity gates, the reserve INSERT, the host
-//!     materialize dispatch, and the flip-active + dependent-graph provisioning
+//!     error-sniffing), the handle gate, the reserve INSERT, the capture-then-dispatch
+//!     host materialize (the attachment gate and the command speak ONE truth about which
+//!     daemon holds the host), and the flip-active + dependent-graph provisioning
 //!     transaction. It returns a sealed [`CreateAgentOutcome`] or a safe-`500`
 //!     [`CreateAgentFault`].
 //!  5. RESPOND + EFFECTS — map the outcome to its exact HTTP body; on the `Created`
@@ -39,17 +40,25 @@
 //!
 //! ## Post-commit effects (parity with `buildPostCommitEffects`)
 //!
-//! Fired ONLY on `Created`, best-effort (a failure is logged, never flips the `201`):
+//! Fired ONLY on `Created`, best-effort (a failure is logged, never flips the `201`).
+//! The TS order is `[direct_pairs, announce, deliver, start]`; the split here is by
+//! blast radius, not by ceremony:
 //!
 //!  - `direct_pairs_changed(creator, direct_line)` — agent-scoped arm ONLY, and ONLY
 //!    when the creator↔agent pair was freshly minted (`pair_created`). A resolved
-//!    existing line is not new to the creator, so no edge fires.
-//!  - `agent_changed(agent)` — the app-scope announce.
-//!  - `deliver(destination, agent, onboarding_message_id)` — the onboarding message.
+//!    existing line is not new to the creator, so no edge fires. An in-process
+//!    broadcast: awaited inline (it cannot block on remote IO, and its order is
+//!    observable).
+//!  - `agent_changed(agent)` — the app-scope announce, also an in-process broadcast,
+//!    awaited inline.
+//!  - `deliver(destination, agent)` — wake the agent on the onboarding conversation.
 //!  - `start(destination, agent)` — the runtime auto-start.
 //!
-//! The order matches TS: the agent arm prepends the direct-pairs edge to
-//! `[announce, deliver, start]`; the conversation arm fires the last three only.
+//! `deliver` and `start` are remote daemon IO: each is handed to the owned aftermath
+//! boundary ([`AftermathDispatch`]) as its OWN independent task, so the `201` is sealed
+//! before either touches the host and one leg's panic or fault can never swallow the
+//! other. The order matches TS: the agent arm fires the direct-pairs edge first; the
+//! conversation arm skips it.
 //!
 //! ## Named divergences, reachability-priced (flagged for review)
 //!
@@ -68,6 +77,7 @@
 //!    exists` (code `agent_name_taken`), since the core carries no message.
 
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use axum::{
@@ -83,8 +93,8 @@ use serde_json::json;
 use silverhand_backend_core::{
     agent_creation::{
         AgentGraphRead, CreateAgentFault, CreateAgentInput, CreateAgentOutcome, CreateAgentPorts,
-        CreatedAgent, CreatedArm, CreatedCoordinates, EchoedAgent, HostConnectivity,
-        MaterializeFailureCode, create_agent,
+        CreatedAgent, CreatedArm, CreatedCoordinates, EchoedAgent, MaterializeFailureCode,
+        create_agent,
     },
     agent_detail_read::AgentDetailReadModel,
     agent_materialization::{
@@ -121,19 +131,21 @@ pub const AGENT_CREATE_PATH: &str = "/api/agents";
 // The two route-local post-commit effect ports
 // ===========================================================================
 
-/// Deliver the onboarding system message to its destination conversation. The core
-/// hands the route a loose `(conversation, agent, message)` coordinate — consistent
-/// with [`RuntimeStart`] — because the onboarding message id is already sealed out of
-/// the provisioning transaction; no existing core delivery port takes this triple (the
-/// mention-copy delivery binds its conversation from a sealed message value). Declared
-/// here as the create face's narrow view; the production adapter is a named seam at
+/// Wake the freshly created agent on its destination conversation so it acts on the
+/// onboarding message the provisioning transaction already committed to that
+/// conversation's inbox. This mirrors the real delivery authority
+/// (`DaemonDeliveryEffects::deliver`), whose wake primitive is `(conversation, agent)`:
+/// the agent reads its own committed inbox, so the onboarding message id is NOT a
+/// delivery parameter (TS threads it through `deliverMessage` but the daemon boundary
+/// drops it — carrying it here would be dead payload). No core trait fits the bare
+/// conversation-level wake — `RuntimeDelivery` is shaped for a sealed mention copy — so
+/// the create face declares its narrow view; the production adapter is a named seam at
 /// mount.
 pub trait OnboardingDelivery: Clone + Send + Sync + 'static {
     fn deliver(
         &self,
         conversation: &ConversationId,
         agent: &AgentId,
-        message: &MessageId,
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
@@ -148,14 +160,28 @@ pub trait DirectPairsChanged: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
+/// One owned, best-effort post-commit leg. It awaits its remote effect and logs any
+/// failure internally, so it never yields an error that could abort a sibling leg.
+pub type AftermathLeg = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+/// Hand a structurally-independent post-commit leg to the application's owned
+/// lifecycle/shutdown boundary. The create response is already sealed before dispatch,
+/// so a leg that blocks on remote daemon IO (`deliver`, `start`) never delays the `201`.
+/// Each leg is handed off separately and the boundary owns it (tracked, cancelled on
+/// shutdown), so one leg's panic or fault is isolated and cannot swallow another. This is
+/// NOT an owner-less detached `spawn`: the production adapter is a named seam at mount
+/// that plugs into the real task tracker.
+pub trait AftermathDispatch: Clone + Send + Sync + 'static {
+    fn dispatch(&self, leg: AftermathLeg);
+}
+
 // ===========================================================================
 // Router + state
 // ===========================================================================
 
 #[allow(clippy::type_complexity)]
-struct StateInner<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL> {
+struct StateInner<C, H, M, R, V, G, E, RD, S, RS, OD, DP, AD, CL> {
     computers: C,
-    connectivity: N,
     handles: H,
     materialization: M,
     materialize: R,
@@ -167,31 +193,32 @@ struct StateInner<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL> {
     runtime_start: RS,
     onboarding: OD,
     direct_pairs: DP,
+    aftermath: AD,
     clock: CL,
 }
 
 #[allow(clippy::type_complexity)]
-struct CreateState<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>(
-    Arc<StateInner<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>>,
+struct CreateState<C, H, M, R, V, G, E, RD, S, RS, OD, DP, AD, CL>(
+    Arc<StateInner<C, H, M, R, V, G, E, RD, S, RS, OD, DP, AD, CL>>,
 );
 
-impl<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL> Clone
-    for CreateState<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>
+impl<C, H, M, R, V, G, E, RD, S, RS, OD, DP, AD, CL> Clone
+    for CreateState<C, H, M, R, V, G, E, RD, S, RS, OD, DP, AD, CL>
 {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-/// Compose the UNMOUNTED create face over its ports: the eight core authorities the
+/// Compose the UNMOUNTED create face over its ports: the seven core authorities the
 /// [`create_agent`] unit of work drives, the detail read model the post-commit
-/// reprojection rides, and the four post-commit effect sinks. Every port is injected;
-/// mounting the real adapters (and, for [`OnboardingDelivery`]/[`DirectPairsChanged`],
-/// the named production seams) is the composition root's job.
+/// reprojection rides, the four post-commit effect sinks, and the aftermath boundary the
+/// two remote legs are handed to. Every port is injected; mounting the real adapters
+/// (and, for [`OnboardingDelivery`]/[`DirectPairsChanged`]/[`AftermathDispatch`], the
+/// named production seams) is the composition root's job.
 #[allow(clippy::too_many_arguments)]
-pub fn router<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>(
+pub fn router<C, H, M, R, V, G, E, RD, S, RS, OD, DP, AD, CL>(
     computers: C,
-    connectivity: N,
     handles: H,
     materialization: M,
     materialize: R,
@@ -203,11 +230,11 @@ pub fn router<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>(
     runtime_start: RS,
     onboarding: OD,
     direct_pairs: DP,
+    aftermath: AD,
     clock: CL,
 ) -> Router
 where
     C: ComputerReadModel,
-    N: HostConnectivity + Send + Sync + 'static,
     H: AgentMaterializationLookupHandles,
     M: AgentMaterializationLookup + AgentMaterializationWrite + Send + Sync + 'static,
     R: AgentMaterializePort,
@@ -216,14 +243,14 @@ where
     E: SendEntropy + Send + Sync + 'static,
     RD: AgentDetailReadModel + Send + Sync + 'static,
     S: AgentChangedSink,
-    RS: RuntimeStart + Send + Sync + 'static,
+    RS: RuntimeStart + Clone + Send + Sync + 'static,
     OD: OnboardingDelivery,
     DP: DirectPairsChanged,
+    AD: AftermathDispatch,
     CL: ProcessClock,
 {
     let state = CreateState(Arc::new(StateInner {
         computers,
-        connectivity,
         handles,
         materialization,
         materialize,
@@ -235,12 +262,13 @@ where
         runtime_start,
         onboarding,
         direct_pairs,
+        aftermath,
         clock,
     }));
     Router::new()
         .route(
             AGENT_CREATE_PATH,
-            post(agent_create::<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>),
+            post(agent_create::<C, H, M, R, V, G, E, RD, S, RS, OD, DP, AD, CL>),
         )
         .with_state(state)
 }
@@ -258,8 +286,8 @@ impl<T> AgentMaterializationLookupHandles for T where
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-async fn agent_create<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>(
-    State(state): State<CreateState<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>>,
+async fn agent_create<C, H, M, R, V, G, E, RD, S, RS, OD, DP, AD, CL>(
+    State(state): State<CreateState<C, H, M, R, V, G, E, RD, S, RS, OD, DP, AD, CL>>,
     principal: Option<Extension<UserId>>,
     headers: HeaderMap,
     RawQuery(raw_query): RawQuery,
@@ -267,7 +295,6 @@ async fn agent_create<C, N, H, M, R, V, G, E, RD, S, RS, OD, DP, CL>(
 ) -> Response
 where
     C: ComputerReadModel,
-    N: HostConnectivity + Send + Sync + 'static,
     H: AgentMaterializationLookupHandles,
     M: AgentMaterializationLookup + AgentMaterializationWrite + Send + Sync + 'static,
     R: AgentMaterializePort,
@@ -276,9 +303,10 @@ where
     E: SendEntropy + Send + Sync + 'static,
     RD: AgentDetailReadModel + Send + Sync + 'static,
     S: AgentChangedSink,
-    RS: RuntimeStart + Send + Sync + 'static,
+    RS: RuntimeStart + Clone + Send + Sync + 'static,
     OD: OnboardingDelivery,
     DP: DirectPairsChanged,
+    AD: AftermathDispatch,
     CL: ProcessClock,
 {
     let inner = &state.0;
@@ -305,7 +333,6 @@ where
 
     let ports = CreateAgentPorts {
         computers: &inner.computers,
-        connectivity: &inner.connectivity,
         handles: &inner.handles,
         materialization: &inner.materialization,
         materialize: &inner.materialize,
@@ -323,6 +350,7 @@ where
         &inner.runtime_start,
         &inner.onboarding,
         &inner.direct_pairs,
+        &inner.aftermath,
         &actor,
     )
     .await
@@ -332,21 +360,23 @@ where
 /// and firing the post-commit effects on the `Created` arm. Isolated from the port
 /// wiring so the outcome→HTTP contract and the effect fan-out are tested directly.
 #[allow(clippy::too_many_arguments)]
-async fn finish<RD, S, RS, OD, DP>(
+async fn finish<RD, S, RS, OD, DP, AD>(
     result: Result<CreateAgentOutcome, CreateAgentFault>,
     reads: &RD,
     sink: &S,
     runtime_start: &RS,
     onboarding: &OD,
     direct_pairs: &DP,
+    aftermath: &AD,
     actor: &UserId,
 ) -> Response
 where
     RD: AgentDetailReadModel,
     S: AgentChangedSink,
-    RS: RuntimeStart,
+    RS: RuntimeStart + Clone + Send + Sync + 'static,
     OD: OnboardingDelivery,
     DP: DirectPairsChanged,
+    AD: AftermathDispatch,
 {
     let outcome = match result {
         Ok(outcome) => outcome,
@@ -367,8 +397,9 @@ where
                 Err(fault) => return fault.into_safe_500("agent-create", &agent_id),
             };
 
-            // Post-commit effects, best-effort, in the TS order. A failure is logged,
-            // never flips the `201` — the write is durable.
+            // Post-commit effects, best-effort, in the TS order. The two in-process
+            // broadcasts run inline (they cannot block on remote IO, and their order is
+            // observable); a failure is logged, never flips the durable `201`.
             if let CreatedArm::Agent {
                 direct_line,
                 pair_created,
@@ -390,23 +421,39 @@ where
                     "agent-create agent_changed announce failed"
                 );
             }
-            if let Err(failure) = onboarding
-                .deliver(arm.destination(), &agent_id, arm.onboarding_message_id())
-                .await
-            {
-                tracing::error!(
-                    agent_id = agent_id.as_str(),
-                    error_chain = %error::describe(&failure),
-                    "agent-create onboarding delivery failed"
-                );
-            }
-            if let Err(failure) = runtime_start.start(arm.destination(), &agent_id).await {
-                tracing::error!(
-                    agent_id = agent_id.as_str(),
-                    error_chain = %error::describe(&failure),
-                    "agent-create runtime start failed"
-                );
-            }
+
+            // The two remote daemon legs. Each is handed to the owned aftermath boundary
+            // as its OWN task, so the `201` below is sealed before either touches the
+            // host and a panic/fault in one can never swallow the other. Each leg logs
+            // its own failure; the boxed future yields `()`.
+            let destination = arm.destination().clone();
+            aftermath.dispatch(Box::pin({
+                let onboarding = (*onboarding).clone();
+                let destination = destination.clone();
+                let agent_id = agent_id.clone();
+                async move {
+                    if let Err(failure) = onboarding.deliver(&destination, &agent_id).await {
+                        tracing::error!(
+                            agent_id = agent_id.as_str(),
+                            error_chain = %error::describe(&failure),
+                            "agent-create onboarding delivery failed"
+                        );
+                    }
+                }
+            }));
+            aftermath.dispatch(Box::pin({
+                let runtime_start = (*runtime_start).clone();
+                let agent_id = agent_id.clone();
+                async move {
+                    if let Err(failure) = runtime_start.start(&destination, &agent_id).await {
+                        tracing::error!(
+                            agent_id = agent_id.as_str(),
+                            error_chain = %error::describe(&failure),
+                            "agent-create runtime start failed"
+                        );
+                    }
+                }
+            }));
 
             coordinates_response(StatusCode::CREATED, dto, &arm.coordinates())
         }
@@ -1054,17 +1101,20 @@ mod tests {
     #[derive(Clone)]
     struct FakeDeliver {
         calls: Arc<AtomicUsize>,
-        last: Arc<Mutex<Option<(ConversationId, AgentId, MessageId)>>>,
+        last: Arc<Mutex<Option<(ConversationId, AgentId)>>>,
+        panic: bool,
     }
     impl OnboardingDelivery for FakeDeliver {
         async fn deliver(
             &self,
             conversation: &ConversationId,
             agent: &AgentId,
-            msg: &MessageId,
         ) -> Result<(), EffectFailure> {
+            if self.panic {
+                panic!("deliver leg blew up");
+            }
             self.calls.fetch_add(1, SeqCst);
-            *self.last.lock().unwrap() = Some((conversation.clone(), agent.clone(), msg.clone()));
+            *self.last.lock().unwrap() = Some((conversation.clone(), agent.clone()));
             Ok(())
         }
     }
@@ -1086,14 +1136,51 @@ mod tests {
         }
     }
 
+    /// Captures the remote legs the create face hands off WITHOUT polling them, so a test
+    /// can prove the `201` was sealed before any leg ran, then drive each leg as its own
+    /// isolated task (mirroring the owned task-set the production adapter plugs into) so a
+    /// panic in one leg cannot abort another.
+    #[derive(Clone)]
+    struct FakeAftermath {
+        legs: Arc<Mutex<Vec<AftermathLeg>>>,
+    }
+    impl AftermathDispatch for FakeAftermath {
+        fn dispatch(&self, leg: AftermathLeg) {
+            self.legs.lock().unwrap().push(leg);
+        }
+    }
+    impl FakeAftermath {
+        fn new() -> Self {
+            Self {
+                legs: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+        fn scheduled(&self) -> usize {
+            self.legs.lock().unwrap().len()
+        }
+        /// Run every captured leg as its own spawned task and join them; a leg panic is
+        /// isolated to its own `JoinHandle` and never aborts the others.
+        async fn run_isolated(&self) {
+            let legs: Vec<AftermathLeg> = std::mem::take(&mut *self.legs.lock().unwrap());
+            let handles: Vec<_> = legs.into_iter().map(tokio::spawn).collect();
+            for handle in handles {
+                let _ = handle.await;
+            }
+        }
+    }
+
     struct Effects {
         sink: FakeSink,
         start: FakeStart,
         deliver: FakeDeliver,
         direct_pairs: FakeDirectPairs,
+        aftermath: FakeAftermath,
     }
     impl Effects {
         fn new() -> Self {
+            Self::with_panicking_deliver(false)
+        }
+        fn with_panicking_deliver(panic: bool) -> Self {
             Self {
                 sink: FakeSink {
                     calls: Arc::new(AtomicUsize::new(0)),
@@ -1105,13 +1192,17 @@ mod tests {
                 deliver: FakeDeliver {
                     calls: Arc::new(AtomicUsize::new(0)),
                     last: Arc::new(Mutex::new(None)),
+                    panic,
                 },
                 direct_pairs: FakeDirectPairs {
                     calls: Arc::new(AtomicUsize::new(0)),
                     last: Arc::new(Mutex::new(None)),
                 },
+                aftermath: FakeAftermath::new(),
             }
         }
+        /// `(direct_pairs, announce, deliver, start)`. `deliver`/`start` only advance once
+        /// their legs are actually run — see [`FakeAftermath::run_isolated`].
         fn counts(&self) -> (usize, usize, usize, usize) {
             (
                 self.direct_pairs.calls.load(SeqCst),
@@ -1141,6 +1232,7 @@ mod tests {
             &fx.start,
             &fx.deliver,
             &fx.direct_pairs,
+            &fx.aftermath,
             &user("creator-1"),
         )
         .await;
@@ -1182,15 +1274,21 @@ mod tests {
         assert!(reply.json["agent_home_workspace_id"].is_null());
         assert!(reply.json["dm_channel_id"].is_null());
         assert!(reply.json["onboarding_message_id"].is_null());
-        // direct_pairs, announce, deliver, start — each exactly once.
-        assert_eq!(fx.counts(), (1, 1, 1, 1));
+        // The two in-process broadcasts already ran inline; the two remote legs are
+        // scheduled but not yet run (the `201` did not wait on them).
+        assert_eq!(fx.counts(), (1, 1, 0, 0));
+        assert_eq!(fx.aftermath.scheduled(), 2);
         assert_eq!(
             *fx.direct_pairs.last.lock().unwrap(),
             Some((user("creator-1"), conversation("dl-1")))
         );
+        // Drive the remote legs: now deliver + start each ran exactly once, at the arm's
+        // destination.
+        fx.aftermath.run_isolated().await;
+        assert_eq!(fx.counts(), (1, 1, 1, 1));
         assert_eq!(
             *fx.deliver.last.lock().unwrap(),
-            Some((conversation("dl-1"), agent("a1"), message("m-1")))
+            Some((conversation("dl-1"), agent("a1")))
         );
         assert_eq!(
             *fx.start.last.lock().unwrap(),
@@ -1203,7 +1301,9 @@ mod tests {
         let fx = Effects::new();
         let reply = drive(Ok(created_agent_arm(false)), true, &fx).await;
         assert_eq!(reply.status, StatusCode::CREATED);
-        // No direct-pairs edge; announce/deliver/start still fire.
+        // No direct-pairs edge; announce ran inline, deliver/start scheduled then run.
+        assert_eq!(fx.counts(), (0, 1, 0, 0));
+        fx.aftermath.run_isolated().await;
         assert_eq!(fx.counts(), (0, 1, 1, 1));
     }
 
@@ -1216,10 +1316,12 @@ mod tests {
         assert_eq!(reply.json["dm_channel_id"], "onb-1");
         assert_eq!(reply.json["onboarding_message_id"], "m-1");
         // Conversation arm: no direct-pairs edge; the DM is the destination.
+        assert_eq!(fx.counts(), (0, 1, 0, 0));
+        fx.aftermath.run_isolated().await;
         assert_eq!(fx.counts(), (0, 1, 1, 1));
         assert_eq!(
             *fx.deliver.last.lock().unwrap(),
-            Some((conversation("onb-1"), agent("a1"), message("m-1")))
+            Some((conversation("onb-1"), agent("a1")))
         );
     }
 
@@ -1242,6 +1344,37 @@ mod tests {
         assert_eq!(reply.status, StatusCode::OK);
         assert_eq!(reply.json["dm_channel_id"], "onb-1");
         assert_eq!(fx.counts(), (0, 0, 0, 0));
+        assert_eq!(fx.aftermath.scheduled(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_201_is_sealed_before_the_remote_legs_run() {
+        // A deliver leg that never completes must not delay the `201`. The fake captures
+        // the leg without polling it, so `finish` returning at all proves it did not
+        // await the remote IO; both legs are handed off independently.
+        let fx = Effects::new();
+        let reply = drive(Ok(created_agent_arm(true)), true, &fx).await;
+        assert_eq!(reply.status, StatusCode::CREATED);
+        assert_eq!(fx.aftermath.scheduled(), 2, "both remote legs scheduled");
+        assert_eq!(
+            (fx.deliver.calls.load(SeqCst), fx.start.calls.load(SeqCst)),
+            (0, 0),
+            "neither remote leg ran before the 201 was produced"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_panicking_deliver_leg_does_not_swallow_the_start_leg() {
+        // Isolation: the deliver leg panics when run, but the start leg — a separate,
+        // separately-owned task — still runs to completion.
+        let fx = Effects::with_panicking_deliver(true);
+        let reply = drive(Ok(created_agent_arm(true)), true, &fx).await;
+        assert_eq!(reply.status, StatusCode::CREATED);
+        assert_eq!(fx.aftermath.scheduled(), 2);
+        fx.aftermath.run_isolated().await;
+        // deliver blew up (its counter never advanced) yet start still ran.
+        assert_eq!(fx.deliver.calls.load(SeqCst), 0);
+        assert_eq!(fx.start.calls.load(SeqCst), 1);
     }
 
     #[tokio::test]
@@ -1251,6 +1384,7 @@ mod tests {
         let reply = drive(Ok(created_agent_arm(true)), false, &fx).await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(fx.counts(), (0, 0, 0, 0));
+        assert_eq!(fx.aftermath.scheduled(), 0);
     }
 
     #[tokio::test]
@@ -1399,11 +1533,6 @@ mod tests {
             unreachable!("placement is never reached on the retry-not-found path")
         }
     }
-    impl HostConnectivity for InertCore {
-        async fn is_attached(&self, _host: &HostId) -> Result<bool, PersistenceFailure> {
-            unreachable!("connectivity is never reached on the retry-not-found path")
-        }
-    }
     impl HandleNamespaceRead for InertCore {
         async fn is_handle_taken(
             &self,
@@ -1456,8 +1585,13 @@ mod tests {
     }
     impl AgentMaterializePort for InertCore {
         type Error = Infallible;
+        type Captured = ();
+        async fn capture(&self, _host: &HostId) -> Result<Option<Self::Captured>, Self::Error> {
+            unreachable!("capture is never reached on the retry-not-found path")
+        }
         async fn materialize(
             &self,
+            _captured: Self::Captured,
             _target: &AgentMaterializeTarget,
         ) -> Result<Result<AgentMaterializeReceipt, AgentMaterializeRefusal>, Self::Error> {
             unreachable!("materialize is never reached on the retry-not-found path")
@@ -1520,7 +1654,6 @@ mod tests {
             InertCore,
             InertCore,
             InertCore,
-            InertCore,
             FakeReads { present: true },
             FakeSink {
                 calls: Arc::new(AtomicUsize::new(0)),
@@ -1532,11 +1665,13 @@ mod tests {
             FakeDeliver {
                 calls: Arc::new(AtomicUsize::new(0)),
                 last: Arc::new(Mutex::new(None)),
+                panic: false,
             },
             FakeDirectPairs {
                 calls: Arc::new(AtomicUsize::new(0)),
                 last: Arc::new(Mutex::new(None)),
             },
+            FakeAftermath::new(),
             FixedClock,
         )
     }

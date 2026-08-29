@@ -19,12 +19,14 @@
 //! ## Deliberate divergences from the TypeScript create path
 //!
 //! - **No pre-reserve generation reconfirm.** TS re-reads the daemon connection id between
-//!   its online check and the dispatch to catch a reconnect. Here the dispatch itself
-//!   captures the daemon custody and fails closed to `host_attach_pending` on any
-//!   generation/instance mismatch, so a separate reconfirm would be a second connectivity
-//!   authority racing the one the dispatch actually uses. The pre-reserve
-//!   [`HostConnectivity`] gate remains only as a fail-fast so the common offline case does
-//!   not insert a pending row a synchronous create would then have to fail.
+//!   its online check and the dispatch to catch a reconnect. Here the saga captures the
+//!   daemon custody ONCE, before it reserves a row, and the dispatch lands only on that
+//!   captured custody — a daemon that dropped or was replaced in between fails closed to
+//!   `host_attach_pending`. The capture is one authority for both the fail-fast offline
+//!   check and the command, so there is no second connectivity fact to reconfirm and no
+//!   window in which the gate and the dispatch could disagree about which daemon owns the
+//!   host. An offline capture inserts no pending row a synchronous create would then fail;
+//!   an offline retry reopens nothing and leaves the prior failure fact untouched.
 //! - **`dependent_row_insert_failed` is not a product code.** A dependent-graph write
 //!   failure surfaces as a [`MaterializationFault`] → safe `500`, matching the DELETE
 //!   face, rather than a `materializeFailed` code.
@@ -40,7 +42,7 @@ use std::future::Future;
 
 use thiserror::Error;
 
-use crate::agent_materialization::fail_materialization;
+use crate::agent_materialization::{FailOutcome, fail_materialization};
 use crate::{
     agent_lifecycle::MaterializationStatus,
     agent_materialization::{
@@ -69,6 +71,7 @@ use crate::{
         environment::{EnvironmentUnavailable, SendEntropy},
         mint_agent_id, mint_conversation_id,
     },
+    name_canonicalization::is_ecmascript_trim_whitespace,
     persistence::PersistenceFailure,
     user_identity::ParticipantHandle,
 };
@@ -95,11 +98,13 @@ pub struct CreateAgentInput {
 }
 
 /// The create-time model default, applied exactly once. A non-blank explicit model is kept;
-/// an absent or whitespace-only one falls back to the runtime's forced default (only Qoder
-/// carries one). Mirrors `normalizeCreateAgentInput` and its `model.trim()`.
+/// an absent or ECMAScript-whitespace-only one falls back to the runtime's forced default
+/// (only Qoder carries one). Mirrors `normalizeCreateAgentInput` and its `model.trim()` —
+/// blank is the ECMAScript `String.prototype.trim` set, so a lone U+FEFF is blank and falls
+/// back while a lone U+0085 (NEL, outside that set) is kept verbatim.
 fn normalize_model(runtime: RuntimeKind, model: Option<String>) -> Option<String> {
     match model {
-        Some(model) if !model.trim().is_empty() => Some(model),
+        Some(model) if !model.chars().all(is_ecmascript_trim_whitespace) => Some(model),
         _ => runtime_default_model(runtime).map(str::to_owned),
     }
 }
@@ -351,19 +356,6 @@ pub enum CreateAgentFault {
     CorruptGraph { reason: &'static str },
 }
 
-/// The live daemon-attachment fact for one host.
-///
-/// Is a daemon connected to this host right now and able to receive an `agent_materialize`
-/// command? This is the SAME attachment registry the dispatch captures custody from —
-/// consulted here only to fail the common offline case fast, before a row is reserved. It
-/// is NOT a lifecycle stamp: a host can be lifecycle-`Active` yet have no daemon attached.
-pub trait HostConnectivity: Send + Sync {
-    fn is_attached(
-        &self,
-        host: &HostId,
-    ) -> impl Future<Output = Result<bool, PersistenceFailure>> + Send;
-}
-
 /// The two post-commit reads an idempotent echo of a conversation-scoped create needs to
 /// rebuild its coordinates: the agent's home DM channel and the first onboarding system
 /// message on it. Only the echo path reads these — a fresh create carries them out of the
@@ -381,10 +373,11 @@ pub trait AgentGraphRead: Send + Sync {
 }
 
 /// The authorities the create unit of work drives. Each field is a distinct bounded
-/// authority; the reserve/lookup pair is one adapter because they are one store.
-pub struct CreateAgentPorts<'a, C, N, H, M, R, V, G, E> {
+/// authority; the reserve/lookup pair is one adapter because they are one store. The
+/// `materialize` port owns both the attachment gate (`capture`) and the command dispatch,
+/// so the gate and the command speak one truth about which daemon holds the host.
+pub struct CreateAgentPorts<'a, C, H, M, R, V, G, E> {
     pub computers: &'a C,
-    pub connectivity: &'a N,
     pub handles: &'a H,
     pub materialization: &'a M,
     pub materialize: &'a R,
@@ -395,8 +388,8 @@ pub struct CreateAgentPorts<'a, C, N, H, M, R, V, G, E> {
 
 /// The one entry point. `creator` is the authenticated principal, `key` the parsed
 /// `Idempotency-Key`, `retry` the `?retry=true` flag, `now_ms` the request clock.
-pub async fn create_agent<C, N, H, M, R, V, G, E>(
-    ports: &CreateAgentPorts<'_, C, N, H, M, R, V, G, E>,
+pub async fn create_agent<C, H, M, R, V, G, E>(
+    ports: &CreateAgentPorts<'_, C, H, M, R, V, G, E>,
     creator: &UserId,
     key: &IdempotencyKey,
     mut input: CreateAgentInput,
@@ -405,7 +398,6 @@ pub async fn create_agent<C, N, H, M, R, V, G, E>(
 ) -> Result<CreateAgentOutcome, CreateAgentFault>
 where
     C: ComputerReadModel,
-    N: HostConnectivity,
     H: HandleNamespaceRead,
     M: AgentMaterializationLookup + AgentMaterializationWrite,
     R: AgentMaterializePort,
@@ -427,7 +419,7 @@ where
         return Ok(CreateAgentOutcome::RetryTargetNotFound);
     }
 
-    // Fresh: placement → handle → connectivity → reserve → materialize.
+    // Fresh: placement → handle → capture custody → reserve → materialize.
     let host_id = match resolve_placement(ports.computers, creator, input.host_id.as_ref()).await? {
         Ok(host_id) => host_id,
         Err(refusal) => return Ok(CreateAgentOutcome::PlacementRefused(refusal)),
@@ -437,9 +429,18 @@ where
         return Ok(CreateAgentOutcome::NameTaken);
     }
 
-    if !ports.connectivity.is_attached(&host_id).await? {
+    // Capture the exact daemon that owns the host BEFORE the first persistent mutation. The
+    // command below dispatches only to this captured custody, so a daemon that drops or is
+    // replaced between here and the dispatch is refused, never silently retargeted. No daemon
+    // attached is the fast offline case: no row is reserved.
+    let Some(captured) = ports
+        .materialize
+        .capture(&host_id)
+        .await
+        .map_err(|_| CreateAgentFault::MaterializeTransport)?
+    else {
         return Ok(CreateAgentOutcome::HostAttachPending);
-    }
+    };
 
     let agent_id = mint_agent_id(ports.entropy)?;
     let reserve_input = ReserveAgentInput {
@@ -477,6 +478,7 @@ where
         key,
         &input,
         reserved.agent_id(),
+        captured,
         target,
         now_ms,
     )
@@ -485,8 +487,8 @@ where
 
 /// Drive an existing reservation for this `(creator, key)`: the idempotent replay and the
 /// retry re-drive.
-async fn dispatch_existing<C, N, H, M, R, V, G, E>(
-    ports: &CreateAgentPorts<'_, C, N, H, M, R, V, G, E>,
+async fn dispatch_existing<C, H, M, R, V, G, E>(
+    ports: &CreateAgentPorts<'_, C, H, M, R, V, G, E>,
     creator: &UserId,
     key: &IdempotencyKey,
     input: &CreateAgentInput,
@@ -496,7 +498,6 @@ async fn dispatch_existing<C, N, H, M, R, V, G, E>(
 ) -> Result<CreateAgentOutcome, CreateAgentFault>
 where
     C: ComputerReadModel,
-    N: HostConnectivity,
     H: HandleNamespaceRead,
     M: AgentMaterializationLookup + AgentMaterializationWrite,
     R: AgentMaterializePort,
@@ -508,6 +509,18 @@ where
         IdempotentClass::Terminal(outcome) => Ok(outcome),
         IdempotentClass::EchoActive => build_echo(ports, &existing).await,
         IdempotentClass::Reopen => {
+            // Capture the daemon BEFORE reopening the failed row. An offline retry reopens
+            // nothing and leaves the original failure code and stamp untouched, so a later
+            // `?retry` still sees the true prior failure rather than a row we churned back to
+            // pending and could not drive.
+            let Some(captured) = ports
+                .materialize
+                .capture(existing.host_id())
+                .await
+                .map_err(|_| CreateAgentFault::MaterializeTransport)?
+            else {
+                return Ok(CreateAgentOutcome::HostAttachPending);
+            };
             match reopen_failed_materialization(ports.materialization, existing.agent_id(), now_ms)
                 .await?
             {
@@ -527,6 +540,7 @@ where
                         key,
                         input,
                         existing.agent_id(),
+                        captured,
                         target,
                         now_ms,
                     )
@@ -564,14 +578,17 @@ fn classify_idempotent(
             if retry {
                 IdempotentClass::Reopen
             } else {
+                // `seal` proved a `failed` reservation carries a non-empty code and a stamp,
+                // so these reads are total — the product decision no longer defaults over a
+                // possibly-forged empty code or zero clock.
                 IdempotentClass::Terminal(CreateAgentOutcome::PreviouslyFailed {
-                    // A failed row always carries both — the fail write stamps them — so a
-                    // missing one is not a reachable state worth a distinct fault path.
                     failed_code: existing
                         .materialization_failed_code()
-                        .unwrap_or_default()
+                        .expect("sealed failed reservation carries its failure code")
                         .to_owned(),
-                    failed_at: existing.materialization_failed_at().unwrap_or_default(),
+                    failed_at: existing
+                        .materialization_failed_at()
+                        .expect("sealed failed reservation carries its failure timestamp"),
                 })
             }
         }
@@ -615,8 +632,8 @@ fn compare_metadata(
 /// Build the idempotent echo of an `active` reservation. An agent-scoped row publishes
 /// all-null coordinates and needs no read; a conversation-scoped one re-reads its home DM
 /// and the onboarding message on it — a missing row is a broken graph.
-async fn build_echo<C, N, H, M, R, V, G, E>(
-    ports: &CreateAgentPorts<'_, C, N, H, M, R, V, G, E>,
+async fn build_echo<C, H, M, R, V, G, E>(
+    ports: &CreateAgentPorts<'_, C, H, M, R, V, G, E>,
     existing: &IdempotentReservation,
 ) -> Result<CreateAgentOutcome, CreateAgentFault>
 where
@@ -654,18 +671,19 @@ where
 /// Send the host materialize command, then activate-and-provision the reserved row. A
 /// refusal stamps the row `failed` and reports the code; a lost activation re-reads the row
 /// as an idempotent dispatch; a transport fault is a safe `500` with the row left pending.
-async fn materialize_and_provision<C, N, H, M, R, V, G, E>(
-    ports: &CreateAgentPorts<'_, C, N, H, M, R, V, G, E>,
+#[allow(clippy::too_many_arguments)]
+async fn materialize_and_provision<C, H, M, R, V, G, E>(
+    ports: &CreateAgentPorts<'_, C, H, M, R, V, G, E>,
     creator: &UserId,
     key: &IdempotencyKey,
     input: &CreateAgentInput,
     agent_id: &AgentId,
+    captured: R::Captured,
     target: AgentMaterializeTarget,
     now_ms: i64,
 ) -> Result<CreateAgentOutcome, CreateAgentFault>
 where
     C: ComputerReadModel,
-    N: HostConnectivity,
     H: HandleNamespaceRead,
     M: AgentMaterializationLookup + AgentMaterializationWrite,
     R: AgentMaterializePort,
@@ -675,24 +693,28 @@ where
 {
     match ports
         .materialize
-        .materialize(&target)
+        .materialize(captured, &target)
         .await
         .map_err(|_| CreateAgentFault::MaterializeTransport)?
     {
         Ok(_receipt) => {}
         Err(refusal) => {
             let code = MaterializeFailureCode::from_refusal(refusal);
-            // Stamp the row `failed` with the code, then report it. A lost flip (the row was
-            // concurrently transitioned) does not change the answer the caller is owed.
-            fail_materialization(
+            // Stamp the row `failed` with the code. A `Lost` flip means a concurrent dispatch
+            // for the same key already moved the row past `pending|failed`, so our own `code`
+            // is not the answer the caller is owed — re-read the winner and report its state.
+            return match fail_materialization(
                 ports.materialization,
                 agent_id,
                 code.as_str(),
                 now_ms,
                 now_ms,
             )
-            .await?;
-            return Ok(CreateAgentOutcome::MaterializeFailed { code });
+            .await?
+            {
+                FailOutcome::Failed(_sealed) => Ok(CreateAgentOutcome::MaterializeFailed { code }),
+                FailOutcome::Lost => resolve_lost(ports, creator, key, input, now_ms).await,
+            };
         }
     }
 
@@ -737,8 +759,8 @@ where
 /// A lost activation means another dispatch for the same `(creator, key)` already moved the
 /// row. Re-read it and produce the outcome a fresh, non-retry idempotent dispatch would —
 /// the winner's `active` echo, its still-`pending` in-progress, or its `failed` report.
-async fn resolve_lost<C, N, H, M, R, V, G, E>(
-    ports: &CreateAgentPorts<'_, C, N, H, M, R, V, G, E>,
+async fn resolve_lost<C, H, M, R, V, G, E>(
+    ports: &CreateAgentPorts<'_, C, H, M, R, V, G, E>,
     creator: &UserId,
     key: &IdempotencyKey,
     input: &CreateAgentInput,
@@ -837,7 +859,7 @@ mod tests {
     #![allow(clippy::field_reassign_with_default)]
 
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 
     use super::*;
     use crate::agent_materialization::{
@@ -953,17 +975,6 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct FakeConnectivity {
-        attached: bool,
-    }
-
-    impl HostConnectivity for FakeConnectivity {
-        async fn is_attached(&self, _host: &HostId) -> Result<bool, PersistenceFailure> {
-            Ok(self.attached)
-        }
-    }
-
-    #[derive(Clone)]
     struct FakeHandles {
         taken: bool,
     }
@@ -981,8 +992,13 @@ mod tests {
         existing: Option<IdempotentReservationRow>,
         reserve_conflict: bool,
         reopen: Option<MaterializationFlipRow>,
+        /// When set, `fail` reports the guarded flip changed no row (`FailOutcome::Lost`) and
+        /// the next idempotency lookup returns this winner.
+        lost_winner: Option<IdempotentReservationRow>,
         reserve_called: AtomicBool,
         fail_called: AtomicBool,
+        reopen_called: AtomicBool,
+        find_calls: AtomicUsize,
         captured_model: Mutex<Option<Option<String>>>,
     }
 
@@ -992,8 +1008,11 @@ mod tests {
                 existing: None,
                 reserve_conflict: false,
                 reopen: None,
+                lost_winner: None,
                 reserve_called: AtomicBool::new(false),
                 fail_called: AtomicBool::new(false),
+                reopen_called: AtomicBool::new(false),
+                find_calls: AtomicUsize::new(0),
                 captured_model: Mutex::new(None),
             }
         }
@@ -1005,7 +1024,14 @@ mod tests {
             _creator: &UserId,
             _key: &IdempotencyKey,
         ) -> Result<Option<IdempotentReservationRow>, PersistenceFailure> {
-            Ok(self.existing.clone())
+            // The first lookup is the entry probe; a later one is a `resolve_lost` re-read,
+            // which must observe the concurrent winner rather than the original absence.
+            let previous = self.find_calls.fetch_add(1, Relaxed);
+            if previous >= 1 && self.lost_winner.is_some() {
+                Ok(self.lost_winner.clone())
+            } else {
+                Ok(self.existing.clone())
+            }
         }
     }
 
@@ -1048,6 +1074,11 @@ mod tests {
             now_ms: i64,
         ) -> Result<Option<MaterializationFlipRow>, PersistenceFailure> {
             self.fail_called.store(true, Relaxed);
+            if self.lost_winner.is_some() {
+                // The guarded `pending|failed → failed` CAS matched no row: a concurrent
+                // dispatch already moved it. The caller must re-read, not report our code.
+                return Ok(None);
+            }
             Ok(Some(MaterializationFlipRow {
                 agent_id: agent.clone(),
                 materialization_status: "failed".to_owned(),
@@ -1062,6 +1093,7 @@ mod tests {
             _agent: &AgentId,
             _now_ms: i64,
         ) -> Result<Option<MaterializationFlipRow>, PersistenceFailure> {
+            self.reopen_called.store(true, Relaxed);
             Ok(self.reopen.clone())
         }
 
@@ -1083,7 +1115,21 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct FakeMaterialize(MaterializeScript);
+    struct FakeMaterialize {
+        script: MaterializeScript,
+        /// Whether a daemon is captured for the host. `false` is the offline case: `capture`
+        /// returns `None` and the saga must reserve nothing.
+        captured: bool,
+    }
+
+    impl FakeMaterialize {
+        fn online(script: MaterializeScript) -> Self {
+            Self {
+                script,
+                captured: true,
+            }
+        }
+    }
 
     #[derive(Debug)]
     struct FakeMaterializeError;
@@ -1098,12 +1144,18 @@ mod tests {
 
     impl AgentMaterializePort for FakeMaterialize {
         type Error = FakeMaterializeError;
+        type Captured = ();
+
+        async fn capture(&self, _host: &HostId) -> Result<Option<()>, Self::Error> {
+            Ok(self.captured.then_some(()))
+        }
 
         async fn materialize(
             &self,
+            _captured: (),
             _target: &AgentMaterializeTarget,
         ) -> Result<Result<AgentMaterializeReceipt, AgentMaterializeRefusal>, Self::Error> {
-            match &self.0 {
+            match &self.script {
                 MaterializeScript::Ok => Ok(Ok(AgentMaterializeReceipt::admitted(
                     "/opaque".to_owned(),
                     NOW,
@@ -1283,7 +1335,6 @@ mod tests {
 
     struct Harness {
         computers: FakeComputers,
-        connectivity: FakeConnectivity,
         handles: FakeHandles,
         materialization: FakeMaterialization,
         materialize: FakeMaterialize,
@@ -1298,10 +1349,9 @@ mod tests {
                 computers: FakeComputers {
                     records: vec![active_host("host-1", CREATOR)],
                 },
-                connectivity: FakeConnectivity { attached: true },
                 handles: FakeHandles { taken: false },
                 materialization: FakeMaterialization::default(),
-                materialize: FakeMaterialize(MaterializeScript::Ok),
+                materialize: FakeMaterialize::online(MaterializeScript::Ok),
                 provisioning: FakeProvision {
                     scope: "conversation",
                     lost: false,
@@ -1320,7 +1370,6 @@ mod tests {
         ) -> Result<CreateAgentOutcome, CreateAgentFault> {
             let ports = CreateAgentPorts {
                 computers: &self.computers,
-                connectivity: &self.connectivity,
                 handles: &self.handles,
                 materialization: &self.materialization,
                 materialize: &self.materialize,
@@ -1346,13 +1395,21 @@ mod tests {
     }
 
     fn existing_row(status: &str, scope: &str) -> IdempotentReservationRow {
+        // A `failed` row always carries its failure columns; every other status carries
+        // neither. Mirror that here so the sealed witness is coherent, exactly as the store's
+        // own `pending|failed → failed` flip leaves it.
+        let (failed_code, failed_at) = if status == "failed" {
+            (Some("fs_unavailable".to_owned()), Some(7))
+        } else {
+            (None, None)
+        };
         IdempotentReservationRow {
             agent_id: AgentId::parse("agent-existing").unwrap(),
             created_by_user_id: CREATOR.to_owned(),
             idempotency_key: Some("idem-key-1".to_owned()),
             materialization_status: status.to_owned(),
-            materialization_failed_code: None,
-            materialization_failed_at: None,
+            materialization_failed_code: failed_code,
+            materialization_failed_at: failed_at,
             name: AGENT_HANDLE.to_owned(),
             runtime: "codex".to_owned(),
             model: None,
@@ -1563,7 +1620,10 @@ mod tests {
     #[tokio::test]
     async fn an_offline_host_is_pending_and_reserves_nothing() {
         let mut harness = Harness::default();
-        harness.connectivity = FakeConnectivity { attached: false };
+        harness.materialize = FakeMaterialize {
+            script: MaterializeScript::Ok,
+            captured: false,
+        };
         assert_eq!(
             harness.run(base_input(), false).await.unwrap(),
             CreateAgentOutcome::HostAttachPending
@@ -1589,7 +1649,7 @@ mod tests {
     #[tokio::test]
     async fn a_materialize_refusal_flips_failed_and_reports_the_code() {
         let mut harness = Harness::default();
-        harness.materialize = FakeMaterialize(MaterializeScript::Refuse(
+        harness.materialize = FakeMaterialize::online(MaterializeScript::Refuse(
             AgentMaterializeRefusal::FsQuotaExceeded,
         ));
         assert_eq!(
@@ -1604,7 +1664,7 @@ mod tests {
     #[tokio::test]
     async fn a_materialize_transport_fault_is_a_safe_500_and_leaves_the_row_pending() {
         let mut harness = Harness::default();
-        harness.materialize = FakeMaterialize(MaterializeScript::Transport);
+        harness.materialize = FakeMaterialize::online(MaterializeScript::Transport);
         let fault = harness.run(base_input(), false).await.unwrap_err();
         assert!(matches!(fault, CreateAgentFault::MaterializeTransport));
         assert!(
@@ -1725,26 +1785,106 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_retry_reopens_and_rematerializes_the_existing_row() {
+    async fn a_retry_against_an_offline_host_reopens_nothing() {
+        // Capture happens BEFORE the reopen. An offline retry must leave the failed row and
+        // its original code/stamp untouched rather than churn it back to pending.
         let mut harness = Harness::default();
-        harness.materialization.existing = Some(existing_row("failed", "agent"));
-        harness.materialization.reopen = Some(MaterializationFlipRow {
-            agent_id: AgentId::parse("agent-existing").unwrap(),
-            materialization_status: "pending_materialization".to_owned(),
-            materialization_failed_code: None,
-            materialization_failed_at: None,
-            updated_at: NOW,
-        });
-        harness.provisioning = FakeProvision {
-            scope: "agent",
-            lost: false,
+        harness.materialization.existing = Some(existing_row("failed", "conversation"));
+        harness.materialize = FakeMaterialize {
+            script: MaterializeScript::Ok,
+            captured: false,
         };
-        let mut input = base_input();
-        input.session_scope = Some(AgentSessionScope::Agent);
-        let outcome = harness.run(input, true).await.unwrap();
-        let CreateAgentOutcome::Created(created) = outcome else {
-            panic!("expected Created on a successful retry, got {outcome:?}");
+        assert_eq!(
+            harness.run(base_input(), true).await.unwrap(),
+            CreateAgentOutcome::HostAttachPending
+        );
+        assert!(
+            !harness.materialization.reopen_called.load(Relaxed),
+            "an offline retry must not reopen the failed row"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lost_fail_flip_re_reads_and_echoes_the_active_winner() {
+        // The refusal's `fail` flip loses to a concurrent dispatch that already activated the
+        // row; the caller must report the winner's `active` echo, never its own dropped code.
+        let mut harness = Harness::default();
+        harness.materialize = FakeMaterialize::online(MaterializeScript::Refuse(
+            AgentMaterializeRefusal::FsQuotaExceeded,
+        ));
+        harness.materialization.lost_winner = Some(existing_row("active", "conversation"));
+        harness.graph = FakeGraph {
+            dm_channel: Some(ConversationId::parse("dm-winner").unwrap()),
+            onboarding: Some(MessageId::parse("msg-winner").unwrap()),
         };
-        assert_eq!(created.agent_id, AgentId::parse("agent-existing").unwrap());
+        let outcome = harness.run(base_input(), false).await.unwrap();
+        let CreateAgentOutcome::Echo(echo) = outcome else {
+            panic!("expected the winner's Echo, got {outcome:?}");
+        };
+        assert_eq!(
+            echo.coordinates.dm_channel_id,
+            Some(ConversationId::parse("dm-winner").unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lost_fail_flip_reports_the_winners_failure_not_our_own() {
+        // The winner independently stamped the row `failed` with a different code; we must
+        // report the winner's code and stamp, not the `FsQuotaExceeded` our refusal carried.
+        let mut harness = Harness::default();
+        harness.materialize = FakeMaterialize::online(MaterializeScript::Refuse(
+            AgentMaterializeRefusal::FsQuotaExceeded,
+        ));
+        harness.materialization.lost_winner = Some(existing_row("failed", "conversation"));
+        assert_eq!(
+            harness.run(base_input(), false).await.unwrap(),
+            CreateAgentOutcome::PreviouslyFailed {
+                failed_code: "fs_unavailable".to_owned(),
+                failed_at: 7,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_witness_missing_its_code_is_a_fault_not_an_empty_default() {
+        let mut harness = Harness::default();
+        let mut row = existing_row("failed", "conversation");
+        row.materialization_failed_code = None; // incoherent: failed with no code
+        row.materialization_failed_at = Some(9);
+        harness.materialization.existing = Some(row);
+        let fault = harness.run(base_input(), false).await.unwrap_err();
+        assert!(
+            matches!(fault, CreateAgentFault::Materialization(_)),
+            "an incoherent failed witness must fault at seal, not default an empty code"
+        );
+    }
+
+    // ---- Model default --------------------------------------------------------
+
+    #[test]
+    fn model_default_uses_ecmascript_trim_not_str_trim() {
+        // A lone U+FEFF is ECMAScript-blank → falls back to the runtime default; a lone
+        // U+0085 (NEL) is outside that set → kept verbatim, matching `String.prototype.trim`.
+        assert_eq!(
+            normalize_model(RuntimeKind::Qoder, Some("\u{feff}".to_owned())),
+            Some("Ultimate".to_owned())
+        );
+        assert_eq!(
+            normalize_model(RuntimeKind::Qoder, Some("\u{0085}".to_owned())),
+            Some("\u{0085}".to_owned())
+        );
+        // Absent or empty falls back; a runtime with no default stays None.
+        assert_eq!(
+            normalize_model(RuntimeKind::Qoder, None),
+            Some("Ultimate".to_owned())
+        );
+        assert_eq!(
+            normalize_model(RuntimeKind::Codex, Some("\u{feff}".to_owned())),
+            None
+        );
+        assert_eq!(
+            normalize_model(RuntimeKind::Codex, Some("gpt-5.6-sol".to_owned())),
+            Some("gpt-5.6-sol".to_owned())
+        );
     }
 }

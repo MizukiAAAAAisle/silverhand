@@ -153,8 +153,27 @@ pub enum AgentMaterializeRefusal {
 pub trait AgentMaterializePort: Clone + Send + Sync + 'static {
     type Error: Error + Send + Sync + 'static;
 
+    /// The specific daemon custody captured for one host. It is opaque to the create saga:
+    /// the saga holds it across the reserve write and hands it straight back to
+    /// [`materialize`](AgentMaterializePort::materialize), so the command lands on the SAME
+    /// daemon instance the fail-fast gate saw — never a replacement that attached in between.
+    type Captured: Send;
+
+    /// Capture the daemon that owns `host` right now, or `None` when none is attached — the
+    /// common offline case, decided before any row is reserved. This is the SINGLE attachment
+    /// truth the saga consults; there is no separate boolean probe that a later resolve could
+    /// silently disagree with.
+    fn capture(
+        &self,
+        host: &HostId,
+    ) -> impl Future<Output = Result<Option<Self::Captured>, Self::Error>> + Send;
+
+    /// Dispatch the materialize command to the exact `captured` custody. A daemon that dropped
+    /// or was replaced after capture yields [`AgentMaterializeRefusal::HostAttachPending`], not
+    /// a silent retarget to whoever owns the host at dispatch time.
     fn materialize(
         &self,
+        captured: Self::Captured,
         target: &AgentMaterializeTarget,
     ) -> impl Future<
         Output = Result<Result<AgentMaterializeReceipt, AgentMaterializeRefusal>, Self::Error>,

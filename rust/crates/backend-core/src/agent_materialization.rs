@@ -1448,6 +1448,36 @@ impl IdempotentReservation {
                 reason: "idempotency witness carries an unknown session scope",
             }
         })?;
+        // The failure columns are a closed function of the status: `failed` carries a
+        // non-empty code and a stamp; every other status carries neither. A row that breaks
+        // this pairing is an incoherent witness, not a decision the use case defaults over.
+        match materialization_status {
+            MaterializationStatus::Failed => {
+                if row
+                    .materialization_failed_code
+                    .as_deref()
+                    .is_none_or(str::is_empty)
+                {
+                    return Err(MaterializationFault::LookupWitnessMismatch {
+                        reason: "failed idempotency witness is missing its failure code",
+                    });
+                }
+                if row.materialization_failed_at.is_none() {
+                    return Err(MaterializationFault::LookupWitnessMismatch {
+                        reason: "failed idempotency witness is missing its failure timestamp",
+                    });
+                }
+            }
+            MaterializationStatus::PendingMaterialization | MaterializationStatus::Active => {
+                if row.materialization_failed_code.is_some()
+                    || row.materialization_failed_at.is_some()
+                {
+                    return Err(MaterializationFault::LookupWitnessMismatch {
+                        reason: "non-failed idempotency witness carries failure columns",
+                    });
+                }
+            }
+        }
         Ok(Self {
             agent_id: row.agent_id,
             created_by_user_id,
