@@ -87,6 +87,11 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // exact-custody data-plane adapter. The later create vertical consumes this
     // port; this ticket does not activate a route.
     ("backend-core", "agent_materialize"),
+    // #task:2225 — the single-UoW create/provision-and-activate authority: the core
+    // materialization writer plus the exhaustive `provision_and_activate` use case that
+    // seals both the agent and conversation arms. Core capability, UNMOUNTED until the
+    // create route is activated by a later integration.
+    ("backend-core", "agent_materialization"),
     ("backend-core", "agent_presence_read"),
     // #task:2225 — the public agent-lifecycle and avatar route family (Rust Wave 3).
     // Core capability ports and orchestration for the handle-availability probe
