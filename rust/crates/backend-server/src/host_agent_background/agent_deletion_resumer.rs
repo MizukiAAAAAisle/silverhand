@@ -477,10 +477,10 @@ where
         {
             let tracked = self.tracked.lock().expect("resumer state");
             if tracked.closed
-                || !tracked
+                || tracked
                     .generations
                     .get(&host)
-                    .is_some_and(|generation| generation.connection_id == connection_id)
+                    .is_none_or(|generation| generation.connection_id != connection_id)
             {
                 return;
             }

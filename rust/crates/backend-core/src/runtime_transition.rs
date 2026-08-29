@@ -52,7 +52,13 @@ use std::future::Future;
 
 use thiserror::Error;
 
-use crate::{agents::runtime::RuntimeKind, identity::AgentId, persistence::PersistenceFailure};
+use crate::{
+    agents::runtime::RuntimeKind,
+    identity::{AgentId, ConversationId},
+    persistence::PersistenceFailure,
+    runtime_credential::RuntimeScope,
+    runtime_event::RuntimeObservedStatus,
+};
 
 /// The runtime change committed in one write, mirroring the TypeScript
 /// `completeRuntimeTransition` input MINUS its runtime: the committed runtime is derived
@@ -321,6 +327,139 @@ pub enum AbortTransition {
     NotHeld,
 }
 
+/// One raw runtime-seat row observed while the exact transition marker was held.
+/// The adapter returns every row without applying the switch use case's live/session
+/// predicate; core consumers own that decision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeTransitionSeatRow {
+    pub scope: RuntimeScope,
+    pub observed_status: RuntimeObservedStatus,
+    pub cli_session_id: Option<String>,
+}
+
+/// The adapter's source-bearing snapshot witness. `lock` is decoded from the persisted
+/// marker, never copied from the request, so core can prove the snapshot came from the
+/// exact lock the saga owns.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeTransitionSeatSnapshotRow {
+    pub lock: RuntimeTransitionLockRow,
+    pub seats: Vec<RuntimeTransitionSeatRow>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RuntimeTransitionSeatSnapshotRecord {
+    Snapshot(RuntimeTransitionSeatSnapshotRow),
+    Lost,
+}
+
+/// A sealed, source-bound enumeration of the locked agent's runtime seats.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeTransitionSeatSnapshot {
+    agent_id: AgentId,
+    seats: Vec<RuntimeTransitionSeatRow>,
+}
+
+impl RuntimeTransitionSeatSnapshot {
+    fn seal(
+        lock: &RuntimeTransitionLock,
+        row: RuntimeTransitionSeatSnapshotRow,
+    ) -> Result<Self, RuntimeTransitionFault> {
+        if !lock_witness_matches(lock, &row.lock) {
+            return Err(RuntimeTransitionFault::SeatSnapshotWitnessMismatch {
+                reason: "snapshot marker differs from the sealed lock",
+            });
+        }
+        if row
+            .seats
+            .iter()
+            .any(|seat| seat.scope.agent() != lock.agent_id())
+        {
+            return Err(RuntimeTransitionFault::SeatSnapshotWitnessMismatch {
+                reason: "seat snapshot contains a scope owned by another agent",
+            });
+        }
+        Ok(Self {
+            agent_id: lock.agent_id().clone(),
+            seats: row.seats,
+        })
+    }
+
+    pub fn agent_id(&self) -> &AgentId {
+        &self.agent_id
+    }
+
+    pub fn seats(&self) -> &[RuntimeTransitionSeatRow] {
+        &self.seats
+    }
+}
+
+/// The raw witness returned after clearing leases under an exact held marker.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeTransitionInboxReclaimRow {
+    pub lock: RuntimeTransitionLockRow,
+    pub conversations: Vec<ConversationId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RuntimeTransitionInboxReclaimRecord {
+    Reclaimed(RuntimeTransitionInboxReclaimRow),
+    Lost,
+}
+
+/// A sealed lease-reclaim fact. Conversation ids are distinct by construction and may
+/// be used as restart candidates only by the later switch use case.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeTransitionInboxReclaim {
+    conversations: Vec<ConversationId>,
+}
+
+impl RuntimeTransitionInboxReclaim {
+    fn seal(
+        lock: &RuntimeTransitionLock,
+        row: RuntimeTransitionInboxReclaimRow,
+    ) -> Result<Self, RuntimeTransitionFault> {
+        if !lock_witness_matches(lock, &row.lock) {
+            return Err(RuntimeTransitionFault::InboxReclaimWitnessMismatch {
+                reason: "reclaim marker differs from the sealed lock",
+            });
+        }
+        let mut distinct = row.conversations.clone();
+        distinct.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        distinct.dedup();
+        if distinct.len() != row.conversations.len() {
+            return Err(RuntimeTransitionFault::InboxReclaimWitnessMismatch {
+                reason: "inbox reclaim returned duplicate conversation ids",
+            });
+        }
+        Ok(Self {
+            conversations: row.conversations,
+        })
+    }
+
+    pub fn conversations(&self) -> &[ConversationId] {
+        &self.conversations
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReadRuntimeTransitionSeats {
+    Snapshot(RuntimeTransitionSeatSnapshot),
+    Lost,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReclaimRuntimeTransitionInboxes {
+    Reclaimed(RuntimeTransitionInboxReclaim),
+    Lost,
+}
+
+fn lock_witness_matches(lock: &RuntimeTransitionLock, row: &RuntimeTransitionLockRow) -> bool {
+    let witnessed_target = RuntimeKind::parse(&row.target);
+    &row.agent_id == lock.agent_id()
+        && witnessed_target == Some(lock.target())
+        && row.started_at == lock.started_at()
+}
+
 /// A fault in the lock lifecycle — a driver error, or a witness that disagrees with the
 /// request. Every arm is an internal invariant break the boundary surfaces as a safe
 /// `500`; none is a product answer. The `reason` is a static label for the boundary log,
@@ -333,6 +472,10 @@ pub enum RuntimeTransitionFault {
     LockWitnessMismatch { reason: &'static str },
     #[error("runtime-transition committed after-image disagreed with the request: {reason}")]
     CommitWitnessMismatch { reason: &'static str },
+    #[error("runtime-transition seat snapshot disagreed with the sealed lock: {reason}")]
+    SeatSnapshotWitnessMismatch { reason: &'static str },
+    #[error("runtime-transition inbox reclaim disagreed with the sealed lock: {reason}")]
+    InboxReclaimWitnessMismatch { reason: &'static str },
 }
 
 /// The durable runtime-transition lock lifecycle. Every write is short and holds no
@@ -363,6 +506,22 @@ pub trait RuntimeTransitionWrite: Clone + Send + Sync + 'static {
         commit: &RuntimeTransitionCommit,
         now_ms: i64,
     ) -> impl Future<Output = Result<CompleteTransitionRecord, PersistenceFailure>> + Send;
+}
+
+/// Narrow read authority for seats belonging to one exact held transition marker.
+pub trait RuntimeTransitionSeatRead: Clone + Send + Sync + 'static {
+    fn read_transition_seats(
+        &self,
+        lock: &RuntimeTransitionLock,
+    ) -> impl Future<Output = Result<RuntimeTransitionSeatSnapshotRecord, PersistenceFailure>> + Send;
+}
+
+/// Narrow transition-owned mutation that clears only outstanding inbox leases.
+pub trait RuntimeTransitionInboxWrite: Clone + Send + Sync + 'static {
+    fn reclaim_transition_inboxes(
+        &self,
+        lock: &RuntimeTransitionLock,
+    ) -> impl Future<Output = Result<RuntimeTransitionInboxReclaimRecord, PersistenceFailure>> + Send;
 }
 
 /// Acquire the lock and seal the witness into an ownership token. A witness that names a
@@ -407,6 +566,36 @@ pub async fn complete_runtime_transition<P: RuntimeTransitionWrite>(
             CommittedRuntimeTransition::seal(lock, commit, now_ms, after)?,
         ),
         CompleteTransitionRecord::Lost => CompleteTransition::Lost,
+    })
+}
+
+/// Read and seal every raw runtime seat while proving the adapter observed this exact
+/// transition marker. A stale token returns `Lost`; a lying source is a hard fault.
+pub async fn read_runtime_transition_seats<P: RuntimeTransitionSeatRead>(
+    port: &P,
+    lock: &RuntimeTransitionLock,
+) -> Result<ReadRuntimeTransitionSeats, RuntimeTransitionFault> {
+    Ok(match port.read_transition_seats(lock).await? {
+        RuntimeTransitionSeatSnapshotRecord::Snapshot(row) => {
+            ReadRuntimeTransitionSeats::Snapshot(RuntimeTransitionSeatSnapshot::seal(lock, row)?)
+        }
+        RuntimeTransitionSeatSnapshotRecord::Lost => ReadRuntimeTransitionSeats::Lost,
+    })
+}
+
+/// Reclaim and seal the conversations whose undelivered leases were cleared under this
+/// exact transition marker. A stale token is a zero-write `Lost` result.
+pub async fn reclaim_runtime_transition_inboxes<P: RuntimeTransitionInboxWrite>(
+    port: &P,
+    lock: &RuntimeTransitionLock,
+) -> Result<ReclaimRuntimeTransitionInboxes, RuntimeTransitionFault> {
+    Ok(match port.reclaim_transition_inboxes(lock).await? {
+        RuntimeTransitionInboxReclaimRecord::Reclaimed(row) => {
+            ReclaimRuntimeTransitionInboxes::Reclaimed(RuntimeTransitionInboxReclaim::seal(
+                lock, row,
+            )?)
+        }
+        RuntimeTransitionInboxReclaimRecord::Lost => ReclaimRuntimeTransitionInboxes::Lost,
     })
 }
 
@@ -668,5 +857,74 @@ mod tests {
                 .unwrap(),
             CompleteTransition::Lost
         );
+    }
+
+    #[derive(Clone)]
+    struct ScriptedTransitionFacts {
+        seats: RuntimeTransitionSeatSnapshotRecord,
+        reclaim: RuntimeTransitionInboxReclaimRecord,
+    }
+
+    impl RuntimeTransitionSeatRead for ScriptedTransitionFacts {
+        async fn read_transition_seats(
+            &self,
+            _lock: &RuntimeTransitionLock,
+        ) -> Result<RuntimeTransitionSeatSnapshotRecord, PersistenceFailure> {
+            Ok(self.seats.clone())
+        }
+    }
+
+    impl RuntimeTransitionInboxWrite for ScriptedTransitionFacts {
+        async fn reclaim_transition_inboxes(
+            &self,
+            _lock: &RuntimeTransitionLock,
+        ) -> Result<RuntimeTransitionInboxReclaimRecord, PersistenceFailure> {
+            Ok(self.reclaim.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn transition_facts_reject_wrong_lock_and_wrong_seat_sources() {
+        let (_port, lock) = a_sealed_lock().await;
+        let c1 = ConversationId::parse("c1").unwrap();
+        let wrong_lock = RuntimeTransitionLockRow {
+            agent_id: agent("other"),
+            target: "codex".to_owned(),
+            started_at: 5,
+        };
+        let facts = ScriptedTransitionFacts {
+            seats: RuntimeTransitionSeatSnapshotRecord::Snapshot(
+                RuntimeTransitionSeatSnapshotRow {
+                    lock: RuntimeTransitionLockRow {
+                        agent_id: agent("a1"),
+                        target: "codex".to_owned(),
+                        started_at: 5,
+                    },
+                    seats: vec![RuntimeTransitionSeatRow {
+                        scope: RuntimeScope::ConversationSlot {
+                            agent: agent("other"),
+                            source: c1.clone(),
+                        },
+                        observed_status: RuntimeObservedStatus::Active,
+                        cli_session_id: Some("cli-1".to_owned()),
+                    }],
+                },
+            ),
+            reclaim: RuntimeTransitionInboxReclaimRecord::Reclaimed(
+                RuntimeTransitionInboxReclaimRow {
+                    lock: wrong_lock,
+                    conversations: vec![c1],
+                },
+            ),
+        };
+
+        assert!(matches!(
+            read_runtime_transition_seats(&facts, &lock).await,
+            Err(RuntimeTransitionFault::SeatSnapshotWitnessMismatch { .. })
+        ));
+        assert!(matches!(
+            reclaim_runtime_transition_inboxes(&facts, &lock).await,
+            Err(RuntimeTransitionFault::InboxReclaimWitnessMismatch { .. })
+        ));
     }
 }

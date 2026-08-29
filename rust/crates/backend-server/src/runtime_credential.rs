@@ -19,11 +19,11 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
-    identity::{AgentId, DaemonInstanceId},
+    identity::{AgentId, ConversationId, DaemonInstanceId},
     persistence::PersistenceFailure,
     runtime_credential::{
-        ClaimRuntimeCustody, FinalizeRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime,
-        RuntimeFinalStatus, RuntimePrincipal, RuntimeScope,
+        AgentSlotPresentationFocusPort, ClaimRuntimeCustody, FinalizeRuntimeCustody,
+        RuntimeCustodyPort, RuntimeEventTime, RuntimeFinalStatus, RuntimePrincipal, RuntimeScope,
     },
     runtime_event::{
         CommitRuntimeExit, DaemonEventDurablePort, RuntimeExitCommitResult, RuntimeExitDisposition,
@@ -289,6 +289,7 @@ impl fmt::Debug for RuntimeStartHandoff {
 pub struct RuntimeCredentialAuthority<C, E = SystemRuntimeEntropy, K = SystemProcessClock> {
     custody: C,
     tokens: Arc<RwLock<ProcessTokenStore>>,
+    presentation_focus: Arc<RwLock<HashMap<RuntimePrincipal, ConversationId>>>,
     scope_guards: Arc<ScopeGuards>,
     entropy: E,
     /// Neutral wall clock. Custody stamps are runtime-event instants, so the branding
@@ -315,6 +316,7 @@ where
         Self {
             custody,
             tokens: Arc::new(RwLock::new(ProcessTokenStore::default())),
+            presentation_focus: Arc::new(RwLock::new(HashMap::new())),
             scope_guards: Arc::new(ScopeGuards::default()),
             entropy,
             clock,
@@ -427,6 +429,7 @@ where
         let disposition = durable.commit_exit(event).await?;
         if disposition.disposition() == RuntimeExitDisposition::Applied {
             self.tokens.write().await.revoke_for(&principal);
+            self.presentation_focus.write().await.remove(&principal);
         }
         Ok(disposition)
     }
@@ -446,6 +449,7 @@ where
             .await?;
         if finalized {
             self.tokens.write().await.revoke_for(&principal);
+            self.presentation_focus.write().await.remove(&principal);
         }
         Ok(finalized)
     }
@@ -482,6 +486,7 @@ where
         &self,
         scope: RuntimeScope,
         daemon_instance: DaemonInstanceId,
+        presentation_origin: ConversationId,
         transport: &T,
     ) -> Result<RuntimePrincipal, RuntimeStartFailure<T::Error>>
     where
@@ -497,7 +502,17 @@ where
         };
         let principal = handoff.principal.clone();
         match transport.dispatch(&handoff).await {
-            Ok(()) => Ok(principal),
+            Ok(()) => {
+                if handoff.newly_claimed && matches!(&principal, RuntimePrincipal::AgentSlot { .. })
+                {
+                    let mut focus = self.presentation_focus.write().await;
+                    focus.retain(|existing, _| {
+                        existing.agent() != principal.agent() || existing.source().is_some()
+                    });
+                    focus.insert(principal.clone(), presentation_origin);
+                }
+                Ok(principal)
+            }
             Err(RuntimeDispatchFailure::Ambiguous(source)) => {
                 Err(RuntimeStartFailure::Ambiguous(source))
             }
@@ -559,6 +574,33 @@ where
         } else {
             HydrateCredentialDisposition::Superseded
         })
+    }
+}
+
+impl<C, E, K> AgentSlotPresentationFocusPort for RuntimeCredentialAuthority<C, E, K>
+where
+    C: RuntimeCustodyPort,
+    E: RuntimeEntropy,
+    K: ProcessClock,
+{
+    async fn agent_slot_presentation_focus(
+        &self,
+        principal: RuntimePrincipal,
+    ) -> Result<Option<ConversationId>, PersistenceFailure> {
+        if !matches!(&principal, RuntimePrincipal::AgentSlot { .. }) {
+            return Ok(None);
+        }
+        let _scope_guard = self.scope_guards.acquire(&principal.scope()).await;
+        if !self.custody.is_current(principal.clone()).await? {
+            self.presentation_focus.write().await.remove(&principal);
+            return Ok(None);
+        }
+        Ok(self
+            .presentation_focus
+            .read()
+            .await
+            .get(&principal)
+            .cloned())
     }
 }
 
@@ -778,9 +820,18 @@ fn unauthorized() -> Response {
 
 #[cfg(test)]
 mod tests {
-    use std::{future::poll_fn, pin::Pin, task::Poll};
+    use std::{
+        future::poll_fn,
+        io,
+        pin::Pin,
+        sync::{Arc, Mutex as StdMutex},
+        task::Poll,
+    };
 
-    use silverhand_backend_core::identity::ConversationId;
+    use silverhand_backend_core::{
+        identity::ConversationId,
+        runtime_credential::{ClaimedRuntime, RuntimeCustody, RuntimeGeneration},
+    };
 
     use super::*;
 
@@ -827,5 +878,257 @@ mod tests {
 
     async fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
         poll_fn(|context| Poll::Ready(future.as_mut().poll(context))).await
+    }
+
+    #[derive(Clone, Default)]
+    struct FocusCustody {
+        current: Arc<StdMutex<Option<RuntimePrincipal>>>,
+        next_generation: Arc<StdMutex<i64>>,
+    }
+
+    impl FocusCustody {
+        fn clear(&self) {
+            *self.current.lock().unwrap() = None;
+        }
+    }
+
+    impl RuntimeCustodyPort for FocusCustody {
+        async fn claim_or_current(
+            &self,
+            claim: ClaimRuntimeCustody,
+        ) -> Result<Option<ClaimedRuntime>, PersistenceFailure> {
+            let generation = {
+                let mut next = self.next_generation.lock().unwrap();
+                *next += 1;
+                RuntimeGeneration::new(*next).unwrap()
+            };
+            let principal = RuntimePrincipal::for_scope(
+                claim.scope().clone(),
+                RuntimeCustody::new(generation, claim.daemon_instance().clone()),
+            );
+            *self.current.lock().unwrap() = Some(principal.clone());
+            Ok(Some(ClaimedRuntime::new(principal, true)))
+        }
+
+        async fn current(
+            &self,
+            scope: RuntimeScope,
+        ) -> Result<Option<RuntimePrincipal>, PersistenceFailure> {
+            Ok(self
+                .current
+                .lock()
+                .unwrap()
+                .clone()
+                .filter(|principal| principal.scope() == scope))
+        }
+
+        async fn is_current(
+            &self,
+            principal: RuntimePrincipal,
+        ) -> Result<bool, PersistenceFailure> {
+            Ok(self.current.lock().unwrap().as_ref() == Some(&principal))
+        }
+
+        async fn finalize(
+            &self,
+            finalization: FinalizeRuntimeCustody,
+        ) -> Result<bool, PersistenceFailure> {
+            let mut current = self.current.lock().unwrap();
+            if current.as_ref() != Some(finalization.principal()) {
+                return Ok(false);
+            }
+            *current = None;
+            Ok(true)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum StartResult {
+        Started,
+        ProvenNotDispatched,
+        Ambiguous,
+        ExitBeforeStartedAck,
+    }
+
+    struct FocusTransport {
+        result: StartResult,
+        custody: FocusCustody,
+    }
+
+    impl RuntimeStartTransport for FocusTransport {
+        type Error = io::Error;
+
+        async fn dispatch(
+            &self,
+            _handoff: &RuntimeStartHandoff,
+        ) -> Result<(), RuntimeDispatchFailure<Self::Error>> {
+            match self.result {
+                StartResult::Started => Ok(()),
+                StartResult::ProvenNotDispatched => Err(
+                    RuntimeDispatchFailure::ProvenNotDispatched(io::Error::other("not sent")),
+                ),
+                StartResult::Ambiguous => Err(RuntimeDispatchFailure::Ambiguous(io::Error::other(
+                    "late or invalid answer",
+                ))),
+                StartResult::ExitBeforeStartedAck => {
+                    self.custody.clear();
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    fn daemon(raw: &str) -> DaemonInstanceId {
+        DaemonInstanceId::parse(raw).unwrap()
+    }
+
+    fn origin(raw: &str) -> ConversationId {
+        ConversationId::parse(raw).unwrap()
+    }
+
+    fn agent_slot() -> RuntimeScope {
+        RuntimeScope::AgentSlot {
+            agent: AgentId::parse("agent-focus").unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_slot_focus_is_read_derived_generation_bound_and_success_only() {
+        let custody = FocusCustody::default();
+        let authority = RuntimeCredentialAuthority::production(custody.clone());
+        let no_focus = authority
+            .dispatch_start(
+                agent_slot(),
+                daemon("daemon-ambiguous"),
+                origin("conversation-0"),
+                &FocusTransport {
+                    result: StartResult::Ambiguous,
+                    custody: custody.clone(),
+                },
+            )
+            .await;
+        let Err(RuntimeStartFailure::Ambiguous(_)) = no_focus else {
+            panic!("late/invalid start must remain ambiguous");
+        };
+        let ambiguous = custody.current(agent_slot()).await.unwrap().unwrap();
+        assert_eq!(
+            authority
+                .agent_slot_presentation_focus(ambiguous)
+                .await
+                .unwrap(),
+            None
+        );
+
+        let c1 = origin("conversation-1");
+        let first = authority
+            .dispatch_start(
+                agent_slot(),
+                daemon("daemon-a"),
+                c1.clone(),
+                &FocusTransport {
+                    result: StartResult::Started,
+                    custody: custody.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            authority
+                .agent_slot_presentation_focus(first.clone())
+                .await
+                .unwrap(),
+            Some(c1)
+        );
+
+        let c2 = origin("conversation-2");
+        let successor = authority
+            .dispatch_start(
+                agent_slot(),
+                daemon("daemon-b"),
+                c2.clone(),
+                &FocusTransport {
+                    result: StartResult::Started,
+                    custody: custody.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            authority
+                .agent_slot_presentation_focus(first)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            authority
+                .agent_slot_presentation_focus(successor)
+                .await
+                .unwrap(),
+            Some(c2)
+        );
+
+        let failed = authority
+            .dispatch_start(
+                agent_slot(),
+                daemon("daemon-c"),
+                origin("conversation-3"),
+                &FocusTransport {
+                    result: StartResult::ProvenNotDispatched,
+                    custody: custody.clone(),
+                },
+            )
+            .await;
+        assert!(matches!(
+            failed,
+            Err(RuntimeStartFailure::ProvenNotDispatched(_))
+        ));
+        assert!(
+            authority
+                .presentation_focus
+                .read()
+                .await
+                .keys()
+                .all(|principal| principal.custody().daemon_instance() != &daemon("daemon-c"))
+        );
+    }
+
+    #[tokio::test]
+    async fn exit_before_focus_install_can_leave_only_an_invisible_stale_entry() {
+        let custody = FocusCustody::default();
+        let authority = RuntimeCredentialAuthority::production(custody.clone());
+        let principal = authority
+            .dispatch_start(
+                agent_slot(),
+                daemon("daemon-a"),
+                origin("conversation-1"),
+                &FocusTransport {
+                    result: StartResult::ExitBeforeStartedAck,
+                    custody,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            authority
+                .presentation_focus
+                .read()
+                .await
+                .contains_key(&principal)
+        );
+        assert_eq!(
+            authority
+                .agent_slot_presentation_focus(principal.clone())
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(
+            !authority
+                .presentation_focus
+                .read()
+                .await
+                .contains_key(&principal)
+        );
     }
 }

@@ -249,6 +249,7 @@ async fn mounted() -> Mounted {
                 agent: AgentId::parse(AGENT).unwrap(),
             },
             DaemonInstanceId::parse("daemon-1").unwrap(),
+            ConversationId::parse(CONVERSATION).unwrap(),
             &transport,
         )
         .await
