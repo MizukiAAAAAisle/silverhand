@@ -1383,8 +1383,13 @@ mod tests {
         http::{Request, StatusCode},
     };
     use futures_util::{SinkExt, StreamExt};
+    use silverhand_backend_core::{
+        identity::AgentId,
+        teardown::intent::{BeginDeletion, begin_agent_deletion},
+    };
     use silverhand_backend_server::{
         daemon_delivery::{HOST_WEBSOCKET_PATH, OUTBOUND_PROTOCOL_VERSION},
+        host_agent_background::agent_deletion_resumer::DeletionRunOutcome,
         messaging::MESSAGE_SEND_MAX_BODY_BYTES,
         scope_events::{
             DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH, EVENT_WS_SESSION_COOKIE,
@@ -4706,13 +4711,17 @@ mod tests {
     ///    (it would `202`-retain, having no live generation of its own) — proving the mounted
     ///    route and the boot/host-ready worker are ONE instance sharing one `Arc` of state.
     /// 3. **Shutdown `close`, durable retention, next-boot recovery.** A marker whose host
-    ///    is NEVER attached stays pending across a full production shutdown — `serve`'s arm
-    ///    runs `resumer.close()` synchronously ahead of transport teardown (a panic or a
-    ///    mis-order there would fault the join below). The durable marker is NOT lost: a
-    ///    fresh `prepare()` over the same store re-lists it, and once its host finally
-    ///    attaches the deletion completes. The resumer's `close_stops_the_ladder_and_refuses_new_work`
-    ///    component test owns the abort-the-timers semantics; this proves close is INVOKED in
-    ///    the composed shutdown path and never strands the fail-forward marker.
+    ///    is NEVER attached stays pending across a full production shutdown. Boot 1 holds a
+    ///    clone of the SAME production resumer instance and, AFTER `serve`'s shutdown arm
+    ///    runs, drives a real begin-minted `try_now` against it: the arm's synchronous
+    ///    `resumer.close()` (ahead of transport teardown) is what makes that attempt resolve
+    ///    to `Closed`. Delete the `close()` line from `serve` and the detached-host attempt
+    ///    resolves to `Retained` instead — the gate reddens on the wiring itself, not merely
+    ///    on a panic. The durable marker is also NOT lost: a fresh `prepare()` over the same
+    ///    store re-lists it, and once its host finally attaches the deletion completes. The
+    ///    resumer's `close_stops_the_ladder_and_refuses_new_work` component test still owns
+    ///    the abort-the-timers internals; this proves the composed shutdown path invokes
+    ///    close on the one shared instance and never strands the fail-forward marker.
     #[tokio::test]
     async fn the_composition_agent_deletion_resumer_drives_the_full_production_lifecycle() {
         // ── Falsifiers 1 & 2 share one served app on one attached host. ──
@@ -4824,16 +4833,29 @@ mod tests {
         running.await.unwrap().unwrap();
 
         // ── Falsifier 3: a marker whose host never attaches survives a full production
-        // shutdown (close ahead of transport teardown), and the NEXT boot recovers it. ──
+        // shutdown (close ahead of transport teardown), and the NEXT boot recovers it.
+        // Boot 1 ALSO witnesses that the production shutdown arm actually calls
+        // `resumer.close()` — not merely that the marker persists. ──
         let fixture3 = fixture(true).await;
         seed_human(&fixture3.path).await;
-        seed_deletable_agents(&fixture3.path, &[("a-retained", Some(9_000))]).await;
+        // `a-retained` proves marker survival + next-boot recovery; `a-witness` is the
+        // close witness — an active agent whose real begin-marker mints a genuine
+        // `AgentDeletionAttempt` (the token's constructor is sealed to the marker
+        // authority, so this is the only way to hold one).
+        seed_deletable_agents(
+            &fixture3.path,
+            &[("a-retained", Some(9_000)), ("a-witness", None)],
+        )
+        .await;
 
         // Boot 1: recover arms the marker, but the detached host drives no purge, so the
         // row stays. Shut down through the production arm, which runs `resumer.close()`
-        // synchronously before transport teardown — a fault there would fail this join.
+        // synchronously before transport teardown.
         let boot1 = prepare(&config(fixture3.path.clone())).await.unwrap();
         let router1 = boot1.router.clone();
+        // The SAME production resumer instance the shutdown arm will close. It shares the
+        // one `Arc<Mutex<Tracked>>`, so a `close()` inside `serve` flips this clone too.
+        let close_probe = boot1.deletion_resumer.clone();
         let (status, body) =
             request(&router1, "GET", "/api/agents/a-retained", Some(&bearer)).await;
         assert_eq!(
@@ -4841,6 +4863,19 @@ mod tests {
             StatusCode::OK,
             "a detached host's marker completes nothing at boot: {body}"
         );
+        // Mint a REAL attempt through the production begin-marker authority (the exact
+        // path the DELETE route uses). The host is detached in boot 1, so before the
+        // shutdown close this attempt would only ever resolve to `Retained` (no live
+        // generation to fence against) — never `Closed`.
+        let lifecycle = SqliteHostAgentStore::open(&fixture3.path).await.unwrap();
+        let witness_attempt =
+            match begin_agent_deletion(&lifecycle, &AgentId::parse("a-witness").unwrap(), 12_000)
+                .await
+                .unwrap()
+            {
+                BeginDeletion::Started(attempt) | BeginDeletion::AlreadyPending(attempt) => attempt,
+                other => panic!("expected a minted deletion attempt, got {other:?}"),
+            };
         let listener1 = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let (stop1_tx, stop1_rx) = oneshot::channel();
         let boot1_running = tokio::spawn(serve(listener1, boot1, async move {
@@ -4850,6 +4885,17 @@ mod tests {
         stop1_tx.send(()).unwrap();
         boot1_running.await.unwrap().unwrap();
         drop(router1);
+
+        // The close witness: after the production shutdown arm ran, the SAME resumer
+        // rejects new work with `Closed`. This is the falsifier for the wiring itself —
+        // delete the `deletion_resumer.close()` line from `serve`'s shutdown arm and this
+        // attempt resolves to `Retained` (detached host) instead, reddening the gate. A
+        // marker-persistence check alone (below) cannot catch that regression.
+        assert_eq!(
+            close_probe.try_now(witness_attempt).await,
+            DeletionRunOutcome::Closed,
+            "the production shutdown arm must have closed the shared resumer"
+        );
 
         // Boot 2 over the SAME store: the durable marker survived shutdown, so recover
         // re-lists it; once the host attaches the deletion finally commits.
