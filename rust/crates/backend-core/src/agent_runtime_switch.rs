@@ -45,7 +45,7 @@ use std::future::Future;
 use futures_util::future::join_all;
 
 use crate::{
-    agent_profile_write::AgentChangedSink,
+    agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
     agents::{
         runtime::RuntimeKind, runtime_catalog::SELECTABLE_RUNTIMES,
         session_scope::AgentSessionScope,
@@ -202,6 +202,28 @@ pub struct SwitchAgentRuntimeCommitted {
     pub resume_read_faults: usize,
 }
 
+/// The OUTER orchestration outcome of a committed switch: the committed tallies paired with the
+/// fate of the best-effort `agent_changed` announce fired AFTER the transition was already durable.
+/// It mirrors the tuning PATCH's `AnnouncedAgentProfileUpdate`: the announce fate is `#[must_use]`
+/// and reachable only through [`into_parts`](Self::into_parts), so the boundary taking the committed
+/// tallies for its wire re-read receives the announce residue in the same move and cannot silently
+/// drop it. A failed hint NEVER downgrades the committed switch — the boundary logs it and still
+/// returns success — but it must be OBSERVED, never swallowed like the old `let _ =`.
+#[derive(Debug)]
+#[must_use = "a committed runtime switch carries an agent_changed announce fate that must be handled"]
+pub struct AnnouncedRuntimeSwitch {
+    committed: SwitchAgentRuntimeCommitted,
+    announce: AgentChangedAnnounce,
+}
+
+impl AnnouncedRuntimeSwitch {
+    /// Split into the committed tallies and the announce fate. The only way to read either, so a
+    /// boundary reprojecting from the committed result also receives the announce it must log.
+    pub fn into_parts(self) -> (SwitchAgentRuntimeCommitted, AgentChangedAnnounce) {
+        (self.committed, self.announce)
+    }
+}
+
 /// The product outcomes of a switch that did not commit. Ordering across simultaneously-true
 /// conditions is deliberately NOT a migration contract (validator governance owns it); each arm
 /// carries only its stable final semantics.
@@ -284,7 +306,7 @@ pub async fn switch_agent_runtime<R, Avail, Coord, W, Seats, Inboxes, Cust, Focu
     changed: &Changed,
     request: &SwitchAgentRuntimeRequest,
     now_ms: i64,
-) -> Result<SwitchAgentRuntimeCommitted, SwitchAgentRuntimeError>
+) -> Result<AnnouncedRuntimeSwitch, SwitchAgentRuntimeError>
 where
     R: SwitchAgentSnapshotRead,
     Avail: RuntimeAvailabilityProbe,
@@ -395,7 +417,7 @@ async fn run_locked<R, Coord, Seats, Inboxes, Cust, Focus, W, P, Changed>(
     request: &SwitchAgentRuntimeRequest,
     now_ms: i64,
     lock: &RuntimeTransitionLock,
-) -> Result<SwitchAgentRuntimeCommitted, Unwound>
+) -> Result<AnnouncedRuntimeSwitch, Unwound>
 where
     R: SwitchAgentSnapshotRead,
     Coord: SwitchConversationCoordination,
@@ -525,11 +547,15 @@ where
     // ── Announce the committed change BEFORE the possibly-blocking restart aftermath. ──
     // The runtime column has moved and the lock is released, so publish the app-scope
     // `agent_changed` hint exactly once, keyed on the SEALED committed agent id — the same
-    // best-effort effect the tuning PATCH fires after its guarded commit. It is a
-    // cache-invalidation hint, so a delivery failure is swallowed here and NEVER flips the
-    // committed result; firing it before `dispatch_resume` keeps a slow restart pass from delaying
-    // the notification.
-    let _ = changed.agent_changed(committed.agent_id()).await;
+    // best-effort effect the tuning PATCH fires after its guarded commit. A delivery failure NEVER
+    // flips the committed result, but it is CARRIED (never `let _ =`-dropped): the fate rides the
+    // `#[must_use]` outer outcome to the boundary, which logs a `Failed` hint exactly as PATCH
+    // does. Firing it before `dispatch_resume` keeps a slow restart pass from delaying the
+    // notification.
+    let announce = match changed.agent_changed(committed.agent_id()).await {
+        Ok(()) => AgentChangedAnnounce::Delivered,
+        Err(failure) => AgentChangedAnnounce::Failed(failure),
+    };
 
     // ── Re-drive (post-commit): NEVER reverts the committed transition. ──
     // The plan foundation — live-before pairs and sealed reclaimed conversations — is already
@@ -551,12 +577,15 @@ where
     )
     .await;
 
-    Ok(SwitchAgentRuntimeCommitted {
-        committed,
-        cleared_sessions: to_clear.len(),
-        restarted_conversations: restarted,
-        restart_failures,
-        resume_read_faults,
+    Ok(AnnouncedRuntimeSwitch {
+        committed: SwitchAgentRuntimeCommitted {
+            committed,
+            cleared_sessions: to_clear.len(),
+            restarted_conversations: restarted,
+            restart_failures,
+            resume_read_faults,
+        },
+        announce,
     })
 }
 
@@ -1500,11 +1529,26 @@ mod tests {
 
         /// Same as [`run`], but with a caller-held sink so a test can assert the post-commit
         /// `agent_changed` publish count and that a failing sink never flips the committed result.
+        /// Drops the carried announce fate (see [`run_announced`] to inspect it) after consuming
+        /// the committed tallies through `into_parts`.
         async fn run_with_changed(
             &self,
             request: &SwitchAgentRuntimeRequest,
             changed: &ChangedSink,
         ) -> Result<SwitchAgentRuntimeCommitted, SwitchAgentRuntimeError> {
+            self.run_announced(request, changed)
+                .await
+                .map(|announced| announced.into_parts().0)
+        }
+
+        /// The raw outer outcome, so a test can assert the carried `agent_changed` announce fate
+        /// (`Delivered` / `Failed`) that the boundary must log — not just that the committed result
+        /// never flips.
+        async fn run_announced(
+            &self,
+            request: &SwitchAgentRuntimeRequest,
+            changed: &ChangedSink,
+        ) -> Result<AnnouncedRuntimeSwitch, SwitchAgentRuntimeError> {
             switch_agent_runtime(
                 &self.reads,
                 &self.probe,
@@ -2310,7 +2354,9 @@ mod tests {
             NOW,
         )
         .await
-        .expect("transition still commits despite restart refusal");
+        .expect("transition still commits despite restart refusal")
+        .into_parts()
+        .0;
         assert_eq!(committed.restarted_conversations, 0);
         assert_eq!(
             committed.restart_failures, 1,
@@ -2341,7 +2387,15 @@ mod tests {
             control: Control::new(),
         };
         let sink = ChangedSink::ok();
-        harness.run_with_changed(&req, &sink).await.expect("commit");
+        let (_committed, announce) = harness
+            .run_announced(&req, &sink)
+            .await
+            .expect("commit")
+            .into_parts();
+        assert!(
+            matches!(announce, AgentChangedAnnounce::Delivered),
+            "a delivered hint is carried as Delivered, not dropped"
+        );
         assert_eq!(
             sink.announced(),
             vec![agent(AGENT)],
@@ -2426,11 +2480,16 @@ mod tests {
             control: Control::new(),
         };
         let sink = ChangedSink::failing();
-        let committed = harness
-            .run_with_changed(&req, &sink)
+        let (committed, announce) = harness
+            .run_announced(&req, &sink)
             .await
-            .expect("the committed switch stands despite a failing best-effort hint");
+            .expect("the committed switch stands despite a failing best-effort hint")
+            .into_parts();
         assert_eq!(committed.cleared_sessions, 1);
+        assert!(
+            matches!(announce, AgentChangedAnnounce::Failed(_)),
+            "the failed announce fate is CARRIED to the boundary, not swallowed"
+        );
         assert_eq!(
             sink.announced(),
             vec![agent(AGENT)],
@@ -2468,7 +2527,9 @@ mod tests {
             NOW,
         )
         .await
-        .expect("commit");
+        .expect("commit")
+        .into_parts()
+        .0;
         assert_eq!(committed.cleared_sessions, 2);
         assert_eq!(committed.restarted_conversations, 2);
         assert_eq!(

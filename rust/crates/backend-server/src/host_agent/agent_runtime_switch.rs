@@ -55,7 +55,7 @@ use serde::Serialize;
 use serde_json::Value;
 use silverhand_backend_core::{
     agent_detail_read::AgentDetailReadModel,
-    agent_profile_write::AgentChangedSink,
+    agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
     agent_runtime_switch::{
         RuntimeAvailabilityProbe, RuntimeAvailabilityProbeFault, SwitchAgentRuntimeConfig,
         SwitchAgentRuntimeError, SwitchAgentRuntimeRequest, SwitchAgentSnapshotRead,
@@ -337,7 +337,7 @@ where
         config,
     };
     let now_ms = state.clock.now_unix_millis();
-    let committed = match switch_agent_runtime(
+    let announced = match switch_agent_runtime(
         &state.snap,
         &state.availability,
         &state.coordination,
@@ -353,9 +353,22 @@ where
     )
     .await
     {
-        Ok(committed) => committed,
+        Ok(announced) => announced,
         Err(err) => return switch_error_response(err, &request.agent, &request.config),
     };
+
+    // The switch is durable regardless of the announce; a failed best-effort `agent_changed` hint
+    // is LOGGED, never a refusal — the same fate PATCH records. Consuming `into_parts` here is the
+    // only way to read the committed tallies, so the announce residue can never be silently
+    // dropped.
+    let (committed, announce) = announced.into_parts();
+    if let AgentChangedAnnounce::Failed(failure) = announce {
+        tracing::error!(
+            agent_id = committed.committed.agent_id().as_str(),
+            error_chain = %error::describe(&failure),
+            "agent-runtime-switch committed but the agent_changed announce failed"
+        );
+    }
 
     // OPERATIONAL SIGNAL (not a wire field): a non-zero degraded-read count means the
     // best-effort re-drive could not enumerate every conversation that might need
