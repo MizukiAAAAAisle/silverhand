@@ -34,13 +34,15 @@ use silverhand_backend_server::{
     auth::{PublicJsonUnauthorized, require_human_session},
     avatar_blob::SingleKindAvatarBlobs,
     clock::SystemProcessClock,
-    daemon_delivery::{DaemonDeliveryController, DaemonDeliveryRuntime},
+    daemon_delivery::{DaemonDeliveryController, DaemonDeliveryRuntime, DaemonHostConnections},
     direct_pairs,
     host_agent::{
-        agent_avatar, agent_avatar_write, agent_detail, agent_list, agent_patch, agent_presence,
-        availability,
+        agent_avatar, agent_avatar_write, agent_delete, agent_detail, agent_list, agent_patch,
+        agent_presence, availability,
     },
-    host_agent_background::presence_grace_timer::PresenceGraceTimers,
+    host_agent_background::{
+        agent_deletion_resumer::AgentDeletionResumer, presence_grace_timer::PresenceGraceTimers,
+    },
     host_control::management::{self, update::ScopeEventHostLabelChange},
     host_resources, host_runtime,
     human_auth::{self, HumanAuthDeps},
@@ -342,6 +344,19 @@ impl EnrollmentClock for SystemEnrollmentClock {
     }
 }
 
+/// The one production agent-deletion resumer type, spelled once so `PreparedApp` and
+/// `serve` can name the shared worker without repeating its three concrete authorities:
+/// the SQLite `deletion_started_at` lifecycle store, the daemon fence binder minted from
+/// the one registry, and the production cascade residue. A clone of this shares its
+/// `Arc<Mutex<..>>` state; there is never a second worker.
+type ProductionAgentDeletionResumer = AgentDeletionResumer<
+    SqliteHostAgentStore,
+    DaemonHostConnections,
+    host_runtime::cascade_effects::ProductionComputerCascadeEffects<
+        host_runtime::cascade_effects::HubAgentDeletedAnnouncer,
+    >,
+>;
+
 pub struct PreparedApp {
     pub router: Router,
     /// The live boot facts the `/readyz` router reads. Carried out of `prepare()` so
@@ -351,10 +366,18 @@ pub struct PreparedApp {
     event_controller: EventWebSocketController,
     daemon_controller: DaemonDeliveryController,
     presence_timers: PresenceGraceTimers<SqliteLastSeenSink, HubPresenceSink>,
+    /// The single agent-deletion resumer, already `recover`ed at boot. Carried so
+    /// shutdown can `close` it FIRST — before any transport closes — so the shutdown
+    /// window never keeps scheduling against a daemon that is being torn down.
+    deletion_resumer: ProductionAgentDeletionResumer,
 }
 
 impl PreparedApp {
     pub async fn close_connections(&self) {
+        // The resumer stops scheduling FIRST, synchronously, while the daemon controller
+        // and the SQLite owner it holds are both still alive — a stopped worker cannot
+        // start a new attempt during the transport teardown below.
+        self.deletion_resumer.close();
         shut_down_transports(
             &self.event_controller,
             &self.daemon_controller,
@@ -623,7 +646,10 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         name: "daemon delivery runtime",
         source: Box::new(source),
     })?;
-    let (daemon_router, daemon_controller) = daemon_runtime.router();
+    // The read-only control handles now; the daemon websocket router is built later, once
+    // the deletion resumer exists to be its mandatory host-ready observer (both descend
+    // from this runtime's one registry — the binder and the observer are one truth).
+    let daemon_controller = daemon_runtime.controller();
 
     let target_address = messaging_store.target_address(hub.clone(), TargetAddressRefusalLog);
     // The task board list reads its board/capability/participation authority from the SAME
@@ -808,6 +834,38 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         daemon_controller.cascade_daemon_effects(),
         blob_store.clone(),
     );
+    // #2234 CP3: the ONE agent-deletion resumer, the single async worker every deletion
+    // entrypoint shares. Assembled here — before `DeleteComputer::new` below consumes
+    // `host_agent_store` and `cascade_effects` — from three already-composed authorities:
+    // the durable `deletion_started_at` lifecycle store, the daemon fence binder minted
+    // from the ONE registry (`daemon_controller.host_connections()`), and the SAME cascade
+    // residue the host-delete path holds (cloned, never a second announce root). It is
+    // cloned into exactly four places and nowhere else — a clone shares its
+    // `Arc<Mutex<..>>` state, so there is one worker, one pending set, one retry ladder:
+    //   1. boot `recover` (below, before this fn returns — before any listener is ready);
+    //   2. the daemon attach `on_host_ready` observer (baked into the daemon router as a
+    //      REQUIRED argument, so the seal edge can never land without the recovery push);
+    //   3. the public DELETE route's `try_now` dispatch;
+    //   4. shutdown `close` (via the `PreparedApp` field, ahead of transport teardown).
+    let deletion_resumer = host_runtime::cascade_effects::production_agent_deletion_resumer(
+        host_agent_store.clone(),
+        cascade_effects.clone(),
+        daemon_controller.host_connections(),
+    );
+    // The DELETE face's narrow ports, captured before the host-delete unit-of-work below
+    // moves `host_agent_store`/`cascade_effects`: the SAME SQLite store as its teardown
+    // (row-only branch) and its durable begin marker (active branch), the SAME cascade
+    // residue for the row-only announce, and the ONE hub availability edge fired when a
+    // full delete begins. No second store, marker authority, announcer, or audience.
+    let agent_delete_teardown = host_agent_store.clone();
+    let agent_delete_lifecycle = host_agent_store.clone();
+    let agent_delete_residue = cascade_effects.clone();
+    let agent_delete_availability =
+        hub.agent_availability_edge(agent_availability_cold_read.clone());
+    // The daemon websocket router, built now that the resumer exists: the resumer is its
+    // MANDATORY host-ready observer. Binder (from `host_connections()`) and observer are
+    // the same resumer over the same runtime registry — one generation truth.
+    let daemon_router = daemon_runtime.router(std::sync::Arc::new(deletion_resumer.clone()));
     let host_delete = host_runtime::delete::router(DeleteComputer::new(
         host_agent_store.clone(),
         host_agent_store,
@@ -945,6 +1003,23 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
                 agent_detail_cold_read.clone(),
                 agent_profile_write.clone(),
                 hub.agent_changed_sink(),
+                SystemProcessClock,
+            ))
+            // #2234 CP3: DELETE accumulates onto the SAME `/api/agents/{id}` node GET
+            // detail and PATCH own (disjoint methods merge; GET/PATCH keep their handlers).
+            // Its async `try_now` dispatch IS the one shared `deletion_resumer` — the same
+            // worker boot `recover` armed and the daemon attach edge drives through
+            // `on_host_ready`. Row-only teardown + durable begin marker are the ONE
+            // `SqliteHostAgentStore`, the residue is the SAME cascade announce the resumer
+            // holds, the availability edge is the ONE hub fan-out fired when a full delete
+            // begins, and the clock stamps `deletion_started_at`. No second authority.
+            .merge(agent_delete::router(
+                agent_detail_cold_read.clone(),
+                agent_delete_teardown,
+                agent_delete_lifecycle,
+                deletion_resumer.clone(),
+                agent_delete_residue,
+                agent_delete_availability,
                 SystemProcessClock,
             ))
             .merge(agent_avatar::router(
@@ -1108,6 +1183,20 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         SystemProcessClock,
     );
 
+    // #2234 CP3: boot recovery, fail-closed and BEFORE this fn returns — so it always
+    // precedes `serve`'s `mark_listen_ready`, never racing a listener. `recover` re-lists
+    // every durable `deletion_started_at` marker into the one resumer's pending set; a
+    // marker whose host is not yet attached simply waits for that host's `on_host_ready`
+    // (driven by the daemon attach edge once the listener is up). A persistence failure
+    // here aborts startup rather than serving with an unrecovered deletion backlog.
+    deletion_resumer
+        .recover()
+        .await
+        .map_err(|source| StartupError::Composition {
+            name: "agent deletion resumer recover",
+            source: Box::new(source),
+        })?;
+
     Ok(PreparedApp {
         router: Router::new()
             .merge(human_products)
@@ -1150,6 +1239,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         event_controller,
         daemon_controller,
         presence_timers,
+        deletion_resumer,
     })
 }
 
@@ -1231,6 +1321,7 @@ where
         event_controller,
         daemon_controller,
         presence_timers,
+        deletion_resumer,
     } = app;
     // The serving boundary, witnessed by the already-bound `TcpListener` this function
     // was handed: reaching here means a listener exists, so `/readyz` may now report
@@ -1250,6 +1341,10 @@ where
         result = &mut server => result.map_err(StartupError::Serve),
         signal = &mut shutdown => {
             let _ = shutdown_tx.send(());
+            // #2234 CP3: the resumer stops scheduling FIRST — synchronously, while the
+            // daemon controller and its SQLite owner are both still alive — so no attempt
+            // can be started during the transport teardown that follows.
+            deletion_resumer.close();
             // The one shared shutdown order (see `shut_down_transports`): event close
             // then an immediate presence dispose, daemon close concurrent but never
             // wedged between the two.
@@ -2992,8 +3087,9 @@ mod tests {
     /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195 + #2198 + #2218 + the
     /// #2219 CP4 batch-B custody doors + the #2223 CP3 workspace-metadata / human-`me`
     /// doors + the #2223 CP4 directory/avatar doors + the #2223 CP5 host residual doors +
-    /// the #2234 CP1 host-management doors + the #2234 CP2 public-agent write doors) as
-    /// seventy-eight entries — sixty-six behind the human
+    /// the #2234 CP1 host-management doors + the #2234 CP2 public-agent write doors + the
+    /// #2234 CP3 public agent-DELETE door) as
+    /// seventy-nine entries — sixty-seven behind the human
     /// session perimeter (including #2218's authenticated `/api/runtimes`, the three #2219
     /// host custody/credential doors, the four #2223 CP5 host residual doors: detail,
     /// revoke, connect-token rotate and delete, the six #2234 CP1 host-management doors:
@@ -3009,7 +3105,7 @@ mod tests {
     /// handler's own status (never the perimeter's bodiless `401`), and never the `404`
     /// fallback. Removing any mounted route's
     /// `.merge(...)` from `prepare()` flips its entry to `404` and reddens this gate.
-    /// The tables are named consts with per-table `assert_eq!(len)` (66 / 3 / 2, plus
+    /// The tables are named consts with per-table `assert_eq!(len)` (67 / 3 / 2, plus
     /// the four #2218/#2219 anon faces asserted by exact status/body and the #2223 CP3
     /// signup/login/logout trio asserted by presence-plus-handler-reach) so a mis-added or
     /// mis-deleted row reddens the count directly.
@@ -3035,10 +3131,10 @@ mod tests {
         let router = app.router;
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // The sixty-six human-perimeter product doors. Anonymous (no bearer) → the human
+        // The sixty-seven human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
-        const HUMAN_PERIMETER_DOORS: [(&str, &str); 66] = [
+        const HUMAN_PERIMETER_DOORS: [(&str, &str); 67] = [
             ("POST", "/api/hosts"),
             // #2219 CP4 host-custody batch B — the three perimeter-guarded custody doors.
             // `GET /api/hosts` shares the path node with the invite POST above, so its anon
@@ -3171,8 +3267,14 @@ mod tests {
             ("GET", "/api/agents/agent-1/avatar"),
             ("POST", "/api/agents/agent-1/avatar"),
             ("DELETE", "/api/agents/agent-1/avatar"),
+            // #2234 CP3: the public agent-DELETE door, accumulating onto the same
+            // GET-detail/PATCH `{id}` node (disjoint method). Anon → the perimeter 401;
+            // the authenticated lifecycle (route→shared resumer `try_now`, boot recover,
+            // daemon-attach `on_host_ready`, shutdown close) is borne by
+            // `the_composition_agent_deletion_resumer_drives_the_full_production_lifecycle`.
+            ("DELETE", "/api/agents/agent-1"),
         ];
-        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 66);
+        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 67);
         for (method, path) in HUMAN_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -3549,25 +3651,27 @@ mod tests {
     /// Gate 2 of the CP2 convergence closure — the #2195 host-agent control-plane lane
     /// as a bidirectionally CLOSED universe of 54, every entry itemized `(method, path)`
     /// in a named table that is mechanically checksummed: the four tables' lengths are
-    /// pinned (`25`/`4`/`23`/`2`), every `(method, path)` across the union is unique,
+    /// pinned (`26`/`4`/`23`/`1`), every `(method, path)` across the union is unique,
     /// landed is disjoint from residual, and the union is exactly `54`. This is the
     /// lane's ORIGINAL owned total (it still counts the three dynamic host reads since
     /// handed to #2198). Deleting a row, or copying one between tables, breaks the
-    /// checksum — `(25 + 4) + (23 + 2) == 54` is an assertion, not prose.
+    /// checksum — `(26 + 4) + (23 + 1) == 54` is an assertion, not prose.
     ///
-    /// Every one of the 25 residual routes is FALSIFIABLE — none rests on an
+    /// Every one of the 54 routes is FALSIFIABLE — none rests on an
     /// unfalsifiable anon `401`:
-    /// * The 25 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
+    /// * The 26 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
     ///   perimeter → anon `401` (includes #2218's authenticated `/api/runtimes`, three of
     ///   #2219's four host-custody routes: list, claim-or-create, and
     ///   `{id}/rotate-token`; the fourth, `connect-token/resolve`, is allowlisted and
     ///   lands anonymously below; the four #2223 CP5 host residual routes: detail
     ///   `GET /api/hosts/{id}`, revoke, connect-token rotate, and delete
-    ///   `DELETE /api/hosts/{id}`; and the six #2234 CP1 host-management routes: update
+    ///   `DELETE /api/hosts/{id}`; the six #2234 CP1 host-management routes: update
     ///   `PATCH /api/hosts/{id}`, disconnect, proxy-config `GET`+`PUT`, runtime-catalog
-    ///   and status; and the five #2234 CP2 public-agent thin faces: name-availability
+    ///   and status; the five #2234 CP2 public-agent thin faces: name-availability
     ///   `GET /api/agents/name-availability`, `PATCH /api/agents/{id}`, and the three
-    ///   avatar faces `GET`+`POST`+`DELETE /api/agents/{id}/avatar`).
+    ///   avatar faces `GET`+`POST`+`DELETE /api/agents/{id}/avatar`; and the one #2234 CP3
+    ///   public-agent face: `DELETE /api/agents/{id}`, a third method on the GET+PATCH
+    ///   `{id}` node, backed by the #2230 deletion resumer's full production lifecycle).
     ///   Deleting any one's `.merge(...)` flips it to `404` and reddens this gate
     ///   (delete-landed RED).
     /// * The 4 ANON-LANDED routes are mounted ahead of every perimeter → an anonymous
@@ -3581,12 +3685,11 @@ mod tests {
     /// * 23 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
     ///   Mounting any one flips it to its perimeter's `401`/`405` and reddens this gate
     ///   (mount-residual RED).
-    /// * 2 METHOD-SHADOW residuals share a concrete path with a mounted sibling that
-    ///   answers a DIFFERENT method (`POST /api/agents` behind the mounted `GET`, and
-    ///   `DELETE /api/agents/{id}` behind the mounted `GET`+`PATCH`).
+    /// * 1 METHOD-SHADOW residual shares a concrete path with a mounted sibling that
+    ///   answers a DIFFERENT method (`POST /api/agents` behind the mounted `GET`).
     ///   Probed anonymously the perimeter's `.layer` answers
     ///   `401` before method dispatch (indistinguishable from mounted), so this gate
-    ///   probes them AUTHENTICATED (real seeded bearer): the perimeter passes and the
+    ///   probes it AUTHENTICATED (real seeded bearer): the perimeter passes and the
     ///   path's `MethodRouter` bears the truth → `405 METHOD_NOT_ALLOWED`. Mis-mounting
     ///   the residual method flips its answer to a handler status and reddens this gate.
     ///
@@ -3597,7 +3700,7 @@ mod tests {
     /// anon-landed).
     #[tokio::test]
     async fn the_host_agent_lane_stays_a_closed_universe_of_fifty_four() {
-        // The 25 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
+        // The 26 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
         // perimeter → anon 401.
         const LANDED: &[(&str, &str)] = &[
             ("GET", "/api/agents"),
@@ -3657,6 +3760,13 @@ mod tests {
             ("GET", "/api/agents/agent-1/avatar"),
             ("POST", "/api/agents/agent-1/avatar"),
             ("DELETE", "/api/agents/agent-1/avatar"),
+            // Public agent-DELETE CP3, #2234 (#2230 resumer): now MOUNTED behind the human
+            // perimeter → anon 401, so it is no longer a method-shadow residual. It is a
+            // THIRD method on the GET-detail/PATCH `{id}` node; its authenticated
+            // DELETE→teardown dispatch (distinct from the GET-detail and PATCH-update arms
+            // the CP2 write-faces gate pins) and its full production lifecycle are borne by
+            // `the_composition_agent_deletion_resumer_drives_the_full_production_lifecycle`.
+            ("DELETE", "/api/agents/agent-1"),
         ];
         // The 4 ANON-LANDED routes: mounted ahead of every perimeter, so an anonymous
         // probe reaches the handler. #2218's server/info and health answer 200; readyz
@@ -3684,8 +3794,9 @@ mod tests {
             // disconnect/proxy-config(GET+PUT)/runtime-catalog/status + `PATCH /api/hosts/{id}`
             // by #2234 CP1 — all now perimeter-landed above)
             // agents residual (13 of 20; name-availability + PATCH /api/agents/{id} are
-            // now perimeter-landed by #2234 CP2; the three avatar faces likewise; POST
-            // /api/agents and DELETE /api/agents/{id} remain method-shadowed, below)
+            // now perimeter-landed by #2234 CP2; the three avatar faces likewise; DELETE
+            // /api/agents/{id} is now perimeter-landed by #2234 CP3; POST /api/agents
+            // remains method-shadowed, below)
             ("PUT", "/api/agents/agent-1/runtime"),
             ("POST", "/api/agents/agent-1/clear-session"),
             ("GET", "/api/agents/agent-1/workspace/tree"),
@@ -3712,19 +3823,18 @@ mod tests {
             // diagnostic (1)
             ("POST", "/internal/agents/agent-1/cli-trace"),
         ];
-        // 2 METHOD-SHADOW residuals: the path is mounted for a DIFFERENT method, so an
+        // 1 METHOD-SHADOW residual: the path is mounted for a DIFFERENT method, so an
         // authenticated probe of the residual method hits the `MethodRouter` → 405.
         const METHOD_SHADOW_RESIDUAL: &[(&str, &str)] = &[
-            ("POST", "/api/agents"),           // ← GET /api/agents (mounted)
-            ("DELETE", "/api/agents/agent-1"), // ← GET+PATCH /api/agents/{id} (mounted)
+            ("POST", "/api/agents"), // ← GET /api/agents (mounted)
         ];
 
-        // ── Mechanical checksum: (25 + 4) + (23 + 2) == 54, all unique, landed ∩
+        // ── Mechanical checksum: (26 + 4) + (23 + 1) == 54, all unique, landed ∩
         // residual = ∅ ──
-        assert_eq!(LANDED.len(), 25);
+        assert_eq!(LANDED.len(), 26);
         assert_eq!(ANON_LANDED.len(), 4);
         assert_eq!(CLEAN_RESIDUAL.len(), 23);
-        assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 2);
+        assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 1);
         let landed: std::collections::HashSet<(&str, &str)> = LANDED
             .iter()
             .copied()
@@ -3735,8 +3845,8 @@ mod tests {
             .chain(METHOD_SHADOW_RESIDUAL)
             .copied()
             .collect();
-        assert_eq!(landed.len(), 29, "landed rows are unique");
-        assert_eq!(residual.len(), 25, "residual rows are unique");
+        assert_eq!(landed.len(), 30, "landed rows are unique");
+        assert_eq!(residual.len(), 24, "residual rows are unique");
         assert!(
             landed.is_disjoint(&residual),
             "landed and residual are disjoint"
@@ -3754,7 +3864,7 @@ mod tests {
         let bearer = format!("Bearer {TOKEN}");
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // ── 25 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
+        // ── 26 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
         for (method, path) in LANDED {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(
@@ -3793,7 +3903,7 @@ mod tests {
             );
         }
 
-        // ── 2 METHOD-SHADOW RESIDUAL → AUTHENTICATED 405 (perimeter passes, the path's
+        // ── 1 METHOD-SHADOW RESIDUAL → AUTHENTICATED 405 (perimeter passes, the path's
         // MethodRouter bears the truth). Mis-mounting the residual method reddens this. ──
         for (method, path) in METHOD_SHADOW_RESIDUAL {
             let (status, body) = request(&router, method, path, Some(&bearer)).await;
@@ -4447,6 +4557,354 @@ mod tests {
         socket.close(None).await.unwrap();
         shutdown_tx.send(()).unwrap();
         running.await.unwrap().unwrap();
+    }
+
+    /// Seed one host `h-online` (owned by the seeded `user-1`) with a long-lived
+    /// credential whose bearer is `HOST_TOKEN`, so a REAL daemon can attach over
+    /// `HOST_WEBSOCKET_PATH`. Each `(agent_id, marker)` is an ACTIVE agent on that host:
+    /// `Some(at)` pre-stamps `deletion_started_at` — a durable deletion marker with no
+    /// request behind it, exactly the shape a prior boot's begin left on disk — and `None`
+    /// leaves the row deletable by a fresh request.
+    async fn seed_deletable_agents(path: &Path, agents: &[(&str, Option<i64>)]) {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id) VALUES ('h-online', 'host-online', 'remote', 1, 'user-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO host_credentials (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at) VALUES ('cred-online', 'h-online', ?, 'long_lived', NULL, NULL, NULL)",
+        )
+        .bind(HOST_TOKEN_HASH)
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (id, marker) in agents {
+            sqlx::query(
+                "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, created_by_user_id, materialization_status, deletion_started_at) \
+                 VALUES (?, ?, 'qoder', 'h-online', 1, 1, 'user-1', 'active', ?)",
+            )
+            .bind(id)
+            .bind(format!("agent-{id}"))
+            .bind(marker)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        pool.close().await;
+    }
+
+    /// Drive a connected daemon socket like a REAL daemon until told to stop, then hand the
+    /// socket back for a clean close: answer the `runtime_status` hydration command and
+    /// every `agent_files_purge` the production deletion fence sends
+    /// (`{"ok":true,"purged_count":0,"quiesced_count":0}` — the exact shape
+    /// `valid_agent_files_purge_result` admits). A composed deletion COMMITS only once this
+    /// purge round-trip is answered, so a mount whose resumer never reaches the live daemon
+    /// transport would leave the marker un-purged and redden by the bounded GET poll below.
+    async fn service_daemon_commands<S>(
+        mut socket: tokio_tungstenite::WebSocketStream<S>,
+        stop: std::sync::Arc<tokio::sync::Notify>,
+    ) -> tokio_tungstenite::WebSocketStream<S>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        loop {
+            tokio::select! {
+                () = stop.notified() => break,
+                command = next_daemon_json(&mut socket) => {
+                    let result = match command["kind"].as_str() {
+                        Some("runtime_status") => serde_json::json!({ "runtimes": [] }),
+                        // The status-seed layer fires one background `host_status` probe at
+                        // the promotion edge (decoupled from attach; a bad answer only logs).
+                        // Answer the exact `StatusWire` contract so the seed seals in one
+                        // round rather than deferring into a retry loop.
+                        Some("host_status") => serde_json::json!({
+                            "os": "linux",
+                            "daemon_pid": 1,
+                            "daemon_version": "0.0.0-test",
+                            "started_at": 0,
+                            "uptime_ms": 0,
+                            "active_agent_ids": [],
+                        }),
+                        Some("agent_files_purge") => {
+                            serde_json::json!({ "ok": true, "purged_count": 0, "quiesced_count": 0 })
+                        }
+                        other => panic!("unexpected daemon command kind: {other:?}"),
+                    };
+                    socket
+                        .send(ClientMessage::Text(
+                            serde_json::json!({
+                                "direction": "daemon_to_server",
+                                "type": "command_response",
+                                "id": command["id"],
+                                "kind": command["kind"],
+                                "result": result,
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+        socket
+    }
+
+    /// Bounded-poll the composed agent-detail GET until the row is GONE — the witness that
+    /// a durable deletion COMMITTED end-to-end (`204`-worthy row teardown, not merely a
+    /// marker write). `200` while present, then the detail route's own anti-enumeration
+    /// `404 {"error":"agent not found"}` once the resumer's fence→complete chain deletes the
+    /// row. Bounded so broken wiring reddens by timeout instead of hanging.
+    async fn poll_agent_deleted(router: &Router, agent_id: &str, bearer: &str) {
+        let uri = format!("/api/agents/{agent_id}");
+        for _ in 0..200 {
+            let (status, body) = request(router, "GET", &uri, Some(bearer)).await;
+            if status == StatusCode::NOT_FOUND {
+                assert_eq!(
+                    body, r#"{"error":"agent not found"}"#,
+                    "a completed deletion collapses to the detail route's anti-enum 404"
+                );
+                return;
+            }
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "{agent_id} present until deleted: {body}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!(
+            "{agent_id} was never deleted — the composed resumer did not carry the marker to a committed teardown"
+        );
+    }
+
+    /// The #2234 CP3 close: `DELETE /api/agents/{id}` is not just mounted — the ONE shared
+    /// production [`AgentDeletionResumer`] the composition builds is reached from every
+    /// entrypoint that must carry a durable deletion marker to its committed end. This is
+    /// the composition obligation Cindy fixed for the mount (not the resumer's own
+    /// scheduling semantics, which its component tests own), reduced to three named
+    /// falsifiers over a REAL daemon attaching through the mounted `HOST_WEBSOCKET_PATH`:
+    ///
+    /// 1. **Boot `recover` + exact host-ready, no request.** A durable marker pre-exists on
+    ///    disk (a prior boot's begin). `prepare()` runs `recover().await` fail-closed BEFORE
+    ///    serving, which arms the marker but drives NO purge while the host is detached; only
+    ///    when the daemon completes its real `attach Ok(true)` does the mandatory
+    ///    `HostReadyObserver` push the exact generation to the resumer, which fences and
+    ///    commits the teardown. The agent's row vanishes with no HTTP request ever sent.
+    ///    Un-wiring `recover` (marker never armed) OR the host-ready observer (attach never
+    ///    reaches the resumer) leaves the row and reddens the poll.
+    /// 2. **Composed `DELETE` request → `try_now` → committed teardown.** An
+    ///    authenticated `DELETE /api/agents/{id}` with `{"confirm":true}` on the SAME
+    ///    attached host writes its begin marker and dispatches the SAME resumer's `try_now`,
+    ///    whose fence→purge→complete commits synchronously and answers `204 No Content`. A
+    ///    route wired to a SECOND resumer instance, or to none, could never return `204` here
+    ///    (it would `202`-retain, having no live generation of its own) — proving the mounted
+    ///    route and the boot/host-ready worker are ONE instance sharing one `Arc` of state.
+    /// 3. **Shutdown `close`, durable retention, next-boot recovery.** A marker whose host
+    ///    is NEVER attached stays pending across a full production shutdown — `serve`'s arm
+    ///    runs `resumer.close()` synchronously ahead of transport teardown (a panic or a
+    ///    mis-order there would fault the join below). The durable marker is NOT lost: a
+    ///    fresh `prepare()` over the same store re-lists it, and once its host finally
+    ///    attaches the deletion completes. The resumer's `close_stops_the_ladder_and_refuses_new_work`
+    ///    component test owns the abort-the-timers semantics; this proves close is INVOKED in
+    ///    the composed shutdown path and never strands the fail-forward marker.
+    #[tokio::test]
+    async fn the_composition_agent_deletion_resumer_drives_the_full_production_lifecycle() {
+        // ── Falsifiers 1 & 2 share one served app on one attached host. ──
+        let fixture1 = fixture(true).await;
+        seed_human(&fixture1.path).await;
+        // `a-marked` carries a pre-stored durable marker (no request behind it);
+        // `a-live` is a plain active agent deleted through the composed HTTP route.
+        seed_deletable_agents(
+            &fixture1.path,
+            &[("a-marked", Some(7_000)), ("a-live", None)],
+        )
+        .await;
+        let app = prepare(&config(fixture1.path.clone())).await.unwrap();
+        let router = app.router.clone();
+        let bearer = format!("Bearer {TOKEN}");
+
+        // Baseline: both rows are present and reachable BEFORE any daemon attaches. The
+        // pre-stored marker has driven nothing — `recover` armed it, but its host is
+        // detached, so the row still answers `200`.
+        for agent in ["a-marked", "a-live"] {
+            let (status, body) = request(
+                &router,
+                "GET",
+                &format!("/api/agents/{agent}"),
+                Some(&bearer),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{agent} present pre-attach: {body}");
+        }
+
+        // Serve over real TCP so a real daemon can attach through the mounted host WS.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+
+        // Drive the REAL admission→attachment handshake.
+        let mut ws_request = format!("ws://{address}{HOST_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        ws_request.headers_mut().insert(
+            tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+            format!("Bearer {HOST_TOKEN}").parse().unwrap(),
+        );
+        let (mut socket, _) = connect_async(ws_request).await.unwrap();
+        socket
+            .send(ClientMessage::Text(
+                serde_json::json!({
+                    "direction": "daemon_to_server",
+                    "type": "event",
+                    "kind": "ready",
+                    "protocol_version": OUTBOUND_PROTOCOL_VERSION,
+                    "daemon_version": "test",
+                    "daemon_id": "daemon-cp3",
+                    "instance_id": "instance-cp3",
+                    "host_descriptor": { "name": "CP3 host", "kind": "remote" },
+                    "capabilities": [],
+                    "daemon_pid": 7,
+                    "started_at": 100,
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+        // A background servicer answers the hydration command AND every deletion purge, so
+        // the push-driven marker and the request-driven delete both make wire progress.
+        let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+        let servicer = tokio::spawn(service_daemon_commands(socket, stop.clone()));
+
+        // ── Falsifier 1: attach alone (boot recover + exact host-ready) completes the
+        // pre-stored marker, with NO HTTP request. ──
+        poll_agent_deleted(&router, "a-marked", &bearer).await;
+
+        // ── Falsifier 2: the composed DELETE dispatches the SAME resumer and commits
+        // synchronously → 204. Spawned so the servicer answers its purge concurrently. ──
+        let del_router = router.clone();
+        let del_bearer = bearer.clone();
+        let deletion = tokio::spawn(async move {
+            request_with_body(
+                &del_router,
+                "DELETE",
+                "/api/agents/a-live",
+                Some(&del_bearer),
+                Body::from(r#"{"confirm":true}"#),
+            )
+            .await
+        });
+        let (status, body) = deletion.await.unwrap();
+        assert_eq!(
+            status,
+            StatusCode::NO_CONTENT,
+            "the composed DELETE drives the shared resumer to a committed teardown (204): {body}"
+        );
+        // The row is gone through the SAME detail read.
+        let (status, body) = request(&router, "GET", "/api/agents/a-live", Some(&bearer)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "a-live deleted: {body}");
+        assert_eq!(body, r#"{"error":"agent not found"}"#);
+
+        // Wind the servicer down and shut the app cleanly.
+        stop.notify_one();
+        let mut socket = servicer.await.unwrap();
+        socket.close(None).await.unwrap();
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+
+        // ── Falsifier 3: a marker whose host never attaches survives a full production
+        // shutdown (close ahead of transport teardown), and the NEXT boot recovers it. ──
+        let fixture3 = fixture(true).await;
+        seed_human(&fixture3.path).await;
+        seed_deletable_agents(&fixture3.path, &[("a-retained", Some(9_000))]).await;
+
+        // Boot 1: recover arms the marker, but the detached host drives no purge, so the
+        // row stays. Shut down through the production arm, which runs `resumer.close()`
+        // synchronously before transport teardown — a fault there would fail this join.
+        let boot1 = prepare(&config(fixture3.path.clone())).await.unwrap();
+        let router1 = boot1.router.clone();
+        let (status, body) =
+            request(&router1, "GET", "/api/agents/a-retained", Some(&bearer)).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "a detached host's marker completes nothing at boot: {body}"
+        );
+        let listener1 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (stop1_tx, stop1_rx) = oneshot::channel();
+        let boot1_running = tokio::spawn(serve(listener1, boot1, async move {
+            let _ = stop1_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+        stop1_tx.send(()).unwrap();
+        boot1_running.await.unwrap().unwrap();
+        drop(router1);
+
+        // Boot 2 over the SAME store: the durable marker survived shutdown, so recover
+        // re-lists it; once the host attaches the deletion finally commits.
+        let boot2 = prepare(&config(fixture3.path.clone())).await.unwrap();
+        let router2 = boot2.router.clone();
+        let (status, body) =
+            request(&router2, "GET", "/api/agents/a-retained", Some(&bearer)).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "the durable marker survived boot-1 shutdown for the next boot: {body}"
+        );
+        let listener2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address2 = listener2.local_addr().unwrap();
+        let (shutdown2_tx, shutdown2_rx) = oneshot::channel();
+        let boot2_running = tokio::spawn(serve(listener2, boot2, async move {
+            let _ = shutdown2_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+        let mut ws2 = format!("ws://{address2}{HOST_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        ws2.headers_mut().insert(
+            tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+            format!("Bearer {HOST_TOKEN}").parse().unwrap(),
+        );
+        let (mut socket2, _) = connect_async(ws2).await.unwrap();
+        socket2
+            .send(ClientMessage::Text(
+                serde_json::json!({
+                    "direction": "daemon_to_server",
+                    "type": "event",
+                    "kind": "ready",
+                    "protocol_version": OUTBOUND_PROTOCOL_VERSION,
+                    "daemon_version": "test",
+                    "daemon_id": "daemon-cp3-boot2",
+                    "instance_id": "instance-cp3-boot2",
+                    "host_descriptor": { "name": "CP3 host", "kind": "remote" },
+                    "capabilities": [],
+                    "daemon_pid": 7,
+                    "started_at": 100,
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let stop2 = std::sync::Arc::new(tokio::sync::Notify::new());
+        let servicer2 = tokio::spawn(service_daemon_commands(socket2, stop2.clone()));
+        poll_agent_deleted(&router2, "a-retained", &bearer).await;
+        stop2.notify_one();
+        let mut socket2 = servicer2.await.unwrap();
+        socket2.close(None).await.unwrap();
+        shutdown2_tx.send(()).unwrap();
+        boot2_running.await.unwrap().unwrap();
     }
 
     /// #2219 real-authority binding — the invite→resolve chain proves BOTH placement and

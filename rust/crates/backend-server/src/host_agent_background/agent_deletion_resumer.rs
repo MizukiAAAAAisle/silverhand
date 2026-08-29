@@ -92,6 +92,31 @@ pub trait DeletionFenceBinder: Clone + Send + Sync + 'static {
     fn current_generation(&self, host: &HostId) -> Option<String>;
 }
 
+/// The push seam the daemon attach edge drives: a host's daemon has been promoted to
+/// custody on `connection_id`, so any durable deletion marker for that host can now be
+/// fenced against a live generation. This is the ONLY way an attach reaches deletion
+/// recovery — the [`DeletionFenceBinder`] is a pure pull/compare port that dials nothing,
+/// so the resumer cannot discover an attach on its own and MUST be told here.
+///
+/// Object-safe on purpose: the daemon router holds it as `Arc<dyn HostReadyObserver>`, a
+/// REQUIRED construction input. A composition that forgets to wire it does not type-check
+/// — there is no `Option`, no setter, and no no-op default that could let an attach seal
+/// while recovery silently never runs.
+pub trait HostReadyObserver: Send + Sync + 'static {
+    fn host_ready(&self, host: &HostId, connection_id: &str);
+}
+
+impl<L, B, R> HostReadyObserver for AgentDeletionResumer<L, B, R>
+where
+    L: AgentDeletionLifecyclePort,
+    B: DeletionFenceBinder,
+    R: AgentDeletionResidue,
+{
+    fn host_ready(&self, host: &HostId, connection_id: &str) {
+        self.on_host_ready(host, connection_id);
+    }
+}
+
 /// The default retry ladder walked per host connection generation, after the immediate
 /// ready/request attempt: 1s, then 5s, then 30s, then the generation gives up until a
 /// reconnect starts it over.
@@ -587,8 +612,7 @@ where
                 continue;
             };
 
-            let outcome =
-                resume_agent_deletion(&self.lifecycle, &fence, &self.residue, &ran).await;
+            let outcome = resume_agent_deletion(&self.lifecycle, &fence, &self.residue, &ran).await;
             self.log_resolved(&ran, &outcome);
 
             let step = {
@@ -1444,11 +1468,7 @@ mod tests {
             1,
             "only A purged h1; B was never carried to A's host"
         );
-        assert_eq!(
-            h.daemon.frames_to("conn-h2"),
-            1,
-            "B purged its own host h2"
-        );
+        assert_eq!(h.daemon.frames_to("conn-h2"), 1, "B purged its own host h2");
         assert_eq!(
             h.lifecycle.completes.load(SeqCst),
             2,
@@ -1475,7 +1495,11 @@ mod tests {
         let outcome = h.resumer.run_single_flight(&attempt, "conn-A").await;
 
         assert_eq!(outcome, DeletionRunOutcome::Completed);
-        assert_eq!(h.daemon.frames_to("conn-A"), 0, "the dead ledger id gets no frame");
+        assert_eq!(
+            h.daemon.frames_to("conn-A"),
+            0,
+            "the dead ledger id gets no frame"
+        );
         assert_eq!(h.daemon.frames_to("conn-B"), 1);
         assert_eq!(h.lifecycle.completes.load(SeqCst), 1);
     }

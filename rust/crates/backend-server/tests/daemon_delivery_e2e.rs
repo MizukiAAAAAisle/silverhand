@@ -64,6 +64,7 @@ use silverhand_backend_server::{
         HOST_PROTOCOL_VERSION, HOST_WEBSOCKET_PATH, HostDataPlaneCustody,
         OUTBOUND_PROTOCOL_VERSION, OwningHostDataPlane, UPDATE_REQUIRED_CLOSE_REASON,
     },
+    host_agent_background::agent_deletion_resumer::HostReadyObserver,
     host_control::admission::ProtocolMismatchRefusal,
     host_control::management::{self, update::HostLabelChangeEffect},
     host_control::proxy_config::{self, ProxyConfig, ProxyConfigOutcome, ProxyConfigRequest},
@@ -116,6 +117,16 @@ struct NullLifecycle;
 impl ConnectionLifecycle for NullLifecycle {
     fn on_connect(&self, _viewer: &UserId, _connection_id: &str) {}
     fn on_disconnect(&self, _viewer: &UserId, _connection_id: &str) {}
+}
+
+/// A do-nothing host-ready observer for the same reason: these e2e cases drive the WS
+/// transport and status/catalog/proxy control planes, never agent deletion. The
+/// production resumer is the real observer, wired in `backend-app::prepare`; this
+/// transport fixture only needs the router's mandatory argument satisfied.
+struct NullHostReady;
+
+impl HostReadyObserver for NullHostReady {
+    fn host_ready(&self, _host: &HostId, _connection_id: &str) {}
 }
 
 const TOKEN: &str = "host-token";
@@ -274,7 +285,8 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
     let agent_profile_mcp =
         runtime.agent_profile_mcp_data_plane(SqliteHostAgentStore::open(&path).await.unwrap());
     let effects = runtime.effects();
-    let (daemon_router, controller) = runtime.router();
+    let controller = runtime.controller();
+    let daemon_router = runtime.router(Arc::new(NullHostReady));
     let sessions = HumanSessionAuthenticator::new(
         SqliteSessionStore::open(&path).await.unwrap(),
         FixedSessionClock,

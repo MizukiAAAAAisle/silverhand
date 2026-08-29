@@ -75,7 +75,7 @@ use crate::{
         RuntimeProductEvent, decode_product_event,
     },
     error,
-    host_agent_background::agent_deletion_resumer::DeletionFenceBinder,
+    host_agent_background::agent_deletion_resumer::{DeletionFenceBinder, HostReadyObserver},
     host_control::admission::{
         AdmissionUnavailable, DialerId, HostAdmission, ProtocolMismatch, RefusalNews, SlotOccupancy,
     },
@@ -176,6 +176,18 @@ pub struct DaemonDeliveryRuntime<C, D, H> {
     config: DaemonDeliveryConfig,
     events: DaemonRuntimeEventOwner<D>,
     clear_session_waiters: crate::runtime_control::RuntimeClearSessionWaiters,
+}
+
+/// The daemon websocket route's state: the runtime the connection loop mutates, plus the
+/// mandatory host-ready observer the attach edge drives on custody promotion. Kept a
+/// distinct type from the runtime — rather than a field ON the runtime — because the
+/// observer is built AFTER the runtime (the resumer's fence binder descends from the
+/// runtime's registry), so it can only be a required argument to `router`, never a field
+/// `new` could construct.
+#[derive(Clone)]
+struct DaemonWebsocketState<C, D, H> {
+    runtime: DaemonDeliveryRuntime<C, D, H>,
+    host_ready: Arc<dyn HostReadyObserver>,
 }
 
 impl<C, D, H> DaemonDeliveryRuntime<C, D, H> {
@@ -307,17 +319,37 @@ where
         })
     }
 
-    pub fn router(&self) -> (Router, DaemonDeliveryController) {
-        let controller = DaemonDeliveryController {
+    /// The read-only control handles for this runtime — host connection generations,
+    /// admission, status seeds, and shutdown. Buildable WITHOUT the host-ready observer,
+    /// so a composition root can derive the deletion resumer's fence binder from THIS
+    /// runtime's one registry (`controller().host_connections()`) BEFORE it assembles the
+    /// daemon websocket router with that same resumer as the mandatory ready observer.
+    /// The binder and the observer therefore both descend from one registry; there is no
+    /// second generation truth a composition could accidentally splice in.
+    pub fn controller(&self) -> DaemonDeliveryController {
+        DaemonDeliveryController {
             registry: self.registry.clone(),
             admission: self.admission.clone(),
             seeds: self.seeds.clone(),
             shutdown_grace: self.config.shutdown_grace,
-        };
-        let router = Router::new()
+        }
+    }
+
+    /// The daemon websocket router, with the host-ready observer baked into its state.
+    /// `host_ready` is REQUIRED, not optional: the attach edge drives it the instant the
+    /// registry promotes a connection to custody, and deletion recovery depends on that
+    /// push. Taking it as a construction argument — rather than a settable slot on the
+    /// runtime — makes "the ready signal is wired" a property of construction, exactly the
+    /// same discipline that builds `admission`/`seeds` in `new` rather than here: a router
+    /// that seals attachments but never notifies recovery is not a shape this API can
+    /// produce.
+    pub fn router(&self, host_ready: Arc<dyn HostReadyObserver>) -> Router {
+        Router::new()
             .route(HOST_WEBSOCKET_PATH, get(daemon_websocket::<C, D, H>))
-            .with_state(self.clone());
-        (router, controller)
+            .with_state(DaemonWebsocketState {
+                runtime: self.clone(),
+                host_ready,
+            })
     }
 
     pub fn effects(&self) -> DaemonDeliveryEffects<C, D, H> {
@@ -2493,7 +2525,7 @@ async fn send_connection_close(socket: &mut WebSocket, close: ConnectionClose) {
 }
 
 async fn daemon_websocket<C, D, H>(
-    State(runtime): State<DaemonDeliveryRuntime<C, D, H>>,
+    State(state): State<DaemonWebsocketState<C, D, H>>,
     websocket: WebSocketUpgrade,
     headers: HeaderMap,
 ) -> Response
@@ -2502,6 +2534,10 @@ where
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
+    let DaemonWebsocketState {
+        runtime,
+        host_ready,
+    } = state;
     let Some(token) = strict_bearer_credential(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -2544,6 +2580,7 @@ where
             connection(
                 socket,
                 runtime,
+                host_ready,
                 AuthenticatedHostConnection {
                     host_id,
                     owner_user_id,
@@ -2565,6 +2602,7 @@ struct AuthenticatedHostConnection {
 async fn connection<C, D, H>(
     mut socket: WebSocket,
     runtime: DaemonDeliveryRuntime<C, D, H>,
+    host_ready: Arc<dyn HostReadyObserver>,
     authenticated: AuthenticatedHostConnection,
     control: mpsc::Sender<ConnectionControl>,
     mut commands: mpsc::Receiver<ConnectionControl>,
@@ -2651,6 +2689,18 @@ async fn connection<C, D, H>(
                                     "host admission refusal could not be cleared after attachment"
                                 );
                             }
+                            // The exact generation trigger for deletion recovery: THIS
+                            // connection just won custody, so any durable deletion marker
+                            // for this host can now be fenced against a live generation.
+                            // Synchronous and non-blocking — the observer only adopts the
+                            // generation and spawns its own workers, so it never wedges the
+                            // connection loop; a repeated ready on the same connection id is
+                            // a no-op inside the resumer.
+                            host_ready.host_ready(
+                                &HostId::parse(host_id.clone())
+                                    .expect("authenticated host ids are validated at lookup"),
+                                &connection_id,
+                            );
                             // Status is a zero-RPC HTTP read. Seed this exact admitted
                             // generation in the background at the promotion edge; the
                             // seed owner rechecks custody after every await and drops a
