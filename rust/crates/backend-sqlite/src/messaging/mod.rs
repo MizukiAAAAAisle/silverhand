@@ -285,9 +285,13 @@ const INSERT_STREAM_HEAD: &str = "INSERT INTO conversation_stream_heads (convers
      thread_root_id, latest_seq) VALUES (?, ?, ?)";
 
 /// Read the onboarding message's stored after-image back by id, so its shape is witnessed
-/// from the row as persisted rather than from the values bound to the INSERT.
-const READ_ONBOARDING_MESSAGE_BACK: &str =
-    "SELECT id, conversation_id, from_kind, metadata, seq FROM messages WHERE id = ?";
+/// from the row as persisted rather than from the values bound to the INSERT. Every column
+/// this writer touches is read back, so the domain can bind the whole write — not just the
+/// discriminating few — against the intent.
+const READ_ONBOARDING_MESSAGE_BACK: &str = "SELECT id, conversation_id, from_kind, \
+     from_agent_id, from_user_id, content, metadata, seq, created_at, thread_root_id, \
+     author_id, author_name, author_display_name, cc_source_message_id \
+     FROM messages WHERE id = ?";
 /// Read the main line's stream-head ordinal (the row whose thread root is NULL), so the
 /// domain can confirm the onboarding message is at the head of its stream.
 const READ_MAIN_STREAM_HEAD_SEQ: &str = "SELECT latest_seq FROM conversation_stream_heads \
@@ -715,27 +719,69 @@ pub(crate) async fn append_onboarding_system_message_on(
         .await
         .map_err(driver)?;
 
-    let subtype = message_row
+    // The metadata's JSON encoding is this layer's concern (it serialized it on the way in),
+    // so it decodes the blob into a `{subtype, has_extra_keys}` digest and hands the domain
+    // the discriminator, not the blob — the domain has no serde. `subtype` is the value under
+    // that key; `has_extra_keys` is true when the object carries ANY other key, so the seal
+    // can assert the metadata is EXACTLY the onboarding subtype and nothing more.
+    let (subtype, has_extra_keys) = match message_row
         .try_get::<Option<String>, _>("metadata")
         .map_err(driver)?
         .as_deref()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-        .and_then(|value| {
-            value
+    {
+        Some(serde_json::Value::Object(map)) => {
+            let subtype = map
                 .get("subtype")
                 .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        });
+                .map(str::to_owned);
+            let has_extra_keys = map.keys().any(|key| key != "subtype");
+            (subtype, has_extra_keys)
+        }
+        // A non-object (or absent/unparseable) metadata carries no subtype; whether it is
+        // "extra" beyond the onboarding subtype is moot — the missing subtype already refuses.
+        _ => (None, false),
+    };
 
     Ok(messaging::agent_onboarding::OnboardingWriteWitness {
         id: message_row.try_get::<String, _>("id").map_err(driver)?,
         conversation: message_row
             .try_get::<String, _>("conversation_id")
             .map_err(driver)?,
+        content: message_row
+            .try_get::<String, _>("content")
+            .map_err(driver)?,
+        created_at_ms: message_row
+            .try_get::<i64, _>("created_at")
+            .map_err(driver)?,
         from_kind: message_row
             .try_get::<String, _>("from_kind")
             .map_err(driver)?,
-        subtype,
+        from_agent_id: message_row
+            .try_get::<Option<String>, _>("from_agent_id")
+            .map_err(driver)?,
+        from_user_id: message_row
+            .try_get::<Option<String>, _>("from_user_id")
+            .map_err(driver)?,
+        author_id: message_row
+            .try_get::<Option<String>, _>("author_id")
+            .map_err(driver)?,
+        author_name: message_row
+            .try_get::<Option<String>, _>("author_name")
+            .map_err(driver)?,
+        author_display_name: message_row
+            .try_get::<Option<String>, _>("author_display_name")
+            .map_err(driver)?,
+        thread_root_id: message_row
+            .try_get::<Option<String>, _>("thread_root_id")
+            .map_err(driver)?,
+        cc_source_message_id: message_row
+            .try_get::<Option<String>, _>("cc_source_message_id")
+            .map_err(driver)?,
+        metadata: messaging::agent_onboarding::OnboardingMetadataDigest {
+            subtype,
+            has_extra_keys,
+        },
         seq: message_row.try_get::<i64, _>("seq").map_err(driver)?,
         head_latest_seq,
     })
@@ -2850,17 +2896,26 @@ mod tests {
         .unwrap();
         assert_eq!(head, 1);
 
-        // The returned witness is the row's own after-image, and it seals into the written
-        // fact — proof the adapter handed back what the domain needs to mint the verdict.
+        // The returned witness is the row's own after-image — every column this writer
+        // touched, read back — so the domain can bind the whole write against the intent.
+        // Sealing itself is core's (`seal_written` is `pub(crate)`); this proves the adapter
+        // hands back the faithful shape the seal will consume.
         assert_eq!(witness.id, "msg-onboard");
         assert_eq!(witness.conversation, "pair-1");
+        assert_eq!(witness.content, expected_body);
+        assert_eq!(witness.created_at_ms, 2_000);
         assert_eq!(witness.from_kind, "system");
-        assert_eq!(witness.subtype.as_deref(), Some("onboarding"));
+        assert_eq!(witness.from_agent_id, None);
+        assert_eq!(witness.from_user_id, None);
+        assert_eq!(witness.author_id, None);
+        assert_eq!(witness.author_name, None);
+        assert_eq!(witness.author_display_name, None);
+        assert_eq!(witness.thread_root_id, None);
+        assert_eq!(witness.cc_source_message_id, None);
+        assert_eq!(witness.metadata.subtype.as_deref(), Some("onboarding"));
+        assert!(!witness.metadata.has_extra_keys);
         assert_eq!(witness.seq, 1);
         assert_eq!(witness.head_latest_seq, 1);
-        let written = intent.seal_written(witness).unwrap();
-        assert_eq!(written.id().as_str(), "msg-onboard");
-        assert_eq!(written.conversation().as_str(), "pair-1");
     }
 
     /// The entitlement read must stay bounded by the NAMES A BODY USED. It runs while

@@ -26,6 +26,12 @@ const ONBOARDING_FROM_KIND: &str = "system";
 /// system-message subtype registry the other implementation writes.
 pub const ONBOARDING_SUBTYPE: &str = "onboarding";
 
+/// The `title` a conversation-scoped agent's personal home DM carries, and the folded
+/// `title_key` that DM row stores. Pinned here so provisioning writes them and the seal
+/// binds the after-image against the one spelling, never an adapter literal.
+pub const ONBOARDING_DM_TITLE: &str = "Onboarding";
+pub const ONBOARDING_DM_TITLE_KEY: &str = "onboarding";
+
 /// Provisioning's typed intent for the onboarding system message.
 ///
 /// It exists so the write cluster that consumes it is not a generic message insert:
@@ -65,6 +71,27 @@ impl OnboardingSystemMessage {
         }
     }
 
+    /// Build the intent to greet a conversation-scoped agent in the personal home DM
+    /// provisioning just opened for it.
+    ///
+    /// Only the agent is named here — a conversation-scoped agent's home DM has no second
+    /// human participant to reference in the body. As with [`Self::agent_direct_line`] the
+    /// prose is rendered through the one canonical renderer; the caller controls only WHERE
+    /// it lands, the minted id, and the write timestamp.
+    pub fn conversation_dm(
+        conversation: ConversationId,
+        id: MessageId,
+        agent_handle: &ParticipantHandle,
+        created_at_ms: i64,
+    ) -> Self {
+        Self {
+            conversation,
+            id,
+            content: render_dm_body(agent_handle),
+            created_at_ms,
+        }
+    }
+
     pub fn conversation(&self) -> &ConversationId {
         &self.conversation
     }
@@ -89,15 +116,18 @@ impl OnboardingSystemMessage {
 
     /// Bind the row the persistence primitive read back after writing this intent, and
     /// mint the sealed fact that the message provisioning meant to land actually did —
-    /// on the line it named, under the system/onboarding shape, at the head of the
-    /// stream.
+    /// on the line it named, carrying the body it rendered, at the clock it stamped,
+    /// under the system/onboarding shape, at the head of the stream, with none of the
+    /// participant / thread / cc columns a normal message carries.
     ///
     /// The write adapter WITNESSES: it returns the after-image it read from the row it
     /// just inserted and the stream head it just bumped. It does not get to assert the
-    /// message landed correctly — this seal re-derives that from the raw columns, so a
-    /// mislabelled, misplaced, or non-head insert cannot pass for a completed onboarding
-    /// message. Only this function mints [`OnboardingWritten`].
-    pub fn seal_written(
+    /// message landed correctly — this seal re-derives every touched column from the raw
+    /// after-image, so a mislabelled, misplaced, re-authored, or non-head insert cannot
+    /// pass for a completed onboarding message. It is `pub(crate)` because only a core
+    /// use case, holding the sealed sub-facts this write depends on, is allowed to mint
+    /// [`OnboardingWritten`] — the write adapter across the crate boundary cannot.
+    pub(crate) fn seal_written(
         &self,
         witness: OnboardingWriteWitness,
     ) -> Result<OnboardingWritten, OnboardingWriteMismatch> {
@@ -111,14 +141,52 @@ impl OnboardingSystemMessage {
                 reason: "written conversation differs from the greeted line",
             });
         }
+        if witness.content != self.content {
+            return Err(OnboardingWriteMismatch {
+                reason: "written content differs from the rendered body",
+            });
+        }
+        if witness.created_at_ms != self.created_at_ms {
+            return Err(OnboardingWriteMismatch {
+                reason: "written timestamp differs from the stamped clock",
+            });
+        }
         if witness.from_kind != ONBOARDING_FROM_KIND {
             return Err(OnboardingWriteMismatch {
                 reason: "written message is not a system message",
             });
         }
-        if witness.subtype.as_deref() != Some(ONBOARDING_SUBTYPE) {
+        if witness.from_agent_id.is_some() || witness.from_user_id.is_some() {
+            return Err(OnboardingWriteMismatch {
+                reason: "written system message carries a from-participant",
+            });
+        }
+        if witness.author_id.is_some()
+            || witness.author_name.is_some()
+            || witness.author_display_name.is_some()
+        {
+            return Err(OnboardingWriteMismatch {
+                reason: "written system message carries an author snapshot",
+            });
+        }
+        if witness.thread_root_id.is_some() {
+            return Err(OnboardingWriteMismatch {
+                reason: "written onboarding message is threaded",
+            });
+        }
+        if witness.cc_source_message_id.is_some() {
+            return Err(OnboardingWriteMismatch {
+                reason: "written onboarding message carries a cc source",
+            });
+        }
+        if witness.metadata.subtype.as_deref() != Some(ONBOARDING_SUBTYPE) {
             return Err(OnboardingWriteMismatch {
                 reason: "written metadata does not carry the onboarding subtype",
+            });
+        }
+        if witness.metadata.has_extra_keys {
+            return Err(OnboardingWriteMismatch {
+                reason: "written metadata carries keys beyond the onboarding subtype",
             });
         }
         if witness.seq < 1 {
@@ -138,19 +206,41 @@ impl OnboardingSystemMessage {
     }
 }
 
-/// The raw after-image the write adapter read back for an onboarding message: the row it
-/// inserted and the stream head it bumped, verbatim. The `subtype` is the value the adapter
-/// decoded from the stored metadata — the metadata's JSON encoding is a storage concern the
-/// adapter owns, so the domain reads the decoded discriminator, not the blob. It carries no
-/// verdict — only [`OnboardingSystemMessage::seal_written`] turns it into a fact.
+/// The raw after-image the write adapter read back for an onboarding message: every column
+/// the onboarding writer touches, verbatim, so the core seal can re-derive the whole write
+/// rather than trust the adapter's word for it. The participant / author / thread / cc
+/// columns are `Option<String>` because the onboarding writer never sets them — the seal
+/// proves that by requiring each to be absent. `metadata` is the [`OnboardingMetadataDigest`]
+/// the adapter decoded from the stored blob (the domain has no JSON runtime), and it carries
+/// no verdict — only [`OnboardingSystemMessage::seal_written`] turns this into a fact.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OnboardingWriteWitness {
     pub id: String,
     pub conversation: String,
+    pub content: String,
+    pub created_at_ms: i64,
     pub from_kind: String,
-    pub subtype: Option<String>,
+    pub from_agent_id: Option<String>,
+    pub from_user_id: Option<String>,
+    pub author_id: Option<String>,
+    pub author_name: Option<String>,
+    pub author_display_name: Option<String>,
+    pub thread_root_id: Option<String>,
+    pub cc_source_message_id: Option<String>,
+    pub metadata: OnboardingMetadataDigest,
     pub seq: i64,
     pub head_latest_seq: i64,
+}
+
+/// The adapter's decoding of a stored message's metadata, reduced to exactly what the seal
+/// judges: the `subtype` discriminator, and whether the blob carried ANY other key. The
+/// domain asserts the subtype is onboarding AND nothing else rode along — the metadata JSON
+/// encoding is a storage concern the adapter owns, so it decodes and the domain judges the
+/// digest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnboardingMetadataDigest {
+    pub subtype: Option<String>,
+    pub has_extra_keys: bool,
 }
 
 /// The sealed fact that an onboarding message provisioning intended actually landed on
@@ -209,6 +299,31 @@ fn render_direct_line_body(
          identity / role / working-style guidance to your L1 {system_prompt} once they answer; it \
          applies in every conversation and takes effect on your next spawn. Do not mention internal \
          file paths to the user unless they ask."
+    )
+}
+
+/// The body a conversation-scoped agent is greeted with in its personal home DM.
+///
+/// Only the agent is named — its home DM has no second human participant. `system_prompt.md`,
+/// `MEMORY.md` and `notes/` are code-spanned so a Markdown reader renders the file names as
+/// literal text rather than prose.
+fn render_dm_body(agent_name: &ParticipantHandle) -> String {
+    let agent = format_reference_token(PrincipalKind::Agent, agent_name);
+    let system_prompt = super::markdown::inline_code("system_prompt.md");
+    let memory = super::markdown::inline_code("MEMORY.md");
+    let notes = super::markdown::inline_code("notes/");
+
+    format!(
+        "You ({agent}) are now in your personal DM with the user.\nYour role contract lives \
+         at L1 {system_prompt}, this computer's authority on who you are; it applies in every \
+         workspace on this computer, and edits take effect on the agent's next spawn. This DM \
+         also has its own L2 {memory} / {notes} for memory that stays here.\nSend one short \
+         greeting: say hi by name, state your current global role briefly (or say it is not \
+         defined yet), and ask what role the user would like you to play. Write global \
+         identity / role / working-style guidance to L1 {system_prompt}. Use this DM's L2 only \
+         for durable, DM-specific knowledge absent from the codebase, task board, and \
+         channel/thread history. Do not mention internal file paths to the user unless they \
+         ask."
     )
 }
 
@@ -277,8 +392,20 @@ mod tests {
         OnboardingWriteWitness {
             id: "msg-1".to_owned(),
             conversation: "pair-1".to_owned(),
+            content: render_direct_line_body(&handle("Alice"), &handle("shiki")),
+            created_at_ms: 42,
             from_kind: "system".to_owned(),
-            subtype: Some("onboarding".to_owned()),
+            from_agent_id: None,
+            from_user_id: None,
+            author_id: None,
+            author_name: None,
+            author_display_name: None,
+            thread_root_id: None,
+            cc_source_message_id: None,
+            metadata: OnboardingMetadataDigest {
+                subtype: Some("onboarding".to_owned()),
+                has_extra_keys: false,
+            },
             seq: 1,
             head_latest_seq: 1,
         }
@@ -316,9 +443,87 @@ mod tests {
     fn a_subtype_other_than_onboarding_refuses_to_seal() {
         for subtype in [None, Some(String::new()), Some("reply".to_owned())] {
             let mut witness = faithful_witness();
-            witness.subtype = subtype;
+            witness.metadata.subtype = subtype;
             assert!(intent().seal_written(witness).is_err());
         }
+    }
+
+    #[test]
+    fn metadata_beyond_the_onboarding_subtype_refuses_to_seal() {
+        let mut witness = faithful_witness();
+        witness.metadata.has_extra_keys = true;
+        assert!(intent().seal_written(witness).is_err());
+    }
+
+    #[test]
+    fn a_reauthored_body_refuses_to_seal() {
+        let mut witness = faithful_witness();
+        witness.content = format!("{} tampered", witness.content);
+        assert!(intent().seal_written(witness).is_err());
+    }
+
+    #[test]
+    fn a_clock_other_than_the_stamped_moment_refuses_to_seal() {
+        let mut witness = faithful_witness();
+        witness.created_at_ms = 43;
+        assert!(intent().seal_written(witness).is_err());
+    }
+
+    #[test]
+    fn any_participant_author_thread_or_cc_column_refuses_to_seal() {
+        let set = |mutate: fn(&mut OnboardingWriteWitness)| {
+            let mut witness = faithful_witness();
+            mutate(&mut witness);
+            witness
+        };
+        let cases: [fn(&mut OnboardingWriteWitness); 7] = [
+            |w| w.from_agent_id = Some("a1".to_owned()),
+            |w| w.from_user_id = Some("u1".to_owned()),
+            |w| w.author_id = Some("u1".to_owned()),
+            |w| w.author_name = Some("shiki".to_owned()),
+            |w| w.author_display_name = Some("shiki".to_owned()),
+            |w| w.thread_root_id = Some("root".to_owned()),
+            |w| w.cc_source_message_id = Some("src".to_owned()),
+        ];
+        for mutate in cases {
+            assert!(intent().seal_written(set(mutate)).is_err());
+        }
+    }
+
+    #[test]
+    fn the_dm_body_names_only_the_agent_and_pins_the_three_files() {
+        let body = render_dm_body(&handle("Alice"));
+        assert_eq!(
+            body,
+            "You (<silverhand://agent/Alice>) are now in your personal DM with the user.\nYour \
+             role contract lives at L1 `system_prompt.md`, this computer's authority on who you \
+             are; it applies in every workspace on this computer, and edits take effect on the \
+             agent's next spawn. This DM also has its own L2 `MEMORY.md` / `notes/` for memory \
+             that stays here.\nSend one short greeting: say hi by name, state your current global \
+             role briefly (or say it is not defined yet), and ask what role the user would like \
+             you to play. Write global identity / role / working-style guidance to L1 \
+             `system_prompt.md`. Use this DM's L2 only for durable, DM-specific knowledge absent \
+             from the codebase, task board, and channel/thread history. Do not mention internal \
+             file paths to the user unless they ask."
+        );
+        assert_eq!(body.lines().count(), 3);
+    }
+
+    #[test]
+    fn the_dm_intent_renders_the_dm_body_and_seals_against_it() {
+        let intent = OnboardingSystemMessage::conversation_dm(
+            ConversationId::parse("dm-1").unwrap(),
+            MessageId::parse("msg-9").unwrap(),
+            &handle("Alice"),
+            7,
+        );
+        assert_eq!(intent.content(), render_dm_body(&handle("Alice")));
+        let mut witness = faithful_witness();
+        witness.id = "msg-9".to_owned();
+        witness.conversation = "dm-1".to_owned();
+        witness.content = render_dm_body(&handle("Alice"));
+        witness.created_at_ms = 7;
+        assert!(intent.seal_written(witness).is_ok());
     }
 
     #[test]

@@ -47,10 +47,22 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    agent_lifecycle::MaterializationStatus, agents::runtime::RuntimeKind,
-    agents::session_scope::AgentSessionScope, identity::AgentId, identity::ConversationId,
-    identity::HostId, identity::UserId, messaging::MessageId,
-    messaging::agent_onboarding::OnboardingWritten, persistence::PersistenceFailure,
+    agent_lifecycle::MaterializationStatus,
+    agents::runtime::RuntimeKind,
+    agents::session_scope::AgentSessionScope,
+    identity::AgentId,
+    identity::ConversationId,
+    identity::HostId,
+    identity::UserId,
+    identity::WorkspaceId,
+    messaging::DirectPairParticipants,
+    messaging::MessageId,
+    messaging::PrincipalIdentity,
+    messaging::agent_onboarding::{
+        ONBOARDING_DM_TITLE, ONBOARDING_DM_TITLE_KEY, OnboardingSystemMessage,
+        OnboardingWriteWitness, OnboardingWritten,
+    },
+    persistence::PersistenceFailure,
     user_identity::ParticipantHandle,
 };
 
@@ -546,7 +558,9 @@ impl ActivatedAgent {
     /// Bind the flip after-image against the requested agent and seal its identity columns.
     /// A row that names a different agent, is not `active`, or carries an unusable handle,
     /// scope, or creator is a fault — never a sealed activation the graph would build on.
-    pub fn seal(
+    /// `pub(crate)` because only the provisioning use cases in this crate, holding the raw
+    /// after-image the port returned, may mint a sealed activation — never the write adapter.
+    pub(crate) fn seal(
         agent: &AgentId,
         now_ms: i64,
         row: ActivationFlipRow,
@@ -644,8 +658,9 @@ impl AgentArmProvisioned {
     /// cannot recite an `active`-and-graph-complete verdict, because each sub-fact is itself
     /// a sealed witness the adapter could not forge, and this function re-checks that the
     /// onboarding message actually landed on the line the provisioning opened. The agent id
-    /// and message id are read from those sealed facts, never from parameters.
-    pub fn seal(
+    /// and message id are read from those sealed facts, never from parameters. `pub(crate)`:
+    /// only the use case in this crate mints it, never the write adapter.
+    pub(crate) fn seal(
         activated: &ActivatedAgent,
         direct_line: ConversationId,
         pair_created: bool,
@@ -692,6 +707,485 @@ impl AgentArmProvisioned {
 pub enum AgentArmActivation {
     Provisioned(AgentArmProvisioned),
     Lost,
+}
+
+/// The committed fact of a conversation-scoped provisioning: the row is `active` AND its
+/// dependent graph — the agent's personal home workspace, the `Onboarding` DM channel in it,
+/// the roster edges that make the creator its owner and both parties members, and the
+/// onboarding message on the DM — is written in the same transaction. Like
+/// [`AgentArmProvisioned`] it carries only the post-commit ids that prove the graph. Minted
+/// only by [`ConversationArmProvisioned::seal`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConversationArmProvisioned {
+    agent_id: AgentId,
+    home_workspace: WorkspaceId,
+    dm_channel: ConversationId,
+    onboarding_message_id: MessageId,
+}
+
+impl ConversationArmProvisioned {
+    /// Seal the committed graph from its sealed sub-facts: the activation, the home workspace
+    /// and DM the same transaction wrote (already bound to the agent and creator by the use
+    /// case), and the onboarding message's own sealed after-image. The onboarding message must
+    /// have landed on the home DM. `pub(crate)`: only the use case mints it, never the adapter.
+    pub(crate) fn seal(
+        activated: &ActivatedAgent,
+        home_workspace: WorkspaceId,
+        dm_channel: ConversationId,
+        onboarding: OnboardingWritten,
+    ) -> Result<Self, MaterializationFault> {
+        if onboarding.conversation() != &dm_channel {
+            return Err(MaterializationFault::OnboardingWitnessMismatch {
+                reason: "onboarding message landed on a line other than the home DM",
+            });
+        }
+        Ok(Self {
+            agent_id: activated.agent_id().clone(),
+            home_workspace,
+            dm_channel,
+            onboarding_message_id: onboarding.id().clone(),
+        })
+    }
+
+    pub fn agent_id(&self) -> &AgentId {
+        &self.agent_id
+    }
+
+    pub fn home_workspace(&self) -> &WorkspaceId {
+        &self.home_workspace
+    }
+
+    pub fn dm_channel(&self) -> &ConversationId {
+        &self.dm_channel
+    }
+
+    pub fn onboarding_message_id(&self) -> &MessageId {
+        &self.onboarding_message_id
+    }
+}
+
+/// What an in-transaction conversation-scoped activation-and-provision observed, mirroring
+/// [`AgentArmActivation`]: `Lost` means the guarded flip changed no row and nothing was
+/// written; `Provisioned` means the flip won and the home-workspace graph committed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConversationArmActivation {
+    Provisioned(ConversationArmProvisioned),
+    Lost,
+}
+
+/// The deterministic id of a conversation-scoped agent's personal home workspace: the one
+/// `wsah_<agent>` derivation both the provisioning write and the seal compute, so neither
+/// recites the other's literal. Mirrors `agentHomeWorkspaceId` in the other implementation.
+pub fn home_workspace_id_for(agent: &AgentId) -> WorkspaceId {
+    WorkspaceId::parse(format!("wsah_{}", agent.as_str()))
+        .expect("a non-empty agent id yields a well-formed wsah_<agent> workspace id")
+}
+
+/// A production adapter that runs an agent-provisioning plan under its OWN transaction and
+/// hands back only RAW after-images — never a sealed verdict.
+///
+/// This is the authority boundary. The adapter commits the flip-and-graph transaction on
+/// success and returns the rows it read; it CANNOT mint an [`AgentArmProvisioned`] or a
+/// [`ConversationArmProvisioned`], because those seals are `pub(crate)` and no method here
+/// returns a sealed fact. The core use cases ([`provision_and_activate_agent`],
+/// [`provision_and_activate_conversation`]) are the sole minters: they subject-bind, replay,
+/// and seal the raw after-images post-commit. A guard miss (the pending-only flip matched no
+/// row) surfaces as the `Lost` arm with nothing written; a genuine dependent-write failure
+/// rolls the adapter's transaction back and surfaces as `Err`, so the use case drives the
+/// separate pending-only compensation — it never restamps a row a concurrent transition won.
+pub trait AgentArmProvisioningPort: Send + Sync {
+    /// Flip the reservation to `active` (pending-only) and, if it won, open the creator↔agent
+    /// direct line on the row's own `created_at` and write the onboarding message on `now_ms`,
+    /// all in one transaction. Return the raw after-images on a won-and-committed graph, or
+    /// `Lost` on a guard miss.
+    fn provision_agent_scoped(
+        &self,
+        agent: &AgentId,
+        candidate_direct_line: ConversationId,
+        onboarding_message_id: MessageId,
+        now_ms: i64,
+    ) -> impl Future<Output = Result<RawAgentArmProvision, PersistenceFailure>> + Send;
+
+    /// Flip the reservation to `active` (pending-only) and, if it won, write the agent's home
+    /// workspace, its `Onboarding` DM, the roster edges, and the onboarding message — all on
+    /// `now_ms`, in one transaction. Return the raw after-images, or `Lost` on a guard miss.
+    fn provision_conversation_scoped(
+        &self,
+        agent: &AgentId,
+        dm_channel_id: ConversationId,
+        onboarding_message_id: MessageId,
+        now_ms: i64,
+    ) -> impl Future<Output = Result<RawConversationArmProvision, PersistenceFailure>> + Send;
+
+    /// Pending-only compensating fail after a rolled-back provision attempt: guarded `WHERE
+    /// materialization_status = 'pending_materialization'` ONLY (never `IN ('pending','failed')`).
+    /// Returns the after-image, or `None` when the row is no longer pending — a concurrent
+    /// transition won, and its terminal state must NEVER be clobbered. The stamped code is
+    /// intrinsic ([`DEPENDENT_GRAPH_FAILED_CODE`]); the use case seals the returned row.
+    fn fail_after_rolled_back_provision(
+        &self,
+        agent: &AgentId,
+        failed_at: i64,
+        now_ms: i64,
+    ) -> impl Future<Output = Result<Option<MaterializationFlipRow>, PersistenceFailure>> + Send;
+}
+
+/// The raw after-images an agent-scoped provision returns, or `Lost`. No sealed fact rides
+/// across the port — the use case mints the verdict.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RawAgentArmProvision {
+    Lost,
+    Provisioned(Box<RawAgentArmGraph>),
+}
+
+/// The raw rows an agent-scoped provisioning transaction read back before committing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawAgentArmGraph {
+    pub flip: ActivationFlipRow,
+    /// The creator's `@`-handle, read from the users row inside the transaction, raw.
+    pub creator_handle: String,
+    /// The direct line the graph opened, and whether the open minted it fresh. The
+    /// participants are the pair the adapter passed to the core direct-pair opener — which
+    /// proved the selected row's endpoints equal them — so the use case re-derives the
+    /// expected pair (creator + agent, from the sealed flip) and checks equality.
+    pub direct_line: ConversationId,
+    pub direct_line_participants: DirectPairParticipants,
+    pub pair_created: bool,
+    pub onboarding: OnboardingWriteWitness,
+}
+
+/// The raw after-images a conversation-scoped provision returns, or `Lost`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RawConversationArmProvision {
+    Lost,
+    Provisioned(Box<RawConversationArmGraph>),
+}
+
+/// The raw rows a conversation-scoped provisioning transaction read back before committing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawConversationArmGraph {
+    pub flip: ActivationFlipRow,
+    pub home_workspace: RawHomeWorkspaceRow,
+    pub dm_channel: RawOnboardingDmRow,
+    pub agent_on_dm: RawConversationAgentEdge,
+    pub creator_workspace_owner: RawWorkspaceOwnerEdge,
+    pub creator_on_dm: RawConversationUserEdge,
+    pub onboarding: OnboardingWriteWitness,
+}
+
+/// The identity columns of the agent's home-workspace row, read back after the owner-user
+/// pointer was stamped, so the seal binds ownership as it committed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawHomeWorkspaceRow {
+    pub id: String,
+    pub owner_agent_id: Option<String>,
+    pub owner_user_id: Option<String>,
+}
+
+/// The identity columns of the home `Onboarding` DM row.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawOnboardingDmRow {
+    pub id: String,
+    pub workspace_id: Option<String>,
+    pub placement_kind: String,
+    pub roster_policy: String,
+    pub title: String,
+    pub title_key: Option<String>,
+}
+
+/// The `conversation_agents` edge binding the agent to its home DM.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawConversationAgentEdge {
+    pub conversation_id: String,
+    pub agent_id: String,
+}
+
+/// The `workspace_users` owner edge binding the creator as owner of the home workspace.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawWorkspaceOwnerEdge {
+    pub workspace_id: String,
+    pub user_id: String,
+    pub role: String,
+}
+
+/// The `conversation_users` edge binding the creator to the home DM.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawConversationUserEdge {
+    pub conversation_id: String,
+    pub user_id: String,
+}
+
+/// Activate the reservation and provision the AGENT-scoped dependent graph, minting the
+/// verdict from the adapter's raw after-images. The sole path that returns
+/// [`AgentArmProvisioned`]. On a dependent-write failure the adapter's transaction rolled
+/// back, so this drives the pending-only compensation and surfaces the original cause.
+pub async fn provision_and_activate_agent<P: AgentArmProvisioningPort>(
+    port: &P,
+    agent: &AgentId,
+    candidate_direct_line: ConversationId,
+    onboarding_message_id: MessageId,
+    now_ms: i64,
+) -> Result<AgentArmActivation, MaterializationFault> {
+    let raw = match port
+        .provision_agent_scoped(
+            agent,
+            candidate_direct_line,
+            onboarding_message_id.clone(),
+            now_ms,
+        )
+        .await
+    {
+        Ok(raw) => raw,
+        Err(cause) => {
+            return Err(compensate_rolled_back_provision(port, agent, now_ms, cause).await);
+        }
+    };
+    let graph = match raw {
+        RawAgentArmProvision::Lost => return Ok(AgentArmActivation::Lost),
+        RawAgentArmProvision::Provisioned(graph) => *graph,
+    };
+    let activated = ActivatedAgent::seal(agent, now_ms, graph.flip)?;
+    if activated.session_scope() != AgentSessionScope::Agent {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "agent-arm provisioning reached a reservation that is not agent-scoped",
+        });
+    }
+    let creator_handle = crate::messaging::ParticipantHandle::parse(graph.creator_handle.as_str())
+        .map_err(|_| MaterializationFault::ProvisioningInvariant {
+            reason: "agent-arm creator handle read from the users row is unusable",
+        })?;
+    let agent_handle = crate::messaging::ParticipantHandle::parse(activated.name().as_str())
+        .map_err(|_| MaterializationFault::ProvisioningInvariant {
+            reason: "agent-arm agent handle is unusable as a messaging handle",
+        })?;
+    let expected = DirectPairParticipants::between(
+        PrincipalIdentity::Human(activated.created_by_user_id().clone()),
+        PrincipalIdentity::Agent(activated.agent_id().clone()),
+    )
+    .map_err(|_| MaterializationFault::ProvisioningInvariant {
+        reason: "agent-arm direct line would pair the agent with itself",
+    })?;
+    if graph.direct_line_participants != expected {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "agent-arm direct line endpoints are not the creator and the agent",
+        });
+    }
+    let intent = OnboardingSystemMessage::agent_direct_line(
+        graph.direct_line.clone(),
+        onboarding_message_id,
+        &agent_handle,
+        &creator_handle,
+        now_ms,
+    );
+    let onboarding = intent.seal_written(graph.onboarding).map_err(|mismatch| {
+        MaterializationFault::OnboardingWitnessMismatch {
+            reason: mismatch.reason(),
+        }
+    })?;
+    Ok(AgentArmActivation::Provisioned(AgentArmProvisioned::seal(
+        &activated,
+        graph.direct_line,
+        graph.pair_created,
+        onboarding,
+    )?))
+}
+
+/// Activate the reservation and provision the CONVERSATION-scoped dependent graph, minting
+/// the verdict from the adapter's raw after-images. The sole path that returns
+/// [`ConversationArmProvisioned`]. Compensation on failure mirrors the agent arm.
+pub async fn provision_and_activate_conversation<P: AgentArmProvisioningPort>(
+    port: &P,
+    agent: &AgentId,
+    dm_channel_id: ConversationId,
+    onboarding_message_id: MessageId,
+    now_ms: i64,
+) -> Result<ConversationArmActivation, MaterializationFault> {
+    let raw = match port
+        .provision_conversation_scoped(agent, dm_channel_id, onboarding_message_id.clone(), now_ms)
+        .await
+    {
+        Ok(raw) => raw,
+        Err(cause) => {
+            return Err(compensate_rolled_back_provision(port, agent, now_ms, cause).await);
+        }
+    };
+    let graph = match raw {
+        RawConversationArmProvision::Lost => return Ok(ConversationArmActivation::Lost),
+        RawConversationArmProvision::Provisioned(graph) => *graph,
+    };
+    let activated = ActivatedAgent::seal(agent, now_ms, graph.flip)?;
+    if activated.session_scope() != AgentSessionScope::Conversation {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm provisioning reached a reservation that is not conversation-scoped",
+        });
+    }
+    let home = seal_agent_home_workspace(&activated, graph.home_workspace)?;
+    let dm = seal_onboarding_dm(&home, graph.dm_channel)?;
+    seal_conversation_roster(
+        &activated,
+        &home,
+        &dm,
+        &graph.agent_on_dm,
+        &graph.creator_workspace_owner,
+        &graph.creator_on_dm,
+    )?;
+    let agent_handle = crate::messaging::ParticipantHandle::parse(activated.name().as_str())
+        .map_err(|_| MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm agent handle is unusable as a messaging handle",
+        })?;
+    let intent = OnboardingSystemMessage::conversation_dm(
+        dm.clone(),
+        onboarding_message_id,
+        &agent_handle,
+        now_ms,
+    );
+    let onboarding = intent.seal_written(graph.onboarding).map_err(|mismatch| {
+        MaterializationFault::OnboardingWitnessMismatch {
+            reason: mismatch.reason(),
+        }
+    })?;
+    Ok(ConversationArmActivation::Provisioned(
+        ConversationArmProvisioned::seal(&activated, home, dm, onboarding)?,
+    ))
+}
+
+/// Drive the pending-only compensation after a provisioning transaction rolled back on a
+/// dependent-write failure, and fold the outcome into the fault to surface.
+///
+/// The flip won, then a dependent write failed, so the whole transaction rolled the row back
+/// to `pending_materialization`. This stamps the compensating fail — but ONLY if the row is
+/// still pending: a concurrent transition may have won between the rollback and here, and its
+/// terminal state is authoritative and must never be overwritten. `None` from the port is
+/// exactly that race, so the compensation is correctly a no-op. Either way the original
+/// dependent-write failure (`cause`) is the fault the caller sees; a compensation that itself
+/// faults supersedes it.
+async fn compensate_rolled_back_provision<P: AgentArmProvisioningPort>(
+    port: &P,
+    agent: &AgentId,
+    now_ms: i64,
+    cause: PersistenceFailure,
+) -> MaterializationFault {
+    match port
+        .fail_after_rolled_back_provision(agent, now_ms, now_ms)
+        .await
+    {
+        Ok(Some(row)) => {
+            match FailedMaterialization::seal(
+                agent,
+                DEPENDENT_GRAPH_FAILED_CODE,
+                now_ms,
+                now_ms,
+                row,
+            ) {
+                Ok(_) => MaterializationFault::Persistence(cause),
+                Err(fault) => fault,
+            }
+        }
+        Ok(None) => MaterializationFault::Persistence(cause),
+        Err(compensation) => MaterializationFault::Persistence(compensation),
+    }
+}
+
+/// Bind the home-workspace after-image: its id is the agent's derived `wsah_<agent>`, it is
+/// owned by the agent, and its owner-user pointer names the creator.
+fn seal_agent_home_workspace(
+    activated: &ActivatedAgent,
+    row: RawHomeWorkspaceRow,
+) -> Result<WorkspaceId, MaterializationFault> {
+    let id =
+        WorkspaceId::parse(row.id).map_err(|_| MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm home workspace row carries an empty id",
+        })?;
+    if id != home_workspace_id_for(activated.agent_id()) {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm home workspace id is not the agent's derived home id",
+        });
+    }
+    if row.owner_agent_id.as_deref() != Some(activated.agent_id().as_str()) {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm home workspace is not owned by the agent",
+        });
+    }
+    if row.owner_user_id.as_deref() != Some(activated.created_by_user_id().as_str()) {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm home workspace owner-user pointer is not the creator",
+        });
+    }
+    Ok(id)
+}
+
+/// Bind the home DM after-image: it is a fixed-roster workspace channel in the agent's home,
+/// carrying the canonical onboarding title and folded key.
+fn seal_onboarding_dm(
+    home: &WorkspaceId,
+    row: RawOnboardingDmRow,
+) -> Result<ConversationId, MaterializationFault> {
+    let id =
+        ConversationId::parse(row.id).map_err(|_| MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm home DM row carries an empty id",
+        })?;
+    if row.workspace_id.as_deref() != Some(home.as_str()) {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm home DM is not in the agent's home workspace",
+        });
+    }
+    // The schema's stored spellings for a fixed-roster workspace channel; the sqlite adapter
+    // writes the same tokens and this seal binds the committed row against them.
+    if row.placement_kind != "workspace" {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm home DM placement is not a workspace channel",
+        });
+    }
+    if row.roster_policy != "fixed" {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm home DM roster policy is not fixed",
+        });
+    }
+    if row.title != ONBOARDING_DM_TITLE {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm home DM title is not the onboarding title",
+        });
+    }
+    if row.title_key.as_deref() != Some(ONBOARDING_DM_TITLE_KEY) {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm home DM title key is not the onboarding key",
+        });
+    }
+    Ok(id)
+}
+
+/// Bind the three roster edges: the agent is a member of its home DM, the creator owns the
+/// home workspace, and the creator is a member of the home DM. Each must name the agent /
+/// creator the sealed activation proved and the home / DM this graph just wrote.
+fn seal_conversation_roster(
+    activated: &ActivatedAgent,
+    home: &WorkspaceId,
+    dm: &ConversationId,
+    agent_on_dm: &RawConversationAgentEdge,
+    creator_workspace_owner: &RawWorkspaceOwnerEdge,
+    creator_on_dm: &RawConversationUserEdge,
+) -> Result<(), MaterializationFault> {
+    let agent = activated.agent_id().as_str();
+    let creator = activated.created_by_user_id().as_str();
+    if agent_on_dm.conversation_id != dm.as_str() || agent_on_dm.agent_id != agent {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm DM agent membership does not bind the agent to its home DM",
+        });
+    }
+    if creator_workspace_owner.workspace_id != home.as_str()
+        || creator_workspace_owner.user_id != creator
+        || creator_workspace_owner.role != "owner"
+    {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm workspace owner membership does not make the creator its owner",
+        });
+    }
+    if creator_on_dm.conversation_id != dm.as_str() || creator_on_dm.user_id != creator {
+        return Err(MaterializationFault::ProvisioningInvariant {
+            reason: "conversation-arm DM user membership does not bind the creator to the home DM",
+        });
+    }
+    Ok(())
 }
 
 /// The subject/status/stamp checks every flip after-image shares: same agent as the
@@ -1057,6 +1551,7 @@ pub async fn mark_stale_materializations_failed<W: AgentMaterializationWrite>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::messaging::agent_onboarding::OnboardingMetadataDigest;
 
     fn agent(id: &str) -> AgentId {
         AgentId::parse(id).expect("agent id")
@@ -1600,8 +2095,20 @@ mod tests {
             .seal_written(OnboardingWriteWitness {
                 id: id.to_string(),
                 conversation: line.as_str().to_string(),
+                content: intent.content().to_string(),
+                created_at_ms: 7,
                 from_kind: "system".to_string(),
-                subtype: Some("onboarding".to_string()),
+                from_agent_id: None,
+                from_user_id: None,
+                author_id: None,
+                author_name: None,
+                author_display_name: None,
+                thread_root_id: None,
+                cc_source_message_id: None,
+                metadata: OnboardingMetadataDigest {
+                    subtype: Some("onboarding".to_string()),
+                    has_extra_keys: false,
+                },
                 seq: 1,
                 head_latest_seq: 1,
             })
@@ -1720,5 +2227,407 @@ mod tests {
                 MaterializationFault::LookupWitnessMismatch { .. }
             ));
         }
+    }
+
+    // ---- Provisioning authority boundary (P0-1): the core use cases are the SOLE minters. ----
+    // The port can only hand back RAW after-images (or a raw failure); it cannot construct a
+    // sealed verdict, because every seal is `pub(crate)` and no port method returns one. These
+    // tests drive the use cases through a fake port that returns deliberately forged raw rows
+    // and prove the seal — not the adapter — is what rejects them.
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("scripted dependent-write failure")]
+    struct ScriptedProvisionFault;
+
+    #[derive(Default)]
+    struct ScriptedProvision {
+        agent: Option<Result<RawAgentArmProvision, ()>>,
+        conversation: Option<Result<RawConversationArmProvision, ()>>,
+        fail: Option<Option<MaterializationFlipRow>>,
+    }
+
+    impl AgentArmProvisioningPort for ScriptedProvision {
+        async fn provision_agent_scoped(
+            &self,
+            _agent: &AgentId,
+            _candidate_direct_line: ConversationId,
+            _onboarding_message_id: MessageId,
+            _now_ms: i64,
+        ) -> Result<RawAgentArmProvision, PersistenceFailure> {
+            match self.agent.clone().expect("agent provision scripted") {
+                Ok(raw) => Ok(raw),
+                Err(()) => Err(PersistenceFailure::from_source(ScriptedProvisionFault)),
+            }
+        }
+
+        async fn provision_conversation_scoped(
+            &self,
+            _agent: &AgentId,
+            _dm_channel_id: ConversationId,
+            _onboarding_message_id: MessageId,
+            _now_ms: i64,
+        ) -> Result<RawConversationArmProvision, PersistenceFailure> {
+            match self
+                .conversation
+                .clone()
+                .expect("conversation provision scripted")
+            {
+                Ok(raw) => Ok(raw),
+                Err(()) => Err(PersistenceFailure::from_source(ScriptedProvisionFault)),
+            }
+        }
+
+        async fn fail_after_rolled_back_provision(
+            &self,
+            _agent: &AgentId,
+            _failed_at: i64,
+            _now_ms: i64,
+        ) -> Result<Option<MaterializationFlipRow>, PersistenceFailure> {
+            Ok(self.fail.clone().expect("compensating fail scripted"))
+        }
+    }
+
+    fn active_flip(scope: &str, created_at: i64, now_ms: i64) -> ActivationFlipRow {
+        ActivationFlipRow {
+            agent_id: agent("a1"),
+            name: "a1".to_string(),
+            materialization_status: "active".to_string(),
+            session_scope: scope.to_string(),
+            created_by_user_id: "u1".to_string(),
+            created_at,
+            updated_at: now_ms,
+        }
+    }
+
+    /// A faithful onboarding after-image for `intent`: the head insert, system-kind, with none
+    /// of the participant / author / thread / cc columns and exactly the onboarding subtype.
+    fn faithful_onboarding_witness(intent: &OnboardingSystemMessage) -> OnboardingWriteWitness {
+        OnboardingWriteWitness {
+            id: intent.id().as_str().to_string(),
+            conversation: intent.conversation().as_str().to_string(),
+            content: intent.content().to_string(),
+            created_at_ms: intent.created_at_ms(),
+            from_kind: "system".to_string(),
+            from_agent_id: None,
+            from_user_id: None,
+            author_id: None,
+            author_name: None,
+            author_display_name: None,
+            thread_root_id: None,
+            cc_source_message_id: None,
+            metadata: OnboardingMetadataDigest {
+                subtype: Some("onboarding".to_string()),
+                has_extra_keys: false,
+            },
+            seq: 1,
+            head_latest_seq: 1,
+        }
+    }
+
+    fn faithful_agent_graph(now_ms: i64) -> RawAgentArmGraph {
+        let direct_line = ConversationId::parse("pair-1").unwrap();
+        let intent = OnboardingSystemMessage::agent_direct_line(
+            direct_line.clone(),
+            MessageId::parse("msg-1").unwrap(),
+            &crate::messaging::ParticipantHandle::parse("a1").unwrap(),
+            &crate::messaging::ParticipantHandle::parse("u1").unwrap(),
+            now_ms,
+        );
+        RawAgentArmGraph {
+            flip: active_flip("agent", 10, now_ms),
+            creator_handle: "u1".to_string(),
+            direct_line: direct_line.clone(),
+            direct_line_participants: DirectPairParticipants::between(
+                PrincipalIdentity::Human(user("u1")),
+                PrincipalIdentity::Agent(agent("a1")),
+            )
+            .unwrap(),
+            pair_created: true,
+            onboarding: faithful_onboarding_witness(&intent),
+        }
+    }
+
+    fn faithful_conversation_graph(now_ms: i64) -> RawConversationArmGraph {
+        let home = home_workspace_id_for(&agent("a1"));
+        let dm = ConversationId::parse("dm-1").unwrap();
+        let intent = OnboardingSystemMessage::conversation_dm(
+            dm.clone(),
+            MessageId::parse("msg-1").unwrap(),
+            &crate::messaging::ParticipantHandle::parse("a1").unwrap(),
+            now_ms,
+        );
+        RawConversationArmGraph {
+            flip: active_flip("conversation", 10, now_ms),
+            home_workspace: RawHomeWorkspaceRow {
+                id: home.as_str().to_string(),
+                owner_agent_id: Some("a1".to_string()),
+                owner_user_id: Some("u1".to_string()),
+            },
+            dm_channel: RawOnboardingDmRow {
+                id: "dm-1".to_string(),
+                workspace_id: Some(home.as_str().to_string()),
+                placement_kind: "workspace".to_string(),
+                roster_policy: "fixed".to_string(),
+                title: ONBOARDING_DM_TITLE.to_string(),
+                title_key: Some(ONBOARDING_DM_TITLE_KEY.to_string()),
+            },
+            agent_on_dm: RawConversationAgentEdge {
+                conversation_id: "dm-1".to_string(),
+                agent_id: "a1".to_string(),
+            },
+            creator_workspace_owner: RawWorkspaceOwnerEdge {
+                workspace_id: home.as_str().to_string(),
+                user_id: "u1".to_string(),
+                role: "owner".to_string(),
+            },
+            creator_on_dm: RawConversationUserEdge {
+                conversation_id: "dm-1".to_string(),
+                user_id: "u1".to_string(),
+            },
+            onboarding: faithful_onboarding_witness(&intent),
+        }
+    }
+
+    async fn activate_agent(
+        graph: RawAgentArmProvision,
+    ) -> Result<AgentArmActivation, MaterializationFault> {
+        let port = ScriptedProvision {
+            agent: Some(Ok(graph)),
+            ..Default::default()
+        };
+        provision_and_activate_agent(
+            &port,
+            &agent("a1"),
+            ConversationId::parse("candidate").unwrap(),
+            MessageId::parse("msg-1").unwrap(),
+            99,
+        )
+        .await
+    }
+
+    async fn activate_conversation(
+        graph: RawConversationArmProvision,
+    ) -> Result<ConversationArmActivation, MaterializationFault> {
+        let port = ScriptedProvision {
+            conversation: Some(Ok(graph)),
+            ..Default::default()
+        };
+        provision_and_activate_conversation(
+            &port,
+            &agent("a1"),
+            ConversationId::parse("candidate").unwrap(),
+            MessageId::parse("msg-1").unwrap(),
+            99,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn agent_arm_seals_from_faithful_raw_after_images() {
+        let outcome = activate_agent(RawAgentArmProvision::Provisioned(Box::new(
+            faithful_agent_graph(99),
+        )))
+        .await
+        .unwrap();
+        let AgentArmActivation::Provisioned(fact) = outcome else {
+            panic!("expected a provisioned agent arm");
+        };
+        assert_eq!(fact.agent_id(), &agent("a1"));
+        assert_eq!(
+            fact.direct_line(),
+            &ConversationId::parse("pair-1").unwrap()
+        );
+        assert_eq!(
+            fact.onboarding_message_id(),
+            &MessageId::parse("msg-1").unwrap()
+        );
+        assert!(fact.pair_created());
+    }
+
+    #[tokio::test]
+    async fn agent_arm_is_lost_when_the_flip_matched_no_row() {
+        assert_eq!(
+            activate_agent(RawAgentArmProvision::Lost).await.unwrap(),
+            AgentArmActivation::Lost
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_arm_rejects_a_reservation_that_is_not_agent_scoped() {
+        let mut graph = faithful_agent_graph(99);
+        graph.flip.session_scope = "conversation".to_string();
+        assert!(matches!(
+            activate_agent(RawAgentArmProvision::Provisioned(Box::new(graph)))
+                .await
+                .unwrap_err(),
+            MaterializationFault::ProvisioningInvariant { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn agent_arm_rejects_a_direct_line_not_between_the_creator_and_the_agent() {
+        let mut graph = faithful_agent_graph(99);
+        // A line the adapter opened between the agent and SOME OTHER human — not the creator the
+        // flip proved. The use case re-derives the expected pair and refuses the forgery.
+        graph.direct_line_participants = DirectPairParticipants::between(
+            PrincipalIdentity::Human(user("u2")),
+            PrincipalIdentity::Agent(agent("a1")),
+        )
+        .unwrap();
+        assert!(matches!(
+            activate_agent(RawAgentArmProvision::Provisioned(Box::new(graph)))
+                .await
+                .unwrap_err(),
+            MaterializationFault::ProvisioningInvariant { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn agent_arm_rejects_an_onboarding_message_that_did_not_land_faithfully() {
+        let mut graph = faithful_agent_graph(99);
+        // The adapter's word that the onboarding message is a clean system post is not trusted:
+        // a stray from-participant makes the seal reject it.
+        graph.onboarding.from_agent_id = Some("a1".to_string());
+        assert!(matches!(
+            activate_agent(RawAgentArmProvision::Provisioned(Box::new(graph)))
+                .await
+                .unwrap_err(),
+            MaterializationFault::OnboardingWitnessMismatch { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_rolled_back_provision_compensates_only_a_still_pending_row() {
+        // The port faulted (its transaction rolled back). The use case drives the pending-only
+        // compensation and surfaces the original dependent-write cause as a persistence fault.
+        // Direction 1 — the row is still pending, so the compensating fail stamps it.
+        let port = ScriptedProvision {
+            agent: Some(Err(())),
+            fail: Some(Some(MaterializationFlipRow {
+                agent_id: agent("a1"),
+                materialization_status: "failed".to_string(),
+                materialization_failed_code: Some(DEPENDENT_GRAPH_FAILED_CODE.to_string()),
+                materialization_failed_at: Some(99),
+                updated_at: 99,
+            })),
+            ..Default::default()
+        };
+        let fault = provision_and_activate_agent(
+            &port,
+            &agent("a1"),
+            ConversationId::parse("candidate").unwrap(),
+            MessageId::parse("msg-1").unwrap(),
+            99,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(fault, MaterializationFault::Persistence(_)));
+
+        // Direction 2 — a concurrent transition already won the row, so the pending-only CAS
+        // matched nothing (`None`); the compensation is a no-op and the original cause stands.
+        let port = ScriptedProvision {
+            agent: Some(Err(())),
+            fail: Some(None),
+            ..Default::default()
+        };
+        let fault = provision_and_activate_agent(
+            &port,
+            &agent("a1"),
+            ConversationId::parse("candidate").unwrap(),
+            MessageId::parse("msg-1").unwrap(),
+            99,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(fault, MaterializationFault::Persistence(_)));
+    }
+
+    #[tokio::test]
+    async fn conversation_arm_seals_from_faithful_raw_after_images() {
+        let outcome = activate_conversation(RawConversationArmProvision::Provisioned(Box::new(
+            faithful_conversation_graph(99),
+        )))
+        .await
+        .unwrap();
+        let ConversationArmActivation::Provisioned(fact) = outcome else {
+            panic!("expected a provisioned conversation arm");
+        };
+        assert_eq!(fact.agent_id(), &agent("a1"));
+        assert_eq!(fact.home_workspace(), &home_workspace_id_for(&agent("a1")));
+        assert_eq!(fact.dm_channel(), &ConversationId::parse("dm-1").unwrap());
+        assert_eq!(
+            fact.onboarding_message_id(),
+            &MessageId::parse("msg-1").unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn conversation_arm_is_lost_when_the_flip_matched_no_row() {
+        assert_eq!(
+            activate_conversation(RawConversationArmProvision::Lost)
+                .await
+                .unwrap(),
+            ConversationArmActivation::Lost
+        );
+    }
+
+    #[tokio::test]
+    async fn conversation_arm_rejects_a_reservation_that_is_not_conversation_scoped() {
+        let mut graph = faithful_conversation_graph(99);
+        graph.flip.session_scope = "agent".to_string();
+        assert!(matches!(
+            activate_conversation(RawConversationArmProvision::Provisioned(Box::new(graph)))
+                .await
+                .unwrap_err(),
+            MaterializationFault::ProvisioningInvariant { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn conversation_arm_rejects_a_home_workspace_not_owned_by_the_agent() {
+        let mut graph = faithful_conversation_graph(99);
+        graph.home_workspace.owner_agent_id = Some("someone-else".to_string());
+        assert!(matches!(
+            activate_conversation(RawConversationArmProvision::Provisioned(Box::new(graph)))
+                .await
+                .unwrap_err(),
+            MaterializationFault::ProvisioningInvariant { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn conversation_arm_rejects_a_dm_without_the_onboarding_title() {
+        let mut graph = faithful_conversation_graph(99);
+        graph.dm_channel.title = "Not Onboarding".to_string();
+        assert!(matches!(
+            activate_conversation(RawConversationArmProvision::Provisioned(Box::new(graph)))
+                .await
+                .unwrap_err(),
+            MaterializationFault::ProvisioningInvariant { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn conversation_arm_rejects_a_creator_edge_that_is_not_an_owner() {
+        let mut graph = faithful_conversation_graph(99);
+        graph.creator_workspace_owner.role = "member".to_string();
+        assert!(matches!(
+            activate_conversation(RawConversationArmProvision::Provisioned(Box::new(graph)))
+                .await
+                .unwrap_err(),
+            MaterializationFault::ProvisioningInvariant { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn conversation_arm_rejects_an_onboarding_message_that_did_not_land_faithfully() {
+        let mut graph = faithful_conversation_graph(99);
+        graph.onboarding.thread_root_id = Some("thread-1".to_string());
+        assert!(matches!(
+            activate_conversation(RawConversationArmProvision::Provisioned(Box::new(graph)))
+                .await
+                .unwrap_err(),
+            MaterializationFault::OnboardingWitnessMismatch { .. }
+        ));
     }
 }
