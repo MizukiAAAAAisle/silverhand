@@ -33,7 +33,6 @@ pub enum AgentMaterializeFailure {
     RegistryUnavailable,
     NotDispatched,
     Ambiguous,
-    TimedOut,
     ProtocolCorruption,
     AuthorityMismatch,
 }
@@ -45,7 +44,6 @@ impl fmt::Display for AgentMaterializeFailure {
             Self::RegistryUnavailable => "daemon attachment registry is unavailable",
             Self::NotDispatched => "agent materialize was proven not dispatched",
             Self::Ambiguous => "agent materialize outcome is ambiguous",
-            Self::TimedOut => "agent materialize timed out",
             Self::ProtocolCorruption => "daemon returned an invalid agent materialize response",
             Self::AuthorityMismatch => "agent materialize answer crossed its captured custody",
         })
@@ -103,7 +101,11 @@ pub(crate) async fn materialize_captured(
             return Err(AgentMaterializeFailure::Ambiguous);
         }
         Err(HostDataPlaneFailure::TimedOut) => {
-            return Err(AgentMaterializeFailure::TimedOut);
+            // Dispatched but unacknowledged within the deadline: a product outcome
+            // (`materialize_timeout` → 504), not a transport fault. The reserved row
+            // is left pending and the create is retryable, exactly like the other
+            // refusals.
+            return Ok(Err(AgentMaterializeRefusal::MaterializeTimeout));
         }
         Err(HostDataPlaneFailure::RegistryUnavailable) => {
             return Err(AgentMaterializeFailure::RegistryUnavailable);

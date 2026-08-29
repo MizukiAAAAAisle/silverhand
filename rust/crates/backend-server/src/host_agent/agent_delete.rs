@@ -443,11 +443,14 @@ where
 }
 
 /// Map the async resumer's outcome to HTTP. `Completed`/`AlreadyRunning` are the
-/// terminal/conflict cases; `Closed`/`Superseded`/`Retained` all mean "the durable
-/// marker survives and the resumer will retry on its own schedule" → `202` with the
-/// fixed retry code and the closest per-arm message (see the module note on the
-/// message collapse). `Faulted` is a frozen non-hot-retriable internal contract
-/// fault, NOT a client-retry signal → detail-free safe `500`.
+/// terminal/conflict cases; `Closed`/`Superseded`/`Retained` all take `202` with
+/// the fixed retry code and the closest per-arm message (see the module note on the
+/// message collapse). The `202` means only that the durable deletion has not yet
+/// synced and a LATER request or the recovery sweep can continue it — NOT that this
+/// resumer will reschedule itself: per the frozen #2230 contract only `Retained`
+/// hangs on the ladder / host-ready wait, `Superseded` dropped its stale token, and
+/// `Closed` stopped the worker. `Faulted` is a frozen non-hot-retriable internal
+/// contract fault, NOT a client-retry signal → detail-free safe `500`.
 fn map_run_outcome(outcome: DeletionRunOutcome) -> Response {
     match outcome {
         DeletionRunOutcome::Completed => no_content(),

@@ -142,6 +142,12 @@ pub enum AgentMaterializeRefusal {
     UnsupportedRuntime,
     DaemonShuttingDown,
     DaemonInternalError,
+    /// The command was dispatched to the owning daemon but no acknowledgement
+    /// arrived within the deadline. It is a product outcome (a distinct
+    /// `materialize_timeout` → 504), not a transport fault, because the reserved
+    /// row is left pending and the create is retryable exactly like the other
+    /// refusals — the caller cannot know whether the host will still land it.
+    MaterializeTimeout,
 }
 
 pub trait AgentMaterializePort: Clone + Send + Sync + 'static {

@@ -117,6 +117,25 @@ pub fn runtime_supports_fast_mode(kind: RuntimeKind) -> bool {
     matches!(kind, RuntimeKind::Codex)
 }
 
+/// The model a runtime FORCES at create time when the request omits one (or gives a
+/// blank one), or `None` when the runtime has no forced create-time default.
+///
+/// Mirrors `runtimeDefaultModel` (`CATALOG[kind].defaultModel ?? null`): today the
+/// only entry carrying a `defaultModel` is Qoder (`'Ultimate'`); Codex and Claude
+/// deliberately carry none (free-text / driver-default), and the roadmap runtimes
+/// carry none either. This is the sole default applied by the create write path, so a
+/// direct-API/CLI create agrees with a UI create on the persisted `model` column.
+pub fn runtime_default_model(kind: RuntimeKind) -> Option<&'static str> {
+    match kind {
+        RuntimeKind::Qoder => Some("Ultimate"),
+        RuntimeKind::Claude
+        | RuntimeKind::Codex
+        | RuntimeKind::Opencode
+        | RuntimeKind::Cursor
+        | RuntimeKind::Gemini => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +263,23 @@ mod tests {
             Some("ultra"),
             None
         ));
+    }
+
+    #[test]
+    fn only_qoder_forces_a_create_time_default_model() {
+        assert_eq!(runtime_default_model(RuntimeKind::Qoder), Some("Ultimate"));
+        // Every other runtime — including the free-text ones (Claude/Codex) and the
+        // roadmap runtimes — forces nothing, so a create request that omits `model`
+        // persists a NULL model, not a fabricated default.
+        for kind in [
+            RuntimeKind::Claude,
+            RuntimeKind::Codex,
+            RuntimeKind::Opencode,
+            RuntimeKind::Cursor,
+            RuntimeKind::Gemini,
+        ] {
+            assert_eq!(runtime_default_model(kind), None, "{kind:?}");
+        }
     }
 
     #[test]

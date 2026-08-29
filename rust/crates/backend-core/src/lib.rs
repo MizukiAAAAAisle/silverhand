@@ -10,6 +10,7 @@ pub mod agent_availability_read;
 pub mod agent_avatar;
 pub mod agent_avatar_write;
 pub mod agent_bulk_stop;
+pub mod agent_creation;
 pub mod agent_detail_read;
 pub mod agent_lifecycle;
 pub mod agent_list_read;
