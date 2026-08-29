@@ -55,7 +55,10 @@ use silverhand_backend_core::{
         RuntimeRoster, RuntimeSpawnPlan,
     },
     runtime_event::{CommitRuntimeConsumed, DaemonEventDurablePort, RuntimeEventAdmission},
-    teardown::facts::AgentRuntimeSessionFacts,
+    teardown::{
+        agent_delete_resume::{AgentDeletionFence, QuiescePurgeFailure},
+        facts::AgentRuntimeSessionFacts,
+    },
 };
 use tokio::{
     sync::{Notify, mpsc, oneshot, watch},
@@ -70,6 +73,7 @@ use crate::{
         RuntimeProductEvent, decode_product_event,
     },
     error,
+    host_agent_background::agent_deletion_resumer::DeletionFenceBinder,
     host_control::admission::{
         AdmissionUnavailable, DialerId, HostAdmission, ProtocolMismatch, RefusalNews, SlotOccupancy,
     },
@@ -984,6 +988,15 @@ impl DaemonDeliveryController {
         }
     }
 
+    /// A read-only projection of the connection generation that currently owns each
+    /// host. Like the name view it carries no dispatch: the deletion resumer only
+    /// compares the id to bind and supersede its retry chains, never to send.
+    pub fn host_connections(&self) -> DaemonHostConnections {
+        DaemonHostConnections {
+            registry: self.registry.clone(),
+        }
+    }
+
     /// Per-computer connection control sharing this runtime's one registry.
     pub fn connection_control(&self) -> DaemonConnectionControlHandle {
         DaemonConnectionControlHandle {
@@ -1061,6 +1074,75 @@ impl ConnectedHostName for ConnectedHostNameView {
             .ok()
             .flatten()
             .map(|attachment| attachment.host_name)
+    }
+}
+
+/// The narrow production answer to the deletion resumer's fence binder. `Clone` shares
+/// the one registry; it snapshots no generation into a second authority.
+///
+/// [`bind`](DeletionFenceBinder::bind) mints a [`DaemonAgentDeletionFence`] pinned to the
+/// exact connection generation the caller means to fence against — refusing when that
+/// generation is already superseded — and the fence verifies the pin AGAIN at send. So a
+/// same-instance daemon replacement can never receive an older chain's purge, and this
+/// type hands out no bare command channel a caller could grow a second transport out of.
+#[derive(Clone)]
+pub struct DaemonHostConnections {
+    registry: DaemonRegistry,
+}
+
+impl DeletionFenceBinder for DaemonHostConnections {
+    type Fence = DaemonAgentDeletionFence;
+
+    fn bind(&self, host: &HostId, connection_id: &str) -> Option<DaemonAgentDeletionFence> {
+        let attachment = self.registry.attachment(host.as_str()).ok().flatten()?;
+        if attachment.connection_id != connection_id {
+            return None;
+        }
+        Some(DaemonAgentDeletionFence {
+            // The same registry Arc, never a second root.
+            effects: DaemonCascadeEffects {
+                registry: self.registry.clone(),
+            },
+            host: host.clone(),
+            connection_id: attachment.connection_id,
+            instance: attachment.daemon_instance,
+        })
+    }
+
+    fn current_generation(&self, host: &HostId) -> Option<String> {
+        self.registry
+            .attachment(host.as_str())
+            .ok()
+            .flatten()
+            .map(|attachment| attachment.connection_id)
+    }
+}
+
+/// A purge fence pinned to one daemon connection generation. `quiesce_and_purge`
+/// dispatches the host-local purge ONLY while that exact generation
+/// (connection id + daemon instance) is still live, verified at send inside
+/// [`DaemonCascadeEffects::purge_host_local_files_on_generation`]. A replacement on the
+/// same host — even one reusing the daemon instance spelling — carries a fresh connection
+/// id, so the purge fails against the dead generation rather than fencing the successor.
+#[derive(Clone)]
+pub struct DaemonAgentDeletionFence {
+    effects: DaemonCascadeEffects,
+    host: HostId,
+    connection_id: String,
+    instance: DaemonInstanceId,
+}
+
+impl AgentDeletionFence for DaemonAgentDeletionFence {
+    async fn quiesce_and_purge(&self, agent: &AgentId) -> Result<(), QuiescePurgeFailure> {
+        self.effects
+            .purge_host_local_files_on_generation(
+                &self.host,
+                &self.connection_id,
+                &self.instance,
+                agent,
+            )
+            .await
+            .map_err(QuiescePurgeFailure::from_source)
     }
 }
 
@@ -1179,12 +1261,59 @@ impl DaemonCascadeEffects {
             .map_err(CascadeDaemonError::Registry)?
             .ok_or(CascadeDaemonError::NoCurrentDaemon)
     }
+
+    /// Purge one agent's host-local files, but ONLY on the exact connection generation the
+    /// caller captured. The live attachment is re-resolved and its connection id + daemon
+    /// instance verified against the captured pair BEFORE the command is sent — mirroring
+    /// [`OwningHostDataPlane::dispatch`] — so a same-instance daemon replacement receives
+    /// nothing and the caller learns the generation moved on. Even a flip immediately after
+    /// the check is safe: the command rides the captured attachment's generation-bound
+    /// channel and reaches the dead connection, never the successor.
+    pub(crate) async fn purge_host_local_files_on_generation(
+        &self,
+        computer: &HostId,
+        connection_id: &str,
+        instance: &DaemonInstanceId,
+        agent: &AgentId,
+    ) -> Result<(), CustodyEffectFailure> {
+        let attachment = self
+            .attachment(computer)
+            .map_err(CustodyEffectFailure::from_source)?;
+        if attachment.connection_id != connection_id {
+            return Err(CustodyEffectFailure::from_source(
+                CascadeDaemonError::ConnectionGenerationMismatch,
+            ));
+        }
+        if &attachment.daemon_instance != instance {
+            return Err(CustodyEffectFailure::from_source(
+                CascadeDaemonError::DaemonInstanceMismatch,
+            ));
+        }
+        let result = attachment
+            .command(
+                "agent_files_purge",
+                json!({ "agent_id": agent.as_str() }),
+                HOST_LOCAL_PURGE_TIMEOUT,
+            )
+            .await
+            .map_err(|source| {
+                CustodyEffectFailure::from_source(CascadeDaemonError::Command(source))
+            })?;
+        if !valid_agent_files_purge_result(&result) {
+            return Err(CustodyEffectFailure::from_source(
+                CascadeDaemonError::InvalidAgentFilesPurgeResponse,
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
 enum CascadeDaemonError {
     Registry(DaemonRegistryError),
     NoCurrentDaemon,
+    ConnectionGenerationMismatch,
+    DaemonInstanceMismatch,
     Command(CommandDispatchError),
     InvalidRuntimeStopRequest(RuntimeStopCodecError),
     InvalidRuntimeStopResponse,
@@ -1196,6 +1325,12 @@ impl fmt::Display for CascadeDaemonError {
         formatter.write_str(match self {
             Self::Registry(_) => "daemon attachment registry is unavailable",
             Self::NoCurrentDaemon => "host has no attached daemon",
+            Self::ConnectionGenerationMismatch => {
+                "daemon connection generation was superseded before the purge could be sent"
+            }
+            Self::DaemonInstanceMismatch => {
+                "daemon instance no longer matches the captured deletion generation"
+            }
             Self::Command(_) => "daemon cascade command failed",
             Self::InvalidRuntimeStopRequest(_) => "daemon runtime_stop target is not wire-safe",
             Self::InvalidRuntimeStopResponse => "daemon returned an invalid runtime_stop response",
@@ -1213,6 +1348,8 @@ impl Error for CascadeDaemonError {
             Self::Command(source) => Some(source),
             Self::InvalidRuntimeStopRequest(source) => Some(source),
             Self::NoCurrentDaemon
+            | Self::ConnectionGenerationMismatch
+            | Self::DaemonInstanceMismatch
             | Self::InvalidRuntimeStopResponse
             | Self::InvalidAgentFilesPurgeResponse => None,
         }
@@ -6466,5 +6603,125 @@ mod tests {
         );
         assert!(recomposed.contains("msg_id=msg-agent"));
         assert!(!recomposed.contains("msg_id=msg-human"));
+    }
+
+    fn purge_test_registry() -> DaemonRegistry {
+        DaemonRegistry::with_process_epoch("purge-epoch".to_owned())
+    }
+
+    /// Reserve and attach a fresh generation for `host`, returning its captured
+    /// (connection id, instance). The command channel is retained by the slot but no
+    /// consumer drains it: every generation-mismatch test must refuse BEFORE any send.
+    fn attach_generation(
+        registry: &DaemonRegistry,
+        host: &str,
+        instance: &str,
+    ) -> (String, DaemonInstanceId) {
+        let (commands, _commands_rx) = mpsc::channel(4);
+        let (close, _close_rx) = watch::channel(None);
+        let connection_id = registry.reserve(host, commands, close).expect("reserve");
+        let instance = DaemonInstanceId::parse(instance).expect("instance");
+        registry
+            .attach(
+                host,
+                &connection_id,
+                AttachedDaemon {
+                    daemon_instance: instance.clone(),
+                    host_name: host.to_owned(),
+                },
+            )
+            .expect("attach");
+        (connection_id, instance)
+    }
+
+    #[tokio::test]
+    async fn a_generation_pinned_purge_refuses_a_replaced_connection() {
+        let registry = purge_test_registry();
+        let host = HostId::parse("host-1").expect("host");
+        let agent = AgentId::parse("agent-1").expect("agent");
+        let (captured_connection, captured_instance) =
+            attach_generation(&registry, "host-1", "instance-1");
+
+        // The daemon reconnects on a fresh generation before the captured purge is sent.
+        registry.remove("host-1", &captured_connection);
+        let (live_connection, _live_instance) =
+            attach_generation(&registry, "host-1", "instance-1");
+        assert_ne!(live_connection, captured_connection);
+
+        let effects = DaemonCascadeEffects {
+            registry: registry.clone(),
+        };
+        let failure = effects
+            .purge_host_local_files_on_generation(
+                &host,
+                &captured_connection,
+                &captured_instance,
+                &agent,
+            )
+            .await
+            .expect_err("a superseded connection generation must not purge");
+        assert!(
+            error::describe(&failure).contains("connection generation was superseded"),
+            "unexpected failure chain: {}",
+            error::describe(&failure)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_generation_pinned_purge_refuses_a_reused_connection_with_a_new_instance() {
+        let registry = purge_test_registry();
+        let host = HostId::parse("host-1").expect("host");
+        let agent = AgentId::parse("agent-1").expect("agent");
+        let (connection, captured_instance) = attach_generation(&registry, "host-1", "instance-1");
+
+        // The same connection slot re-hydrates under a different daemon instance.
+        registry
+            .attach(
+                "host-1",
+                &connection,
+                AttachedDaemon {
+                    daemon_instance: DaemonInstanceId::parse("instance-2").expect("instance"),
+                    host_name: "host-1".to_owned(),
+                },
+            )
+            .expect("re-attach");
+
+        let effects = DaemonCascadeEffects {
+            registry: registry.clone(),
+        };
+        let failure = effects
+            .purge_host_local_files_on_generation(&host, &connection, &captured_instance, &agent)
+            .await
+            .expect_err("a reused connection under a new instance must not purge");
+        assert!(
+            error::describe(&failure).contains("daemon instance no longer matches"),
+            "unexpected failure chain: {}",
+            error::describe(&failure)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fence_binder_declines_a_stale_generation_and_binds_a_live_one() {
+        let registry = purge_test_registry();
+        let host = HostId::parse("host-1").expect("host");
+        let (connection, _instance) = attach_generation(&registry, "host-1", "instance-1");
+
+        let binder = DaemonHostConnections {
+            registry: registry.clone(),
+        };
+        assert!(
+            binder.bind(&host, &connection).is_some(),
+            "the live generation must bind a fence"
+        );
+        assert!(
+            binder
+                .bind(&host, "daemon-connection-purge-epoch-999")
+                .is_none(),
+            "a stale generation must not bind"
+        );
+        assert_eq!(
+            binder.current_generation(&host).as_deref(),
+            Some(connection.as_str())
+        );
     }
 }

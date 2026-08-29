@@ -23,6 +23,7 @@
 //! WHOSE computer it is is not decided here at all: that is authorization and lives
 //! in [`crate::capability::computer_access`]. This namespace consumes its witness.
 
+pub mod agent_delete_resume;
 pub mod cascade;
 pub mod computer_delete;
 pub mod contract;
