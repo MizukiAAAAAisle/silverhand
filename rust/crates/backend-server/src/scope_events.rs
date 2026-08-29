@@ -642,6 +642,15 @@ impl ScopeEventHub {
         HubAgentChangedSink::new(self.clone())
     }
 
+    /// #2234 CP6: the `DirectPairsChanged` seam for `POST /api/agents`, built over THIS
+    /// hub. The create route's post-commit direct-pairs invalidation is exactly the ONE
+    /// [`ScopeEventHub::publish_direct_pairs_changed`] edge (a viewer-scoped
+    /// `DirectPairsChanged` event), never a second publication path. Its constructor stays
+    /// crate-private, so the sink can only be minted on the hub that owns the transport.
+    pub fn direct_pairs_changed_sink(&self) -> HubDirectPairsChanged {
+        HubDirectPairsChanged::new(self.clone())
+    }
+
     /// The custody context's post-commit availability fan-out, built over THIS hub.
     ///
     /// When a computer's custody moves, every agent on it changes availability
@@ -1398,6 +1407,35 @@ impl AgentChangedSink for HubAgentChangedSink {
         self.hub
             .publish_agent_changed(agent)
             .map_err(AgentChangedAnnounceFailure::from_source)
+    }
+}
+
+/// #2234 CP6: the production `DirectPairsChanged` seam for `POST /api/agents`. When a
+/// fresh creator↔agent direct pair opens, the creator's own direct-pairs view must
+/// re-fetch, so the create route fires the ONE viewer-scoped `DirectPairsChanged` edge to
+/// exactly that creator over exactly that conversation. It composes the ONE hub — never a
+/// second event authority — and its constructor stays crate-private, so it can only be
+/// minted through [`ScopeEventHub::direct_pairs_changed_sink`] on the owning hub.
+#[derive(Clone)]
+pub struct HubDirectPairsChanged {
+    hub: ScopeEventHub,
+}
+
+impl HubDirectPairsChanged {
+    pub(crate) fn new(hub: ScopeEventHub) -> Self {
+        Self { hub }
+    }
+}
+
+impl crate::host_agent::agent_create::DirectPairsChanged for HubDirectPairsChanged {
+    async fn direct_pairs_changed(
+        &self,
+        viewer: &UserId,
+        conversation: &ConversationId,
+    ) -> Result<(), EffectFailure> {
+        self.hub
+            .publish_direct_pairs_changed(viewer, conversation)
+            .map_err(EffectFailure::from_source)
     }
 }
 

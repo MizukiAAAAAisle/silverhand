@@ -578,6 +578,31 @@ where
     }
 }
 
+/// #2234 CP6: the production `OnboardingDelivery` seam for `POST /api/agents`. The
+/// create route's post-commit onboarding leg is exactly the `(conversation, agent)` wake
+/// this effects facade already owns — the same private `DaemonDeliveryRuntime::deliver`
+/// primitive `RuntimeDelivery::deliver` forwards to after unwrapping a mention copy. The
+/// create route carries no mention copy (the agent reads its own committed inbox), so it
+/// binds this narrow view rather than `RuntimeDelivery`; both resolve to the ONE wake, so
+/// no second resolve/dispatch path is copied.
+impl<C, D, H> crate::host_agent::agent_create::OnboardingDelivery for DaemonDeliveryEffects<C, D, H>
+where
+    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
+    H: HostCredentialLookup,
+{
+    async fn deliver(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+    ) -> Result<(), EffectFailure> {
+        self.runtime
+            .deliver(conversation, agent)
+            .await
+            .map_err(EffectFailure::from_source)
+    }
+}
+
 impl<C, D, H> MainDelivery for DaemonDeliveryEffects<C, D, H>
 where
     C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,

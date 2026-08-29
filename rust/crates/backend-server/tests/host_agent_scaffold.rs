@@ -295,6 +295,13 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     // so it belongs in the non-seam baseline this list closes the tree over, not in
     // `SEAM_ROOT_MODULES`.
     ("backend-app", "request_perimeter"),
+    // #task:2234 CP6 composition-root create-aftermath boundary: the owned tracker the
+    // create route hands its two post-commit remote legs to, built in `prepare()` and
+    // closed at shutdown. Like `request_perimeter` it is a non-seam production module the
+    // host-agent seam lane did not add — it is deliberately MOUNTED (not fenced against
+    // composition) and owes no labeled seam line, so it closes into this non-seam baseline
+    // rather than `SEAM_ROOT_MODULES`.
+    ("backend-app", "create_aftermath"),
     ("backend-core", "access"),
     ("backend-core", "auth"),
     ("backend-core", "blob_store"),

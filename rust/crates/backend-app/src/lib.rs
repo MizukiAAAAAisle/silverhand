@@ -37,8 +37,9 @@ use silverhand_backend_server::{
     daemon_delivery::{DaemonDeliveryController, DaemonDeliveryRuntime, DaemonHostConnections},
     direct_pairs,
     host_agent::{
-        agent_avatar, agent_avatar_write, agent_clear_session, agent_delete, agent_detail,
-        agent_list, agent_patch, agent_presence, agent_runtime_switch, agent_stop, availability,
+        agent_avatar, agent_avatar_write, agent_clear_session, agent_create, agent_delete,
+        agent_detail, agent_list, agent_patch, agent_presence, agent_runtime_switch, agent_stop,
+        availability,
     },
     host_agent_background::{
         agent_deletion_resumer::AgentDeletionResumer, presence_grace_timer::PresenceGraceTimers,
@@ -97,7 +98,7 @@ use silverhand_backend_sqlite::{
     host_resources_read::SqliteHostResourcesColdRead,
     host_runtime::SqliteHostRuntimeStore,
     human_registration::SqliteHumanRegistration,
-    messaging::{MessagingStore, task::SqliteTaskStore},
+    messaging::{HostEnvironment, MessagingStore, task::SqliteTaskStore},
     runtime_credential::SqliteRuntimeCustodyStore,
     runtime_delivery::SqliteRuntimeDeliveryStore,
     scope_event::SqliteEventScopeAuthority,
@@ -116,6 +117,9 @@ use thiserror::Error;
 use tokio::{net::TcpListener, sync::oneshot};
 
 mod request_perimeter;
+
+mod create_aftermath;
+use create_aftermath::CreateAftermath;
 
 const DATABASE_PATH_ENV: &str = "SILVERHAND_DATABASE_PATH";
 /// The local blob-storage root. Required and launcher-provided, exactly like the
@@ -371,6 +375,11 @@ pub struct PreparedApp {
     /// shutdown can `close` it FIRST — before any transport closes — so the shutdown
     /// window never keeps scheduling against a daemon that is being torn down.
     deletion_resumer: ProductionAgentDeletionResumer,
+    /// #2234 CP6: the single create-aftermath boundary the `POST /api/agents` route hands
+    /// its two remote post-commit legs to. Carried so shutdown can `close` it FIRST — while
+    /// the daemon transport its legs drive is still alive — cancelling any in-flight leg and
+    /// rejecting any dispatched afterward, exactly like the deletion resumer above.
+    create_aftermath: CreateAftermath,
 }
 
 impl PreparedApp {
@@ -379,6 +388,10 @@ impl PreparedApp {
         // and the SQLite owner it holds are both still alive — a stopped worker cannot
         // start a new attempt during the transport teardown below.
         self.deletion_resumer.close();
+        // #2234 CP6: the create-aftermath boundary closes alongside the resumer — before any
+        // transport — so an in-flight onboarding/runtime-start leg is cancelled and no leg
+        // dispatched during shutdown reaches the daemon being torn down.
+        self.create_aftermath.close();
         shut_down_transports(
             &self.event_controller,
             &self.daemon_controller,
@@ -887,6 +900,31 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // route's gate read stays the separate `agent_detail_cold_read` authority (below); the two
     // reads are carried on two params, never fused into one combining read type.
     let agent_stop_seats = host_agent_store.clone();
+    // #2234 CP6: the three host-agent ports the `POST /api/agents` create saga drives —
+    // materialization lookup+write, arm provisioning, and the agent-graph read — captured
+    // before the host-delete unit-of-work below moves `host_agent_store`. All three are the
+    // SAME ONE `SqliteHostAgentStore` the delete/switch/stop paths hold: a clone shares its
+    // pool, so the reservation/materialization write, the dependent-graph provisioning, and
+    // the graph read are ONE durable authority, never a second store the saga could diverge
+    // across.
+    let agent_create_materialization = host_agent_store.clone();
+    let agent_create_provisioning = host_agent_store.clone();
+    let agent_create_graph = host_agent_store.clone();
+    // The create saga's remaining two read ports, captured before their originals are moved
+    // downstream: the computer read model is the SAME ONE `SqliteHostRuntimeStore`
+    // (`host_store`) host-detail/revoke read, and the handle namespace is the SAME ONE
+    // `SqliteHandleNamespace` the `name-availability` face consumes (that mount moves the
+    // original un-cloned).
+    let agent_create_computers = host_store.clone();
+    let agent_create_handles = handle_namespace.clone();
+    // #2234 CP6: the ONE owned lifecycle boundary for the create route's two post-commit
+    // remote legs (onboarding wake + runtime start). A clone shares its `Arc<Mutex<..>>`
+    // state, so the instance the route dispatches into and the `PreparedApp` field that
+    // `close`s it at shutdown are the same owner — there is never a second tracker a leg
+    // could outlive. Mirrors the deletion resumer's composition pattern (built here, cloned
+    // into the route, held by `PreparedApp`, closed FIRST at shutdown), never reusing that
+    // deletion state machine.
+    let create_aftermath = CreateAftermath::new();
     // The daemon websocket router, built now that the resumer exists: the resumer is its
     // MANDATORY host-ready observer. Binder (from `host_connections()`) and observer are
     // the same resumer over the same runtime registry — one generation truth.
@@ -1101,6 +1139,38 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
                 agent_detail_cold_read.clone(),
                 agent_stop_seats,
                 daemon_runtime.scope_runtime_stop(),
+            ))
+            // #2234 CP6 — `POST /api/agents` (agent create), behind the SAME
+            // `require_human_session` perimeter. It accumulates onto the `/api/agents` node
+            // the `GET` list already owns (disjoint methods merge; GET stays the list
+            // handler). Its fourteen ports resolve to the genuine production authorities and
+            // no more: the reserve→materialize→provision-graph saga's seven core authorities
+            // are the ONE `SqliteHostRuntimeStore` (computer read), the ONE
+            // `SqliteHandleNamespace` (handle read), the ONE `SqliteHostAgentStore`
+            // (materialization write + arm provisioning + graph read — three faces of one
+            // store), the daemon runtime's ONE `ProductionAgentMaterialize`, and the process
+            // `HostEnvironment` entropy. The post-commit fan-out rides the SAME sinks its
+            // siblings use — the ONE `agent_detail_cold_read` reprojection, the ONE
+            // `agent_changed` hub sink, the ONE `DirectPairsChanged` hub edge (fired only on
+            // a fresh creator↔agent pair), and the daemon effects facade for BOTH the
+            // onboarding wake and the runtime start. The two remote legs are handed to the
+            // ONE owned `create_aftermath` boundary, so the `201` seals before either
+            // touches the host and shutdown cancels any in-flight leg.
+            .merge(agent_create::router(
+                agent_create_computers,
+                agent_create_handles,
+                agent_create_materialization,
+                daemon_runtime.agent_materialize(),
+                agent_create_provisioning,
+                agent_create_graph,
+                HostEnvironment,
+                agent_detail_cold_read.clone(),
+                hub.agent_changed_sink(),
+                daemon_runtime.effects(),
+                daemon_runtime.effects(),
+                hub.direct_pairs_changed_sink(),
+                create_aftermath.clone(),
+                SystemProcessClock,
             ))
             .merge(agent_avatar::router(
                 agent_detail_cold_read.clone(),
@@ -1320,6 +1390,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         daemon_controller,
         presence_timers,
         deletion_resumer,
+        create_aftermath,
     })
 }
 
@@ -1402,6 +1473,7 @@ where
         daemon_controller,
         presence_timers,
         deletion_resumer,
+        create_aftermath,
     } = app;
     // The serving boundary, witnessed by the already-bound `TcpListener` this function
     // was handed: reaching here means a listener exists, so `/readyz` may now report
@@ -1425,6 +1497,9 @@ where
             // daemon controller and its SQLite owner are both still alive — so no attempt
             // can be started during the transport teardown that follows.
             deletion_resumer.close();
+            // #2234 CP6: the create-aftermath boundary closes alongside it — same window,
+            // ahead of transport teardown — cancelling any in-flight leg.
+            create_aftermath.close();
             // The one shared shutdown order (see `shut_down_transports`): event close
             // then an immediate presence dispose, daemon close concurrent but never
             // wedged between the two.
@@ -3219,7 +3294,7 @@ mod tests {
         // The sixty-seven human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
-        const HUMAN_PERIMETER_DOORS: [(&str, &str); 70] = [
+        const HUMAN_PERIMETER_DOORS: [(&str, &str); 71] = [
             ("POST", "/api/hosts"),
             // #2219 CP4 host-custody batch B — the three perimeter-guarded custody doors.
             // `GET /api/hosts` shares the path node with the invite POST above, so its anon
@@ -3370,8 +3445,15 @@ mod tests {
             // enumerate-all-seats reach through the exact per-seat stop transport is borne by
             // `the_composition_agent_stop_face_reaches_every_seat_through_the_exact_transport`.
             ("POST", "/api/agents/agent-1/stop"),
+            // #2234 CP6: the public agent-create door, accumulating onto the `/api/agents`
+            // node the GET list already owns (disjoint method). Anon → the perimeter 401
+            // (the `.layer` answers before method dispatch, so anon presence witnesses only
+            // the shared path-guard); the authenticated GET-list-vs-POST-create dispatch and
+            // the full reserve→materialize→provision-graph→201 reach are borne by
+            // `the_composition_agent_create_face_drives_the_full_saga_and_post_commit_effects`.
+            ("POST", "/api/agents"),
         ];
-        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 70);
+        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 71);
         for (method, path) in HUMAN_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -3748,15 +3830,15 @@ mod tests {
     /// Gate 2 of the CP2 convergence closure — the #2195 host-agent control-plane lane
     /// as a bidirectionally CLOSED universe of 54, every entry itemized `(method, path)`
     /// in a named table that is mechanically checksummed: the four tables' lengths are
-    /// pinned (`29`/`4`/`20`/`1`), every `(method, path)` across the union is unique,
+    /// pinned (`30`/`4`/`20`/`0`), every `(method, path)` across the union is unique,
     /// landed is disjoint from residual, and the union is exactly `54`. This is the
     /// lane's ORIGINAL owned total (it still counts the three dynamic host reads since
     /// handed to #2198). Deleting a row, or copying one between tables, breaks the
-    /// checksum — `(29 + 4) + (20 + 1) == 54` is an assertion, not prose.
+    /// checksum — `(30 + 4) + (20 + 0) == 54` is an assertion, not prose.
     ///
     /// Every one of the 54 routes is FALSIFIABLE — none rests on an
     /// unfalsifiable anon `401`:
-    /// * The 29 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
+    /// * The 30 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
     ///   perimeter → anon `401` (includes #2218's authenticated `/api/runtimes`, three of
     ///   #2219's four host-custody routes: list, claim-or-create, and
     ///   `{id}/rotate-token`; the fourth, `connect-token/resolve`, is allowlisted and
@@ -3772,7 +3854,9 @@ mod tests {
     ///   the two #2234 CP4 runtime write faces: `POST /api/agents/{id}/clear-session` and
     ///   `PUT /api/agents/{id}/runtime`, sharing the one production `ProductionRuntimeControl`;
     ///   and the one #2234 CP5 public-agent face: `POST /api/agents/{id}/stop`, whose gate
-    ///   read and seat-snapshot read stay two separate sole authorities).
+    ///   read and seat-snapshot read stay two separate sole authorities; and the one #2234
+    ///   CP6 public-agent face: `POST /api/agents` (create), a second method on the GET-list
+    ///   `/api/agents` node, driving the reserve→materialize→provision-graph saga).
     ///   Deleting any one's `.merge(...)` flips it to `404` and reddens this gate
     ///   (delete-landed RED).
     /// * The 4 ANON-LANDED routes are mounted ahead of every perimeter → an anonymous
@@ -3786,13 +3870,10 @@ mod tests {
     /// * 20 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
     ///   Mounting any one flips it to its perimeter's `401`/`405` and reddens this gate
     ///   (mount-residual RED).
-    /// * 1 METHOD-SHADOW residual shares a concrete path with a mounted sibling that
-    ///   answers a DIFFERENT method (`POST /api/agents` behind the mounted `GET`).
-    ///   Probed anonymously the perimeter's `.layer` answers
-    ///   `401` before method dispatch (indistinguishable from mounted), so this gate
-    ///   probes it AUTHENTICATED (real seeded bearer): the perimeter passes and the
-    ///   path's `MethodRouter` bears the truth → `405 METHOD_NOT_ALLOWED`. Mis-mounting
-    ///   the residual method flips its answer to a handler status and reddens this gate.
+    /// * 0 METHOD-SHADOW residuals remain: `POST /api/agents` was the last one, mounted by
+    ///   #2234 CP6 as a second method on the GET-list `/api/agents` node (now landed). Its
+    ///   authenticated GET-list-vs-POST-create dispatch is borne by the create composition
+    ///   gate, so no method-shadow row remains in this universe.
     ///
     /// RESIDUAL routes are NEVER implemented in this lane — they are disproved (404 or
     /// 405), not built. A new registrar mounted into
@@ -3801,7 +3882,7 @@ mod tests {
     /// anon-landed).
     #[tokio::test]
     async fn the_host_agent_lane_stays_a_closed_universe_of_fifty_four() {
-        // The 29 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
+        // The 30 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
         // perimeter → anon 401.
         const LANDED: &[(&str, &str)] = &[
             ("GET", "/api/agents"),
@@ -3882,6 +3963,14 @@ mod tests {
             // ordered residue, never short-circuiting) is borne by
             // `the_composition_agent_stop_face_reaches_every_seat_through_the_exact_transport`.
             ("POST", "/api/agents/agent-1/stop"),
+            // #2234 CP6: the public agent-create face, now MOUNTED behind the human
+            // perimeter → anon 401. It is a SECOND method on the `/api/agents` node the GET
+            // list owns, so it is no longer a method-shadow residual. Its authenticated
+            // reach — the reserve→materialize→provision-graph saga and the four post-commit
+            // effects (direct-pairs on a fresh pair, agent_changed, and the two aftermath
+            // legs), all NOT replayed on an Echo — is borne by
+            // `the_composition_agent_create_face_drives_the_full_saga_and_post_commit_effects`.
+            ("POST", "/api/agents"),
         ];
         // The 4 ANON-LANDED routes: mounted ahead of every perimeter, so an anonymous
         // probe reaches the handler. #2218's server/info and health answer 200; readyz
@@ -3911,7 +4000,7 @@ mod tests {
             // agents residual (10 of 20; name-availability + PATCH /api/agents/{id} are
             // now perimeter-landed by #2234 CP2; the three avatar faces likewise; DELETE
             // /api/agents/{id} by #2234 CP3; clear-session + PUT .../runtime by #2234 CP4;
-            // POST .../stop by #2234 CP5; POST /api/agents remains method-shadowed, below)
+            // POST .../stop by #2234 CP5; POST /api/agents by #2234 CP6 — all now landed)
             ("GET", "/api/agents/agent-1/workspace/tree"),
             ("GET", "/api/agents/agent-1/workspace/file"),
             ("GET", "/api/agents/agent-1/profile/mcp"),
@@ -3935,18 +4024,16 @@ mod tests {
             // diagnostic (1)
             ("POST", "/internal/agents/agent-1/cli-trace"),
         ];
-        // 1 METHOD-SHADOW residual: the path is mounted for a DIFFERENT method, so an
-        // authenticated probe of the residual method hits the `MethodRouter` → 405.
-        const METHOD_SHADOW_RESIDUAL: &[(&str, &str)] = &[
-            ("POST", "/api/agents"), // ← GET /api/agents (mounted)
-        ];
+        // 0 METHOD-SHADOW residuals remain: `POST /api/agents` was the last one, mounted by
+        // #2234 CP6 (now a second method on the GET-list `/api/agents` node, landed above).
+        const METHOD_SHADOW_RESIDUAL: &[(&str, &str)] = &[];
 
-        // ── Mechanical checksum: (29 + 4) + (20 + 1) == 54, all unique, landed ∩
+        // ── Mechanical checksum: (30 + 4) + (20 + 0) == 54, all unique, landed ∩
         // residual = ∅ ──
-        assert_eq!(LANDED.len(), 29);
+        assert_eq!(LANDED.len(), 30);
         assert_eq!(ANON_LANDED.len(), 4);
         assert_eq!(CLEAN_RESIDUAL.len(), 20);
-        assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 1);
+        assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 0);
         let landed: std::collections::HashSet<(&str, &str)> = LANDED
             .iter()
             .copied()
@@ -3957,8 +4044,8 @@ mod tests {
             .chain(METHOD_SHADOW_RESIDUAL)
             .copied()
             .collect();
-        assert_eq!(landed.len(), 33, "landed rows are unique");
-        assert_eq!(residual.len(), 21, "residual rows are unique");
+        assert_eq!(landed.len(), 34, "landed rows are unique");
+        assert_eq!(residual.len(), 20, "residual rows are unique");
         assert!(
             landed.is_disjoint(&residual),
             "landed and residual are disjoint"
@@ -3976,7 +4063,7 @@ mod tests {
         let bearer = format!("Bearer {TOKEN}");
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // ── 28 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
+        // ── 30 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
         for (method, path) in LANDED {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(
@@ -4005,7 +4092,7 @@ mod tests {
             "anon resolve reaches its own handler, not the perimeter"
         );
 
-        // ── 23 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
+        // ── 20 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
         for (method, path) in CLEAN_RESIDUAL {
             let (status, _) = request(&router, method, path, None).await;
             assert_eq!(
@@ -4015,8 +4102,10 @@ mod tests {
             );
         }
 
-        // ── 1 METHOD-SHADOW RESIDUAL → AUTHENTICATED 405 (perimeter passes, the path's
-        // MethodRouter bears the truth). Mis-mounting the residual method reddens this. ──
+        // ── 0 METHOD-SHADOW RESIDUAL → none remain (CP6 mounted the last one, `POST
+        // /api/agents`, as a second method on the GET-list node). The AUTHENTICATED-405
+        // probe stays as the structural gate for any future method-shadow row: a residual
+        // method re-added here must answer 405, and mis-mounting it reddens this. ──
         for (method, path) in METHOD_SHADOW_RESIDUAL {
             let (status, body) = request(&router, method, path, Some(&bearer)).await;
             assert_eq!(
@@ -5685,6 +5774,618 @@ mod tests {
         running.await.unwrap().unwrap();
     }
 
+    /// Seed exactly ONE Active host owned by the acting human, plus its daemon credential, so
+    /// auto-placement resolves unambiguously to `h-online` and the fake daemon can attach the
+    /// mounted host WS (making the saga's `capture` return custody). No agent/workspace rows:
+    /// the create saga mints the entire graph itself.
+    async fn seed_agent_create_host(path: &Path) {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id, activated_at, finalized_at) \
+             VALUES ('h-online', 'host-online', 'remote', 1, 'user-1', 1, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO host_credentials (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at) \
+             VALUES ('cred-online', 'h-online', ?, 'long_lived', NULL, NULL, NULL)",
+        )
+        .bind(HOST_TOKEN_HASH)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    /// Drive a connected daemon socket like a REAL daemon for the create saga: answer
+    /// hydration (`runtime_status`), signal `attached` on the promotion-edge `host_status`
+    /// probe, tolerate the attach-time `host_runtime_catalog`, and — the point of the gate —
+    /// answer `agent_materialize` with the schema-valid success the codec requires, so the
+    /// production `ProductionAgentMaterialize` port completes and the saga proceeds to provision
+    /// the graph. The two post-commit aftermath legs also cross this wire: `runtime_start`
+    /// (which fires `start_seen`) and, if the runtime inbox has a pending delivery,
+    /// `runtime_deliver`. Every create-effect command is RECORDED in `seen` so the gate can
+    /// prove the real wire was hit exactly once and that an idempotent echo replays none of it.
+    async fn service_agent_create_commands<S>(
+        mut socket: tokio_tungstenite::WebSocketStream<S>,
+        stop: std::sync::Arc<tokio::sync::Notify>,
+        attached: std::sync::Arc<tokio::sync::Notify>,
+        start_seen: std::sync::Arc<tokio::sync::Notify>,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    ) -> tokio_tungstenite::WebSocketStream<S>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        loop {
+            tokio::select! {
+                () = stop.notified() => break,
+                command = next_daemon_json(&mut socket) => {
+                    let result = match command["kind"].as_str() {
+                        Some("runtime_status") => serde_json::json!({ "runtimes": [] }),
+                        Some("host_status") => {
+                            attached.notify_one();
+                            serde_json::json!({
+                                "os": "linux",
+                                "daemon_pid": 1,
+                                "daemon_version": "0.0.0-test",
+                                "started_at": 0,
+                                "uptime_ms": 0,
+                                "active_agent_ids": [],
+                            })
+                        }
+                        Some("host_runtime_catalog") => serde_json::json!({
+                            "runtimes": [],
+                            "detected_at": 1_700_000_000_000_i64,
+                        }),
+                        Some("agent_materialize") => {
+                            seen.lock().unwrap().push(command.clone());
+                            // The codec's `decode_result` requires EXACTLY these four keys,
+                            // `ok == true`, `agent_dir == agent_home_workspace_path`, and a
+                            // positive `materialized_at`. Anything else faults the saga.
+                            serde_json::json!({
+                                "ok": true,
+                                "agent_dir": "/a",
+                                "agent_home_workspace_path": "/a",
+                                "materialized_at": 1,
+                            })
+                        }
+                        Some("runtime_start") => {
+                            seen.lock().unwrap().push(command.clone());
+                            start_seen.notify_one();
+                            serde_json::json!({ "started": true, "pid": 1, "started_at": 1 })
+                        }
+                        Some("runtime_deliver") => {
+                            seen.lock().unwrap().push(command.clone());
+                            serde_json::json!({
+                                "disposition": "admitted",
+                                "pid": 1,
+                                "started_at": 1,
+                            })
+                        }
+                        other => panic!("unexpected daemon command kind: {other:?}"),
+                    };
+                    socket
+                        .send(ClientMessage::Text(
+                            serde_json::json!({
+                                "direction": "daemon_to_server",
+                                "type": "command_response",
+                                "id": command["id"],
+                                "kind": command["kind"],
+                                "result": result,
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+        socket
+    }
+
+    /// POST `/api/agents` with the human bearer, the required `Idempotency-Key`, and a JSON
+    /// create body. Goes through the mounted router (a oneshot on the same app the served
+    /// listener runs, so the production `ProductionAgentMaterialize` reads the same daemon
+    /// controller the fake daemon attached to).
+    async fn post_create(
+        router: &Router,
+        bearer: &str,
+        idempotency_key: &str,
+        body: &str,
+    ) -> (StatusCode, String) {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/agents")
+            .header("authorization", bearer)
+            .header("idempotency-key", idempotency_key)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_owned()))
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    fn count_kind(seen: &std::sync::Mutex<Vec<serde_json::Value>>, kind: &str) -> usize {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|command| command["kind"].as_str() == Some(kind))
+            .count()
+    }
+
+    /// The #2234 CP6 close: `POST /api/agents` (agent create) is not merely mounted behind the
+    /// human perimeter — it drives the FULL production saga end to end. Reserve → materialize
+    /// (over the mounted host WS, through the real `ProductionAgentMaterialize`) → provision the
+    /// whole conversation-arm graph → seal `201`, then hand the two remote legs to the owned
+    /// `CreateAftermath` boundary (the start leg reaches the same real daemon transport). Delete
+    /// the `.merge(agent_create::router(...))` from `prepare()`'s human chain and the
+    /// authenticated POST 405s on the `/api/agents` node (it is shared with `GET`; anonymous is
+    /// 401 for both, so the AUTHENTICATED 201 is the real mount witness) — the first assert
+    /// reddens (the A6 no-op-mount falsifier).
+    ///
+    /// A no-op or stubbed mount cannot fake the DB graph facts asserted below: the real
+    /// provision-graph minted the agent's home workspace (owner_agent edge), the fixed
+    /// onboarding DM channel, the onboarding message on it, and the creator's owner + DM roster
+    /// edges. The real materialize crossed the WS exactly once; the real aftermath reached the
+    /// real transport (`runtime_start`). An idempotent replay (same key + body) echoes `200`
+    /// and replays NONE of it: no second materialize, no second start leg, no duplicate rows.
+    /// The shared `/api/agents` node still lists agents (disjoint-method merge did not clobber
+    /// `GET`), and the shared `CreateAftermath` the shutdown arm closed rejects post-shutdown
+    /// legs.
+    ///
+    /// The handler-level orchestration (both legs scheduled, `201` sealed before the legs run,
+    /// echo fires nothing, per-arm coordinates, direct-pairs gating) is proven by the leaf
+    /// `agent_create` unit tests over fakes; the tracker lifecycle (cancel-in-flight, no-op
+    /// after close, recycle, panic isolation) by the `create_aftermath` unit tests. This gate
+    /// proves only what those cannot: the REAL ports wired into `prepare()`.
+    #[tokio::test]
+    async fn the_composition_agent_create_face_drives_the_full_saga_and_post_commit_effects() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_agent_create_host(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router.clone();
+        // The SAME production aftermath instance the shutdown arm will close: a clone shares
+        // the one `Arc<Mutex<..>>`, so `serve`'s `create_aftermath.close()` flips it too.
+        let close_probe = app.create_aftermath.clone();
+        let bearer = format!("Bearer {TOKEN}");
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+
+        let mut ws_request = format!("ws://{address}{HOST_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        ws_request.headers_mut().insert(
+            tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+            format!("Bearer {HOST_TOKEN}").parse().unwrap(),
+        );
+        let (socket, _) = connect_async(ws_request).await.unwrap();
+        {
+            use futures_util::SinkExt;
+            let mut socket = socket;
+            socket
+                .send(ClientMessage::Text(
+                    serde_json::json!({
+                        "direction": "daemon_to_server",
+                        "type": "event",
+                        "kind": "ready",
+                        "protocol_version": OUTBOUND_PROTOCOL_VERSION,
+                        "daemon_version": "test",
+                        "daemon_id": "daemon-cp6",
+                        "instance_id": "instance-cp6",
+                        "host_descriptor": { "name": "CP6 host", "kind": "remote" },
+                        "capabilities": [],
+                        "daemon_pid": 7,
+                        "started_at": 100,
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+
+            let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+            let attached = std::sync::Arc::new(tokio::sync::Notify::new());
+            let start_seen = std::sync::Arc::new(tokio::sync::Notify::new());
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+            let servicer = tokio::spawn(service_agent_create_commands(
+                socket,
+                stop.clone(),
+                attached.clone(),
+                start_seen.clone(),
+                seen.clone(),
+            ));
+            tokio::time::timeout(std::time::Duration::from_secs(5), attached.notified())
+                .await
+                .expect("the daemon must attach (host_status probe) before create captures");
+
+            // The full saga to 201 (conversation arm — session_scope defaults to conversation).
+            let (status, body) = post_create(
+                &router,
+                &bearer,
+                "key-conv",
+                r#"{"name":"createbot","runtime":"codex"}"#,
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::CREATED,
+                "create must reach the mounted saga and materialize over the real WS: {body}"
+            );
+            let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let agent_id = json["agent"]["id"].as_str().unwrap().to_owned();
+            let home = json["agent_home_workspace_id"].as_str().unwrap().to_owned();
+            let dm = json["dm_channel_id"].as_str().unwrap().to_owned();
+            let onboarding_message = json["onboarding_message_id"].as_str().unwrap().to_owned();
+            assert!(
+                !home.is_empty() && !dm.is_empty() && !onboarding_message.is_empty(),
+                "conversation-arm coordinates are all present: {body}"
+            );
+
+            // The aftermath start leg reaches the SAME real daemon transport (proves the
+            // `CreateAftermath` port drives a real effect, not `/dev/null`).
+            tokio::time::timeout(std::time::Duration::from_secs(5), start_seen.notified())
+                .await
+                .expect("the aftermath runtime-start leg must reach the real daemon transport");
+
+            // The real materialize crossed the mounted host WS exactly once.
+            assert_eq!(
+                count_kind(&seen, "agent_materialize"),
+                1,
+                "the production materialize port hit the daemon exactly once"
+            );
+            assert_eq!(
+                count_kind(&seen, "runtime_start"),
+                1,
+                "the aftermath start leg hit the daemon exactly once"
+            );
+
+            // DB graph facts — the real provision-graph completed the conversation arm. A
+            // stubbed/no-op mount could return 201-shaped JSON but never write this graph.
+            let pool = SqlitePoolOptions::new()
+                .connect(fixture.path.to_str().unwrap())
+                .await
+                .unwrap();
+            let owner_agent: Option<String> =
+                sqlx::query_scalar("SELECT owner_agent_id FROM workspaces WHERE id = ?")
+                    .bind(&home)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                owner_agent.as_deref(),
+                Some(agent_id.as_str()),
+                "the home workspace is owned by the created agent"
+            );
+            let (dm_placement, dm_policy, dm_workspace): (String, String, Option<String>) =
+                sqlx::query_as(
+                    "SELECT placement_kind, roster_policy, workspace_id FROM conversations WHERE id = ?",
+                )
+                .bind(&dm)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                dm_placement, "workspace",
+                "the onboarding DM is a workspace channel"
+            );
+            assert_eq!(dm_policy, "fixed", "the onboarding DM roster is fixed");
+            assert_eq!(
+                dm_workspace.as_deref(),
+                Some(home.as_str()),
+                "the onboarding DM lives in the agent's home workspace"
+            );
+            let onboarding_conversation: String =
+                sqlx::query_scalar("SELECT conversation_id FROM messages WHERE id = ?")
+                    .bind(&onboarding_message)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                onboarding_conversation, dm,
+                "the onboarding message sits on the onboarding DM"
+            );
+            let agent_on_dm: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM conversation_agents WHERE conversation_id = ? AND agent_id = ?",
+            )
+            .bind(&dm)
+            .bind(&agent_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(agent_on_dm, 1, "the agent is a member of its onboarding DM");
+            let creator_on_dm: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM conversation_users WHERE conversation_id = ? AND user_id = 'user-1'",
+            )
+            .bind(&dm)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                creator_on_dm, 1,
+                "the creator is a member of the onboarding DM"
+            );
+            let creator_role: String = sqlx::query_scalar(
+                "SELECT role FROM workspace_users WHERE workspace_id = ? AND user_id = 'user-1'",
+            )
+            .bind(&home)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(creator_role, "owner", "the creator owns the home workspace");
+            let (materialization, created_by, scope): (String, String, String) = sqlx::query_as(
+                "SELECT materialization_status, created_by_user_id, session_scope FROM agents WHERE id = ?",
+            )
+            .bind(&agent_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                materialization, "active",
+                "the reservation flipped to active"
+            );
+            assert_eq!(created_by, "user-1", "the creator is recorded");
+            assert_eq!(scope, "conversation", "the conversation arm was taken");
+
+            // The shared `/api/agents` node still lists agents — the disjoint-method merge did
+            // not clobber the pre-existing `GET`.
+            let (list_status, list_body) =
+                request(&router, "GET", "/api/agents", Some(&bearer)).await;
+            assert_eq!(
+                list_status,
+                StatusCode::OK,
+                "GET on the shared /api/agents node still lists: {list_body}"
+            );
+            assert!(
+                list_body.contains(&agent_id),
+                "the created agent appears in the shared-node list: {list_body}"
+            );
+
+            // Idempotent replay: SAME key + body echoes 200 and replays NONE of the four
+            // post-commit effects — no second materialize, no second start leg.
+            let materialize_before = count_kind(&seen, "agent_materialize");
+            let start_before = count_kind(&seen, "runtime_start");
+            let (echo_status, echo_body) = post_create(
+                &router,
+                &bearer,
+                "key-conv",
+                r#"{"name":"createbot","runtime":"codex"}"#,
+            )
+            .await;
+            assert_eq!(
+                echo_status,
+                StatusCode::OK,
+                "the same key + body echoes 200, not a second create: {echo_body}"
+            );
+            let echo_json: serde_json::Value = serde_json::from_str(&echo_body).unwrap();
+            assert_eq!(
+                echo_json["agent"]["id"].as_str(),
+                Some(agent_id.as_str()),
+                "the echo returns the same agent"
+            );
+            assert_eq!(
+                echo_json["dm_channel_id"].as_str(),
+                Some(dm.as_str()),
+                "the echo returns the same coordinates"
+            );
+            assert_eq!(
+                count_kind(&seen, "agent_materialize"),
+                materialize_before,
+                "the echo does not re-run the real materialize"
+            );
+            assert_eq!(
+                count_kind(&seen, "runtime_start"),
+                start_before,
+                "the echo schedules no second runtime-start leg"
+            );
+            let agents_named: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM agents WHERE name = 'createbot'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(agents_named, 1, "the echo created no duplicate agent row");
+            let homes: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM workspaces WHERE owner_agent_id = ?")
+                    .bind(&agent_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(homes, 1, "the echo created no duplicate home workspace");
+            pool.close().await;
+
+            stop.notify_one();
+            let mut socket = servicer.await.unwrap();
+            socket.close(None).await.unwrap();
+        }
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+
+        // The close-wiring witness: after the production shutdown arm ran serve's
+        // `create_aftermath.close()`, the SHARED tracker rejects new work — a fresh dispatch is
+        // dropped and nothing is spawned. Delete that close line and `closed` stays false → the
+        // leg is spawned → `in_flight_len()` is 1 → this assert reddens.
+        silverhand_backend_server::host_agent::agent_create::AftermathDispatch::dispatch(
+            &close_probe,
+            Box::pin(async {}),
+        );
+        assert_eq!(
+            close_probe.in_flight_len(),
+            0,
+            "serve's shutdown arm must have closed the shared aftermath tracker"
+        );
+    }
+
+    /// The #2234 CP6 agent-arm witness: an agent-scoped create returns null coordinates, mints
+    /// the creator↔agent direct pair, and — the point of this gate — publishes the fresh pair
+    /// through the NEW production `HubDirectPairsChanged` sink wired into `prepare()`. That sink
+    /// has no other composition consumer, so this is its A6 no-op falsifier: the viewer's
+    /// direct-pairs list scope high-water advances by one on the fresh create and NOT on the
+    /// idempotent echo. (The conversation arm never fires this edge; the agent arm with a fresh
+    /// pair always does — the leaf `agent_create` tests prove that gating over fakes.)
+    #[tokio::test]
+    async fn the_composition_agent_create_agent_arm_publishes_the_fresh_direct_pair() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_agent_create_host(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router.clone();
+        let bearer = format!("Bearer {TOKEN}");
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+
+        let mut ws_request = format!("ws://{address}{HOST_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        ws_request.headers_mut().insert(
+            tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+            format!("Bearer {HOST_TOKEN}").parse().unwrap(),
+        );
+        let (socket, _) = connect_async(ws_request).await.unwrap();
+        {
+            use futures_util::SinkExt;
+            let mut socket = socket;
+            socket
+                .send(ClientMessage::Text(
+                    serde_json::json!({
+                        "direction": "daemon_to_server",
+                        "type": "event",
+                        "kind": "ready",
+                        "protocol_version": OUTBOUND_PROTOCOL_VERSION,
+                        "daemon_version": "test",
+                        "daemon_id": "daemon-cp6b",
+                        "instance_id": "instance-cp6b",
+                        "host_descriptor": { "name": "CP6 host", "kind": "remote" },
+                        "capabilities": [],
+                        "daemon_pid": 7,
+                        "started_at": 100,
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+
+            let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+            let attached = std::sync::Arc::new(tokio::sync::Notify::new());
+            let start_seen = std::sync::Arc::new(tokio::sync::Notify::new());
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+            let servicer = tokio::spawn(service_agent_create_commands(
+                socket,
+                stop.clone(),
+                attached.clone(),
+                start_seen.clone(),
+                seen.clone(),
+            ));
+            tokio::time::timeout(std::time::Duration::from_secs(5), attached.notified())
+                .await
+                .expect("the daemon must attach before create captures");
+
+            // Baseline: nothing published to the creator's direct-pairs list yet.
+            let viewer_before = fresh_scope_high_water(address, "viewer:self").await;
+
+            let (status, body) = post_create(
+                &router,
+                &bearer,
+                "key-agent",
+                r#"{"name":"createbot2","runtime":"codex","session_scope":"agent"}"#,
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::CREATED,
+                "the agent-arm create must reach the mounted saga: {body}"
+            );
+            let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let agent_id = json["agent"]["id"].as_str().unwrap().to_owned();
+            assert!(
+                json["agent_home_workspace_id"].is_null()
+                    && json["dm_channel_id"].is_null()
+                    && json["onboarding_message_id"].is_null(),
+                "agent-arm coordinates are all null: {body}"
+            );
+            tokio::time::timeout(std::time::Duration::from_secs(5), start_seen.notified())
+                .await
+                .expect("the aftermath runtime-start leg must reach the daemon");
+
+            // The NEW HubDirectPairsChanged sink fired exactly once for the fresh pair.
+            let viewer_after_create = fresh_scope_high_water(address, "viewer:self").await;
+            assert_eq!(
+                viewer_after_create - viewer_before,
+                1,
+                "the fresh direct pair advanced the creator's direct-pairs list by one frame"
+            );
+
+            // The direct pair exists as a direct_pair-placement conversation between the human
+            // and the agent.
+            let pool = SqlitePoolOptions::new()
+                .connect(fixture.path.to_str().unwrap())
+                .await
+                .unwrap();
+            let pairs: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM conversations \
+                 WHERE placement_kind = 'direct_pair' \
+                   AND (endpoint_a_id = ? OR endpoint_b_id = ?)",
+            )
+            .bind(&agent_id)
+            .bind(&agent_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(pairs, 1, "exactly one creator-agent direct pair was minted");
+
+            // Idempotent replay: 200, and NO second direct-pairs frame.
+            let (echo_status, echo_body) = post_create(
+                &router,
+                &bearer,
+                "key-agent",
+                r#"{"name":"createbot2","runtime":"codex","session_scope":"agent"}"#,
+            )
+            .await;
+            assert_eq!(
+                echo_status,
+                StatusCode::OK,
+                "the agent-arm echo is 200: {echo_body}"
+            );
+            let viewer_after_echo = fresh_scope_high_water(address, "viewer:self").await;
+            assert_eq!(
+                viewer_after_echo - viewer_after_create,
+                0,
+                "the echo publishes no second direct-pairs frame"
+            );
+            assert_eq!(
+                count_kind(&seen, "agent_materialize"),
+                1,
+                "the echo does not re-run the real materialize"
+            );
+            pool.close().await;
+
+            stop.notify_one();
+            let mut socket = servicer.await.unwrap();
+            socket.close(None).await.unwrap();
+        }
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+    }
+
     /// #2219 real-authority binding — the invite→resolve chain proves BOTH placement and
     /// wiring in one shot. (1) A connect-token bearer is NOT a human session; a resolve
     /// mounted behind the human perimeter would reject it with the perimeter body before
@@ -6143,9 +6844,12 @@ mod tests {
             serde_json::json!({ "agents": [] })
         );
 
-        // One-method route checksum: the mounted path serves GET only.
+        // Shared-node checksum: since CP6 the `/api/agents` node serves BOTH `GET` (this
+        // list) and `POST` (create) — a disjoint-method merge, not a clobber. A bare POST
+        // (bearer, but no idempotency key / body) is no longer method-shadowed (405); it
+        // reaches the mounted create handler's admission and is refused as invalid input.
         let (status, body) = request(&router, "POST", path, Some(&bearer)).await;
-        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     }
 
     /// The direct-pair initiation TARGET for viewer `user-1`: one host and one active
