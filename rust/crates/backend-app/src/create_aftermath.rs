@@ -10,13 +10,29 @@
 //! `close`d FIRST at shutdown while the daemon transport it drives is still alive) without
 //! reusing that deletion-marker state machine — the two lifecycles are unrelated.
 //!
+//! Two owned-lifetime guarantees the tracker enforces (a bare `tokio::spawn` gives
+//! neither):
+//!   * **Cancellation completes before teardown.** [`CreateAftermath::close`] aborts every
+//!     in-flight leg and then AWAITS each handle. `JoinHandle::abort` is only a
+//!     cancellation *request* — the task is not dropped until its next poll — so a bare
+//!     abort followed immediately by transport teardown races: the leg could still be
+//!     mid-poll against a daemon transport that is closing. Awaiting the aborted handle
+//!     resolves only after the runtime has DROPPED the leg's future, so when `close`
+//!     returns no leg can outlive the transport.
+//!   * **Settled legs are reaped without waiting for future traffic, and a panic is
+//!     never swallowed.** Each leg reaps its finished siblings the moment it settles and
+//!     reads their [`JoinError`], surfacing a panic as an operational signal. A burst of
+//!     legs followed by no further create therefore does not retain the whole batch until
+//!     shutdown, and a panicking leg is isolated to its own task (its siblings and any
+//!     later leg are untouched) yet still observed.
+//!
 //! It is deliberately NOT a general task framework: it owns exactly the create aftermath,
 //! and stays a bespoke component until a second consumer justifies a shared abstraction.
 
 use std::sync::{Arc, Mutex};
 
 use silverhand_backend_server::host_agent::agent_create::{AftermathDispatch, AftermathLeg};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinError, JoinHandle};
 
 /// The single create-aftermath tracker. A clone shares the one `Arc<Mutex<..>>` state, so
 /// the instance the route dispatches into and the instance `PreparedApp` closes at
@@ -31,10 +47,14 @@ struct TrackerState {
     /// new leg to a daemon transport that is being torn down.
     closed: bool,
     /// The in-flight legs. Each is its OWN spawned task, so a panic is isolated to that
-    /// task (the runtime catches it; the sibling leg's task is untouched). Finished and
-    /// panicked handles are recycled on the next dispatch, so a long-lived process never
-    /// accumulates an unbounded set of completed handles.
+    /// task (the runtime catches it; the sibling leg's task is untouched). A settled leg
+    /// prunes its finished siblings as soon as it completes, so the set does not grow
+    /// unbounded across a long-lived process even without further dispatch traffic.
     legs: Vec<JoinHandle<()>>,
+    /// The count of legs observed to have PANICKED, read off their `JoinError`. Kept so a
+    /// panic is a visible operational signal rather than a silently-dropped handle, and so
+    /// a test can witness that observation.
+    observed_panics: usize,
 }
 
 impl CreateAftermath {
@@ -43,25 +63,48 @@ impl CreateAftermath {
             state: Arc::new(Mutex::new(TrackerState {
                 closed: false,
                 legs: Vec::new(),
+                observed_panics: 0,
             })),
         }
     }
 
-    /// Stop accepting new legs and cancel every in-flight leg. Idempotent. Called at
-    /// shutdown FIRST — synchronously, while the daemon controller and the SQLite owner the
-    /// legs touch are both still alive — so a leg mid-flight is aborted rather than racing a
-    /// half-torn-down transport, and no leg dispatched after this point ever runs.
-    pub fn close(&self) {
-        let mut state = self.state.lock().expect("create aftermath state");
-        state.closed = true;
-        for leg in state.legs.drain(..) {
-            leg.abort();
+    /// Stop accepting new legs, cancel every in-flight leg, and AWAIT the cancellation to
+    /// complete. Called at shutdown FIRST — while the daemon controller and the SQLite
+    /// owner the legs touch are both still alive — so a leg mid-flight is not merely asked
+    /// to stop but has actually been dropped by the time this returns, ahead of the
+    /// transport teardown that follows. Idempotent: a second call finds no handles.
+    ///
+    /// It is `async` because both production shutdown callers
+    /// ([`crate::PreparedApp::close_connections`] and `serve`) are already async and
+    /// `await` it before tearing down transports.
+    pub async fn close(&self) {
+        let handles = {
+            let mut state = self.state.lock().expect("create aftermath state");
+            state.closed = true;
+            std::mem::take(&mut state.legs)
+        };
+        let mut panicked = 0usize;
+        for handle in handles {
+            handle.abort();
+            // Resolves only after the runtime has dropped the leg's future: a leg that
+            // panicked before the abort landed still surfaces `is_panic`; an aborted one
+            // resolves `is_cancelled`, which is the expected, benign shutdown outcome.
+            if is_panic(handle.await) {
+                panicked += 1;
+            }
+        }
+        if panicked > 0 {
+            tracing::error!(panicked, "create-aftermath legs panicked before shutdown");
+            self.state
+                .lock()
+                .expect("create aftermath state")
+                .observed_panics += panicked;
         }
     }
 
     /// The count of retained leg handles. Test-only observability: it lets the composition
     /// close-wiring witness prove a post-shutdown dispatch was rejected (stays `0`) and the
-    /// unit tests prove completed handles are recycled rather than accumulated.
+    /// unit tests prove settled handles are reaped rather than accumulated.
     #[cfg(test)]
     pub(crate) fn in_flight_len(&self) -> usize {
         self.state
@@ -69,6 +112,16 @@ impl CreateAftermath {
             .expect("create aftermath state")
             .legs
             .len()
+    }
+
+    /// The number of panicking legs observed so far. Test-only: witnesses that a panic is
+    /// read off the `JoinError` rather than silently dropped.
+    #[cfg(test)]
+    pub(crate) fn observed_panics(&self) -> usize {
+        self.state
+            .lock()
+            .expect("create aftermath state")
+            .observed_panics
     }
 }
 
@@ -87,20 +140,68 @@ impl AftermathDispatch for CreateAftermath {
             // leg is a benign miss, never a lost commit.
             return;
         }
-        // Recycle completed/panicked handles so the set never grows unbounded across a
-        // long-lived process's create traffic.
+        // Opportunistic prune keeps the common path bounded even before the self-reap
+        // below fires (e.g. the very first dispatch after a long idle).
         state.legs.retain(|handle| !handle.is_finished());
-        state.legs.push(tokio::spawn(leg));
+        let weak = Arc::downgrade(&self.state);
+        state.legs.push(tokio::spawn(async move {
+            leg.await;
+            // Self-reap: the instant this leg settles it prunes its FINISHED siblings and
+            // reads their `JoinError`, so a burst that is never followed by another
+            // dispatch is not retained until shutdown, and a sibling panic is surfaced.
+            // Its own handle is not yet finished (this task is still running), so it stays
+            // until the next sibling settles or `close` drains it — a single residual
+            // handle, never the batch. Best-effort: skip if the tracker is gone.
+            let Some(state) = weak.upgrade() else {
+                return;
+            };
+            let finished: Vec<JoinHandle<()>> = {
+                let mut state = state.lock().expect("create aftermath state");
+                let (finished, live) = std::mem::take(&mut state.legs)
+                    .into_iter()
+                    .partition(JoinHandle::is_finished);
+                state.legs = live;
+                finished
+            };
+            let mut panicked = 0usize;
+            for handle in finished {
+                // Immediate: the handle is already finished, so the await does not block.
+                if is_panic(handle.await) {
+                    panicked += 1;
+                }
+            }
+            if panicked > 0 {
+                tracing::error!(panicked, "create-aftermath leg panicked");
+                state
+                    .lock()
+                    .expect("create aftermath state")
+                    .observed_panics += panicked;
+            }
+        }));
     }
+}
+
+/// A join outcome is a panic exactly when the task neither completed nor was cancelled.
+fn is_panic(result: Result<(), JoinError>) -> bool {
+    result.err().is_some_and(|error| error.is_panic())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::sync::Notify;
     use tokio::time::timeout;
+
+    /// Sets a flag when dropped — the witness that a leg's FUTURE has actually been
+    /// dropped (cancellation completed), not merely that its business tail did not run.
+    struct DropFlag(Arc<AtomicBool>);
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
 
     /// A leg handed to the tracker is actually run.
     #[tokio::test]
@@ -122,26 +223,36 @@ mod tests {
         assert_eq!(ran.load(Ordering::SeqCst), 1);
     }
 
-    /// `close` cancels a leg that is still in flight: a leg parked on remote IO is aborted
-    /// before it can complete, and the handle set is drained. This is the shutdown-cancels-
-    /// in-flight boundary — a leg must never outlive the transport it drives.
+    /// `close` cancels a leg that is still in flight AND waits for the cancellation to
+    /// complete: a leg parked on remote IO is aborted, its future is dropped before
+    /// `close().await` returns (the `DropFlag` proves it), and the handle set is drained.
+    /// This is the shutdown-cancels-in-flight boundary — a leg must never outlive the
+    /// transport it drives, and the drain-await is what makes that true rather than a
+    /// best-hope. (Revert `close` to a bare synchronous abort with no await and the
+    /// `dropped-after-close` assertion below reddens: on the current-thread runtime the
+    /// aborted task has not yet been polled, so its future — and its `DropFlag` — is still
+    /// alive when a non-awaiting `close` returns.)
     #[tokio::test]
-    async fn close_cancels_an_in_flight_leg() {
+    async fn close_awaits_cancellation_of_an_in_flight_leg() {
         let tracker = CreateAftermath::new();
         let started = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicBool::new(false));
         let parked = Arc::new(Notify::new());
         let never = Arc::new(Notify::new());
         let finished = Arc::new(Notify::new());
         {
             let started = started.clone();
+            let drop_flag = DropFlag(dropped.clone());
             let parked = parked.clone();
             let never = never.clone();
             let finished = finished.clone();
             tracker.dispatch(Box::pin(async move {
+                // Keep the guard alive across the await so its drop marks the cancellation.
+                let _drop_flag = drop_flag;
                 started.fetch_add(1, Ordering::SeqCst);
                 parked.notify_one();
                 // Blocks until someone fires `never` — which the test only does AFTER the
-                // abort, so a still-running leg would reach `finished` but an aborted one
+                // close, so a still-running leg would reach `finished` but an aborted one
                 // never resumes past this await.
                 never.notified().await;
                 finished.notify_one();
@@ -151,9 +262,17 @@ mod tests {
             .await
             .expect("the leg must reach its await point");
         assert_eq!(tracker.in_flight_len(), 1, "one leg is in flight");
+        assert!(
+            !dropped.load(Ordering::SeqCst),
+            "the leg is still parked, not dropped"
+        );
 
-        tracker.close();
+        tracker.close().await;
         assert_eq!(tracker.in_flight_len(), 0, "close drains the handle set");
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "close().await must not return until the aborted leg's future is dropped"
+        );
 
         // Firing `never` now must not resurrect the aborted leg.
         never.notify_one();
@@ -171,7 +290,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_after_close_is_a_no_op() {
         let tracker = CreateAftermath::new();
-        tracker.close();
+        tracker.close().await;
         let ran = Arc::new(AtomicUsize::new(0));
         let done = Arc::new(Notify::new());
         {
@@ -192,52 +311,46 @@ mod tests {
         assert_eq!(ran.load(Ordering::SeqCst), 0);
     }
 
-    /// Completed handles are recycled on the next dispatch, so a long-lived process never
-    /// accumulates finished handles. A first leg runs to completion, is still retained
-    /// (nothing prunes eagerly), then the next dispatch drops it before pushing — the set
-    /// holds exactly one live handle, not two.
+    /// Settled legs are reaped WITHOUT a further dispatch: a burst of legs that all
+    /// complete does not retain the whole batch until shutdown. As each leg settles it
+    /// prunes its finished siblings, so the set converges to at most one residual handle
+    /// (the last-settling leg cannot reap its own still-running task) purely on task
+    /// completion — no new business request required.
     #[tokio::test]
-    async fn completed_handles_are_recycled_on_next_dispatch() {
+    async fn settled_legs_are_reaped_without_a_further_dispatch() {
         let tracker = CreateAftermath::new();
-        let done1 = Arc::new(Notify::new());
-        {
-            let done1 = done1.clone();
+        let remaining = Arc::new(AtomicUsize::new(4));
+        let all_done = Arc::new(Notify::new());
+        for _ in 0..4 {
+            let remaining = remaining.clone();
+            let all_done = all_done.clone();
             tracker.dispatch(Box::pin(async move {
-                done1.notify_one();
+                if remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
+                    all_done.notify_one();
+                }
             }));
         }
-        timeout(Duration::from_secs(5), done1.notified())
+        timeout(Duration::from_secs(5), all_done.notified())
             .await
-            .expect("first leg must run");
-        // Let the completed task settle so its handle reports finished.
-        for _ in 0..16 {
+            .expect("all four legs must run");
+        // Let the self-reap tasks settle.
+        for _ in 0..32 {
             tokio::task::yield_now().await;
         }
-        assert_eq!(
-            tracker.in_flight_len(),
-            1,
-            "the finished handle is still retained until the next dispatch prunes it"
-        );
-
-        let done2 = Arc::new(Notify::new());
-        {
-            let done2 = done2.clone();
-            tracker.dispatch(Box::pin(async move {
-                done2.notify_one();
-            }));
-        }
-        assert_eq!(
-            tracker.in_flight_len(),
-            1,
-            "the finished first handle was recycled; only the new leg remains"
+        assert!(
+            tracker.in_flight_len() <= 1,
+            "settled legs are reaped on completion, leaving at most one residual handle, not \
+             the whole batch (found {})",
+            tracker.in_flight_len()
         );
     }
 
     /// A panicking leg is isolated to its own task: the runtime catches the panic, the
-    /// sibling leg still runs, and the tracker's lock is not poisoned — a later dispatch
-    /// still works.
+    /// sibling leg still runs, the tracker's lock is not poisoned (a later dispatch still
+    /// works), AND the panic is observed rather than silently dropped — a later settling
+    /// leg reads the panicking leg's `JoinError` and records it.
     #[tokio::test]
-    async fn a_panicking_leg_does_not_poison_the_tracker() {
+    async fn a_panicking_leg_is_isolated_and_observed() {
         let tracker = CreateAftermath::new();
         tracker.dispatch(Box::pin(async {
             panic!("leg blew up");
@@ -273,5 +386,14 @@ mod tests {
             .await
             .expect("the tracker still dispatches after a panicking leg");
         assert_eq!(later_ran.load(Ordering::SeqCst), 1);
+
+        // Drain anything still settling, then confirm the panic was observed (either by a
+        // sibling's self-reap or by close reading the `JoinError`).
+        tracker.close().await;
+        assert_eq!(
+            tracker.observed_panics(),
+            1,
+            "the panicking leg's JoinError was read, not silently dropped"
+        );
     }
 }

@@ -389,9 +389,9 @@ impl PreparedApp {
         // start a new attempt during the transport teardown below.
         self.deletion_resumer.close();
         // #2234 CP6: the create-aftermath boundary closes alongside the resumer — before any
-        // transport — so an in-flight onboarding/runtime-start leg is cancelled and no leg
-        // dispatched during shutdown reaches the daemon being torn down.
-        self.create_aftermath.close();
+        // transport — so an in-flight onboarding/runtime-start leg is cancelled AND its
+        // future awaited-to-drop before the daemon it drives is torn down.
+        self.create_aftermath.close().await;
         shut_down_transports(
             &self.event_controller,
             &self.daemon_controller,
@@ -1498,8 +1498,9 @@ where
             // can be started during the transport teardown that follows.
             deletion_resumer.close();
             // #2234 CP6: the create-aftermath boundary closes alongside it — same window,
-            // ahead of transport teardown — cancelling any in-flight leg.
-            create_aftermath.close();
+            // ahead of transport teardown — cancelling any in-flight leg and awaiting its
+            // future to drop before the daemon it drives is torn down.
+            create_aftermath.close().await;
             // The one shared shutdown order (see `shut_down_transports`): event close
             // then an immediate presence dispose, daemon close concurrent but never
             // wedged between the two.
@@ -5806,10 +5807,13 @@ mod tests {
     /// probe, tolerate the attach-time `host_runtime_catalog`, and — the point of the gate —
     /// answer `agent_materialize` with the schema-valid success the codec requires, so the
     /// production `ProductionAgentMaterialize` port completes and the saga proceeds to provision
-    /// the graph. The two post-commit aftermath legs also cross this wire: `runtime_start`
-    /// (which fires `start_seen`) and, if the runtime inbox has a pending delivery,
-    /// `runtime_deliver`. Every create-effect command is RECORDED in `seen` so the gate can
-    /// prove the real wire was hit exactly once and that an idempotent echo replays none of it.
+    /// the graph. Of the two post-commit aftermath legs, only `runtime_start` (which fires
+    /// `start_seen`) actually crosses this wire on a real create; the onboarding `deliver`
+    /// leg reaches `Empty` → `NoPending` (the create graph enqueues no runtime-inbox row) and
+    /// emits NO `runtime_deliver` command. A `runtime_deliver` arm is kept here anyway so that
+    /// if the model ever changes, the recorded-command count would catch it rather than
+    /// silently pass. Every create-effect command is RECORDED in `seen` so the gate can prove
+    /// the real wire was hit exactly once and that an idempotent echo replays none of it.
     async fn service_agent_create_commands<S>(
         mut socket: tokio_tungstenite::WebSocketStream<S>,
         stop: std::sync::Arc<tokio::sync::Notify>,
@@ -5934,11 +5938,22 @@ mod tests {
     /// provision-graph minted the agent's home workspace (owner_agent edge), the fixed
     /// onboarding DM channel, the onboarding message on it, and the creator's owner + DM roster
     /// edges. The real materialize crossed the WS exactly once; the real aftermath reached the
-    /// real transport (`runtime_start`). An idempotent replay (same key + body) echoes `200`
-    /// and replays NONE of it: no second materialize, no second start leg, no duplicate rows.
-    /// The shared `/api/agents` node still lists agents (disjoint-method merge did not clobber
-    /// `GET`), and the shared `CreateAftermath` the shutdown arm closed rejects post-shutdown
-    /// legs.
+    /// real transport (`runtime_start`); the created arm's inline `agent_changed` fired exactly
+    /// once through the real app-scope hub sink. An idempotent replay (same key + body) echoes
+    /// `200` and replays NONE of it: no second materialize, no second start leg, no second
+    /// `agent_changed` frame, no duplicate rows. The shared `/api/agents` node still lists
+    /// agents (disjoint-method merge did not clobber `GET`), and the shared `CreateAftermath`
+    /// the shutdown arm closed rejects post-shutdown legs.
+    ///
+    /// The four candidate post-commit effects are direct-pairs / agent_changed / onboarding
+    /// deliver / runtime start. This conversation-arm gate witnesses the two that are reachable
+    /// on it — `agent_changed` (app-scope high-water delta) and `runtime_start` — and their
+    /// zero-replay on echo. The direct-pairs frame belongs to the agent arm and is witnessed by
+    /// `the_composition_agent_create_agent_arm_publishes_the_fresh_direct_pair`. The onboarding
+    /// deliver leg emits NO wire effect on a real create (`Empty` → `NoPending`, no
+    /// `conversation_inboxes` row is enqueued), so there is deliberately no `runtime_deliver`
+    /// assertion — asserting one would be a false witness for an effect the model does not
+    /// produce.
     ///
     /// The handler-level orchestration (both legs scheduled, `201` sealed before the legs run,
     /// echo fires nothing, per-arm coordinates, direct-pairs gating) is proven by the leaf
@@ -6012,6 +6027,11 @@ mod tests {
                 .await
                 .expect("the daemon must attach (host_status probe) before create captures");
 
+            // Baseline for the inline post-commit `agent_changed` (app scope): nothing
+            // published for this create yet. Read after attach so a daemon-attach frame, if
+            // any, is already behind the high-water.
+            let app_before = fresh_scope_high_water(address, "app").await;
+
             // The full saga to 201 (conversation arm — session_scope defaults to conversation).
             let (status, body) = post_create(
                 &router,
@@ -6051,6 +6071,21 @@ mod tests {
                 count_kind(&seen, "runtime_start"),
                 1,
                 "the aftermath start leg hit the daemon exactly once"
+            );
+
+            // The inline post-commit `agent_changed` (app scope) fired EXACTLY once through
+            // the real `hub.agent_changed_sink()` wired into `prepare()`. Break that sink (or
+            // strip the inline publish from the created arm) and this delta drops to 0. The
+            // onboarding `deliver` leg is intentionally NOT asserted here: on a real create
+            // the provision-graph writes the onboarding message but enqueues NO
+            // `conversation_inboxes` row, so `claim_pending` returns `Empty` → `NoPending` and
+            // no `runtime_deliver` command ever crosses the wire (the agent reads its own
+            // committed inbox when its runtime starts). See the CP6 model-gap note.
+            let app_after_create = fresh_scope_high_water(address, "app").await;
+            assert_eq!(
+                app_after_create - app_before,
+                1,
+                "the created arm publishes exactly one app-scope agent_changed frame"
             );
 
             // DB graph facts — the real provision-graph completed the conversation arm. A
@@ -6154,8 +6189,9 @@ mod tests {
                 "the created agent appears in the shared-node list: {list_body}"
             );
 
-            // Idempotent replay: SAME key + body echoes 200 and replays NONE of the four
-            // post-commit effects — no second materialize, no second start leg.
+            // Idempotent replay: SAME key + body echoes 200 and replays NONE of the reachable
+            // post-commit effects — no second materialize, no second start leg, and no second
+            // app-scope `agent_changed` frame.
             let materialize_before = count_kind(&seen, "agent_materialize");
             let start_before = count_kind(&seen, "runtime_start");
             let (echo_status, echo_body) = post_create(
@@ -6190,6 +6226,12 @@ mod tests {
                 count_kind(&seen, "runtime_start"),
                 start_before,
                 "the echo schedules no second runtime-start leg"
+            );
+            let app_after_echo = fresh_scope_high_water(address, "app").await;
+            assert_eq!(
+                app_after_echo - app_after_create,
+                0,
+                "the echo publishes no second app-scope agent_changed frame"
             );
             let agents_named: i64 =
                 sqlx::query_scalar("SELECT count(*) FROM agents WHERE name = 'createbot'")
