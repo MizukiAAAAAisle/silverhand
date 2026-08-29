@@ -51,6 +51,14 @@ use silverhand_backend_server::{
     host_control::runtime_availability::DataPlaneRuntimeAvailabilityProbe,
     host_resources, host_runtime,
     human_auth::{self, HumanAuthDeps},
+    internal_agent::{
+        peer_profile::{PeerProfilePorts, peer_profile_router},
+        profile::self_profile_router,
+        profile_write::{
+            InternalAvatarWriteState, InternalProfileWriteState, internal_avatar_write_router,
+            internal_profile_write_router,
+        },
+    },
     messaging::{
         TargetAddressRefusalLog,
         collaboration::{
@@ -91,6 +99,7 @@ use silverhand_backend_sqlite::{
     agent_detail_read::SqliteAgentDetailColdRead,
     agent_list_read::SqliteAgentListColdRead,
     agent_presence_read::SqliteAgentPresenceColdRead,
+    agent_profile_read::SqliteAgentProfileRead,
     agent_profile_write::SqliteAgentProfileWrite,
     auth::SqliteSessionStore,
     computer_agents_read::SqliteComputerAgentsRead,
@@ -383,6 +392,14 @@ pub struct PreparedApp {
     /// the daemon transport its legs drive is still alive — cancelling any in-flight leg and
     /// rejecting any dispatched afterward, exactly like the deletion resumer above.
     create_aftermath: CreateAftermath,
+    /// #2234 CP7a (test-only): a clone of the ONE runtime-credential authority the
+    /// `agent_products` perimeter is wrapped with. Carried so a composition test can mint a
+    /// real bearer through `dispatch_start` against the SAME in-memory token store the mounted
+    /// perimeter authenticates against — the authority is `Arc`-backed, so the clone shares its
+    /// process-local token map. This is the only way to drive the internal self-scope routes'
+    /// authenticated effect through the real `prepare()` router; never read in production.
+    #[cfg(test)]
+    test_runtime_credentials: RuntimeCredentialAuthority<SqliteRuntimeCustodyStore>,
 }
 
 impl PreparedApp {
@@ -547,6 +564,16 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     let agent_avatar_read = open(
         "agent avatar read",
         SqliteAgentAvatarRead::open(&config.database_path),
+    )
+    .await?;
+    // #2234 CP7a — the ONE narrow agent-profile read model the internal self-scope family
+    // consumes: `GET /internal/agents/{aid}/profile` (self read), the `POST` reprojection, and
+    // the `GET .../peer-profile` cross-agent read all reproject through this single
+    // ACL-scoped profile reader, never a second read authority. A read-only snapshot pool on
+    // the SAME product database file, opened by path exactly like every sibling `*ColdRead`.
+    let agent_profile_read = open(
+        "agent profile read",
+        SqliteAgentProfileRead::open(&config.database_path),
     )
     .await?;
     let presence_cold_read = open(
@@ -769,6 +796,14 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // above, which is itself that transport. So this mount cannot announce a pair-open on
     // one hub while the pair's first message publishes on another — there is no parameter
     // to say it in.
+    // #2234 CP7a: the caller-side truth the internal peer-profile read consults, captured
+    // before `write_doors` below moves `messaging_store`. It is the SAME ONE `MessagingStore`
+    // the send/task-board gates hold — a clone shares its pool, and this ONE value answers all
+    // three caller ports (`CallerConversationPlacement` / `CallerWorkspaceHorizon` /
+    // `CallerReadMessagesCapability`), so the peer route reads the placement floor, the
+    // cross-workspace horizon, and the `read_messages` capability through the same authority,
+    // never a second store minted for the internal family.
+    let peer_profile_caller = messaging_store.clone();
     let (human_writes, agent_writes) = aftermath.write_doors(messaging_store, target_address);
 
     let host = host_runtime::router(
@@ -1036,6 +1071,41 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         },
         sessions.clone(),
     );
+    // #2234 CP7a: the internal, runtime-credentialed self-scope family (five faces),
+    // assembled here — before `human_products` below moves `agent_profile_write`,
+    // `agent_avatar_blobs`, and `agent_detail_cold_read` into the PUBLIC avatar mount and
+    // `access_store` into the workspace-access mount — then merged behind the SAME
+    // `require_runtime_credential` layer its already-mounted siblings sit behind (so the
+    // layer self-pins `{aid}` to the caller's own agent, and an unlisted method on any shared
+    // node is axum's 405). Every owner is the ONE production authority its public counterpart
+    // holds — the ONE `SqliteAgentProfileWrite` and ONE `SingleKindAvatarBlobs` #2225's
+    // `agent_avatar_write` reprojects through, the ONE `agent_changed` hub sink, the ONE
+    // `agent_detail_cold_read` full-agent reprojector for the avatar echo, and the ONE narrow
+    // `agent_profile_read` for the profile/peer reads — cloned, never a second store. The
+    // three shared internal nodes carry disjoint-method unions: `/profile` (GET read + POST
+    // write, across two factories), `/avatar` (POST set + DELETE clear, one factory).
+    let internal_agent_products = self_profile_router(agent_profile_read.clone())
+        .merge(internal_profile_write_router(InternalProfileWriteState {
+            writes: agent_profile_write.clone(),
+            blobs: agent_avatar_blobs.clone(),
+            announce: hub.agent_changed_sink(),
+            reader: agent_profile_read.clone(),
+            clock: SystemProcessClock,
+        }))
+        .merge(internal_avatar_write_router(InternalAvatarWriteState {
+            writes: agent_profile_write.clone(),
+            blobs: agent_avatar_blobs.clone(),
+            announce: hub.agent_changed_sink(),
+            reader: agent_detail_cold_read.clone(),
+            clock: SystemProcessClock,
+        }))
+        .merge(peer_profile_router(PeerProfilePorts {
+            placement: peer_profile_caller.clone(),
+            horizon: peer_profile_caller.clone(),
+            capability: peer_profile_caller,
+            reader: agent_profile_read,
+            membership: access_store.clone(),
+        }));
     let human_products = require_human_session(
         host.merge(human_writes)
             // Wave 3A checkpoint A6 (#2203): `POST /api/agents/{id}/direct-messages`, the
@@ -1298,6 +1368,12 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         sessions.clone(),
         PublicJsonUnauthorized,
     );
+    // #2234 CP7a (test-only): capture a clone of the runtime-credential authority BEFORE it is
+    // moved into the perimeter below. The authority is `Arc`-backed (its process-local token
+    // map is an `Arc<RwLock<…>>`), so the clone and the perimeter share ONE token store — a
+    // bearer a test mints through this clone authenticates against the mounted router.
+    #[cfg(test)]
+    let test_runtime_credentials = runtime_credentials.clone();
     let agent_products = require_runtime_credential(
         agent_writes
             .merge(task_list_router(TaskListState {
@@ -1308,7 +1384,14 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
                 stale_admission,
                 stale_capability,
                 TracingStaleMessageResolutionObserver,
-            )),
+            ))
+            // #2234 CP7a: the internal self-scope profile/avatar/peer family assembled above,
+            // merged into the SAME runtime-credential perimeter as the send-message/task-list/
+            // stale-resolution siblings. Its `/internal/agents/{aid}/…` paths are all fresh
+            // nodes (no collision with the public `/api/agents/…` family), and the wrapping
+            // layer below self-pins `{aid}` so a foreign or missing/invalid bearer is a uniform
+            // 401 across every listed method.
+            .merge(internal_agent_products),
         runtime_credentials,
     );
 
@@ -1407,6 +1490,8 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         presence_timers,
         deletion_resumer,
         create_aftermath,
+        #[cfg(test)]
+        test_runtime_credentials,
     })
 }
 
@@ -1490,6 +1575,8 @@ where
         presence_timers,
         deletion_resumer,
         create_aftermath,
+        #[cfg(test)]
+            test_runtime_credentials: _,
     } = app;
     // The serving boundary, witnessed by the already-bound `TcpListener` this function
     // was handed: reaching here means a listener exists, so `/readyz` may now report
@@ -3477,14 +3564,23 @@ mod tests {
             assert_eq!(body, unauthorized, "{method} {path}");
         }
 
-        // The three runtime-perimeter internal doors. Anonymous → the runtime
-        // credential perimeter's `401` on the matched route, never `404`.
-        const RUNTIME_PERIMETER_DOORS: [(&str, &str); 3] = [
+        // The runtime-perimeter internal doors. Anonymous → the runtime credential
+        // perimeter's `401` on the matched route, never `404`. The original three (#2226-era
+        // send/tasks/stale) plus the #2234 CP7a self-scope profile family: `/profile` GET+POST
+        // (disjoint union across the read and write factories), `/avatar` POST+DELETE (one
+        // factory), and `/peer-profile` GET. All eight ride the ONE `require_runtime_credential`
+        // layer, so anon on any listed method is the same bodiless 401.
+        const RUNTIME_PERIMETER_DOORS: [(&str, &str); 8] = [
             ("POST", "/internal/agents/agent-1/send-message"),
             ("GET", "/internal/agents/agent-1/tasks"),
             ("POST", "/internal/agents/agent-1/stale-message-resolution"),
+            ("GET", "/internal/agents/agent-1/profile"),
+            ("POST", "/internal/agents/agent-1/profile"),
+            ("POST", "/internal/agents/agent-1/avatar"),
+            ("DELETE", "/internal/agents/agent-1/avatar"),
+            ("GET", "/internal/agents/agent-1/peer-profile"),
         ];
-        assert_eq!(RUNTIME_PERIMETER_DOORS.len(), 3);
+        assert_eq!(RUNTIME_PERIMETER_DOORS.len(), 8);
         for (method, path) in RUNTIME_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -3847,16 +3943,18 @@ mod tests {
     /// Gate 2 of the CP2 convergence closure — the #2195 host-agent control-plane lane
     /// as a bidirectionally CLOSED universe of 54, every entry itemized `(method, path)`
     /// in a named table that is mechanically checksummed: the four tables' lengths are
-    /// pinned (`30`/`4`/`20`/`0`), every `(method, path)` across the union is unique,
+    /// pinned (`35`/`4`/`15`/`0`), every `(method, path)` across the union is unique,
     /// landed is disjoint from residual, and the union is exactly `54`. This is the
     /// lane's ORIGINAL owned total (it still counts the three dynamic host reads since
     /// handed to #2198). Deleting a row, or copying one between tables, breaks the
-    /// checksum — `(30 + 4) + (20 + 0) == 54` is an assertion, not prose.
+    /// checksum — `(35 + 4) + (15 + 0) == 54` is an assertion, not prose.
     ///
     /// Every one of the 54 routes is FALSIFIABLE — none rests on an
     /// unfalsifiable anon `401`:
-    /// * The 30 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
-    ///   perimeter → anon `401` (includes #2218's authenticated `/api/runtimes`, three of
+    /// * The 35 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
+    ///   perimeter OR the runtime-credential perimeter → anon `401` (both perimeters emit the
+    ///   SAME `{"error":"unauthorized"}` bodiless envelope). Includes #2218's authenticated
+    ///   `/api/runtimes`, three of
     ///   #2219's four host-custody routes: list, claim-or-create, and
     ///   `{id}/rotate-token`; the fourth, `connect-token/resolve`, is allowlisted and
     ///   lands anonymously below; the four #2223 CP5 host residual routes: detail
@@ -3873,7 +3971,10 @@ mod tests {
     ///   and the one #2234 CP5 public-agent face: `POST /api/agents/{id}/stop`, whose gate
     ///   read and seat-snapshot read stay two separate sole authorities; and the one #2234
     ///   CP6 public-agent face: `POST /api/agents` (create), a second method on the GET-list
-    ///   `/api/agents` node, driving the reserve→materialize→provision-graph saga).
+    ///   `/api/agents` node, driving the reserve→materialize→provision-graph saga; and the
+    ///   five #2234 CP7a internal self-scope faces behind the RUNTIME-credential perimeter:
+    ///   `GET`+`POST /internal/agents/{aid}/profile`, `POST`+`DELETE /internal/agents/{aid}/avatar`,
+    ///   and `GET /internal/agents/{aid}/peer-profile`).
     ///   Deleting any one's `.merge(...)` flips it to `404` and reddens this gate
     ///   (delete-landed RED).
     /// * The 4 ANON-LANDED routes are mounted ahead of every perimeter → an anonymous
@@ -3884,7 +3985,7 @@ mod tests {
     ///   whose `error_code` body (asserted after the loop) proves it landed anonymously and
     ///   not behind the perimeter. Neither the guarded (bodiless) `401` nor the absent
     ///   `404`. Deleting any one's `.merge(...)` flips it to `404` and reddens this gate.
-    /// * 20 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
+    /// * 15 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
     ///   Mounting any one flips it to its perimeter's `401`/`405` and reddens this gate
     ///   (mount-residual RED).
     /// * 0 METHOD-SHADOW residuals remain: `POST /api/agents` was the last one, mounted by
@@ -3899,8 +4000,9 @@ mod tests {
     /// anon-landed).
     #[tokio::test]
     async fn the_host_agent_lane_stays_a_closed_universe_of_fifty_four() {
-        // The 30 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
-        // perimeter → anon 401.
+        // The 35 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
+        // perimeter OR the runtime-credential perimeter → anon 401 (both emit the same
+        // `{"error":"unauthorized"}` envelope).
         const LANDED: &[(&str, &str)] = &[
             ("GET", "/api/agents"),
             ("GET", "/api/agents/agent-1"),
@@ -3988,6 +4090,17 @@ mod tests {
             // legs), all NOT replayed on an Echo — is borne by
             // `the_composition_agent_create_face_drives_the_full_saga_and_post_commit_effects`.
             ("POST", "/api/agents"),
+            // #2234 CP7a: the five internal self-scope profile faces, now MOUNTED behind the
+            // runtime-credential perimeter (the send/tasks/stale siblings' layer) → anon 401.
+            // Moved here from CLEAN_RESIDUAL below; the three `/profile/mcp` faces stay residual
+            // for CP7b. `/profile` GET+POST and `/avatar` POST+DELETE are disjoint-method
+            // unions; `/peer-profile` is its own node. Deleting any one's merge flips it to 404
+            // and reddens this gate (delete-landed RED).
+            ("GET", "/internal/agents/agent-1/profile"),
+            ("POST", "/internal/agents/agent-1/profile"),
+            ("POST", "/internal/agents/agent-1/avatar"),
+            ("DELETE", "/internal/agents/agent-1/avatar"),
+            ("GET", "/internal/agents/agent-1/peer-profile"),
         ];
         // The 4 ANON-LANDED routes: mounted ahead of every perimeter, so an anonymous
         // probe reaches the handler. #2218's server/info and health answer 200; readyz
@@ -4006,7 +4119,7 @@ mod tests {
                 StatusCode::UNAUTHORIZED,
             ),
         ];
-        // 21 RESIDUAL routes whose path matches no mounted route → anon 404.
+        // 15 RESIDUAL routes whose path matches no mounted route → anon 404.
         const CLEAN_RESIDUAL: &[(&str, &str)] = &[
             // routes.ts remaining (1)
             ("POST", "/auth/embedded-bootstrap"),
@@ -4028,16 +4141,11 @@ mod tests {
             ("GET", "/api/agents/agent-1/chats/conv-1/attachments/att-1"),
             ("GET", "/api/agents/agent-1/schedules"),
             ("POST", "/api/agents/agent-1/schedules/sched-1/cancel"),
-            // internal profile-MCP (3)
+            // internal profile-MCP (3) — stay residual until #2234 CP7b mounts them
             ("GET", "/internal/agents/agent-1/profile/mcp"),
             ("POST", "/internal/agents/agent-1/profile/mcp"),
             ("POST", "/internal/agents/agent-1/profile/mcp/probe"),
-            // internal profile (5)
-            ("POST", "/internal/agents/agent-1/avatar"),
-            ("DELETE", "/internal/agents/agent-1/avatar"),
-            ("GET", "/internal/agents/agent-1/profile"),
-            ("POST", "/internal/agents/agent-1/profile"),
-            ("GET", "/internal/agents/agent-1/peer-profile"),
+            // internal profile (5) — MOUNTED by #2234 CP7a, moved to LANDED above
             // diagnostic (1)
             ("POST", "/internal/agents/agent-1/cli-trace"),
         ];
@@ -4045,11 +4153,11 @@ mod tests {
         // #2234 CP6 (now a second method on the GET-list `/api/agents` node, landed above).
         const METHOD_SHADOW_RESIDUAL: &[(&str, &str)] = &[];
 
-        // ── Mechanical checksum: (30 + 4) + (20 + 0) == 54, all unique, landed ∩
+        // ── Mechanical checksum: (35 + 4) + (15 + 0) == 54, all unique, landed ∩
         // residual = ∅ ──
-        assert_eq!(LANDED.len(), 30);
+        assert_eq!(LANDED.len(), 35);
         assert_eq!(ANON_LANDED.len(), 4);
-        assert_eq!(CLEAN_RESIDUAL.len(), 20);
+        assert_eq!(CLEAN_RESIDUAL.len(), 15);
         assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 0);
         let landed: std::collections::HashSet<(&str, &str)> = LANDED
             .iter()
@@ -4061,8 +4169,8 @@ mod tests {
             .chain(METHOD_SHADOW_RESIDUAL)
             .copied()
             .collect();
-        assert_eq!(landed.len(), 34, "landed rows are unique");
-        assert_eq!(residual.len(), 20, "residual rows are unique");
+        assert_eq!(landed.len(), 39, "landed rows are unique");
+        assert_eq!(residual.len(), 15, "residual rows are unique");
         assert!(
             landed.is_disjoint(&residual),
             "landed and residual are disjoint"
@@ -4080,7 +4188,7 @@ mod tests {
         let bearer = format!("Bearer {TOKEN}");
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // ── 30 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
+        // ── 35 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
         for (method, path) in LANDED {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(
@@ -4773,6 +4881,361 @@ mod tests {
         );
 
         socket.close(None).await.unwrap();
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+    }
+
+    /// #2234 CP7a — the internal self-scope profile/avatar/peer family, driven through the
+    /// REAL `prepare()` router over a REAL minted runtime credential.
+    ///
+    /// The `RUNTIME_PERIMETER_DOORS` ledger already proves each `/internal/agents/{aid}/…`
+    /// path is MOUNTED and refuses an anonymous caller with `{"error":"unauthorized"}`. What
+    /// no anonymous probe can show is that the handlers BEHIND that perimeter reach real
+    /// durable authority. So this mints a bearer through the SAME `Arc`-backed
+    /// `RuntimeCredentialAuthority` the perimeter authenticates against (the `#[cfg(test)]`
+    /// `test_runtime_credentials` handle is a clone sharing its process-local token store),
+    /// then drives the family end to end:
+    ///   * a valid bearer reaches its OWN `{aid}`; a foreign `{aid}` and a missing/invalid
+    ///     bearer are the uniform perimeter 401; an unlisted method is the ROUTE's 405.
+    ///   * profile POST commits durably (GET readback) and announces exactly one
+    ///     `agent_changed`; the readback proves GET and POST coexist on the one profile node.
+    ///   * internal avatar POST → public `/api/agents/{id}/avatar` GET returns those exact
+    ///     bytes → internal DELETE → the public GET is 404 — proving the internal write and
+    ///     the #2225 public read share ONE `SingleKindAvatarBlobs` root, and that POST and
+    ///     DELETE coexist on the one internal avatar node.
+    ///   * peer-profile passes the real caller ladder (horizon + `read_messages`) and runs
+    ///     the real by-handle reader — an unknown handle collapses to the leaf's 404, which a
+    ///     shaped stub could never reach through the ladder.
+    /// The refusal grammar, projection bytes and effect semantics are each pinned by the
+    /// leaves' own tests; this asserts the MOUNT + authenticated wiring, not a second reading.
+    #[tokio::test]
+    async fn the_composition_internal_self_scope_family_reaches_and_effects_over_one_runtime_credential()
+     {
+        use std::{
+            convert::Infallible,
+            future::Future,
+            sync::{Arc, Mutex},
+        };
+
+        use silverhand_backend_core::{
+            identity::{ConversationId, DaemonInstanceId},
+            runtime_credential::RuntimeScope,
+        };
+        use silverhand_backend_server::runtime_credential::{
+            RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
+        };
+
+        let fixture = fixture(true).await;
+        // The APP-scope high-water probe below rides the human event WebSocket, which
+        // authenticates as `user-1` via the seeded `auth_sessions` row (bearer `TOKEN`).
+        // `seed_human` also inserts the `user-1` row the host/agent/workspace rows reference.
+        seed_human(&fixture.path).await;
+        let pool = SqlitePoolOptions::new()
+            .connect(fixture.path.to_str().unwrap())
+            .await
+            .unwrap();
+        // `agent-1` is the ONE self-scope subject. `session_scope='agent'` fires the
+        // `agents_create_agent_runtime_slot` trigger, so a claimable `agent_runtime_slots`
+        // row exists for `dispatch_start` to mint against. Membership in `workspace0000001`
+        // plus its `read_messages` capability lets the peer-profile caller ladder pass all
+        // the way to the real by-handle reader.
+        for statement in [
+            "INSERT INTO hosts (id, name, kind, created_at, user_id) \
+             VALUES ('h-cp7a', 'host-cp7a', 'remote', 1, 'user-1')",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, \
+             created_by_user_id, materialization_status, session_scope) \
+             VALUES ('agent-1', 'agent-one', 'qoder', 'h-cp7a', 1, 1, 'user-1', 'active', 'agent')",
+            "INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at) \
+             VALUES ('workspace0000001', 'Product Space', 'product space', 'user-1', 0, 0)",
+            "INSERT INTO workspace_members (workspace_id, agent_id, joined_at) \
+             VALUES ('workspace0000001', 'agent-1', 0)",
+            "INSERT INTO workspace_agent_capabilities (workspace_id, agent_id, capability) \
+             VALUES ('workspace0000001', 'agent-1', 'read_messages')",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        pool.close().await;
+
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+
+        // Mint a REAL bearer through the SAME authority the mounted perimeter holds — BEFORE
+        // `serve` consumes `app`. The authority is `Arc`-backed, so the token this records in
+        // the shared process-local store is exactly the one the running router authenticates.
+        #[derive(Clone, Default)]
+        struct CapturingStart(Arc<Mutex<Option<String>>>);
+        impl RuntimeStartTransport for CapturingStart {
+            type Error = Infallible;
+
+            fn dispatch(
+                &self,
+                handoff: &RuntimeStartHandoff,
+            ) -> impl Future<Output = Result<(), RuntimeDispatchFailure<Self::Error>>> + Send
+            {
+                *self.0.lock().unwrap() = Some(handoff.daemon_auth_token().to_owned());
+                std::future::ready(Ok(()))
+            }
+        }
+        let transport = CapturingStart::default();
+        app.test_runtime_credentials
+            .dispatch_start(
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-1").unwrap(),
+                },
+                DaemonInstanceId::parse("daemon-1").unwrap(),
+                ConversationId::parse(CONVERSATION_ID).unwrap(),
+                &transport,
+            )
+            .await
+            .unwrap();
+        let token = transport.0.lock().unwrap().clone().unwrap();
+        let bearer = format!("Bearer {token}");
+        // The public avatar GET rides the HUMAN perimeter, not the runtime one, so the
+        // round-trip reads it back as the seeded human session (`user-1`, creator of
+        // `agent-1`) — the same bearer #2225's public avatar test uses.
+        let human_bearer = format!("Bearer {TOKEN}");
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+
+        // ---- (1) the perimeter: a valid bearer reaches self; a foreign `{aid}`, a missing
+        // bearer and an unknown bearer all collapse to the uniform 401; an unlisted method is
+        // the ROUTE's 405 (asserted after an admitted call, below).
+        let anon =
+            http_over_tcp(address, "GET", "/internal/agents/agent-1/profile", None, "").await;
+        assert!(
+            anon.starts_with("HTTP/1.1 401 Unauthorized\r\n"),
+            "a missing bearer is the runtime perimeter 401: {anon}"
+        );
+        let bad = http_over_tcp(
+            address,
+            "GET",
+            "/internal/agents/agent-1/profile",
+            Some("Bearer unknown-runtime-token"),
+            "",
+        )
+        .await;
+        assert!(
+            bad.starts_with("HTTP/1.1 401 Unauthorized\r\n"),
+            "an unknown bearer is the runtime perimeter 401: {bad}"
+        );
+        let foreign = http_over_tcp(
+            address,
+            "GET",
+            "/internal/agents/agent-2/profile",
+            Some(&bearer),
+            "",
+        )
+        .await;
+        assert!(
+            foreign.starts_with("HTTP/1.1 401 Unauthorized\r\n"),
+            "the bearer self-pins to agent-1: a foreign {{aid}} is refused at the perimeter: {foreign}"
+        );
+        let unauthorized: serde_json::Value =
+            serde_json::from_str(foreign.split_once("\r\n\r\n").expect("body").1).unwrap();
+        assert_eq!(
+            unauthorized["error"], "unauthorized",
+            "the runtime perimeter shares the human perimeter's refusal body: {unauthorized}"
+        );
+
+        // ---- (2) profile POST commits durably + announces exactly one agent_changed; the
+        // GET readback proves the GET and POST method-union coexist on the one node.
+        let boundary = "XBOUNDARYCP7A";
+        let mut profile_form: Vec<u8> = Vec::new();
+        profile_form.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        profile_form
+            .extend_from_slice(b"Content-Disposition: form-data; name=\"display_name\"\r\n\r\n");
+        profile_form.extend_from_slice(b"Renamed Self");
+        profile_form.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
+        profile_form
+            .extend_from_slice(b"Content-Disposition: form-data; name=\"description\"\r\n\r\n");
+        profile_form.extend_from_slice(b"a self-authored bio");
+        profile_form.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+        let before = fresh_scope_high_water(address, "app").await;
+        let posted = http_over_tcp_typed(
+            address,
+            "POST",
+            "/internal/agents/agent-1/profile",
+            Some(&bearer),
+            &format!("multipart/form-data; boundary={boundary}"),
+            &profile_form,
+        )
+        .await;
+        let (posted_head, posted_body) = split_http_response(&posted);
+        assert!(
+            posted_head.starts_with("HTTP/1.1 200 OK\r\n"),
+            "the self profile POST reaches the mounted write face: {posted_head}"
+        );
+        let posted_body: serde_json::Value = serde_json::from_slice(&posted_body).unwrap();
+        assert_eq!(
+            posted_body["profile"]["display_name"], "Renamed Self",
+            "the profile-write authority committed the new label: {posted_body}"
+        );
+        let after = fresh_scope_high_water(address, "app").await;
+        assert_eq!(
+            after - before,
+            1,
+            "the self profile POST announces exactly one agent_changed: {before}→{after}"
+        );
+
+        let readback = http_over_tcp(
+            address,
+            "GET",
+            "/internal/agents/agent-1/profile",
+            Some(&bearer),
+            "",
+        )
+        .await;
+        assert!(
+            readback.starts_with("HTTP/1.1 200 OK\r\n"),
+            "GET /internal/agents/{{aid}}/profile stays the read handler alongside POST: {readback}"
+        );
+        let readback: serde_json::Value =
+            serde_json::from_str(readback.split_once("\r\n\r\n").expect("body").1).unwrap();
+        assert_eq!(
+            readback["profile"]["display_name"], "Renamed Self",
+            "the read face returns the durable label: {readback}"
+        );
+        assert_eq!(
+            readback["profile"]["description"], "a self-authored bio",
+            "the read face returns the durable description: {readback}"
+        );
+
+        // An unlisted method on the profile node is the ROUTE's 405, not the perimeter 401 —
+        // the authenticated caller is admitted, and the node answers GET+POST only.
+        let method = http_over_tcp(
+            address,
+            "DELETE",
+            "/internal/agents/agent-1/profile",
+            Some(&bearer),
+            "",
+        )
+        .await;
+        assert!(
+            method.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"),
+            "the profile node answers GET+POST only — an authenticated DELETE is 405: {method}"
+        );
+
+        // ---- (3) internal avatar POST → public GET bytes → internal DELETE → public GET 404,
+        // proving the internal write and the #2225 public read share ONE blob root; POST and
+        // DELETE coexist on the one internal avatar node.
+        let avatar_bytes = b"PNGDATA-cp7a-self-avatar".to_vec();
+        let mut avatar_form: Vec<u8> = Vec::new();
+        avatar_form.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        avatar_form.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"file\"; filename=\"a.png\"\r\n",
+        );
+        avatar_form.extend_from_slice(b"Content-Type: image/png\r\n\r\n");
+        avatar_form.extend_from_slice(&avatar_bytes);
+        avatar_form.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+        let before = fresh_scope_high_water(address, "app").await;
+        let upload = http_over_tcp_typed(
+            address,
+            "POST",
+            "/internal/agents/agent-1/avatar",
+            Some(&bearer),
+            &format!("multipart/form-data; boundary={boundary}"),
+            &avatar_form,
+        )
+        .await;
+        let (upload_head, _) = split_http_response(&upload);
+        assert!(
+            upload_head.starts_with("HTTP/1.1 200 OK\r\n"),
+            "the internal self avatar POST reaches the mounted write face: {upload_head}"
+        );
+        let after = fresh_scope_high_water(address, "app").await;
+        assert_eq!(
+            after - before,
+            1,
+            "the internal avatar POST announces exactly one agent_changed: {before}→{after}"
+        );
+
+        let served = http_over_tcp_typed(
+            address,
+            "GET",
+            "/api/agents/agent-1/avatar",
+            Some(&human_bearer),
+            "application/json",
+            b"",
+        )
+        .await;
+        let (served_head, served_body) = split_http_response(&served);
+        assert!(
+            served_head.starts_with("HTTP/1.1 200 OK\r\n"),
+            "the PUBLIC avatar GET serves the internally-uploaded blob: {served_head}"
+        );
+        assert!(
+            served_head
+                .to_ascii_lowercase()
+                .contains("content-type: image/png"),
+            "the served avatar carries its stored content type: {served_head}"
+        );
+        assert_eq!(
+            served_body, avatar_bytes,
+            "the public GET returns the exact bytes the internal POST stored — ONE blob root"
+        );
+
+        let before = fresh_scope_high_water(address, "app").await;
+        let cleared = http_over_tcp(
+            address,
+            "DELETE",
+            "/internal/agents/agent-1/avatar",
+            Some(&bearer),
+            "",
+        )
+        .await;
+        assert!(
+            cleared.starts_with("HTTP/1.1 200 OK\r\n"),
+            "the internal self avatar DELETE reaches the mounted clear face: {cleared}"
+        );
+        let after = fresh_scope_high_water(address, "app").await;
+        assert_eq!(
+            after - before,
+            1,
+            "the internal avatar DELETE announces exactly one agent_changed: {before}→{after}"
+        );
+
+        let gone = http_over_tcp(
+            address,
+            "GET",
+            "/api/agents/agent-1/avatar",
+            Some(&human_bearer),
+            "",
+        )
+        .await;
+        assert!(
+            gone.starts_with("HTTP/1.1 404 Not Found\r\n"),
+            "the cleared avatar is 404 on the public read — the internal DELETE cleared the shared root: {gone}"
+        );
+
+        // ---- (4) peer-profile passes the real caller ladder (horizon + `read_messages`) and
+        // runs the real by-handle reader; an unknown handle collapses to the leaf's 404, which
+        // a shaped stub could never reach through the ladder.
+        let peer = http_over_tcp(
+            address,
+            "GET",
+            "/internal/agents/agent-1/peer-profile?handle=ghost&workspace_id=workspace0000001",
+            Some(&bearer),
+            "",
+        )
+        .await;
+        assert!(
+            peer.starts_with("HTTP/1.1 404 Not Found\r\n"),
+            "peer-profile reaches the real by-handle reader and collapses an unknown handle to 404: {peer}"
+        );
+        let peer: serde_json::Value =
+            serde_json::from_str(peer.split_once("\r\n\r\n").expect("body").1).unwrap();
+        assert_eq!(
+            peer["error"], "agent not found",
+            "the real reader's miss is the collapsed 404 body: {peer}"
+        );
+
         shutdown_tx.send(()).unwrap();
         running.await.unwrap().unwrap();
     }
