@@ -92,6 +92,13 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // seals both the agent and conversation arms. Core capability, UNMOUNTED until the
     // create route is activated by a later integration.
     ("backend-core", "agent_materialization"),
+    // #task:2225 — the create-agent unit of work (`POST /api/agents`): the saga that
+    // owns each decision over the `agent_materialization` primitives, the host
+    // materialize command, the placement rule and the shared handle namespace. Core
+    // orchestration only — the wire projection, post-commit effects and status mapping
+    // belong to the route face. UNMOUNTED until the create route is activated (#task:2234
+    // CP6).
+    ("backend-core", "agent_creation"),
     ("backend-core", "agent_presence_read"),
     // #task:2225 — the public agent-lifecycle and avatar route family (Rust Wave 3).
     // Core capability ports and orchestration for the handle-availability probe
@@ -133,6 +140,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // row writer, keyed on the lock columns; its SQLite adapter rides the existing
     // `host_agent` store. UNMOUNTED until a later integration.
     ("backend-core", "runtime_transition"),
+    // #task:2225 — the agent runtime-switch saga (`PUT /api/agents/{id}/runtime`):
+    // clears the old-runtime sessions and moves the `runtime` column without changing
+    // identity or racing a delete, orchestrating that window over the durable
+    // `runtime_transition` lock (reused verbatim). Core orchestration only; UNMOUNTED
+    // until the runtime-switch route is activated (#task:2234 CP4).
+    ("backend-core", "agent_runtime_switch"),
     ("backend-core", "teardown"),
     ("backend-core", "user_presence_cold_read"),
     ("backend-core", "user_presence_last_seen"),
