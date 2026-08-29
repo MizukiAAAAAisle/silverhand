@@ -38,7 +38,7 @@ use silverhand_backend_server::{
     direct_pairs,
     host_agent::{
         agent_avatar, agent_avatar_write, agent_clear_session, agent_delete, agent_detail,
-        agent_list, agent_patch, agent_presence, agent_runtime_switch, availability,
+        agent_list, agent_patch, agent_presence, agent_runtime_switch, agent_stop, availability,
     },
     host_agent_background::{
         agent_deletion_resumer::AgentDeletionResumer, presence_grace_timer::PresenceGraceTimers,
@@ -880,6 +880,13 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     let agent_switch_transitions = host_agent_store.clone();
     let agent_switch_seats = host_agent_store.clone();
     let agent_switch_inboxes = host_agent_store.clone();
+    // #2234 CP5: the bulk-stop seat snapshot read for `POST /api/agents/{id}/stop`, captured
+    // before the host-delete unit-of-work below moves `host_agent_store`. It is the SAME ONE
+    // `SqliteHostAgentStore` — a clone shares its pool, so the stop route's seat snapshot is the
+    // same durable seat authority the delete/switch paths hold, never a second store. The stop
+    // route's gate read stays the separate `agent_detail_cold_read` authority (below); the two
+    // reads are carried on two params, never fused into one combining read type.
+    let agent_stop_seats = host_agent_store.clone();
     // The daemon websocket router, built now that the resumer exists: the resumer is its
     // MANDATORY host-ready observer. Binder (from `host_connections()`) and observer are
     // the same resumer over the same runtime registry — one generation truth.
@@ -1079,6 +1086,21 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
                 runtime_control,
                 hub.agent_changed_sink(),
                 SystemProcessClock,
+            ))
+            // #2234 CP5 — `POST /api/agents/{id}/stop`, behind the SAME
+            // `require_human_session` perimeter. Its two reads stay two distinct sole
+            // authorities, carried on two params: the visibility+authority gate read is the
+            // ONE `agent_detail_cold_read` every sibling face uses; the seat snapshot read is
+            // the ONE `SqliteHostAgentStore` the delete/switch paths hold (`agent_stop_seats`
+            // clone shares its pool). Neither is fused into a combining read type. Each running
+            // seat is hard-stopped through `daemon_runtime.scope_runtime_stop()` — the exact
+            // scope-keyed transport bound to the daemon's own host credentials + live registry,
+            // never re-derived here; a single seat's refusal/fault is kept as ordered residue,
+            // never short-circuiting the remaining seats.
+            .merge(agent_stop::router(
+                agent_detail_cold_read.clone(),
+                agent_stop_seats,
+                daemon_runtime.scope_runtime_stop(),
             ))
             .merge(agent_avatar::router(
                 agent_detail_cold_read.clone(),
@@ -3197,7 +3219,7 @@ mod tests {
         // The sixty-seven human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
-        const HUMAN_PERIMETER_DOORS: [(&str, &str); 69] = [
+        const HUMAN_PERIMETER_DOORS: [(&str, &str); 70] = [
             ("POST", "/api/hosts"),
             // #2219 CP4 host-custody batch B — the three perimeter-guarded custody doors.
             // `GET /api/hosts` shares the path node with the invite POST above, so its anon
@@ -3343,8 +3365,13 @@ mod tests {
             // `the_composition_agent_runtime_control_faces_reach_the_shared_production_control`.
             ("POST", "/api/agents/agent-1/clear-session"),
             ("PUT", "/api/agents/agent-1/runtime"),
+            // #2234 CP5: the public agent-stop door on its own path node (distinct from the
+            // `{id}` and runtime nodes above). Anon → the perimeter 401; the authenticated
+            // enumerate-all-seats reach through the exact per-seat stop transport is borne by
+            // `the_composition_agent_stop_face_reaches_every_seat_through_the_exact_transport`.
+            ("POST", "/api/agents/agent-1/stop"),
         ];
-        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 69);
+        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 70);
         for (method, path) in HUMAN_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -3721,15 +3748,15 @@ mod tests {
     /// Gate 2 of the CP2 convergence closure — the #2195 host-agent control-plane lane
     /// as a bidirectionally CLOSED universe of 54, every entry itemized `(method, path)`
     /// in a named table that is mechanically checksummed: the four tables' lengths are
-    /// pinned (`26`/`4`/`23`/`1`), every `(method, path)` across the union is unique,
+    /// pinned (`29`/`4`/`20`/`1`), every `(method, path)` across the union is unique,
     /// landed is disjoint from residual, and the union is exactly `54`. This is the
     /// lane's ORIGINAL owned total (it still counts the three dynamic host reads since
     /// handed to #2198). Deleting a row, or copying one between tables, breaks the
-    /// checksum — `(26 + 4) + (23 + 1) == 54` is an assertion, not prose.
+    /// checksum — `(29 + 4) + (20 + 1) == 54` is an assertion, not prose.
     ///
     /// Every one of the 54 routes is FALSIFIABLE — none rests on an
     /// unfalsifiable anon `401`:
-    /// * The 28 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
+    /// * The 29 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
     ///   perimeter → anon `401` (includes #2218's authenticated `/api/runtimes`, three of
     ///   #2219's four host-custody routes: list, claim-or-create, and
     ///   `{id}/rotate-token`; the fourth, `connect-token/resolve`, is allowlisted and
@@ -3741,7 +3768,11 @@ mod tests {
     ///   `GET /api/agents/name-availability`, `PATCH /api/agents/{id}`, and the three
     ///   avatar faces `GET`+`POST`+`DELETE /api/agents/{id}/avatar`; and the one #2234 CP3
     ///   public-agent face: `DELETE /api/agents/{id}`, a third method on the GET+PATCH
-    ///   `{id}` node, backed by the #2230 deletion resumer's full production lifecycle).
+    ///   `{id}` node, backed by the #2230 deletion resumer's full production lifecycle;
+    ///   the two #2234 CP4 runtime write faces: `POST /api/agents/{id}/clear-session` and
+    ///   `PUT /api/agents/{id}/runtime`, sharing the one production `ProductionRuntimeControl`;
+    ///   and the one #2234 CP5 public-agent face: `POST /api/agents/{id}/stop`, whose gate
+    ///   read and seat-snapshot read stay two separate sole authorities).
     ///   Deleting any one's `.merge(...)` flips it to `404` and reddens this gate
     ///   (delete-landed RED).
     /// * The 4 ANON-LANDED routes are mounted ahead of every perimeter → an anonymous
@@ -3752,7 +3783,7 @@ mod tests {
     ///   whose `error_code` body (asserted after the loop) proves it landed anonymously and
     ///   not behind the perimeter. Neither the guarded (bodiless) `401` nor the absent
     ///   `404`. Deleting any one's `.merge(...)` flips it to `404` and reddens this gate.
-    /// * 23 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
+    /// * 20 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
     ///   Mounting any one flips it to its perimeter's `401`/`405` and reddens this gate
     ///   (mount-residual RED).
     /// * 1 METHOD-SHADOW residual shares a concrete path with a mounted sibling that
@@ -3770,7 +3801,7 @@ mod tests {
     /// anon-landed).
     #[tokio::test]
     async fn the_host_agent_lane_stays_a_closed_universe_of_fifty_four() {
-        // The 28 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
+        // The 29 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
         // perimeter → anon 401.
         const LANDED: &[(&str, &str)] = &[
             ("GET", "/api/agents"),
@@ -3845,6 +3876,12 @@ mod tests {
             // `the_composition_agent_runtime_control_faces_reach_the_shared_production_control`.
             ("POST", "/api/agents/agent-1/clear-session"),
             ("PUT", "/api/agents/agent-1/runtime"),
+            // #2234 CP5: the public agent-stop face, now MOUNTED behind the human perimeter
+            // → anon 401, on its own path node. Its authenticated enumerate-every-seat reach
+            // through the exact per-seat stop transport (a single seat's refusal/fault kept as
+            // ordered residue, never short-circuiting) is borne by
+            // `the_composition_agent_stop_face_reaches_every_seat_through_the_exact_transport`.
+            ("POST", "/api/agents/agent-1/stop"),
         ];
         // The 4 ANON-LANDED routes: mounted ahead of every perimeter, so an anonymous
         // probe reaches the handler. #2218's server/info and health answer 200; readyz
@@ -3871,10 +3908,10 @@ mod tests {
             // #2219, detail/revoke/connect-token-rotate/delete by #2223 CP5, and
             // disconnect/proxy-config(GET+PUT)/runtime-catalog/status + `PATCH /api/hosts/{id}`
             // by #2234 CP1 — all now perimeter-landed above)
-            // agents residual (11 of 20; name-availability + PATCH /api/agents/{id} are
+            // agents residual (10 of 20; name-availability + PATCH /api/agents/{id} are
             // now perimeter-landed by #2234 CP2; the three avatar faces likewise; DELETE
             // /api/agents/{id} by #2234 CP3; clear-session + PUT .../runtime by #2234 CP4;
-            // POST /api/agents remains method-shadowed, below)
+            // POST .../stop by #2234 CP5; POST /api/agents remains method-shadowed, below)
             ("GET", "/api/agents/agent-1/workspace/tree"),
             ("GET", "/api/agents/agent-1/workspace/file"),
             ("GET", "/api/agents/agent-1/profile/mcp"),
@@ -3885,7 +3922,6 @@ mod tests {
             ("GET", "/api/agents/agent-1/chats/conv-1/attachments/att-1"),
             ("GET", "/api/agents/agent-1/schedules"),
             ("POST", "/api/agents/agent-1/schedules/sched-1/cancel"),
-            ("POST", "/api/agents/agent-1/stop"),
             // internal profile-MCP (3)
             ("GET", "/internal/agents/agent-1/profile/mcp"),
             ("POST", "/internal/agents/agent-1/profile/mcp"),
@@ -3905,11 +3941,11 @@ mod tests {
             ("POST", "/api/agents"), // ← GET /api/agents (mounted)
         ];
 
-        // ── Mechanical checksum: (28 + 4) + (21 + 1) == 54, all unique, landed ∩
+        // ── Mechanical checksum: (29 + 4) + (20 + 1) == 54, all unique, landed ∩
         // residual = ∅ ──
-        assert_eq!(LANDED.len(), 28);
+        assert_eq!(LANDED.len(), 29);
         assert_eq!(ANON_LANDED.len(), 4);
-        assert_eq!(CLEAN_RESIDUAL.len(), 21);
+        assert_eq!(CLEAN_RESIDUAL.len(), 20);
         assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 1);
         let landed: std::collections::HashSet<(&str, &str)> = LANDED
             .iter()
@@ -3921,8 +3957,8 @@ mod tests {
             .chain(METHOD_SHADOW_RESIDUAL)
             .copied()
             .collect();
-        assert_eq!(landed.len(), 32, "landed rows are unique");
-        assert_eq!(residual.len(), 22, "residual rows are unique");
+        assert_eq!(landed.len(), 33, "landed rows are unique");
+        assert_eq!(residual.len(), 21, "residual rows are unique");
         assert!(
             landed.is_disjoint(&residual),
             "landed and residual are disjoint"
@@ -5358,6 +5394,289 @@ mod tests {
             );
 
             // Wind the servicer down and shut the app cleanly.
+            stop.notify_one();
+            let mut socket = servicer.await.unwrap();
+            socket.close(None).await.unwrap();
+        }
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+    }
+
+    /// Seed one CONVERSATION-scoped agent (`a-stop`) with THREE live workspace-conversation
+    /// seats on the online host, so the composed `/stop` face has a genuine multi-seat fan-out
+    /// to enumerate. The seat rows are NOT inserted directly: each `conversation_agents` join to
+    /// a `workspace`-placement conversation fires the production
+    /// `conversation_agents_create_runtime_slot` trigger, which is the only way a conversation
+    /// seat comes to exist. Reuses the CP4 online host + credential so the same real daemon
+    /// attach hydrates custody for `h-online`.
+    async fn seed_agent_stop_agent(path: &Path) {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id, activated_at, finalized_at) \
+             VALUES ('h-online', 'host-online', 'remote', 1, 'user-1', 1, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO host_credentials (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at) \
+             VALUES ('cred-online', 'h-online', ?, 'long_lived', NULL, NULL, NULL)",
+        )
+        .bind(HOST_TOKEN_HASH)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
+                 created_by_user_id, materialization_status, session_scope) VALUES \
+                 ('a-stop', 'a-stop', 'claude', 'h-online', 1, 1, 'Stop', 'user-1', 'active', 'conversation')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Three workspace conversations; each membership trigger-materializes one seat.
+        sqlx::query(
+            "INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at) \
+                 VALUES ('ws-stop', 'Space', 'space', 'user-1', 0, 0); \
+             INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, \
+                 status, visibility, created_at, updated_at, latest_message_seq) VALUES \
+                 ('conv-s1', 'ws-stop', 'workspace', 'open', 'One', 'one', 'open', 'private', 0, 0, 1), \
+                 ('conv-s2', 'ws-stop', 'workspace', 'open', 'Two', 'two', 'open', 'private', 0, 0, 1), \
+                 ('conv-s3', 'ws-stop', 'workspace', 'open', 'Three', 'three', 'open', 'private', 0, 0, 1); \
+             INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES \
+                 ('conv-s1', 'a-stop', 0), ('conv-s2', 'a-stop', 0), ('conv-s3', 'a-stop', 0);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    /// Claim all three trigger-materialized seats LIVE (`observed_status='active'`, generation
+    /// `1`) AFTER attach, so daemon hydration cannot reconcile them back to idle. From here the
+    /// bulk-stop snapshot reads three genuinely running conversation seats, each with a positive
+    /// generation the `runtime_stop` codec will accept.
+    async fn activate_agent_stop_slots(path: &Path) {
+        let pool = SqlitePoolOptions::new()
+            .connect(path.to_str().unwrap())
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE agent_runtime_slots SET generation=1, claimed_by_daemon_instance_id='instance-cp5', \
+                 observed_status='active', cli_session_id='session-' || conversation_id \
+               WHERE agent_id='a-stop' AND conversation_id IN ('conv-s1', 'conv-s2', 'conv-s3');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+
+    /// Drive a connected daemon socket like a REAL daemon for the bulk-stop face: answer
+    /// hydration (`runtime_status`), signal `attached` on the promotion-edge `host_status`
+    /// probe, tolerate an attach-time `host_runtime_catalog`, and service every `runtime_stop`
+    /// — RECORDING each command's `runtime_scope` (so the gate can prove every seat was
+    /// dispatched, in scope, without short-circuit) and answering a schema-VALID
+    /// `{"mode":"hard","stopped":true,"exit_code":null}` for every seat EXCEPT the designated
+    /// poison conversation, for which it returns a schema-INVALID body so that one seat faults
+    /// (`ProtocolCorruption`) while the others still stop.
+    async fn service_agent_stop_commands<S>(
+        mut socket: tokio_tungstenite::WebSocketStream<S>,
+        stop: std::sync::Arc<tokio::sync::Notify>,
+        attached: std::sync::Arc<tokio::sync::Notify>,
+        poison_conversation: &'static str,
+        stop_scopes: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    ) -> tokio_tungstenite::WebSocketStream<S>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        loop {
+            tokio::select! {
+                () = stop.notified() => break,
+                command = next_daemon_json(&mut socket) => {
+                    let result = match command["kind"].as_str() {
+                        Some("runtime_status") => serde_json::json!({ "runtimes": [] }),
+                        Some("host_status") => {
+                            attached.notify_one();
+                            serde_json::json!({
+                                "os": "linux",
+                                "daemon_pid": 1,
+                                "daemon_version": "0.0.0-test",
+                                "started_at": 0,
+                                "uptime_ms": 0,
+                                "active_agent_ids": [],
+                            })
+                        }
+                        Some("host_runtime_catalog") => serde_json::json!({
+                            "runtimes": [],
+                            "detected_at": 1_700_000_000_000_i64,
+                        }),
+                        Some("runtime_stop") => {
+                            let scope = command["params"]["runtime_scope"].clone();
+                            let is_poison = scope["conversation_id"].as_str()
+                                == Some(poison_conversation);
+                            stop_scopes.lock().unwrap().push(scope);
+                            if is_poison {
+                                // Schema-INVALID answer (missing keys ⇒ len != 3): the codec's
+                                // `valid_result` rejects it ⇒ ProtocolCorruption ⇒ this seat
+                                // Faulted, while the sibling seats still stop.
+                                serde_json::json!({ "stopped": true })
+                            } else {
+                                serde_json::json!({
+                                    "mode": "hard",
+                                    "stopped": true,
+                                    "exit_code": null,
+                                })
+                            }
+                        }
+                        other => panic!("unexpected daemon command kind: {other:?}"),
+                    };
+                    socket
+                        .send(ClientMessage::Text(
+                            serde_json::json!({
+                                "direction": "daemon_to_server",
+                                "type": "command_response",
+                                "id": command["id"],
+                                "kind": command["kind"],
+                                "result": result,
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+        socket
+    }
+
+    /// The #2234 CP5 close: `POST /api/agents/{id}/stop` is not merely mounted behind the human
+    /// perimeter — it reaches the ONE scope-keyed stop transport the composition builds
+    /// (`daemon_runtime.scope_runtime_stop()`, bound to the daemon's own host credentials + live
+    /// registry) and, through the production `bulk_stop_agent_runtimes`, ENUMERATES AND ATTEMPTS
+    /// EVERY running seat the agent owns against a REAL daemon attaching over the mounted host
+    /// WS. Delete the `.merge(agent_stop::router(...))` from `prepare()`'s human chain and the
+    /// route 404s: the first assert reddens (the A6 no-op-mount falsifier).
+    ///
+    /// `a-stop` owns THREE live conversation seats on the online host. The composed route reads
+    /// them through the two distinct sole authorities (the shared `agent_detail_cold_read` gate
+    /// + the `SqliteHostAgentStore` seat snapshot), then hard-stops each seat through the exact
+    /// transport. The middle seat's daemon answer is schema-invalid, so it FAULTS — but that
+    /// fault does NOT short-circuit the run: all three seats are dispatched, the two healthy
+    /// seats stop, and the aggregate is the product's `200 {"stopped":2}` (fulfilled count only,
+    /// the faulted seat kept as ordered residue). The gate proves the real wire hit EACH seat's
+    /// exact scope: every recorded dispatch is a `conversation`-kind scope naming `a-stop`, and
+    /// the set of dispatched `conversation_id`s is EXACTLY the three seeded seats.
+    #[tokio::test]
+    async fn the_composition_agent_stop_face_reaches_every_seat_through_the_exact_transport() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_agent_stop_agent(&fixture.path).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let router = app.router.clone();
+        let bearer = format!("Bearer {TOKEN}");
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+
+        let mut ws_request = format!("ws://{address}{HOST_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        ws_request.headers_mut().insert(
+            tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+            format!("Bearer {HOST_TOKEN}").parse().unwrap(),
+        );
+        let (socket, _) = connect_async(ws_request).await.unwrap();
+        {
+            use futures_util::SinkExt;
+            let mut socket = socket;
+            socket
+                .send(ClientMessage::Text(
+                    serde_json::json!({
+                        "direction": "daemon_to_server",
+                        "type": "event",
+                        "kind": "ready",
+                        "protocol_version": OUTBOUND_PROTOCOL_VERSION,
+                        "daemon_version": "test",
+                        "daemon_id": "daemon-cp5",
+                        "instance_id": "instance-cp5",
+                        "host_descriptor": { "name": "CP5 host", "kind": "remote" },
+                        "capabilities": [],
+                        "daemon_pid": 7,
+                        "started_at": 100,
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+
+            let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+            let attached = std::sync::Arc::new(tokio::sync::Notify::new());
+            let stop_scopes =
+                std::sync::Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+            let servicer = tokio::spawn(service_agent_stop_commands(
+                socket,
+                stop.clone(),
+                attached.clone(),
+                "conv-s2",
+                stop_scopes.clone(),
+            ));
+            tokio::time::timeout(std::time::Duration::from_secs(5), attached.notified())
+                .await
+                .expect("the daemon must attach (host_status probe) before the gate dispatches");
+
+            // Claim all three seats LIVE now that hydration is done.
+            activate_agent_stop_slots(&fixture.path).await;
+
+            // The composed face enumerates and stops every running seat; the middle seat faults
+            // but does not short-circuit the run.
+            let (status, body) =
+                request(&router, "POST", "/api/agents/a-stop/stop", Some(&bearer)).await;
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "stop must reach the mounted bulk-stop transport: {body}"
+            );
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+                serde_json::json!({ "stopped": 2 }),
+                "two healthy seats stopped; the poison seat is residue, not a short-circuit: {body}"
+            );
+
+            // Every seat was dispatched through the real transport, in its exact scope: three
+            // `conversation`-kind scopes naming `a-stop`, whose conversation_ids are EXACTLY the
+            // three seeded seats (proves enumerate-all + no short-circuit + exact scope).
+            let scopes = stop_scopes.lock().unwrap().clone();
+            assert_eq!(
+                scopes.len(),
+                3,
+                "all three running seats must be dispatched (no seat short-circuited): {scopes:?}"
+            );
+            for scope in &scopes {
+                assert_eq!(scope["kind"], "conversation", "exact seat scope: {scope:?}");
+                assert_eq!(scope["agent_id"], "a-stop", "exact seat scope: {scope:?}");
+            }
+            let mut dispatched: Vec<String> = scopes
+                .iter()
+                .map(|scope| scope["conversation_id"].as_str().unwrap().to_owned())
+                .collect();
+            dispatched.sort();
+            assert_eq!(
+                dispatched,
+                vec!["conv-s1", "conv-s2", "conv-s3"],
+                "the real wire hit each seeded seat's exact scope"
+            );
+
             stop.notify_one();
             let mut socket = servicer.await.unwrap();
             socket.close(None).await.unwrap();

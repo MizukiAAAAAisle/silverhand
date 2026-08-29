@@ -73,28 +73,41 @@ const FORBIDDEN: &str = "forbidden";
 const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
 
 #[derive(Clone)]
-struct StopState<R, S> {
-    reads: R,
+struct StopState<D, B, S> {
+    detail_reads: D,
+    stop_reads: B,
     stops: S,
 }
 
-pub fn router<R, S>(reads: R, stops: S) -> Router
+/// The gate read (visibility+authority) and the bulk-stop snapshot read are TWO distinct
+/// domain ports, carried on TWO separate parameters — never fused onto one type. In
+/// production they are two different source-bound SQLite reads (agent-detail cold read vs
+/// host-agent seat store); binding them as one generic would force a combining wrapper that
+/// is a second, wider read authority. Each stays its own sole authority, exactly as the
+/// sibling agent write faces take their detail read plus their domain-specific ports.
+pub fn router<D, B, S>(detail_reads: D, stop_reads: B, stops: S) -> Router
 where
-    R: AgentDetailReadModel + AgentBulkStopReadPort + Clone + Send + Sync + 'static,
+    D: AgentDetailReadModel + Clone + Send + Sync + 'static,
+    B: AgentBulkStopReadPort,
     S: ScopeRuntimeStopPort,
 {
     Router::new()
-        .route(AGENT_STOP_PATH, post(agent_stop::<R, S>))
-        .with_state(StopState { reads, stops })
+        .route(AGENT_STOP_PATH, post(agent_stop::<D, B, S>))
+        .with_state(StopState {
+            detail_reads,
+            stop_reads,
+            stops,
+        })
 }
 
-async fn agent_stop<R, S>(
+async fn agent_stop<D, B, S>(
     Path(agent_id): Path<String>,
     viewer: Option<Extension<UserId>>,
-    State(state): State<StopState<R, S>>,
+    State(state): State<StopState<D, B, S>>,
 ) -> Response
 where
-    R: AgentDetailReadModel + AgentBulkStopReadPort,
+    D: AgentDetailReadModel,
+    B: AgentBulkStopReadPort,
     S: ScopeRuntimeStopPort,
 {
     let Some(Extension(viewer)) = viewer else {
@@ -109,7 +122,7 @@ where
     };
 
     // Gate read: the one snapshot that decides visibility and authority.
-    let detail = match state.reads.read_agent_detail(&agent).await {
+    let detail = match state.detail_reads.read_agent_detail(&agent).await {
         Ok(detail) => detail,
         Err(cause) => {
             tracing::error!(
@@ -155,7 +168,7 @@ where
     }
 
     // STOP: one source-bound snapshot, then stop each running seat and aggregate.
-    match bulk_stop_agent_runtimes(&state.reads, &state.stops, &agent).await {
+    match bulk_stop_agent_runtimes(&state.stop_reads, &state.stops, &agent).await {
         // The row vanished between the gate and the snapshot: the same anti-enum 404.
         Ok(AgentBulkStopOutcome::NoSuchAgent) => not_found(),
         // The snapshot resolved a host from the wrong row — a resolver defect.
@@ -550,7 +563,7 @@ mod tests {
         if with_principal {
             request = request.extension(user("viewer-1"));
         }
-        let response = router(reads, stops)
+        let response = router(reads.clone(), reads, stops)
             .oneshot(request.body(Body::empty()).unwrap())
             .await
             .unwrap();
