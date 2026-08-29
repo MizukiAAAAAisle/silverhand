@@ -13,16 +13,16 @@ use std::{
 
 use serde_json::Value;
 
-/// Driver, wire and runtime families. `backend-core`'s linked library stays free
-/// of all of them through its whole transitive normal closure.
+/// Driver and runtime families. `backend-core`'s linked library stays free of
+/// side-effecting infrastructure through its whole transitive normal closure.
+/// Pure data-format libraries are deliberately outside this list: the accepted
+/// internal-profile MCP capability owns canonical JSON config admission in core.
 const DRIVER_WIRE_RUNTIME: &[&str] = &[
     "axum",
     "http",
     "http-body",
     "hyper",
     "libsqlite3-sys",
-    "serde",
-    "serde_json",
     "sqlx",
     "sqlx-core",
     "sqlx-sqlite",
@@ -112,6 +112,14 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // `host_agent` store and its server route is the `host_agent::agent_stop`
     // submodule; both stay UNMOUNTED until a later integration.
     ("backend-core", "agent_bulk_stop"),
+    // #task:2226 — internal profile/MCP consumer vocabulary and pure
+    // orchestration. The production data-plane adapter is #task:2231 below;
+    // these accepted modules remain unmounted capability seams.
+    ("backend-core", "agent_peer_profile"),
+    ("backend-core", "agent_profile_mcp"),
+    ("backend-core", "agent_profile_read"),
+    ("backend-core", "internal_profile_write"),
+    ("backend-core", "mcp_config"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
     ("backend-core", "host_resources_read"),
@@ -158,6 +166,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // under one ambient storage kind. An adapter like `clock` / `password_hasher`
     // below, so it belongs in this seam ledger but NOT `ACTIVATION_NAMESPACES`.
     ("backend-server", "avatar_blob"),
+    // #task:2231 — the production typed adapter for the accepted internal
+    // profile-MCP port, sharing the owning-host registry and exposing no raw
+    // dispatcher. Unmounted until convergence wires the internal routes.
+    ("backend-server", "agent_profile_mcp_data_plane"),
     // #task:2225 — the crate-root route surface for the handle-availability probe
     // (route 1). The tuning-write (route 2) and avatar (route 5) surfaces are
     // `host_agent` submodules, already covered by the `host_agent` entry. UNMOUNTED
@@ -176,6 +188,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
+    // #task:2226 — unmounted internal-agent route family. Its MCP leaf consumes
+    // only the typed data-plane port; #task:2231 supplies that production face.
+    ("backend-server", "internal_agent"),
     ("backend-server", "host_resources"),
     ("backend-server", "human_auth"),
     // #task:2222 — the human-directory and avatar route surface (GET /api/users,
@@ -207,6 +222,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // adapter listed below.
     ("backend-sqlite", "agent_avatar_read"),
     ("backend-sqlite", "agent_profile_write"),
+    ("backend-sqlite", "agent_profile_read"),
     ("backend-sqlite", "agent_view_acl"),
     ("backend-sqlite", "credential"),
     ("backend-sqlite", "handle_namespace"),
@@ -339,6 +355,7 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
+    ("backend-server", "internal_agent"),
     ("backend-server", "ops"),
     ("backend-sqlite", "host_agent"),
 ];

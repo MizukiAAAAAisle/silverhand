@@ -157,8 +157,7 @@ mod tests {
     };
 
     use crate::{
-        identity::ConversationId,
-        runtime_event::RuntimeObservedStatus,
+        identity::ConversationId, runtime_event::RuntimeObservedStatus,
         scope_runtime_stop::ScopeRuntimeStopOutcome,
     };
 
@@ -176,7 +175,11 @@ mod tests {
         RuntimeGeneration::new(value).expect("generation")
     }
 
-    fn agent_seat(id: &str, status: RuntimeObservedStatus, gen_value: i64) -> AgentRuntimeSessionFacts {
+    fn agent_seat(
+        id: &str,
+        status: RuntimeObservedStatus,
+        gen_value: i64,
+    ) -> AgentRuntimeSessionFacts {
         AgentRuntimeSessionFacts {
             scope: RuntimeScope::AgentSlot { agent: agent(id) },
             status,
@@ -315,7 +318,10 @@ mod tests {
             .expect("read ok");
 
         assert_eq!(outcome, AgentBulkStopOutcome::NoSuchAgent);
-        assert!(stops.targets().is_empty(), "an absent row must not dispatch");
+        assert!(
+            stops.targets().is_empty(),
+            "an absent row must not dispatch"
+        );
     }
 
     #[tokio::test]

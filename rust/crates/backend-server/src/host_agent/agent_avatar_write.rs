@@ -203,7 +203,10 @@ where
                 error_chain = %error::describe(&cause),
                 "agent-avatar upload write faulted before a durable commit"
             );
-            log_blob_cleanup(&orphan_cleanup, "agent-avatar upload orphan (write faulted)");
+            log_blob_cleanup(
+                &orphan_cleanup,
+                "agent-avatar upload orphan (write faulted)",
+            );
             internal_error()
         }
         // A durable commit whose witness could not be trusted: the fresh blob is
@@ -247,24 +250,17 @@ where
     }
 
     let now_ms = state.clock.now_unix_millis();
-    let outcome = match clear_agent_avatar(
-        &state.writes,
-        &state.blobs,
-        &state.sink,
-        &agent,
-        now_ms,
-    )
-    .await
-    {
-        Ok(outcome) => outcome,
-        Err(cause) => {
-            tracing::error!(
-                error_chain = %error::describe(&cause),
-                "agent-avatar clear write failed"
-            );
-            return internal_error();
-        }
-    };
+    let outcome =
+        match clear_agent_avatar(&state.writes, &state.blobs, &state.sink, &agent, now_ms).await {
+            Ok(outcome) => outcome,
+            Err(cause) => {
+                tracing::error!(
+                    error_chain = %error::describe(&cause),
+                    "agent-avatar clear write failed"
+                );
+                return internal_error();
+            }
+        };
 
     // A genuine clear and an already-absent no-op both return the current DTO; they
     // differ only in whether a blob was removed / an announce owed. The id to re-read is
@@ -296,7 +292,10 @@ fn principal(viewer: Option<Extension<UserId>>, route: &str) -> Option<Principal
     match viewer {
         Some(Extension(viewer)) => Some(Principal::human(viewer)),
         None => {
-            tracing::error!(route, "agent-avatar write route reached without its human principal");
+            tracing::error!(
+                route,
+                "agent-avatar write route reached without its human principal"
+            );
             None
         }
     }
@@ -670,7 +669,9 @@ mod tests {
             match outcome {
                 ReadOutcome::Present(facts) => Ok(Some(facts.as_ref().clone())),
                 ReadOutcome::Absent => Ok(None),
-                ReadOutcome::Fails => Err(PersistenceFailure::from_source(io::Error::other("boom"))),
+                ReadOutcome::Fails => {
+                    Err(PersistenceFailure::from_source(io::Error::other("boom")))
+                }
             }
         }
     }
@@ -718,9 +719,9 @@ mod tests {
         {
             self.calls.fetch_add(1, SeqCst);
             match &self.outcome {
-                WriteFixture::Fault => {
-                    Err(PersistenceFailure::from_source(io::Error::other("write boom")))
-                }
+                WriteFixture::Fault => Err(PersistenceFailure::from_source(io::Error::other(
+                    "write boom",
+                ))),
                 WriteFixture::Row(row) => Ok(row.clone()),
             }
         }
@@ -950,7 +951,9 @@ mod tests {
         let mut out = Vec::new();
         out.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
         let disposition = match filename {
-            Some(name) => format!("Content-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"),
+            Some(name) => {
+                format!("Content-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n")
+            }
             None => "Content-Disposition: form-data; name=\"file\"\r\n".to_owned(),
         };
         out.extend_from_slice(disposition.as_bytes());
@@ -1027,7 +1030,12 @@ mod tests {
     }
 
     /// The ordinary POST driver: a valid `image/png` `file` part.
-    async fn post_upload(reads: FakeReads, writes: FakeWrites, blobs: FakeBlobs, sink: FakeSink) -> Reply {
+    async fn post_upload(
+        reads: FakeReads,
+        writes: FakeWrites,
+        blobs: FakeBlobs,
+        sink: FakeSink,
+    ) -> Reply {
         post_with(
             reads,
             writes,
@@ -1256,7 +1264,10 @@ mod tests {
         )
         .await;
         assert_eq!(reply.status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed(&reply), json!({ "error": "multipart/form-data required" }));
+        assert_eq!(
+            parsed(&reply),
+            json!({ "error": "multipart/form-data required" })
+        );
         assert_eq!(reply.writes, 0);
     }
 
@@ -1367,7 +1378,11 @@ mod tests {
         )
         .await;
         assert_eq!(reply.status, StatusCode::OK);
-        assert_eq!(blobs.puts(), 1, "a cased-but-valid type still reaches the put");
+        assert_eq!(
+            blobs.puts(),
+            1,
+            "a cased-but-valid type still reaches the put"
+        );
     }
 
     #[tokio::test]
@@ -1416,7 +1431,10 @@ mod tests {
         )
         .await;
         assert_eq!(reply.status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed(&reply), json!({ "error": "multipart/form-data required" }));
+        assert_eq!(
+            parsed(&reply),
+            json!({ "error": "multipart/form-data required" })
+        );
         assert_eq!(blobs.puts(), 0, "a transport refusal never puts a blob");
         assert_eq!(reply.writes, 0);
     }
@@ -1450,7 +1468,11 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::NOT_FOUND);
         assert_eq!(parsed(&reply), json!({ "error": "agent not found" }));
-        assert_eq!(blobs.deleted(), vec![FRESH.to_owned()], "the fresh orphan is cleaned");
+        assert_eq!(
+            blobs.deleted(),
+            vec![FRESH.to_owned()],
+            "the fresh orphan is cleaned"
+        );
         assert_eq!(reply.announces, 0);
     }
 
@@ -1512,7 +1534,10 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(reply.writes, 1);
-        assert_eq!(reply.announces, 1, "it DID write and announce; only the projection failed");
+        assert_eq!(
+            reply.announces, 1,
+            "it DID write and announce; only the projection failed"
+        );
     }
 
     // ================= DELETE =================

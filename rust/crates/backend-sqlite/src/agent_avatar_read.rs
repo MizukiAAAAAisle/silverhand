@@ -162,7 +162,11 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
         else {
             panic!("expected Row/Present");
         };
-        assert_eq!(source, agent("a-present"), "the row id is read back, not the bind");
+        assert_eq!(
+            source,
+            agent("a-present"),
+            "the row id is read back, not the bind"
+        );
         assert_eq!(pointer.as_str(), "agents/a-present/avatars/blob-0.png");
         assert_eq!(content_type, AvatarContentType::Png);
     }

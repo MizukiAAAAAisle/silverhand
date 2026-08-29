@@ -390,9 +390,12 @@ mod tests {
 
     #[test]
     fn both_present_and_valid_is_the_serve_coordinate() {
-        let decoded =
-            decode_agent_avatar_row("agent-1", Some("agents/a1/avatars/blob-0.png"), Some("image/png"))
-                .unwrap();
+        let decoded = decode_agent_avatar_row(
+            "agent-1",
+            Some("agents/a1/avatars/blob-0.png"),
+            Some("image/png"),
+        )
+        .unwrap();
         let AgentAvatarServeRef::Row {
             source,
             avatar:
@@ -523,7 +526,9 @@ mod tests {
             bytes,
             content_type,
             filename,
-        } = fetch_agent_avatar(&refs, &blobs, &agent_id()).await.unwrap()
+        } = fetch_agent_avatar(&refs, &blobs, &agent_id())
+            .await
+            .unwrap()
         else {
             panic!("expected Found");
         };
@@ -537,7 +542,9 @@ mod tests {
         let refs = FakeRefs(Ok(AgentAvatarServeRef::NoRow));
         let blobs = FakeBlob::new(None, false);
         assert!(matches!(
-            fetch_agent_avatar(&refs, &blobs, &agent_id()).await.unwrap(),
+            fetch_agent_avatar(&refs, &blobs, &agent_id())
+                .await
+                .unwrap(),
             AgentAvatarFetchOutcome::NotFound
         ));
         assert_eq!(blobs.reads(), 0);
@@ -551,7 +558,9 @@ mod tests {
         }));
         let blobs = FakeBlob::new(None, false);
         assert!(matches!(
-            fetch_agent_avatar(&refs, &blobs, &agent_id()).await.unwrap(),
+            fetch_agent_avatar(&refs, &blobs, &agent_id())
+                .await
+                .unwrap(),
             AgentAvatarFetchOutcome::NotFound
         ));
         assert_eq!(blobs.reads(), 0);
@@ -563,7 +572,9 @@ mod tests {
         let blobs = FakeBlob::new(Some(AvatarBlobReadOutcome::Missing), false);
         assert!(
             matches!(
-                fetch_agent_avatar(&refs, &blobs, &agent_id()).await.unwrap(),
+                fetch_agent_avatar(&refs, &blobs, &agent_id())
+                    .await
+                    .unwrap(),
                 AgentAvatarFetchOutcome::StorageUnavailable { .. }
             ),
             "a present row asserts its bytes exist; a Missing blob is a safe-500, not `avatar not found`"
@@ -575,7 +586,9 @@ mod tests {
         let refs = FakeRefs(Ok(present_row_for("agent-1")));
         let blobs = FakeBlob::new(None, true);
         assert!(matches!(
-            fetch_agent_avatar(&refs, &blobs, &agent_id()).await.unwrap(),
+            fetch_agent_avatar(&refs, &blobs, &agent_id())
+                .await
+                .unwrap(),
             AgentAvatarFetchOutcome::StorageUnavailable { .. }
         ));
     }
@@ -589,7 +602,11 @@ mod tests {
         fetch_agent_avatar(&refs, &blobs, &agent_id())
             .await
             .expect_err("a serve fact resolved for another agent has no product answer");
-        assert_eq!(blobs.reads(), 0, "the blob must not be touched on a source mismatch");
+        assert_eq!(
+            blobs.reads(),
+            0,
+            "the blob must not be touched on a source mismatch"
+        );
     }
 
     #[tokio::test]

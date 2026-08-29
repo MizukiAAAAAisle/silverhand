@@ -267,6 +267,33 @@ pub fn admit_avatar_removal() -> AdmittedAgentProfileEdit {
     }
 }
 
+/// Admit an INTERNAL self-service profile edit — the `POST /internal/agents/{aid}/profile`
+/// capability (which also backs the internal avatar POST/DELETE) — into a sealed edit
+/// naming ONLY `display_name`, `description`, and the paired avatar column. The
+/// runtime-tuning columns (`model` / `reasoning_effort` / `fast_mode`) are forced `Leave`
+/// by the shared base, so this capability can never smuggle a runtime column the way the
+/// public tuning capability could. Because it names no runtime column it judges NO
+/// runtime legality and is infallible: the display-name shape and description length were
+/// validated by the internal-profile boundary, and an avatar `Set` carries a pointer whose
+/// blob was already validated and put. `description` is a [`RequiredEdit`] (absent →
+/// `Leave`, present incl. the empty string → `Set`) because this capability
+/// updates-or-leaves the description and never clears it to NULL.
+pub fn admit_internal_profile_edit(
+    display_name: RequiredEdit<String>,
+    description: RequiredEdit<String>,
+    avatar: FieldEdit<AgentAvatarAssignment>,
+) -> AdmittedAgentProfileEdit {
+    AdmittedAgentProfileEdit {
+        display_name,
+        description: match description {
+            RequiredEdit::Leave => FieldEdit::Leave,
+            RequiredEdit::Set(value) => FieldEdit::Set(value),
+        },
+        avatar,
+        ..leave_tuning_columns()
+    }
+}
+
 /// Admit a PUBLIC tuning PATCH into a sealed edit, or refuse it. Invoked by the write
 /// port INSIDE its write lock, against the runtime/model/effort just read from the
 /// locked row — so the verdict is always against the row the write will land on, never
@@ -635,8 +662,16 @@ pub(crate) fn seal_agent_row(
 ) -> Result<(), AgentProfileWriteError> {
     let ok = committed.id == *subject
         && committed.updated_at == now_ms
-        && required_matches_after(&edit.display_name, &before.display_name, &committed.display_name)
-        && nullable_matches_after(&edit.description, &before.description, &committed.description)
+        && required_matches_after(
+            &edit.display_name,
+            &before.display_name,
+            &committed.display_name,
+        )
+        && nullable_matches_after(
+            &edit.description,
+            &before.description,
+            &committed.description,
+        )
         && nullable_matches_after(&edit.model, &before.context.model, &committed.model)
         && nullable_matches_after(
             &edit.reasoning_effort,
@@ -654,11 +689,7 @@ pub(crate) fn seal_agent_row(
 
 /// A non-nullable column's expected after-image: a `Set` names the new value, a
 /// `Leave` must equal the before value.
-fn required_matches_after<T: PartialEq>(
-    edit: &RequiredEdit<T>,
-    before: &T,
-    committed: &T,
-) -> bool {
+fn required_matches_after<T: PartialEq>(edit: &RequiredEdit<T>, before: &T, committed: &T) -> bool {
     match edit {
         RequiredEdit::Leave => committed == before,
         RequiredEdit::Set(value) => committed == value,

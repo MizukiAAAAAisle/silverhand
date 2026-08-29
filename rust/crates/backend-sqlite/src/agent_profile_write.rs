@@ -332,9 +332,7 @@ fn push_nullable_str(
 /// `RETURNING` row go through this, so the id is bound to the row's OWN `id` column
 /// (never the query parameter) and a malformed id or a half-populated avatar pair is an
 /// integrity fault BEFORE the decision or the seal, never a silently-dropped column.
-fn decode_id_and_avatar(
-    row: &SqliteRow,
-) -> Result<(AgentId, AgentAvatarRow), ProfileWriteFailure> {
+fn decode_id_and_avatar(row: &SqliteRow) -> Result<(AgentId, AgentAvatarRow), ProfileWriteFailure> {
     let row_id: String = row.try_get("id")?;
     let storage_key: Option<String> = row.try_get("avatar_storage_key")?;
     let content_type: Option<String> = row.try_get("avatar_content_type")?;
@@ -737,7 +735,11 @@ INSERT INTO agents (id, name, display_name, runtime, avatar_storage_key, avatar_
         // together and the committed row must report Absent, with the before-image
         // carrying the seeded Present state it read under the lock.
         let outcome = adapter
-            .write_agent_row(&agent("agent-4"), |_before| Some(admit_avatar_removal()), 4100)
+            .write_agent_row(
+                &agent("agent-4"),
+                |_before| Some(admit_avatar_removal()),
+                4100,
+            )
             .await
             .unwrap();
         let AgentProfileRowWrite::Committed { before, row } = outcome else {

@@ -44,7 +44,9 @@ use crate::{
         AgentChangedAnnounce, AgentChangedSink, AgentProfileRowWrite, AgentProfileWriteError,
         AgentProfileWriteUnitOfWork, admit_avatar_assignment, admit_avatar_removal, seal_agent_row,
     },
-    avatar::{AvatarRejection, AvatarStorageFailure, BlobCleanup, CandidateAvatar, validate_avatar},
+    avatar::{
+        AvatarRejection, AvatarStorageFailure, BlobCleanup, CandidateAvatar, validate_avatar,
+    },
     identity::AgentId,
 };
 
@@ -114,7 +116,9 @@ pub enum AgentAvatarUploadOutcome {
     /// committed blob is indeterminate; `retained_fresh` is recorded for reconciliation.
     /// This is NOT `BlobCleanup::NothingToClean` — a residue exists and cleanup was
     /// intentionally not attempted. → safe-`500`, no announce.
-    CommitUntrustworthy { retained_fresh: AgentAvatarBlobPointer },
+    CommitUntrustworthy {
+        retained_fresh: AgentAvatarBlobPointer,
+    },
 }
 
 /// Upload (or replace) an agent's avatar. `subject` MUST have already cleared the
@@ -308,11 +312,13 @@ where
             seal_agent_row(subject, &before, &admitted, &row, now_ms)?;
             let blob_cleanup = cleanup_agent_blob(blobs, subject, &prior).await;
             let announce = announce_agent_changed(announce_sink, subject).await;
-            Ok(AgentAvatarClearOutcome::Cleared(AnnouncedAgentAvatarWrite {
-                agent_id: row.id,
-                announce,
-                blob_cleanup,
-            }))
+            Ok(AgentAvatarClearOutcome::Cleared(
+                AnnouncedAgentAvatarWrite {
+                    agent_id: row.id,
+                    announce,
+                    blob_cleanup,
+                },
+            ))
         }
     }
 }
@@ -681,7 +687,10 @@ mod tests {
         else {
             panic!("expected WriteFaulted");
         };
-        assert!(matches!(cause, AgentProfileWriteError::UntrustworthyWriteFact));
+        assert!(matches!(
+            cause,
+            AgentProfileWriteError::UntrustworthyWriteFact
+        ));
         assert!(matches!(orphan_cleanup, BlobCleanup::Deleted));
         assert_eq!(sink.calls(), 0);
     }
@@ -731,7 +740,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_commit_whose_avatar_is_fresh_but_a_tuning_column_was_tampered_retains_the_fresh_blob()
-    {
+     {
         // Cindy's P0-1 falsifier: the committed avatar correctly points at FRESH, but a
         // NON-avatar column the avatar-only admit left untouched came back changed
         // (display_name tampered). The full-column seal fails, yet the durable row DOES

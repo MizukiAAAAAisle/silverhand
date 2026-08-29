@@ -540,7 +540,10 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(reply.body, b"Internal Server Error");
-        assert_eq!(reply.blob_calls, 1, "the present row was resolved against the blob");
+        assert_eq!(
+            reply.blob_calls, 1,
+            "the present row was resolved against the blob"
+        );
     }
 
     #[tokio::test]

@@ -421,7 +421,9 @@ mod tests {
             "the agent read capability must refuse a user-scope key"
         );
         assert!(
-            AgentAvatarBlobStore::delete(&adapter, &foreign).await.is_err(),
+            AgentAvatarBlobStore::delete(&adapter, &foreign)
+                .await
+                .is_err(),
             "the agent delete capability must refuse a user-scope key"
         );
         assert_eq!(
@@ -457,7 +459,9 @@ mod tests {
         // delete face) before the store is touched.
         let b_under_a = OwnedAgentAvatarBlob::new(a.clone(), b_key.clone());
         assert!(
-            AgentAvatarBlobRead::read(&adapter, &b_under_a).await.is_err(),
+            AgentAvatarBlobRead::read(&adapter, &b_under_a)
+                .await
+                .is_err(),
             "A must not read B's blob through a cross-wired key"
         );
         assert!(
@@ -499,7 +503,9 @@ mod tests {
             .unwrap();
         assert!(fresh.as_str().starts_with("agent-avatars/"));
         let fresh_owned = OwnedAgentAvatarBlob::new(owner.clone(), fresh);
-        let read = AgentAvatarBlobRead::read(&adapter, &fresh_owned).await.unwrap();
+        let read = AgentAvatarBlobRead::read(&adapter, &fresh_owned)
+            .await
+            .unwrap();
         assert!(matches!(read, AvatarBlobReadOutcome::Found(bytes) if bytes == vec![9]));
 
         // A legacy TS-shaped key `agents/<owner>/avatars/...` bound to that owner is
@@ -525,7 +531,11 @@ mod tests {
             AgentAvatarBlobPointer::parse("agents/agent-b/avatars/legacy.png").unwrap(),
         );
         assert!(AgentAvatarBlobRead::read(&adapter, &wrong).await.is_err());
-        assert!(AgentAvatarBlobStore::delete(&adapter, &wrong).await.is_err());
+        assert!(
+            AgentAvatarBlobStore::delete(&adapter, &wrong)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -534,9 +544,10 @@ mod tests {
         let adapter = SingleKindAvatarBlobs::new(backend.clone(), StorageKind::Local);
         let agent = AgentId::parse("agent-1").unwrap();
 
-        let pointer = AgentAvatarBlobStore::put(&adapter, &agent, AvatarContentType::Png, vec![7, 8])
-            .await
-            .unwrap();
+        let pointer =
+            AgentAvatarBlobStore::put(&adapter, &agent, AvatarContentType::Png, vec![7, 8])
+                .await
+                .unwrap();
         assert!(
             pointer.as_str().starts_with("agent-avatars/"),
             "agent blobs live under their own scope, never the user `avatars/` scope: {}",
@@ -548,7 +559,9 @@ mod tests {
         let read = AgentAvatarBlobRead::read(&adapter, &owned).await.unwrap();
         assert!(matches!(read, AvatarBlobReadOutcome::Found(bytes) if bytes == vec![7, 8]));
 
-        AgentAvatarBlobStore::delete(&adapter, &owned).await.unwrap();
+        AgentAvatarBlobStore::delete(&adapter, &owned)
+            .await
+            .unwrap();
         assert_eq!(backend.live(), 0);
     }
 

@@ -1,6 +1,7 @@
 //! Authenticated daemon attachment, delivery custody and Messaging effect adapters.
 
 pub(crate) mod agent_materialize_codec;
+pub(crate) mod agent_profile_mcp_codec;
 pub(crate) mod runtime_clear_session_codec;
 pub(crate) mod runtime_start_codec;
 pub(crate) mod runtime_stop_codec;
@@ -67,6 +68,7 @@ use tokio::{
 
 use crate::{
     agent_materialize::ProductionAgentMaterialize,
+    agent_profile_mcp_data_plane::ProductionAgentProfileMcpDataPlane,
     bearer::strict_bearer_credential,
     daemon_events::{
         AgentRunStateWire, DaemonRuntimeEventOwner, HydratedRuntime, RuntimeEventDirective,
@@ -183,6 +185,25 @@ impl<C, D, H> DaemonDeliveryRuntime<C, D, H> {
                 registry: self.registry.clone(),
             },
             self.config.command_timeout,
+        )
+    }
+
+    /// The profile-MCP capability composed over this runtime's one attachment
+    /// registry plus the caller-supplied persisted placement authority. The
+    /// returned value exposes only the typed domain port; raw command dispatch
+    /// remains crate-private.
+    pub fn agent_profile_mcp_data_plane<P>(
+        &self,
+        placements: P,
+    ) -> ProductionAgentProfileMcpDataPlane<P>
+    where
+        P: silverhand_backend_core::agent_profile_mcp::AgentProfileMcpPlacementRead,
+    {
+        ProductionAgentProfileMcpDataPlane::new(
+            placements,
+            OwningHostDataPlane {
+                registry: self.registry.clone(),
+            },
         )
     }
 
@@ -1538,6 +1559,30 @@ pub(crate) enum AgentMaterializeRefusalCode {
     UnsupportedRuntime,
 }
 
+/// Business refusal codes admitted only by the profile-MCP command family.
+/// `internal_error` is already the generic response-level token; these are the
+/// command-scoped additions and each kind admits only its TS catalogue subset.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AgentProfileMcpRefusalCode {
+    AgentDeleting,
+    FsUnavailable,
+    InvalidConfig,
+}
+
+impl AgentProfileMcpRefusalCode {
+    fn parse(kind: &str, raw: &str) -> Option<Self> {
+        match (kind, raw) {
+            ("agent_profile_mcp_read", "fs_unavailable") => Some(Self::FsUnavailable),
+            ("agent_profile_mcp_write", "fs_unavailable") => Some(Self::FsUnavailable),
+            ("agent_profile_mcp_write", "invalid_config") => Some(Self::InvalidConfig),
+            ("agent_profile_mcp_write", "agent_deleting") => Some(Self::AgentDeleting),
+            ("mcp_probe", "fs_unavailable") => Some(Self::FsUnavailable),
+            ("mcp_probe", "agent_deleting") => Some(Self::AgentDeleting),
+            _ => None,
+        }
+    }
+}
+
 impl AgentMaterializeRefusalCode {
     fn parse(raw: &str) -> Option<Self> {
         match raw {
@@ -1586,6 +1631,7 @@ pub(crate) enum CommandRefusal {
     RuntimeScoped(RuntimeRefusalCode),
     AgentMaterializeScoped(AgentMaterializeRefusalCode),
     AgentFilesPurgeScoped(AgentFilesPurgeRefusalCode),
+    AgentProfileMcpScoped(AgentProfileMcpRefusalCode),
 }
 
 impl CommandRefusal {
@@ -1607,6 +1653,9 @@ impl CommandRefusal {
             }
             "agent_files_purge" => {
                 AgentFilesPurgeRefusalCode::parse(code).map(Self::AgentFilesPurgeScoped)
+            }
+            "agent_profile_mcp_read" | "agent_profile_mcp_write" | "mcp_probe" => {
+                AgentProfileMcpRefusalCode::parse(kind, code).map(Self::AgentProfileMcpScoped)
             }
             _ => None,
         }
@@ -1646,6 +1695,8 @@ impl DaemonAttachment {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HostDataPlaneCommandKind {
     AgentMaterialize,
+    AgentProfileMcpRead,
+    AgentProfileMcpWrite,
     HostStatus,
     RuntimeClearSession,
     RuntimeCatalog,
@@ -1653,14 +1704,17 @@ pub(crate) enum HostDataPlaneCommandKind {
     RuntimeStop,
     ProxyConfigGet,
     ProxyConfigSet,
+    McpProbe,
     RotateToken,
 }
 
 impl HostDataPlaneCommandKind {
     /// Every variant, so the response envelope admits exactly the kinds this face can
     /// send. A variant missing here is not silently tolerated: nothing could answer it.
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 12] = [
         Self::AgentMaterialize,
+        Self::AgentProfileMcpRead,
+        Self::AgentProfileMcpWrite,
         Self::HostStatus,
         Self::RuntimeClearSession,
         Self::RuntimeCatalog,
@@ -1668,12 +1722,15 @@ impl HostDataPlaneCommandKind {
         Self::RuntimeStop,
         Self::ProxyConfigGet,
         Self::ProxyConfigSet,
+        Self::McpProbe,
         Self::RotateToken,
     ];
 
     fn as_wire(self) -> &'static str {
         match self {
             Self::AgentMaterialize => "agent_materialize",
+            Self::AgentProfileMcpRead => "agent_profile_mcp_read",
+            Self::AgentProfileMcpWrite => "agent_profile_mcp_write",
             Self::HostStatus => "host_status",
             Self::RuntimeClearSession => "runtime_clear_session",
             Self::RuntimeCatalog => "host_runtime_catalog",
@@ -1681,6 +1738,7 @@ impl HostDataPlaneCommandKind {
             Self::RuntimeStop => RUNTIME_STOP_KIND,
             Self::ProxyConfigGet => "host_proxy_config_get",
             Self::ProxyConfigSet => "host_proxy_config_set",
+            Self::McpProbe => "mcp_probe",
             Self::RotateToken => "rotate_token",
         }
     }
@@ -5338,6 +5396,9 @@ mod tests {
         let error = |code: &str| json!({ "code": code, "message": "why" });
         for kind in [
             "agent_materialize",
+            "agent_profile_mcp_read",
+            "agent_profile_mcp_write",
+            "mcp_probe",
             "runtime_clear_session",
             "runtime_start",
             "runtime_deliver",
@@ -5383,6 +5444,31 @@ mod tests {
                 None
             );
         }
+        assert!(matches!(
+            CommandRefusal::decode("agent_profile_mcp_read", &error("fs_unavailable")),
+            Some(CommandRefusal::AgentProfileMcpScoped(
+                AgentProfileMcpRefusalCode::FsUnavailable
+            ))
+        ));
+        assert_eq!(
+            CommandRefusal::decode("agent_profile_mcp_read", &error("agent_deleting")),
+            None
+        );
+        for (kind, code) in [
+            ("agent_profile_mcp_write", "invalid_config"),
+            ("agent_profile_mcp_write", "agent_deleting"),
+            ("mcp_probe", "agent_deleting"),
+            ("mcp_probe", "fs_unavailable"),
+        ] {
+            assert!(matches!(
+                CommandRefusal::decode(kind, &error(code)),
+                Some(CommandRefusal::AgentProfileMcpScoped(_))
+            ));
+        }
+        assert_eq!(
+            CommandRefusal::decode("mcp_probe", &error("invalid_config")),
+            None
+        );
         for code in [
             "agent_deleting",
             "fs_quota_exceeded",
@@ -5491,6 +5577,14 @@ mod tests {
                 HostDataPlaneCommandKind::AgentMaterialize,
                 "agent_materialize",
             ),
+            (
+                HostDataPlaneCommandKind::AgentProfileMcpRead,
+                "agent_profile_mcp_read",
+            ),
+            (
+                HostDataPlaneCommandKind::AgentProfileMcpWrite,
+                "agent_profile_mcp_write",
+            ),
             (HostDataPlaneCommandKind::HostStatus, "host_status"),
             (
                 HostDataPlaneCommandKind::RuntimeClearSession,
@@ -5510,6 +5604,7 @@ mod tests {
                 HostDataPlaneCommandKind::ProxyConfigSet,
                 "host_proxy_config_set",
             ),
+            (HostDataPlaneCommandKind::McpProbe, "mcp_probe"),
             (HostDataPlaneCommandKind::RotateToken, "rotate_token"),
         ] {
             assert_eq!(kind.as_wire(), wire);
@@ -5602,6 +5697,253 @@ mod tests {
             successor_receive.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
+    }
+
+    #[derive(Clone)]
+    struct McpPlacementRead {
+        fact: Option<silverhand_backend_core::agent_profile_mcp::AgentProfileMcpPlacement>,
+    }
+
+    impl silverhand_backend_core::agent_profile_mcp::AgentProfileMcpPlacementRead for McpPlacementRead {
+        async fn read_mcp_placement(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<
+            Option<silverhand_backend_core::agent_profile_mcp::AgentProfileMcpPlacement>,
+            PersistenceFailure,
+        > {
+            Ok(self.fact.clone())
+        }
+    }
+
+    fn mcp_placement(
+        source: &str,
+        host: &str,
+        deletion_pending: bool,
+    ) -> silverhand_backend_core::agent_profile_mcp::AgentProfileMcpPlacement {
+        silverhand_backend_core::agent_profile_mcp::AgentProfileMcpPlacement::new(
+            AgentId::parse(source).unwrap(),
+            HostId::parse(host).unwrap(),
+            deletion_pending,
+        )
+    }
+
+    #[tokio::test]
+    async fn profile_mcp_commands_are_typed_host_bound_and_generation_bound() {
+        use silverhand_backend_core::agent_profile_mcp::{
+            AgentProfileMcpDataPlane, McpProbeCommand, McpProbePhase,
+        };
+
+        let registry = DaemonRegistry::with_process_epoch("profile-mcp-test".to_owned());
+        let host_a = HostId::parse("host-a").unwrap();
+        let host_b = HostId::parse("host-b").unwrap();
+        let instance = DaemonInstanceId::parse("same-instance").unwrap();
+        let (connection_a, mut receive_a) =
+            attach_for_command_test(&registry, &host_a, instance.clone());
+        let (_connection_b, mut receive_b) =
+            attach_for_command_test(&registry, &host_b, instance.clone());
+        let plane = OwningHostDataPlane {
+            registry: registry.clone(),
+        };
+        let adapter = crate::agent_profile_mcp_data_plane::ProductionAgentProfileMcpDataPlane::new(
+            McpPlacementRead {
+                fact: Some(mcp_placement("agent-a", "host-a", false)),
+            },
+            plane.clone(),
+        );
+        let agent = AgentId::parse("agent-a").unwrap();
+
+        let read_adapter = adapter.clone();
+        let read_agent = agent.clone();
+        let read = tokio::spawn(async move { read_adapter.read_config(&read_agent).await });
+        let ConnectionControl::Command(command) = receive_a.recv().await.unwrap() else {
+            panic!("MCP read must enter host A FIFO")
+        };
+        assert_eq!(command.kind, "agent_profile_mcp_read");
+        assert_eq!(command.params, json!({ "agent_id": "agent-a" }));
+        assert!(matches!(
+            receive_b.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        command
+            .response
+            .send(Ok(json!({ "ok": true, "raw": null })))
+            .unwrap();
+        assert_eq!(read.await.unwrap().unwrap(), None);
+
+        let raw = "{\n  \"mcpServers\": {\"sky😀\": {\"command\": \"x\"}}\n}\n";
+        let write_adapter = adapter.clone();
+        let write_agent = agent.clone();
+        let write_raw = raw.to_owned();
+        let write =
+            tokio::spawn(async move { write_adapter.write_config(&write_agent, &write_raw).await });
+        let ConnectionControl::Command(command) = receive_a.recv().await.unwrap() else {
+            panic!("MCP write must enter host A FIFO")
+        };
+        assert_eq!(command.kind, "agent_profile_mcp_write");
+        assert_eq!(command.params["agent_id"], "agent-a");
+        assert_eq!(command.params["raw"].as_str(), Some(raw));
+        command
+            .response
+            .send(Ok(json!({ "ok": true, "bytes_written": 61 })))
+            .unwrap();
+        assert_eq!(write.await.unwrap().unwrap().get(), 61);
+
+        let probe_adapter = adapter.clone();
+        let probe_agent = agent.clone();
+        let probe = tokio::spawn(async move {
+            probe_adapter
+                .probe(
+                    &probe_agent,
+                    &McpProbeCommand {
+                        server_name: "sky".to_owned(),
+                        include_tools: true,
+                    },
+                )
+                .await
+        });
+        let ConnectionControl::Command(command) = receive_a.recv().await.unwrap() else {
+            panic!("MCP probe must enter host A FIFO")
+        };
+        assert_eq!(command.kind, "mcp_probe");
+        assert_eq!(
+            command.params,
+            json!({
+                "source": { "kind": "profile", "agent_id": "agent-a" },
+                "server_name": "sky",
+                "include_tools": true,
+            })
+        );
+        command
+            .response
+            .send(Ok(json!({
+                "ok": false,
+                "phase": "connect",
+                "message": "connection failed"
+            })))
+            .unwrap();
+        let outcome = probe.await.unwrap().unwrap();
+        assert!(!outcome.ok);
+        assert_eq!(outcome.phase, McpProbePhase::Connect);
+
+        // Admission captured A. A same-instance successor has a different
+        // connection generation and must receive none of the old attempt.
+        let captured_a = plane.resolve(&host_a).unwrap().unwrap();
+        registry.remove(host_a.as_str(), &connection_a);
+        let (_successor, mut successor_receive) =
+            attach_for_command_test(&registry, &host_a, instance);
+        let failure = crate::agent_profile_mcp_data_plane::read_captured(
+            &plane,
+            captured_a,
+            &agent,
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            failure.code,
+            silverhand_backend_core::agent_profile_mcp::McpDataPlaneFaultCode::HostAttachPending
+        );
+        assert!(matches!(
+            successor_receive.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn profile_mcp_write_decoder_closes_every_unsafe_byte_count() {
+        use silverhand_backend_core::{
+            agent_profile_mcp::{AgentProfileMcpDataPlane, McpDataPlaneFaultCode},
+            wire_number::JsSafeInteger,
+        };
+
+        let registry = DaemonRegistry::with_process_epoch("profile-mcp-number".to_owned());
+        let host = HostId::parse("host-a").unwrap();
+        let (_connection, mut receive) = attach_for_command_test(
+            &registry,
+            &host,
+            DaemonInstanceId::parse("instance-a").unwrap(),
+        );
+        let adapter = crate::agent_profile_mcp_data_plane::ProductionAgentProfileMcpDataPlane::new(
+            McpPlacementRead {
+                fact: Some(mcp_placement("agent-a", "host-a", false)),
+            },
+            OwningHostDataPlane { registry },
+        );
+        let agent = AgentId::parse("agent-a").unwrap();
+
+        for unsafe_count in [json!(-1), json!(1.5), json!(JsSafeInteger::MAX + 1)] {
+            let call_adapter = adapter.clone();
+            let call_agent = agent.clone();
+            let call =
+                tokio::spawn(async move { call_adapter.write_config(&call_agent, "{}").await });
+            let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
+                panic!("write must enter FIFO")
+            };
+            command
+                .response
+                .send(Ok(json!({ "ok": true, "bytes_written": unsafe_count })))
+                .unwrap();
+            assert_eq!(
+                call.await.unwrap().unwrap_err().code,
+                McpDataPlaneFaultCode::DaemonInternalError
+            );
+        }
+
+        let call_adapter = adapter.clone();
+        let call_agent = agent.clone();
+        let call = tokio::spawn(async move { call_adapter.write_config(&call_agent, "{}").await });
+        let ConnectionControl::Command(command) = receive.recv().await.unwrap() else {
+            panic!("write must enter FIFO")
+        };
+        command
+            .response
+            .send(Ok(json!({
+                "ok": true,
+                "bytes_written": JsSafeInteger::MAX
+            })))
+            .unwrap();
+        assert_eq!(call.await.unwrap().unwrap().get(), JsSafeInteger::MAX);
+    }
+
+    #[tokio::test]
+    async fn profile_mcp_persisted_refusals_bind_source_before_registry_or_deletion() {
+        use silverhand_backend_core::agent_profile_mcp::{
+            AgentProfileMcpDataPlane, McpDataPlaneFaultCode,
+        };
+        use std::thread;
+
+        let registry = DaemonRegistry::with_process_epoch("profile-mcp-poison".to_owned());
+        let poisoned = Arc::clone(&registry.state);
+        let _ = thread::spawn(move || {
+            let _guard = poisoned.lock().unwrap();
+            panic!("poison registry for the pre-transport discriminator");
+        })
+        .join();
+        let plane = OwningHostDataPlane { registry };
+        let requested = AgentId::parse("agent-a").unwrap();
+
+        for (fact, expected) in [
+            (
+                Some(mcp_placement("agent-a", "host-a", true)),
+                McpDataPlaneFaultCode::AgentDeleting,
+            ),
+            (
+                Some(mcp_placement("agent-b", "host-a", true)),
+                McpDataPlaneFaultCode::DaemonInternalError,
+            ),
+            (None, McpDataPlaneFaultCode::DaemonInternalError),
+        ] {
+            let adapter =
+                crate::agent_profile_mcp_data_plane::ProductionAgentProfileMcpDataPlane::new(
+                    McpPlacementRead { fact },
+                    plane.clone(),
+                );
+            assert_eq!(
+                adapter.read_config(&requested).await.unwrap_err().code,
+                expected
+            );
+        }
     }
 
     #[tokio::test]

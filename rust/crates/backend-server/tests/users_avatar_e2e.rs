@@ -33,8 +33,8 @@ use silverhand_backend_core::{
         SessionBearer, SessionClock, SessionTtl,
     },
     avatar::{
-        AVATAR_MAX_BYTES, AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome, AvatarBlobStore,
-        AvatarContentType, AvatarStorageFailure,
+        AVATAR_MAX_BYTES, AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome,
+        AvatarBlobStore, AvatarContentType, AvatarStorageFailure,
     },
     credential::{
         Argon2idCost, PasswordHashError, PasswordHashParams, PasswordHasher,

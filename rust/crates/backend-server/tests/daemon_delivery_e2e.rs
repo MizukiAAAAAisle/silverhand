@@ -14,6 +14,7 @@ use log_capture::LogBuffer;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
+    agent_profile_mcp::{AgentProfileMcpDataPlane, McpDataPlaneFaultCode, McpProbeCommand},
     agents::runtime::RuntimeKind,
     auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
     blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
@@ -56,6 +57,7 @@ use silverhand_backend_core::{
 };
 use silverhand_backend_filesystem::blob_store::LocalBlobStore;
 use silverhand_backend_server::{
+    agent_profile_mcp_data_plane::ProductionAgentProfileMcpDataPlane,
     clock::ProcessClock,
     daemon_delivery::{
         DaemonDeliveryController, DaemonDeliveryEffects, DaemonDeliveryRuntime,
@@ -85,7 +87,8 @@ use silverhand_backend_server::{
     },
 };
 use silverhand_backend_sqlite::{
-    auth::SqliteSessionStore, host_runtime::SqliteHostRuntimeStore, messaging::MessagingStore,
+    auth::SqliteSessionStore, host_agent::SqliteHostAgentStore,
+    host_runtime::SqliteHostRuntimeStore, messaging::MessagingStore,
     runtime_credential::SqliteRuntimeCustodyStore, runtime_delivery::SqliteRuntimeDeliveryStore,
     scope_event::SqliteEventScopeAuthority,
 };
@@ -137,6 +140,7 @@ type RuntimeControl = ProductionRuntimeControl<
     CountingRuntimeDeliveryStore,
     SqliteHostRuntimeStore,
 >;
+type AgentProfileMcp = ProductionAgentProfileMcpDataPlane<SqliteHostAgentStore>;
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 struct Fixture {
@@ -145,6 +149,7 @@ struct Fixture {
     address: std::net::SocketAddr,
     effects: Effects,
     runtime_control: RuntimeControl,
+    agent_profile_mcp: AgentProfileMcp,
     settlement_calls: Arc<AtomicUsize>,
     clear_settlement_calls: Arc<AtomicUsize>,
     controller: DaemonDeliveryController,
@@ -266,6 +271,8 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
     )
     .unwrap();
     let runtime_control = runtime.runtime_control();
+    let agent_profile_mcp =
+        runtime.agent_profile_mcp_data_plane(SqliteHostAgentStore::open(&path).await.unwrap());
     let effects = runtime.effects();
     let (daemon_router, controller) = runtime.router();
     let sessions = HumanSessionAuthenticator::new(
@@ -293,6 +300,7 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
         address,
         effects,
         runtime_control,
+        agent_profile_mcp,
         settlement_calls,
         clear_settlement_calls,
         controller,
@@ -3175,6 +3183,81 @@ async fn a_timed_out_host_command_is_deregistered_before_its_late_answer_arrives
         "{observed:#?}"
     );
 
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn profile_mcp_timeout_removes_correlation_and_late_answer_cannot_poison_probe() {
+    let fixture = fixture("profile-mcp-timeout-cleanup.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+    let agent = AgentId::parse(AGENT).unwrap();
+    let mut observed = Vec::new();
+
+    let timed_adapter = fixture.agent_profile_mcp.clone();
+    let timed_agent = agent.clone();
+    let timed = tokio::spawn(async move { timed_adapter.write_config(&timed_agent, "{}").await });
+    let stale = next_daemon_command(&mut socket, &mut observed).await;
+    assert_eq!(stale["kind"], "agent_profile_mcp_write");
+    assert_eq!(stale["params"], json!({ "agent_id": AGENT, "raw": "{}" }));
+
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(31)).await;
+    tokio::time::resume();
+    assert_eq!(
+        timed.await.unwrap().unwrap_err().code,
+        McpDataPlaneFaultCode::DaemonTimeout
+    );
+
+    let live_adapter = fixture.agent_profile_mcp.clone();
+    let live_agent = agent.clone();
+    let live = tokio::spawn(async move {
+        live_adapter
+            .probe(
+                &live_agent,
+                &McpProbeCommand {
+                    server_name: "sky".to_owned(),
+                    include_tools: false,
+                },
+            )
+            .await
+    });
+    let command = next_daemon_command(&mut socket, &mut observed).await;
+    assert_eq!(command["kind"], "mcp_probe");
+    assert_ne!(command["id"], stale["id"]);
+
+    // An unknown refusal would be fatal if the stale id still owned a pending
+    // settlement. It must instead be ignored, leaving the live probe to settle
+    // from its own result and the connection open.
+    respond_error(
+        &mut socket,
+        &stale,
+        json!({ "code": "banana", "message": "late raw message" }),
+    )
+    .await;
+    respond(
+        &mut socket,
+        &command,
+        json!({ "ok": true, "phase": "initialize" }),
+    )
+    .await;
+    let outcome = live.await.unwrap().unwrap();
+    assert!(outcome.ok);
+
+    // A third command proves the socket outlived the late answer.
+    let next_adapter = fixture.agent_profile_mcp.clone();
+    let next = tokio::spawn(async move { next_adapter.read_config(&agent).await });
+    let command = next_daemon_command(&mut socket, &mut observed).await;
+    assert_eq!(command["kind"], "agent_profile_mcp_read");
+    respond(&mut socket, &command, json!({ "ok": true, "raw": "raw" })).await;
+    assert_eq!(next.await.unwrap().unwrap().as_deref(), Some("raw"));
+
+    assert!(
+        observed.iter().all(|frame| frame["type"] != "close"),
+        "{observed:#?}"
+    );
     socket.close(None).await.unwrap();
     fixture.controller.close().await;
     fixture.server.abort();

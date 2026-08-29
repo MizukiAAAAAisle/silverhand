@@ -13,6 +13,7 @@
 
 use silverhand_backend_core::{
     agent_bulk_stop::{AgentBulkStopReadPort, AgentBulkStopSnapshot},
+    agent_profile_mcp::{AgentProfileMcpPlacement, AgentProfileMcpPlacementRead},
     capability::computer_access::ComputerOwnershipFacts,
     identity::{AgentId, HostId},
     persistence::PersistenceFailure,
@@ -41,6 +42,10 @@ const SELECT_RUNTIME_SESSIONS: &str = "SELECT agent_id, conversation_id, observe
 /// dispatched to, read in the same transaction as the seats so a racing host
 /// reassignment cannot split them.
 const SELECT_AGENT_HOST: &str = "SELECT id, host_id FROM agents WHERE id = ?";
+/// Profile MCP routing reads the row's own id, owning host and deletion marker
+/// together so none can come from a different lifecycle snapshot.
+const SELECT_AGENT_MCP_PLACEMENT: &str =
+    "SELECT id, host_id, deletion_started_at FROM agents WHERE id = ?";
 const SELECT_IS_DELETION_PENDING: &str =
     "SELECT EXISTS(SELECT 1 FROM agents WHERE id = ? AND deletion_started_at IS NOT NULL)";
 const SELECT_COMPUTER_OWNERSHIP: &str = "SELECT id, user_id FROM hosts WHERE id = ?";
@@ -103,6 +108,15 @@ fn agent_host(row: &SqliteRow) -> Result<(AgentId, HostId), sqlx::Error> {
     Ok((
         decode::agent_id(row.try_get("id")?)?,
         decode::host_id(row.try_get("host_id")?)?,
+    ))
+}
+
+fn agent_mcp_placement(row: &SqliteRow) -> Result<AgentProfileMcpPlacement, sqlx::Error> {
+    Ok(AgentProfileMcpPlacement::new(
+        decode::agent_id(row.try_get("id")?)?,
+        decode::host_id(row.try_get("host_id")?)?,
+        row.try_get::<Option<i64>, _>("deletion_started_at")?
+            .is_some(),
     ))
 }
 
@@ -365,6 +379,23 @@ impl AgentBulkStopReadPort for SqliteHostAgentStore {
     }
 }
 
+impl AgentProfileMcpPlacementRead for SqliteHostAgentStore {
+    async fn read_mcp_placement(
+        &self,
+        agent: &AgentId,
+    ) -> Result<Option<AgentProfileMcpPlacement>, PersistenceFailure> {
+        let row = sqlx::query(SELECT_AGENT_MCP_PLACEMENT)
+            .bind(agent.as_str())
+            .fetch_optional(self.pool())
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        row.as_ref()
+            .map(agent_mcp_placement)
+            .transpose()
+            .map_err(PersistenceFailure::from_source)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -592,5 +623,41 @@ mod tests {
             .await
             .expect("read snapshot");
         assert!(snapshot.is_none(), "an unknown agent has no snapshot");
+    }
+
+    #[tokio::test]
+    async fn profile_mcp_placement_sources_host_and_deletion_from_one_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = seed_read_fixture(&dir).await;
+
+        let active = store
+            .read_mcp_placement(&agent("a-agent"))
+            .await
+            .expect("read placement")
+            .expect("agent present");
+        assert_eq!(active.source(), &agent("a-agent"));
+        assert_eq!(active.host(), &host("h-good"));
+        assert!(!active.deletion_pending());
+
+        sqlx::query("UPDATE agents SET deletion_started_at = 7 WHERE id = 'a-agent'")
+            .execute(store.pool())
+            .await
+            .unwrap();
+        let deleting = store
+            .read_mcp_placement(&agent("a-agent"))
+            .await
+            .expect("read deleting placement")
+            .expect("agent present");
+        assert_eq!(deleting.source(), &agent("a-agent"));
+        assert_eq!(deleting.host(), &host("h-good"));
+        assert!(deleting.deletion_pending());
+
+        assert!(
+            store
+                .read_mcp_placement(&agent("nope"))
+                .await
+                .expect("read missing")
+                .is_none()
+        );
     }
 }

@@ -399,7 +399,9 @@ mod tests {
             match &self.detail {
                 DetailOutcome::Present(facts) => Ok(Some(facts.as_ref().clone())),
                 DetailOutcome::Absent => Ok(None),
-                DetailOutcome::Fails => Err(PersistenceFailure::from_source(io::Error::other("boom"))),
+                DetailOutcome::Fails => {
+                    Err(PersistenceFailure::from_source(io::Error::other("boom")))
+                }
             }
         }
     }
@@ -413,9 +415,9 @@ mod tests {
             match &self.snapshot {
                 SnapshotOutcome::Present(snapshot) => Ok(Some(snapshot.clone())),
                 SnapshotOutcome::Absent => Ok(None),
-                SnapshotOutcome::Fails => {
-                    Err(PersistenceFailure::from_source(io::Error::other("read boom")))
-                }
+                SnapshotOutcome::Fails => Err(PersistenceFailure::from_source(io::Error::other(
+                    "read boom",
+                ))),
             }
         }
     }
@@ -461,7 +463,13 @@ mod tests {
             _target: &ScopeRuntimeStopTarget,
         ) -> Result<Result<ScopeRuntimeStopOutcome, ScopeRuntimeStopRefusal>, Self::Error> {
             self.calls.fetch_add(1, SeqCst);
-            match self.script.lock().unwrap().pop_front().expect("scripted stop") {
+            match self
+                .script
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("scripted stop")
+            {
                 StopScript::Ok => Ok(Ok(ScopeRuntimeStopOutcome)),
                 StopScript::Refused(refusal) => Ok(Err(refusal)),
                 StopScript::Faulted(message) => Err(StopFault(message)),
@@ -795,7 +803,9 @@ mod tests {
                     1,
                 )]),
             ),
-            FakeStops::scripted(vec![StopScript::Refused(ScopeRuntimeStopRefusal::HostMissing)]),
+            FakeStops::scripted(vec![StopScript::Refused(
+                ScopeRuntimeStopRefusal::HostMissing,
+            )]),
             "a1",
             true,
         )
@@ -891,7 +901,12 @@ mod tests {
                 SnapshotOutcome::Present(AgentBulkStopSnapshot {
                     source: agent("a2"),
                     host: host("h1"),
-                    sessions: vec![conversation_seat("a2", "c1", RuntimeObservedStatus::Active, 1)],
+                    sessions: vec![conversation_seat(
+                        "a2",
+                        "c1",
+                        RuntimeObservedStatus::Active,
+                        1,
+                    )],
                 }),
             ),
             FakeStops::scripted(vec![]),
