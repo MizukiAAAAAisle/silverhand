@@ -54,7 +54,8 @@ use thiserror::Error;
 
 use crate::{
     agents::runtime::RuntimeKind,
-    identity::{AgentId, ConversationId},
+    identity::{AgentId, ConversationId, UserId},
+    messaging::collaboration::RuntimeSeatTarget,
     persistence::PersistenceFailure,
     runtime_credential::RuntimeScope,
     runtime_event::RuntimeObservedStatus,
@@ -400,6 +401,45 @@ impl RuntimeTransitionSeatSnapshot {
 
     pub fn seats(&self) -> &[RuntimeTransitionSeatRow] {
         &self.seats
+    }
+
+    /// The sealed seats as clear candidates. Iterating them is the ONLY way to obtain a
+    /// [`RuntimeSeatTarget`] for a runtime-transition clear, so every scope the switch use
+    /// case clears is provably one this snapshot enumerated under the exact held marker —
+    /// the generic `RuntimeSeatTarget` ctor is never a core mint口 for a transition clear,
+    /// and a caller cannot smuggle in a hand-picked scope. The live/session predicate stays
+    /// the switch use case's: each candidate exposes its raw status and CLI session so the
+    /// consumer decides which seats hold something to clear.
+    pub fn clear_candidates(&self) -> impl Iterator<Item = TransitionClearCandidate<'_>> {
+        self.seats
+            .iter()
+            .map(|row| TransitionClearCandidate { row })
+    }
+}
+
+/// One sealed transition seat, borrowed from a proven [`RuntimeTransitionSeatSnapshot`].
+/// It carries the raw classification the switch use case needs and can mint exactly one
+/// actor-bound clear target for its own sealed scope.
+pub struct TransitionClearCandidate<'a> {
+    row: &'a RuntimeTransitionSeatRow,
+}
+
+impl TransitionClearCandidate<'_> {
+    pub fn scope(&self) -> &RuntimeScope {
+        &self.row.scope
+    }
+
+    pub fn observed_status(&self) -> RuntimeObservedStatus {
+        self.row.observed_status
+    }
+
+    pub fn cli_session_id(&self) -> Option<&str> {
+        self.row.cli_session_id.as_deref()
+    }
+
+    /// Mint the actor-bound clear target for THIS sealed seat's scope.
+    pub fn clear_target(&self, actor: &UserId) -> RuntimeSeatTarget {
+        RuntimeSeatTarget::new(actor.clone(), self.row.scope.clone())
     }
 }
 

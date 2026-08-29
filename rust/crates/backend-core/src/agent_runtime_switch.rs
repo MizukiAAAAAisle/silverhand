@@ -4,8 +4,9 @@
 //! Switching drivers is a lifecycle transition, not a column edit. The old-runtime sessions
 //! must be cleared before the `runtime` column moves, and nothing may spawn or deliver under
 //! the agent while that window is open. This module orchestrates that window against narrow
-//! typed ports; the durable half — the compare-and-set lock lifecycle and the committed-fact
-//! seal — lives in [`crate::runtime_transition`] and is reused verbatim here.
+//! typed ports; the durable half — the compare-and-set lock lifecycle, the committed-fact
+//! seal, and the lock-fenced seat/inbox reads — lives in [`crate::runtime_transition`] and is
+//! reused verbatim here.
 //!
 //! # Shape of the transition (mirrors the TypeScript `switchAgentRuntime`)
 //!
@@ -16,23 +17,25 @@
 //!  2. **Acquire** the durable transition lock ([`begin_runtime_transition`]). A concurrent
 //!     switch or an in-flight delete loses here, loudly, instead of interleaving.
 //!  3. **Under the lock**: re-read the row (the preflight snapshot can go stale across the
-//!     catalog round-trip), enumerate every live-or-resumable SEAT, return in-flight inbox
-//!     claims to pending, and clear every old-runtime session. A single clear failure aborts
-//!     the lock and leaves the runtime unchanged — no partial switch is ever committed.
+//!     catalog round-trip); enumerate every SEAT through the lock-fenced sealed read; capture
+//!     the AgentSlot presentation focus while its custody is still current; reclaim in-flight
+//!     inbox leases; and clear every old-runtime session. A single clear failure aborts the
+//!     lock and leaves the runtime unchanged — no partial switch is ever committed.
 //!  4. **Commit** the runtime + tuning in one guarded write ([`complete_runtime_transition`]),
 //!     which also releases the lock. A `Lost` commit means another attempt owns the lock now.
-//!  5. **Re-drive**: start the conversations that must resume under the new runtime. A restart
-//!     failure is logged and counted by the caller — it NEVER rolls back the committed
-//!     transition.
+//!  5. **Re-drive** (post-commit): start the conversations that must resume under the new
+//!     runtime. Nothing here can revert the committed transition — a resume-plan read that
+//!     faults, or a restart the provider refuses, is counted and dropped; the AgentSlot
+//!     ready-replay / inbox trigger picks up whatever this best-effort pass missed.
 //!
-//! # Why the saga calls the runtime-control provider directly
+//! # Where the effect targets come from
 //!
-//! The per-seat clear/start here are consequences of a transition the caller already
-//! authorized (route edit-admission) and that the durable lock already fenced — not fresh
-//! user actions. So the saga mints the sealed [`RuntimeSeatTarget`]/[`RuntimeStartTarget`]
-//! from the SEAT FACTS it read (exactly the "internal seat-fact read for runtime-switch" the
-//! target type documents) and invokes the provider directly, rather than re-running the
-//! per-seat admission ladder the public clear/start endpoints use.
+//! The per-seat clear here is a consequence of a transition the caller already authorized
+//! (route edit-admission) and that the durable lock already fenced — not a fresh user action.
+//! So the saga does NOT re-run the per-seat admission ladder: it mints each sealed
+//! [`RuntimeSeatTarget`] only from a [`TransitionClearCandidate`] — the sole bridge from a
+//! lock-fenced sealed seat to a clear target — so every cleared scope is provably one the
+//! held marker enumerated, never a caller-picked arm.
 
 use std::future::Future;
 
@@ -41,17 +44,18 @@ use crate::{
         runtime::RuntimeKind, runtime_catalog::SELECTABLE_RUNTIMES,
         session_scope::AgentSessionScope,
     },
-    identity::{AgentId, ConversationId, HostId, UserId},
-    messaging::collaboration::{
-        CliSessionId, RuntimeControlPort, RuntimeSeatTarget, RuntimeStartTarget,
-    },
+    identity::{AgentId, ConversationId, HostId},
+    messaging::collaboration::{RuntimeControlPort, RuntimeStartTarget},
     persistence::PersistenceFailure,
-    runtime_credential::RuntimeScope,
+    runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustodyPort, RuntimeScope},
     runtime_event::RuntimeObservedStatus,
     runtime_transition::{
         AbortTransition, BeginTransition, CommittedRuntimeTransition, CompleteTransition,
-        RuntimeTransitionCommit, RuntimeTransitionFault, RuntimeTransitionWrite,
+        ReadRuntimeTransitionSeats, ReclaimRuntimeTransitionInboxes, RuntimeTransitionCommit,
+        RuntimeTransitionFault, RuntimeTransitionInboxWrite, RuntimeTransitionLock,
+        RuntimeTransitionSeatRead, RuntimeTransitionWrite, TransitionClearCandidate,
         abort_runtime_transition, begin_runtime_transition, complete_runtime_transition,
+        read_runtime_transition_seats, reclaim_runtime_transition_inboxes,
     },
 };
 
@@ -81,13 +85,14 @@ impl SwitchAgentRuntimeConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SwitchAgentRuntimeRequest {
     pub agent: AgentId,
-    pub actor: UserId,
+    pub actor: crate::identity::UserId,
     pub config: SwitchAgentRuntimeConfig,
 }
 
-/// The row facts and seat set the saga reads together, in ONE source-bound snapshot so a host
-/// reassignment racing the request cannot split the host a restart dispatches to from the seat
-/// set it was captured with (the same discipline as [`crate::agent_bulk_stop`]).
+/// The row facts the saga reads for the preflight and the authoritative under-lock re-read.
+/// SEATS are NOT part of this snapshot: they are read separately through the lock-fenced
+/// sealed [`RuntimeTransitionSeatRead`], so they can only be enumerated while the exact
+/// transition marker is held.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SwitchAgentSnapshot {
     /// The id the row was read FROM — its own primary key. Bound against the requested agent so
@@ -97,37 +102,10 @@ pub struct SwitchAgentSnapshot {
     pub runtime: RuntimeKind,
     pub session_scope: AgentSessionScope,
     pub host: HostId,
-    pub seats: Vec<SwitchSeat>,
 }
 
-/// One runtime SEAT of the agent. Carries the raw observed status and the seat's CLI session so
-/// the saga can decide — as a domain rule, not an adapter filter — whether the old runtime holds
-/// anything behind this seat that must be cleared before the driver changes.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SwitchSeat {
-    pub scope: RuntimeScope,
-    pub status: RuntimeObservedStatus,
-    pub cli_session_id: Option<CliSessionId>,
-}
-
-impl SwitchSeat {
-    /// A seat still owns a live runtime child.
-    fn is_live(&self) -> bool {
-        matches!(
-            self.status,
-            RuntimeObservedStatus::Starting | RuntimeObservedStatus::Active
-        )
-    }
-
-    /// Nothing running and nothing resumable — the old runtime holds no session behind this
-    /// seat, so the transition has nothing to clear through it.
-    fn holds_session(&self) -> bool {
-        self.is_live() || self.cli_session_id.is_some()
-    }
-}
-
-/// The single source-bound read the saga needs of the agent row and its seats. Used for both
-/// the preflight read and the authoritative re-read under the lock.
+/// The single source-bound read the saga needs of the agent row. Used for both the preflight
+/// read and the authoritative re-read under the lock.
 pub trait SwitchAgentSnapshotRead: Clone + Send + Sync + 'static {
     fn read_switch_snapshot(
         &self,
@@ -169,21 +147,14 @@ pub enum RuntimeAvailabilityProbeFault {
     TransportContractViolation,
 }
 
-/// Conversation-inbox coordination the saga needs across the transition window: reclaim
-/// in-flight claims so the post-transition restart can redeliver, enumerate the pending
-/// conversations to re-drive, and re-check a presentation focus against live participation.
+/// The conversation-inbox reads the saga needs for the POST-COMMIT re-drive: enumerate the
+/// pending conversations to resume, and re-check a presentation focus against live
+/// participation. Returning in-flight claims to pending is NOT here — that is the lock-fenced
+/// [`RuntimeTransitionInboxWrite`], run under the marker before the commit.
 ///
 /// `list_pending_for_agent` MUST return oldest-durable-pending first: the agent-scope restart
 /// takes only its head.
 pub trait SwitchConversationCoordination: Clone + Send + Sync + 'static {
-    /// Return every in-flight claim held by this agent to pending, yielding the conversations
-    /// reclaimed. A claim made before the lock is no longer valid custody; returning it lets the
-    /// post-transition restart deliver under the target runtime.
-    fn rollback_in_flight_for_agent(
-        &self,
-        agent: &AgentId,
-    ) -> impl Future<Output = Result<Vec<ConversationId>, PersistenceFailure>> + Send;
-
     /// Every conversation with undelivered input for this agent, oldest durable pending first.
     fn list_pending_for_agent(
         &self,
@@ -235,7 +206,8 @@ pub enum SwitchAgentRuntimeError {
     TransitionInProgress,
     /// The agent is being deleted; a transition must not race teardown.
     DeletionInProgress,
-    /// The guarded commit matched no row — another attempt owns the lock now.
+    /// The guarded commit (or a lock-fenced read) matched no row — another attempt owns the
+    /// lock now.
     TransitionLost,
     /// At least one old-runtime session could not be cleared; the runtime was not changed.
     SessionClearFailed,
@@ -253,7 +225,7 @@ pub enum SwitchAgentRuntimeFault {
     Persistence,
     /// The snapshot resolved a row whose id is not the requested agent.
     SourceUntrustworthy,
-    /// The lock-lifecycle write returned a witness that disagreed with the request.
+    /// A lock-lifecycle or lock-fenced read returned a witness that disagreed with the request.
     Transition,
 }
 
@@ -270,7 +242,9 @@ impl From<RuntimeTransitionFault> for SwitchAgentRuntimeError {
                 Self::Fault(SwitchAgentRuntimeFault::Persistence)
             }
             RuntimeTransitionFault::LockWitnessMismatch { .. }
-            | RuntimeTransitionFault::CommitWitnessMismatch { .. } => {
+            | RuntimeTransitionFault::CommitWitnessMismatch { .. }
+            | RuntimeTransitionFault::SeatSnapshotWitnessMismatch { .. }
+            | RuntimeTransitionFault::InboxReclaimWitnessMismatch { .. } => {
                 Self::Fault(SwitchAgentRuntimeFault::Transition)
             }
         }
@@ -280,11 +254,15 @@ impl From<RuntimeTransitionFault> for SwitchAgentRuntimeError {
 /// Transition one agent to another runtime. See the module docs for the phase shape and the
 /// invariants each phase holds.
 #[allow(clippy::too_many_arguments)]
-pub async fn switch_agent_runtime<R, Avail, Coord, W, P>(
+pub async fn switch_agent_runtime<R, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P>(
     reads: &R,
     availability: &Avail,
     coordination: &Coord,
     transitions: &W,
+    seats: &Seats,
+    inboxes: &Inboxes,
+    custody: &Cust,
+    focus: &Focus,
     control: &P,
     request: &SwitchAgentRuntimeRequest,
     now_ms: i64,
@@ -294,6 +272,10 @@ where
     Avail: RuntimeAvailabilityProbe,
     Coord: SwitchConversationCoordination,
     W: RuntimeTransitionWrite,
+    Seats: RuntimeTransitionSeatRead,
+    Inboxes: RuntimeTransitionInboxWrite,
+    Cust: RuntimeCustodyPort,
+    Focus: AgentSlotPresentationFocusPort,
     P: RuntimeControlPort,
 {
     let agent = &request.agent;
@@ -326,6 +308,10 @@ where
     match run_locked(
         reads,
         coordination,
+        seats,
+        inboxes,
+        custody,
+        focus,
         transitions,
         control,
         request,
@@ -372,18 +358,26 @@ impl From<SwitchAgentRuntimeError> for Unwound {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_locked<R, Coord, W, P>(
+async fn run_locked<R, Coord, Seats, Inboxes, Cust, Focus, W, P>(
     reads: &R,
     coordination: &Coord,
+    seats: &Seats,
+    inboxes: &Inboxes,
+    custody: &Cust,
+    focus: &Focus,
     transitions: &W,
     control: &P,
     request: &SwitchAgentRuntimeRequest,
     now_ms: i64,
-    lock: &crate::runtime_transition::RuntimeTransitionLock,
+    lock: &RuntimeTransitionLock,
 ) -> Result<SwitchAgentRuntimeCommitted, Unwound>
 where
     R: SwitchAgentSnapshotRead,
     Coord: SwitchConversationCoordination,
+    Seats: RuntimeTransitionSeatRead,
+    Inboxes: RuntimeTransitionInboxWrite,
+    Cust: RuntimeCustodyPort,
+    Focus: AgentSlotPresentationFocusPort,
     W: RuntimeTransitionWrite,
     P: RuntimeControlPort,
 {
@@ -396,48 +390,73 @@ where
     let locked = load_snapshot(reads, agent).await?;
     reject_unchanged_or_unselectable(&locked, target).map_err(Unwound::from)?;
 
+    // Enumerate the SEATS through the lock-fenced sealed read. The seal proves every seat
+    // belongs to THIS held marker (a foreign-seat or wrong-lock snapshot is a fault, cleared
+    // nothing); a `Lost` means the marker vanished under us — treat it as a lost transition.
+    let snapshot = match read_runtime_transition_seats(seats, lock)
+        .await
+        .map_err(SwitchAgentRuntimeError::from)
+        .map_err(Unwound::from)?
+    {
+        ReadRuntimeTransitionSeats::Snapshot(snapshot) => snapshot,
+        ReadRuntimeTransitionSeats::Lost => {
+            return Err(Unwound::from(SwitchAgentRuntimeError::TransitionLost));
+        }
+    };
+
+    // Capture the AgentSlot presentation focus BEFORE any clear, while its custody is still
+    // current. `current` then `focus` are two reads, not one atomic snapshot: if the slot exits
+    // or finalizes between them the focus port re-checks custody and answers `None`, so the
+    // worst case degrades to "no focus", never a successor's focus. A persistence fault on
+    // either read fails closed here — before any clear or commit — with nothing to restore.
+    let agent_focus = capture_agent_focus(custody, focus, agent, locked.session_scope)
+        .await
+        .map_err(Unwound::from)?;
+
+    // Return every in-flight inbox lease to pending under the exact marker, so the post-commit
+    // restart can redeliver under the target runtime. A `Lost` marker means we no longer own the
+    // lock — nothing was written and nothing cleared.
+    let reclaimed = match reclaim_runtime_transition_inboxes(inboxes, lock)
+        .await
+        .map_err(SwitchAgentRuntimeError::from)
+        .map_err(Unwound::from)?
+    {
+        ReclaimRuntimeTransitionInboxes::Reclaimed(reclaim) => reclaim.conversations().to_vec(),
+        ReclaimRuntimeTransitionInboxes::Lost => {
+            return Err(Unwound::from(SwitchAgentRuntimeError::TransitionLost));
+        }
+    };
+
     // SEATS, not conversations: what must be cleared is every live-or-resumable SESSION, wherever
     // it sits. One row per seat, every placement — a DM or inbox session cannot be silently
-    // excluded and switched out from under.
-    let mut to_clear: Vec<RuntimeScope> = Vec::new();
+    // excluded and switched out from under. The clear target is minted only from the sealed
+    // candidate, so it is provably a scope this marker enumerated.
+    let mut to_clear = Vec::new();
     let mut live_before: Vec<ConversationId> = Vec::new();
     let mut agent_slot_was_live = false;
-    for seat in &locked.seats {
-        if !seat.holds_session() {
+    for candidate in snapshot.clear_candidates() {
+        if !holds_session(&candidate) {
             continue;
         }
-        match &seat.scope {
+        match candidate.scope() {
             RuntimeScope::AgentSlot { .. } => {
-                agent_slot_was_live = seat.is_live();
+                agent_slot_was_live = is_live(&candidate);
             }
             RuntimeScope::ConversationSlot { source, .. } => {
-                if seat.is_live() {
+                if is_live(&candidate) {
                     live_before.push(source.clone());
                 }
             }
         }
-        to_clear.push(seat.scope.clone());
+        to_clear.push(candidate.clear_target(&request.actor));
     }
-
-    // A claim made before the lock is no longer valid custody; returning it to pending lets the
-    // post-transition restart deliver under the target runtime.
-    let reclaimed = coordination
-        .rollback_in_flight_for_agent(agent)
-        .await
-        .map_err(SwitchAgentRuntimeError::from)?;
 
     // Clear every old-runtime session. ALL are attempted (no short-circuit) so a stuck seat does
     // not hide behind an earlier failure; a single failure then aborts without committing.
     let mut clear_failed = false;
-    let mut agent_focus: Option<ConversationId> = None;
-    for scope in &to_clear {
-        let seat_target = RuntimeSeatTarget::new(request.actor.clone(), scope.clone());
-        match control.clear_session(&seat_target).await {
-            Ok(Ok(outcome)) => {
-                if matches!(scope, RuntimeScope::AgentSlot { .. }) && agent_focus.is_none() {
-                    agent_focus = outcome.focus_conversation_id().cloned();
-                }
-            }
+    for seat_target in &to_clear {
+        match control.clear_session(seat_target).await {
+            Ok(Ok(_)) => {}
             Ok(Err(_refusal)) => clear_failed = true,
             Err(_transport) => clear_failed = true,
         }
@@ -454,25 +473,12 @@ where
         });
     }
 
-    // A focus captured before clear is only a presentation coordinate. Reuse it only while the
-    // placement-aware participant authority still accepts it; never substitute another binding.
-    let agent_resume_focus = match (locked.session_scope, &agent_focus) {
-        (AgentSessionScope::Agent, Some(focus))
-            if coordination
-                .is_agent_participant(focus, agent)
-                .await
-                .map_err(SwitchAgentRuntimeError::from)? =>
-        {
-            Some(focus.clone())
-        }
-        _ => None,
-    };
-
     // ── Commit the runtime + tuning and release the lock in one guarded write. ──
     let committed =
         match complete_runtime_transition(transitions, lock, &request.config.commit(), now_ms)
             .await
-            .map_err(SwitchAgentRuntimeError::from)?
+            .map_err(SwitchAgentRuntimeError::from)
+            .map_err(Unwound::from)?
         {
             CompleteTransition::Committed(committed) => committed,
             CompleteTransition::Lost => {
@@ -485,35 +491,22 @@ where
             }
         };
 
-    // ── Re-drive: start the conversations that must resume under the new runtime. ──
-    let newly_pending = coordination
-        .list_pending_for_agent_since(agent, now_ms)
-        .await
-        .map_err(SwitchAgentRuntimeError::from)?;
-    let resume = resume_targets(
+    // ── Re-drive (post-commit): NEVER reverts the committed transition. ──
+    // Every read here is best-effort: a persistence fault yields an empty resume plan, and a
+    // provider refusal is counted, so the committed switch stands and the ready-replay / inbox
+    // trigger picks up whatever this pass missed.
+    let (restarted, restart_failures) = dispatch_resume(
         coordination,
-        agent,
+        control,
+        request,
         locked.session_scope,
         agent_slot_was_live,
         &reclaimed,
-        &newly_pending,
         &live_before,
-        agent_resume_focus,
+        agent_focus,
+        now_ms,
     )
-    .await
-    .map_err(SwitchAgentRuntimeError::from)?;
-
-    let mut restarted = 0usize;
-    let mut restart_failures = 0usize;
-    for conversation in resume {
-        let restart = RuntimeStartTarget::new(request.actor.clone(), agent.clone(), conversation);
-        match control.start(&restart).await {
-            // A committed transition is NEVER rolled back by a restart failure — it is logged and
-            // counted only. The AgentSlot ready-replay / inbox trigger will pick up the rest.
-            Ok(Ok(_)) => restarted += 1,
-            Ok(Err(_)) | Err(_) => restart_failures += 1,
-        }
-    }
+    .await;
 
     Ok(SwitchAgentRuntimeCommitted {
         committed,
@@ -521,6 +514,47 @@ where
         restarted_conversations: restarted,
         restart_failures,
     })
+}
+
+/// A seat still owns a live runtime child.
+fn is_live(candidate: &TransitionClearCandidate<'_>) -> bool {
+    matches!(
+        candidate.observed_status(),
+        RuntimeObservedStatus::Starting | RuntimeObservedStatus::Active
+    )
+}
+
+/// Nothing running and nothing resumable — the old runtime holds no session behind this seat,
+/// so the transition has nothing to clear through it.
+fn holds_session(candidate: &TransitionClearCandidate<'_>) -> bool {
+    is_live(candidate) || candidate.cli_session_id().is_some()
+}
+
+/// Capture the AgentSlot presentation focus while its custody is current, or `None`. Only
+/// agent-scope agents have an AgentSlot focus; conversation-scope agents never do.
+async fn capture_agent_focus<Cust, Focus>(
+    custody: &Cust,
+    focus: &Focus,
+    agent: &AgentId,
+    session_scope: AgentSessionScope,
+) -> Result<Option<ConversationId>, SwitchAgentRuntimeError>
+where
+    Cust: RuntimeCustodyPort,
+    Focus: AgentSlotPresentationFocusPort,
+{
+    if session_scope != AgentSessionScope::Agent {
+        return Ok(None);
+    }
+    let principal = match custody
+        .current(RuntimeScope::AgentSlot {
+            agent: agent.clone(),
+        })
+        .await?
+    {
+        Some(principal) => principal,
+        None => return Ok(None),
+    };
+    Ok(focus.agent_slot_presentation_focus(principal).await?)
 }
 
 /// The pairs to restart under the OLD runtime when a pre-commit failure aborts the lock.
@@ -539,7 +573,52 @@ fn restore_targets(
     }
 }
 
-/// The conversations to re-drive after a committed switch.
+/// The post-commit re-drive. Infallible by contract: a resume-plan read that faults yields an
+/// empty plan and a provider refusal is counted, so nothing here reverts the committed switch.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_resume<Coord, P>(
+    coordination: &Coord,
+    control: &P,
+    request: &SwitchAgentRuntimeRequest,
+    session_scope: AgentSessionScope,
+    agent_slot_was_live: bool,
+    reclaimed: &[ConversationId],
+    live_before: &[ConversationId],
+    agent_focus: Option<ConversationId>,
+    now_ms: i64,
+) -> (usize, usize)
+where
+    Coord: SwitchConversationCoordination,
+    P: RuntimeControlPort,
+{
+    let resume = resume_targets(
+        coordination,
+        &request.agent,
+        session_scope,
+        agent_slot_was_live,
+        reclaimed,
+        live_before,
+        agent_focus,
+        now_ms,
+    )
+    .await
+    .unwrap_or_default();
+
+    let mut restarted = 0usize;
+    let mut restart_failures = 0usize;
+    for conversation in resume {
+        let restart =
+            RuntimeStartTarget::new(request.actor.clone(), request.agent.clone(), conversation);
+        match control.start(&restart).await {
+            Ok(Ok(_)) => restarted += 1,
+            Ok(Err(_)) | Err(_) => restart_failures += 1,
+        }
+    }
+    (restarted, restart_failures)
+}
+
+/// The conversations to re-drive after a committed switch. Every read is post-commit; a fault
+/// bubbles to the infallible [`dispatch_resume`] as an empty plan.
 #[allow(clippy::too_many_arguments)]
 async fn resume_targets<Coord: SwitchConversationCoordination>(
     coordination: &Coord,
@@ -547,32 +626,38 @@ async fn resume_targets<Coord: SwitchConversationCoordination>(
     session_scope: AgentSessionScope,
     agent_slot_was_live: bool,
     reclaimed: &[ConversationId],
-    newly_pending: &[ConversationId],
     live_before: &[ConversationId],
-    agent_resume_focus: Option<ConversationId>,
+    agent_focus: Option<ConversationId>,
+    now_ms: i64,
 ) -> Result<Vec<ConversationId>, PersistenceFailure> {
+    let newly_pending = coordination
+        .list_pending_for_agent_since(agent, now_ms)
+        .await?;
     match session_scope {
         AgentSessionScope::Agent => {
             // One AgentSlot gets one restart target. Origin is presentation only: prefer the
-            // oldest durable pending origin, otherwise reuse the focus observed before clear.
-            // Starting once is enough — AgentSlot ready-replay drains the rest in inbox order.
+            // oldest durable pending origin, otherwise reuse the focus captured before clear —
+            // but only while it is still a real participant. Starting once is enough; the
+            // AgentSlot ready-replay drains the rest in inbox order.
             let should_resume =
                 agent_slot_was_live || !reclaimed.is_empty() || !newly_pending.is_empty();
-            let oldest_pending = if should_resume {
-                coordination
-                    .list_pending_for_agent(agent)
-                    .await?
-                    .into_iter()
-                    .next()
-            } else {
-                None
-            };
-            let target = oldest_pending.or(if should_resume {
-                agent_resume_focus
-            } else {
-                None
-            });
-            Ok(target.into_iter().collect())
+            if !should_resume {
+                return Ok(Vec::new());
+            }
+            if let Some(oldest) = coordination
+                .list_pending_for_agent(agent)
+                .await?
+                .into_iter()
+                .next()
+            {
+                return Ok(vec![oldest]);
+            }
+            match agent_focus {
+                Some(focus) if coordination.is_agent_participant(&focus, agent).await? => {
+                    Ok(vec![focus])
+                }
+                _ => Ok(Vec::new()),
+            }
         }
         AgentSessionScope::Conversation => {
             // Restore live pairs and reclaimed claims, and nudge only messages that arrived while
@@ -633,13 +718,20 @@ mod tests {
     };
 
     use crate::{
+        identity::{DaemonInstanceId, UserId},
         messaging::collaboration::{
             ClearSessionOutcome, ClearSessionProviderRefusal, RuntimePlacementRefusal,
-            StartRuntimeOutcome, StartRuntimeProviderRefusal,
+            RuntimeSeatTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal,
+        },
+        runtime_credential::{
+            ClaimRuntimeCustody, ClaimedRuntime, FinalizeRuntimeCustody, RuntimeCustody,
+            RuntimeGeneration, RuntimePrincipal,
         },
         runtime_transition::{
             BeginTransitionRecord, CompleteTransitionRecord, RuntimeTransitionAfterImage,
-            RuntimeTransitionLock, RuntimeTransitionLockRow,
+            RuntimeTransitionInboxReclaimRecord, RuntimeTransitionInboxReclaimRow,
+            RuntimeTransitionLockRow, RuntimeTransitionSeatRow,
+            RuntimeTransitionSeatSnapshotRecord, RuntimeTransitionSeatSnapshotRow,
         },
     };
 
@@ -659,14 +751,16 @@ mod tests {
     fn conv(id: &str) -> ConversationId {
         ConversationId::parse(id).expect("conversation id")
     }
-    fn cli(id: &str) -> CliSessionId {
-        CliSessionId::parse(id).expect("cli session id")
-    }
 
     const NOW: i64 = 1_000;
     const AGENT: &str = "agent-1";
     const ACTOR: &str = "user-1";
     const HOST: &str = "host-1";
+
+    /// A stand-in persistence fault for the read-error fakes.
+    fn boom() -> PersistenceFailure {
+        PersistenceFailure::from_source(NeverFails)
+    }
 
     fn request(from: RuntimeKind, to: RuntimeKind) -> (SwitchAgentRuntimeRequest, RuntimeKind) {
         (
@@ -684,38 +778,48 @@ mod tests {
         )
     }
 
-    fn conversation_seat(id: &str, status: RuntimeObservedStatus) -> SwitchSeat {
-        SwitchSeat {
-            scope: RuntimeScope::ConversationSlot {
-                agent: agent(AGENT),
-                source: conv(id),
-            },
-            status,
-            cli_session_id: Some(cli(id)),
-        }
-    }
-
-    fn agent_seat(status: RuntimeObservedStatus, resumable: bool) -> SwitchSeat {
-        SwitchSeat {
-            scope: RuntimeScope::AgentSlot {
-                agent: agent(AGENT),
-            },
-            status,
-            cli_session_id: resumable.then(|| cli("agent-seat")),
-        }
-    }
-
-    fn snapshot(
-        from: RuntimeKind,
-        scope: AgentSessionScope,
-        seats: Vec<SwitchSeat>,
-    ) -> SwitchAgentSnapshot {
+    fn snapshot(from: RuntimeKind, scope: AgentSessionScope) -> SwitchAgentSnapshot {
         SwitchAgentSnapshot {
             source: agent(AGENT),
             runtime: from,
             session_scope: scope,
             host: host(HOST),
-            seats,
+        }
+    }
+
+    // ── sealed-seat witnesses (built for the lock the committing writer mints) ──
+
+    /// The exact lock row `Transitions::committing` acquires: agent AGENT, target codex, at NOW.
+    fn lock_row() -> RuntimeTransitionLockRow {
+        RuntimeTransitionLockRow {
+            agent_id: agent(AGENT),
+            target: "codex".into(),
+            started_at: NOW,
+        }
+    }
+
+    fn conv_seat(
+        id: &str,
+        status: RuntimeObservedStatus,
+        resumable: bool,
+    ) -> RuntimeTransitionSeatRow {
+        RuntimeTransitionSeatRow {
+            scope: RuntimeScope::ConversationSlot {
+                agent: agent(AGENT),
+                source: conv(id),
+            },
+            observed_status: status,
+            cli_session_id: resumable.then(|| id.to_string()),
+        }
+    }
+
+    fn agent_seat(status: RuntimeObservedStatus, resumable: bool) -> RuntimeTransitionSeatRow {
+        RuntimeTransitionSeatRow {
+            scope: RuntimeScope::AgentSlot {
+                agent: agent(AGENT),
+            },
+            observed_status: status,
+            cli_session_id: resumable.then(|| "agent-seat".to_string()),
         }
     }
 
@@ -791,20 +895,13 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct Coordination {
-        reclaimed: Vec<ConversationId>,
         pending: Vec<ConversationId>,
         pending_since: Vec<ConversationId>,
         participant: bool,
-        rollback_calls: Arc<Mutex<usize>>,
+        /// When set, `list_pending_for_agent_since` faults — a post-commit read failure.
+        fault_pending_since: bool,
     }
     impl SwitchConversationCoordination for Coordination {
-        async fn rollback_in_flight_for_agent(
-            &self,
-            _agent: &AgentId,
-        ) -> Result<Vec<ConversationId>, PersistenceFailure> {
-            *self.rollback_calls.lock().unwrap() += 1;
-            Ok(self.reclaimed.clone())
-        }
         async fn list_pending_for_agent(
             &self,
             _agent: &AgentId,
@@ -816,6 +913,9 @@ mod tests {
             _agent: &AgentId,
             _since_ms: i64,
         ) -> Result<Vec<ConversationId>, PersistenceFailure> {
+            if self.fault_pending_since {
+                return Err(boom());
+            }
             Ok(self.pending_since.clone())
         }
         async fn is_agent_participant(
@@ -824,6 +924,163 @@ mod tests {
             _agent: &AgentId,
         ) -> Result<bool, PersistenceFailure> {
             Ok(self.participant)
+        }
+    }
+
+    // ── lock-fenced seat read + inbox reclaim fakes ──────────────────────
+
+    #[derive(Clone)]
+    struct TransitionFacts {
+        seats: RuntimeTransitionSeatSnapshotRecord,
+        reclaim: RuntimeTransitionInboxReclaimRecord,
+        seat_reads: Arc<Mutex<usize>>,
+        reclaims: Arc<Mutex<usize>>,
+    }
+    impl TransitionFacts {
+        fn new(seats: Vec<RuntimeTransitionSeatRow>, reclaimed: Vec<ConversationId>) -> Self {
+            Self {
+                seats: RuntimeTransitionSeatSnapshotRecord::Snapshot(
+                    RuntimeTransitionSeatSnapshotRow {
+                        lock: lock_row(),
+                        seats,
+                    },
+                ),
+                reclaim: RuntimeTransitionInboxReclaimRecord::Reclaimed(
+                    RuntimeTransitionInboxReclaimRow {
+                        lock: lock_row(),
+                        conversations: reclaimed,
+                    },
+                ),
+                seat_reads: Arc::new(Mutex::new(0)),
+                reclaims: Arc::new(Mutex::new(0)),
+            }
+        }
+        /// No seats, nothing reclaimed — for preflight/lock refusals that never read seats.
+        fn empty() -> Self {
+            Self::new(Vec::new(), Vec::new())
+        }
+        fn with_seats(seats: Vec<RuntimeTransitionSeatRow>) -> Self {
+            Self::new(seats, Vec::new())
+        }
+        fn reads(&self) -> usize {
+            *self.seat_reads.lock().unwrap()
+        }
+    }
+    impl RuntimeTransitionSeatRead for TransitionFacts {
+        async fn read_transition_seats(
+            &self,
+            _lock: &RuntimeTransitionLock,
+        ) -> Result<RuntimeTransitionSeatSnapshotRecord, PersistenceFailure> {
+            *self.seat_reads.lock().unwrap() += 1;
+            Ok(self.seats.clone())
+        }
+    }
+    impl RuntimeTransitionInboxWrite for TransitionFacts {
+        async fn reclaim_transition_inboxes(
+            &self,
+            _lock: &RuntimeTransitionLock,
+        ) -> Result<RuntimeTransitionInboxReclaimRecord, PersistenceFailure> {
+            *self.reclaims.lock().unwrap() += 1;
+            Ok(self.reclaim.clone())
+        }
+    }
+
+    // ── custody + focus fakes ────────────────────────────────────────────
+
+    fn agent_principal() -> RuntimePrincipal {
+        RuntimePrincipal::AgentSlot {
+            agent: agent(AGENT),
+            custody: RuntimeCustody::new(
+                RuntimeGeneration::new(1).unwrap(),
+                DaemonInstanceId::parse("daemon-1").unwrap(),
+            ),
+        }
+    }
+
+    #[derive(Clone)]
+    struct Custody {
+        current: Arc<Mutex<Result<Option<RuntimePrincipal>, ()>>>,
+    }
+    impl Custody {
+        /// No live AgentSlot custody — focus is never consulted.
+        fn absent() -> Self {
+            Self {
+                current: Arc::new(Mutex::new(Ok(None))),
+            }
+        }
+        fn current(principal: RuntimePrincipal) -> Self {
+            Self {
+                current: Arc::new(Mutex::new(Ok(Some(principal)))),
+            }
+        }
+        fn faulting() -> Self {
+            Self {
+                current: Arc::new(Mutex::new(Err(()))),
+            }
+        }
+    }
+    impl RuntimeCustodyPort for Custody {
+        async fn claim_or_current(
+            &self,
+            _claim: ClaimRuntimeCustody,
+        ) -> Result<Option<ClaimedRuntime>, PersistenceFailure> {
+            unreachable!("switch saga never claims custody")
+        }
+        async fn current(
+            &self,
+            _scope: RuntimeScope,
+        ) -> Result<Option<RuntimePrincipal>, PersistenceFailure> {
+            match &*self.current.lock().unwrap() {
+                Ok(principal) => Ok(principal.clone()),
+                Err(()) => Err(boom()),
+            }
+        }
+        async fn is_current(
+            &self,
+            _principal: RuntimePrincipal,
+        ) -> Result<bool, PersistenceFailure> {
+            unreachable!("switch saga never linearizes custody directly")
+        }
+        async fn finalize(
+            &self,
+            _finalization: FinalizeRuntimeCustody,
+        ) -> Result<bool, PersistenceFailure> {
+            unreachable!("switch saga never finalizes custody")
+        }
+    }
+
+    #[derive(Clone)]
+    struct Focus {
+        answer: Arc<Mutex<Result<Option<ConversationId>, ()>>>,
+    }
+    impl Focus {
+        /// Never consulted (no live AgentSlot custody).
+        fn unused() -> Self {
+            Self {
+                answer: Arc::new(Mutex::new(Ok(None))),
+            }
+        }
+        fn presenting(conversation: ConversationId) -> Self {
+            Self {
+                answer: Arc::new(Mutex::new(Ok(Some(conversation)))),
+            }
+        }
+        /// The custody read saw a live slot, but the focus port's re-check found it gone.
+        fn expired() -> Self {
+            Self {
+                answer: Arc::new(Mutex::new(Ok(None))),
+            }
+        }
+    }
+    impl AgentSlotPresentationFocusPort for Focus {
+        async fn agent_slot_presentation_focus(
+            &self,
+            _principal: RuntimePrincipal,
+        ) -> Result<Option<ConversationId>, PersistenceFailure> {
+            match &*self.answer.lock().unwrap() {
+                Ok(focus) => Ok(focus.clone()),
+                Err(()) => Err(boom()),
+            }
         }
     }
 
@@ -863,11 +1120,7 @@ mod tests {
         /// A writer that locks and commits faithfully to `codex` at `NOW`.
         fn committing() -> Self {
             Self::new(
-                BeginTransitionRecord::Locked(RuntimeTransitionLockRow {
-                    agent_id: agent(AGENT),
-                    target: "codex".into(),
-                    started_at: NOW,
-                }),
+                BeginTransitionRecord::Locked(lock_row()),
                 CompleteTransitionRecord::Committed(faithful_after(NOW)),
             )
         }
@@ -983,8 +1236,7 @@ mod tests {
             &self,
             target: &RuntimeSeatTarget,
         ) -> Result<Result<ClearSessionOutcome, ClearSessionProviderRefusal>, Self::Error> {
-            let scope = target.scope().clone();
-            self.cleared.lock().unwrap().push(scope.clone());
+            self.cleared.lock().unwrap().push(target.scope().clone());
             let script = self
                 .clears
                 .lock()
@@ -992,15 +1244,7 @@ mod tests {
                 .pop_front()
                 .unwrap_or(ClearScript::Ok);
             Ok(match script {
-                ClearScript::Ok => Ok(match scope {
-                    // The agent seat carries the presentation focus the saga may reuse.
-                    RuntimeScope::AgentSlot { .. } => {
-                        ClearSessionOutcome::committed_presenting(None, true, Some(conv("focus")))
-                    }
-                    RuntimeScope::ConversationSlot { .. } => {
-                        ClearSessionOutcome::committed(None, true)
-                    }
-                }),
+                ClearScript::Ok => Ok(ClearSessionOutcome::committed(None, true)),
                 ClearScript::Refuse => Err(ClearSessionProviderRefusal::Placement(
                     RuntimePlacementRefusal::HostMissing,
                 )),
@@ -1016,6 +1260,9 @@ mod tests {
         probe: Probe,
         coordination: Coordination,
         transitions: Transitions,
+        facts: TransitionFacts,
+        custody: Custody,
+        focus: Focus,
         control: Control,
     }
     impl Harness {
@@ -1028,6 +1275,10 @@ mod tests {
                 &self.probe,
                 &self.coordination,
                 &self.transitions,
+                &self.facts,
+                &self.facts,
+                &self.custody,
+                &self.focus,
                 &self.control,
                 request,
                 NOW,
@@ -1044,14 +1295,13 @@ mod tests {
     async fn unchanged_runtime_refuses_before_the_lock() {
         let (req, _from) = request(RuntimeKind::Codex, RuntimeKind::Codex);
         let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(
-                RuntimeKind::Codex,
-                AgentSessionScope::Agent,
-                vec![],
-            )),
+            reads: SnapshotReads::stable(snapshot(RuntimeKind::Codex, AgentSessionScope::Agent)),
             probe: Probe::available(),
             coordination: Coordination::default(),
             transitions: Transitions::committing(),
+            facts: TransitionFacts::empty(),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::new(),
         };
         assert_eq!(
@@ -1060,6 +1310,7 @@ mod tests {
         );
         assert_eq!(harness.transitions.begins(), 0, "no lock acquired");
         assert!(harness.control.cleared().is_empty(), "no session cleared");
+        assert_eq!(harness.facts.reads(), 0, "no seat read before the lock");
         assert_eq!(
             harness.probe.calls(),
             0,
@@ -1072,10 +1323,13 @@ mod tests {
         // Cursor is a real RuntimeKind that is NOT in SELECTABLE_RUNTIMES.
         let (req, from) = request(RuntimeKind::Codex, RuntimeKind::Cursor);
         let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent, vec![])),
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
             probe: Probe::available(),
             coordination: Coordination::default(),
             transitions: Transitions::committing(),
+            facts: TransitionFacts::empty(),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::new(),
         };
         assert_eq!(
@@ -1094,10 +1348,13 @@ mod tests {
     async fn deterministically_absent_runtime_refuses_before_the_lock() {
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent, vec![])),
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
             probe: Probe::new(Ok(RuntimeAvailabilityVerdict::Absent)),
             coordination: Coordination::default(),
             transitions: Transitions::committing(),
+            facts: TransitionFacts::empty(),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::new(),
         };
         assert_eq!(
@@ -1116,10 +1373,13 @@ mod tests {
     async fn probe_fault_surfaces_and_never_takes_the_lock() {
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent, vec![])),
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
             probe: Probe::new(Err(RuntimeAvailabilityProbeFault::AttachPending)),
             coordination: Coordination::default(),
             transitions: Transitions::committing(),
+            facts: TransitionFacts::empty(),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::new(),
         };
         assert_eq!(
@@ -1139,6 +1399,9 @@ mod tests {
             probe: Probe::available(),
             coordination: Coordination::default(),
             transitions: Transitions::committing(),
+            facts: TransitionFacts::empty(),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::new(),
         };
         assert_eq!(
@@ -1151,13 +1414,16 @@ mod tests {
     #[tokio::test]
     async fn a_snapshot_from_a_foreign_row_is_a_fault_not_an_answer() {
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
-        let mut foreign = snapshot(from, AgentSessionScope::Agent, vec![]);
+        let mut foreign = snapshot(from, AgentSessionScope::Agent);
         foreign.source = agent("someone-else");
         let harness = Harness {
             reads: SnapshotReads::scripted(vec![Ok(Some(foreign))]),
             probe: Probe::available(),
             coordination: Coordination::default(),
             transitions: Transitions::committing(),
+            facts: TransitionFacts::empty(),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::new(),
         };
         assert_eq!(
@@ -1177,13 +1443,16 @@ mod tests {
     async fn concurrent_transition_loses_the_lock_race() {
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent, vec![])),
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
             probe: Probe::available(),
             coordination: Coordination::default(),
             transitions: Transitions::new(
                 BeginTransitionRecord::InProgress,
                 CompleteTransitionRecord::Lost,
             ),
+            facts: TransitionFacts::empty(),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::new(),
         };
         assert_eq!(
@@ -1194,19 +1463,23 @@ mod tests {
             harness.control.cleared().is_empty(),
             "a lost lock clears nothing"
         );
+        assert_eq!(harness.facts.reads(), 0, "a lost lock reads no seats");
     }
 
     #[tokio::test]
     async fn a_deleting_agent_refuses_the_transition() {
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent, vec![])),
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
             probe: Probe::available(),
             coordination: Coordination::default(),
             transitions: Transitions::new(
                 BeginTransitionRecord::Deleting,
                 CompleteTransitionRecord::Lost,
             ),
+            facts: TransitionFacts::empty(),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::new(),
         };
         assert_eq!(
@@ -1216,7 +1489,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Under the lock: re-read staleness, clear-all, commit, re-drive.
+    // Under the lock: re-read staleness, sealed seats, clear-all, commit, re-drive.
     // ─────────────────────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -1229,17 +1502,15 @@ mod tests {
                 Ok(Some(snapshot(
                     RuntimeKind::Claude,
                     AgentSessionScope::Agent,
-                    vec![],
                 ))),
-                Ok(Some(snapshot(
-                    RuntimeKind::Codex,
-                    AgentSessionScope::Agent,
-                    vec![],
-                ))),
+                Ok(Some(snapshot(RuntimeKind::Codex, AgentSessionScope::Agent))),
             ]),
             probe: Probe::available(),
             coordination: Coordination::default(),
             transitions: Transitions::committing(),
+            facts: TransitionFacts::empty(),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::new(),
         };
         assert_eq!(
@@ -1250,41 +1521,71 @@ mod tests {
         assert_eq!(harness.transitions.begins(), 1, "the lock was taken");
         assert_eq!(harness.transitions.aborts(), 1, "then aborted");
         assert_eq!(harness.transitions.completes(), 0, "never committed");
+        assert_eq!(
+            harness.facts.reads(),
+            0,
+            "a stale re-read refuses before the seat read"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_foreign_seat_snapshot_is_a_fault_and_clears_nothing() {
+        // The seat read returns a snapshot naming a seat owned by another agent: the sealed
+        // read rejects it, so the saga faults and clears nothing (P0-1 falsifier).
+        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
+        let foreign_seat = RuntimeTransitionSeatRow {
+            scope: RuntimeScope::ConversationSlot {
+                agent: agent("someone-else"),
+                source: conv("c-a"),
+            },
+            observed_status: RuntimeObservedStatus::Active,
+            cli_session_id: Some("cli".into()),
+        };
+        let harness = Harness {
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
+            probe: Probe::available(),
+            coordination: Coordination::default(),
+            transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![foreign_seat]),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
+            control: Control::new(),
+        };
+        assert_eq!(
+            harness.run(&req).await,
+            Err(SwitchAgentRuntimeError::Fault(
+                SwitchAgentRuntimeFault::Transition
+            ))
+        );
+        assert!(
+            harness.control.cleared().is_empty(),
+            "a rejected seat snapshot clears nothing"
+        );
+        assert_eq!(harness.transitions.completes(), 0, "never committed");
+        assert_eq!(harness.transitions.aborts(), 1, "lock aborted");
     }
 
     #[tokio::test]
     async fn conversation_scope_clears_every_live_or_resumable_seat_then_commits_and_redrives() {
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let seats = vec![
-            conversation_seat("c-active", RuntimeObservedStatus::Active),
-            conversation_seat("c-starting", RuntimeObservedStatus::Starting),
-            SwitchSeat {
-                scope: RuntimeScope::ConversationSlot {
-                    agent: agent(AGENT),
-                    source: conv("c-resumable"),
-                },
-                status: RuntimeObservedStatus::Idle,
-                cli_session_id: Some(cli("c-resumable")),
-            },
+            conv_seat("c-active", RuntimeObservedStatus::Active, true),
+            conv_seat("c-starting", RuntimeObservedStatus::Starting, true),
+            conv_seat("c-resumable", RuntimeObservedStatus::Idle, true),
             // Idle with no resumable session: nothing to clear, nothing to restart.
-            SwitchSeat {
-                scope: RuntimeScope::ConversationSlot {
-                    agent: agent(AGENT),
-                    source: conv("c-dead"),
-                },
-                status: RuntimeObservedStatus::Idle,
-                cli_session_id: None,
-            },
+            conv_seat("c-dead", RuntimeObservedStatus::Idle, false),
         ];
         let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation, seats)),
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
             probe: Probe::available(),
             coordination: Coordination {
-                reclaimed: vec![conv("c-reclaimed")],
                 pending_since: vec![conv("c-active"), conv("c-late")],
                 ..Coordination::default()
             },
             transitions: Transitions::committing(),
+            facts: TransitionFacts::new(seats, vec![conv("c-reclaimed")]),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::new(),
         };
         let committed = harness.run(&req).await.expect("commit");
@@ -1294,7 +1595,7 @@ mod tests {
         assert_eq!(harness.control.cleared().len(), 3);
         assert_eq!(harness.transitions.completes(), 1);
         assert_eq!(harness.transitions.aborts(), 0);
-        assert_eq!(*harness.coordination.rollback_calls.lock().unwrap(), 1);
+        assert_eq!(*harness.facts.reclaims.lock().unwrap(), 1);
 
         // Re-drive is live-before ∪ reclaimed ∪ newly-pending, deduped, insertion-ordered.
         // Only the two live conversations were live-before (resumable-idle is not restarted).
@@ -1315,14 +1616,17 @@ mod tests {
     async fn a_single_clear_failure_aborts_without_committing_and_restores_old_runtime() {
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let seats = vec![
-            conversation_seat("c-a", RuntimeObservedStatus::Active),
-            conversation_seat("c-b", RuntimeObservedStatus::Active),
+            conv_seat("c-a", RuntimeObservedStatus::Active, true),
+            conv_seat("c-b", RuntimeObservedStatus::Active, true),
         ];
         let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation, seats)),
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
             probe: Probe::available(),
             coordination: Coordination::default(),
             transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(seats),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             // First clear succeeds, second refuses: still both attempted (no short-circuit).
             control: Control::scripting(vec![ClearScript::Ok, ClearScript::Refuse]),
         };
@@ -1345,14 +1649,17 @@ mod tests {
     async fn a_transport_error_on_clear_also_aborts() {
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(
-                from,
-                AgentSessionScope::Conversation,
-                vec![conversation_seat("c-a", RuntimeObservedStatus::Active)],
-            )),
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
             probe: Probe::available(),
             coordination: Coordination::default(),
             transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![conv_seat(
+                "c-a",
+                RuntimeObservedStatus::Active,
+                true,
+            )]),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::scripting(vec![ClearScript::Transport]),
         };
         assert_eq!(
@@ -1367,21 +1674,20 @@ mod tests {
     async fn a_lost_commit_leaves_cleared_sessions_and_fires_no_restore() {
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(
-                from,
-                AgentSessionScope::Conversation,
-                vec![conversation_seat("c-a", RuntimeObservedStatus::Active)],
-            )),
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
             probe: Probe::available(),
             coordination: Coordination::default(),
             transitions: Transitions::new(
-                BeginTransitionRecord::Locked(RuntimeTransitionLockRow {
-                    agent_id: agent(AGENT),
-                    target: "codex".into(),
-                    started_at: NOW,
-                }),
+                BeginTransitionRecord::Locked(lock_row()),
                 CompleteTransitionRecord::Lost,
             ),
+            facts: TransitionFacts::with_seats(vec![conv_seat(
+                "c-a",
+                RuntimeObservedStatus::Active,
+                true,
+            )]),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::new(),
         };
         assert_eq!(
@@ -1407,11 +1713,7 @@ mod tests {
     async fn agent_scope_restarts_only_the_oldest_pending_conversation() {
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(
-                from,
-                AgentSessionScope::Agent,
-                vec![agent_seat(RuntimeObservedStatus::Active, false)],
-            )),
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
             probe: Probe::available(),
             coordination: Coordination {
                 pending: vec![conv("oldest"), conv("newer")],
@@ -1419,6 +1721,12 @@ mod tests {
                 ..Coordination::default()
             },
             transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![agent_seat(
+                RuntimeObservedStatus::Active,
+                false,
+            )]),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::new(),
         };
         let committed = harness.run(&req).await.expect("commit");
@@ -1432,22 +1740,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_scope_reuses_the_cleared_focus_only_while_still_a_participant() {
+    async fn agent_scope_reuses_the_pre_clear_focus_only_while_still_a_participant() {
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
-        // No pending conversations, but the agent seat was live and its focus is still a
-        // participant → resume at the focus captured before clear.
+        // No pending conversations, but the agent seat was live and the focus captured before
+        // clear (via the custody→focus ports) is still a participant → resume at that focus.
         let live_participant = Harness {
-            reads: SnapshotReads::stable(snapshot(
-                from,
-                AgentSessionScope::Agent,
-                vec![agent_seat(RuntimeObservedStatus::Active, false)],
-            )),
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
             probe: Probe::available(),
             coordination: Coordination {
                 participant: true,
                 ..Coordination::default()
             },
             transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![agent_seat(
+                RuntimeObservedStatus::Active,
+                false,
+            )]),
+            custody: Custody::current(agent_principal()),
+            focus: Focus::presenting(conv("focus")),
             control: Control::new(),
         };
         let committed = live_participant.run(&req).await.expect("commit");
@@ -1460,17 +1770,19 @@ mod tests {
 
         // Same shape but the focus is no longer a participant → nothing to restart.
         let gone = Harness {
-            reads: SnapshotReads::stable(snapshot(
-                from,
-                AgentSessionScope::Agent,
-                vec![agent_seat(RuntimeObservedStatus::Active, false)],
-            )),
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
             probe: Probe::available(),
             coordination: Coordination {
                 participant: false,
                 ..Coordination::default()
             },
             transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![agent_seat(
+                RuntimeObservedStatus::Active,
+                false,
+            )]),
+            custody: Custody::current(agent_principal()),
+            focus: Focus::presenting(conv("focus")),
             control: Control::new(),
         };
         let committed = gone.run(&req).await.expect("commit");
@@ -1482,20 +1794,92 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_scope_with_nothing_live_and_no_pending_restarts_nothing() {
+    async fn agent_scope_focus_that_expires_between_custody_and_focus_reads_degrades_to_none() {
+        // Interleaving gate: `current` sees a live AgentSlot principal, but between that read
+        // and the focus port's re-check the slot exits/finalizes, so the port answers `None`.
+        // The clear + commit proceed with ZERO error and nothing is restarted at a successor.
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
-            reads: SnapshotReads::stable(snapshot(
-                from,
-                AgentSessionScope::Agent,
-                vec![agent_seat(RuntimeObservedStatus::Idle, false)],
-            )),
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
             probe: Probe::available(),
             coordination: Coordination {
                 participant: true,
                 ..Coordination::default()
             },
             transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![agent_seat(
+                RuntimeObservedStatus::Active,
+                false,
+            )]),
+            custody: Custody::current(agent_principal()),
+            focus: Focus::expired(),
+            control: Control::new(),
+        };
+        let committed = harness
+            .run(&req)
+            .await
+            .expect("commit despite the expired focus");
+        assert_eq!(
+            committed.cleared_sessions, 1,
+            "the live seat was still cleared"
+        );
+        assert_eq!(harness.transitions.completes(), 1);
+        assert!(
+            harness.control.started().is_empty(),
+            "an expired focus resumes nothing — never a successor's focus"
+        );
+        assert_eq!(committed.restart_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn agent_scope_focus_capture_fault_fails_closed_before_any_clear() {
+        // A persistence fault on the pre-clear custody read fails closed BEFORE any clear or
+        // commit — the runtime is never changed.
+        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
+        let harness = Harness {
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
+            probe: Probe::available(),
+            coordination: Coordination::default(),
+            transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![agent_seat(
+                RuntimeObservedStatus::Active,
+                false,
+            )]),
+            custody: Custody::faulting(),
+            focus: Focus::unused(),
+            control: Control::new(),
+        };
+        assert_eq!(
+            harness.run(&req).await,
+            Err(SwitchAgentRuntimeError::Fault(
+                SwitchAgentRuntimeFault::Persistence
+            ))
+        );
+        assert!(
+            harness.control.cleared().is_empty(),
+            "a focus-capture fault clears nothing"
+        );
+        assert_eq!(harness.transitions.completes(), 0, "never committed");
+        assert_eq!(harness.transitions.aborts(), 1, "lock aborted");
+    }
+
+    #[tokio::test]
+    async fn agent_scope_with_nothing_live_and_no_pending_restarts_nothing() {
+        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
+        let harness = Harness {
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
+            probe: Probe::available(),
+            coordination: Coordination {
+                participant: true,
+                ..Coordination::default()
+            },
+            transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![agent_seat(
+                RuntimeObservedStatus::Idle,
+                false,
+            )]),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
             control: Control::new(),
         };
         let committed = harness.run(&req).await.expect("commit");
@@ -1505,6 +1889,43 @@ mod tests {
         );
         assert!(harness.control.started().is_empty());
         assert_eq!(committed.restarted_conversations, 0);
+    }
+
+    #[tokio::test]
+    async fn a_post_commit_resume_read_fault_never_reverts_the_committed_transition() {
+        // The switch commits; then the post-commit pending-since read faults. The committed
+        // transition stands (Ok), nothing is restarted, and the fault is swallowed (P0-3).
+        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
+        let harness = Harness {
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
+            probe: Probe::available(),
+            coordination: Coordination {
+                fault_pending_since: true,
+                ..Coordination::default()
+            },
+            transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![conv_seat(
+                "c-a",
+                RuntimeObservedStatus::Active,
+                true,
+            )]),
+            custody: Custody::absent(),
+            focus: Focus::unused(),
+            control: Control::new(),
+        };
+        let committed = harness
+            .run(&req)
+            .await
+            .expect("a post-commit read fault never reverts the commit");
+        assert_eq!(harness.transitions.completes(), 1, "committed");
+        assert_eq!(
+            harness.transitions.aborts(),
+            0,
+            "never aborted after commit"
+        );
+        assert_eq!(committed.cleared_sessions, 1);
+        assert_eq!(committed.restarted_conversations, 0);
+        assert_eq!(committed.restart_failures, 0);
     }
 
     #[tokio::test]
@@ -1543,15 +1964,20 @@ mod tests {
                 self.0.clear_session(target).await
             }
         }
+        let facts = TransitionFacts::with_seats(vec![conv_seat(
+            "c-a",
+            RuntimeObservedStatus::Active,
+            true,
+        )]);
         let committed = switch_agent_runtime(
-            &SnapshotReads::stable(snapshot(
-                from,
-                AgentSessionScope::Conversation,
-                vec![conversation_seat("c-a", RuntimeObservedStatus::Active)],
-            )),
+            &SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
             &Probe::available(),
             &Coordination::default(),
             &Transitions::committing(),
+            &facts,
+            &facts,
+            &Custody::absent(),
+            &Focus::unused(),
             &RefusingStart(Control::new()),
             &req,
             NOW,
