@@ -24,9 +24,12 @@
 //!  4. **Commit** the runtime + tuning in one guarded write ([`complete_runtime_transition`]),
 //!     which also releases the lock. A `Lost` commit means another attempt owns the lock now.
 //!  5. **Re-drive** (post-commit): start the conversations that must resume under the new
-//!     runtime. Nothing here can revert the committed transition — a resume-plan read that
-//!     faults, or a restart the provider refuses, is counted and dropped; the AgentSlot
-//!     ready-replay / inbox trigger picks up whatever this best-effort pass missed.
+//!     runtime. Nothing here can revert the committed transition. The known-live and sealed
+//!     reclaimed conversations are always dispatched; each supplemental resume-plan read
+//!     (newly-pending, oldest-pending, participation) degrades INDEPENDENTLY — a fault skips
+//!     only that read and is surfaced in `resume_read_faults`, never silently zeroed — and a
+//!     restart the provider refuses is counted. The AgentSlot ready-replay / inbox trigger
+//!     picks up whatever this best-effort pass could not enumerate.
 //!
 //! # Where the effect targets come from
 //!
@@ -45,7 +48,7 @@ use crate::{
         session_scope::AgentSessionScope,
     },
     identity::{AgentId, ConversationId, HostId},
-    messaging::collaboration::{RuntimeControlPort, RuntimeStartTarget},
+    messaging::collaboration::{RuntimeControlPort, RuntimeSeatTarget, RuntimeStartTarget},
     persistence::PersistenceFailure,
     runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustodyPort, RuntimeScope},
     runtime_event::RuntimeObservedStatus,
@@ -187,6 +190,13 @@ pub struct SwitchAgentRuntimeCommitted {
     pub cleared_sessions: usize,
     pub restarted_conversations: usize,
     pub restart_failures: usize,
+    /// Post-commit resume-plan reads that faulted and were degraded past. NON-ZERO means the
+    /// best-effort re-drive could not enumerate every conversation that might need restarting;
+    /// the known-live/reclaimed candidates were still dispatched, but the supplemental reads
+    /// (newly-pending, oldest-pending, participation) were skipped. The boundary must surface
+    /// this as an operational signal — never report a silent `0` — so the aftermath fault is
+    /// visible even though it cannot revert the committed switch.
+    pub resume_read_faults: usize,
 }
 
 /// The product outcomes of a switch that did not commit. Ordering across simultaneously-true
@@ -225,6 +235,10 @@ pub enum SwitchAgentRuntimeFault {
     Persistence,
     /// The snapshot resolved a row whose id is not the requested agent.
     SourceUntrustworthy,
+    /// The custody port answered a `current` read for the requested agent's AgentSlot with a
+    /// principal bound to a different scope/agent — a raw fact core must not consume as this
+    /// agent's focus source.
+    CustodyScopeMismatch,
     /// A lock-lifecycle or lock-fenced read returned a witness that disagreed with the request.
     Transition,
 }
@@ -448,7 +462,10 @@ where
                 }
             }
         }
-        to_clear.push(candidate.clear_target(&request.actor));
+        to_clear.push(RuntimeSeatTarget::for_transition_clear(
+            request.actor.clone(),
+            &candidate,
+        ));
     }
 
     // Clear every old-runtime session. ALL are attempted (no short-circuit) so a stuck seat does
@@ -492,10 +509,13 @@ where
         };
 
     // ── Re-drive (post-commit): NEVER reverts the committed transition. ──
-    // Every read here is best-effort: a persistence fault yields an empty resume plan, and a
-    // provider refusal is counted, so the committed switch stands and the ready-replay / inbox
-    // trigger picks up whatever this pass missed.
-    let (restarted, restart_failures) = dispatch_resume(
+    // The plan foundation — live-before pairs and sealed reclaimed conversations — is already
+    // KNOWN and is always dispatched. Each SUPPLEMENTAL read (newly-pending, oldest-pending,
+    // participation) degrades INDEPENDENTLY: a fault skips only that read's contribution and is
+    // counted in `resume_read_faults`, never silently zeroed and never dragging the known
+    // candidates down with it. A provider restart refusal is likewise counted. The committed
+    // switch stands regardless.
+    let (restarted, restart_failures, resume_read_faults) = dispatch_resume(
         coordination,
         control,
         request,
@@ -513,6 +533,7 @@ where
         cleared_sessions: to_clear.len(),
         restarted_conversations: restarted,
         restart_failures,
+        resume_read_faults,
     })
 }
 
@@ -532,6 +553,12 @@ fn holds_session(candidate: &TransitionClearCandidate<'_>) -> bool {
 
 /// Capture the AgentSlot presentation focus while its custody is current, or `None`. Only
 /// agent-scope agents have an AgentSlot focus; conversation-scope agents never do.
+///
+/// `RuntimeCustodyPort::current` returns a RAW fact: it is asked for THIS agent's AgentSlot, but
+/// a lying (or racing) adapter could answer with a principal bound to another agent/scope. Core
+/// binds the returned principal to the requested `AgentSlot{agent}` before handing it to the
+/// focus port — otherwise another agent's focus could become this agent's fallback. A mismatch
+/// is an internal witness fault that fails closed before any clear or commit.
 async fn capture_agent_focus<Cust, Focus>(
     custody: &Cust,
     focus: &Focus,
@@ -554,6 +581,15 @@ where
         Some(principal) => principal,
         None => return Ok(None),
     };
+    // Source-bind the raw custody fact: it must be exactly this agent's AgentSlot principal.
+    match principal.scope() {
+        RuntimeScope::AgentSlot { agent: witnessed } if &witnessed == agent => {}
+        _ => {
+            return Err(SwitchAgentRuntimeError::Fault(
+                SwitchAgentRuntimeFault::CustodyScopeMismatch,
+            ));
+        }
+    }
     Ok(focus.agent_slot_presentation_focus(principal).await?)
 }
 
@@ -573,8 +609,10 @@ fn restore_targets(
     }
 }
 
-/// The post-commit re-drive. Infallible by contract: a resume-plan read that faults yields an
-/// empty plan and a provider refusal is counted, so nothing here reverts the committed switch.
+/// The post-commit re-drive. Infallible by contract: it returns `(restarted, restart_failures,
+/// resume_read_faults)`. The known-live/reclaimed candidates are always dispatched; supplemental
+/// resume-plan reads degrade independently and their faults are counted, never zeroed. Nothing
+/// here reverts the committed switch.
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_resume<Coord, P>(
     coordination: &Coord,
@@ -586,12 +624,12 @@ async fn dispatch_resume<Coord, P>(
     live_before: &[ConversationId],
     agent_focus: Option<ConversationId>,
     now_ms: i64,
-) -> (usize, usize)
+) -> (usize, usize, usize)
 where
     Coord: SwitchConversationCoordination,
     P: RuntimeControlPort,
 {
-    let resume = resume_targets(
+    let (resume, resume_read_faults) = resume_targets(
         coordination,
         &request.agent,
         session_scope,
@@ -601,8 +639,7 @@ where
         agent_focus,
         now_ms,
     )
-    .await
-    .unwrap_or_default();
+    .await;
 
     let mut restarted = 0usize;
     let mut restart_failures = 0usize;
@@ -614,11 +651,13 @@ where
             Ok(Err(_)) | Err(_) => restart_failures += 1,
         }
     }
-    (restarted, restart_failures)
+    (restarted, restart_failures, resume_read_faults)
 }
 
-/// The conversations to re-drive after a committed switch. Every read is post-commit; a fault
-/// bubbles to the infallible [`dispatch_resume`] as an empty plan.
+/// The conversations to re-drive after a committed switch, plus the count of supplemental reads
+/// that faulted. INFALLIBLE: the known-live/reclaimed foundation is always returned; each
+/// supplemental read degrades on its own and increments the fault count instead of dropping the
+/// whole plan.
 #[allow(clippy::too_many_arguments)]
 async fn resume_targets<Coord: SwitchConversationCoordination>(
     coordination: &Coord,
@@ -629,51 +668,62 @@ async fn resume_targets<Coord: SwitchConversationCoordination>(
     live_before: &[ConversationId],
     agent_focus: Option<ConversationId>,
     now_ms: i64,
-) -> Result<Vec<ConversationId>, PersistenceFailure> {
-    let newly_pending = coordination
-        .list_pending_for_agent_since(agent, now_ms)
-        .await?;
+) -> (Vec<ConversationId>, usize) {
     match session_scope {
         AgentSessionScope::Agent => {
             // One AgentSlot gets one restart target. Origin is presentation only: prefer the
-            // oldest durable pending origin, otherwise reuse the focus captured before clear —
-            // but only while it is still a real participant. Starting once is enough; the
-            // AgentSlot ready-replay drains the rest in inbox order.
-            let should_resume =
-                agent_slot_was_live || !reclaimed.is_empty() || !newly_pending.is_empty();
-            if !should_resume {
-                return Ok(Vec::new());
-            }
-            if let Some(oldest) = coordination
-                .list_pending_for_agent(agent)
-                .await?
-                .into_iter()
-                .next()
-            {
-                return Ok(vec![oldest]);
-            }
-            match agent_focus {
-                Some(focus) if coordination.is_agent_participant(&focus, agent).await? => {
-                    Ok(vec![focus])
+            // oldest durable pending origin (covers both pre-existing backlog and gate-window
+            // arrivals), otherwise reuse the focus captured before clear — but only while it is
+            // still a real participant. Starting once is enough; the AgentSlot ready-replay
+            // drains the rest in inbox order. Each read degrades on its own.
+            let mut faults = 0usize;
+            match coordination.list_pending_for_agent(agent).await {
+                Ok(pending) => {
+                    if let Some(oldest) = pending.into_iter().next() {
+                        return (vec![oldest], faults);
+                    }
                 }
-                _ => Ok(Vec::new()),
+                Err(_) => faults += 1,
             }
+            // No pending origin (empty, or that read faulted). Fall back to the pre-clear focus,
+            // but only when a known fact says this slot should resume at all.
+            let should_fallback = agent_slot_was_live || !reclaimed.is_empty();
+            if let Some(focus) = agent_focus.filter(|_| should_fallback) {
+                match coordination.is_agent_participant(&focus, agent).await {
+                    Ok(true) => return (vec![focus], faults),
+                    Ok(false) => {}
+                    Err(_) => faults += 1,
+                }
+            }
+            (Vec::new(), faults)
         }
         AgentSessionScope::Conversation => {
-            // Restore live pairs and reclaimed claims, and nudge only messages that arrived while
+            // KNOWN foundation first: the live pairs and the sealed reclaimed claims are already
+            // determined and are always dispatched. Then nudge only messages that arrived while
             // this transition held the spawn gate — never turn historical backlog into a restart
-            // herd. Deduped, insertion order preserved.
+            // herd. Deduped, insertion order preserved; a fault on the supplemental newly-pending
+            // read is counted, leaving the known foundation intact.
             let mut resume: Vec<ConversationId> = Vec::new();
-            for conversation in live_before
-                .iter()
-                .chain(reclaimed.iter())
-                .chain(newly_pending.iter())
-            {
+            let mut faults = 0usize;
+            for conversation in live_before.iter().chain(reclaimed.iter()) {
                 if !resume.contains(conversation) {
                     resume.push(conversation.clone());
                 }
             }
-            Ok(resume)
+            match coordination
+                .list_pending_for_agent_since(agent, now_ms)
+                .await
+            {
+                Ok(newly_pending) => {
+                    for conversation in &newly_pending {
+                        if !resume.contains(conversation) {
+                            resume.push(conversation.clone());
+                        }
+                    }
+                }
+                Err(_) => faults += 1,
+            }
+            (resume, faults)
         }
     }
 }
@@ -900,12 +950,17 @@ mod tests {
         participant: bool,
         /// When set, `list_pending_for_agent_since` faults — a post-commit read failure.
         fault_pending_since: bool,
+        /// When set, `list_pending_for_agent` faults — the AgentSlot oldest-origin read failure.
+        fault_pending: bool,
     }
     impl SwitchConversationCoordination for Coordination {
         async fn list_pending_for_agent(
             &self,
             _agent: &AgentId,
         ) -> Result<Vec<ConversationId>, PersistenceFailure> {
+            if self.fault_pending {
+                return Err(boom());
+            }
             Ok(self.pending.clone())
         }
         async fn list_pending_for_agent_since(
@@ -997,6 +1052,18 @@ mod tests {
         }
     }
 
+    /// A live AgentSlot custody for a DIFFERENT agent — a raw `current` fact core must reject as
+    /// AGENT's focus source.
+    fn other_agent_principal() -> RuntimePrincipal {
+        RuntimePrincipal::AgentSlot {
+            agent: agent("someone-else"),
+            custody: RuntimeCustody::new(
+                RuntimeGeneration::new(1).unwrap(),
+                DaemonInstanceId::parse("daemon-1").unwrap(),
+            ),
+        }
+    }
+
     #[derive(Clone)]
     struct Custody {
         current: Arc<Mutex<Result<Option<RuntimePrincipal>, ()>>>,
@@ -1052,24 +1119,28 @@ mod tests {
     #[derive(Clone)]
     struct Focus {
         answer: Arc<Mutex<Result<Option<ConversationId>, ()>>>,
+        calls: Arc<Mutex<usize>>,
     }
     impl Focus {
-        /// Never consulted (no live AgentSlot custody).
-        fn unused() -> Self {
+        fn build(answer: Result<Option<ConversationId>, ()>) -> Self {
             Self {
-                answer: Arc::new(Mutex::new(Ok(None))),
+                answer: Arc::new(Mutex::new(answer)),
+                calls: Arc::new(Mutex::new(0)),
             }
         }
+        /// Never consulted (no live AgentSlot custody, or a rejected custody fact).
+        fn unused() -> Self {
+            Self::build(Ok(None))
+        }
         fn presenting(conversation: ConversationId) -> Self {
-            Self {
-                answer: Arc::new(Mutex::new(Ok(Some(conversation)))),
-            }
+            Self::build(Ok(Some(conversation)))
         }
         /// The custody read saw a live slot, but the focus port's re-check found it gone.
         fn expired() -> Self {
-            Self {
-                answer: Arc::new(Mutex::new(Ok(None))),
-            }
+            Self::build(Ok(None))
+        }
+        fn calls(&self) -> usize {
+            *self.calls.lock().unwrap()
         }
     }
     impl AgentSlotPresentationFocusPort for Focus {
@@ -1077,6 +1148,7 @@ mod tests {
             &self,
             _principal: RuntimePrincipal,
         ) -> Result<Option<ConversationId>, PersistenceFailure> {
+            *self.calls.lock().unwrap() += 1;
             match &*self.answer.lock().unwrap() {
                 Ok(focus) => Ok(focus.clone()),
                 Err(()) => Err(boom()),
@@ -1864,6 +1936,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_custody_current_for_a_foreign_agent_is_a_fault_and_never_becomes_this_agents_focus()
+    {
+        // Switch agent A; the custody port answers A's AgentSlot `current` read with B's live
+        // principal. Core must source-bind the raw fact and reject it as an internal witness
+        // fault — never hand B's principal to the focus port, and never clear or commit (P0-1).
+        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
+        let focus = Focus::presenting(conv("b-focus"));
+        let harness = Harness {
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
+            probe: Probe::available(),
+            coordination: Coordination {
+                participant: true,
+                ..Coordination::default()
+            },
+            transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![agent_seat(
+                RuntimeObservedStatus::Active,
+                false,
+            )]),
+            custody: Custody::current(other_agent_principal()),
+            focus: focus.clone(),
+            control: Control::new(),
+        };
+        assert_eq!(
+            harness.run(&req).await,
+            Err(SwitchAgentRuntimeError::Fault(
+                SwitchAgentRuntimeFault::CustodyScopeMismatch
+            ))
+        );
+        assert_eq!(
+            focus.calls(),
+            0,
+            "a foreign custody fact is never handed to the focus port"
+        );
+        assert!(
+            harness.control.cleared().is_empty(),
+            "a rejected custody fact clears nothing"
+        );
+        assert_eq!(harness.transitions.completes(), 0, "never committed");
+        assert_eq!(harness.transitions.aborts(), 1, "lock aborted");
+    }
+
+    #[tokio::test]
     async fn agent_scope_with_nothing_live_and_no_pending_restarts_nothing() {
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
@@ -1892,9 +2007,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_post_commit_resume_read_fault_never_reverts_the_committed_transition() {
-        // The switch commits; then the post-commit pending-since read faults. The committed
-        // transition stands (Ok), nothing is restarted, and the fault is swallowed (P0-3).
+    async fn conversation_scope_dispatches_known_live_even_when_the_supplemental_read_faults() {
+        // The switch commits; the KNOWN live conversation (live_before) is dispatched regardless,
+        // and the post-commit newly-pending read faults. The committed transition stands (Ok),
+        // c-a is still restarted, and the fault is surfaced in `resume_read_faults` — never a
+        // silent 0 and never dragging the known candidate down with it (P0-2 + Cindy's gate).
         let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
         let harness = Harness {
             reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Conversation)),
@@ -1924,8 +2041,53 @@ mod tests {
             "never aborted after commit"
         );
         assert_eq!(committed.cleared_sessions, 1);
-        assert_eq!(committed.restarted_conversations, 0);
+        assert_eq!(
+            harness.control.started(),
+            vec![conv("c-a")],
+            "the known live conversation is dispatched despite the faulted supplemental read"
+        );
+        assert_eq!(committed.restarted_conversations, 1);
         assert_eq!(committed.restart_failures, 0);
+        assert_eq!(
+            committed.resume_read_faults, 1,
+            "the aftermath fault is surfaced, never a silent 0"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_scope_falls_back_to_focus_when_the_oldest_pending_read_faults() {
+        // AgentSlot was live and a focus F was captured pre-clear; the oldest-pending read
+        // faults. The saga must still try F when participation holds, and surface the fault
+        // (P0-2 + Cindy's AgentSlot gate).
+        let (req, from) = request(RuntimeKind::Claude, RuntimeKind::Codex);
+        let harness = Harness {
+            reads: SnapshotReads::stable(snapshot(from, AgentSessionScope::Agent)),
+            probe: Probe::available(),
+            coordination: Coordination {
+                participant: true,
+                fault_pending: true,
+                ..Coordination::default()
+            },
+            transitions: Transitions::committing(),
+            facts: TransitionFacts::with_seats(vec![agent_seat(
+                RuntimeObservedStatus::Active,
+                false,
+            )]),
+            custody: Custody::current(agent_principal()),
+            focus: Focus::presenting(conv("focus")),
+            control: Control::new(),
+        };
+        let committed = harness.run(&req).await.expect("commit");
+        assert_eq!(
+            harness.control.started(),
+            vec![conv("focus")],
+            "focus fallback still attempted after the oldest-pending read faulted"
+        );
+        assert_eq!(committed.restarted_conversations, 1);
+        assert_eq!(
+            committed.resume_read_faults, 1,
+            "the faulted oldest-pending read is surfaced"
+        );
     }
 
     #[tokio::test]

@@ -54,8 +54,7 @@ use thiserror::Error;
 
 use crate::{
     agents::runtime::RuntimeKind,
-    identity::{AgentId, ConversationId, UserId},
-    messaging::collaboration::RuntimeSeatTarget,
+    identity::{AgentId, ConversationId},
     persistence::PersistenceFailure,
     runtime_credential::RuntimeScope,
     runtime_event::RuntimeObservedStatus,
@@ -403,13 +402,14 @@ impl RuntimeTransitionSeatSnapshot {
         &self.seats
     }
 
-    /// The sealed seats as clear candidates. Iterating them is the ONLY way to obtain a
-    /// [`RuntimeSeatTarget`] for a runtime-transition clear, so every scope the switch use
-    /// case clears is provably one this snapshot enumerated under the exact held marker —
-    /// the generic `RuntimeSeatTarget` ctor is never a core mint口 for a transition clear,
-    /// and a caller cannot smuggle in a hand-picked scope. The live/session predicate stays
-    /// the switch use case's: each candidate exposes its raw status and CLI session so the
-    /// consumer decides which seats hold something to clear.
+    /// The sealed seats as clear candidates. A [`TransitionClearCandidate`] can be obtained
+    /// ONLY by iterating this snapshot, and its inner row is private, so it is unforgeable
+    /// outside this module. The seat-target minter in `runtime_control` consumes one of these
+    /// candidates to bind a clear target — so every scope the switch use case clears is
+    /// provably one this snapshot enumerated under the exact held marker, and a caller can
+    /// never smuggle in a hand-picked scope. The live/session predicate stays the switch use
+    /// case's: each candidate exposes its raw status and CLI session so the consumer decides
+    /// which seats hold something to clear.
     pub fn clear_candidates(&self) -> impl Iterator<Item = TransitionClearCandidate<'_>> {
         self.seats
             .iter()
@@ -418,8 +418,9 @@ impl RuntimeTransitionSeatSnapshot {
 }
 
 /// One sealed transition seat, borrowed from a proven [`RuntimeTransitionSeatSnapshot`].
-/// It carries the raw classification the switch use case needs and can mint exactly one
-/// actor-bound clear target for its own sealed scope.
+/// It carries the raw classification the switch use case needs; its scope is the only fact a
+/// downstream seat-target minter is trusted to act on, and it cannot be constructed outside
+/// this module.
 pub struct TransitionClearCandidate<'a> {
     row: &'a RuntimeTransitionSeatRow,
 }
@@ -435,11 +436,6 @@ impl TransitionClearCandidate<'_> {
 
     pub fn cli_session_id(&self) -> Option<&str> {
         self.row.cli_session_id.as_deref()
-    }
-
-    /// Mint the actor-bound clear target for THIS sealed seat's scope.
-    pub fn clear_target(&self, actor: &UserId) -> RuntimeSeatTarget {
-        RuntimeSeatTarget::new(actor.clone(), self.row.scope.clone())
     }
 }
 

@@ -65,16 +65,28 @@ pub struct RuntimeSeatTarget {
 }
 
 impl RuntimeSeatTarget {
-    /// Mint a seat target from a row-owned [`RuntimeScope`]. Deliberately
-    /// crate-private and with no test escape hatch: a `RuntimeScope` is
-    /// authoritative only when derived from a fact — route admission reading the
-    /// immutable persisted session scope, or an internal seat-fact read for
-    /// runtime-switch. A public (or test-only cross-crate) constructor would let a
-    /// caller hand-pick an arm and re-open the caller-selected-scope hole this type
-    /// exists to close, so the only mint sites are the admission use cases below,
-    /// and downstream tests reach a target only by driving those use cases.
-    pub(crate) fn new(actor: UserId, scope: RuntimeScope) -> Self {
+    /// Mint a seat target from a row-owned [`RuntimeScope`]. Module-private with no test
+    /// escape hatch: a `RuntimeScope` is authoritative only when derived from a fact, so the
+    /// only mint sites are the route-admission use cases in this module (reading the immutable
+    /// persisted session scope) and the transition ctor below (consuming an unforgeable sealed
+    /// seat candidate). A public — or even crate-visible — raw constructor would let another
+    /// core module hand-pick an arm and re-open the caller-selected-scope hole this type exists
+    /// to close.
+    fn new(actor: UserId, scope: RuntimeScope) -> Self {
         Self { actor, scope }
+    }
+
+    /// Mint a clear target for a runtime-transition seat. The [`TransitionClearCandidate`] can
+    /// only be produced by iterating a sealed [`crate::runtime_transition::RuntimeTransitionSeatSnapshot`]
+    /// under the exact held lock, and its inner row is private, so the scope here is provably a
+    /// seat that snapshot enumerated — never a caller-picked arm. This is the sole cross-module
+    /// mint site, and it takes the sealed candidate rather than a bare scope so the transition
+    /// module never needs to depend on this target type or `UserId`.
+    pub(crate) fn for_transition_clear(
+        actor: UserId,
+        candidate: &crate::runtime_transition::TransitionClearCandidate<'_>,
+    ) -> Self {
+        Self::new(actor, candidate.scope().clone())
     }
 
     pub fn actor(&self) -> &UserId {
