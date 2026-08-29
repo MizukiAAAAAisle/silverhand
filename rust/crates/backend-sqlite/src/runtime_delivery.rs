@@ -11,7 +11,7 @@ use silverhand_backend_core::{
         collaboration::{
             BoundRuntimeControlSeat, ClearSessionAuditWitness, ClearSessionCommitReceipt,
             CliSessionId, RuntimeControlObservedStatus, RuntimeControlSeatPort,
-            RuntimeControlSeatSnapshot, RuntimeSeatCoordinate,
+            RuntimeControlSeatSnapshot, RuntimeSeatTarget,
         },
         environment::SendClock,
     },
@@ -435,12 +435,12 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
 
     async fn snapshot(
         &self,
-        coordinate: &RuntimeSeatCoordinate,
+        scope: &RuntimeScope,
     ) -> Result<Option<RuntimeControlSeatSnapshot>, Self::Error> {
-        // The seat coordinate already names its arm and (for a conversation seat)
-        // its source; bind that source directly so the row lookup matches the exact
-        // seat rather than echoing a presentation candidate.
-        let seat_source = match coordinate.scope() {
+        // The scope already names its arm and (for a conversation seat) its source;
+        // bind that source directly so the row lookup matches the exact seat rather
+        // than echoing a presentation candidate.
+        let seat_source = match scope {
             RuntimeScope::ConversationSlot { source, .. } => Some(source.as_str()),
             RuntimeScope::AgentSlot { .. } => None,
         };
@@ -453,7 +453,7 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
               WHERE a.id = ? AND ((a.session_scope = 'conversation' AND s.conversation_id = ?) \
                    OR (a.session_scope = 'agent' AND s.conversation_id IS NULL))",
         )
-        .bind(coordinate.agent().as_str())
+        .bind(scope.agent().as_str())
         .bind(seat_source)
         .fetch_optional(&self.pool)
         .await
@@ -531,9 +531,33 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
 
     async fn settle_clear(
         &self,
-        coordinate: &RuntimeSeatCoordinate,
+        target: &RuntimeSeatTarget,
         before: &BoundRuntimeControlSeat,
     ) -> Result<Option<ClearSessionCommitReceipt>, Self::Error> {
+        // Exact-bind the sealed target to the captured seat before any durable
+        // write: the production provider always binds against `target.scope()`, so a
+        // mismatch is never a race — refuse with zero durable write. The audit actor
+        // comes only from the sealed target.
+        if target.scope() != before.scope() {
+            return Ok(None);
+        }
+        self.settle_clear_bound(target.actor(), before).await
+    }
+}
+
+impl SqliteRuntimeDeliveryStore {
+    /// Durable clear settlement keyed on the already-captured seat. Deliberately
+    /// `pub(crate)`: the public [`RuntimeControlSeatPort::settle_clear`] consumes the
+    /// sealed [`RuntimeSeatTarget`], so no downstream crate can drive a durable
+    /// clear/audit without having passed admission. This helper exists only so the
+    /// crate's own CAS-interleaving tests can step snapshot→mutate→settle without
+    /// widening the production write capability. `actor` is the audit author; in
+    /// production it is always `target.actor()`.
+    pub(crate) async fn settle_clear_bound(
+        &self,
+        actor: &UserId,
+        before: &BoundRuntimeControlSeat,
+    ) -> Result<Option<ClearSessionCommitReceipt>, PersistenceFailure> {
         let should_audit = before.was_running() || before.previous_cli_session().is_some();
         let environment = crate::messaging::HostEnvironment;
         let occurred_at = environment
@@ -654,7 +678,7 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
                         .map_or_else(|| "none".to_owned(), |value| format!("{value}..."));
                     let content = format!(
                         "@{} cleared @{}'s CLI session context (prev session: {}). Next start will use a fresh session; pending deliveries remain queued.",
-                        coordinate.actor().as_str(),
+                        actor.as_str(),
                         before.agent_name(),
                         previous_label,
                     );
@@ -662,7 +686,7 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
                         "subtype": "session_cleared",
                         "agent_id": before.agent().as_str(),
                         "agent_name": before.agent_name(),
-                        "actor_user_id": coordinate.actor().as_str(),
+                        "actor_user_id": actor.as_str(),
                         "previous_cli_session_id_prefix": prefix,
                         "was_running": before.was_running(),
                     }))
@@ -675,7 +699,7 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
                     )
                     .bind(audit_message.as_ref().expect("conversation audit id").as_str())
                     .bind(source.as_str())
-                    .bind(coordinate.actor().as_str())
+                    .bind(actor.as_str())
                     .bind(content)
                     .bind(metadata)
                     .bind(sequence)
@@ -721,7 +745,7 @@ impl RuntimeControlSeatPort for SqliteRuntimeDeliveryStore {
                     )
                     .bind(agent.as_str())
                     .bind(before.generation().as_i64())
-                    .bind(coordinate.actor().as_str())
+                    .bind(actor.as_str())
                     .bind(i64::from(before.was_running()))
                     .bind(prefix)
                     .bind(occurred_at)
@@ -2626,13 +2650,20 @@ mod presentation_tests {
 mod runtime_control_seat_tests {
     use silverhand_backend_core::{
         identity::UserId,
-        messaging::collaboration::{
-            RuntimeControlSeatPort, RuntimeSeatCoordinate, seal_clear_session_commit,
-        },
+        messaging::collaboration::{RuntimeControlSeatPort, seal_clear_session_commit},
     };
     use sqlx::{Connection, Executor};
 
     use super::*;
+
+    // The production write path only accepts a sealed `RuntimeSeatTarget`, whose
+    // ctor is core-private and unreachable from this crate. These CAS-interleaving
+    // tests therefore drive the crate-private `settle_clear_bound(actor, before)`
+    // seam directly rather than widening the public capability. The read path is
+    // keyed on a bare `RuntimeScope`, so the seat helpers return scopes.
+    fn actor() -> UserId {
+        UserId::parse("user-1").unwrap()
+    }
 
     async fn seeded() -> (tempfile::TempDir, SqliteRuntimeDeliveryStore) {
         let directory = tempfile::tempdir().unwrap();
@@ -2668,37 +2699,35 @@ mod runtime_control_seat_tests {
         (directory, store)
     }
 
-    fn conv_seat(conversation: &str, agent: &str) -> RuntimeSeatCoordinate {
-        RuntimeSeatCoordinate::new(
-            UserId::parse("user-1").unwrap(),
-            RuntimeScope::ConversationSlot {
-                agent: AgentId::parse(agent).unwrap(),
-                source: ConversationId::parse(conversation).unwrap(),
-            },
-        )
+    fn conv_seat(conversation: &str, agent: &str) -> RuntimeScope {
+        RuntimeScope::ConversationSlot {
+            agent: AgentId::parse(agent).unwrap(),
+            source: ConversationId::parse(conversation).unwrap(),
+        }
     }
 
-    fn agent_seat(agent: &str) -> RuntimeSeatCoordinate {
-        RuntimeSeatCoordinate::new(
-            UserId::parse("user-1").unwrap(),
-            RuntimeScope::AgentSlot {
-                agent: AgentId::parse(agent).unwrap(),
-            },
-        )
+    fn agent_seat(agent: &str) -> RuntimeScope {
+        RuntimeScope::AgentSlot {
+            agent: AgentId::parse(agent).unwrap(),
+        }
     }
 
     #[tokio::test]
     async fn conversation_clear_cas_audit_and_receipt_are_one_commit() {
         let (_directory, store) = seeded().await;
-        let target = conv_seat("conversation-1", "agent-conv");
+        let scope = conv_seat("conversation-1", "agent-conv");
         let before = store
-            .snapshot(&target)
+            .snapshot(&scope)
             .await
             .unwrap()
             .unwrap()
-            .bind(&target)
+            .bind(&scope)
             .unwrap();
-        let receipt = store.settle_clear(&target, &before).await.unwrap().unwrap();
+        let receipt = store
+            .settle_clear_bound(&actor(), &before)
+            .await
+            .unwrap()
+            .unwrap();
         let outcome = seal_clear_session_commit(&before, receipt).unwrap();
         assert_eq!(
             outcome.previous_cli_session().unwrap().as_str(),
@@ -2737,15 +2766,19 @@ mod runtime_control_seat_tests {
     #[tokio::test]
     async fn agent_clear_writes_only_the_agent_control_audit() {
         let (_directory, store) = seeded().await;
-        let target = agent_seat("agent-seat");
+        let scope = agent_seat("agent-seat");
         let before = store
-            .snapshot(&target)
+            .snapshot(&scope)
             .await
             .unwrap()
             .unwrap()
-            .bind(&target)
+            .bind(&scope)
             .unwrap();
-        let receipt = store.settle_clear(&target, &before).await.unwrap().unwrap();
+        let receipt = store
+            .settle_clear_bound(&actor(), &before)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(seal_clear_session_commit(&before, receipt).is_ok());
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
@@ -2844,15 +2877,19 @@ mod runtime_control_seat_tests {
         .execute(&store.pool)
         .await
         .unwrap();
-        let target = agent_seat("agent-seat");
+        let scope = agent_seat("agent-seat");
         let before = store
-            .snapshot(&target)
+            .snapshot(&scope)
             .await
             .unwrap()
             .unwrap()
-            .bind(&target)
+            .bind(&scope)
             .unwrap();
-        let receipt = store.settle_clear(&target, &before).await.unwrap().unwrap();
+        let receipt = store
+            .settle_clear_bound(&actor(), &before)
+            .await
+            .unwrap()
+            .unwrap();
         let outcome = seal_clear_session_commit(&before, receipt).unwrap();
         assert!(!outcome.was_running());
         assert!(outcome.previous_cli_session().is_none());
@@ -2868,13 +2905,13 @@ mod runtime_control_seat_tests {
     #[tokio::test]
     async fn successor_generation_rejects_old_settlement_without_residue() {
         let (_directory, store) = seeded().await;
-        let target = agent_seat("agent-seat");
+        let scope = agent_seat("agent-seat");
         let before = store
-            .snapshot(&target)
+            .snapshot(&scope)
             .await
             .unwrap()
             .unwrap()
-            .bind(&target)
+            .bind(&scope)
             .unwrap();
         sqlx::query(
             "UPDATE agent_runtime_slots SET generation=2,claimed_by_daemon_instance_id='daemon-2' \
@@ -2885,7 +2922,7 @@ mod runtime_control_seat_tests {
         .unwrap();
         assert!(
             store
-                .settle_clear(&target, &before)
+                .settle_clear_bound(&actor(), &before)
                 .await
                 .unwrap()
                 .is_none()
@@ -2919,15 +2956,15 @@ mod runtime_control_seat_tests {
         .execute(&store.pool)
         .await
         .unwrap();
-        let target = agent_seat("agent-seat");
+        let scope = agent_seat("agent-seat");
         let before = store
-            .snapshot(&target)
+            .snapshot(&scope)
             .await
             .unwrap()
             .unwrap()
-            .bind(&target)
+            .bind(&scope)
             .unwrap();
-        assert!(store.settle_clear(&target, &before).await.is_err());
+        assert!(store.settle_clear_bound(&actor(), &before).await.is_err());
         assert_eq!(
             sqlx::query_scalar::<_, Option<String>>(
                 "SELECT cli_session_id FROM agent_runtime_slots WHERE agent_id='agent-seat'",

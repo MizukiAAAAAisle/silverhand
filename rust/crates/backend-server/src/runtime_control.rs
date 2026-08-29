@@ -235,15 +235,16 @@ where
         &self,
         target: &RuntimeSeatTarget,
     ) -> Result<BoundRuntimeControlSeat, RuntimeControlAdapterFailure> {
-        // The seat port operates on the unsealed coordinate; the admission seal
-        // stays at this `RuntimeControlPort` boundary.
-        let coordinate = target.coordinate();
+        // The read path is unauthorized and keyed on the row-owned scope; the
+        // admission seal stays at this `RuntimeControlPort` boundary and is only
+        // handed to the durable write path (`settle_clear`).
+        let scope = target.scope();
         self.seats
-            .snapshot(coordinate)
+            .snapshot(scope)
             .await
             .map_err(|source| RuntimeControlAdapterFailure::Infrastructure(Box::new(source)))?
             .ok_or(RuntimeControlAdapterFailure::MissingSeat)?
-            .bind(coordinate)
+            .bind(scope)
             .map_err(|_| RuntimeControlAdapterFailure::SeatFactsMismatch)
     }
 
@@ -440,7 +441,7 @@ where
         }
         let receipt = self
             .seats
-            .settle_clear(target.coordinate(), &before)
+            .settle_clear(target, &before)
             .await
             .map_err(|source| RuntimeControlAdapterFailure::Infrastructure(Box::new(source)))?
             .ok_or(RuntimeControlAdapterFailure::StaleSettlement)?;

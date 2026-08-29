@@ -27,7 +27,7 @@ use silverhand_backend_core::{
             BoundRuntimeControlSeat, ClearSessionCommitReceipt, ClearSessionProviderRefusal,
             ClearSessionRefusal, RuntimeControlAdmission, RuntimeControlAdmissionScope,
             RuntimeControlPort, RuntimeControlSeatPort, RuntimeControlSeatSnapshot,
-            RuntimeSeatCoordinate, RuntimeStartTarget, clear_conversation_session,
+            RuntimeSeatTarget, RuntimeStartTarget, clear_conversation_session,
         },
         post_commit::{IdleStart, MainDelivery},
     },
@@ -342,18 +342,18 @@ impl RuntimeControlSeatPort for CountingRuntimeDeliveryStore {
 
     async fn snapshot(
         &self,
-        coordinate: &RuntimeSeatCoordinate,
+        scope: &RuntimeScope,
     ) -> Result<Option<RuntimeControlSeatSnapshot>, Self::Error> {
-        self.inner.snapshot(coordinate).await
+        self.inner.snapshot(scope).await
     }
 
     async fn settle_clear(
         &self,
-        coordinate: &RuntimeSeatCoordinate,
+        target: &RuntimeSeatTarget,
         before: &BoundRuntimeControlSeat,
     ) -> Result<Option<ClearSessionCommitReceipt>, Self::Error> {
         self.clear_settlement_calls.fetch_add(1, Ordering::SeqCst);
-        self.inner.settle_clear(coordinate, before).await
+        self.inner.settle_clear(target, before).await
     }
 }
 

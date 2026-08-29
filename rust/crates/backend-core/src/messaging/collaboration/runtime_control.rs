@@ -46,21 +46,34 @@ impl RuntimeStartTarget {
     }
 }
 
-/// The persistence-layer address of a runtime seat: the acting human plus the
-/// row-owned [`RuntimeScope`]. Unlike [`RuntimeSeatTarget`] it carries **no admission
-/// seal** — it is freely constructible, because it names a seat coordinate the way a
-/// repository key names a row, not an authorization. The admission guarantee lives one
-/// layer up at the [`RuntimeControlPort`] boundary, whose methods consume a sealed
-/// `RuntimeSeatTarget`; the lower [`RuntimeControlSeatPort`] (persistence) only needs
-/// the coordinate to read and settle the durable seat, so it takes this value.
+/// A seat-operation target (clear-session / hard-stop). It carries the acting
+/// human plus the row-owned [`RuntimeScope`], which is always minted from a fact
+/// (route admission reading the persisted session scope, or a seat read fact for
+/// runtime-switch) — never selected by the caller. Exact scope equality binds it
+/// to the durable seat, so an agent-scoped seat can never match a conversation.
+///
+/// This is the **sealed admission artifact** and the sole authorization the
+/// persistence write path trusts: [`RuntimeControlSeatPort::settle_clear`] consumes
+/// it (a downstream crate can read its accessors but cannot construct it), so no
+/// caller can drive a durable clear/audit without having passed admission. The
+/// read path ([`RuntimeControlSeatPort::snapshot`]) needs no authorization and takes
+/// a bare [`RuntimeScope`] instead.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RuntimeSeatCoordinate {
+pub struct RuntimeSeatTarget {
     actor: UserId,
     scope: RuntimeScope,
 }
 
-impl RuntimeSeatCoordinate {
-    pub fn new(actor: UserId, scope: RuntimeScope) -> Self {
+impl RuntimeSeatTarget {
+    /// Mint a seat target from a row-owned [`RuntimeScope`]. Deliberately
+    /// crate-private and with no test escape hatch: a `RuntimeScope` is
+    /// authoritative only when derived from a fact — route admission reading the
+    /// immutable persisted session scope, or an internal seat-fact read for
+    /// runtime-switch. A public (or test-only cross-crate) constructor would let a
+    /// caller hand-pick an arm and re-open the caller-selected-scope hole this type
+    /// exists to close, so the only mint sites are the admission use cases below,
+    /// and downstream tests reach a target only by driving those use cases.
+    pub(crate) fn new(actor: UserId, scope: RuntimeScope) -> Self {
         Self { actor, scope }
     }
 
@@ -74,52 +87,6 @@ impl RuntimeSeatCoordinate {
 
     pub fn agent(&self) -> &AgentId {
         self.scope.agent()
-    }
-}
-
-/// A seat-operation coordinate (clear-session / hard-stop / snapshot / settle).
-/// It carries the row-owned [`RuntimeScope`], which is always minted from a fact
-/// (route admission reading the persisted session scope, or a seat read fact for
-/// runtime-switch) — never selected by the caller. Exact scope equality binds it
-/// to the durable seat, so an agent-scoped seat can never match a conversation.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RuntimeSeatTarget {
-    coordinate: RuntimeSeatCoordinate,
-}
-
-impl RuntimeSeatTarget {
-    /// Mint a seat target from a row-owned [`RuntimeScope`]. Deliberately
-    /// crate-private and with no test escape hatch: a `RuntimeScope` is
-    /// authoritative only when derived from a fact — route admission reading the
-    /// immutable persisted session scope, or an internal seat-fact read for
-    /// runtime-switch. A public (or test-only cross-crate) constructor would let a
-    /// caller hand-pick an arm and re-open the caller-selected-scope hole this type
-    /// exists to close, so the only mint sites are the admission use cases below,
-    /// and downstream tests reach a target only by driving those use cases. The
-    /// persistence layer never receives this seal; it operates on the unsealed
-    /// [`RuntimeSeatCoordinate`] via [`Self::coordinate`].
-    pub(crate) fn new(actor: UserId, scope: RuntimeScope) -> Self {
-        Self {
-            coordinate: RuntimeSeatCoordinate::new(actor, scope),
-        }
-    }
-
-    /// The persistence-layer coordinate this admitted target authorizes. The seat
-    /// port consumes this; the seal (crate-private [`Self::new`]) stays above.
-    pub fn coordinate(&self) -> &RuntimeSeatCoordinate {
-        &self.coordinate
-    }
-
-    pub fn actor(&self) -> &UserId {
-        self.coordinate.actor()
-    }
-
-    pub fn scope(&self) -> &RuntimeScope {
-        self.coordinate.scope()
-    }
-
-    pub fn agent(&self) -> &AgentId {
-        self.coordinate.agent()
     }
 }
 
@@ -177,16 +144,15 @@ impl RuntimeControlSeatSnapshot {
 
     pub fn bind(
         self,
-        coordinate: &RuntimeSeatCoordinate,
+        scope: &RuntimeScope,
     ) -> Result<BoundRuntimeControlSeat, RuntimeControlSeatMismatch> {
         // Exact scope equality: `RuntimeScope` distinguishes the two arms by
         // construction, so an `AgentSlot` seat can never satisfy a
         // `ConversationSlot` request (and vice versa), and a conversation-scoped
         // seat is pinned to its exact source conversation. This closes the old
         // `is_none_or` hole where an agent-scoped seat accepted any conversation.
-        let coordinate_matches =
-            self.scope == *coordinate.scope() && &self.agent == self.scope.agent();
-        if !coordinate_matches || self.agent_name.is_empty() {
+        let scope_matches = self.scope == *scope && &self.agent == self.scope.agent();
+        if !scope_matches || self.agent_name.is_empty() {
             return Err(RuntimeControlSeatMismatch);
         }
         Ok(BoundRuntimeControlSeat(self))
@@ -310,14 +276,23 @@ pub struct ClearSessionCommitMismatch;
 pub trait RuntimeControlSeatPort: Clone + Send + Sync + 'static {
     type Error: Error + Send + Sync + 'static;
 
+    /// Read the durable seat for a row-owned scope. This is an unauthorized read,
+    /// so it takes a bare [`RuntimeScope`] (a repository key), not the sealed
+    /// target.
     fn snapshot(
         &self,
-        coordinate: &RuntimeSeatCoordinate,
+        scope: &RuntimeScope,
     ) -> impl Future<Output = Result<Option<RuntimeControlSeatSnapshot>, Self::Error>> + Send;
 
+    /// Settle a durable clear against a captured seat. This is the sole durable
+    /// mutation face, so it consumes the sealed [`RuntimeSeatTarget`]: a downstream
+    /// crate can receive and read this type but cannot construct it, so it cannot
+    /// reach a durable clear/audit without having passed admission. The adapter must
+    /// exact-bind `target.scope() == before.scope()` (zero write on mismatch) and
+    /// take the audit actor only from `target.actor()`.
     fn settle_clear(
         &self,
-        coordinate: &RuntimeSeatCoordinate,
+        target: &RuntimeSeatTarget,
         before: &BoundRuntimeControlSeat,
     ) -> impl Future<Output = Result<Option<ClearSessionCommitReceipt>, Self::Error>> + Send;
 }
@@ -889,7 +864,7 @@ mod tests {
             RuntimeControlObservedStatus::Active,
             "agent".to_owned(),
         )
-        .bind(target.coordinate())
+        .bind(target.scope())
         .unwrap();
         let receipt = |scope, generation, previous, was_running, committed, audit| {
             ClearSessionCommitReceipt::decoded(
@@ -1517,36 +1492,27 @@ mod tests {
                 "agent".to_owned(),
             )
         };
-        let agent_arm = RuntimeSeatCoordinate::new(
-            actor(),
-            RuntimeScope::AgentSlot {
-                agent: AgentId::parse("agent-1").unwrap(),
-            },
-        );
+        let agent_arm = RuntimeScope::AgentSlot {
+            agent: AgentId::parse("agent-1").unwrap(),
+        };
         assert_eq!(
             snapshot().bind(&agent_arm).unwrap_err(),
             RuntimeControlSeatMismatch
         );
         // The wrong conversation is likewise rejected.
-        let other_conversation = RuntimeSeatCoordinate::new(
-            actor(),
-            RuntimeScope::ConversationSlot {
-                agent: AgentId::parse("agent-1").unwrap(),
-                source: ConversationId::parse("conversation-2").unwrap(),
-            },
-        );
+        let other_conversation = RuntimeScope::ConversationSlot {
+            agent: AgentId::parse("agent-1").unwrap(),
+            source: ConversationId::parse("conversation-2").unwrap(),
+        };
         assert_eq!(
             snapshot().bind(&other_conversation).unwrap_err(),
             RuntimeControlSeatMismatch
         );
-        // The exact coordinate binds.
-        let exact = RuntimeSeatCoordinate::new(
-            actor(),
-            RuntimeScope::ConversationSlot {
-                agent: AgentId::parse("agent-1").unwrap(),
-                source: ConversationId::parse("conversation-1").unwrap(),
-            },
-        );
+        // The exact scope binds.
+        let exact = RuntimeScope::ConversationSlot {
+            agent: AgentId::parse("agent-1").unwrap(),
+            source: ConversationId::parse("conversation-1").unwrap(),
+        };
         assert!(snapshot().bind(&exact).is_ok());
     }
 }

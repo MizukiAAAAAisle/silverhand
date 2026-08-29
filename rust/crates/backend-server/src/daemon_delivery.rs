@@ -5696,7 +5696,7 @@ mod tests {
 
         async fn snapshot(
             &self,
-            _coordinate: &silverhand_backend_core::messaging::collaboration::RuntimeSeatCoordinate,
+            _scope: &silverhand_backend_core::runtime_credential::RuntimeScope,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot>,
             Self::Error,
@@ -5706,7 +5706,7 @@ mod tests {
 
         async fn settle_clear(
             &self,
-            _coordinate: &silverhand_backend_core::messaging::collaboration::RuntimeSeatCoordinate,
+            _target: &silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
             before: &silverhand_backend_core::messaging::collaboration::BoundRuntimeControlSeat,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::ClearSessionCommitReceipt>,
@@ -6116,7 +6116,7 @@ mod tests {
 
         async fn snapshot(
             &self,
-            _coordinate: &silverhand_backend_core::messaging::collaboration::RuntimeSeatCoordinate,
+            _scope: &silverhand_backend_core::runtime_credential::RuntimeScope,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot>,
             Self::Error,
@@ -6126,7 +6126,7 @@ mod tests {
 
         async fn settle_clear(
             &self,
-            _coordinate: &silverhand_backend_core::messaging::collaboration::RuntimeSeatCoordinate,
+            _target: &silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
             _before: &silverhand_backend_core::messaging::collaboration::BoundRuntimeControlSeat,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::ClearSessionCommitReceipt>,
