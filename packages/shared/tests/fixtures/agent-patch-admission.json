@@ -1,0 +1,224 @@
+{
+  "//": "Dual-language admission corpus for the agent-tuning PATCH body (anchor #2236). The TypeScript half (packages/shared/tests/agent-patch-admission-parity.test.ts) is the ORACLE: it runs the real UpdateAgentInputSchema over each `body` and signs `verdict`/`canonical` — the values are never hand-restated on that side. The Rust half (in-crate module in rust/crates/backend-server/src/host_agent/agent_patch.rs) reads THIS file and holds `AgentPatchRaw` decode + garde + `TryFrom<AgentTuningEdit>` to it. Scope is the SEMANTIC value plane only (accept/reject of a JSON object + the normalized op-form). HTTP status classification (malformed JSON 400 vs semantic 422 vs 415) is a Rust-only extractor matrix, not this corpus. A `body` field value is a literal JSON value, or {\"$repeat\":{\"unit\":<str>,\"times\":<int>}} which BOTH harnesses expand to unit*times before admission.",
+  "displayNameMax": 64,
+  "descriptionMaxUtf16": 2000,
+  "reasoningTokenMax": 32,
+  "cases": [
+    {
+      "name": "display_name set",
+      "body": { "display_name": "Renamed" },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "set", "value": "Renamed" }, "description": { "op": "leave" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "display_name ASCII-trimmed to canonical",
+      "body": { "display_name": "  Renamed  " },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "set", "value": "Renamed" }, "description": { "op": "leave" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "display_name exotic ECMAScript whitespace trimmed (BOM/NBSP/ideographic)",
+      "body": { "display_name": "﻿ 　Renamed\t\n" },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "set", "value": "Renamed" }, "description": { "op": "leave" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "display_name at 64-unit bound",
+      "body": { "display_name": { "$repeat": { "unit": "x", "times": 64 } } },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "set", "value": { "$repeat": { "unit": "x", "times": 64 } } }, "description": { "op": "leave" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "display_name astral scalars at 64-unit bound (32 surrogate pairs)",
+      "body": { "display_name": { "$repeat": { "unit": "\uD83D\uDE00", "times": 32 } } },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "set", "value": { "$repeat": { "unit": "\uD83D\uDE00", "times": 32 } } }, "description": { "op": "leave" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "display_name padded raw>64 trims to the 64-unit canonical",
+      "body": {"display_name": "          xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx          "},
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "set", "value": { "$repeat": { "unit": "x", "times": 64 } } }, "description": { "op": "leave" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "description set",
+      "body": { "description": "hello" },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "leave" }, "description": { "op": "set", "value": "hello" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "description cleared with null",
+      "body": { "description": null },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "leave" }, "description": { "op": "clear" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "description at 2000-unit bound (ASCII)",
+      "body": { "description": { "$repeat": { "unit": "x", "times": 2000 } } },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "leave" }, "description": { "op": "set", "value": { "$repeat": { "unit": "x", "times": 2000 } } }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "description astral chars at 2000-unit bound (1000 surrogate pairs)",
+      "body": { "description": { "$repeat": { "unit": "😀", "times": 1000 } } },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "leave" }, "description": { "op": "set", "value": { "$repeat": { "unit": "😀", "times": 1000 } } }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "model set",
+      "body": { "model": "opus" },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "leave" }, "description": { "op": "leave" }, "model": { "op": "set", "value": "opus" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "model cleared with null",
+      "body": { "model": null },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "leave" }, "description": { "op": "leave" }, "model": { "op": "clear" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "reasoning_effort set",
+      "body": { "reasoning_effort": "high" },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "leave" }, "description": { "op": "leave" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "set", "value": "high" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "reasoning_effort cleared with null",
+      "body": { "reasoning_effort": null },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "leave" }, "description": { "op": "leave" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "clear" }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "reasoning_effort at 32-char bound",
+      "body": { "reasoning_effort": { "$repeat": { "unit": "a", "times": 32 } } },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "leave" }, "description": { "op": "leave" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "set", "value": { "$repeat": { "unit": "a", "times": 32 } } }, "fast_mode": { "op": "leave" } }
+    },
+    {
+      "name": "fast_mode true",
+      "body": { "fast_mode": true },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "leave" }, "description": { "op": "leave" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "set", "value": true } }
+    },
+    {
+      "name": "fast_mode false",
+      "body": { "fast_mode": false },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "leave" }, "description": { "op": "leave" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "set", "value": false } }
+    },
+    {
+      "name": "fast_mode cleared with null",
+      "body": { "fast_mode": null },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "leave" }, "description": { "op": "leave" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "clear" } }
+    },
+    {
+      "name": "unknown key stripped, known field survives",
+      "body": { "unknown": 1, "fast_mode": true },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "leave" }, "description": { "op": "leave" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "leave" }, "fast_mode": { "op": "set", "value": true } }
+    },
+    {
+      "name": "multi-field set/clear/set",
+      "body": { "display_name": "New", "description": null, "reasoning_effort": "low" },
+      "verdict": "accept",
+      "canonical": { "display_name": { "op": "set", "value": "New" }, "description": { "op": "clear" }, "model": { "op": "leave" }, "reasoning_effort": { "op": "set", "value": "low" }, "fast_mode": { "op": "leave" } }
+    },
+
+    {
+      "name": "empty object names no field",
+      "body": {},
+      "verdict": "reject"
+    },
+    {
+      "name": "unknown-only body strips to empty",
+      "body": { "unknown": 1 },
+      "verdict": "reject"
+    },
+    {
+      "name": "display_name empty string",
+      "body": { "display_name": "" },
+      "verdict": "reject"
+    },
+    {
+      "name": "display_name whitespace-only trims to empty",
+      "body": { "display_name": "   " },
+      "verdict": "reject"
+    },
+    {
+      "name": "display_name over 64-unit bound",
+      "body": { "display_name": { "$repeat": { "unit": "x", "times": 65 } } },
+      "verdict": "reject"
+    },
+    {
+      "name": "display_name astral scalars over 64-unit bound (33 surrogate pairs = 66 units)",
+      "body": { "display_name": { "$repeat": { "unit": "\uD83D\uDE00", "times": 33 } } },
+      "verdict": "reject"
+    },
+    {
+      "name": "display_name with forbidden control char",
+      "body": { "display_name": "a\u0000b" },
+      "verdict": "reject"
+    },
+    {
+      "name": "display_name null is not accepted (non-nullable)",
+      "body": { "display_name": null },
+      "verdict": "reject"
+    },
+    {
+      "name": "description over 2000-unit bound (ASCII)",
+      "body": { "description": { "$repeat": { "unit": "x", "times": 2001 } } },
+      "verdict": "reject"
+    },
+    {
+      "name": "description astral chars over 2000-unit bound (1001 surrogate pairs = 2002 units)",
+      "body": { "description": { "$repeat": { "unit": "😀", "times": 1001 } } },
+      "verdict": "reject"
+    },
+    {
+      "name": "runtime present as string is forbidden",
+      "body": { "runtime": "codex" },
+      "verdict": "reject"
+    },
+    {
+      "name": "runtime present as null is forbidden",
+      "body": { "runtime": null },
+      "verdict": "reject"
+    },
+    {
+      "name": "reasoning_effort uppercase fails token regex",
+      "body": { "reasoning_effort": "HIGH" },
+      "verdict": "reject"
+    },
+    {
+      "name": "reasoning_effort leading digit fails token regex",
+      "body": { "reasoning_effort": "1x" },
+      "verdict": "reject"
+    },
+    {
+      "name": "reasoning_effort empty fails min length",
+      "body": { "reasoning_effort": "" },
+      "verdict": "reject"
+    },
+    {
+      "name": "reasoning_effort over 32-char bound",
+      "body": { "reasoning_effort": { "$repeat": { "unit": "a", "times": 33 } } },
+      "verdict": "reject"
+    },
+    {
+      "name": "description wrong type (number)",
+      "body": { "description": 5 },
+      "verdict": "reject"
+    },
+    {
+      "name": "fast_mode wrong type (string)",
+      "body": { "fast_mode": "yes" },
+      "verdict": "reject"
+    },
+    {
+      "name": "display_name wrong type (number)",
+      "body": { "display_name": 123 },
+      "verdict": "reject"
+    }
+  ]
+}

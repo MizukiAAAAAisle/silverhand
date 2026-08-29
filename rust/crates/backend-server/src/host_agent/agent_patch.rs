@@ -12,14 +12,16 @@
 //!     oracle for an agent the caller may not even see.
 //!  2. AUTHORITY ([`can_edit_agent`]) — may this caller CHANGE it? Only the creator
 //!     (or system) may; anyone else who could merely *see* it gets `403
-//!     {"error":"forbidden"}`. Access precedes product: a refused caller never reaches
-//!     the body.
-//!  3. WIRE ADMISSION — parse the body against `UpdateAgentInputSchema`'s field rules.
-//!     A malformed body, an out-of-range value, a `runtime` key (the product's
-//!     `z.never()`), and a body naming no known field all collapse to ONE terminal
-//!     `400 {"error":"invalid input"}`. (See the module note below: the Zod `issues`
-//!     array is deliberately dropped, matching the ratified `PATCH /api/me`
-//!     precedent — no consumer branches on it.)
+//!     {"error":"forbidden"}`.
+//!  3. WIRE ADMISSION — decode and validate the body through the shared
+//!     [`ValidatedJson`](crate::wire_admission::ValidatedJson) extractor plus the
+//!     `TryFrom<AgentPatchRaw>` cross-field step. Two failure planes, kept distinct:
+//!     a STRUCTURAL fault (malformed JSON, a wrong-typed field, a `runtime` key, a
+//!     missing `Content-Type`) keeps axum's native `Json` rejection unchanged
+//!     (`400`/`422`/`415`); a SEMANTIC fault (a too-long description, a malformed
+//!     reasoning token, a `display_name` the shared authority rejects, or a body naming
+//!     no known field) collapses to ONE minimal `422 {"error":"invalid input"}`. The
+//!     Zod `issues` array is deliberately never emitted (see the note below).
 //!  4. WRITE + ANNOUNCE ([`update_agent_profile_and_announce`]) — hand the RAW request
 //!     to the write unit of work, which admits tuning legality UNDER its own write
 //!     lock against the runtime/model/effort as they stand THERE, then commits and
@@ -35,32 +37,46 @@
 //!     races the projection is honest post-commit residue: the write is durable, but
 //!     no trustworthy DTO can be projected, so it takes the lane's safe `500`.
 //!
+//! Error ORDER is not a parity gate (shiki): the framework extracts and admits the body
+//! (stage 3) before the handler runs stages 1–2, so a structural or semantic body fault
+//! refuses regardless of the access verdict. The numbering is the logical decomposition,
+//! not a runtime sequence, and no anti-enumeration contract depends on access preceding
+//! admission — the shared extractors own extraction order.
+//!
 //! Like the read faces, the human principal is proof the authenticating perimeter
 //! ran; its ABSENCE is a composition fault, not a product request, so it takes a
 //! fail-closed `500` reading nothing. Mounting the real bearer perimeter is the
 //! composition root's job, not this factory's — done by the backend-app #2234 CP2 mount.
 //!
-//! ## One wire divergence, reachability-priced (flagged for review)
+//! ## Two ratified wire divergences (flagged for review)
 //!
-//! The `400` body is terminally `{ "error": "invalid input" }`, WITHOUT the Zod
-//! `issues` array the TS route also emits, and the `.refine` "no fields to update"
-//! case collapses into it rather than a distinct body. This mirrors the ratified
-//! `PATCH /api/me` decision ([`crate::human_auth`]): no shared response schema pins
-//! `issues`, no agent-editing client branches on it, and reproducing the full Zod
-//! issue projection would be a large, drift-prone surface with no reachable consumer.
-//! The observable `error` string is preserved. The typed TUNING `400` (which DOES
-//! carry a `code` a client can act on) is reproduced exactly.
+//! 1. NO Zod `issues` array. The refusal body is terminally `{ "error": "invalid
+//!    input" }` for every semantic fault (the `.refine` "no fields to update" case
+//!    included), WITHOUT the per-issue array the TS route emits. This mirrors the
+//!    ratified `PATCH /api/me` decision ([`crate::human_auth`]): no shared response
+//!    schema pins `issues`, no client branches on it, and reproducing the full Zod
+//!    projection is a large, drift-prone surface with no reachable consumer. The typed
+//!    TUNING `400` (which DOES carry an actionable `code`) is reproduced exactly.
+//!
+//! 2. STRUCTURAL faults take axum's native status, not a fused `400`. Where the TS
+//!    route funnels every wire fault to `400`, this route lets the layer that rejects
+//!    choose the status: malformed JSON is `400`, a wrong-typed or `runtime` key is the
+//!    native `Json` `422`, a missing `Content-Type` is `415`; only SEMANTIC rules
+//!    (garde + the cross-field `TryFrom`) use `422 {"error":"invalid input"}`. This is
+//!    the anchor's deliberate, industry-standard classification (syntactic `400` vs
+//!    semantic `422`), aligned with axum's own `Json` extractor rather than
+//!    hand-massaged. Error text and ordering are not a parity gate; the observable
+//!    `error` string on the semantic body is preserved.
 
 use axum::{
     Json, Router,
-    body::Bytes,
     extract::{Extension, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::patch,
 };
-use serde::Serialize;
-use serde_json::{Map, Value};
+use garde::Validate;
+use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
     agent_detail_read::AgentDetailReadModel,
     agent_profile_write::{
@@ -78,6 +94,8 @@ use silverhand_backend_core::{
 
 use crate::clock::ProcessClock;
 use crate::error;
+use crate::wire_admission::{self, ValidatedJson, patch_within_utf16_max};
+use crate::wire_patch::{Forbidden, PatchField, RequiredPatchField};
 
 use crate::agent_wire::{AgentDto, reproject_committed_agent};
 
@@ -88,8 +106,6 @@ pub const AGENT_PATCH_PATH: &str = "/api/agents/{id}";
 const AGENT_NOT_FOUND: &str = "agent not found";
 /// The authority-refusal string (`c.json({ error: 'forbidden' }, 403)`).
 const FORBIDDEN: &str = "forbidden";
-/// The one terminal wire-admission refusal string (see the module note).
-const INVALID_INPUT: &str = "invalid input";
 /// The unmapped-error body: an unexpected failure falls to the framework default —
 /// a bare `text/plain` `500`, never a JSON envelope.
 const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
@@ -127,22 +143,33 @@ where
 }
 
 async fn agent_patch<R, W, S, C>(
-    Path(agent_id): Path<String>,
-    viewer: Option<Extension<UserId>>,
     State(state): State<PatchState<R, W, S, C>>,
-    body: Bytes,
+    Extension(viewer): Extension<UserId>,
+    Path(agent_id): Path<String>,
+    ValidatedJson(raw): ValidatedJson<AgentPatchRaw>,
 ) -> Response
 where
-    R: AgentDetailReadModel,
-    W: AgentProfileWriteUnitOfWork,
-    S: AgentChangedSink,
-    C: ProcessClock,
+    R: AgentDetailReadModel + Send + Sync,
+    W: AgentProfileWriteUnitOfWork + Send + Sync,
+    S: AgentChangedSink + Send + Sync,
+    C: ProcessClock + Send + Sync,
 {
-    let Some(Extension(viewer)) = viewer else {
-        tracing::error!("agent-patch route reached without its human principal fact");
-        return internal_error();
-    };
+    // The framework owns extraction order: `State`/`Extension`/`Path` read the request
+    // parts and `ValidatedJson` reads and admits the body, all BEFORE this body runs.
+    // Error ordering is not a parity gate (shiki), so admission is plainly body-first —
+    // a structural or semantic body fault refuses regardless of the access verdict, and
+    // no anti-enumeration contract depends on access preceding admission. The human
+    // principal arrives as `Extension<UserId>`: its absence is a composition fault the
+    // extractor fails closed on before this body runs.
     let principal = Principal::human(viewer);
+
+    // Finish wire admission: `ValidatedJson` already decoded the body and ran the
+    // stateless garde rules; the cross-field `TryFrom` applies `display_name`
+    // normalization and the "names a field" rule, its failure the same minimal `422`.
+    let request = match AgentTuningEdit::try_from(raw) {
+        Ok(edit) => edit,
+        Err(()) => return wire_admission::invalid_input(),
+    };
 
     // A malformed id names no agent — the same 404 an absent row gets.
     let Ok(agent) = AgentId::parse(agent_id) else {
@@ -197,13 +224,6 @@ where
     if !can_edit_agent(&principal, &agent, Some(&authority)).is_allowed() {
         return forbidden();
     }
-
-    // WIRE ADMISSION: parse against the field rules; every malformed shape is one
-    // terminal `invalid input`.
-    let request = match parse_patch_body(&body) {
-        PatchBody::Edit(request) => request,
-        PatchBody::Invalid => return invalid_input(),
-    };
 
     // WRITE + ANNOUNCE. Tuning legality is NOT decided here against the pre-read
     // snapshot — that verdict could go stale before the write. The write unit of work
@@ -269,117 +289,124 @@ where
 // Wire admission — `UpdateAgentInputSchema`
 // ===========================================================================
 
-/// The admission verdict for the PATCH body. Every malformed shape — bad JSON, a
-/// non-object, an out-of-range value, a `runtime` key, or no known field — collapses
-/// to [`Invalid`](PatchBody::Invalid), the one terminal `400`.
-enum PatchBody {
-    Edit(AgentTuningEdit),
-    Invalid,
+/// The raw PATCH body: decoded structurally by serde, validated statelessly by garde.
+///
+/// Every field is optional (`#[serde(default)]` → the absent/`Missing` arm when the key
+/// is absent); nullable fields are three-valued via [`PatchField`]; the non-nullable
+/// `display_name` uses [`RequiredPatchField`] (a present `null` is a decode error);
+/// `runtime` is [`Forbidden`] (`z.never()` — a present key, any value, fails to decode).
+/// Unknown keys are ignored, matching the product schema's strip.
+///
+/// The garde rules are the STATELESS field predicates only. `display_name`
+/// normalization (trim) and the cross-field "names a field" rule are NOT here — they
+/// live in `TryFrom<AgentPatchRaw>`, so garde validates without ever normalizing.
+#[derive(Debug, Deserialize, Validate)]
+struct AgentPatchRaw {
+    /// `display_name: DisplayNameSchema.optional()`. No stateless rule — trim and bound
+    /// are the shared `DisplayName::parse` authority, applied once in `TryFrom`.
+    #[serde(default)]
+    #[garde(skip)]
+    display_name: RequiredPatchField<String>,
+
+    /// `description: z.string().max(2000).nullable().optional()`, measured in UTF-16
+    /// code units by the shared primitive the adapter delegates to.
+    #[serde(default)]
+    #[garde(custom(patch_within_utf16_max(DESCRIPTION_MAX_UTF16)))]
+    description: PatchField<String>,
+
+    /// `model: z.string().nullable().optional()` — any string, no bound.
+    #[serde(default)]
+    #[garde(skip)]
+    model: PatchField<String>,
+
+    /// `reasoning_effort: ReasoningEffortTokenSchema.nullable().optional()` — structural
+    /// token format only; per-runtime legality is the later tuning gate.
+    #[serde(default)]
+    #[garde(custom(reasoning_token))]
+    reasoning_effort: PatchField<String>,
+
+    /// `fast_mode: z.boolean().nullable().optional()`.
+    #[serde(default)]
+    #[garde(skip)]
+    fast_mode: PatchField<bool>,
+
+    /// `runtime: z.never().optional()` — a present key (any value, `null` included) is a
+    /// decode error, so this never carries a value past admission.
+    #[serde(default)]
+    #[garde(skip)]
+    runtime: Forbidden,
 }
 
-/// The three-valued read of one optional+nullable key: absent (leave), explicit null
-/// (clear), or a present value (set).
-enum Tri<'a> {
-    Absent,
-    Null,
-    Value(&'a Value),
-}
-
-fn tri<'a>(object: &'a Map<String, Value>, key: &str) -> Tri<'a> {
-    match object.get(key) {
-        None => Tri::Absent,
-        Some(Value::Null) => Tri::Null,
-        Some(value) => Tri::Value(value),
-    }
-}
-
-/// Parse the body against `UpdateAgentInputSchema`: every field optional, nullable
-/// fields three-valued, `runtime` forbidden (`z.never()`), and at least one KNOWN
-/// field required (`.refine(keys > 0)`). A malformed body (`c.req.json().catch(() =>
-/// ({}))` → refine fails) collapses to the same `Invalid`.
-fn parse_patch_body(body: &Bytes) -> PatchBody {
-    let Ok(value) = serde_json::from_slice::<Value>(body) else {
-        return PatchBody::Invalid;
-    };
-    let Some(object) = value.as_object() else {
-        return PatchBody::Invalid;
-    };
-
-    // `runtime: z.never().optional()` — present with ANY value (null included) fails.
-    if object.contains_key("runtime") {
-        return PatchBody::Invalid;
-    }
-
-    // `display_name: DisplayNameSchema.optional()` — NOT nullable. A value is trimmed
-    // and bounded by the shared authority; null or non-string is invalid.
-    let display_name = match object.get("display_name") {
-        None => RequiredEdit::Leave,
-        Some(Value::String(raw)) => match DisplayName::parse(raw) {
-            Ok(name) => RequiredEdit::Set(name.into_inner()),
-            Err(_) => return PatchBody::Invalid,
-        },
-        Some(_) => return PatchBody::Invalid,
-    };
-
-    // `description: z.string().max(2000).nullable().optional()` — no trim, no min.
-    let description = match tri(object, "description") {
-        Tri::Absent => FieldEdit::Leave,
-        Tri::Null => FieldEdit::Clear,
-        Tri::Value(Value::String(raw)) if within_utf16_max(raw, DESCRIPTION_MAX_UTF16) => {
-            FieldEdit::Set(raw.clone())
+/// A garde field rule for `reasoning_effort`, delegating to the sole token predicate
+/// [`is_reasoning_token`]. The value-less arms carry no token and pass.
+fn reasoning_token(field: &PatchField<String>, _: &()) -> garde::Result {
+    match field {
+        PatchField::Value(value) if !is_reasoning_token(value) => {
+            Err(garde::Error::new("not a reasoning-effort token"))
         }
-        Tri::Value(_) => return PatchBody::Invalid,
-    };
-
-    // `model: z.string().nullable().optional()` — any string, no bound.
-    let model = match tri(object, "model") {
-        Tri::Absent => FieldEdit::Leave,
-        Tri::Null => FieldEdit::Clear,
-        Tri::Value(Value::String(raw)) => FieldEdit::Set(raw.clone()),
-        Tri::Value(_) => return PatchBody::Invalid,
-    };
-
-    // `reasoning_effort: ReasoningEffortTokenSchema.nullable().optional()` — structural
-    // token format only; per-runtime legality is the later tuning gate.
-    let reasoning_effort = match tri(object, "reasoning_effort") {
-        Tri::Absent => FieldEdit::Leave,
-        Tri::Null => FieldEdit::Clear,
-        Tri::Value(Value::String(raw)) if is_reasoning_token(raw) => FieldEdit::Set(raw.clone()),
-        Tri::Value(_) => return PatchBody::Invalid,
-    };
-
-    // `fast_mode: z.boolean().nullable().optional()`.
-    let fast_mode = match tri(object, "fast_mode") {
-        Tri::Absent => FieldEdit::Leave,
-        Tri::Null => FieldEdit::Clear,
-        Tri::Value(Value::Bool(value)) => FieldEdit::Set(*value),
-        Tri::Value(_) => return PatchBody::Invalid,
-    };
-
-    // `.refine(Object.keys(v).length > 0)` — on the STRIPPED object, so unknown-only
-    // bodies count as empty. At least one KNOWN field must be named (a null clear
-    // counts as named).
-    let names_a_field = !matches!(display_name, RequiredEdit::Leave)
-        || description.is_present()
-        || model.is_present()
-        || reasoning_effort.is_present()
-        || fast_mode.is_present();
-    if !names_a_field {
-        return PatchBody::Invalid;
+        _ => Ok(()),
     }
-
-    PatchBody::Edit(AgentTuningEdit {
-        display_name,
-        description,
-        model,
-        reasoning_effort,
-        fast_mode,
-    })
 }
 
-/// `z.string().max(max)` on the UTF-16 code-unit length (JS `.length`).
-fn within_utf16_max(value: &str, max: usize) -> bool {
-    value.encode_utf16().count() <= max
+impl TryFrom<AgentPatchRaw> for AgentTuningEdit {
+    /// Semantic-admission failure; the caller maps it to the minimal `422`.
+    type Error = ();
+
+    fn try_from(raw: AgentPatchRaw) -> Result<Self, Self::Error> {
+        let AgentPatchRaw {
+            display_name,
+            description,
+            model,
+            reasoning_effort,
+            fast_mode,
+            // A present `runtime` key was already rejected at decode; matched here to
+            // prove the field is consumed.
+            runtime: Forbidden,
+        } = raw;
+
+        // `display_name` is trimmed and bounded by the shared authority — the one place
+        // normalization happens, never in a garde rule.
+        let display_name = match display_name {
+            RequiredPatchField::Missing => RequiredEdit::Leave,
+            RequiredPatchField::Value(value) => {
+                RequiredEdit::Set(DisplayName::parse(&value).map_err(|_| ())?.into_inner())
+            }
+        };
+        let description = field_edit(description);
+        let model = field_edit(model);
+        let reasoning_effort = field_edit(reasoning_effort);
+        let fast_mode = field_edit(fast_mode);
+
+        // `.refine(Object.keys(v).length > 0)` on the STRIPPED object: at least one KNOWN
+        // field must be named (a null clear counts as named); unknown-only bodies, whose
+        // keys are dropped at decode, count as empty.
+        let names_a_field = !matches!(display_name, RequiredEdit::Leave)
+            || description.is_present()
+            || model.is_present()
+            || reasoning_effort.is_present()
+            || fast_mode.is_present();
+        if !names_a_field {
+            return Err(());
+        }
+
+        Ok(AgentTuningEdit {
+            display_name,
+            description,
+            model,
+            reasoning_effort,
+            fast_mode,
+        })
+    }
+}
+
+/// Map a wire tri-state onto the domain's PATCH algebra: absent leaves, null clears, a
+/// value sets. The wire type stays pure; this mapping is the route's.
+fn field_edit<T>(field: PatchField<T>) -> FieldEdit<T> {
+    match field {
+        PatchField::Missing => FieldEdit::Leave,
+        PatchField::Null => FieldEdit::Clear,
+        PatchField::Value(value) => FieldEdit::Set(value),
+    }
 }
 
 /// `ReasoningEffortTokenSchema`: `.min(1).max(32).regex(/^[a-z][a-z0-9_-]*$/)`. The
@@ -437,16 +464,6 @@ fn not_found() -> Response {
 
 fn forbidden() -> Response {
     (StatusCode::FORBIDDEN, Json(ErrorBody { error: FORBIDDEN })).into_response()
-}
-
-fn invalid_input() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ErrorBody {
-            error: INVALID_INPUT,
-        }),
-    )
-        .into_response()
 }
 
 fn tuning_rejected(rejection: &TuningRejection) -> Response {
@@ -905,6 +922,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_principal_is_a_safe_500_that_never_reads() {
+        // The principal arrives as `Extension<UserId>`; its absence is a composition
+        // fault the extractor rejects with a bare `500` BEFORE the handler runs, so no
+        // read or write is attempted. The exact rejection text is the framework's, not a
+        // product contract — only that it is a bare text `500`, never a JSON envelope.
         let reply = patch_with(
             FakeReads::new(present(creator_facts()), present(committed_facts())),
             SealingWrites::new(WriteOutcome::Commits),
@@ -915,7 +936,10 @@ mod tests {
         )
         .await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(reply.body, "Internal Server Error");
+        assert!(
+            serde_json::from_str::<Value>(&reply.body).is_err(),
+            "the composition-fault 500 is a bare text rejection, never a JSON envelope"
+        );
         assert_eq!(reply.reads, 0);
         assert_eq!(reply.writes, 0);
     }
@@ -1000,57 +1024,81 @@ mod tests {
         assert_eq!(reply.writes, 0);
     }
 
-    // ---- wire admission (400 invalid input) ----
+    // ---- wire admission (native structural status vs semantic 422) ----
 
     #[tokio::test]
-    async fn every_malformed_body_is_one_terminal_invalid_input() {
+    async fn a_malformed_json_body_keeps_the_native_400() {
+        // Invalid JSON syntax is the one structural fault axum classifies `400`.
+        let reply = ok_run("not json").await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+        assert_eq!(reply.writes, 0);
+    }
+
+    #[tokio::test]
+    async fn a_structurally_wrong_body_keeps_the_native_422() {
+        // Valid JSON that cannot decode into the body type — a non-object, a wrong field
+        // type, a present `runtime`, or a present-null `display_name` — surfaces axum's
+        // native `Json` 422 (a text body, NOT the semantic envelope), never a fused 400.
         for body in [
-            "not json",
-            "[]",
             "5",
-            "{}",                             // no fields (refine)
-            r#"{"unknown":1}"#,               // unknown-only → stripped → empty
-            r#"{"runtime":"codex"}"#,         // z.never()
-            r#"{"display_name":null}"#,       // not nullable
-            r#"{"display_name":""}"#,         // trimmed to empty → min(1) fails
-            r#"{"display_name":123}"#,        // not a string
-            r#"{"description":5}"#,           // not a string
-            r#"{"model":5}"#,                 // not a string
-            r#"{"reasoning_effort":"BAD"}"#,  // uppercase → regex fails
-            r#"{"reasoning_effort":"1bad"}"#, // leading digit → regex fails
-            r#"{"fast_mode":"yes"}"#,         // not a boolean
+            r#"{"runtime":"codex"}"#,   // z.never() → Forbidden decode error
+            r#"{"display_name":null}"#, // not nullable → RequiredPatchField error
+            r#"{"display_name":123}"#,  // not a string
+            r#"{"description":5}"#,     // not a string
+            r#"{"model":5}"#,           // not a string
+            r#"{"fast_mode":"yes"}"#,   // not a boolean
         ] {
-            let reply = patch_with(
-                FakeReads::new(present(creator_facts()), present(committed_facts())),
-                SealingWrites::new(WriteOutcome::Commits),
-                FakeSink::new(false),
-                "a1",
-                body,
-                true,
-            )
-            .await;
+            let reply = ok_run(body).await;
             assert_eq!(
                 reply.status,
-                StatusCode::BAD_REQUEST,
-                "body {body:?} must be 400"
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "body {body:?} must be the native 422"
             );
-            assert_eq!(
-                parsed(&reply.body),
-                json!({ "error": "invalid input" }),
-                "body {body:?} must be terminal invalid input"
+            // The native rejection is NOT the semantic envelope.
+            assert_ne!(
+                serde_json::from_str::<Value>(&reply.body).ok(),
+                Some(json!({ "error": "invalid input" })),
+                "body {body:?} must carry the native rejection, not the semantic envelope"
             );
             assert_eq!(reply.writes, 0, "body {body:?} must not write");
         }
     }
 
     #[tokio::test]
-    async fn a_description_over_two_thousand_units_is_invalid_but_at_the_bound_is_ok() {
+    async fn a_semantic_rule_fault_is_the_minimal_422_invalid_input() {
+        // A well-formed body the STATELESS rules or the cross-field step reject: no
+        // named field, a garde predicate, or the `display_name` authority.
+        for body in [
+            "{}",                             // no fields (refine)
+            "[]",                             // empty seq → struct-from-seq defaults → empty
+            r#"{"unknown":1}"#,               // unknown-only → stripped → empty
+            r#"{"display_name":""}"#,         // trimmed to empty → min(1) fails
+            r#"{"reasoning_effort":"BAD"}"#,  // uppercase → regex fails
+            r#"{"reasoning_effort":"1bad"}"#, // leading digit → regex fails
+        ] {
+            let reply = ok_run(body).await;
+            assert_eq!(
+                reply.status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "body {body:?} must be the semantic 422"
+            );
+            assert_eq!(
+                parsed(&reply.body),
+                json!({ "error": "invalid input" }),
+                "body {body:?} must be the minimal semantic envelope"
+            );
+            assert_eq!(reply.writes, 0, "body {body:?} must not write");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_description_over_two_thousand_units_is_semantic_422_but_at_the_bound_is_ok() {
         let at_bound = "x".repeat(2000);
         let over = "x".repeat(2001);
         let ok = ok_run(&format!(r#"{{"description":"{at_bound}"}}"#)).await;
         assert_eq!(ok.status, StatusCode::OK);
         let bad = ok_run(&format!(r#"{{"description":"{over}"}}"#)).await;
-        assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+        assert_eq!(bad.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(parsed(&bad.body), json!({ "error": "invalid input" }));
     }
 
@@ -1198,5 +1246,163 @@ mod tests {
         .await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(reply.writes, 0);
+    }
+}
+
+/// Cross-language admission corpus (anchor #2236).
+///
+/// The `verdict`/`canonical` in the checked-in fixture
+/// `packages/shared/tests/fixtures/agent-patch-admission.json` are HAND-AUTHORED, not
+/// generated. The TypeScript oracle
+/// (`packages/shared/tests/agent-patch-admission-parity.test.ts`) SIGNS them: it runs
+/// the real `UpdateAgentInputSchema` over every case and asserts the fixture's stated
+/// verdict/canonical — it verifies the file, it never writes it. This half
+/// drives the SAME cases through the PRODUCTION Rust path — `AgentPatchRaw` serde decode
+/// → `garde::Validate` → `TryFrom<AgentTuningEdit>` — and asserts the same accept/reject
+/// verdict and, on accept, the same normalized op-form.
+///
+/// Scope is the SEMANTIC value plane only: is a JSON object admitted, and to what
+/// op-form. HTTP status classification (malformed-JSON `400` vs semantic `422` vs `415`)
+/// is the extractor matrix in [`crate::wire_admission`], not this corpus — so a
+/// wrong-typed field, which the extractor path would reject as a native decode fault,
+/// folds here into the single "reject" verdict.
+#[cfg(test)]
+mod corpus {
+    use garde::Validate;
+    use serde::Serialize;
+    use serde_json::{Value, json};
+    use silverhand_backend_core::agent_profile_write::{FieldEdit, RequiredEdit};
+
+    use super::{AgentPatchRaw, AgentTuningEdit, DESCRIPTION_MAX_UTF16, REASONING_TOKEN_MAX};
+
+    /// The shared fixture, embedded at compile time. The path climbs five levels from
+    /// this source file (`rust/crates/backend-server/src/host_agent/agent_patch.rs`) to
+    /// the repo root, then down into the shared package's fixtures.
+    const CORPUS_JSON: &str =
+        include_str!("../../../../../packages/shared/tests/fixtures/agent-patch-admission.json");
+
+    /// Expand a fixture value: a `{"$repeat":{"unit","times"}}` spec becomes `unit`
+    /// repeated `times`, every other value passes through verbatim. Mirrors the TS
+    /// `materialize`, so both halves admit byte-identical bodies.
+    fn materialize(value: &Value) -> Value {
+        if let Some(spec) = value.get("$repeat") {
+            let unit = spec["unit"].as_str().expect("$repeat.unit is a string");
+            let times = spec["times"].as_u64().expect("$repeat.times is an integer");
+            return Value::String(unit.repeat(times as usize));
+        }
+        value.clone()
+    }
+
+    /// Materialize every value of a JSON object (the case `body`).
+    fn materialize_object(object: &Value) -> Value {
+        let map = object.as_object().expect("body is a JSON object");
+        Value::Object(
+            map.iter()
+                .map(|(key, value)| (key.clone(), materialize(value)))
+                .collect(),
+        )
+    }
+
+    /// Materialize a canonical op-form: only a `set` op carries a value to expand.
+    fn materialize_canonical(canonical: &Value) -> Value {
+        let map = canonical.as_object().expect("canonical is a JSON object");
+        Value::Object(
+            map.iter()
+                .map(|(field, op)| {
+                    let mut op = op.clone();
+                    if op["op"].as_str() == Some("set") {
+                        let value = materialize(&op["value"]);
+                        op.as_object_mut()
+                            .expect("op is an object")
+                            .insert("value".to_owned(), value);
+                    }
+                    (field.clone(), op)
+                })
+                .collect(),
+        )
+    }
+
+    /// The PRODUCTION admission over one already-materialized body. `Ok` is the admitted
+    /// edit; `Err(())` folds EVERY refusal plane the wire route has — serde decode (wrong
+    /// type, a forbidden `runtime` key), garde `validate`, and the cross-field `TryFrom`
+    /// (over-bound `display_name`, an empty patch) — into the single reject the corpus
+    /// scores against, exactly as the extractor + handler compose them on the wire.
+    fn admit(body: Value) -> Result<AgentTuningEdit, ()> {
+        let raw: AgentPatchRaw = serde_json::from_value(body).map_err(|_| ())?;
+        raw.validate().map_err(|_| ())?;
+        AgentTuningEdit::try_from(raw)
+    }
+
+    /// Project an admitted edit to the shared op-form. `display_name` is non-nullable
+    /// (leave/set); the other four are leave/clear/set. This is the Rust twin of the TS
+    /// oracle's `project`.
+    fn project(edit: &AgentTuningEdit) -> Value {
+        fn required(edit: &RequiredEdit<String>) -> Value {
+            match edit {
+                RequiredEdit::Leave => json!({ "op": "leave" }),
+                RequiredEdit::Set(value) => json!({ "op": "set", "value": value }),
+            }
+        }
+        fn nullable<T: Serialize>(edit: &FieldEdit<T>) -> Value {
+            match edit {
+                FieldEdit::Leave => json!({ "op": "leave" }),
+                FieldEdit::Clear => json!({ "op": "clear" }),
+                FieldEdit::Set(value) => json!({ "op": "set", "value": value }),
+            }
+        }
+        json!({
+            "display_name": required(&edit.display_name),
+            "description": nullable(&edit.description),
+            "model": nullable(&edit.model),
+            "reasoning_effort": nullable(&edit.reasoning_effort),
+            "fast_mode": nullable(&edit.fast_mode),
+        })
+    }
+
+    #[test]
+    fn rust_path_matches_the_ts_signed_verdict_and_canonical_for_every_case() {
+        let corpus: Value = serde_json::from_str(CORPUS_JSON).expect("corpus parses");
+
+        // The fixture's declared maxima must equal the constants this route encodes, so a
+        // silent drift on either side is caught here rather than masked by a matching pair
+        // of wrong numbers.
+        assert_eq!(corpus["displayNameMax"].as_u64(), Some(64));
+        assert_eq!(
+            corpus["descriptionMaxUtf16"].as_u64(),
+            Some(DESCRIPTION_MAX_UTF16 as u64)
+        );
+        assert_eq!(
+            corpus["reasoningTokenMax"].as_u64(),
+            Some(REASONING_TOKEN_MAX as u64)
+        );
+
+        let cases = corpus["cases"].as_array().expect("cases is an array");
+        assert!(!cases.is_empty(), "corpus carries cases to check");
+
+        for case in cases {
+            let name = case["name"].as_str().expect("case has a name");
+            let verdict = case["verdict"].as_str().expect("case has a verdict");
+            let body = materialize_object(&case["body"]);
+
+            match (verdict, admit(body)) {
+                ("accept", Ok(edit)) => {
+                    let expected = materialize_canonical(&case["canonical"]);
+                    assert_eq!(
+                        project(&edit),
+                        expected,
+                        "case {name:?}: op-form disagrees with the TS-signed canonical"
+                    );
+                }
+                ("accept", Err(())) => panic!("case {name:?}: expected ACCEPT, Rust rejected"),
+                ("reject", Err(())) => {
+                    assert!(
+                        case.get("canonical").is_none(),
+                        "case {name:?}: a reject case must carry no canonical"
+                    );
+                }
+                ("reject", Ok(_)) => panic!("case {name:?}: expected REJECT, Rust admitted"),
+                (other, _) => panic!("case {name:?}: unknown verdict {other:?}"),
+            }
+        }
     }
 }

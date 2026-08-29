@@ -160,6 +160,11 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // Shared binary64-exact integer primitive. #task:2227's runtime-stop codec is
     // the first migration consumer; domain positivity remains outside this module.
     ("backend-core", "wire_number"),
+    // #task:2236 — the shared UTF-16 code-unit length primitive the validator anchor
+    // introduces. Pure value vocabulary (astral scalars count as 2 units, matching JS
+    // `String.length`); the garde adapter that delegates to it, and the PATCH presence
+    // algebra, are the server-owned `wire_admission`/`wire_patch` entries below.
+    ("backend-core", "wire_text"),
     // #task:2193 CP2 — the human credentialed-session vertical (signup/login/
     // logout + self profile). Core bounded contexts and their ports; the SQLite
     // adapters and the server route surface are the sibling entries below. Mounted at
@@ -179,6 +184,13 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // under one ambient storage kind. An adapter like `clock` / `password_hasher`
     // below, so it belongs in this seam ledger but NOT `ACTIVATION_NAMESPACES`.
     ("backend-server", "avatar_blob"),
+    // #task:2236 — the shared JSON write-admission extractor (`ValidatedJson<T>`) plus
+    // the garde adapters delegating to the `wire_text`/`wire_number` primitives, and the
+    // crate-private PATCH presence algebra (`wire_patch`: missing/null/value tri-state,
+    // non-nullable, forbidden). Wire FRAMEWORK/transport vocabulary placed by its bounded
+    // context; admission seams like the adapters above, NOT activation namespaces.
+    ("backend-server", "wire_admission"),
+    ("backend-server", "wire_patch"),
     // #task:2231 — the production typed adapter for the accepted internal
     // profile-MCP port, sharing the owning-host registry and exposing no raw
     // dispatcher. Wired into the internal MCP routes by the #task:2234 integration (CP7b).

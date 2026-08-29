@@ -53,6 +53,7 @@ pub mod user_presence_cold_read;
 pub mod user_presence_last_seen;
 pub mod viewer_workspace_sort;
 pub mod wire_number;
+pub mod wire_text;
 pub mod workspace_cold_read;
 pub mod workspace_detail_read;
 pub mod workspace_face;

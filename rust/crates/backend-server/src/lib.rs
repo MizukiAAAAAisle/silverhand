@@ -29,6 +29,8 @@ pub mod runtime_credential;
 pub mod scope_events;
 pub mod scope_runtime_stop;
 pub mod users;
+pub(crate) mod wire_admission;
+pub(crate) mod wire_patch;
 pub mod workspace_detail;
 pub mod workspace_metadata_write;
 pub mod workspace_name_availability;
