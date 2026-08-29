@@ -1,4 +1,6 @@
-//! UNMOUNTED component router for the remaining host-management route family.
+//! Component router for the remaining host-management route family, mounted at the
+//! app composition root (backend-app) behind the human bearer perimeter by the
+//! #task:2234 integration (CP1).
 //!
 //! Every dependency is an accepted process owner: one SQLite-backed host store,
 //! one live owning-host data plane, one status seed/admission owner, one

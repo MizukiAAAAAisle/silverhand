@@ -6,8 +6,8 @@
 //!
 //!  1. PRINCIPAL — the human principal is proof the authenticating perimeter ran;
 //!     its ABSENCE is a composition fault, not a product request, so it takes a
-//!     fail-closed `500` reading nothing. This router stays UNMOUNTED; mounting the
-//!     real bearer perimeter is the composition root's job.
+//!     fail-closed `500` reading nothing. Mounting the real bearer perimeter is the
+//!     composition root's job — done by the backend-app #2234 CP3 mount.
 //!  2. ID — a malformed id names no agent. Unlike the read/patch faces (which
 //!     answer `404 {"error":"agent not found"}`), DELETE is IDEMPOTENT: an unknown
 //!     id, an ACL-invisible row, and a row that vanishes mid-flight all collapse to
@@ -156,7 +156,7 @@ impl<R, T, L, D, Res, A, C> Clone for DeleteState<R, T, L, D, Res, A, C> {
     }
 }
 
-/// Compose the UNMOUNTED delete face over its narrow ports:
+/// Compose the delete face over its narrow ports:
 ///  - `reads` — the gate read model (visibility + authority + branch dispatch, ONE
 ///    snapshot).
 ///  - `teardown` — the synchronous row-only teardown unit of work (failed branch).

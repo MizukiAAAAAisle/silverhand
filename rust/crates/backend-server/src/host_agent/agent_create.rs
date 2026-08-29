@@ -7,9 +7,9 @@
 //!  1. PRINCIPAL — the human principal is proof the authenticating perimeter ran; its
 //!     ABSENCE is a composition fault, not a product request, so it takes a fail-closed
 //!     `500` reading nothing. Create has NO visibility/authority ladder: any
-//!     authenticated caller may create, and the principal IS the creator. This router
-//!     stays UNMOUNTED; mounting the real bearer perimeter is the composition root's
-//!     job. The auth gate staying pre-body matches the ratified admission ordering.
+//!     authenticated caller may create, and the principal IS the creator. Mounting the
+//!     real bearer perimeter is the composition root's job — done by the backend-app
+//!     #2234 CP6 mount. The auth gate staying pre-body matches the ratified admission ordering.
 //!  2. WIRE ADMISSION (body) — parse against `CreateAgentInputSchema`: the handle
 //!     grammar, the runtime enum, the reasoning-effort token shape AND its
 //!     runtime/model allowlist, the fast-mode runtime allowlist, and the session-scope
@@ -216,7 +216,7 @@ impl<C, H, M, R, V, G, E, RD, S, RS, OD, DP, AD, CL> Clone
     }
 }
 
-/// Compose the UNMOUNTED create face over its ports: the seven core authorities the
+/// Compose the create face over its ports: the seven core authorities the
 /// [`create_agent`] unit of work drives, the detail read model the post-commit
 /// reprojection rides, the four post-commit effect sinks, and the aftermath boundary the
 /// two remote legs are handed to. Every port is injected; mounting the real adapters

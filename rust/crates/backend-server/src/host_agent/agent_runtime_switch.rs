@@ -41,7 +41,7 @@
 //! Like the sibling faces, the human principal is proof the authenticating perimeter
 //! ran; its ABSENCE is a composition fault (fail-closed `500`, reads nothing), not a
 //! product request. Mounting the real bearer perimeter and the concrete ports is the
-//! composition root's job — this route stays UNMOUNTED.
+//! composition root's job — done by the backend-app #2234 CP4 mount.
 
 use axum::{
     Json, Router,

@@ -52,8 +52,8 @@ const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
 
 /// Mounts the probe generic over the handle-namespace port, so tests drive it with a
 /// driver-free fake and the composition root wires the SQLite `SqliteHandleNamespace`
-/// adapter. Route registration into the served application is a separate integration
-/// seam.
+/// adapter. The composition root (backend-app, #2234 CP2) registers it into the
+/// served application behind the human bearer perimeter.
 pub fn router<N>(namespace: N) -> Router
 where
     N: HandleNamespaceRead,

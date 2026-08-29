@@ -42,8 +42,9 @@ const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
 
 /// Mount the self-profile read generic over the read port, so tests drive it with
 /// a driver-free fake and the composition root wires the SQLite adapter AND the
-/// runtime-credential layer that self-pins `{aid}`. Route registration and that
-/// layer are a separate integration seam — this builder yields the bare route.
+/// runtime-credential layer that self-pins `{aid}`. This builder yields the bare route;
+/// the composition root (backend-app, #2234 CP7a) registers it and composes that layer
+/// in front.
 pub fn self_profile_router<R>(reader: R) -> Router
 where
     R: AgentProfileReadModel + Clone + Send + Sync + 'static,

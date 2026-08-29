@@ -833,9 +833,7 @@ mod tests {
             ClearSessionOutcome, ClearSessionProviderRefusal, RuntimePlacementRefusal,
             RuntimeSeatTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal,
         },
-        runtime_credential::{
-            RuntimeCustody, RuntimeGeneration, RuntimePrincipal,
-        },
+        runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
         runtime_transition::{
             BeginTransitionRecord, CompleteTransitionRecord, RuntimeTransitionAfterImage,
             RuntimeTransitionInboxReclaimRecord, RuntimeTransitionInboxReclaimRow,

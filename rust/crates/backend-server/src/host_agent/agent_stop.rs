@@ -33,8 +33,8 @@
 //!
 //! Like the read faces, the human principal is proof the authenticating perimeter
 //! ran; its ABSENCE is a composition fault → fail-closed `500` reading nothing.
-//! Mounting the real perimeter is the composition root's job — this route stays
-//! UNMOUNTED.
+//! Mounting the real perimeter is the composition root's job — done by the
+//! backend-app #2234 CP5 mount.
 
 use axum::{
     Json, Router,

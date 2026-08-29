@@ -143,7 +143,12 @@ mod tests {
         seed.push(seed_home_workspace("wsah_a1", "a1"));
         // A non-onboarding fixed channel that must NOT be picked.
         seed.push(seed_conversation("dm-a1", "wsah_a1", "dm-a1", 5));
-        seed.push(seed_conversation("onb-a1", "wsah_a1", ONBOARDING_DM_TITLE, 3));
+        seed.push(seed_conversation(
+            "onb-a1",
+            "wsah_a1",
+            ONBOARDING_DM_TITLE,
+            3,
+        ));
         let store = open(&dir, "home-dm.db", &seed).await;
 
         let dm = store
@@ -174,7 +179,12 @@ mod tests {
         let mut seed = base();
         seed.push(seed_agent("a1"));
         seed.push(seed_home_workspace("wsah_a1", "a1"));
-        seed.push(seed_conversation("onb-a1", "wsah_a1", ONBOARDING_DM_TITLE, 3));
+        seed.push(seed_conversation(
+            "onb-a1",
+            "wsah_a1",
+            ONBOARDING_DM_TITLE,
+            3,
+        ));
         // Insert the later message first: order must come from seq, not row order.
         seed.push(seed_message("msg-2", "onb-a1", 2, 20));
         seed.push(seed_message("msg-1", "onb-a1", 1, 10));
@@ -193,7 +203,12 @@ mod tests {
         let mut seed = base();
         seed.push(seed_agent("a1"));
         seed.push(seed_home_workspace("wsah_a1", "a1"));
-        seed.push(seed_conversation("onb-a1", "wsah_a1", ONBOARDING_DM_TITLE, 3));
+        seed.push(seed_conversation(
+            "onb-a1",
+            "wsah_a1",
+            ONBOARDING_DM_TITLE,
+            3,
+        ));
         let store = open(&dir, "empty-msg.db", &seed).await;
 
         let msg = store

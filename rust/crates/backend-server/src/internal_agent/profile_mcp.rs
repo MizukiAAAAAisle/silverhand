@@ -19,9 +19,10 @@
 //! wire projection of a probe outcome, and the mapping of a data-plane fault code
 //! to an HTTP status. It does NOT own the transport: the production
 //! [`AgentProfileMcpDataPlane`] adapter is #2231's, reusing #2224's correlated-RPC
-//! data-plane root, wired at convergence. Deterministic fakes prove the handler orchestration; they do NOT
-//! make it mounted or effect-complete, and this lane copies none of #2224's
-//! dispatch machinery.
+//! data-plane root, wired at the backend-app #2234 CP7b mount. Deterministic fakes
+//! prove the handler orchestration but not mounting or effect-completeness; the
+//! backend-app composition gate proves those over the real daemon wire. This lane
+//! copies none of #2224's dispatch machinery.
 //!
 //! ## A probe failure is a 200, not an HTTP error
 //!
@@ -61,7 +62,8 @@ const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
 /// Mount the three MCP routes generic over the data-plane port, so tests drive them
 /// with a driver-free fake and the composition root wires the #2231 adapter AND the
 /// runtime-credential layer that self-pins `{aid}`. This builder yields the bare
-/// routes; route registration and that layer are a separate integration seam.
+/// routes; the composition root (backend-app, #2234 CP7b) registers them and composes
+/// that layer in front.
 pub fn profile_mcp_router<D>(data_plane: D) -> Router
 where
     D: AgentProfileMcpDataPlane + Clone + Send + Sync + 'static,

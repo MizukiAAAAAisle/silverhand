@@ -68,9 +68,9 @@ pub struct PeerProfilePorts<P, H, C, R, M> {
     pub membership: M,
 }
 
-/// Mount the peer-profile read generic over its ports. Route registration and the
-/// runtime-credential layer that self-pins `{aid}` are a separate integration seam —
-/// this builder yields the bare route.
+/// Mount the peer-profile read generic over its ports. This builder yields the bare
+/// route; the composition root (backend-app, #2234 CP7a) registers it and composes the
+/// runtime-credential layer that self-pins `{aid}` in front.
 pub fn peer_profile_router<P, H, C, R, M>(ports: PeerProfilePorts<P, H, C, R, M>) -> Router
 where
     P: CallerConversationPlacement + Clone + Send + Sync + 'static,

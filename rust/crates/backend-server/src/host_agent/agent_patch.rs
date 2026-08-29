@@ -38,7 +38,7 @@
 //! Like the read faces, the human principal is proof the authenticating perimeter
 //! ran; its ABSENCE is a composition fault, not a product request, so it takes a
 //! fail-closed `500` reading nothing. Mounting the real bearer perimeter is the
-//! composition root's job, not this factory's — this route stays UNMOUNTED.
+//! composition root's job, not this factory's — done by the backend-app #2234 CP2 mount.
 //!
 //! ## One wire divergence, reachability-priced (flagged for review)
 //!

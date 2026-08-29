@@ -32,8 +32,8 @@
 //!
 //! As in the sibling routes the human principal is proof the authenticating perimeter
 //! ran; its ABSENCE is a composition fault (a fail-closed `500` that reads and writes
-//! nothing), and mounting the real bearer perimeter is the composition root's job — this
-//! route stays UNMOUNTED.
+//! nothing), and mounting the real bearer perimeter is the composition root's job —
+//! done by the backend-app #2234 CP2 mount.
 //!
 //! ## Multipart admission is reproduced, not shared (scope note)
 //!

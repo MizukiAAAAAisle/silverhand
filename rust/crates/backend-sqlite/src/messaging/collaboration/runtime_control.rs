@@ -252,8 +252,8 @@ mod tests {
         messaging::collaboration::{
             ClearSessionOutcome, ClearSessionProviderRefusal, HardStopRuntimeOutcome,
             HardStopRuntimeProviderRefusal, RuntimeControlAdmissionRefusal,
-            RuntimeControlAdmissionScope, RuntimeControlPort, RuntimeSeatTarget, RuntimeStartTarget,
-            StartRuntimeOutcome, StartRuntimeProviderRefusal, start_runtime,
+            RuntimeControlAdmissionScope, RuntimeControlPort, RuntimeSeatTarget,
+            RuntimeStartTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal, start_runtime,
         },
     };
     use sqlx::{

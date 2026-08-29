@@ -89,15 +89,15 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_materialize"),
     // #task:2225 — the single-UoW create/provision-and-activate authority: the core
     // materialization writer plus the exhaustive `provision_and_activate` use case that
-    // seals both the agent and conversation arms. Core capability, UNMOUNTED until the
-    // create route is activated by a later integration.
+    // seals both the agent and conversation arms. Core capability, mounted at the app
+    // composition root by the #task:2234 integration (CP6 create route).
     ("backend-core", "agent_materialization"),
     // #task:2225 — the create-agent unit of work (`POST /api/agents`): the saga that
     // owns each decision over the `agent_materialization` primitives, the host
     // materialize command, the placement rule and the shared handle namespace. Core
     // orchestration only — the wire projection, post-commit effects and status mapping
-    // belong to the route face. UNMOUNTED until the create route is activated (#task:2234
-    // CP6).
+    // belong to the route face. Mounted at the app composition root by the #task:2234
+    // integration (CP6 create route).
     ("backend-core", "agent_creation"),
     ("backend-core", "agent_presence_read"),
     // #task:2225 — the public agent-lifecycle and avatar route family (Rust Wave 3).
@@ -107,7 +107,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // `agent_avatar`), and the agent avatar upload/clear lifecycle (routes 3/4,
     // `agent_avatar_write`, which reuses the single `agent_profile_write` row writer).
     // Their SQLite adapters and server route surfaces are the sibling entries below;
-    // all stay UNMOUNTED until a later integration wires them.
+    // all mounted at the app composition root by the #task:2234 integration (CP2).
     ("backend-core", "agent_avatar"),
     ("backend-core", "agent_avatar_write"),
     ("backend-core", "agent_profile_write"),
@@ -117,11 +117,11 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // #task:2227's `scope_runtime_stop` capability per seat and mints no new stop
     // adapter or refusal vocabulary. Its SQLite adapter rides the existing
     // `host_agent` store and its server route is the `host_agent::agent_stop`
-    // submodule; both stay UNMOUNTED until a later integration.
+    // submodule; mounted at the app composition root by the #task:2234 integration (CP5).
     ("backend-core", "agent_bulk_stop"),
     // #task:2226 — internal profile/MCP consumer vocabulary and pure
-    // orchestration. The production data-plane adapter is #task:2231 below;
-    // these accepted modules remain unmounted capability seams.
+    // orchestration. The production data-plane adapter is #task:2231 below; mounted at
+    // the app composition root by the #task:2234 integration (CP7a peer-profile, CP7b MCP).
     ("backend-core", "agent_peer_profile"),
     ("backend-core", "agent_profile_mcp"),
     ("backend-core", "agent_profile_read"),
@@ -138,13 +138,13 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // #task:2225 — the durable runtime-transition lock (begin/complete/abort) behind
     // the public runtime-switch route. A distinct write authority from the profile
     // row writer, keyed on the lock columns; its SQLite adapter rides the existing
-    // `host_agent` store. UNMOUNTED until a later integration.
+    // `host_agent` store. Mounted at the app composition root by the #task:2234 integration (CP4).
     ("backend-core", "runtime_transition"),
     // #task:2225 — the agent runtime-switch saga (`PUT /api/agents/{id}/runtime`):
     // clears the old-runtime sessions and moves the `runtime` column without changing
     // identity or racing a delete, orchestrating that window over the durable
-    // `runtime_transition` lock (reused verbatim). Core orchestration only; UNMOUNTED
-    // until the runtime-switch route is activated (#task:2234 CP4).
+    // `runtime_transition` lock (reused verbatim). Core orchestration only; mounted at
+    // the app composition root by the #task:2234 integration (CP4 runtime-switch route).
     ("backend-core", "agent_runtime_switch"),
     ("backend-core", "teardown"),
     ("backend-core", "user_presence_cold_read"),
@@ -181,12 +181,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "avatar_blob"),
     // #task:2231 — the production typed adapter for the accepted internal
     // profile-MCP port, sharing the owning-host registry and exposing no raw
-    // dispatcher. Unmounted until convergence wires the internal routes.
+    // dispatcher. Wired into the internal MCP routes by the #task:2234 integration (CP7b).
     ("backend-server", "agent_profile_mcp_data_plane"),
     // #task:2225 — the crate-root route surface for the handle-availability probe
     // (route 1). The tuning-write (route 2) and avatar (route 5) surfaces are
-    // `host_agent` submodules, already covered by the `host_agent` entry. UNMOUNTED
-    // until a later integration.
+    // `host_agent` submodules, already covered by the `host_agent` entry. Mounted at the
+    // app composition root by the #task:2234 integration (CP2).
     ("backend-server", "agent_name_availability"),
     // #task:2225 — the single crate-root full-`AgentDto` authority: the
     // `agentRowToDto` projector plus the shared post-commit `reproject_committed_agent`
@@ -201,8 +201,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
-    // #task:2226 — unmounted internal-agent route family. Its MCP leaf consumes
-    // only the typed data-plane port; #task:2231 supplies that production face.
+    // #task:2226 — internal-agent route family, mounted at the app composition root by
+    // the #task:2234 integration (CP7a profile/avatar/peer-profile, CP7b MCP). Its MCP
+    // leaf consumes only the typed data-plane port; #task:2231 supplies that production face.
     ("backend-server", "internal_agent"),
     ("backend-server", "host_resources"),
     ("backend-server", "human_auth"),
@@ -212,9 +213,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "users"),
     ("backend-server", "ops"),
     ("backend-server", "password_hasher"),
-    // #task:2229 — unmounted runtime start/stop/clear production capability. It
-    // owns exact-custody commands, the ephemeral clear waiter, and committed
-    // clear settlement; the later route vertical is the activation owner.
+    // #task:2229 — the runtime start/stop/clear production capability. It owns
+    // exact-custody commands, the ephemeral clear waiter, and committed clear
+    // settlement; its route verticals are mounted by #task:2234 (CP4 clear/switch, CP5 stop).
     ("backend-server", "runtime_control"),
     ("backend-server", "scope_runtime_stop"),
     ("backend-server", "workspace_detail"),
