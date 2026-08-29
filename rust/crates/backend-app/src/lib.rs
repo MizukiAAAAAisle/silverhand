@@ -4009,6 +4009,11 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&subscribed).unwrap()["type"],
             "subscribed"
         );
+        // Deterministic app-scope high-water BEFORE the rename. The effect runs
+        // post-commit inside the handler, so once the PATCH returns the count is
+        // settled; the delta below is the exact number of app-scope events the rename
+        // published — the falsifier for "only h-mgmt's agent".
+        let app_high_water_before = fresh_scope_high_water(address, "app").await;
 
         // A valid rename → the real `UpdateComputer` domain takes the `Write`/`Renamed`
         // path (finalized host, so no PendingAttach), commits, and the committed
@@ -4053,6 +4058,20 @@ mod tests {
         assert_eq!(
             event["payload"]["agent_id"], "agent-on-mgmt",
             "the roster read is host-scoped: only h-mgmt's agent, never h-peer's: {event}"
+        );
+
+        // Deterministic peer-silence proof: the rename published EXACTLY ONE app-scope
+        // event. Frame-1 alone can't prove this — a broken roster returning
+        // [agent-on-mgmt, agent-on-peer] would still deliver agent-on-mgmt first and
+        // leave the second frame queued. The settled high-water delta is 1 iff the
+        // host-scoped roster read yielded only h-mgmt's agent; a second publish (peer
+        // leaked in) makes it 2 and the gate goes red.
+        let app_high_water_after = fresh_scope_high_water(address, "app").await;
+        assert_eq!(
+            app_high_water_after - app_high_water_before,
+            1,
+            "the rename must publish exactly one app-scope event (only h-mgmt's agent), \
+             not one per owner-agent: before={app_high_water_before} after={app_high_water_after}"
         );
 
         socket.close(None).await.unwrap();
