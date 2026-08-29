@@ -54,6 +54,7 @@ use silverhand_backend_server::{
     internal_agent::{
         peer_profile::{PeerProfilePorts, peer_profile_router},
         profile::self_profile_router,
+        profile_mcp::profile_mcp_router,
         profile_write::{
             InternalAvatarWriteState, InternalProfileWriteState, internal_avatar_write_router,
             internal_profile_write_router,
@@ -955,6 +956,12 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     let agent_create_materialization = host_agent_store.clone();
     let agent_create_provisioning = host_agent_store.clone();
     let agent_create_graph = host_agent_store.clone();
+    // #2234 CP7b: the placement-read authority the internal profile-MCP data plane consults
+    // for `{agent, host, deleting}`, captured before the host-delete unit-of-work below moves
+    // `host_agent_store`. It is the SAME ONE `SqliteHostAgentStore` the delete/switch/stop/create
+    // paths hold — a clone shares its pool — so the MCP placement lookup is the same durable
+    // authority, never a second store.
+    let agent_mcp_placement = host_agent_store.clone();
     // The create saga's remaining two read ports, captured before their originals are moved
     // downstream: the computer read model is the SAME ONE `SqliteHostRuntimeStore`
     // (`host_store`) host-detail/revoke read, and the handle namespace is the SAME ONE
@@ -1105,7 +1112,17 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             capability: peer_profile_caller,
             reader: agent_profile_read,
             membership: access_store.clone(),
-        }));
+        }))
+        // #2234 CP7b: the three internal profile-MCP faces — `/profile/mcp` GET (read config)
+        // + POST (write config), and `/profile/mcp/probe` POST. All three ride the ONE
+        // production `ProductionAgentProfileMcpDataPlane`, whose State IS the port itself. It
+        // consults the shared `SqliteHostAgentStore` placement authority (`agent_mcp_placement`)
+        // for the `{agent, host, deleting}` fact, then the composition's ONE live daemon
+        // registry (via `daemon_runtime`'s owning-host data plane) for the exact-custody wire —
+        // never a second placement store or a second registry.
+        .merge(profile_mcp_router(
+            daemon_runtime.agent_profile_mcp_data_plane(agent_mcp_placement),
+        ));
     let human_products = require_human_session(
         host.merge(human_writes)
             // Wave 3A checkpoint A6 (#2203): `POST /api/agents/{id}/direct-messages`, the
@@ -3566,11 +3583,12 @@ mod tests {
 
         // The runtime-perimeter internal doors. Anonymous → the runtime credential
         // perimeter's `401` on the matched route, never `404`. The original three (#2226-era
-        // send/tasks/stale) plus the #2234 CP7a self-scope profile family: `/profile` GET+POST
-        // (disjoint union across the read and write factories), `/avatar` POST+DELETE (one
-        // factory), and `/peer-profile` GET. All eight ride the ONE `require_runtime_credential`
+        // send/tasks/stale), the #2234 CP7a self-scope profile family (`/profile` GET+POST,
+        // `/avatar` POST+DELETE, `/peer-profile` GET), and the #2234 CP7b profile-MCP family:
+        // `/profile/mcp` GET+POST (disjoint union across read/write on one factory) and
+        // `/profile/mcp/probe` POST. All eleven ride the ONE `require_runtime_credential`
         // layer, so anon on any listed method is the same bodiless 401.
-        const RUNTIME_PERIMETER_DOORS: [(&str, &str); 8] = [
+        const RUNTIME_PERIMETER_DOORS: [(&str, &str); 11] = [
             ("POST", "/internal/agents/agent-1/send-message"),
             ("GET", "/internal/agents/agent-1/tasks"),
             ("POST", "/internal/agents/agent-1/stale-message-resolution"),
@@ -3579,8 +3597,11 @@ mod tests {
             ("POST", "/internal/agents/agent-1/avatar"),
             ("DELETE", "/internal/agents/agent-1/avatar"),
             ("GET", "/internal/agents/agent-1/peer-profile"),
+            ("GET", "/internal/agents/agent-1/profile/mcp"),
+            ("POST", "/internal/agents/agent-1/profile/mcp"),
+            ("POST", "/internal/agents/agent-1/profile/mcp/probe"),
         ];
-        assert_eq!(RUNTIME_PERIMETER_DOORS.len(), 8);
+        assert_eq!(RUNTIME_PERIMETER_DOORS.len(), 11);
         for (method, path) in RUNTIME_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -4092,15 +4113,24 @@ mod tests {
             ("POST", "/api/agents"),
             // #2234 CP7a: the five internal self-scope profile faces, now MOUNTED behind the
             // runtime-credential perimeter (the send/tasks/stale siblings' layer) → anon 401.
-            // Moved here from CLEAN_RESIDUAL below; the three `/profile/mcp` faces stay residual
-            // for CP7b. `/profile` GET+POST and `/avatar` POST+DELETE are disjoint-method
-            // unions; `/peer-profile` is its own node. Deleting any one's merge flips it to 404
+            // `/profile` GET+POST and `/avatar` POST+DELETE are disjoint-method unions;
+            // `/peer-profile` is its own node. Deleting any one's merge flips it to 404
             // and reddens this gate (delete-landed RED).
             ("GET", "/internal/agents/agent-1/profile"),
             ("POST", "/internal/agents/agent-1/profile"),
             ("POST", "/internal/agents/agent-1/avatar"),
             ("DELETE", "/internal/agents/agent-1/avatar"),
             ("GET", "/internal/agents/agent-1/peer-profile"),
+            // #2234 CP7b: the three internal profile-MCP faces, now MOUNTED behind the same
+            // runtime-credential perimeter → anon 401. `/profile/mcp` GET+POST is a
+            // disjoint-method union on one factory; `/profile/mcp/probe` POST is its own node.
+            // Their authenticated distinct-command reach through the ONE
+            // `ProductionAgentProfileMcpDataPlane` (read/write/probe each crossing the real
+            // daemon wire as its own kind, and no-daemon → HostAttachPending with zero wire) is
+            // borne by `the_composition_internal_profile_mcp_family_reaches_the_daemon_wire`.
+            ("GET", "/internal/agents/agent-1/profile/mcp"),
+            ("POST", "/internal/agents/agent-1/profile/mcp"),
+            ("POST", "/internal/agents/agent-1/profile/mcp/probe"),
         ];
         // The 4 ANON-LANDED routes: mounted ahead of every perimeter, so an anonymous
         // probe reaches the handler. #2218's server/info and health answer 200; readyz
@@ -4119,7 +4149,7 @@ mod tests {
                 StatusCode::UNAUTHORIZED,
             ),
         ];
-        // 15 RESIDUAL routes whose path matches no mounted route → anon 404.
+        // 12 RESIDUAL routes whose path matches no mounted route → anon 404.
         const CLEAN_RESIDUAL: &[(&str, &str)] = &[
             // routes.ts remaining (1)
             ("POST", "/auth/embedded-bootstrap"),
@@ -4141,10 +4171,7 @@ mod tests {
             ("GET", "/api/agents/agent-1/chats/conv-1/attachments/att-1"),
             ("GET", "/api/agents/agent-1/schedules"),
             ("POST", "/api/agents/agent-1/schedules/sched-1/cancel"),
-            // internal profile-MCP (3) — stay residual until #2234 CP7b mounts them
-            ("GET", "/internal/agents/agent-1/profile/mcp"),
-            ("POST", "/internal/agents/agent-1/profile/mcp"),
-            ("POST", "/internal/agents/agent-1/profile/mcp/probe"),
+            // internal profile-MCP (0 of 3) — MOUNTED by #2234 CP7b, moved to LANDED above
             // internal profile (5) — MOUNTED by #2234 CP7a, moved to LANDED above
             // diagnostic (1)
             ("POST", "/internal/agents/agent-1/cli-trace"),
@@ -4153,11 +4180,11 @@ mod tests {
         // #2234 CP6 (now a second method on the GET-list `/api/agents` node, landed above).
         const METHOD_SHADOW_RESIDUAL: &[(&str, &str)] = &[];
 
-        // ── Mechanical checksum: (35 + 4) + (15 + 0) == 54, all unique, landed ∩
+        // ── Mechanical checksum: (38 + 4) + (12 + 0) == 54, all unique, landed ∩
         // residual = ∅ ──
-        assert_eq!(LANDED.len(), 35);
+        assert_eq!(LANDED.len(), 38);
         assert_eq!(ANON_LANDED.len(), 4);
-        assert_eq!(CLEAN_RESIDUAL.len(), 15);
+        assert_eq!(CLEAN_RESIDUAL.len(), 12);
         assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 0);
         let landed: std::collections::HashSet<(&str, &str)> = LANDED
             .iter()
@@ -4169,8 +4196,8 @@ mod tests {
             .chain(METHOD_SHADOW_RESIDUAL)
             .copied()
             .collect();
-        assert_eq!(landed.len(), 39, "landed rows are unique");
-        assert_eq!(residual.len(), 15, "residual rows are unique");
+        assert_eq!(landed.len(), 42, "landed rows are unique");
+        assert_eq!(residual.len(), 12, "residual rows are unique");
         assert!(
             landed.is_disjoint(&residual),
             "landed and residual are disjoint"
@@ -4188,7 +4215,7 @@ mod tests {
         let bearer = format!("Bearer {TOKEN}");
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // ── 35 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
+        // ── 38 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
         for (method, path) in LANDED {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(
@@ -4217,7 +4244,7 @@ mod tests {
             "anon resolve reaches its own handler, not the perimeter"
         );
 
-        // ── 20 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
+        // ── 12 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
         for (method, path) in CLEAN_RESIDUAL {
             let (status, _) = request(&router, method, path, None).await;
             assert_eq!(
@@ -5236,6 +5263,441 @@ mod tests {
             "the real reader's miss is the collapsed 404 body: {peer}"
         );
 
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+    }
+
+    /// Drive a connected daemon socket like a REAL daemon for the internal profile-MCP
+    /// family until told to stop, then hand the socket back for a clean close: answer the
+    /// `runtime_status` hydration and the promotion-edge `host_status` probe, and answer each
+    /// of the three MCP commands with the schema-exact result its transport codec admits
+    /// (`decode_read` wants `{ ok, raw }`; `decode_write` wants `{ ok, bytes_written }` as a
+    /// JS-safe count; `decode_probe` wants `{ ok, phase, server_info?, tools? }`). Every MCP
+    /// command is RECORDED in `seen` — with its `kind` and `params` — so the gate can prove
+    /// each face crosses the wire as its OWN distinct command carrying the pinned self's id
+    /// and payload, and that a face whose owning host is detached reaches this transport zero
+    /// times. Recording happens BEFORE the response is sent, so a returned HTTP call always
+    /// finds its command already in `seen`. `promoted` is notified once the promotion-edge
+    /// `host_status` probe is answered — which the attach flow fires only AFTER `hydrate()`
+    /// has returned, so a credential minted after it is past the hydration finalize pass that
+    /// would otherwise rotate any custody persisted-for-host the daemon did not list as active.
+    async fn service_mcp_commands<S>(
+        mut socket: tokio_tungstenite::WebSocketStream<S>,
+        stop: std::sync::Arc<tokio::sync::Notify>,
+        promoted: std::sync::Arc<tokio::sync::Notify>,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    ) -> tokio_tungstenite::WebSocketStream<S>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        loop {
+            tokio::select! {
+                () = stop.notified() => break,
+                command = next_daemon_json(&mut socket) => {
+                    let result = match command["kind"].as_str() {
+                        Some("runtime_status") => serde_json::json!({ "runtimes": [] }),
+                        Some("host_status") => {
+                            promoted.notify_one();
+                            serde_json::json!({
+                                "os": "linux",
+                                "daemon_pid": 1,
+                                "daemon_version": "0.0.0-test",
+                                "started_at": 0,
+                                "uptime_ms": 0,
+                                "active_agent_ids": [],
+                            })
+                        }
+                        Some("agent_profile_mcp_read") => {
+                            seen.lock().unwrap().push(command.clone());
+                            serde_json::json!({ "ok": true, "raw": "{\"mcpServers\":{}}" })
+                        }
+                        Some("agent_profile_mcp_write") => {
+                            seen.lock().unwrap().push(command.clone());
+                            serde_json::json!({ "ok": true, "bytes_written": 128 })
+                        }
+                        Some("mcp_probe") => {
+                            seen.lock().unwrap().push(command.clone());
+                            serde_json::json!({
+                                "ok": true,
+                                "phase": "tools",
+                                "server_info": { "name": "srv" },
+                                "tools": [ { "name": "t1", "description": "does a thing" } ],
+                            })
+                        }
+                        other => panic!("unexpected daemon command kind: {other:?}"),
+                    };
+                    socket
+                        .send(ClientMessage::Text(
+                            serde_json::json!({
+                                "direction": "daemon_to_server",
+                                "type": "command_response",
+                                "id": command["id"],
+                                "kind": command["kind"],
+                                "result": result,
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+        socket
+    }
+
+    /// #2234 CP7b — the three internal profile-MCP faces reach the REAL daemon wire, each as
+    /// its OWN distinct correlated command, over the ONE `ProductionAgentProfileMcpDataPlane`
+    /// the composition builds from `daemon_runtime.agent_profile_mcp_data_plane(host_agent_store)`.
+    ///
+    /// `RUNTIME_PERIMETER_DOORS` already proves the three `/profile/mcp[/probe]` paths are
+    /// MOUNTED and refuse an anonymous caller. What no anonymous probe can show is that the
+    /// handlers BEHIND that perimeter dispatch a correlated RPC to the agent's OWNING host —
+    /// the right command kind, carrying the pinned self's id and the exact payload — and
+    /// project the daemon's typed answer. So this attaches a REAL daemon over the mounted
+    /// `HOST_WEBSOCKET_PATH`, mints a bearer through the SAME `Arc`-backed authority the
+    /// perimeter holds (the `#[cfg(test)]` `test_runtime_credentials` handle), and drives all
+    /// three faces end to end, over two layers of composition evidence:
+    ///
+    ///   1. **Positive wire — attached host.** `agent-1` lives on the attached host
+    ///      `h-online`. `GET` crosses as `agent_profile_mcp_read`, `POST` as
+    ///      `agent_profile_mcp_write` (carrying the verbatim raw), and probe as `mcp_probe`
+    ///      (carrying `source.agent_id` + `server_name` + `include_tools`). Each command is
+    ///      recorded with its kind and params, the daemon answers the codec-exact result, and
+    ///      the HTTP response projects it (`{raw}`, `{ok,bytes_written}`, `{ok,phase,…}`).
+    ///      Exactly THREE distinct commands cross — proving the faces do not collapse onto one
+    ///      leaf and pass falsely green, and each carries agent-1's own coordinates.
+    ///   2. **Zero wire — detached host.** `agent-2` lives on `h-detached`, a host with NO
+    ///      live attachment. Its three faces each resolve the live per-host registry, miss,
+    ///      and become `HostAttachPending` → 503; the attached daemon records ZERO new
+    ///      commands. A no-op/canned stub would 200; a mis-route onto the one attached leaf
+    ///      would record an agent-2 command. Neither happens.
+    ///
+    /// The stale-generation falsifier (capture → re-resolve → dispatch reads the live
+    /// attachment twice and binds the second read as `expected`) is NOT borne here: HTTP
+    /// composition 无稳定 interleaving seam，故由 lower-boundary discriminator 承重 — the named
+    /// backend-server unit tests `profile_mcp_commands_are_typed_host_bound_and_generation_bound`
+    /// (generation/instance bind) and
+    /// `profile_mcp_persisted_refusals_bind_source_before_registry_or_deletion` (source-bind
+    /// and wrong-subject zero-registry) own it. This gate asserts the MOUNT + authenticated,
+    /// host-resolved wiring, not a second reading of those leaf semantics.
+    #[tokio::test]
+    async fn the_composition_internal_profile_mcp_family_reaches_the_daemon_wire() {
+        use std::{
+            convert::Infallible,
+            future::Future,
+            sync::{Arc, Mutex},
+        };
+
+        use silverhand_backend_core::{
+            identity::{ConversationId, DaemonInstanceId},
+            runtime_credential::RuntimeScope,
+        };
+        use silverhand_backend_server::runtime_credential::{
+            RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
+        };
+
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let pool = SqlitePoolOptions::new()
+            .connect(fixture.path.to_str().unwrap())
+            .await
+            .unwrap();
+        // `h-online` is the ATTACHED host (its credential admits the daemon below); `h-detached`
+        // is a real host row with NO credential and thus NO live attachment. `agent-1` lives on
+        // the attached host, `agent-2` on the detached one; both are `session_scope='agent'` so
+        // the `agents_create_agent_runtime_slot` trigger yields a claimable slot for
+        // `dispatch_start` to mint a self-pinned bearer against.
+        sqlx::query(
+            "INSERT INTO hosts (id, name, kind, created_at, user_id) \
+             VALUES ('h-online', 'host-online', 'remote', 1, 'user-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO host_credentials (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at) \
+             VALUES ('cred-online', 'h-online', ?, 'long_lived', NULL, NULL, NULL)",
+        )
+        .bind(HOST_TOKEN_HASH)
+        .execute(&pool)
+        .await
+        .unwrap();
+        for statement in [
+            "INSERT INTO hosts (id, name, kind, created_at, user_id) \
+             VALUES ('h-detached', 'host-detached', 'remote', 1, 'user-1')",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, \
+             created_by_user_id, materialization_status, session_scope) \
+             VALUES ('agent-1', 'agent-one', 'qoder', 'h-online', 1, 1, 'user-1', 'active', 'agent')",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, \
+             created_by_user_id, materialization_status, session_scope) \
+             VALUES ('agent-2', 'agent-two', 'qoder', 'h-detached', 1, 1, 'user-1', 'active', 'agent')",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        pool.close().await;
+
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+
+        // Mint a REAL self-pinned bearer for each subject through the SAME `Arc`-backed
+        // authority the mounted perimeter holds, BEFORE `serve` consumes `app`. The custody's
+        // daemon instance is irrelevant to routing — the data plane re-resolves the agent's
+        // OWNING host from the live registry — so the bearer only carries the self-pin `{aid}`.
+        #[derive(Clone, Default)]
+        struct CapturingStart(Arc<Mutex<Option<String>>>);
+        impl RuntimeStartTransport for CapturingStart {
+            type Error = Infallible;
+
+            fn dispatch(
+                &self,
+                handoff: &RuntimeStartHandoff,
+            ) -> impl Future<Output = Result<(), RuntimeDispatchFailure<Self::Error>>> + Send
+            {
+                *self.0.lock().unwrap() = Some(handoff.daemon_auth_token().to_owned());
+                std::future::ready(Ok(()))
+            }
+        }
+        let credentials = app.test_runtime_credentials.clone();
+        let mint = |agent: &str, instance: &str| {
+            let agent = agent.to_owned();
+            let instance = instance.to_owned();
+            let credentials = &credentials;
+            async move {
+                let transport = CapturingStart::default();
+                credentials
+                    .dispatch_start(
+                        RuntimeScope::AgentSlot {
+                            agent: AgentId::parse(&agent).unwrap(),
+                        },
+                        DaemonInstanceId::parse(&instance).unwrap(),
+                        ConversationId::parse(CONVERSATION_ID).unwrap(),
+                        &transport,
+                    )
+                    .await
+                    .unwrap();
+                format!("Bearer {}", transport.0.lock().unwrap().clone().unwrap())
+            }
+        };
+
+        let router = app.router.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+
+        // Attach a REAL daemon for `h-online` over the mounted host WS.
+        let mut ws_request = format!("ws://{address}{HOST_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        ws_request.headers_mut().insert(
+            tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+            format!("Bearer {HOST_TOKEN}").parse().unwrap(),
+        );
+        let (mut socket, _) = connect_async(ws_request).await.unwrap();
+        socket
+            .send(ClientMessage::Text(
+                serde_json::json!({
+                    "direction": "daemon_to_server",
+                    "type": "event",
+                    "kind": "ready",
+                    "protocol_version": OUTBOUND_PROTOCOL_VERSION,
+                    "daemon_version": "test",
+                    "daemon_id": "daemon-cp7b",
+                    "instance_id": "instance-cp7b",
+                    "host_descriptor": { "name": "CP7b host", "kind": "remote" },
+                    "capabilities": [],
+                    "daemon_pid": 7,
+                    "started_at": 100,
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+        let seen = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let stop = Arc::new(tokio::sync::Notify::new());
+        let promoted = Arc::new(tokio::sync::Notify::new());
+        let servicer = tokio::spawn(service_mcp_commands(
+            socket,
+            stop.clone(),
+            promoted.clone(),
+            seen.clone(),
+        ));
+
+        // Mint the self-pinned bearers only AFTER the host is promoted (the `host_status`
+        // probe answered), which the attach flow fires once `hydrate()` has returned — past
+        // the finalize pass that rotates any custody persisted-for-host the daemon's empty
+        // `runtime_status` did not list as active. `agent-2` lives on the never-attached
+        // `h-detached`, so no hydration ever touches its slot.
+        promoted.notified().await;
+        let bearer_1 = mint("agent-1", "daemon-1").await;
+        let bearer_2 = mint("agent-2", "daemon-2").await;
+
+        // ---- (1) positive wire: GET → read command, projected. A bounded poll absorbs the
+        // brief window between promotion and the attachment becoming resolvable for dispatch;
+        // a mount that never reaches the live transport reddens by timeout. A pre-resolve miss
+        // is HostAttachPending (503) and faults BEFORE dispatch, recording no command.
+        let raw = "{\n  \"mcpServers\": {}\n}";
+        let mut read_body = String::new();
+        for _ in 0..200 {
+            let (status, body) = request_with_body(
+                &router,
+                "GET",
+                "/internal/agents/agent-1/profile/mcp",
+                Some(&bearer_1),
+                Body::empty(),
+            )
+            .await;
+            if status == StatusCode::OK {
+                read_body = body;
+                break;
+            }
+            assert_eq!(
+                status,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "before the attachment resolves the read is HostAttachPending, never another status: {body}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            !read_body.is_empty(),
+            "the read never reached the attached daemon — the mount did not carry the face to the live per-host transport"
+        );
+        let read_body: serde_json::Value = serde_json::from_str(&read_body).unwrap();
+        assert_eq!(
+            read_body,
+            serde_json::json!({ "raw": "{\"mcpServers\":{}}" }),
+            "GET projects the daemon's read result verbatim: {read_body}"
+        );
+
+        // POST → write command carrying the verbatim raw, projected.
+        let (status, body) = request_with_body(
+            &router,
+            "POST",
+            "/internal/agents/agent-1/profile/mcp",
+            Some(&bearer_1),
+            Body::from(raw),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "the write reaches the daemon: {body}"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({ "ok": true, "bytes_written": 128 }),
+            "POST projects the daemon's byte count: {body}"
+        );
+
+        // Probe → probe command carrying source + payload, projected.
+        let (status, body) = request_with_body(
+            &router,
+            "POST",
+            "/internal/agents/agent-1/profile/mcp/probe",
+            Some(&bearer_1),
+            Body::from(
+                serde_json::json!({ "server_name": "srv", "include_tools": true }).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "the probe reaches the daemon: {body}"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({
+                "ok": true,
+                "phase": "tools",
+                "server_info": { "name": "srv" },
+                "tools": [ { "name": "t1", "description": "does a thing" } ],
+            }),
+            "probe projects the daemon's outcome: {body}"
+        );
+
+        // Each face crossed as its OWN distinct command with agent-1's exact coordinates.
+        let recorded = seen.lock().unwrap().clone();
+        let read_cmd = recorded
+            .iter()
+            .find(|c| c["kind"] == "agent_profile_mcp_read")
+            .expect("the read command crossed the wire");
+        assert_eq!(
+            read_cmd["params"],
+            serde_json::json!({ "agent_id": "agent-1" }),
+            "the read carries the pinned self's id: {read_cmd}"
+        );
+        let write_cmd = recorded
+            .iter()
+            .find(|c| c["kind"] == "agent_profile_mcp_write")
+            .expect("the write command crossed the wire");
+        assert_eq!(
+            write_cmd["params"],
+            serde_json::json!({ "agent_id": "agent-1", "raw": raw }),
+            "the write carries the verbatim raw for the pinned self: {write_cmd}"
+        );
+        let probe_cmd = recorded
+            .iter()
+            .find(|c| c["kind"] == "mcp_probe")
+            .expect("the probe command crossed the wire");
+        assert_eq!(
+            probe_cmd["params"],
+            serde_json::json!({
+                "source": { "kind": "profile", "agent_id": "agent-1" },
+                "server_name": "srv",
+                "include_tools": true,
+            }),
+            "the probe carries the profile source + payload for the pinned self: {probe_cmd}"
+        );
+        assert_eq!(
+            recorded.len(),
+            3,
+            "exactly three DISTINCT commands crossed — no face collapsed onto another's leaf: {recorded:?}"
+        );
+
+        // ---- (2) zero wire: agent-2's owning host is detached. Every face resolves the live
+        // per-host registry, misses, and is HostAttachPending 503 — and NO new command crosses
+        // the attached daemon (no no-op success, no mis-route onto the one live leaf).
+        for (method, path, body) in [
+            ("GET", "/internal/agents/agent-2/profile/mcp", Body::empty()),
+            (
+                "POST",
+                "/internal/agents/agent-2/profile/mcp",
+                Body::from("{\"mcpServers\":{}}"),
+            ),
+            (
+                "POST",
+                "/internal/agents/agent-2/profile/mcp/probe",
+                Body::from(serde_json::json!({ "server_name": "srv" }).to_string()),
+            ),
+        ] {
+            let (status, body) =
+                request_with_body(&router, method, path, Some(&bearer_2), body).await;
+            assert_eq!(
+                status,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{method} {path} on a detached host is HostAttachPending 503: {body}"
+            );
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap()["code"],
+                "host_attach_pending",
+                "the detached-host fault is host_attach_pending: {body}"
+            );
+        }
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            3,
+            "still exactly the three agent-1 commands — every detached-host face dispatched nothing: {:?}",
+            seen.lock().unwrap()
+        );
+
+        stop.notify_one();
+        drop(servicer.await.unwrap());
         shutdown_tx.send(()).unwrap();
         running.await.unwrap().unwrap();
     }
