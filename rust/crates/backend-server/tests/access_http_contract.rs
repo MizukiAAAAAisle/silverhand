@@ -300,15 +300,88 @@ async fn tagged_agent_body_is_accepted_like_the_bare_form() {
 }
 
 #[tokio::test]
-async fn floor_refuses_before_the_body_is_parsed_or_the_agent_is_read() {
+async fn the_floor_refuses_a_valid_body_before_the_agent_is_read() {
     let fake = FakeAccess::default().governed(WorkspaceGovernance::Denied);
 
-    // A body that could never parse: the floor must still answer first.
-    let (status, body) = send(app(&fake), request("ws-1", "user-1", "not json")).await;
+    // A structurally valid body: the native decode passes, and the floor is the
+    // next door — it answers `403` before the body is classified or the agent is
+    // read, so a non-member still cannot probe past the boundary.
+    let (status, body) = send(
+        app(&fake),
+        request("ws-1", "user-1", r#"{"agent_id":"agent-1"}"#),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body, json!({"error": "forbidden"}));
     assert_eq!(fake.trace(), ["policy"]);
+}
+
+/// The ratified floor-before-body ordering: the governance floor runs BEFORE the
+/// body is decoded, so a non-member is answered `403` whatever the body is — even
+/// a body the native `Json` extractor could not decode. The body is never
+/// buffered, so the caller cannot probe the body verdict. This is the base
+/// route's `body: Bytes` contract, preserved through the DEFERRED
+/// `Json::<ObjectOnly<_>>` decode.
+#[tokio::test]
+async fn a_non_member_is_forbidden_before_a_malformed_body_is_decoded() {
+    let fake = FakeAccess::default().governed(WorkspaceGovernance::Denied);
+
+    let (status, body) = send(app(&fake), request("ws-1", "user-1", "not json")).await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body, json!({"error": "forbidden"}));
+    assert_eq!(
+        fake.trace(),
+        ["policy"],
+        "the floor answers before the body is decoded, malformed or not"
+    );
+}
+
+/// A value-shaped array from a NON-MEMBER is likewise answered by the floor, not
+/// the decoder: the body verdict stays unprobeable. A derived struct visitor
+/// would fill `AddMemberRaw` (kind, agent_id, user_id) positionally from
+/// `["agent", "agent-1", null]`, but decode never even runs here.
+#[tokio::test]
+async fn a_non_member_is_forbidden_before_a_value_shaped_array_is_decoded() {
+    let fake = FakeAccess::default().governed(WorkspaceGovernance::Denied);
+
+    let (status, body) = send(
+        app(&fake),
+        request("ws-1", "user-1", r#"["agent","agent-1",null]"#),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body, json!({"error": "forbidden"}));
+    assert_eq!(
+        fake.trace(),
+        ["policy"],
+        "a non-member's array body is refused by the floor, never decoded"
+    );
+}
+
+/// For an ADMITTED caller the shared `ObjectOnly<T>` map floor catches the
+/// value-shaped array: a top-level array whose elements line up by
+/// type/value/order with `AddMemberRaw` would positionally classify as a
+/// tagged-agent enrollment, but the object floor makes it a native structural
+/// `422` at the deferred decode — after the governance floor, before the agent is
+/// ever read, so no enrollment or write reaches the ports.
+#[tokio::test]
+async fn an_admitted_value_shaped_array_is_a_native_reject_with_zero_enrollment_reach() {
+    let fake = FakeAccess::default();
+
+    let response = app(&fake)
+        .oneshot(request("ws-1", "user-1", r#"["agent","agent-1",null]"#))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        fake.trace(),
+        ["policy"],
+        "the array is rejected at decode after the floor; the agent is never read and nothing is enrolled"
+    );
 }
 
 #[tokio::test]
@@ -327,14 +400,17 @@ async fn unknown_workspace_is_not_found_at_the_boundary() {
 }
 
 #[tokio::test]
-async fn invalid_body_is_rejected_after_the_floor_admits() {
+async fn a_structurally_valid_body_no_arm_accepts_is_invalid_input_after_the_floor() {
     let fake = FakeAccess::default();
 
+    // `{}` decodes fine (every field is optional) but matches no product arm, so
+    // it clears the native decode, meets the floor, is admitted, and only then
+    // fails classification: the minimal semantic `422`.
     let (status, body) = send(app(&fake), request("ws-1", "user-1", "{}")).await;
 
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body, json!({"error": "invalid input"}));
-    // Admitted, then parse failed — the agent was never read.
+    // Admitted, then classification failed — the agent was never read.
     assert_eq!(fake.trace(), ["policy"]);
 }
 

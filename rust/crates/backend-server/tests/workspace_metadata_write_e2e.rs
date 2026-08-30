@@ -237,6 +237,7 @@ fn metadata_request(id: &str, user: &str, body: &str) -> Request<Body> {
     Request::builder()
         .method("PATCH")
         .uri(format!("/api/workspaces/{id}"))
+        .header("content-type", "application/json")
         .extension(UserId::parse(user).unwrap())
         .body(Body::from(body.to_owned()))
         .unwrap()
@@ -246,6 +247,7 @@ fn archive_request(id: &str, user: &str, body: &str) -> Request<Body> {
     Request::builder()
         .method("PATCH")
         .uri(format!("/api/workspaces/{id}/archive"))
+        .header("content-type", "application/json")
         .extension(UserId::parse(user).unwrap())
         .body(Body::from(body.to_owned()))
         .unwrap()
@@ -368,19 +370,47 @@ async fn a_malformed_body_from_an_admin_is_invalid_input() {
         .router(FixedClock(777), RecordingSink::new(false))
         .await;
 
-    // user-2 is an admin, so it clears the rename floor and the body IS parsed.
+    // user-2 is an admin, so it clears the rename floor and the body IS decoded.
+    // `{}` is structurally valid, so it clears native `Json` and reaches the
+    // classifier: no field is present, so `WorkspaceMetadataEdit::try_from` refuses
+    // (the Zod `.refine` "no fields" case) and collapses into the one terminal
+    // semantic `422` envelope (ratified divergence — the Zod issue array is gone).
     let response = app
         .oneshot(metadata_request("ws-1", "user-2", "{}"))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
         json_body(response).await,
-        json!({
-            "error": "invalid input",
-            "issues": [{ "code": "custom", "message": "no fields to update", "path": [] }]
-        })
+        json!({ "error": "invalid input" })
     );
+}
+
+#[tokio::test]
+async fn a_value_shaped_array_from_the_owner_is_a_native_rejection_at_body_decode_with_zero_effect()
+{
+    let harness = Harness::seeded().await;
+    let sink = RecordingSink::new(false);
+    let app = harness.router(FixedClock(777), sink.clone()).await;
+
+    // The owner CLEARS the governance floor, so decode runs — which is exactly
+    // where the shared object floor must catch a top-level array. This body lines
+    // up by type/value/order with `WorkspaceUpdateRaw` (name, description): decoded
+    // positionally it would be a valid rename. `ObjectOnly` rejects the sequence
+    // shape (native structural `422`, not our semantic envelope), so nothing is
+    // classified and nothing commits.
+    let response = app
+        .oneshot(metadata_request(
+            "ws-1",
+            "user-1",
+            r#"["Renamed Team","a new description"]"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // Zero effect: the name is untouched and the viewer hint never fired.
+    assert_eq!(harness.stored("ws-1").await.0, "Original");
+    assert!(sink.ids().is_empty());
 }
 
 #[tokio::test]
@@ -483,6 +513,25 @@ async fn archive_requires_the_owner_floor() {
 }
 
 #[tokio::test]
+async fn an_archive_value_shaped_array_from_the_owner_is_a_native_rejection_with_zero_effect() {
+    let harness = Harness::seeded().await;
+    let app = harness
+        .router(FixedClock(900), RecordingSink::new(false))
+        .await;
+
+    // The owner clears the archive floor, so decode runs. `WorkspaceArchiveRaw`'s
+    // single `archived: bool` field means `[true]` lines up positionally with a
+    // valid archive. The shared object floor rejects the array shape (native `422`)
+    // before the flag is read, so the workspace is never archived.
+    let response = app
+        .oneshot(archive_request("ws-1", "user-1", r#"[true]"#))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(harness.stored("ws-1").await.2, None);
+}
+
+#[tokio::test]
 async fn the_owner_archives_and_unarchives() {
     let harness = Harness::seeded().await;
     let archive_app = harness
@@ -515,27 +564,21 @@ async fn the_owner_archives_and_unarchives() {
 }
 
 #[tokio::test]
-async fn a_missing_archived_flag_is_invalid_input() {
+async fn a_missing_archived_flag_is_a_native_structural_rejection() {
     let harness = Harness::seeded().await;
     let app = harness
         .router(FixedClock(777), RecordingSink::new(false))
         .await;
 
+    // `{}` is missing the required `archived` boolean, so the native `Json`
+    // extractor for `WorkspaceArchiveRaw` refuses it BEFORE any classifier runs.
+    // That keeps axum's native structural `422` (with its own plain-text body),
+    // not our semantic envelope — the Zod issue array parity is retired.
     let response = app
         .oneshot(archive_request("ws-1", "user-1", "{}"))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        json_body(response).await,
-        json!({
-            "error": "invalid input",
-            "issues": [{
-                "code": "invalid_type", "expected": "boolean", "received": "undefined",
-                "path": ["archived"], "message": "Required"
-            }]
-        })
-    );
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]

@@ -381,7 +381,7 @@ async fn signup_disabled_answers_a_typed_403_before_the_body() {
 }
 
 #[tokio::test]
-async fn signup_with_a_short_password_is_a_400_invalid_input() {
+async fn signup_with_a_short_password_is_a_422_invalid_input() {
     let backend = backend(true).await;
     let body = json!({
         "email": "alice@example.com",
@@ -390,8 +390,37 @@ async fn signup_with_a_short_password_is_a_400_invalid_input() {
         "display_name": "Alice A"
     });
     let (status, body) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, body)).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // A well-formed body whose password fails the garde length bound is the
+    // minimal semantic refusal under the frozen admission model.
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body, json!({ "error": "invalid input" }));
+}
+
+#[tokio::test]
+async fn signup_from_a_value_shaped_array_is_a_native_rejection_with_zero_effect() {
+    let backend = backend(true).await;
+
+    // The sharp hazard the shared object floor defeats: a top-level JSON array
+    // whose elements line up by TYPE, VALUE and ORDER with `SignupRaw`'s fields
+    // (email, password, name, display_name) would — if decoded positionally by a
+    // derived struct visitor — build a fully valid signup. The object floor
+    // rejects the sequence SHAPE before any field is read, so it is a native
+    // structural rejection (not our semantic `{ "error": "invalid input" }`), and
+    // no identity is ever created.
+    let array = json!(["alice@example.com", "correct-horse", "alice", "Alice A"]);
+    let (status, body) = call(&backend.app, post_json(human_auth::SIGNUP_PATH, array)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_ne!(body, json!({ "error": "invalid input" }));
+    assert_eq!(
+        backend.sink.count(),
+        0,
+        "a floor-rejected body must never create a user"
+    );
+    // Zero authority reach: those credentials name no account, so a login with the
+    // exact array values answers the uniform unknown 401.
+    let login = json!({ "email": "alice@example.com", "password": "correct-horse" });
+    let (status, _) = call(&backend.app, post_json(human_auth::LOGIN_PATH, login)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -442,6 +471,36 @@ async fn login_for_an_unknown_email_is_the_same_uniform_401() {
         backend.hasher.dummy_calls(),
         1,
         "an unknown email must still spend one dummy verify"
+    );
+}
+
+#[tokio::test]
+async fn login_from_a_value_shaped_array_is_a_native_rejection_with_zero_effect() {
+    let backend = backend(true).await;
+    call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
+    let sessions_before = stored_token_hashes(&backend.path).await.len();
+
+    // A top-level array lined up by type/value/order with `LoginRaw`'s fields
+    // (email, password) would positionally decode into the real account's
+    // credentials. The object floor rejects the sequence before any verify runs,
+    // so it is a native structural rejection, no session is minted, and the
+    // credential verify cost is never even spent.
+    let array = json!(["alice@example.com", "correct-horse"]);
+    let (status, body) = call(&backend.app, post_json(human_auth::LOGIN_PATH, array)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_ne!(body, json!({ "error": "invalid input" }));
+    assert!(
+        body.get("user_token").is_none(),
+        "a floor-rejected login must mint no session"
+    );
+    assert_eq!(
+        stored_token_hashes(&backend.path).await.len(),
+        sessions_before,
+        "a floor-rejected login must add no session row"
     );
 }
 
@@ -554,19 +613,20 @@ async fn patch_me_with_no_fields_is_the_terminal_invalid_input() {
     .await;
     let token = token_of(&signup);
 
-    // The Zod `.refine` "no fields" case collapses into the one terminal 400 body
-    // (ratified divergence #1), not TS's distinct "no fields to update".
+    // The Zod `.refine` "no fields" case: `{}` decodes fine (display_name absent →
+    // Missing), reaches the handler, and collapses into the one terminal semantic
+    // 422 (ratified divergence #1), not TS's distinct "no fields to update".
     let (status, body) = call(
         &backend.app,
         authed_patch(human_auth::ME_PATH, &token, json!({})),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body, json!({ "error": "invalid input" }));
 }
 
 #[tokio::test]
-async fn patch_me_with_an_invalid_display_name_is_invalid_input() {
+async fn patch_me_with_an_invalid_display_name_is_a_native_structural_rejection() {
     let backend = backend(true).await;
     let (_, signup) = call(
         &backend.app,
@@ -575,14 +635,50 @@ async fn patch_me_with_an_invalid_display_name_is_invalid_input() {
     .await;
     let token = token_of(&signup);
 
-    // A non-string value for the key is malformed, not "no fields".
+    // A non-string value for the key is a native decode fault (a present
+    // `RequiredPatchField` that is not a string), so it keeps axum's native `422`
+    // and is NOT re-rendered as our semantic envelope.
     let (status, body) = call(
         &backend.app,
         authed_patch(human_auth::ME_PATH, &token, json!({ "display_name": 42 })),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body, json!({ "error": "invalid input" }));
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_ne!(body, json!({ "error": "invalid input" }));
+}
+
+#[tokio::test]
+async fn patch_me_from_a_value_shaped_array_is_a_native_rejection_with_zero_effect() {
+    let backend = backend(true).await;
+    let (_, signup) = call(
+        &backend.app,
+        post_json(human_auth::SIGNUP_PATH, signup_body()),
+    )
+    .await;
+    let token = token_of(&signup);
+    let announces_after_signup = backend.sink.count();
+
+    // `MePatchRaw` has a single field (display_name), so a one-element array
+    // carrying a valid display-name value lines up positionally. The object floor
+    // rejects the array shape before the field is read: a native structural `422`,
+    // not our semantic envelope, and the profile is untouched.
+    let array = json!(["Renamed via array"]);
+    let (status, body) = call(
+        &backend.app,
+        authed_patch(human_auth::ME_PATH, &token, array),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_ne!(body, json!({ "error": "invalid input" }));
+    assert_eq!(
+        backend.sink.count(),
+        announces_after_signup,
+        "a floor-rejected patch owes no user_changed hint"
+    );
+    // Zero effect: the display_name still reads its signup value.
+    let (status, me) = call(&backend.app, authed_get(human_auth::ME_PATH, &token)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(me["display_name"], json!("Alice A"));
 }
 
 #[tokio::test]
