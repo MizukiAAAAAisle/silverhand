@@ -498,7 +498,11 @@ fn decode_list_row(
     })
 }
 
-pub(super) async fn load_attachment(
+/// Loads one attachment row by id, strictly decoded. `pub(crate)`: the agent-audit
+/// attachment face reuses this exact decode, then binds the row to its ONE audited
+/// conversation by comparing [`AttachmentRecord::channel`] — a row in another
+/// conversation is treated as absent, and the blob store is never touched here.
+pub(crate) async fn load_attachment(
     tx: &mut Transaction<'_, Sqlite>,
     requested: &AttachmentId,
 ) -> Result<Option<AttachmentRecord>, AttachmentReadStoreError> {

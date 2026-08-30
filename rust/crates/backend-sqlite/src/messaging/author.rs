@@ -35,10 +35,13 @@ use super::{MessagingStoreError, driver};
 
 /// The author evidence carried by one `messages` row: the send-time provenance
 /// (`from_kind` and the two nullable FKs) plus the snapshot columns that outlive a
-/// deleted principal. Storage-shaped, so it is `pub(super)` and never leaves the
-/// adapter — the domain sees only the resolved [`MessageAuthor`].
+/// deleted principal. Storage-shaped, so it stays inside the adapter crate and never
+/// leaves for the domain — the domain sees only the resolved [`MessageAuthor`].
+///
+/// `pub(crate)`: reused by the agent-audit read adapter to gather the same evidence
+/// batch its transcript rows carry.
 #[derive(Clone)]
-pub(super) struct AuthorEvidence {
+pub(crate) struct AuthorEvidence {
     pub from_kind: FromKind,
     pub from_agent_id: Option<String>,
     pub from_user_id: Option<String>,
@@ -346,7 +349,10 @@ fn live_key(evidence: &AuthorEvidence) -> Option<(PrincipalKind, &str)> {
 /// set, a snapshot id that names nothing, a driver fault) is a persistence
 /// invariant the store owns, so there is no partial result and the source chain is
 /// preserved.
-pub(super) async fn resolve_authors(
+///
+/// `pub(crate)`: the agent-audit read adapter resolves its transcript authors through
+/// this same authority (see [`AuthorEvidence`]).
+pub(crate) async fn resolve_authors(
     conn: &mut SqliteConnection,
     evidence: &[AuthorEvidence],
 ) -> Result<Vec<Option<MessageAuthor>>, PersistenceFailure> {

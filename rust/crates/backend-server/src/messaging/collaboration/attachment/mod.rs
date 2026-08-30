@@ -1061,7 +1061,11 @@ pub fn changed_event(fact: &AttachmentChangedFact) -> Value {
     })
 }
 
-fn download_success(record: &AttachmentRecord, bytes: Vec<u8>) -> Response {
+/// Serialize a served blob to the download wire: raw bytes with the pinned
+/// Content-Type / Content-Length / Content-Disposition / Cache-Control headers.
+/// `pub(crate)`: the agent-audit attachment face serves bytes byte-identically to
+/// this membership-gated download, so the two cannot drift on the wire.
+pub(crate) fn download_success(record: &AttachmentRecord, bytes: Vec<u8>) -> Response {
     let mut response = Body::from(bytes).into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,

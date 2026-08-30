@@ -113,17 +113,26 @@ async fn read<P: ConversationMessageWindowReadPort>(
     }
 }
 
+/// `pub(crate)`: the agent-audit transcript reuses this same cursor grammar. It is
+/// the identical set of tokens; the audit face simply forces [`thread_root_id`] to
+/// `None` before parsing, because that read is `mode=all` (mainline and thread
+/// interleaved) and carries no thread-stream selector.
 #[derive(Debug, Default, Deserialize)]
-struct MessageWindowQueryWire {
+pub(crate) struct MessageWindowQueryWire {
     limit: Option<String>,
     before_seq: Option<String>,
     after_seq: Option<String>,
     around_message_id: Option<String>,
-    thread_root_id: Option<String>,
+    /// `pub(crate)`: the audit transcript clears this to `None` so a client's
+    /// `thread_root_id` (even an empty one) is ignored rather than rejected, matching
+    /// the TypeScript audit route which never reads the token.
+    pub(crate) thread_root_id: Option<String>,
 }
 
+/// `pub(crate)`: shared with the agent-audit transcript so both faces refuse a
+/// malformed cursor with the identical coded 400.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum QueryRefusal {
+pub(crate) enum QueryRefusal {
     Limit,
     Before,
     After,
@@ -132,7 +141,10 @@ enum QueryRefusal {
     ThreadRoot,
 }
 
-fn request(
+/// `pub(crate)`: the agent-audit transcript parses its cursor through this same
+/// grammar (with `thread_root_id` forced to `None`), so the two faces cannot drift on
+/// limit clamping, cursor validity or anchor mutual-exclusivity.
+pub(crate) fn request(
     wire: &MessageWindowQueryWire,
 ) -> Result<ConversationMessageWindowRequest, QueryRefusal> {
     let limit = match wire.limit.as_deref() {
@@ -207,8 +219,10 @@ fn cursor(raw: &str, refusal: QueryRefusal) -> Result<MessageSeq, QueryRefusal> 
     }
 }
 
+/// `pub(crate)`: reused by the agent-audit transcript wire so the audit face and this
+/// authenticated face project a message row to the wire identically.
 #[derive(Debug)]
-pub(super) enum MessageWindowWireError {
+pub(crate) enum MessageWindowWireError {
     Metadata,
 }
 
@@ -261,7 +275,9 @@ fn success(window: &BoundConversationMessageWindow) -> Result<Response, MessageW
     .into_response())
 }
 
-pub(super) fn message(
+/// Projects one sealed message row to the wire `MessageDto`. `pub(crate)`: the
+/// agent-audit transcript reuses this exact projector so the two faces cannot drift.
+pub(crate) fn message(
     projection: &silverhand_backend_core::messaging::collaboration::conversation_message_window::WindowMessageProjection,
 ) -> Result<Value, MessageWindowWireError> {
     let metadata = match projection.metadata.json() {
@@ -362,7 +378,9 @@ fn refusal_wire(refusal: MessageWindowRefusal) -> Response {
     }
 }
 
-fn query_refusal_wire(refusal: QueryRefusal) -> Response {
+/// `pub(crate)`: the agent-audit transcript renders a refused cursor with the exact
+/// same coded 400 bodies.
+pub(crate) fn query_refusal_wire(refusal: QueryRefusal) -> Response {
     match refusal {
         QueryRefusal::Limit => coded_error(
             StatusCode::BAD_REQUEST,

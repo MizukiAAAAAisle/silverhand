@@ -43,14 +43,17 @@ use super::{
     reaction::aggregate_facts_in_snapshot,
 };
 
-const MESSAGE_COLUMNS: &str = "m.id AS message_id,m.conversation_id AS message_conversation_id,\
+// `pub(crate)`: the message column list and its linked-task joins are reused verbatim
+// by the agent-audit read adapter, which selects rows in `mode=all` (no mainline/thread
+// filter) but decodes them through the same [`RawMessage::decode`].
+pub(crate) const MESSAGE_COLUMNS: &str = "m.id AS message_id,m.conversation_id AS message_conversation_id,\
      m.from_kind,m.from_agent_id,m.from_user_id,m.author_id,m.author_name,\
      m.author_display_name,m.content,m.metadata,m.seq,m.created_at,m.thread_root_id,\
      lt.id AS task_id,lt.conversation_id AS task_conversation_id,lt.task_number,\
      lt.title AS task_title,lt.status AS task_status,\
      lt.assignee_agent_id,lt.assignee_user_id,lta.display_name AS assignee_agent_name,\
      ltu.display_name AS assignee_user_name";
-const MESSAGE_JOINS: &str = " LEFT JOIN tasks lt ON lt.source_message_id=m.id \
+pub(crate) const MESSAGE_JOINS: &str = " LEFT JOIN tasks lt ON lt.source_message_id=m.id \
      LEFT JOIN agents lta ON lta.id=lt.assignee_agent_id \
      LEFT JOIN users ltu ON ltu.id=lt.assignee_user_id ";
 
@@ -601,22 +604,29 @@ fn closed_false_boundary(
     }
 }
 
+/// One selected `messages` row, decoded but not yet author-resolved.
+///
+/// `pub(crate)`: the agent-audit read adapter selects its own `mode=all` rows and then
+/// decodes/seals them through this same authority, so the audit transcript and the
+/// authenticated window agree on what a row means. Only `author` (evidence to batch)
+/// and `seq` (the keyset pivot) are read across the boundary; the rest stay private to
+/// [`decode`](Self::decode)/[`seal`](Self::seal).
 #[derive(Clone)]
-struct RawMessage {
+pub(crate) struct RawMessage {
     id: MessageId,
     conversation: ConversationId,
-    author: AuthorEvidence,
+    pub(crate) author: AuthorEvidence,
     content: String,
     metadata_json: Option<String>,
     attachments: Vec<AttachmentSnapshot>,
-    seq: MessageSeq,
+    pub(crate) seq: MessageSeq,
     created_at: i64,
     thread_root: Option<ThreadRootId>,
     linked_task: Option<WindowLinkedTask>,
 }
 
 impl RawMessage {
-    fn decode(row: &SqliteRow) -> Result<Self, ConversationMessageWindowStoreError> {
+    pub(crate) fn decode(row: &SqliteRow) -> Result<Self, ConversationMessageWindowStoreError> {
         let metadata_json: Option<String> = row.try_get("metadata")?;
         Ok(Self {
             id: message_id(row, "message_id")?,
@@ -632,7 +642,7 @@ impl RawMessage {
         })
     }
 
-    fn seal(
+    pub(crate) fn seal(
         self,
         resolved: Option<MessageAuthor>,
         reactions: Vec<WindowReaction>,
