@@ -13,13 +13,26 @@
 //! tell "leave" from "clear" apart cannot be an `Option`. [`PatchField`] carries all
 //! three arms; [`RequiredPatchField`] carries only two, for a key that is optional but
 //! NOT nullable (a present `null` is a decode error); [`Forbidden`] is a key that must
-//! not appear at all.
+//! not appear at all. [`RequiredNullable`] is the mandatory-key sibling: the key MUST be
+//! present, but its value may be `null` — absent is a native `missing field` rejection,
+//! present `null` and present value are the two distinct arms.
 //!
-//! Each type decodes ONLY when its key is present: the containing struct annotates the
-//! field `#[serde(default)]`, so an absent key takes the type's `Default` (the
-//! `Missing`/absent arm) and the `Deserialize` impl below runs only for a present key.
-//! This keeps the missing/null/value decision in the type system — there is no
+//! The three OPTIONAL types decode ONLY when their key is present: the containing struct
+//! annotates the field `#[serde(default)]`, so an absent key takes the type's `Default`
+//! (the `Missing`/absent arm) and the `Deserialize` impl below runs only for a present
+//! key. This keeps the missing/null/value decision in the type system — there is no
 //! hand-written "is the key in the map" branch to drift.
+//!
+//! [`RequiredNullable`] is the deliberate exception, because "required" is a fact the
+//! containing struct's derive owns, not the value type. It implements NO `Default` and
+//! carries NO `Missing` arm, and its field is annotated
+//! `#[serde(deserialize_with = "RequiredNullable::deserialize_present")]` WITHOUT
+//! `#[serde(default)]`: the derive emits the native `missing field` error for an absent
+//! key BEFORE the helper runs, and the helper decides `null` vs value only for a present
+//! key. A naive two-arm enum with a plain `Deserialize` that calls `deserialize_option`
+//! would NOT work — serde's missing-field path routes an absent key to `visit_none`, so
+//! a missing key would decode as `Null`, indistinguishable from an explicit `null`. That
+//! collision is exactly what the resident `{}`-rejects test pins.
 //!
 //! These are pure wire shapes. Mapping an arm to a domain edit, and any normalization
 //! or cross-field rule, belong to the route's `TryFrom<Raw>` — not here.
@@ -127,6 +140,50 @@ where
     }
 }
 
+/// A REQUIRED, nullable key: present `null` (`Null`) or present with a value (`Value`).
+///
+/// Unlike the optional trio, the key is MANDATORY — an absent key is a native Serde
+/// `missing field` rejection, never a distinct arm. The type therefore implements NO
+/// `Default` and has NO `Missing` arm on purpose: there is nothing for an absent key to
+/// silently fall into, so a `#[serde(default)]` annotation on such a field will not even
+/// compile, and the required-key contract cannot decay into an optional one.
+///
+/// Decode it via [`deserialize_present`](Self::deserialize_present) on a field that is
+/// NOT `#[serde(default)]`. See the module docs for why a plain two-arm `Deserialize`
+/// (routing an absent key through `visit_none`) collapses `missing` into `null`.
+///
+/// Landed here by #2244 ahead of its first consumer (the mounted runtime-switch lane,
+/// #2241); `allow(dead_code)` covers that one-commit gap and is removed when #2241 wires
+/// it. Resident tests exercise it now, so the shape is proven before a route depends on it.
+#[allow(dead_code)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RequiredNullable<T> {
+    /// The key was present and explicitly `null`.
+    Null,
+    /// The key was present with a value.
+    Value(T),
+}
+
+#[allow(dead_code)]
+impl<T> RequiredNullable<T> {
+    /// Decode a PRESENT key's value: `null` → [`Null`](Self::Null), any other value →
+    /// [`Value`](Self::Value). A wrong JSON type surfaces as `T`'s own decode error.
+    ///
+    /// Wired as `#[serde(deserialize_with = "RequiredNullable::deserialize_present")]` on
+    /// a field WITHOUT `#[serde(default)]`, so the containing struct's derive owns the
+    /// missing verdict: an absent key errors natively before this helper is ever called.
+    pub(crate) fn deserialize_present<'de, D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        match Option::<T>::deserialize(deserializer)? {
+            Some(value) => Ok(RequiredNullable::Value(value)),
+            None => Ok(RequiredNullable::Null),
+        }
+    }
+}
+
 /// A key that must not appear at all (the product's `z.never()`). Absent decodes to the
 /// default; a present key — with ANY value, `null` included — is a decode error.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -223,5 +280,53 @@ mod tests {
         // product schema's strip-unknowns behavior.
         let body = parse(r#"{"nonesuch":1}"#).unwrap();
         assert_eq!(body.opt, PatchField::Missing);
+    }
+
+    // `RequiredNullable` is decoded via `deserialize_present` on a field that is NOT
+    // `#[serde(default)]`, so the derive owns the missing verdict.
+    #[derive(Debug, Deserialize, Eq, PartialEq)]
+    struct RequiredNullableBody {
+        #[serde(deserialize_with = "RequiredNullable::deserialize_present")]
+        reqnull: RequiredNullable<String>,
+    }
+
+    fn parse_required_nullable(json: &str) -> Result<RequiredNullableBody, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+
+    #[test]
+    fn required_nullable_rejects_a_missing_key_natively() {
+        // THE guard: an absent key must be a native `missing field` rejection, NOT a
+        // silent `Null`. A naive two-arm enum with a plain `Deserialize` calling
+        // `deserialize_option` would decode `{}` as `Null` (serde routes the missing
+        // field to `visit_none`); the `deserialize_with`-without-`default` shape makes
+        // the derive emit the missing-field error first. If this ever turns green as a
+        // decoded value, the required-key contract has silently decayed into optional.
+        let err = parse_required_nullable("{}").unwrap_err();
+        assert!(
+            err.to_string().contains("missing field"),
+            "absent key must be the native missing-field rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn required_nullable_admits_present_null_distinctly_from_a_value() {
+        assert_eq!(
+            parse_required_nullable(r#"{"reqnull":null}"#)
+                .unwrap()
+                .reqnull,
+            RequiredNullable::Null
+        );
+        assert_eq!(
+            parse_required_nullable(r#"{"reqnull":"x"}"#)
+                .unwrap()
+                .reqnull,
+            RequiredNullable::Value("x".to_owned())
+        );
+    }
+
+    #[test]
+    fn required_nullable_wrong_type_is_a_decode_error() {
+        assert!(parse_required_nullable(r#"{"reqnull":123}"#).is_err());
     }
 }
