@@ -4,12 +4,17 @@
 //!
 //! Two authorities, in order:
 //!
-//!  1. VALIDATE — the request body is admitted against the same shape the TypeScript
-//!     `HostClaimOrCreateInputSchema` enforces: `installation_id` a required uuid,
-//!     `label` a trimmed 1..=64 unit string, `current_host_id` a non-empty string, and
-//!     no unknown keys. A malformed or non-object body is `Expected object, received
-//!     <type>` — the same `null` fallback the handler's `c.req.json().catch(() => null)`
-//!     produces — and the issue grid is projected through the shared Zod vocabulary.
+//!  1. VALIDATE — the request body is admitted through the frozen [`ValidatedJson`]
+//!     extractor against [`RawClaim`]: `installation_id` a required string bounded by the
+//!     route-local `is_uuid` predicate, `label` and `current_host_id` optional but
+//!     NON-nullable strings, and no unknown keys (`deny_unknown_fields`). A malformed
+//!     body, a wrong-typed or `null` field, a missing `installation_id`, a stray key, and
+//!     a non-object shape all keep axum's native `Json` classification (`400`/`422`/`415`)
+//!     — this route publishes no validation-issue schema. `TryFrom<RawClaim>` then
+//!     normalizes the two optional strings through their sole value authorities
+//!     (`ComputerDisplayLabel::parse`, `HostId::parse`) and a bad uuid / empty / over-long
+//!     value collapses to the minimal semantic `422 {"error":"invalid input"}`. Every
+//!     admission fault stops before the claim authority is reached.
 //!  2. CLAIM — [`ClaimLocalComputer`] owns the three-way reuse/adopt/register branch and
 //!     the one credential mint; this factory only carries its refusals to the wire. A
 //!     credential refused because the computer was revoked under the claim is the one
@@ -17,31 +22,28 @@
 //!     that takes a fail-closed `500`.
 //!
 //! The human principal is proof the authenticating perimeter ran; its ABSENCE is a
-//! composition fault, not a product request, so it takes a fail-closed `500` having read
-//! and parsed nothing. Mounting the real bearer perimeter is the composition root's job
-//! (#task:2197), not this factory's.
+//! composition fault, not a product request, so it takes a fail-closed `500` and reaches
+//! neither the claim authority nor the credential mint. Mounting the real bearer
+//! perimeter is the composition root's job (#task:2197), not this factory's.
 
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    body::Bytes,
     extract::{Extension, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
 };
-use serde::{
-    Deserialize, Deserializer, Serialize,
-    de::{IgnoredAny, MapAccess, SeqAccess, Visitor},
-};
+use garde::Validate;
+use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
     host_runtime::{
         claim::{
             ClaimLocalComputer, ClaimLocalComputerError, ClaimLocalComputerUnitOfWork,
             LocalClaimRequest,
         },
-        computer::{ComputerDisplayLabel, DisplayLabelRefusal},
+        computer::ComputerDisplayLabel,
         custody::{CredentialIssueRefusal, CredentialIssueUnitOfWork, HostCredentialInventory},
         environment::{Clock, EntropySource},
     },
@@ -49,11 +51,13 @@ use silverhand_backend_core::{
 };
 
 use crate::error;
+use crate::wire_admission::{ValidatedJson, invalid_input};
+use crate::wire_patch::RequiredPatchField;
 
 use super::{
-    ErrorBody, ZodIssue,
+    ErrorBody,
     host_wire::{HostDto, host_wire},
-    internal_error, invalid_input, js_object_keys, unrecognized_keys_message,
+    internal_error,
 };
 
 pub const HOST_CLAIM_OR_CREATE_PATH: &str = "/api/hosts/claim-or-create";
@@ -90,7 +94,7 @@ where
 async fn claim_or_create<U, I, W, R, C>(
     State(state): State<ClaimState<U, I, W, R, C>>,
     principal: Option<Extension<UserId>>,
-    body: Bytes,
+    ValidatedJson(raw): ValidatedJson<RawClaim>,
 ) -> Response
 where
     U: ClaimLocalComputerUnitOfWork,
@@ -104,9 +108,9 @@ where
         return internal_error();
     };
 
-    let request = match parse_claim_or_create(&body) {
+    let request = match LocalClaimRequest::try_from(raw) {
         Ok(request) => request,
-        Err(issues) => return invalid_input(issues),
+        Err(()) => return invalid_input(),
     };
 
     match state.0.execute(user_id, request).await {
@@ -147,102 +151,64 @@ struct ClaimOrCreateResponse {
     host_token: Option<String>,
 }
 
-/// Admit the body, or return the Zod-shaped `400` it fails against.
+/// The claim body: the shape the frozen [`ValidatedJson`] extractor decodes and validates.
 ///
-/// Known fields are validated in schema order — `installation_id`, `label`,
-/// `current_host_id` — then `.strict()`'s unrecognized keys are appended, so the issue
-/// list matches Zod's for any combination of failures.
-fn parse_claim_or_create(body: &[u8]) -> Result<LocalClaimRequest, Vec<ZodIssue>> {
-    let fields =
-        match serde_json::from_slice::<ClaimBody>(body).unwrap_or(ClaimBody::NonObject("null")) {
-            ClaimBody::Object(fields) => fields,
-            ClaimBody::NonObject(received) => {
-                return Err(vec![ZodIssue::InvalidType {
-                    code: "invalid_type",
-                    expected: "object",
-                    received,
-                    path: Vec::new(),
-                    message: format!("Expected object, received {received}"),
-                }]);
+/// Serde owns structure — a missing `installation_id`, a wrong-typed field, a present
+/// `null` for either optional key (via [`RequiredPatchField`]), or a stray key
+/// (`deny_unknown_fields`) is a native decode fault. The one stateless value rule,
+/// `installation_id`'s shape, delegates to the route-local [`is_uuid`] predicate; the two
+/// optional strings carry no garde rule because their sole value authority is the
+/// normalization in [`TryFrom`], which turns any refusal into the minimal semantic `422`.
+#[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+struct RawClaim {
+    #[garde(custom(is_uuid_rule))]
+    installation_id: String,
+    #[serde(default)]
+    #[garde(skip)]
+    label: RequiredPatchField<String>,
+    #[serde(default)]
+    #[garde(skip)]
+    current_host_id: RequiredPatchField<String>,
+}
+
+impl TryFrom<RawClaim> for LocalClaimRequest {
+    type Error = ();
+
+    /// Normalize the admitted body into the domain request. Both optional strings run
+    /// through their sole value authorities; any refusal is an opaque `()` the handler
+    /// renders as the minimal semantic refusal. A `Missing` arm carries no value and maps
+    /// to `None`, never a decode error — a present `null` was already rejected upstream by
+    /// [`RequiredPatchField`].
+    fn try_from(raw: RawClaim) -> Result<Self, Self::Error> {
+        let label = match raw.label {
+            RequiredPatchField::Missing => None,
+            RequiredPatchField::Value(value) => {
+                Some(ComputerDisplayLabel::parse(&value).map_err(|_| ())?)
             }
         };
 
-    let mut issues = Vec::new();
+        let current_computer = match raw.current_host_id {
+            RequiredPatchField::Missing => None,
+            RequiredPatchField::Value(value) => Some(HostId::parse(value).map_err(|_| ())?),
+        };
 
-    let installation_id = match &fields.installation_id {
-        None => {
-            issues.push(required_string("installation_id"));
-            None
-        }
-        Some(FieldValue::Other(received)) => {
-            issues.push(invalid_type_string("installation_id", received));
-            None
-        }
-        Some(FieldValue::Str(value)) => {
-            if is_uuid(value) {
-                Some(value.clone())
-            } else {
-                issues.push(invalid_uuid("installation_id"));
-                None
-            }
-        }
-    };
-
-    let label = match &fields.label {
-        None => None,
-        Some(FieldValue::Other(received)) => {
-            issues.push(invalid_type_string("label", received));
-            None
-        }
-        Some(FieldValue::Str(value)) => match ComputerDisplayLabel::parse(value) {
-            Ok(label) => Some(label),
-            Err(DisplayLabelRefusal::Empty) => {
-                issues.push(too_small("label"));
-                None
-            }
-            Err(DisplayLabelRefusal::TooLong { .. }) => {
-                issues.push(too_big("label"));
-                None
-            }
-        },
-    };
-
-    let current_computer = match &fields.current_host_id {
-        None => None,
-        Some(FieldValue::Other(received)) => {
-            issues.push(invalid_type_string("current_host_id", received));
-            None
-        }
-        Some(FieldValue::Str(value)) => match HostId::parse(value) {
-            Ok(host) => Some(host),
-            Err(_) => {
-                issues.push(too_small("current_host_id"));
-                None
-            }
-        },
-    };
-
-    if !fields.unknown_keys.is_empty() {
-        let keys = js_object_keys(fields.unknown_keys);
-        let message = unrecognized_keys_message(&keys);
-        issues.push(ZodIssue::UnrecognizedKeys {
-            code: "unrecognized_keys",
-            keys,
-            path: Vec::new(),
-            message,
-        });
+        Ok(LocalClaimRequest {
+            installation_id: raw.installation_id,
+            label,
+            current_computer,
+        })
     }
+}
 
-    if !issues.is_empty() {
-        return Err(issues);
+/// The stateless garde rule bounding `installation_id`: a THIN delegate to the route-local
+/// [`is_uuid`] predicate, holding no shape logic of its own.
+fn is_uuid_rule(value: &str, _: &()) -> garde::Result {
+    if is_uuid(value) {
+        Ok(())
+    } else {
+        Err(garde::Error::new("installation_id must be a uuid"))
     }
-
-    Ok(LocalClaimRequest {
-        installation_id: installation_id
-            .expect("installation_id is Some once no issue was recorded"),
-        label,
-        current_computer,
-    })
 }
 
 /// The Zod uuid check reduced to its observable behavior: 8-4-4-4-12 hex with dashes at
@@ -261,237 +227,6 @@ fn is_uuid(value: &str) -> bool {
             byte.is_ascii_hexdigit()
         }
     })
-}
-
-fn required_string(field: &str) -> ZodIssue {
-    ZodIssue::InvalidType {
-        code: "invalid_type",
-        expected: "string",
-        received: "undefined",
-        path: vec![field.to_owned()],
-        message: "Required".to_owned(),
-    }
-}
-
-fn invalid_type_string(field: &str, received: &'static str) -> ZodIssue {
-    ZodIssue::InvalidType {
-        code: "invalid_type",
-        expected: "string",
-        received,
-        path: vec![field.to_owned()],
-        message: format!("Expected string, received {received}"),
-    }
-}
-
-fn invalid_uuid(field: &str) -> ZodIssue {
-    ZodIssue::InvalidString {
-        validation: "uuid",
-        code: "invalid_string",
-        message: "Invalid uuid",
-        path: vec![field.to_owned()],
-    }
-}
-
-fn too_small(field: &str) -> ZodIssue {
-    ZodIssue::TooSmall {
-        code: "too_small",
-        minimum: 1,
-        value_type: "string",
-        inclusive: true,
-        exact: false,
-        message: "String must contain at least 1 character(s)",
-        path: vec![field.to_owned()],
-    }
-}
-
-fn too_big(field: &str) -> ZodIssue {
-    ZodIssue::TooBig {
-        code: "too_big",
-        maximum: 64,
-        value_type: "string",
-        inclusive: true,
-        exact: false,
-        message: "String must contain at most 64 character(s)",
-        path: vec![field.to_owned()],
-    }
-}
-
-/// The body as one of two shapes: a JSON object, or anything else named for the wire.
-enum ClaimBody {
-    Object(ClaimFields),
-    NonObject(&'static str),
-}
-
-/// The three known fields captured verbatim, plus the unknown keys `.strict()` refuses.
-/// A repeated known key keeps its last value, as `JSON.parse` does.
-#[derive(Default)]
-struct ClaimFields {
-    installation_id: Option<FieldValue>,
-    label: Option<FieldValue>,
-    current_host_id: Option<FieldValue>,
-    unknown_keys: Vec<String>,
-}
-
-/// A field's value reduced to what validation needs: its string, or the wire name of the
-/// non-string type it was, so `invalid_type` can report `received`.
-enum FieldValue {
-    Str(String),
-    Other(&'static str),
-}
-
-impl<'de> Deserialize<'de> for FieldValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(FieldValueVisitor)
-    }
-}
-
-struct FieldValueVisitor;
-
-impl<'de> Visitor<'de> for FieldValueVisitor {
-    type Value = FieldValue;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a JSON value")
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
-        Ok(FieldValue::Str(value.to_owned()))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        Ok(FieldValue::Str(value))
-    }
-
-    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
-        Ok(FieldValue::Other("boolean"))
-    }
-
-    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
-        Ok(FieldValue::Other("number"))
-    }
-
-    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
-        Ok(FieldValue::Other("number"))
-    }
-
-    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
-        Ok(FieldValue::Other("number"))
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(FieldValue::Other("null"))
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(FieldValue::Other("null"))
-    }
-
-    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(self)
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        while sequence.next_element::<IgnoredAny>()?.is_some() {}
-        Ok(FieldValue::Other("array"))
-    }
-
-    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
-    where
-        M: MapAccess<'de>,
-    {
-        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
-        Ok(FieldValue::Other("object"))
-    }
-}
-
-impl<'de> Deserialize<'de> for ClaimBody {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(ClaimBodyVisitor)
-    }
-}
-
-struct ClaimBodyVisitor;
-
-impl<'de> Visitor<'de> for ClaimBodyVisitor {
-    type Value = ClaimBody;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a JSON value")
-    }
-
-    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
-    where
-        M: MapAccess<'de>,
-    {
-        let mut fields = ClaimFields::default();
-        let mut seen_unknown = HashSet::new();
-        while let Some(key) = map.next_key::<String>()? {
-            match key.as_str() {
-                "installation_id" => fields.installation_id = Some(map.next_value()?),
-                "label" => fields.label = Some(map.next_value()?),
-                "current_host_id" => fields.current_host_id = Some(map.next_value()?),
-                _ => {
-                    map.next_value::<IgnoredAny>()?;
-                    if seen_unknown.insert(key.clone()) {
-                        fields.unknown_keys.push(key);
-                    }
-                }
-            }
-        }
-        Ok(ClaimBody::Object(fields))
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        while sequence.next_element::<IgnoredAny>()?.is_some() {}
-        Ok(ClaimBody::NonObject("array"))
-    }
-
-    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
-        Ok(ClaimBody::NonObject("boolean"))
-    }
-
-    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
-        Ok(ClaimBody::NonObject("number"))
-    }
-
-    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
-        Ok(ClaimBody::NonObject("number"))
-    }
-
-    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
-        Ok(ClaimBody::NonObject("number"))
-    }
-
-    fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E> {
-        Ok(ClaimBody::NonObject("string"))
-    }
-
-    fn visit_string<E>(self, _value: String) -> Result<Self::Value, E> {
-        Ok(ClaimBody::NonObject("string"))
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(ClaimBody::NonObject("null"))
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(ClaimBody::NonObject("null"))
-    }
 }
 
 #[cfg(test)]
@@ -709,52 +444,117 @@ mod tests {
         serde_json::from_str(include_str!("fixtures/claim_or_create_parity.json")).unwrap()
     }
 
-    /// Every rejected input the Zod schema produces is reproduced field for field, and
-    /// the claim authority is never reached.
+    const SEMANTIC_BODY: &str = r#"{"error":"invalid input"}"#;
+
+    /// A value that decodes cleanly but fails its sole value authority — a bad uuid, an
+    /// empty or over-long label, an empty `current_host_id` — collapses to the minimal
+    /// semantic `422`, never an issue array, and never reaches the claim.
     #[tokio::test]
-    async fn every_invalid_input_matches_zod_and_stops_before_the_claim() {
-        for entry in fixture()["invalid_inputs"].as_array().unwrap() {
-            let request = serde_json::to_string(&entry["request"]).unwrap();
-            let reply = post_valid(&request).await;
-            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "for {request}");
-            assert_eq!(parsed(&reply.body), entry["body"], "for {request}");
-            assert_eq!(reply.claim_calls, 0, "for {request}");
+    async fn a_semantic_value_fault_is_the_minimal_422_before_the_claim() {
+        let uuid = "11111111-1111-4111-8111-111111111111";
+        let cases = [
+            r#"{"installation_id":"not-a-uuid"}"#.to_owned(),
+            format!(r#"{{"installation_id":"{uuid}","label":"   "}}"#),
+            format!(
+                r#"{{"installation_id":"{uuid}","label":"{}"}}"#,
+                "x".repeat(65)
+            ),
+            format!(r#"{{"installation_id":"{uuid}","current_host_id":""}}"#),
+        ];
+        for body in cases {
+            let reply = post_valid(&body).await;
+            assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "for {body}");
+            assert_eq!(reply.body, SEMANTIC_BODY, "for {body}");
+            assert_eq!(reply.claim_calls, 0, "for {body}");
         }
     }
 
-    /// A non-object body collapses to `invalid_type` naming the type it was, exactly as
-    /// Zod's `safeParse` of the parsed value does.
+    /// A structural decode fault — a missing required field, a wrong-typed field, a
+    /// present `null` for a non-nullable optional, a stray key, or a non-object shape —
+    /// keeps axum's native `Json` classification (`422` today), never our semantic
+    /// envelope, and never reaches the claim.
     #[tokio::test]
-    async fn every_invalid_shape_is_the_zod_invalid_type() {
-        for entry in fixture()["invalid_shapes"].as_array().unwrap() {
-            let request = serde_json::to_string(&entry["request"]).unwrap();
-            let reply = post_valid(&request).await;
-            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "for {request}");
-            assert_eq!(parsed(&reply.body), entry["body"], "for {request}");
-            assert_eq!(reply.claim_calls, 0, "for {request}");
+    async fn a_structural_fault_keeps_the_native_rejection_before_the_claim() {
+        let uuid = "11111111-1111-4111-8111-111111111111";
+        let cases = [
+            "{}".to_owned(),                                           // missing installation_id
+            r#"{"installation_id":5}"#.to_owned(),                     // wrong type
+            format!(r#"{{"installation_id":"{uuid}","label":5}}"#),    // wrong type
+            format!(r#"{{"installation_id":"{uuid}","label":null}}"#), // present null
+            format!(r#"{{"installation_id":"{uuid}","current_host_id":null}}"#), // present null
+            format!(r#"{{"installation_id":"{uuid}","zeta":true}}"#),  // unknown key
+            "[]".to_owned(),                                           // non-object shapes
+            "\"text\"".to_owned(),
+            "42".to_owned(),
+            "true".to_owned(),
+            "null".to_owned(),
+        ];
+        for body in cases {
+            let reply = post_valid(&body).await;
+            assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "for {body}");
+            assert_ne!(reply.body, SEMANTIC_BODY, "for {body}");
+            assert_eq!(reply.claim_calls, 0, "for {body}");
         }
     }
 
-    /// A body that is not JSON at all is the handler's `catch(() => null)` — parsed as
-    /// `null`, refused as a non-object, never reaching the claim.
+    /// The exact-arity value-shaped arrays Cindy flagged: under a bare positional derive,
+    /// `["<uuid>"]` would bind `installation_id` and `["<uuid>","label"]` would bind both by
+    /// declaration order, decode cleanly, and REACH the claim authority. The shared
+    /// object-only floor refuses the sequence at the top level (native `422`) before any
+    /// positional bind, so the accepted set stays object-only and the claim is never reached.
     #[tokio::test]
-    async fn malformed_json_is_the_null_invalid_type() {
-        let reply = post_valid("{not json").await;
-        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            parsed(&reply.body),
-            json!({
-                "error": "invalid input",
-                "issues": [{
-                    "code": "invalid_type",
-                    "expected": "object",
-                    "received": "null",
-                    "path": [],
-                    "message": "Expected object, received null"
-                }]
-            })
-        );
-        assert_eq!(reply.claim_calls, 0);
+    async fn a_value_shaped_array_body_is_refused_before_it_can_reach_the_claim() {
+        let uuid = "11111111-1111-4111-8111-111111111111";
+        let cases = [format!(r#"["{uuid}"]"#), format!(r#"["{uuid}","Studio"]"#)];
+        for body in cases {
+            let reply = post_valid(&body).await;
+            assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "for {body}");
+            assert_ne!(reply.body, SEMANTIC_BODY, "for {body}");
+            assert_eq!(reply.claim_calls, 0, "for {body}");
+        }
+    }
+
+    /// A body that is not JSON at all, and an empty body, are native syntax faults
+    /// (`400`): the old `catch(() => null)` empty-object/`null` fallback is gone. Neither
+    /// reaches the claim.
+    #[tokio::test]
+    async fn a_malformed_or_empty_body_is_a_native_400_before_the_claim() {
+        for body in ["{not json", ""] {
+            let reply = post_valid(body).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "for {body:?}");
+            assert_eq!(reply.claim_calls, 0, "for {body:?}");
+        }
+    }
+
+    /// Native `Json` requires the `application/json` content-type; its absence is a
+    /// native `415` before the claim (the old handler accepted any content-type).
+    #[tokio::test]
+    async fn a_missing_content_type_is_a_native_415_before_the_claim() {
+        let claim_calls = Arc::new(AtomicUsize::new(0));
+        let uow = FakeClaim {
+            computer: claimed_record(),
+            calls: claim_calls.clone(),
+        };
+        let issuer = FakeIssuer {
+            outcome: IssueOutcome::Ok,
+            issued: Arc::new(AtomicUsize::new(0)),
+        };
+        let app = router(ClaimLocalComputer::new(
+            uow,
+            FakeInventory { has_active: false },
+            issuer,
+            FixedEntropy::sequence(),
+            FixedClock,
+        ));
+        let request = Request::post(HOST_CLAIM_OR_CREATE_PATH)
+            .extension(user(OWNER))
+            .body(Body::from(
+                r#"{"installation_id":"11111111-1111-4111-8111-111111111111"}"#,
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(claim_calls.load(SeqCst), 0);
     }
 
     /// The principal is the perimeter's contribution; without it the route parses

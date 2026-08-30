@@ -26,6 +26,8 @@ use crate::{
     error,
     host_runtime::host_wire::{HostDto, host_wire},
     scope_events::ScopeEventHub,
+    wire_admission::from_object_slice,
+    wire_patch::PatchField,
 };
 
 use super::{computer_times_are_js_safe, internal_error, read_body};
@@ -136,7 +138,7 @@ where
     let input = read_body(request.into_body())
         .await
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<UpdateBody>(&bytes).ok())
+        .and_then(|bytes| from_object_slice::<UpdateBody>(&bytes).ok())
         .map(UpdateBody::into_input)
         .unwrap_or(UpdateComputerInput::Invalid);
     let command = UpdateComputerCommand {
@@ -173,19 +175,34 @@ where
     }
 }
 
+/// The update body. `display_label` is optional-but-present-nullable in the wire vocab:
+/// the frozen [`PatchField`] tells an ABSENT key from an explicit `null`. Serde owns
+/// structure (`deny_unknown_fields`; a wrong-typed value fails the decode); the arm→input
+/// mapping and the label normalization stay in [`into_input`](Self::into_input).
+///
+/// The body is decoded through the shared [`from_object_slice`] so a top-level JSON
+/// non-object is refused STRUCTURALLY before any positional field bind: a bare derive
+/// would bind `["Renamed"]`/`[null]` positionally onto `display_label` and rename or CLEAR
+/// the label, so the object-only floor is what stops an array-shaped body from reaching the
+/// rename authority. A decode fault (non-object, wrong type, present-null) and the `Invalid`
+/// arm both funnel to the core's `InvalidInput` `400`, so the `#[serde(default)]` Missing
+/// arm is mapped EXPLICITLY to `Invalid` rather than relying on a missing-field decode
+/// error. This route keeps its post-auth admission (the anti-enum `404` runs first).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UpdateBody {
-    display_label: serde_json::Value,
+    #[serde(default)]
+    display_label: PatchField<String>,
 }
 
 impl UpdateBody {
     fn into_input(self) -> UpdateComputerInput {
         match self.display_label {
-            serde_json::Value::Null => UpdateComputerInput::Valid {
+            PatchField::Missing => UpdateComputerInput::Invalid,
+            PatchField::Null => UpdateComputerInput::Valid {
                 display_label: None,
             },
-            serde_json::Value::String(raw) => match ComputerDisplayLabel::parse(&raw) {
+            PatchField::Value(raw) => match ComputerDisplayLabel::parse(&raw) {
                 Ok(label) => UpdateComputerInput::Valid {
                     display_label: Some(label),
                 },
@@ -194,7 +211,6 @@ impl UpdateBody {
                 },
                 Err(DisplayLabelRefusal::TooLong { .. }) => UpdateComputerInput::Invalid,
             },
-            _ => UpdateComputerInput::Invalid,
         }
     }
 }
@@ -272,6 +288,48 @@ mod tests {
         }
     }
 
+    /// A UoW that runs the real in-lock `decide` against a genuine owned record, so a
+    /// `Write` decision commits (and a rename would publish the effect) while a `Refuse`
+    /// leaves the row untouched. This is what makes the object-floor test meaningful:
+    /// without the floor, `[null]` would bind `display_label=null` positionally, decide
+    /// would `Write { display_label: None }`, and the label would really be CLEARED.
+    #[derive(Clone)]
+    struct FaithfulWitness {
+        owned: ComputerRecord,
+    }
+
+    impl UpdateComputerUnitOfWork for FaithfulWitness {
+        async fn update_computer<D>(
+            &self,
+            _computer: HostId,
+            decide: D,
+        ) -> Result<
+            UpdateComputerTransaction,
+            silverhand_backend_core::persistence::PersistenceFailure,
+        >
+        where
+            D: FnOnce(Option<ComputerRecord>) -> UpdateComputerDecision + Send,
+        {
+            let before = self.owned.clone();
+            match decide(Some(before.clone())) {
+                UpdateComputerDecision::Refuse(_) => Ok(UpdateComputerTransaction::Unchanged {
+                    before: Some(before),
+                }),
+                UpdateComputerDecision::Write {
+                    display_label,
+                    finalized_at,
+                } => {
+                    let mut committed = before.clone();
+                    committed.display_label = display_label;
+                    if let Some(finalized_at) = finalized_at {
+                        committed.finalized_at = Some(finalized_at);
+                    }
+                    Ok(UpdateComputerTransaction::Committed { before, committed })
+                }
+            }
+        }
+    }
+
     #[derive(Clone, Default)]
     struct RecordingEffect(Arc<AtomicUsize>);
 
@@ -331,6 +389,33 @@ mod tests {
             response.status(),
             axum::http::StatusCode::INTERNAL_SERVER_ERROR
         );
+        assert_eq!(effect.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_value_shaped_array_body_is_structurally_refused_and_never_clears_the_label() {
+        // `[null]` would, under a bare positional derive, bind `display_label=null` and
+        // clear the label. The shared object-only floor refuses the array shape before any
+        // field bind: the decode fault collapses to `Invalid`, decide refuses with `400`,
+        // the owned row is never written and the rename effect never publishes.
+        let effect = RecordingEffect::default();
+        let witness = FaithfulWitness {
+            owned: record("host-1", Some("Original"), Some(2)),
+        };
+        let mut request = Request::builder()
+            .method("PATCH")
+            .uri("/api/hosts/host-1")
+            .header("content-type", "application/json")
+            .body(Body::from("[null]"))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(UserId::parse("owner").unwrap());
+        let response = router(UpdateComputer::new(witness), effect.clone(), Clock)
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
         assert_eq!(effect.0.load(Ordering::SeqCst), 0);
     }
 }
