@@ -35,18 +35,22 @@
 //! nothing), and mounting the real bearer perimeter is the composition root's job —
 //! done by the backend-app #2234 CP2 mount.
 //!
-//! ## Multipart admission is reproduced, not shared (scope note)
+//! ## Multipart admission composes shared transport primitives, keeps its own policy
 //!
-//! The `file`-part semantics and the `AVATAR_MAX_BYTES + 1` bounded read mirror the
-//! `POST /api/me/avatar` transport admission in [`crate::users`]. Only the ONE thing
-//! that must never drift — the byte cap — is single-sourced from
-//! [`silverhand_backend_core::avatar::AVATAR_MAX_BYTES`]; the parse mechanics are kept
-//! local to this route rather than refactoring the landed `users` face, which is out of
-//! this lane's blast radius.
+//! The bounded read, the field drain, and the "declared type or octet-stream default"
+//! read are the route-neutral [`crate::multipart_transport`] primitives, shared with the
+//! sibling avatar/profile faces. What stays HERE is this route's POLICY: the whole
+//! envelope is decoded (every part drained to end, including the selected file's bytes
+//! past `cap + 1`) so a malformed/truncated part ANYWHERE — even after a valid `file` —
+//! is the transport `400`, mirroring `await c.req.formData()` parsing the entire body
+//! before `form.get('file')`. The byte cap is single-sourced from
+//! [`silverhand_backend_core::avatar::AVATAR_MAX_BYTES`], and the MIME allowlist is owned
+//! solely by [`silverhand_backend_core::avatar::AvatarContentType::parse`] (which
+//! lowercases and exact-matches), so this route adds no second normalizer.
 
 use axum::{
     Json, Router,
-    extract::{Extension, FromRequest, Multipart, Path, Request, State},
+    extract::{Extension, FromRequest, Multipart, Path, Request, State, multipart::MultipartError},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
@@ -72,6 +76,7 @@ use crate::error;
 
 use super::agent_avatar::AGENT_AVATAR_PATH;
 use crate::agent_wire::{AgentDto, reproject_committed_agent};
+use crate::multipart_transport::{accumulate_capped, declared_content_type, drain};
 
 /// The anti-enumeration refusal string, pinned to the TypeScript handler.
 const AGENT_NOT_FOUND: &str = "agent not found";
@@ -79,10 +84,6 @@ const AGENT_NOT_FOUND: &str = "agent not found";
 const FORBIDDEN: &str = "forbidden";
 /// The unmapped-error body: a bare `text/plain` `500`, never a JSON envelope.
 const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
-/// `file.type || 'application/octet-stream'`: an absent OR empty part content type
-/// falls back to the octet-stream default, which is outside the avatar allowlist and so
-/// deterministically yields `415` at the domain validator.
-const DEFAULT_UPLOAD_CONTENT_TYPE: &str = "application/octet-stream";
 
 #[derive(Clone)]
 struct AvatarWriteState<R, W, B, S, C> {
@@ -378,7 +379,7 @@ fn log_blob_cleanup(cleanup: &BlobCleanup, origin: &str) {
 }
 
 // ===========================================================================
-// Multipart admission (reproduced from the `users` face; cap single-sourced).
+// Multipart admission (shared transport primitives; whole-envelope drain policy).
 // ===========================================================================
 
 /// A multipart `file` part reduced to what the upload flow needs.
@@ -398,7 +399,7 @@ struct UploadedFile {
 /// `formData()` throw's `400`.
 async fn first_file_field(
     multipart: &mut Multipart,
-) -> Result<Option<UploadedFile>, axum::extract::multipart::MultipartError> {
+) -> Result<Option<UploadedFile>, MultipartError> {
     // Outer `Some` = the first `file`-named slot has been claimed; inner `Option` = it was a
     // file (`Some`) or a same-named non-file (`None`). The claim is made on the first match
     // but the loop runs to the end regardless, so `?` still surfaces a later part's fault.
@@ -408,18 +409,18 @@ async fn first_file_field(
             if field.file_name().is_none() {
                 // A non-file `file` slot is `file field required`, but only AFTER the whole
                 // envelope decodes cleanly — so drain it and keep parsing the rest.
-                drain_field(&mut field).await?;
+                drain(&mut field).await?;
                 claimed = Some(None);
             } else {
-                // `input.contentType.toLowerCase()`: media types are ASCII; lowercase so a
-                // cased type cannot slip past the domain allowlist. No trim, no parameter
-                // stripping — the domain validator owns those.
-                let content_type = field
-                    .content_type()
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or(DEFAULT_UPLOAD_CONTENT_TYPE)
-                    .to_ascii_lowercase();
-                let bytes = read_field_bounded(&mut field).await?;
+                // Raw declared type (or the octet-stream default); the domain's
+                // `AvatarContentType::parse` lowercases and exact-matches, so no transport
+                // normalizer is applied here.
+                let content_type = declared_content_type(&field);
+                // Retain at most `cap + 1` — enough for the domain validator to tell a
+                // `cap` file (accept) from `cap + 1` (the exact `413`) — then drain the rest
+                // of this part so a truncated tail still surfaces as the transport `400`.
+                let bytes = accumulate_capped(&mut field, AVATAR_MAX_BYTES as usize + 1).await?;
+                drain(&mut field).await?;
                 claimed = Some(Some(UploadedFile {
                     bytes,
                     content_type,
@@ -428,44 +429,10 @@ async fn first_file_field(
         } else {
             // Not the claimed slot: drain fully with zero accumulation so its bytes still pass
             // through the parser and any fault becomes the transport `400`.
-            drain_field(&mut field).await?;
+            drain(&mut field).await?;
         }
     }
     Ok(claimed.flatten())
-}
-
-/// Read a multipart file part into memory, bounded at `AVATAR_MAX_BYTES + 1` — enough for
-/// the domain validator to return the exact `avatar_too_large`, never more — while still
-/// draining the field to its end. axum applies no envelope cap of its own (the served app
-/// owns the global request limit, an integration seam this leaf does not mount), so an
-/// unbounded `field.bytes()` would buffer an arbitrarily large body; but stopping the READ
-/// at the cap without draining would leave a truncated tail unparsed, so we keep pulling
-/// chunks (discarding past the cap) to preserve the `formData()` parse-before-validate order.
-async fn read_field_bounded(
-    field: &mut axum::extract::multipart::Field<'_>,
-) -> Result<Vec<u8>, axum::extract::multipart::MultipartError> {
-    let limit = AVATAR_MAX_BYTES as usize + 1;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = field.chunk().await? {
-        if bytes.len() < limit {
-            let room = limit - bytes.len();
-            let take = room.min(chunk.len());
-            bytes.extend_from_slice(&chunk[..take]);
-        }
-        // Past the cap we keep pulling to drain the field (and surface any parse fault),
-        // but retain nothing more.
-    }
-    Ok(bytes)
-}
-
-/// Pull a field to its end, discarding its bytes. Used to complete the `formData()`-equivalent
-/// full decode of parts this handler does not keep; any stream/parse fault propagates as the
-/// transport `400`.
-async fn drain_field(
-    field: &mut axum::extract::multipart::Field<'_>,
-) -> Result<(), axum::extract::multipart::MultipartError> {
-    while field.chunk().await?.is_some() {}
-    Ok(())
 }
 
 // ===========================================================================
@@ -1010,9 +977,9 @@ mod tests {
         }
         // The served app's request perimeter disables axum's default 2 MiB body limit
         // (`request_perimeter.rs` → `DefaultBodyLimit::disable()`), so the handler's own
-        // `read_field_bounded` + the domain validator produce the precise `413`. Reproduce
-        // that seam here; without it axum would pre-empt an over-cap body with a generic
-        // rejection before the leaf ever sees it.
+        // bounded read (`accumulate_capped`) + the domain validator produce the precise
+        // `413`. Reproduce that seam here; without it axum would pre-empt an over-cap body
+        // with a generic rejection before the leaf ever sees it.
         let response = router(reads, writes, blobs, sink, FixedClock(NOW))
             .layer(DefaultBodyLimit::disable())
             .oneshot(request.body(Body::from(body)).unwrap())
@@ -1356,9 +1323,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cased_media_type_is_lowercased_before_the_domain_allowlist() {
-        // `input.contentType.toLowerCase()`: `IMAGE/PNG` must pass the allowlist and reach
-        // the put, exactly as `image/png` does.
+    async fn a_cased_media_type_still_reaches_the_domain_allowlist() {
+        // A cased `IMAGE/PNG` must pass the allowlist and reach the put, exactly as
+        // `image/png` does: the transport applies NO normalizer, and the sole authority
+        // `AvatarContentType::parse` lowercases before its exact match.
         let blobs = FakeBlobs::new();
         let reply = post_with(
             FakeReads::new(
@@ -1386,10 +1354,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lowercasing_does_not_strip_parameters_so_a_charset_type_is_still_415() {
-        // Lowercasing is the ONLY normalization: `IMAGE/PNG; CHARSET=X` lowercases to
-        // `image/png; charset=x`, which is NOT the bare `image/png` the allowlist admits —
-        // parameters are not stripped, so it is still the unsupported-type 415.
+    async fn a_parameterized_media_type_is_still_the_415() {
+        // Parameters are never stripped: `IMAGE/PNG; CHARSET=X` reaches the domain validator,
+        // which lowercases to `image/png; charset=x` — NOT the bare `image/png` its allowlist
+        // admits — so it is still the unsupported-type 415. The transport passes the declared
+        // type through unfolded; the sole authority judges it.
         let reply = post_with(
             FakeReads::new(present(creator_facts()), present(creator_facts())),
             FakeWrites::new(WriteFixture::Row(AgentProfileRowWrite::NoSuchAgent)),

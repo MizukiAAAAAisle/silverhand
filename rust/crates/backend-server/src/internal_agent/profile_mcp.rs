@@ -39,6 +39,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
     agent_profile_mcp::{
@@ -48,6 +49,9 @@ use silverhand_backend_core::{
     mcp_config::parse_mcp_config,
     runtime_credential::RuntimePrincipal,
 };
+
+use crate::wire_admission::ValidatedJson;
+use crate::wire_patch::RequiredPatchField;
 
 /// The product route template for reading/replacing the config. `{aid}` is consumed
 /// by the credential layer, which self-pins it.
@@ -221,18 +225,49 @@ where
 
 /// The probe request: `{ server_name, include_tools? }`, strict. `server_name` is
 /// the RAW user-visible name (never the `silverhand_<scope>__` runtime spelling).
-#[derive(Deserialize)]
+///
+/// Admission rides the frozen [`ValidatedJson`] model, so the pre-migration blanket
+/// `400 { error, code: "invalid_input" }` is gone and the failure surface splits by
+/// KIND, exactly as the sibling internal routes now do. Structural faults ride axum's
+/// own `Json` rejection, forwarded verbatim: a malformed body is a native `400`, while
+/// a missing/duplicate/unknown key, a wrong-typed field, or a present
+/// `include_tools: null` is a native `422`. A top-level NON-object shape (an array such
+/// as `["srv", true]`, a scalar, `null`) is likewise a native `422`: `ValidatedJson`
+/// decodes through the shared `ObjectOnly` floor (#2246), so serde can never bind an
+/// array to these fields positionally into a dispatch. An empty `server_name` decodes
+/// fine and then fails the `garde` rule, so it is the semantic
+/// `422 { "error": "invalid input" }` (the `Report` is never serialized). The
+/// `code: "invalid_input"` discriminator is deliberately dropped — the data-plane fault
+/// envelope (`data_plane_error`) still carries `{ error, code }` unchanged.
+#[derive(Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 struct ProbeRequest {
+    #[garde(custom(server_name_present))]
     server_name: String,
+    // Tri-state via the frozen `RequiredPatchField`: absent → `Missing` (defaults to
+    // `false`), present `true`/`false` → `Value`, present `null` → a native `422`
+    // decode error. `#[serde(default)]` supplies `Missing` when the key is absent.
     #[serde(default)]
-    include_tools: Option<bool>,
+    #[garde(skip)]
+    include_tools: RequiredPatchField<bool>,
+}
+
+/// `garde` rule: `server_name` must be non-empty. This is a RAW `!is_empty()` check —
+/// NOT trimmed — mirroring the product's `z.string().min(1)` (a character count, not a
+/// trimmed length), so a whitespace-only name (`" "`) is accepted and bound to the
+/// probe command verbatim.
+fn server_name_present(value: &str, _: &()) -> garde::Result {
+    if value.is_empty() {
+        Err(garde::Error::new("server_name must not be empty"))
+    } else {
+        Ok(())
+    }
 }
 
 async fn probe<D>(
     credential: Option<Extension<RuntimePrincipal>>,
     State(data_plane): State<D>,
-    body: Bytes,
+    ValidatedJson(request): ValidatedJson<ProbeRequest>,
 ) -> Response
 where
     D: AgentProfileMcpDataPlane,
@@ -241,37 +276,12 @@ where
         return missing_credential(PROFILE_MCP_PROBE_PATH);
     };
 
-    // Mirror the product's `c.req.json().catch(() => ({}))` then strict parse: bad
-    // JSON, a missing/empty `server_name`, an unknown key, or a wrong type all land
-    // as one `invalid_input` 400 before any dispatch. This lane emits the stable
-    // `{ error, code }` envelope WITHOUT the Zod `issues[]` array — the same
-    // deliberate simplification the sibling internal routes adopted; the `code`
-    // discriminator is preserved.
-    //
-    // We parse to `serde_json::Value` FIRST, then strict-decode: the product's
-    // `JSON.parse` is last-wins on a duplicate key, and `Value` decoding matches it
-    // (a later key overwrites the earlier in its object map). Decoding the struct
-    // directly from the bytes would instead REJECT a duplicate field, so
-    // `{"server_name":"a","server_name":"b"}` — admitted as `b` by TS — would be a
-    // spurious 400. `deny_unknown_fields` and the non-empty check still apply on the
-    // second decode.
-    let request = match serde_json::from_slice::<serde_json::Value>(&body)
-        .ok()
-        .and_then(|value| serde_json::from_value::<ProbeRequest>(value).ok())
-    {
-        Some(request) if !request.server_name.is_empty() => request,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "invalid input", "code": "invalid_input" })),
-            )
-                .into_response();
-        }
-    };
-
     let command = McpProbeCommand {
         server_name: request.server_name,
-        include_tools: request.include_tools.unwrap_or(false),
+        include_tools: match request.include_tools {
+            RequiredPatchField::Missing => false,
+            RequiredPatchField::Value(value) => value,
+        },
     };
 
     match data_plane.probe(credential.agent(), &command).await {
@@ -366,7 +376,10 @@ mod tests {
     use super::*;
     use axum::{
         body::{Body, to_bytes},
-        http::{Request, header::AUTHORIZATION},
+        http::{
+            Request,
+            header::{AUTHORIZATION, CONTENT_TYPE},
+        },
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
@@ -563,6 +576,12 @@ mod tests {
 
     /// Drive a request against the bare router with the principal already injected
     /// (as the layer would), isolating the handler from the credential layer.
+    ///
+    /// Every request carries `Content-Type: application/json`: the probe route now
+    /// admits through the frozen `ValidatedJson` extractor, which `415`s a body with no
+    /// declared JSON type. The GET/config-write routes ignore the header (GET has no
+    /// body; the config write reads raw `Bytes` verbatim), so tagging every body — all
+    /// of which are JSON payloads to this router — is uniform and behavior-neutral.
     async fn injected(
         data_plane: FakeDataPlane,
         method: &str,
@@ -570,7 +589,10 @@ mod tests {
         credential: Option<RuntimePrincipal>,
         body: Body,
     ) -> Response {
-        let mut request = Request::builder().method(method).uri(path);
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(CONTENT_TYPE, "application/json");
         if let Some(credential) = credential {
             request = request.extension(credential);
         }
@@ -857,11 +879,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_duplicate_server_name_is_last_wins_matching_js() {
-        // The product's JSON.parse is last-wins on a duplicate key, so a body with
-        // two `server_name`s admits the LAST. Decoding the struct directly would
-        // reject the duplicate as a 400; parsing to Value first reproduces JS. The
-        // raw JSON is hand-written because `json!` cannot express a duplicate key.
+    async fn a_duplicate_server_name_is_natively_rejected() {
+        // The pre-migration handler parsed to `Value` first to reproduce JSON.parse's
+        // last-wins and admitted the LAST `server_name`. Under the frozen `ValidatedJson`
+        // model the derived `Deserialize` REJECTS a duplicate known field as a native
+        // `422` before the handler runs — no dispatch. The raw JSON is hand-written
+        // because `json!` cannot express a duplicate key.
         let data_plane = FakeDataPlane::new();
         let response = injected(
             data_plane.clone(),
@@ -871,24 +894,25 @@ mod tests {
             Body::from(r#"{"server_name":"first","server_name":"second"}"#),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        // The LAST value is what reached the port.
-        assert_eq!(
-            data_plane.probed_command(),
-            Some(("second".to_string(), false))
-        );
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(!data_plane.consulted(), "a duplicate key never dispatches");
     }
 
     #[tokio::test]
-    async fn a_malformed_probe_request_is_invalid_input_before_dispatch() {
-        // Missing server_name, empty server_name, an unknown key, and non-JSON all
-        // collapse to one invalid_input 400 and never dispatch.
-        for body in [
-            json!({}).to_string(),
-            json!({ "server_name": "" }).to_string(),
-            json!({ "server_name": "srv", "extra": 1 }).to_string(),
-            "not json".to_string(),
-        ] {
+    async fn a_structurally_invalid_probe_is_a_native_rejection_before_dispatch() {
+        // Structural faults ride axum's own `Json` rejection, forwarded verbatim: a
+        // malformed body is a `400`; a missing/unknown/duplicate key, a wrong-typed
+        // field, or a present `include_tools: null` is a `422`. None reaches the port,
+        // and none carries the semantic `{ "error": "invalid input" }` envelope.
+        let semantic = json!({ "error": "invalid input" });
+        let native_422 = [
+            json!({}).to_string(),                                   // missing server_name
+            json!({ "server_name": "srv", "extra": 1 }).to_string(), // unknown key
+            json!({ "server_name": 7 }).to_string(),                 // wrong-typed name
+            json!({ "server_name": "srv", "include_tools": null }).to_string(), // present null
+            json!({ "server_name": "srv", "include_tools": "yes" }).to_string(), // wrong-typed flag
+        ];
+        for body in native_422 {
             let data_plane = FakeDataPlane::new();
             let response = injected(
                 data_plane.clone(),
@@ -900,16 +924,102 @@ mod tests {
             .await;
             assert_eq!(
                 response.status(),
-                StatusCode::BAD_REQUEST,
-                "body {body:?} must be a 400"
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "body {body:?} is a native 422"
             );
-            assert_eq!(
+            assert_ne!(
                 body_json(response).await,
-                json!({ "error": "invalid input", "code": "invalid_input" }),
-                "body {body:?} keeps the stable envelope without issues[]"
+                semantic,
+                "body {body:?} is a native rejection, not the semantic envelope"
             );
-            assert!(!data_plane.consulted(), "invalid input never dispatches");
+            assert!(!data_plane.consulted(), "body {body:?} never dispatches");
         }
+
+        // Malformed JSON is the native `400` syntax rejection.
+        let data_plane = FakeDataPlane::new();
+        let response = injected(
+            data_plane.clone(),
+            "POST",
+            "/internal/agents/a1/profile/mcp/probe",
+            Some(principal("a1")),
+            Body::from("not json"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(!data_plane.consulted(), "malformed JSON never dispatches");
+    }
+
+    #[tokio::test]
+    async fn an_empty_server_name_is_the_semantic_invalid_input_before_dispatch() {
+        // A present-but-empty `server_name` decodes fine, then fails the `garde` rule:
+        // the frozen semantic refusal is `422 { "error": "invalid input" }` with NO
+        // `code` (the pre-migration `code: "invalid_input"` discriminator is gone) and
+        // no `issues[]`. It never dispatches.
+        let data_plane = FakeDataPlane::new();
+        let response = injected(
+            data_plane.clone(),
+            "POST",
+            "/internal/agents/a1/profile/mcp/probe",
+            Some(principal("a1")),
+            Body::from(json!({ "server_name": "" }).to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            body_json(response).await,
+            json!({ "error": "invalid input" })
+        );
+        assert!(!data_plane.consulted(), "an empty name never dispatches");
+    }
+
+    #[tokio::test]
+    async fn a_whitespace_only_server_name_is_admitted_and_bound_verbatim() {
+        // `server_name` is a RAW `!is_empty()` check — not trimmed — so a whitespace-only
+        // name passes admission and reaches the port verbatim, matching the product's
+        // `z.string().min(1)` (a character count). include_tools is absent → false.
+        let data_plane = FakeDataPlane::new();
+        let response = injected(
+            data_plane.clone(),
+            "POST",
+            "/internal/agents/a1/profile/mcp/probe",
+            Some(principal("a1")),
+            Body::from(json!({ "server_name": " " }).to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(data_plane.probed_command(), Some((" ".to_string(), false)));
+    }
+
+    #[tokio::test]
+    async fn a_value_shaped_probe_array_is_a_native_reject_and_never_dispatches() {
+        // The sharp accepted-set falsifier: `["srv", true]` is a two-element array whose
+        // elements are VALID values for `ProbeRequest`'s fields IN ORDER (`server_name:
+        // String`, `include_tools: bool`). A bare serde derive would bind them positionally
+        // (`server_name = "srv"`, `include_tools = true`), pass `garde`, and DISPATCH — the
+        // exact array-shaped-body bypass. The frozen `ValidatedJson` now decodes through the
+        // shared `ObjectOnly` object floor (#2246), so a top-level array is a native
+        // structural reject BEFORE decode: a `422`, never the semantic `{ "error":
+        // "invalid input" }` envelope, and the data-plane is never consulted. Not a
+        // type-mismatched array like `[1, 2]` — this one would otherwise decode cleanly.
+        let data_plane = FakeDataPlane::new();
+        let response = injected(
+            data_plane.clone(),
+            "POST",
+            "/internal/agents/a1/profile/mcp/probe",
+            Some(principal("a1")),
+            Body::from(json!(["srv", true]).to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_ne!(
+            body_json(response).await,
+            json!({ "error": "invalid input" }),
+            "an array-shaped body is a native structural reject, not the semantic refusal"
+        );
+        assert!(
+            !data_plane.consulted(),
+            "an array-shaped body never reaches the data-plane"
+        );
     }
 
     // ---- composition + self-pin ----

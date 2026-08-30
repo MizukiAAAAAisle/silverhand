@@ -22,6 +22,7 @@ pub mod host_runtime;
 pub mod human_auth;
 pub mod internal_agent;
 pub mod messaging;
+pub(crate) mod multipart_transport;
 pub mod ops;
 pub mod password_hasher;
 pub mod runtime_control;
