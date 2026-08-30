@@ -25,6 +25,35 @@ pub enum ScheduleStatus {
     Failed,
 }
 
+impl ScheduleStatus {
+    /// The persisted/wire token, identical to the `schedules.status` CHECK set
+    /// and the `status` field the DTO echoes.
+    pub fn as_token(self) -> &'static str {
+        match self {
+            ScheduleStatus::Pending => "pending",
+            ScheduleStatus::Firing => "firing",
+            ScheduleStatus::Done => "done",
+            ScheduleStatus::Cancelled => "cancelled",
+            ScheduleStatus::Failed => "failed",
+        }
+    }
+
+    /// Parse a persisted token back to the status. `None` for a value outside
+    /// the CHECK set — a corrupt `status` column, reported as a safe-500 at the
+    /// decode boundary rather than smuggled onto the wire. The schema's CHECK
+    /// makes such a value unreachable through any write path.
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "pending" => Some(ScheduleStatus::Pending),
+            "firing" => Some(ScheduleStatus::Firing),
+            "done" => Some(ScheduleStatus::Done),
+            "cancelled" => Some(ScheduleStatus::Cancelled),
+            "failed" => Some(ScheduleStatus::Failed),
+            _ => None,
+        }
+    }
+}
+
 /// The count of times a schedule has already successfully fired.
 ///
 /// Non-negativity is the load-bearing invariant: `plan_advancement` reads it

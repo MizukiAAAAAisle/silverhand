@@ -36,6 +36,16 @@ use sqlx::{
 };
 use thiserror::Error;
 
+// The product read/cancel adapters are separate authorities that live beside the
+// fire-path store and reuse only its row-decode boundary (`decode_spec`,
+// `corrupt`, `driver`) — never its claim/settlement CAS.
+pub mod cancel;
+pub mod list_read;
+mod product;
+
+pub use cancel::SqliteScheduleCancel;
+pub use list_read::SqliteScheduleListRead;
+
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// The claim's occurrence flip and its `RETURNING` decode run inside ONE
