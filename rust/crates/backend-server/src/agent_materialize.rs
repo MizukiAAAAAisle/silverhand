@@ -179,6 +179,7 @@ fn map_refusal(refusal: CommandRefusal) -> Option<AgentMaterializeRefusal> {
         ) => Some(AgentMaterializeRefusal::DaemonInternalError),
         CommandRefusal::RuntimeScoped(_)
         | CommandRefusal::AgentFilesPurgeScoped(_)
-        | CommandRefusal::AgentProfileMcpScoped(_) => None,
+        | CommandRefusal::AgentProfileMcpScoped(_)
+        | CommandRefusal::AgentWorkspaceFsScoped(_) => None,
     }
 }

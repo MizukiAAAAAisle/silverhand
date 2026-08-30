@@ -220,6 +220,19 @@ impl<C, D, H> DaemonDeliveryRuntime<C, D, H> {
         )
     }
 
+    /// The workspace filesystem data plane composed over this runtime's one
+    /// attachment registry. The agent's host coordinate is supplied per call by
+    /// the route (off the agent row it already read), so unlike the profile-MCP
+    /// plane this one holds no persisted placement authority — only the typed
+    /// domain port is exposed; raw command dispatch stays crate-private.
+    pub fn workspace_data_plane(
+        &self,
+    ) -> crate::workspace_data_plane::ProductionWorkspaceDataPlane {
+        crate::workspace_data_plane::ProductionWorkspaceDataPlane::new(OwningHostDataPlane {
+            registry: self.registry.clone(),
+        })
+    }
+
     pub fn runtime_control(&self) -> crate::runtime_control::ProductionRuntimeControl<C, D, H>
     where
         C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
@@ -1688,6 +1701,34 @@ impl AgentProfileMcpRefusalCode {
     }
 }
 
+/// Business refusal codes admitted only by the workspace filesystem read family
+/// (`agent_workspace_tree`, `agent_workspace_file_read`). Both reads share one
+/// data-plane fault taxonomy, so both kinds admit the same four codes. A path is
+/// opaque to the backend — `forbidden_path` and `not_found` are the daemon's own
+/// virtual-path verdicts, never re-derived here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AgentWorkspaceFsRefusalCode {
+    FsUnavailable,
+    RegistryUnavailable,
+    ForbiddenPath,
+    NotFound,
+}
+
+impl AgentWorkspaceFsRefusalCode {
+    fn parse(kind: &str, raw: &str) -> Option<Self> {
+        match kind {
+            "agent_workspace_tree" | "agent_workspace_file_read" => match raw {
+                "fs_unavailable" => Some(Self::FsUnavailable),
+                "registry_unavailable" => Some(Self::RegistryUnavailable),
+                "forbidden_path" => Some(Self::ForbiddenPath),
+                "not_found" => Some(Self::NotFound),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
 impl AgentMaterializeRefusalCode {
     fn parse(raw: &str) -> Option<Self> {
         match raw {
@@ -1737,6 +1778,7 @@ pub(crate) enum CommandRefusal {
     AgentMaterializeScoped(AgentMaterializeRefusalCode),
     AgentFilesPurgeScoped(AgentFilesPurgeRefusalCode),
     AgentProfileMcpScoped(AgentProfileMcpRefusalCode),
+    AgentWorkspaceFsScoped(AgentWorkspaceFsRefusalCode),
 }
 
 impl CommandRefusal {
@@ -1761,6 +1803,9 @@ impl CommandRefusal {
             }
             "agent_profile_mcp_read" | "agent_profile_mcp_write" | "mcp_probe" => {
                 AgentProfileMcpRefusalCode::parse(kind, code).map(Self::AgentProfileMcpScoped)
+            }
+            "agent_workspace_tree" | "agent_workspace_file_read" => {
+                AgentWorkspaceFsRefusalCode::parse(kind, code).map(Self::AgentWorkspaceFsScoped)
             }
             _ => None,
         }
@@ -1802,6 +1847,8 @@ pub(crate) enum HostDataPlaneCommandKind {
     AgentMaterialize,
     AgentProfileMcpRead,
     AgentProfileMcpWrite,
+    AgentWorkspaceTree,
+    AgentWorkspaceFileRead,
     HostStatus,
     RuntimeClearSession,
     RuntimeCatalog,
@@ -1816,10 +1863,12 @@ pub(crate) enum HostDataPlaneCommandKind {
 impl HostDataPlaneCommandKind {
     /// Every variant, so the response envelope admits exactly the kinds this face can
     /// send. A variant missing here is not silently tolerated: nothing could answer it.
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 14] = [
         Self::AgentMaterialize,
         Self::AgentProfileMcpRead,
         Self::AgentProfileMcpWrite,
+        Self::AgentWorkspaceTree,
+        Self::AgentWorkspaceFileRead,
         Self::HostStatus,
         Self::RuntimeClearSession,
         Self::RuntimeCatalog,
@@ -1836,6 +1885,8 @@ impl HostDataPlaneCommandKind {
             Self::AgentMaterialize => "agent_materialize",
             Self::AgentProfileMcpRead => "agent_profile_mcp_read",
             Self::AgentProfileMcpWrite => "agent_profile_mcp_write",
+            Self::AgentWorkspaceTree => "agent_workspace_tree",
+            Self::AgentWorkspaceFileRead => "agent_workspace_file_read",
             Self::HostStatus => "host_status",
             Self::RuntimeClearSession => "runtime_clear_session",
             Self::RuntimeCatalog => "host_runtime_catalog",
@@ -5656,6 +5707,41 @@ mod tests {
     }
 
     #[test]
+    fn the_workspace_fs_family_admits_its_four_codes_on_both_reads_and_nothing_else() {
+        let error = |code: &str| json!({ "code": code, "message": "why" });
+        // Both wire kinds share ONE fault vocabulary, so each admits all four codes.
+        for kind in ["agent_workspace_tree", "agent_workspace_file_read"] {
+            for code in [
+                "fs_unavailable",
+                "registry_unavailable",
+                "forbidden_path",
+                "not_found",
+            ] {
+                assert!(
+                    matches!(
+                        CommandRefusal::decode(kind, &error(code)),
+                        Some(CommandRefusal::AgentWorkspaceFsScoped(_))
+                    ),
+                    "{kind} must admit {code}"
+                );
+            }
+            // A code from a sibling family is not this family's language.
+            assert_eq!(CommandRefusal::decode(kind, &error("agent_deleting")), None);
+            assert_eq!(CommandRefusal::decode(kind, &error("invalid_config")), None);
+        }
+        // A response-level code still outranks the operation vocabulary, and a
+        // workspace-fs code offered to a kind that does not speak it is not admitted.
+        assert!(matches!(
+            CommandRefusal::decode("agent_workspace_tree", &error("internal_error")),
+            Some(CommandRefusal::Response(DaemonRefusalCode::InternalError))
+        ));
+        assert_eq!(
+            CommandRefusal::decode("runtime_start", &error("forbidden_path")),
+            None
+        );
+    }
+
+    #[test]
     fn an_answer_opens_only_for_the_coordinate_that_awaited_it() {
         let answer = || HostDataPlaneAnswer {
             host: HostId::parse("host-1").unwrap(),
@@ -5728,6 +5814,14 @@ mod tests {
                 "host_proxy_config_set",
             ),
             (HostDataPlaneCommandKind::McpProbe, "mcp_probe"),
+            (
+                HostDataPlaneCommandKind::AgentWorkspaceTree,
+                "agent_workspace_tree",
+            ),
+            (
+                HostDataPlaneCommandKind::AgentWorkspaceFileRead,
+                "agent_workspace_file_read",
+            ),
             (HostDataPlaneCommandKind::RotateToken, "rotate_token"),
         ] {
             assert_eq!(kind.as_wire(), wire);

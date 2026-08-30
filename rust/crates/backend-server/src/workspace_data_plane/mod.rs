@@ -1,9 +1,22 @@
-//! Workspace data-plane route family (Rust residual wave).
+//! Workspace data-plane route family (Rust residual wave, #task:2252).
 //!
-//! Scaffold only: declared beside the existing workspace surfaces
-//! (`workspaces`, `workspace_detail`, `workspace_metadata_write`,
-//! `workspace_name_availability`, `workspace_rename_fanout`) so the workspace
-//! data-plane lane can land in a file-disjoint subtree. No route, handler, DTO,
-//! factory, port or mount yet, and not named by any composition root —
-//! UNMOUNTED. The implementing lane fills it with `mod`/`use` submodule
-//! declarations here and route files beside this `mod.rs`.
+//! Two authenticated agent-pane surfaces —
+//! `GET /api/agents/{id}/workspace/tree` and `GET /api/agents/{id}/workspace/file`
+//! — over the one owning-host correlated-RPC data plane. [`route::router`] mounts
+//! the shared admission ladder (principal → visibility → owner-only authority →
+//! workspace scope → opaque path) and projects the daemon's answer; the daemon
+//! stays the sole virtual-path authority. The subtree is file-disjoint and
+//! UNMOUNTED: a composition root wires the three ports and mounts the router at
+//! convergence.
+//!
+//!  * [`codec`] — the transport-owned params/result schemas for the two commands.
+//!  * [`adapter`] — [`ProductionWorkspaceDataPlane`], the daemon-backed port with a
+//!    closed fault taxonomy.
+//!  * [`route`] — the two public routers and their ladder.
+
+mod adapter;
+mod codec;
+mod route;
+
+pub use adapter::ProductionWorkspaceDataPlane;
+pub use route::{AGENT_WORKSPACE_FILE_PATH, AGENT_WORKSPACE_TREE_PATH, router};

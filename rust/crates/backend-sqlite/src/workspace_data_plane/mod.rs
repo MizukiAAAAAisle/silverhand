@@ -1,8 +1,11 @@
-//! SQLite adapter for the workspace data-plane core capability (#task:2248
-//! scaffold). Same-named sibling of
-//! `silverhand_backend_core::workspace_data_plane`; owns the SQL behind that port
-//! family and returns application facts only.
+//! SQLite adapter for the workspace data-plane scope reader.
 //!
-//! Scaffold only — no adapter yet; UNMOUNTED. The implementing lane fills it with
-//! `mod`/`use` declarations here and adapter files beside this `mod.rs`, touching no
-//! shared declaration.
+//! Same-named sibling of `silverhand_backend_core::workspace_data_plane`: it owns
+//! the SQL behind [`AgentWorkspaceScopeRead`] and returns application facts only,
+//! deciding nothing. The membership rule (home-owner vs explicit edge) is the pure
+//! resolver's; this adapter reads BOTH edges plus existence and ownership under one
+//! read transaction so the resolver judges a single consistent snapshot.
+
+mod reader;
+
+pub use reader::{SqliteWorkspaceScopeStore, SqliteWorkspaceScopeStoreError};
