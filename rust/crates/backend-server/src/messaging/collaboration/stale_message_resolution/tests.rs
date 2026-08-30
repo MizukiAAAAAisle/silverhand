@@ -256,7 +256,7 @@ async fn runtime_and_path_identity_fail_before_the_body_is_polled() {
 }
 
 #[tokio::test]
-async fn bounded_body_and_zod_shape_precede_product_authority() {
+async fn bounded_body_and_typed_shape_precede_product_authority() {
     let invalid_case = fixture(AdmissionMode::Matching, true);
     let (status, body) = call(
         invalid_case.app,
@@ -266,14 +266,10 @@ async fn bounded_body_and_zod_shape_precede_product_authority() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
         serde_json::from_slice::<Value>(&body).unwrap(),
-        json!({"error":"invalid input","issues":[
-            {"code":"invalid_type","expected":"string","received":"undefined", "path":["conversation_id"],"message":"Required"},
-            {"code":"invalid_type","expected":"string","received":"undefined", "path":["stale_event_id"],"message":"Required"},
-            {"code":"invalid_literal","expected":"obsolete", "path":["resolution_reason"],"message":"Invalid literal value, expected \"obsolete\""}
-        ]})
+        json!({"error": "invalid input"})
     );
     assert_eq!(invalid_case.admission_calls.load(Ordering::SeqCst), 0);
 
@@ -299,6 +295,31 @@ async fn bounded_body_and_zod_shape_precede_product_authority() {
     );
     assert!(!polled.load(Ordering::SeqCst));
     assert_eq!(oversized.admission_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_value_shaped_positional_array_is_refused_before_product_authority() {
+    // Serde's derived struct would bind `["conversation-1","evt-1","obsolete"]` to
+    // `StaleResolutionBody`'s three fields positionally — a fully valid-looking request that,
+    // without the shared `ObjectOnly` floor, would decode and reach the post authority. It is
+    // the same minimal `422 {"error":"invalid input"}` and the admission is never consulted.
+    let fixture = fixture(AdmissionMode::Matching, true);
+    let (status, body) = call(
+        fixture.app,
+        "agent-1",
+        Body::from(r#"["conversation-1","evt-1","obsolete"]"#),
+        Some(principal(None)),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({"error": "invalid input"})
+    );
+    assert_eq!(fixture.admission_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.capability_calls.load(Ordering::SeqCst), 0);
+    assert!(fixture.observer.observed.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

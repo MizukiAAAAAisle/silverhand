@@ -478,7 +478,9 @@ async fn a_missing_human_identifier_answers_before_the_body_is_parsed() {
 }
 
 /// Shape before size: a body that is both the wrong shape AND oversized is answered as
-/// the wrong shape, with privacy-safe issues and no echo of what was sent.
+/// the wrong shape — the shared minimal `422 {"error":"invalid input"}`, never the content
+/// cap and never an echo of what was sent. The status alone carries "shape, not size": a
+/// 413 would mean the cap won, and the door publishes no enumerated reason to leak.
 #[tokio::test]
 async fn an_invalid_shape_answers_before_the_content_cap() {
     let oversized_but_not_a_string = format!(r#"{{"content":{}}}"#, "1".repeat(70_000));
@@ -489,10 +491,12 @@ async fn an_invalid_shape_answers_before_the_content_cap() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body.contains(r#""error":"invalid input""#), "{body}");
-    assert!(body.contains(r#""code":"invalid_type""#), "{body}");
-    assert!(body.contains(r#""path":["content"]"#), "{body}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap(),
+        serde_json::json!({ "error": "invalid input" }),
+        "{body}"
+    );
     assert!(
         !body.contains("111"),
         "the refusal echoed the value: {body}"
@@ -537,12 +541,12 @@ async fn each_door_words_the_content_cap_for_its_own_caller() {
     assert_eq!(unit.calls(), 0);
 }
 
-/// A LEGAL JSON BODY THAT IS NOT AN OBJECT is answered about the document, and the empty
-/// path survives all the way to the wire.
+/// A LEGAL JSON BODY THAT IS NOT AN OBJECT is refused at the root — the shared minimal
+/// `422 {"error":"invalid input"}`, the same answer a missing or ill-typed field gets.
 ///
-/// `path: []` is the observable half: a renderer that dropped an empty array, or a door that
-/// went looking for fields a number does not have, would both still answer 400 — so the
-/// status is not the assertion here, the body is.
+/// The door does not go looking for fields a non-object cannot have: the agent door in
+/// particular does not invent its required `target`. The status is the assertion, and the
+/// minimal body carries no enumerated reason to leak.
 #[tokio::test]
 async fn a_non_object_body_is_refused_at_the_root_on_both_doors() {
     let unit = CountingUnitOfWork::default();
@@ -560,13 +564,10 @@ async fn a_non_object_body_is_refused_at_the_root_on_both_doors() {
         .await;
 
         for (status, body) in [(human_status, &human_body), (agent_status, &agent_body)] {
-            assert_eq!(status, StatusCode::BAD_REQUEST, "{root}");
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{root}");
             assert_eq!(
                 serde_json::from_str::<Value>(body).unwrap(),
-                serde_json::json!({
-                    "error": "invalid input",
-                    "issues": [{"code": "invalid_type", "path": []}]
-                }),
+                serde_json::json!({ "error": "invalid input" }),
                 "{root}"
             );
         }
@@ -609,7 +610,7 @@ async fn one_faulty_request_is_answered_by_whichever_gate_its_own_door_asks_firs
 
     let (agent_status, agent_body) =
         answered(closed(), agent_request(AGENT_PATH, malformed())).await;
-    assert_eq!(agent_status, StatusCode::BAD_REQUEST);
+    assert_eq!(agent_status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(agent_body.contains("invalid input"), "{agent_body}");
     assert!(!agent_body.contains("forbidden"), "{agent_body}");
 
@@ -967,7 +968,7 @@ async fn a_request_that_fails_two_gates_is_answered_by_the_earlier_one() {
         Err(CapabilityDenied),
     )
     .await;
-    assert_eq!(payload.status, StatusCode::BAD_REQUEST);
+    assert_eq!(payload.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(payload.body.contains("invalid input"), "{}", payload.body);
     assert_eq!(
         (payload.address, payload.capability, payload.committed),

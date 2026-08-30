@@ -35,7 +35,7 @@ use crate::messaging::{
     execute::{ResolvedSendContext, execute},
     outcome::refused_send,
     references::MarkdownReferencePositions,
-    send_request::{envelope_too_large, human_content_too_large, invalid_input},
+    send_request::{envelope_too_large, human_content_too_large},
 };
 
 pub const DIRECT_PAIR_INITIATION_PATH: &str = "/api/agents/{id}/direct-messages";
@@ -196,7 +196,7 @@ fn error(status: StatusCode, message: &'static str) -> Response {
 /// answers.
 fn refuse_payload(refusal: PayloadRefusal) -> Response {
     match refusal {
-        PayloadRefusal::Shape(issues) => invalid_input(issues).into_response(),
+        PayloadRefusal::Invalid => crate::wire_admission::invalid_input(),
         PayloadRefusal::ContentTooLarge { actual_bytes } => {
             human_content_too_large(actual_bytes).into_response()
         }
