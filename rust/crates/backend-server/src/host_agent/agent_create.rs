@@ -82,13 +82,13 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    body::Bytes,
     extract::{Extension, RawQuery, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
 };
-use serde::Serialize;
+use garde::Validate;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use silverhand_backend_core::{
     agent_creation::{
@@ -122,6 +122,8 @@ use crate::agent_wire::{AgentDto, reproject_committed_agent};
 use crate::clock::ProcessClock;
 use crate::error;
 use crate::messaging::collaboration::runtime_control::placement_refusal;
+use crate::wire_admission::{self, ValidatedJson};
+use crate::wire_patch::RequiredPatchField;
 
 /// The product route template. `POST` on the collection; the composition root mounts it
 /// alongside the `GET` list on the same path at mount time.
@@ -297,7 +299,7 @@ async fn agent_create<C, H, M, R, V, G, E, RD, S, RS, OD, DP, AD, CL>(
     principal: Option<Extension<UserId>>,
     headers: HeaderMap,
     RawQuery(raw_query): RawQuery,
-    body: Bytes,
+    ValidatedJson(raw): ValidatedJson<RawCreateBody>,
 ) -> Response
 where
     C: ComputerReadModel,
@@ -317,15 +319,25 @@ where
 {
     let inner = &state.0;
 
+    // BODY ADMISSION is framework-owned and runs BEFORE this handler (shiki, per the
+    // anchor): `ValidatedJson` already decoded the body with native `Json` (a malformed
+    // body / wrong-typed or present-`null` field / missing Content-Type keeps its native
+    // 400/422/415) and ran the stateless garde rules. So a structural body fault precedes
+    // the principal composition check below — the old hand-rolled principal-before-body
+    // order no longer holds and is not a parity gate.
+
     // PRINCIPAL — the auth gate; its absence is a composition fault, not a request.
     let Some(Extension(actor)) = principal else {
         tracing::error!("agent-create route reached without its human principal fact");
         return internal_error();
     };
 
-    // WIRE ADMISSION (body) — one terminal `invalid input` for every field/combo fault.
-    let Some(input) = parse_create_input(&body) else {
-        return invalid_input();
+    // SEMANTIC ADMISSION — the cross-field `TryFrom` settles handle grammar, the runtime
+    // enum, reasoning shape+allowlist, fast-mode capability, session-scope enum, and
+    // host_id normalization; any fault is the one terminal `422 {"error":"invalid input"}`.
+    let input = match CreateAgentInput::try_from(raw) {
+        Ok(input) => input,
+        Err(()) => return wire_admission::invalid_input(),
     };
 
     // WIRE ADMISSION (Idempotency-Key header) — after the body, matching TS.
@@ -634,85 +646,122 @@ fn materialize_failure_message(code: MaterializeFailureCode) -> &'static str {
 // Body admission
 // ===========================================================================
 
-/// The raw JSON shape. `#[serde(default)]` on every field makes them all optional at
-/// the deserialize layer (so the required-field rules live below), and unknown keys are
-/// ignored — mirroring Zod `.object`'s strip-unknown. A type mismatch (e.g. a number
-/// where a string/bool is expected) fails the whole parse → `invalid input`.
-#[derive(serde::Deserialize)]
+/// The raw JSON shape, decoded structurally by serde and validated (statelessly) by
+/// garde. `name` and `runtime` are required, non-null keys — an absent or present-`null`
+/// key is the native serde data fault (`422`), not a fused `400`. Every other field is
+/// Zod `.optional()` but NOT `.nullable()`: a present `null` must be rejected, so they
+/// are [`RequiredPatchField<T>`] (Missing/Value; present-`null` is a native decode
+/// error) rather than a plain `Option<T>` (which would fold present-`null` into missing
+/// and widen the accepted set). Unknown keys are ignored — Zod `.object`'s strip-unknown
+/// (no `deny_unknown_fields`).
+///
+/// Every rule create needs is cross-field or normalization (the handle grammar, the
+/// runtime enum, the reasoning-token shape AND its runtime/model allowlist, the
+/// fast-mode runtime allowlist, the session-scope enum, the `host_id` empty→default
+/// normalization), so all of it lives in `TryFrom<RawCreateBody>`; there is no stateless
+/// single-field garde rule to run, hence every field is `#[garde(skip)]`.
+#[derive(Debug, Deserialize, Validate)]
 struct RawCreateBody {
+    #[garde(skip)]
+    name: String,
+    #[garde(skip)]
+    runtime: String,
     #[serde(default)]
-    name: Option<String>,
+    #[garde(skip)]
+    model: RequiredPatchField<String>,
     #[serde(default)]
-    runtime: Option<String>,
+    #[garde(skip)]
+    reasoning_effort: RequiredPatchField<String>,
     #[serde(default)]
-    model: Option<String>,
+    #[garde(skip)]
+    fast_mode: RequiredPatchField<bool>,
     #[serde(default)]
-    reasoning_effort: Option<String>,
+    #[garde(skip)]
+    description: RequiredPatchField<String>,
     #[serde(default)]
-    fast_mode: Option<bool>,
+    #[garde(skip)]
+    host_id: RequiredPatchField<String>,
     #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    host_id: Option<String>,
-    #[serde(default)]
-    session_scope: Option<String>,
+    #[garde(skip)]
+    session_scope: RequiredPatchField<String>,
 }
 
-/// Admit the body against `CreateAgentInputSchema` + its `superRefine`. `None` is the
-/// ONE terminal `invalid input` for every fault (issues dropped, PATCH precedent). All
-/// format legality is settled HERE, before the core value is built (the core trusts it).
-fn parse_create_input(body: &Bytes) -> Option<CreateAgentInput> {
-    let raw: RawCreateBody = serde_json::from_slice(body).ok()?;
-
-    // `name` and `runtime` are required; the handle grammar and the runtime enum are
-    // the field-level schemas.
-    let name = ParticipantHandle::parse(raw.name?.as_str()).ok()?;
-    let runtime = RuntimeKind::parse(&raw.runtime?)?;
-
-    // `reasoning_effort`: the token SHAPE (ReasoningEffortTokenSchema) then the
-    // runtime/model allowlist (the superRefine). A present token must clear both.
-    if let Some(token) = raw.reasoning_effort.as_deref()
-        && !is_reasoning_token(token)
-    {
-        return None;
+/// Collapse an optional, non-nullable wire field to a domain `Option`: a present value
+/// carries through, an absent key is `None`. (A present `null` never reaches here — it
+/// is the decode error `RequiredPatchField` enforces.)
+fn present<T>(field: RequiredPatchField<T>) -> Option<T> {
+    match field {
+        RequiredPatchField::Value(value) => Some(value),
+        RequiredPatchField::Missing => None,
     }
-    if !reasoning_effort_valid_for_runtime(
-        runtime,
-        raw.reasoning_effort.as_deref(),
-        raw.model.as_deref(),
-    ) {
-        return None;
+}
+
+impl TryFrom<RawCreateBody> for CreateAgentInput {
+    /// Semantic-admission failure; the caller maps it to the minimal `422`.
+    type Error = ();
+
+    /// Admit the decoded body against `CreateAgentInputSchema` + its `superRefine`. Every
+    /// fault folds to `Err(())` (the ONE terminal `invalid input`, issues dropped — the
+    /// PATCH precedent). All format legality is settled HERE, before the core value is
+    /// built (the core trusts it).
+    fn try_from(raw: RawCreateBody) -> Result<Self, Self::Error> {
+        let model = present(raw.model);
+        let reasoning_effort = present(raw.reasoning_effort);
+        let fast_mode = present(raw.fast_mode);
+        let description = present(raw.description);
+        let host_id = present(raw.host_id);
+        let session_scope = present(raw.session_scope);
+
+        // `name` and `runtime` are present (required keys); the handle grammar and the
+        // runtime enum are their field-level schemas.
+        let name = ParticipantHandle::parse(raw.name.as_str()).map_err(|_| ())?;
+        let runtime = RuntimeKind::parse(&raw.runtime).ok_or(())?;
+
+        // `reasoning_effort`: the token SHAPE (ReasoningEffortTokenSchema) then the
+        // runtime/model allowlist (the superRefine). A present token must clear both.
+        if let Some(token) = reasoning_effort.as_deref()
+            && !is_reasoning_token(token)
+        {
+            return Err(());
+        }
+        if !reasoning_effort_valid_for_runtime(
+            runtime,
+            reasoning_effort.as_deref(),
+            model.as_deref(),
+        ) {
+            return Err(());
+        }
+
+        // `fast_mode`: only a fast-mode-capable runtime may carry the tri-state at all.
+        if fast_mode.is_some() && !runtime_supports_fast_mode(runtime) {
+            return Err(());
+        }
+
+        // `session_scope`: the enum, when present. Absent defaults to Conversation in core.
+        let session_scope = match session_scope.as_deref() {
+            None => None,
+            Some(scope) => Some(AgentSessionScope::parse(scope).ok_or(())?),
+        };
+
+        // `host_id`: empty/absent → default placement (TS truthy check); a non-empty
+        // string always parses (the id newtype rejects only the empty string) and lets
+        // core placement decide ownership/attachment.
+        let host_id = match host_id.as_deref() {
+            Some(host) if !host.is_empty() => Some(HostId::parse(host).map_err(|_| ())?),
+            _ => None,
+        };
+
+        Ok(CreateAgentInput {
+            name,
+            runtime,
+            model,
+            reasoning_effort,
+            fast_mode,
+            description,
+            host_id,
+            session_scope,
+        })
     }
-
-    // `fast_mode`: only a fast-mode-capable runtime may carry the tri-state at all.
-    if raw.fast_mode.is_some() && !runtime_supports_fast_mode(runtime) {
-        return None;
-    }
-
-    // `session_scope`: the enum, when present. Absent defaults to Conversation in core.
-    let session_scope = match raw.session_scope.as_deref() {
-        None => None,
-        Some(scope) => Some(AgentSessionScope::parse(scope)?),
-    };
-
-    // `host_id`: empty/absent → default placement (TS truthy check); a non-empty string
-    // always parses (the id newtype rejects only the empty string) and lets core
-    // placement decide ownership/attachment.
-    let host_id = match raw.host_id.as_deref() {
-        Some(host) if !host.is_empty() => Some(HostId::parse(host).ok()?),
-        _ => None,
-    };
-
-    Some(CreateAgentInput {
-        name,
-        runtime,
-        model: raw.model,
-        reasoning_effort: raw.reasoning_effort,
-        fast_mode: raw.fast_mode,
-        description: raw.description,
-        host_id,
-        session_scope,
-    })
 }
 
 /// `ReasoningEffortTokenSchema`: `.min(1).max(32)` code units, `/^[a-z][a-z0-9_-]*$/`.
@@ -796,7 +845,6 @@ fn wants_retry(raw_query: &Option<String>) -> bool {
 // Responses
 // ===========================================================================
 
-const INVALID_INPUT: &str = "invalid input";
 const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
 
 const IDEMPOTENCY_KEY_MISSING_CODE: &str = "idempotency_key_missing";
@@ -805,14 +853,6 @@ const IDEMPOTENCY_KEY_MISSING_MESSAGE: &str =
 const IDEMPOTENCY_KEY_MALFORMED_CODE: &str = "idempotency_key_malformed";
 const IDEMPOTENCY_KEY_MALFORMED_MESSAGE: &str =
     "Idempotency-Key must match /^[A-Za-z0-9_-]{1,64}$/ (per design §14 Q1)";
-
-fn invalid_input() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({ "error": INVALID_INPUT })),
-    )
-        .into_response()
-}
 
 fn idempotency_error(code: &'static str, message: &'static str) -> Response {
     (
@@ -888,16 +928,20 @@ mod tests {
         WorkspaceId::parse(id).expect("workspace id")
     }
 
-    // ---- admission unit tests ----
+    // ---- admission unit tests (SEMANTIC value plane) ----
+    //
+    // These exercise serde-decode + `TryFrom` together, the semantic-admission verdict.
+    // The wire STATUS split (native structural 400/422/415 vs the semantic 422 envelope)
+    // is the extractor's contract, covered by the router-level tests further down.
 
-    fn body(json: Value) -> Bytes {
-        Bytes::from(serde_json::to_vec(&json).unwrap())
+    fn admit(json: Value) -> Option<CreateAgentInput> {
+        let raw: RawCreateBody = serde_json::from_value(json).ok()?;
+        CreateAgentInput::try_from(raw).ok()
     }
 
     #[test]
     fn a_minimal_agent_scoped_body_admits() {
-        let input = parse_create_input(&body(json!({ "name": "alice", "runtime": "codex" })))
-            .expect("admits");
+        let input = admit(json!({ "name": "alice", "runtime": "codex" })).expect("admits");
         assert_eq!(input.name, ParticipantHandle::parse("alice").unwrap());
         assert_eq!(input.runtime, RuntimeKind::Codex);
         assert!(input.host_id.is_none());
@@ -906,56 +950,62 @@ mod tests {
 
     #[test]
     fn unknown_keys_are_stripped_not_rejected() {
-        assert!(
-            parse_create_input(&body(
-                json!({ "name": "alice", "runtime": "codex", "surprise": 1 })
-            ))
-            .is_some()
-        );
+        assert!(admit(json!({ "name": "alice", "runtime": "codex", "surprise": 1 })).is_some());
     }
 
     #[test]
     fn a_missing_name_or_runtime_is_invalid() {
-        assert!(parse_create_input(&body(json!({ "runtime": "codex" }))).is_none());
-        assert!(parse_create_input(&body(json!({ "name": "alice" }))).is_none());
+        assert!(admit(json!({ "runtime": "codex" })).is_none());
+        assert!(admit(json!({ "name": "alice" })).is_none());
+    }
+
+    #[test]
+    fn a_present_null_on_an_optional_field_is_a_decode_fault() {
+        // Every optional field is `.optional()` but NOT `.nullable()`: a present `null`
+        // is a structural decode fault (`RequiredPatchField` rejects it), never folded
+        // into "absent". Each widens the accepted set if mishandled.
+        for field in [
+            "model",
+            "reasoning_effort",
+            "fast_mode",
+            "description",
+            "host_id",
+            "session_scope",
+        ] {
+            let mut object = serde_json::Map::new();
+            object.insert("name".to_owned(), json!("alice"));
+            object.insert("runtime".to_owned(), json!("codex"));
+            object.insert(field.to_owned(), Value::Null);
+            assert!(
+                serde_json::from_value::<RawCreateBody>(Value::Object(object)).is_err(),
+                "present-null {field} must be a decode fault"
+            );
+        }
     }
 
     #[test]
     fn a_bad_runtime_enum_is_invalid() {
-        assert!(parse_create_input(&body(json!({ "name": "alice", "runtime": "nope" }))).is_none());
+        assert!(admit(json!({ "name": "alice", "runtime": "nope" })).is_none());
     }
 
     #[test]
     fn a_bad_handle_grammar_is_invalid() {
-        assert!(
-            parse_create_input(&body(json!({ "name": "has space", "runtime": "codex" }))).is_none()
-        );
+        assert!(admit(json!({ "name": "has space", "runtime": "codex" })).is_none());
     }
 
     #[test]
     fn a_type_mismatch_is_invalid() {
         // `fast_mode` must be a boolean; a string fails the whole deserialize.
         assert!(
-            parse_create_input(&body(
-                json!({ "name": "alice", "runtime": "codex", "fast_mode": "yes" })
-            ))
-            .is_none()
+            admit(json!({ "name": "alice", "runtime": "codex", "fast_mode": "yes" })).is_none()
         );
-    }
-
-    #[test]
-    fn malformed_json_is_invalid() {
-        assert!(parse_create_input(&Bytes::from_static(b"not json")).is_none());
     }
 
     #[test]
     fn a_reasoning_token_with_a_bad_shape_is_invalid() {
         // Uppercase fails the `^[a-z]` shape before the allowlist is even consulted.
         assert!(
-            parse_create_input(&body(
-                json!({ "name": "a", "runtime": "codex", "reasoning_effort": "HIGH" })
-            ))
-            .is_none()
+            admit(json!({ "name": "a", "runtime": "codex", "reasoning_effort": "HIGH" })).is_none()
         );
     }
 
@@ -963,45 +1013,29 @@ mod tests {
     fn a_reasoning_token_not_in_the_runtime_allowlist_is_invalid() {
         // Claude has no reasoning options; any token is out of the allowlist.
         assert!(
-            parse_create_input(&body(
-                json!({ "name": "a", "runtime": "claude", "reasoning_effort": "high" })
-            ))
-            .is_none()
+            admit(json!({ "name": "a", "runtime": "claude", "reasoning_effort": "high" }))
+                .is_none()
         );
     }
 
     #[test]
     fn fast_mode_on_a_non_capable_runtime_is_invalid() {
         // Only Codex accepts fast_mode; Claude with any fast_mode present is invalid.
-        assert!(
-            parse_create_input(&body(
-                json!({ "name": "a", "runtime": "claude", "fast_mode": false })
-            ))
-            .is_none()
-        );
+        assert!(admit(json!({ "name": "a", "runtime": "claude", "fast_mode": false })).is_none());
     }
 
     #[test]
     fn a_bad_session_scope_is_invalid() {
         assert!(
-            parse_create_input(&body(
-                json!({ "name": "a", "runtime": "codex", "session_scope": "team" })
-            ))
-            .is_none()
+            admit(json!({ "name": "a", "runtime": "codex", "session_scope": "team" })).is_none()
         );
     }
 
     #[test]
     fn an_empty_host_id_defaults_placement_a_non_empty_one_is_carried() {
-        let empty = parse_create_input(&body(
-            json!({ "name": "a", "runtime": "codex", "host_id": "" }),
-        ))
-        .unwrap();
+        let empty = admit(json!({ "name": "a", "runtime": "codex", "host_id": "" })).unwrap();
         assert!(empty.host_id.is_none());
-        let named = parse_create_input(&body(
-            json!({ "name": "a", "runtime": "codex", "host_id": "h1" }),
-        ))
-        .unwrap();
+        let named = admit(json!({ "name": "a", "runtime": "codex", "host_id": "h1" })).unwrap();
         assert_eq!(named.host_id, Some(HostId::parse("h1").unwrap()));
     }
 
@@ -1729,9 +1763,29 @@ mod tests {
         assert_eq!(body, "Internal Server Error");
     }
 
+    // A request builder carrying a valid principal + Idempotency-Key, so only the BODY
+    // (and its Content-Type) varies. `wired_router`'s core ports all `unreachable!()` off
+    // the retry-not-found path, so a plain (non-error) response to any of these bodies is
+    // itself the saga-zero-reach proof: an admission fault returns before `create_agent`.
+    fn create_request(body: &str, content_type: bool) -> Request<Body> {
+        let mut builder = Request::post("/api/agents")
+            .header("Idempotency-Key", "fresh-key-1")
+            .extension(user("creator-1"));
+        if content_type {
+            builder = builder.header("content-type", "application/json");
+        }
+        builder.body(Body::from(body.to_owned())).unwrap()
+    }
+
+    fn is_semantic_envelope(body: &str) -> bool {
+        serde_json::from_str::<Value>(body).ok() == Some(json!({ "error": "invalid input" }))
+    }
+
     #[tokio::test]
-    async fn a_malformed_body_is_400_invalid_input_before_the_key_check() {
-        // No Idempotency-Key header at all, but the body fault wins (body precedes key).
+    async fn a_malformed_body_keeps_the_native_400_before_the_key_check() {
+        // No Idempotency-Key header at all, but the framework-owned body extraction runs
+        // first: a malformed body is axum's NATIVE 400 (not the fused semantic envelope,
+        // not the idempotency error), and the handler — hence the key check — is skipped.
         let request = Request::post("/api/agents")
             .header("content-type", "application/json")
             .extension(user("creator-1"))
@@ -1739,8 +1793,71 @@ mod tests {
             .unwrap();
         let (status, body) = oneshot(request).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        let json: Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(json["error"], "invalid input");
+        assert!(
+            !is_semantic_envelope(&body),
+            "native rejection, not semantic"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_structurally_wrong_body_keeps_the_native_422() {
+        // Non-object shape, missing required key, wrong-typed key, and a present-null on a
+        // `.optional()`-not-`.nullable()` field — all NATIVE serde data faults (422 today),
+        // never the semantic envelope, never the saga.
+        for body in [
+            "5",
+            r#"{"runtime":"codex"}"#,
+            r#"{"name":"a"}"#,
+            r#"{"name":123,"runtime":"codex"}"#,
+            r#"{"name":"a","runtime":"codex","fast_mode":"yes"}"#,
+            r#"{"name":"a","runtime":"codex","model":null}"#,
+            // The accepted-set falsifier: field-aligned and well-typed, this array would
+            // positionally bind name="alice"/runtime="codex" — a body that WOULD create —
+            // under a bare derive. The shared object-only floor (#2246) makes it a native
+            // 422 before the handler; the saga's placement/handle reads (`unreachable!`
+            // in `InertCore`) are never touched, so authority reach is zero.
+            r#"["alice","codex"]"#,
+        ] {
+            let (status, resp) = oneshot(create_request(body, true)).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "body {body:?}");
+            assert!(
+                !is_semantic_envelope(&resp),
+                "native 422, not semantic: {body:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_semantic_rule_fault_is_the_minimal_422_invalid_input() {
+        // Structurally valid bodies that fail the cross-field `TryFrom`: bad handle
+        // grammar, bad runtime enum, bad reasoning shape, fast-mode on a non-capable
+        // runtime, bad session-scope enum. Each is the ONE terminal semantic 422.
+        for body in [
+            r#"{"name":"has space","runtime":"codex"}"#,
+            r#"{"name":"a","runtime":"nope"}"#,
+            r#"{"name":"a","runtime":"codex","reasoning_effort":"HIGH"}"#,
+            r#"{"name":"a","runtime":"claude","fast_mode":false}"#,
+            r#"{"name":"a","runtime":"codex","session_scope":"team"}"#,
+        ] {
+            let (status, resp) = oneshot(create_request(body, true)).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "body {body:?}");
+            assert!(
+                is_semantic_envelope(&resp),
+                "semantic envelope expected: {body:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_content_type_keeps_the_native_415() {
+        // Create is a JSON write; a body with no Content-Type is the native `Json` 415.
+        let (status, body) = oneshot(create_request(
+            r#"{"name":"alice","runtime":"codex"}"#,
+            false,
+        ))
+        .await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert!(!is_semantic_envelope(&body), "native 415, not semantic");
     }
 
     #[tokio::test]

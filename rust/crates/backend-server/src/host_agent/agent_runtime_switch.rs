@@ -15,12 +15,23 @@
 //!     found"}`, so the surface is never an existence oracle.
 //!  2. AUTHORITY ([`can_edit_agent`]) — only the creator (or system) may change it;
 //!     anyone who could merely see it gets `403 {"error":"forbidden"}`.
-//!  3. WIRE ADMISSION — `SwitchAgentRuntimeInputSchema`: `.strict()`, all four tuning
-//!     keys REQUIRED (a missing key cannot silently select a default), `model` trimmed
-//!     and non-empty-or-null, plus the two cross-field tuning-legality refinements
-//!     against the TARGET runtime. Every malformed shape collapses to ONE terminal
-//!     `400 {"error":"invalid input"}` (the Zod `issues` array is dropped, matching the
-//!     ratified `PATCH` precedent — no consumer branches on it).
+//!  3. WIRE ADMISSION — `SwitchAgentRuntimeInputSchema`: `.strict()` (serde
+//!     `deny_unknown_fields`), all four tuning keys REQUIRED (each nullable via the
+//!     frozen [`RequiredNullable`] wire arm, so a missing key is a native decode fault
+//!     that cannot silently select a default, while an explicit `null` is the caller's
+//!     "target driver's default"), `model` trimmed and non-empty-or-null, plus the two
+//!     cross-field tuning-legality refinements against the TARGET runtime. Structural
+//!     faults keep their native `Json` rejection (400/422/415); every SEMANTIC fault
+//!     collapses to ONE terminal `422 {"error":"invalid input"}` (the Zod `issues` array
+//!     is dropped, matching the ratified `PATCH` precedent — no consumer branches on it).
+//!
+//!     Body extraction is framework-owned and runs BEFORE this handler, so a STRUCTURAL
+//!     body fault precedes the visibility/authority gates. Error ORDER is not a parity
+//!     gate (shiki, per the anchor + sibling `agent_patch`): the body fault is
+//!     agent-independent, so it never distinguishes an existent from an absent agent, and
+//!     the anti-enumeration 404 still owns every existence-revealing outcome. The
+//!     cross-field `TryFrom` (target-runtime legality) runs after authority, as before.
+
 //!  4. SAGA — hand the validated request to [`switch_agent_runtime`]. Its product
 //!     failures render as the TS `{"error":<message>,"code":<code>}` envelope at the
 //!     status each arm carries; the availability faults render exactly as the daemon
@@ -45,14 +56,13 @@
 
 use axum::{
     Json, Router,
-    body::Bytes,
     extract::{Extension, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::put,
 };
-use serde::Serialize;
-use serde_json::Value;
+use garde::Validate;
+use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
     agent_detail_read::AgentDetailReadModel,
     agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
@@ -81,6 +91,8 @@ use silverhand_backend_core::{
 use crate::agent_wire::{AgentDto, reproject_committed_agent};
 use crate::clock::ProcessClock;
 use crate::error;
+use crate::wire_admission::{self, ValidatedJson};
+use crate::wire_patch::RequiredNullable;
 
 /// The product route template, in axum's `{id}` capture syntax.
 pub const AGENT_RUNTIME_PATH: &str = "/api/agents/{id}/runtime";
@@ -89,8 +101,6 @@ pub const AGENT_RUNTIME_PATH: &str = "/api/agents/{id}/runtime";
 const AGENT_NOT_FOUND: &str = "agent not found";
 /// The authority-refusal string (`c.json({ error: 'forbidden' }, 403)`).
 const FORBIDDEN: &str = "forbidden";
-/// The one terminal wire-admission refusal string (issues array dropped; see module note).
-const INVALID_INPUT: &str = "invalid input";
 /// The unmapped-error body: an unexpected internal fault falls to the framework default —
 /// a bare `text/plain` `500`, never a JSON envelope.
 const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
@@ -98,10 +108,6 @@ const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
 /// `ReasoningEffortTokenSchema` bounds: `.min(1).max(32)` code units.
 const REASONING_TOKEN_MIN: usize = 1;
 const REASONING_TOKEN_MAX: usize = 32;
-
-/// The four keys `SwitchAgentRuntimeInputSchema.strict()` admits — every other key is a
-/// strict-mode violation.
-const KNOWN_KEYS: [&str; 4] = ["runtime", "model", "reasoning_effort", "fast_mode"];
 
 #[allow(clippy::type_complexity)]
 struct SwitchState<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, Changed, C> {
@@ -243,7 +249,7 @@ async fn agent_runtime_switch<
     State(state): State<
         SwitchState<Reads, Snap, Avail, Coord, W, Seats, Inboxes, Cust, Focus, P, Changed, C>,
     >,
-    body: Bytes,
+    ValidatedJson(raw): ValidatedJson<SwitchBodyRaw>,
 ) -> Response
 where
     Reads: AgentDetailReadModel,
@@ -321,11 +327,14 @@ where
         return forbidden();
     }
 
-    // WIRE ADMISSION: parse against `SwitchAgentRuntimeInputSchema`; every malformed shape
-    // is one terminal `invalid input`.
-    let config = match parse_switch_body(&body) {
-        SwitchBody::Config(config) => config,
-        SwitchBody::Invalid => return invalid_input(),
+    // WIRE ADMISSION (semantic): the body was already decoded + structurally validated by
+    // the framework-owned `ValidatedJson` extractor (strict unknown keys, required keys,
+    // present-null vs value, types → native 400/422/415). The cross-field `TryFrom` settles
+    // the runtime enum, `model` trim/non-empty normalization, the reasoning-token shape, and
+    // the two target-runtime tuning-legality refinements; any fault is the one terminal 422.
+    let config = match SwitchAgentRuntimeConfig::try_from(raw) {
+        Ok(config) => config,
+        Err(()) => return wire_admission::invalid_input(),
     };
 
     // SAGA. The core orchestrates the durable transition against its typed ports; its
@@ -409,89 +418,93 @@ where
 // Wire admission — `SwitchAgentRuntimeInputSchema`
 // ===========================================================================
 
-/// The admission verdict for the switch body. Every malformed shape — bad JSON, a
-/// non-object, an unknown key (`.strict()`), a missing required key, an out-of-range or
-/// wrong-typed value, or a cross-field tuning-legality failure — collapses to
-/// [`Invalid`](SwitchBody::Invalid), the one terminal `400`.
-enum SwitchBody {
-    Config(SwitchAgentRuntimeConfig),
-    Invalid,
+/// The raw JSON shape of `SwitchAgentRuntimeInputSchema.strict()`. `deny_unknown_fields`
+/// is the `.strict()` policy; every field is a REQUIRED key (no `#[serde(default)]`), so a
+/// missing key is the native serde data fault, never a silent default. `runtime` is a
+/// required non-null enum (decoded as a string, mapped by the closed-set `TryFrom`); the
+/// three tuning keys are required-AND-nullable, the frozen [`RequiredNullable`] arm —
+/// decoded via [`RequiredNullable::deserialize_present`] on a field that is deliberately
+/// NOT `#[serde(default)]` so the derive owns the "missing key" verdict.
+///
+/// Every remaining rule is normalization or cross-field (the runtime enum, `model`
+/// trim/non-empty, the reasoning-token shape, and the two target-runtime tuning-legality
+/// refinements), so all of it lives in `TryFrom`; there is no stateless single-field garde
+/// rule, hence every field is `#[garde(skip)]`.
+#[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+struct SwitchBodyRaw {
+    #[garde(skip)]
+    runtime: String,
+    #[serde(deserialize_with = "RequiredNullable::deserialize_present")]
+    #[garde(skip)]
+    model: RequiredNullable<String>,
+    #[serde(deserialize_with = "RequiredNullable::deserialize_present")]
+    #[garde(skip)]
+    reasoning_effort: RequiredNullable<String>,
+    #[serde(deserialize_with = "RequiredNullable::deserialize_present")]
+    #[garde(skip)]
+    fast_mode: RequiredNullable<bool>,
 }
 
-/// Parse the body against `SwitchAgentRuntimeInputSchema`: `.strict()` (only the four
-/// tuning keys), every key REQUIRED (`null` is the caller's explicit "target driver's
-/// default"), `model` trimmed to non-empty-or-null, and the two `superRefine`
-/// tuning-legality rules against the target runtime.
-fn parse_switch_body(body: &Bytes) -> SwitchBody {
-    let Ok(value) = serde_json::from_slice::<Value>(body) else {
-        return SwitchBody::Invalid;
-    };
-    let Some(object) = value.as_object() else {
-        return SwitchBody::Invalid;
-    };
+impl TryFrom<SwitchBodyRaw> for SwitchAgentRuntimeConfig {
+    /// Semantic-admission failure; the caller maps it to the minimal `422`.
+    type Error = ();
 
-    // `.strict()` — any key outside the schema fails.
-    if object.keys().any(|key| !KNOWN_KEYS.contains(&key.as_str())) {
-        return SwitchBody::Invalid;
-    }
+    /// Admit the decoded body against `SwitchAgentRuntimeInputSchema`'s value rules + its
+    /// `superRefine`. Every fault folds to `Err(())` (the ONE terminal `invalid input`,
+    /// issues dropped — the PATCH precedent).
+    fn try_from(raw: SwitchBodyRaw) -> Result<Self, Self::Error> {
+        // `runtime: RuntimeKindSchema` — required; must be a member of the closed set.
+        let runtime = RuntimeKind::parse(&raw.runtime).ok_or(())?;
 
-    // `runtime: RuntimeKindSchema` — required; must be a member of the closed set.
-    let runtime = match object.get("runtime") {
-        Some(Value::String(raw)) => match RuntimeKind::parse(raw) {
-            Some(runtime) => runtime,
-            None => return SwitchBody::Invalid,
-        },
-        _ => return SwitchBody::Invalid,
-    };
-
-    // `model: z.string().trim().min(1).nullable()` — required KEY; null → driver default,
-    // a string is trimmed by the shared authority and must be non-empty after trim.
-    let model = match object.get("model") {
-        None => return SwitchBody::Invalid,
-        Some(Value::Null) => None,
-        Some(Value::String(raw)) => {
-            let trimmed = raw.trim_matches(is_ecmascript_trim_whitespace);
-            if trimmed.is_empty() {
-                return SwitchBody::Invalid;
+        // `model: z.string().trim().min(1).nullable()` — `null` → driver default; a string
+        // is trimmed by the shared ECMAScript authority and must be non-empty after trim.
+        let model = match raw.model {
+            RequiredNullable::Null => None,
+            RequiredNullable::Value(raw_model) => {
+                let trimmed = raw_model.trim_matches(is_ecmascript_trim_whitespace);
+                if trimmed.is_empty() {
+                    return Err(());
+                }
+                Some(trimmed.to_owned())
             }
-            Some(trimmed.to_owned())
+        };
+
+        // `reasoning_effort: ReasoningEffortTokenSchema.nullable()` — `null` → default;
+        // a string must clear the token SHAPE (per-runtime legality is the refine below).
+        let reasoning_effort = match raw.reasoning_effort {
+            RequiredNullable::Null => None,
+            RequiredNullable::Value(token) if is_reasoning_token(&token) => Some(token),
+            RequiredNullable::Value(_) => return Err(()),
+        };
+
+        // `fast_mode: FastModeSchema.nullable()` — `null` → default; a boolean carries.
+        let fast_mode = match raw.fast_mode {
+            RequiredNullable::Null => None,
+            RequiredNullable::Value(value) => Some(value),
+        };
+
+        // `.superRefine`: reasoning-effort must be valid for the TARGET runtime + model, and
+        // fast-mode may be set only on a runtime that supports it (an explicit null — now
+        // `None` — is always allowed, matching the schema's `!== null` guard).
+        if !reasoning_effort_valid_for_runtime(
+            runtime,
+            reasoning_effort.as_deref(),
+            model.as_deref(),
+        ) {
+            return Err(());
         }
-        Some(_) => return SwitchBody::Invalid,
-    };
+        if !runtime_supports_fast_mode(runtime) && fast_mode.is_some() {
+            return Err(());
+        }
 
-    // `reasoning_effort: ReasoningEffortTokenSchema.nullable()` — required KEY; structural
-    // token only (per-runtime legality is the cross-field refine below).
-    let reasoning_effort = match object.get("reasoning_effort") {
-        None => return SwitchBody::Invalid,
-        Some(Value::Null) => None,
-        Some(Value::String(raw)) if is_reasoning_token(raw) => Some(raw.clone()),
-        Some(_) => return SwitchBody::Invalid,
-    };
-
-    // `fast_mode: FastModeSchema.nullable()` — required KEY; a boolean or null.
-    let fast_mode = match object.get("fast_mode") {
-        None => return SwitchBody::Invalid,
-        Some(Value::Null) => None,
-        Some(Value::Bool(value)) => Some(*value),
-        Some(_) => return SwitchBody::Invalid,
-    };
-
-    // `.superRefine`: reasoning-effort must be valid for the TARGET runtime + model, and
-    // fast-mode may be set only on a runtime that supports it (`!== null` in the schema, so
-    // an explicit null is always allowed).
-    if !reasoning_effort_valid_for_runtime(runtime, reasoning_effort.as_deref(), model.as_deref()) {
-        return SwitchBody::Invalid;
+        Ok(SwitchAgentRuntimeConfig {
+            runtime,
+            model,
+            reasoning_effort,
+            fast_mode,
+        })
     }
-    if !runtime_supports_fast_mode(runtime) && fast_mode.is_some() {
-        return SwitchBody::Invalid;
-    }
-
-    SwitchBody::Config(SwitchAgentRuntimeConfig {
-        runtime,
-        model,
-        reasoning_effort,
-        fast_mode,
-    })
 }
 
 /// `ReasoningEffortTokenSchema`: `.min(1).max(32).regex(/^[a-z][a-z0-9_-]*$/)`. The regex
@@ -647,16 +660,6 @@ fn not_found() -> Response {
 
 fn forbidden() -> Response {
     (StatusCode::FORBIDDEN, Json(ErrorBody { error: FORBIDDEN })).into_response()
-}
-
-fn invalid_input() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ErrorBody {
-            error: INVALID_INPUT,
-        }),
-    )
-        .into_response()
 }
 
 fn internal_error() -> Response {
@@ -1013,12 +1016,30 @@ mod tests {
         body: &str,
         with_principal: bool,
     ) -> (StatusCode, String, usize) {
-        let read_calls = reads.calls.clone();
         let uri = format!("/api/agents/{id}/runtime");
         let mut request = Request::put(&uri).header("content-type", "application/json");
         if with_principal {
             request = request.extension(user("viewer-1"));
         }
+        run_raw(
+            reads,
+            snap,
+            request.body(Body::from(body.to_owned())).unwrap(),
+        )
+        .await
+    }
+
+    /// Drive the router with a fully built request (so a test can omit the `Content-Type`
+    /// or otherwise shape the raw request). Returns the status, the body, and how many times
+    /// the ACL read ran — the read count is the witness that a STRUCTURAL body fault is
+    /// refused by the framework-owned extractor BEFORE the ladder (zero reads), while a
+    /// SEMANTIC fault is refused inside the handler AFTER visibility+authority (one read).
+    async fn run_raw(
+        reads: FakeReads,
+        snap: FakeSnap,
+        request: Request<Body>,
+    ) -> (StatusCode, String, usize) {
+        let read_calls = reads.calls.clone();
         let response = router(
             reads,
             snap,
@@ -1033,11 +1054,15 @@ mod tests {
             Unreached,
             FixedClock(NOW),
         )
-        .oneshot(request.body(Body::from(body.to_owned())).unwrap())
+        .oneshot(request)
         .await
         .unwrap();
         let (status, text) = render(response).await;
         (status, text, read_calls.load(SeqCst))
+    }
+
+    fn is_semantic_envelope(body: &str) -> bool {
+        serde_json::from_str::<Value>(body).ok() == Some(json!({ "error": "invalid input" }))
     }
 
     fn valid_body() -> &'static str {
@@ -1184,27 +1209,51 @@ mod tests {
     }
 
     // ===================================================================
-    // Wire admission (400 invalid input) — through the ladder
+    // Wire admission — through the ladder
+    //
+    // Structural faults keep the native `Json` rejection (400/422/415) and are refused by
+    // the framework-owned extractor BEFORE the ladder, so nothing is read; SEMANTIC faults
+    // collapse to ONE terminal `422 {"error":"invalid input"}` inside the handler, AFTER
+    // visibility+authority, so the ACL read has run exactly once.
     // ===================================================================
 
     #[tokio::test]
-    async fn every_malformed_body_is_one_terminal_invalid_input() {
-        for body in [
+    async fn a_malformed_body_keeps_the_native_400_before_the_ladder() {
+        let (status, text, reads) = run(
+            FakeReads::new(present(creator_facts())),
+            absent_snap(),
+            "a1",
             "not json",
-            "[]",
-            "5",
-            "{}",                     // no keys
-            r#"{"runtime":"codex"}"#, // missing required keys
-            r#"{"runtime":"codex","model":null,"reasoning_effort":null,"fast_mode":null,"x":1}"#, // strict
-            r#"{"runtime":"bogus","model":null,"reasoning_effort":null,"fast_mode":null}"#, // bad enum
-            r#"{"runtime":"codex","model":"   ","reasoning_effort":null,"fast_mode":null}"#, // trims empty
-            r#"{"runtime":"codex","model":5,"reasoning_effort":null,"fast_mode":null}"#, // model non-string
-            r#"{"runtime":"codex","model":null,"reasoning_effort":"BAD","fast_mode":null}"#, // token regex
-            r#"{"runtime":"codex","model":null,"reasoning_effort":5,"fast_mode":null}"#, // token non-string
-            r#"{"runtime":"codex","model":null,"reasoning_effort":null,"fast_mode":"yes"}"#, // non-bool
-            r#"{"runtime":"claude","model":null,"reasoning_effort":null,"fast_mode":true}"#, // fast-mode refine
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            !is_semantic_envelope(&text),
+            "native rejection, not semantic"
+        );
+        assert_eq!(reads, 0, "the body extractor precedes the ACL read");
+    }
+
+    #[tokio::test]
+    async fn every_structural_body_fault_keeps_the_native_422_before_the_ladder() {
+        for body in [
+            "[]", // top-level array — wrong shape
+            "5",  // scalar — wrong shape
+            // Field-aligned and well-typed, this array would positionally bind
+            // runtime="claude"/model=Null/reasoning_effort=Null/fast_mode=Null — a switch
+            // that WOULD reach the snapshot/transition — under a bare derive. The shared
+            // object-only floor (#2246) makes it a native 422 before the ladder, so the
+            // ACL read (reads==0 below) and every transition port are never touched.
+            r#"["claude",null,null,null]"#,
+            "{}",                     // no keys — every required key missing
+            r#"{"runtime":"codex"}"#, // model/reasoning_effort/fast_mode keys missing
+            r#"{"runtime":"codex","model":null,"reasoning_effort":null,"fast_mode":null,"x":1}"#, // deny_unknown_fields
+            r#"{"runtime":"codex","model":5,"reasoning_effort":null,"fast_mode":null}"#, // model wrong type
+            r#"{"runtime":"codex","model":null,"reasoning_effort":5,"fast_mode":null}"#, // token wrong type
+            r#"{"runtime":"codex","model":null,"reasoning_effort":null,"fast_mode":"yes"}"#, // fast_mode wrong type
         ] {
-            let (status, text, _) = run(
+            let (status, text, reads) = run(
                 FakeReads::new(present(creator_facts())),
                 absent_snap(),
                 "a1",
@@ -1212,13 +1261,66 @@ mod tests {
                 true,
             )
             .await;
-            assert_eq!(status, StatusCode::BAD_REQUEST, "body {body:?} must be 400");
             assert_eq!(
-                parsed(&text),
-                json!({ "error": "invalid input" }),
-                "body {body:?} must be terminal invalid input"
+                status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "body {body:?} is the native structural 422"
             );
+            assert!(
+                !is_semantic_envelope(&text),
+                "body {body:?} keeps the native rejection, not the semantic envelope"
+            );
+            assert_eq!(reads, 0, "body {body:?} is refused before the ACL read");
         }
+    }
+
+    #[tokio::test]
+    async fn every_semantic_body_fault_is_one_terminal_invalid_input_after_the_ladder() {
+        for body in [
+            r#"{"runtime":"bogus","model":null,"reasoning_effort":null,"fast_mode":null}"#, // bad enum
+            r#"{"runtime":"codex","model":"   ","reasoning_effort":null,"fast_mode":null}"#, // trims empty
+            r#"{"runtime":"codex","model":null,"reasoning_effort":"BAD","fast_mode":null}"#, // token regex
+            r#"{"runtime":"claude","model":null,"reasoning_effort":null,"fast_mode":true}"#, // fast-mode refine
+        ] {
+            let (status, text, reads) = run(
+                FakeReads::new(present(creator_facts())),
+                absent_snap(),
+                "a1",
+                body,
+                true,
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "body {body:?} is the semantic 422"
+            );
+            assert!(
+                is_semantic_envelope(&text),
+                "body {body:?} is the terminal invalid input"
+            );
+            assert_eq!(reads, 1, "body {body:?} is judged after the ladder read");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_content_type_keeps_the_native_415_before_the_ladder() {
+        let request = Request::put("/api/agents/a1/runtime")
+            .extension(user("viewer-1"))
+            .body(Body::from(valid_body().to_owned()))
+            .unwrap();
+        let (status, text, reads) = run_raw(
+            FakeReads::new(present(creator_facts())),
+            absent_snap(),
+            request,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert!(
+            !is_semantic_envelope(&text),
+            "native rejection, not semantic"
+        );
+        assert_eq!(reads, 0, "the body extractor precedes the ACL read");
     }
 
     // ===================================================================
@@ -1265,14 +1367,13 @@ mod tests {
     }
 
     // ===================================================================
-    // Pure admission — `parse_switch_body`
+    // Pure admission — `SwitchBodyRaw` decode + `TryFrom`
     // ===================================================================
 
     fn admit(body: &str) -> Option<SwitchAgentRuntimeConfig> {
-        match parse_switch_body(&Bytes::from(body.to_owned())) {
-            SwitchBody::Config(config) => Some(config),
-            SwitchBody::Invalid => None,
-        }
+        serde_json::from_str::<SwitchBodyRaw>(body)
+            .ok()
+            .and_then(|raw| SwitchAgentRuntimeConfig::try_from(raw).ok())
     }
 
     #[test]
@@ -1298,6 +1399,27 @@ mod tests {
         assert_eq!(config.runtime, RuntimeKind::Claude);
         assert_eq!(config.model, None);
         assert_eq!(config.fast_mode, None);
+    }
+
+    #[test]
+    fn a_missing_tuning_key_fails_to_decode_rather_than_defaulting() {
+        // The three tuning keys are REQUIRED (RequiredNullable, no `#[serde(default)]`), so a
+        // body that omits one is a native decode fault — it never silently becomes `null`.
+        assert!(
+            serde_json::from_str::<SwitchBodyRaw>(r#"{"runtime":"codex"}"#).is_err(),
+            "an absent tuning key must be a decode fault, not a default"
+        );
+        // And the decode error is the native missing-field rejection, not a coerced value.
+        let err = serde_json::from_str::<SwitchBodyRaw>(r#"{"runtime":"codex"}"#).unwrap_err();
+        assert!(err.to_string().contains("missing field"), "got: {err}");
+    }
+
+    #[test]
+    fn an_explicit_null_tuning_key_decodes_to_the_domain_default() {
+        // A present `null` is distinct from a missing key: it decodes to the `Null` arm and
+        // maps to the domain's `None` (the target driver's default).
+        let config = admit(valid_body()).expect("valid");
+        assert_eq!(config.reasoning_effort, None);
     }
 
     // ===================================================================
