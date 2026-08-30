@@ -49,6 +49,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use silverhand_backend_core::agent_audit_read::{AgentAuditEvent, AgentAuditSink};
+use silverhand_backend_core::cli_invoke_audit::{CliInvoke, CliInvokeAuditSink};
 use silverhand_backend_core::cli_preflight_audit::{CliPreflightAuditSink, CliPreflightFailure};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -339,54 +340,77 @@ fn report_durable_failure(filename: &Arc<str>, health: &Arc<AtomicU8>, error: &s
     );
 }
 
-/// The production sink: a typed facade over one [`CategorizedJsonlWriter`] that projects
-/// a [`CliPreflightFailure`] into the exact `cli-<utc>.log` wire line.
-///
-/// Cloning shares the one underlying writer, so injecting a clone into router state and
-/// keeping another for shutdown closes the SAME file — never a second sink.
 #[derive(Clone)]
-pub struct CliPreflightFileSink<C: AuditClock> {
+struct CliAuditShared<C: AuditClock> {
     writer: CategorizedJsonlWriter,
     clock: C,
     app: AppTag,
     pid: u32,
 }
 
-impl<C: AuditClock> CliPreflightFileSink<C> {
-    /// Opens the `cli-<utc>.log` file for this boot under `dir` and spawns its writer.
-    /// The per-boot UTC stamp is sampled from `clock` once, here; an open failure is
-    /// surfaced so the composition root can fail startup.
+/// The sole lifecycle owner of the process's `cli-*.log` file.
+pub struct CliAuditFile<C: AuditClock> {
+    shared: CliAuditShared<C>,
+}
+
+impl<C: AuditClock> CliAuditFile<C> {
     pub async fn open(dir: PathBuf, app: AppTag, clock: C) -> std::io::Result<Self> {
         let stamp = filename_stamp(clock.now_unix_millis());
         let writer = CategorizedJsonlWriter::open(&dir, CLI_PREFIX, &stamp).await?;
         Ok(Self {
-            writer,
-            clock,
-            app,
-            pid: std::process::id(),
+            shared: CliAuditShared {
+                writer,
+                clock,
+                app,
+                pid: std::process::id(),
+            },
         })
     }
 
-    /// Drains, flushes, and closes the underlying file. Idempotent (see
-    /// [`CategorizedJsonlWriter::close`]).
+    pub fn preflight_sink(&self) -> CliPreflightFileSink<C> {
+        CliPreflightFileSink {
+            shared: self.shared.clone(),
+        }
+    }
+
+    pub fn invoke_sink(&self) -> CliInvokeFileSink<C> {
+        CliInvokeFileSink {
+            shared: self.shared.clone(),
+        }
+    }
+
     pub async fn close(&self) {
-        self.writer.close().await;
+        self.shared.writer.close().await;
     }
 
-    /// The underlying writer's health, for shutdown-close witnessing and diagnostics.
     pub fn state(&self) -> WriterState {
-        self.writer.state()
+        self.shared.writer.state()
     }
 
-    /// How many lines this sink has dropped over its life.
     pub fn dropped_lines(&self) -> u64 {
-        self.writer.dropped_lines()
+        self.shared.writer.dropped_lines()
+    }
+}
+
+/// Narrow preflight producer facade. It deliberately has no open/close lifecycle.
+#[derive(Clone)]
+pub struct CliPreflightFileSink<C: AuditClock> {
+    shared: CliAuditShared<C>,
+}
+
+impl<C: AuditClock> CliPreflightFileSink<C> {
+    pub fn state(&self) -> WriterState {
+        self.shared.writer.state()
+    }
+
+    pub fn dropped_lines(&self) -> u64 {
+        self.shared.writer.dropped_lines()
     }
 
     fn line_bytes(&self, failure: &CliPreflightFailure) -> Vec<u8> {
         use serde_json::{Map, Number, Value};
 
-        let ts = iso8601_utc_millis(self.clock.now_unix_millis());
+        let ts = iso8601_utc_millis(self.shared.clock.now_unix_millis());
         let mut line = Map::new();
         // Envelope, mirroring the product's `{ ts, level, msg, ...base }` prefix.
         line.insert("ts".to_owned(), Value::String(ts));
@@ -397,9 +421,12 @@ impl<C: AuditClock> CliPreflightFileSink<C> {
         );
         line.insert(
             "app".to_owned(),
-            Value::String(self.app.as_str().to_owned()),
+            Value::String(self.shared.app.as_str().to_owned()),
         );
-        line.insert("pid".to_owned(), Value::Number(Number::from(self.pid)));
+        line.insert(
+            "pid".to_owned(),
+            Value::Number(Number::from(self.shared.pid)),
+        );
         // Business fields, each an independently-addressable top-level key with the exact
         // casing the live contract uses. `category`/`status` are stamped constants.
         line.insert(
@@ -460,7 +487,148 @@ impl<C: AuditClock> CliPreflightFileSink<C> {
 impl<C: AuditClock> CliPreflightAuditSink for CliPreflightFileSink<C> {
     fn record(&self, failure: CliPreflightFailure) {
         let line = self.line_bytes(&failure);
-        self.writer.enqueue(line);
+        self.shared.writer.enqueue(line);
+    }
+}
+
+/// Narrow invocation producer facade. It shares the owner's writer and has no lifecycle.
+#[derive(Clone)]
+pub struct CliInvokeFileSink<C: AuditClock> {
+    shared: CliAuditShared<C>,
+}
+
+impl<C: AuditClock> CliInvokeFileSink<C> {
+    fn line_bytes(&self, invoke: &CliInvoke) -> Vec<u8> {
+        use serde_json::{Map, Number, Value};
+
+        let success = (200..400).contains(&invoke.http_status);
+        let level = if success {
+            "info"
+        } else if invoke.http_status >= 500 || invoke.error_kind.is_some() {
+            "error"
+        } else {
+            "warn"
+        };
+        let mut line = Map::new();
+        line.insert(
+            "ts".to_owned(),
+            Value::String(iso8601_utc_millis(self.shared.clock.now_unix_millis())),
+        );
+        line.insert("level".to_owned(), Value::String(level.to_owned()));
+        line.insert("msg".to_owned(), Value::String("cli.invoke".to_owned()));
+        line.insert(
+            "app".to_owned(),
+            Value::String(self.shared.app.as_str().to_owned()),
+        );
+        line.insert(
+            "pid".to_owned(),
+            Value::Number(Number::from(self.shared.pid)),
+        );
+        line.insert(
+            "category".to_owned(),
+            Value::String("cli.invoke".to_owned()),
+        );
+        line.insert(
+            "request_id".to_owned(),
+            Value::String(invoke.request_id.clone()),
+        );
+        line.insert(
+            "agentId".to_owned(),
+            Value::String(invoke.agent_id.as_str().to_owned()),
+        );
+        line.insert(
+            "noun".to_owned(),
+            invoke
+                .route
+                .map(|route| Value::String(route.noun.to_owned()))
+                .unwrap_or(Value::Null),
+        );
+        line.insert(
+            "verb".to_owned(),
+            invoke
+                .route
+                .map(|route| Value::String(route.verb.to_owned()))
+                .unwrap_or(Value::Null),
+        );
+        line.insert(
+            "method".to_owned(),
+            Value::String(invoke.method.as_str().to_owned()),
+        );
+        line.insert(
+            "route_suffix".to_owned(),
+            invoke
+                .route
+                .map(|route| Value::String(route.route_suffix.to_owned()))
+                .unwrap_or(Value::Null),
+        );
+        line.insert(
+            "query_keys".to_owned(),
+            Value::Array(
+                invoke
+                    .query_keys
+                    .iter()
+                    .map(|key| Value::String((*key).to_owned()))
+                    .collect(),
+            ),
+        );
+        line.insert(
+            "http_status".to_owned(),
+            Value::Number(Number::from(invoke.http_status)),
+        );
+        line.insert(
+            "duration_ms".to_owned(),
+            Number::from_f64(invoke.duration_ms.get())
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
+        );
+        line.insert(
+            "status".to_owned(),
+            Value::String(if success { "success" } else { "failure" }.to_owned()),
+        );
+        if let Some(code) = invoke.error_code {
+            line.insert(
+                "error_code".to_owned(),
+                Value::String(code.as_str().to_owned()),
+            );
+        }
+        if !invoke.error_issues.is_empty() {
+            line.insert(
+                "error_issues".to_owned(),
+                Value::Array(
+                    invoke
+                        .error_issues
+                        .as_slice()
+                        .iter()
+                        .map(|issue| {
+                            serde_json::json!({
+                                "path": issue.path.as_str(),
+                                "code": issue.code.as_str(),
+                            })
+                        })
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(reason) = invoke.stale_resolution_reason {
+            line.insert(
+                "stale_resolution_reason".to_owned(),
+                Value::String(reason.as_str().to_owned()),
+            );
+        }
+        if let Some(kind) = invoke.error_kind {
+            line.insert(
+                "error_kind".to_owned(),
+                Value::String(kind.as_str().to_owned()),
+            );
+        }
+        serde_json::to_vec(&Value::Object(line)).unwrap_or_default()
+    }
+}
+
+impl<C: AuditClock> CliInvokeAuditSink for CliInvokeFileSink<C> {
+    fn record(&self, invoke: CliInvoke) {
+        let line = self.line_bytes(&invoke);
+        self.shared.writer.enqueue(line);
     }
 }
 
@@ -678,6 +846,10 @@ impl<C: AuditClock> AgentAuditSink for AgentAuditFileSink<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use silverhand_backend_core::cli_invoke_audit::{
+        CliInvoke, CliInvokeAuditSink, CliInvokeErrorCode, CliInvokeIssue, CliInvokeIssueCode,
+        CliInvokeIssues, CliInvokeMethod, CliInvokeRoute,
+    };
     use silverhand_backend_core::cli_preflight_audit::NonNegativeFiniteF64;
     use silverhand_backend_core::identity::AgentId;
     use std::future::Future;
@@ -969,13 +1141,14 @@ mod tests {
     #[tokio::test]
     async fn the_facade_projects_the_exact_wire_line_and_persists_it() {
         let dir = tempfile::tempdir().unwrap();
-        let sink = CliPreflightFileSink::open(
+        let owner = CliAuditFile::open(
             dir.path().to_path_buf(),
             AppTag::Desktop,
             FixedClock(ANCHOR_MS),
         )
         .await
         .unwrap();
+        let sink = owner.preflight_sink();
 
         // A record exercising every arm: present + absent optionals, empty flags, and a
         // fractional duration that must survive verbatim.
@@ -990,7 +1163,7 @@ mod tests {
             error_message: Some("unknown flag --nope".to_owned()),
             duration_ms: Some(NonNegativeFiniteF64::new(12.5).unwrap()),
         });
-        sink.close().await;
+        owner.close().await;
 
         // The file is named for this boot's UTC stamp.
         let expected_name = format!("cli-{}.log", filename_stamp(ANCHOR_MS));
@@ -1028,7 +1201,68 @@ mod tests {
         );
         assert_eq!(object["status"], "failure");
 
-        assert_eq!(sink.state(), WriterState::ClosedShutdown);
+        assert_eq!(owner.state(), WriterState::ClosedShutdown);
+    }
+
+    #[tokio::test]
+    async fn one_cli_owner_persists_preflight_and_invoke_in_the_same_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let owner = CliAuditFile::open(
+            dir.path().to_path_buf(),
+            AppTag::Server,
+            FixedClock(ANCHOR_MS),
+        )
+        .await
+        .unwrap();
+        owner.preflight_sink().record(CliPreflightFailure {
+            agent_id: AgentId::parse("agent-7").unwrap(),
+            conversation_id: None,
+            noun: None,
+            verb: None,
+            flags_seen: Vec::new(),
+            error_code: None,
+            error_subkind: None,
+            error_message: None,
+            duration_ms: None,
+        });
+        owner.invoke_sink().record(CliInvoke {
+            request_id: "rust-7-1".to_owned(),
+            agent_id: AgentId::parse("agent-7").unwrap(),
+            route: Some(CliInvokeRoute {
+                noun: "message",
+                verb: "send",
+                route_suffix: "send-message",
+            }),
+            method: CliInvokeMethod::Post,
+            query_keys: Vec::new(),
+            http_status: 422,
+            duration_ms: NonNegativeFiniteF64::new(0.5).unwrap(),
+            error_code: Some(CliInvokeErrorCode::InvalidInput),
+            error_issues: CliInvokeIssues::new(vec![CliInvokeIssue::body(
+                CliInvokeIssueCode::InvalidStructure,
+            )]),
+            stale_resolution_reason: None,
+            error_kind: None,
+        });
+        owner.close().await;
+
+        let expected_name = format!("cli-{}.log", filename_stamp(ANCHOR_MS));
+        let contents = tokio::fs::read_to_string(dir.path().join(expected_name))
+            .await
+            .unwrap();
+        let lines: Vec<serde_json::Value> = contents
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["category"], "cli.preflight_failure");
+        assert_eq!(lines[1]["category"], "cli.invoke");
+        assert_eq!(lines[1]["duration_ms"], serde_json::json!(0.5));
+        assert_eq!(
+            lines[1]["error_issues"],
+            serde_json::json!([{ "path": "body", "code": "invalid_structure" }])
+        );
+        assert_eq!(owner.state(), WriterState::ClosedShutdown);
     }
 
     #[tokio::test]

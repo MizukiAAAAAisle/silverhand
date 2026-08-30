@@ -35,6 +35,7 @@
 
 use garde::Validate;
 use serde::Deserialize;
+use silverhand_backend_core::cli_invoke_audit::CliStaleResolutionReason;
 use silverhand_backend_core::messaging::{
     AttachmentId, MessageContent, MessageId,
     attachments::{AttachmentLabel, AttachmentRef},
@@ -119,6 +120,7 @@ pub(crate) struct ValidatedAgentSend {
     payload: ValidatedSendPayload,
     target: String,
     freshness_bypass: bool,
+    stale_resolution_reason: Option<CliStaleResolutionReason>,
 }
 
 impl ValidatedAgentSend {
@@ -128,6 +130,10 @@ impl ValidatedAgentSend {
 
     pub(crate) fn freshness_bypass(&self) -> bool {
         self.freshness_bypass
+    }
+
+    pub(crate) fn stale_resolution_reason(&self) -> Option<CliStaleResolutionReason> {
+        self.stale_resolution_reason
     }
 
     pub(crate) fn into_payload(self) -> ValidatedSendPayload {
@@ -348,17 +354,33 @@ impl TryFrom<AgentSendBody> for ValidatedAgentSend {
 
     fn try_from(raw: AgentSendBody) -> Result<Self, Self::Error> {
         let attachments = build_attachments(raw.attachment_ids)?;
-        // Shape-checked and dropped: these correlate a retry with the refusal that caused
-        // it, and this slice has nothing that records them (R5). Their decode (and the
-        // stale-event non-empty rule) already ran; nothing more is owed here.
-        let _ = raw.stale_event_id;
-        let _ = raw.stale_resolution_reason;
         // Absent means "did not ask", which refuses the bypass exactly as `false` does.
         let freshness_bypass = matches!(raw.freshness_bypass, RequiredPatchField::Value(true));
+        let stale_resolution_reason = if matches!(&raw.stale_event_id, RequiredPatchField::Value(_))
+        {
+            Some(match raw.stale_resolution_reason {
+                RequiredPatchField::Value(SendStaleReason::Unaffected) => {
+                    CliStaleResolutionReason::Unaffected
+                }
+                RequiredPatchField::Value(SendStaleReason::Revised) => {
+                    CliStaleResolutionReason::Revised
+                }
+                RequiredPatchField::Value(SendStaleReason::ForceSend) => {
+                    CliStaleResolutionReason::ForceSend
+                }
+                RequiredPatchField::Missing if freshness_bypass => {
+                    CliStaleResolutionReason::ForceSend
+                }
+                RequiredPatchField::Missing => CliStaleResolutionReason::Unattributed,
+            })
+        } else {
+            None
+        };
         Ok(ValidatedAgentSend {
             payload: seal(refine(raw.content, attachments)?)?,
             target: raw.target,
             freshness_bypass,
+            stale_resolution_reason,
         })
     }
 }
@@ -735,10 +757,9 @@ mod tests {
         assert_eq!(agent.target(), "#conv:elsewhere");
     }
 
-    /// The agent door's telemetry members are shape-checked even though this slice carries
-    /// them no further: a malformed one is a refusal, not a value quietly dropped. A legal
-    /// pair is accepted; an empty/ wrong-typed event id, the out-of-set `obsolete` reason, a
-    /// wrong-typed reason, and a non-boolean bypass each refuse.
+    /// The agent door's telemetry members are shape-checked and reduced to a closed audit
+    /// fact without retaining the stale-event id. A malformed one is a refusal, not a value
+    /// quietly dropped.
     #[test]
     fn the_stale_resolution_members_are_shape_checked_where_they_arrive() {
         let legal = |extra: serde_json::Value| {
@@ -750,13 +771,39 @@ mod tests {
             body(object)
         };
 
-        assert!(
-            validate_agent_payload(legal(serde_json::json!({
-                "stale_event_id": "evt-1",
-                "stale_resolution_reason": "revised"
-            })))
-            .is_ok()
-        );
+        for (extra, expected_reason, expected_bypass) in [
+            (
+                serde_json::json!({
+                    "stale_event_id": "evt-1",
+                    "stale_resolution_reason": "revised"
+                }),
+                Some(CliStaleResolutionReason::Revised),
+                false,
+            ),
+            (
+                serde_json::json!({
+                    "stale_event_id": "evt-1",
+                    "freshness_bypass": true
+                }),
+                Some(CliStaleResolutionReason::ForceSend),
+                true,
+            ),
+            (
+                serde_json::json!({ "stale_event_id": "evt-1" }),
+                Some(CliStaleResolutionReason::Unattributed),
+                false,
+            ),
+            (serde_json::json!({ "freshness_bypass": true }), None, true),
+            (
+                serde_json::json!({ "stale_resolution_reason": "revised" }),
+                None,
+                false,
+            ),
+        ] {
+            let admitted = validate_agent_payload(legal(extra)).unwrap();
+            assert_eq!(admitted.stale_resolution_reason(), expected_reason);
+            assert_eq!(admitted.freshness_bypass(), expected_bypass);
+        }
 
         for extra in [
             serde_json::json!({"stale_event_id": ""}),

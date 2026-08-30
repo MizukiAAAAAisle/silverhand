@@ -18,6 +18,7 @@ use garde::Validate;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    cli_invoke_audit::CliStaleResolutionReason,
     identity::{AgentId, ConversationId},
     messaging::{
         CapabilityDenied, SendCapability,
@@ -28,6 +29,8 @@ use silverhand_backend_core::{
     },
     runtime_credential::RuntimePrincipal,
 };
+
+use crate::internal_agent::cli_invoke::CliInvokeRequestContext;
 
 use super::json_body::{BodyRead, payload_too_large, read_body};
 
@@ -161,6 +164,11 @@ where
         return not_found();
     }
 
+    let audit = request
+        .extensions()
+        .get::<CliInvokeRequestContext>()
+        .cloned();
+
     let request = match request_json(request).await {
         Ok(value) => value,
         Err(response) => return *response,
@@ -212,6 +220,10 @@ where
             );
             return internal();
         }
+    }
+
+    if let Some(audit) = audit {
+        audit.set_stale_reason(CliStaleResolutionReason::Obsolete);
     }
 
     let observation = StaleMessageResolutionObservation::from_bound(bound, admitted.stale_event_id);

@@ -1229,19 +1229,24 @@ routes do not expose log-level mutation.
 `cli-<utc>.log` carries two distinct categories:
 
 - `cli.invoke` — one line per call against any
-  `/internal/agents/:aid/...` route. Emitted by the
-  Hono middleware in
-  `packages/backend/src/observability/cli-invoke-middleware.ts`. Fields:
-  `{ts, level, category, request_id, agentId, noun, verb, method, route_suffix, query_keys, http_status, duration_ms, status, error_code?, error_issues?, stale_resolution_reason?}`.
+  `/internal/agents/:aid/...` route. The TypeScript service emits it from
+  `packages/backend/src/observability/cli-invoke-middleware.ts`; the Rust
+  composition emits the same category from its authenticated internal-agent
+  middleware. Fields:
+  `{ts, level, category, request_id, agentId, noun, verb, method, route_suffix, query_keys, http_status, duration_ms, status, error_code?, error_issues?, stale_resolution_reason?, error_kind?}`.
   `route_suffix` is the *matched route pattern* — never the raw URL
   path — so wildcard segments like `attachments/<id>/locate` collapse
   to `attachments/*/locate` and ids never leak. The `query_keys` array
-  is the *sorted set of query-string keys* — values are never recorded.
-  `error_issues` is the privacy-safe summary of zod schema-validation
-  failures: an array of `{path, code}` (e.g.
-  `[{path: 'every_seconds', code: 'too_small'}]`) — *never* `received`,
-  `minimum`, or `message`, since those can carry user-supplied values.
-  Capped at 16 entries per line.
+  is the *sorted set of query-string keys* — values are never recorded. Rust
+  additionally intersects keys with a compile-time allowlist for the matched
+  route; arbitrary keys are omitted. `error_issues` is a privacy-safe typed
+  classification array, never a serialized validator report. Rust currently
+  publishes only the closed `body` path and the coarse codes
+  `unsupported_media_type`, `malformed_json`, `invalid_structure`, and
+  `invalid_value`; it never derives field paths or wording from Serde/Garde.
+  Both implementations cap the array at 16 entries. A Rust handler panic is
+  recorded once with `error_kind: panic`, then resumed; audit does not swallow
+  or convert it into an HTTP response.
   `stale_resolution_reason` is present only when a validated, authorized
   request carrying a stale event attempts disposal: `unaffected`, `revised`,
   `obsolete`, `force_send`, or `unattributed`. The daemon supplies a stale

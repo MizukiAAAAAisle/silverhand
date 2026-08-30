@@ -31,6 +31,8 @@
 pub struct NonNegativeFiniteF64(f64);
 
 impl NonNegativeFiniteF64 {
+    pub const ZERO: Self = Self(0.0);
+
     /// Admits a value that is finite and `>= 0`; every other input is rejected so the
     /// audit line can never carry a duration the wire contract forbids.
     pub fn new(value: f64) -> Result<Self, NonNegativeFiniteF64OutOfRange> {

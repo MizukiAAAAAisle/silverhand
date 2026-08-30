@@ -264,7 +264,7 @@ mod tests {
         identity::{AgentId, ConversationId, DaemonInstanceId},
         runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     };
-    use silverhand_backend_filesystem::audit_sink::{AppTag, AuditClock, CliPreflightFileSink};
+    use silverhand_backend_filesystem::audit_sink::{AppTag, AuditClock, CliAuditFile};
     use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
 
@@ -650,13 +650,14 @@ mod tests {
         const ANCHOR_MS: i64 = 1_700_000_123_123;
 
         let dir = tempfile::tempdir().unwrap();
-        let sink = CliPreflightFileSink::open(
+        let owner = CliAuditFile::open(
             dir.path().to_path_buf(),
             AppTag::Server,
             FixedClock(ANCHOR_MS),
         )
         .await
         .unwrap();
+        let sink = owner.preflight_sink();
 
         let (status, body) = run_with(
             sink.clone(),
@@ -671,7 +672,7 @@ mod tests {
         assert_eq!(body, json!({ "ok": true }));
 
         // Drain + close so the accepted line is durably on disk before we read it.
-        sink.close().await;
+        owner.close().await;
 
         // The one file for this boot; read its single line and address the flat top-level keys.
         let mut entries = tokio::fs::read_dir(dir.path()).await.unwrap();

@@ -7,6 +7,7 @@
 
 mod wire;
 
+pub mod cli_invoke;
 pub mod diagnostics;
 pub mod peer_profile;
 pub mod profile;
