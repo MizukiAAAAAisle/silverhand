@@ -1,0 +1,861 @@
+//! The production, composition-owned sink that durably records `cli.preflight_failure`
+//! audit lines.
+//!
+//! # Where this sits
+//!
+//! The domain owns the record and the port ([`silverhand_backend_core::cli_preflight_audit`]);
+//! this module is the ONE concrete implementation of that port — an OS adapter, because
+//! its entire job is touching the filesystem and the wall clock. The composition root
+//! constructs it, owns its lifecycle, and injects it as the port; a handler never sees
+//! this type.
+//!
+//! # What it preserves
+//!
+//! The TypeScript product writes each preflight failure as one JSON object per line to
+//! `<log-dir>/cli-<utc>.log`, one file per process boot, and an operator queries those
+//! files with `tail`/`jq`/`grep`. There is no programmatic reader, so the compatibility
+//! contract is exactly that on-disk shape: the same filename grammar, the same set of
+//! independently-addressable top-level keys with the same casing, absent optionals as
+//! explicit `null`, an absent flag list as `[]`, and a line that persists regardless of
+//! any configured log level (the product force-writes this category past its threshold).
+//!
+//! # Two layers, one lifecycle
+//!
+//! [`CategorizedJsonlWriter`] is the reusable primitive: it opens one categorized log
+//! file, owns a single background writer task fed by a *bounded* channel, and exposes a
+//! non-blocking enqueue plus an idempotent drain/flush/close. It knows nothing about the
+//! preflight record — it appends opaque JSON lines. [`CliPreflightFileSink`] is the thin
+//! typed facade over one such writer that projects a [`CliPreflightFailure`] into the
+//! exact wire line. A second audit surface reuses the SAME primitive with its own prefix
+//! and facade — never a second file/lifecycle implementation, and never this file's
+//! `cli-*.log`.
+//!
+//! # Failure policy
+//!
+//! Recording is best-effort and can never fail a request. Two failure classes are kept
+//! distinct, exactly as the review required:
+//! - *Transient backpressure*: the bounded queue is full. The line is dropped with an
+//!   observable signal (a drop counter and a non-recursive `tracing` warning); the
+//!   writer stays **healthy**.
+//! - *Durable failure*: an actual open/write/flush error or writer-task termination. The
+//!   writer transitions to a terminal **failed/closed** state, emits a non-recursive
+//!   warning, and never again pretends a line was written.
+//!
+//! The diagnostic warnings go to the ordinary process `tracing` subscriber (stdout),
+//! never back through this sink — there is no recursion path.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+
+use silverhand_backend_core::cli_preflight_audit::{CliPreflightAuditSink, CliPreflightFailure};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::task::JoinHandle;
+
+/// The `tracing` target every non-recursive diagnostic from the reusable writer carries,
+/// so an operator (and a test subscriber) can isolate categorized-audit health from
+/// application logs. It is category-neutral on purpose: this primitive is shared by more
+/// than one audit surface (CLI preflight today, agent-audit next), and each diagnostic
+/// already carries the concrete `file` (its `<prefix>-<stamp>.log`), so a failing writer
+/// is attributed to the right category by its filename rather than by a target hard-wired
+/// to one caller.
+const DIAGNOSTIC_TARGET: &str = "silverhand::categorized_audit";
+
+/// The categorized-log filename prefix for CLI audit lines: `cli-<utc>.log`.
+const CLI_PREFIX: &str = "cli";
+
+/// How many enqueued-but-unwritten lines the bounded channel holds before it applies
+/// backpressure by dropping. Preflight failures are rare and each line is tiny, so this
+/// is generous headroom for a burst while still being a hard ceiling — the queue can
+/// never grow without bound and wedge memory behind a stalled disk.
+const QUEUE_CAPACITY: usize = 1024;
+
+const HEALTHY: u8 = 0;
+const FAILED_IO: u8 = 1;
+const CLOSED_SHUTDOWN: u8 = 2;
+
+/// The observable health of a [`CategorizedJsonlWriter`]'s background task.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WriterState {
+    /// The task is running and accepting lines.
+    Healthy,
+    /// The task terminated on an actual open/write/flush error. It writes nothing more.
+    Failed,
+    /// The task drained and closed cleanly at shutdown. It writes nothing more.
+    ClosedShutdown,
+}
+
+/// The wall clock this sink stamps each line's `ts` with, and derives the per-boot
+/// filename from. Injected rather than read inline so a test can pin a deterministic
+/// instant; production supplies the one process clock, never a second wall-clock reader.
+pub trait AuditClock: Clone + Send + Sync + 'static {
+    /// The current time as signed Unix milliseconds (`Date.now()` parity).
+    fn now_unix_millis(&self) -> i64;
+}
+
+/// The `app` base field, chosen once by the launcher's deployment profile — never
+/// inferred per line. Mirrors the product's per-launcher log base.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppTag {
+    /// The embedded desktop launcher.
+    Desktop,
+    /// The remote-only server launcher.
+    Server,
+}
+
+impl AppTag {
+    /// The exact string the product's log base carries for this launcher.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AppTag::Desktop => "silverhand-desktop",
+            AppTag::Server => "silverhand-server",
+        }
+    }
+}
+
+struct CloseState {
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    join: Option<JoinHandle<()>>,
+}
+
+/// A single categorized JSON-lines log file with a background writer task.
+///
+/// Cloning shares the one channel, the one task, and the one close latch — every clone
+/// enqueues to the same file and any clone can close it exactly once. There is never a
+/// second task or a second file behind two clones.
+#[derive(Clone)]
+pub struct CategorizedJsonlWriter {
+    tx: mpsc::Sender<Vec<u8>>,
+    health: Arc<AtomicU8>,
+    dropped_lines: Arc<AtomicU64>,
+    filename: Arc<str>,
+    close: Arc<Mutex<CloseState>>,
+}
+
+impl CategorizedJsonlWriter {
+    /// Opens `<dir>/<prefix>-<stamp>.log` for append (creating `dir` if missing) and
+    /// spawns its writer task. A file/directory open failure is returned as an error so
+    /// the composition root can fail startup — a configured sink that cannot open its
+    /// file is a startup fault, never a silently degraded no-op.
+    pub async fn open(dir: &Path, prefix: &str, stamp: &str) -> std::io::Result<Self> {
+        tokio::fs::create_dir_all(dir).await?;
+        let filename = format!("{prefix}-{stamp}.log");
+        let path = dir.join(&filename);
+        let file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await?;
+        Ok(Self::spawn(file, filename, QUEUE_CAPACITY))
+    }
+
+    fn spawn<W>(writer: W, filename: String, capacity: usize) -> Self
+    where
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>(capacity);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let health = Arc::new(AtomicU8::new(HEALTHY));
+        let filename: Arc<str> = Arc::from(filename);
+        let join = tokio::spawn(drive_writer(
+            writer,
+            rx,
+            shutdown_rx,
+            filename.clone(),
+            health.clone(),
+        ));
+        Self {
+            tx,
+            health,
+            dropped_lines: Arc::new(AtomicU64::new(0)),
+            filename,
+            close: Arc::new(Mutex::new(CloseState {
+                shutdown_tx: Some(shutdown_tx),
+                join: Some(join),
+            })),
+        }
+    }
+
+    /// Enqueues one already-serialized line for the writer task. Never blocks and never
+    /// fails the caller. A full queue drops the line as transient backpressure (the
+    /// writer stays healthy); a closed queue drops it because the task has terminated.
+    /// Both increment the drop counter and emit one non-recursive diagnostic.
+    pub fn enqueue(&self, line: Vec<u8>) {
+        match self.tx.try_send(line) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.dropped_lines.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(
+                    target: DIAGNOSTIC_TARGET,
+                    file = %self.filename,
+                    "categorized audit writer queue is full; dropping this line as transient backpressure (writer stays healthy)"
+                );
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                self.dropped_lines.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(
+                    target: DIAGNOSTIC_TARGET,
+                    file = %self.filename,
+                    state = ?self.state(),
+                    "categorized audit writer is closed; dropping this line"
+                );
+            }
+        }
+    }
+
+    /// The writer task's current health.
+    pub fn state(&self) -> WriterState {
+        match self.health.load(Ordering::SeqCst) {
+            FAILED_IO => WriterState::Failed,
+            CLOSED_SHUTDOWN => WriterState::ClosedShutdown,
+            _ => WriterState::Healthy,
+        }
+    }
+
+    /// How many lines have been dropped (full or closed) over this writer's life.
+    pub fn dropped_lines(&self) -> u64 {
+        self.dropped_lines.load(Ordering::Relaxed)
+    }
+
+    /// Signals the writer task to drain the queue, flush, and close its file, then awaits
+    /// its termination. Idempotent: the first caller performs the close and every later
+    /// caller (including the second shutdown wiring) is a no-op that returns immediately.
+    pub async fn close(&self) {
+        let mut guard = self.close.lock().await;
+        if let Some(shutdown_tx) = guard.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+        if let Some(join) = guard.join.take()
+            && let Err(join_error) = join.await
+        {
+            // The writer task panicked or was cancelled — worker termination, which
+            // the failure policy classifies as a durable failure, never a clean
+            // close. Fail closed and observably: force `Failed` (never leaving a
+            // `Healthy`/`ClosedShutdown` illusion) and emit one non-recursive warning.
+            self.health.store(FAILED_IO, Ordering::SeqCst);
+            tracing::warn!(
+                target: DIAGNOSTIC_TARGET,
+                file = %self.filename,
+                error = %join_error,
+                "categorized audit writer task terminated abnormally; the writer is now failed"
+            );
+        }
+    }
+}
+
+async fn drive_writer<W>(
+    mut writer: W,
+    mut rx: mpsc::Receiver<Vec<u8>>,
+    mut shutdown_rx: oneshot::Receiver<()>,
+    filename: Arc<str>,
+    health: Arc<AtomicU8>,
+) where
+    W: AsyncWrite + Unpin,
+{
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut shutdown_rx => {
+                // Graceful shutdown is an accepted-line barrier. Closing the receiver
+                // FIRST makes every concurrent `try_send` from another clone observe
+                // `Closed` (an observable drop) instead of racing this drain: without it,
+                // a clone could `try_send == Ok` in the window between "queue looks empty"
+                // and "task returns", and that accepted line would never reach disk yet
+                // the writer would still report a clean close. After closing intake we
+                // drain to channel EOF with `recv().await` — draining EVERY line accepted
+                // before the barrier, never stopping on a transient empty moment — then
+                // flush+close.
+                rx.close();
+                while let Some(line) = rx.recv().await {
+                    if let Err(error) = write_line(&mut writer, &line).await {
+                        report_durable_failure(&filename, &health, &error);
+                        return;
+                    }
+                }
+                finish(&mut writer, &filename, &health).await;
+                return;
+            }
+            received = rx.recv() => match received {
+                Some(line) => {
+                    if let Err(error) = write_line(&mut writer, &line).await {
+                        report_durable_failure(&filename, &health, &error);
+                        return;
+                    }
+                }
+                None => {
+                    // Every sender was dropped without an explicit close: flush+close.
+                    finish(&mut writer, &filename, &health).await;
+                    return;
+                }
+            }
+        }
+    }
+}
+
+async fn write_line<W>(writer: &mut W, line: &[u8]) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    writer.write_all(line).await?;
+    writer.write_all(b"\n").await?;
+    // Flush per line: preflight failures are infrequent and each line must be durable
+    // the instant it is recorded, so an operator tailing the file sees it without
+    // waiting for a buffer to fill or the process to exit.
+    writer.flush().await
+}
+
+async fn finish<W>(writer: &mut W, filename: &Arc<str>, health: &Arc<AtomicU8>)
+where
+    W: AsyncWrite + Unpin,
+{
+    if let Err(error) = writer.flush().await {
+        report_durable_failure(filename, health, &error);
+        return;
+    }
+    // A close-time `shutdown` I/O fault is a durable failure like any other write/flush
+    // fault, not a clean close: it must NOT leave a `ClosedShutdown` illusion behind a
+    // sink that failed to finalize its file.
+    if let Err(error) = writer.shutdown().await {
+        report_durable_failure(filename, health, &error);
+        return;
+    }
+    health.store(CLOSED_SHUTDOWN, Ordering::SeqCst);
+}
+
+fn report_durable_failure(filename: &Arc<str>, health: &Arc<AtomicU8>, error: &std::io::Error) {
+    health.store(FAILED_IO, Ordering::SeqCst);
+    tracing::warn!(
+        target: DIAGNOSTIC_TARGET,
+        file = %filename,
+        error = %error,
+        "categorized audit writer write failed; the writer is now failed and will record nothing more"
+    );
+}
+
+/// The production sink: a typed facade over one [`CategorizedJsonlWriter`] that projects
+/// a [`CliPreflightFailure`] into the exact `cli-<utc>.log` wire line.
+///
+/// Cloning shares the one underlying writer, so injecting a clone into router state and
+/// keeping another for shutdown closes the SAME file — never a second sink.
+#[derive(Clone)]
+pub struct CliPreflightFileSink<C: AuditClock> {
+    writer: CategorizedJsonlWriter,
+    clock: C,
+    app: AppTag,
+    pid: u32,
+}
+
+impl<C: AuditClock> CliPreflightFileSink<C> {
+    /// Opens the `cli-<utc>.log` file for this boot under `dir` and spawns its writer.
+    /// The per-boot UTC stamp is sampled from `clock` once, here; an open failure is
+    /// surfaced so the composition root can fail startup.
+    pub async fn open(dir: PathBuf, app: AppTag, clock: C) -> std::io::Result<Self> {
+        let stamp = filename_stamp(clock.now_unix_millis());
+        let writer = CategorizedJsonlWriter::open(&dir, CLI_PREFIX, &stamp).await?;
+        Ok(Self {
+            writer,
+            clock,
+            app,
+            pid: std::process::id(),
+        })
+    }
+
+    /// Drains, flushes, and closes the underlying file. Idempotent (see
+    /// [`CategorizedJsonlWriter::close`]).
+    pub async fn close(&self) {
+        self.writer.close().await;
+    }
+
+    /// The underlying writer's health, for shutdown-close witnessing and diagnostics.
+    pub fn state(&self) -> WriterState {
+        self.writer.state()
+    }
+
+    /// How many lines this sink has dropped over its life.
+    pub fn dropped_lines(&self) -> u64 {
+        self.writer.dropped_lines()
+    }
+
+    fn line_bytes(&self, failure: &CliPreflightFailure) -> Vec<u8> {
+        use serde_json::{Map, Number, Value};
+
+        let ts = iso8601_utc_millis(self.clock.now_unix_millis());
+        let mut line = Map::new();
+        // Envelope, mirroring the product's `{ ts, level, msg, ...base }` prefix.
+        line.insert("ts".to_owned(), Value::String(ts));
+        line.insert("level".to_owned(), Value::String("warn".to_owned()));
+        line.insert(
+            "msg".to_owned(),
+            Value::String("cli.preflight_failure".to_owned()),
+        );
+        line.insert(
+            "app".to_owned(),
+            Value::String(self.app.as_str().to_owned()),
+        );
+        line.insert("pid".to_owned(), Value::Number(Number::from(self.pid)));
+        // Business fields, each an independently-addressable top-level key with the exact
+        // casing the live contract uses. `category`/`status` are stamped constants.
+        line.insert(
+            "category".to_owned(),
+            Value::String("cli.preflight_failure".to_owned()),
+        );
+        line.insert(
+            "agentId".to_owned(),
+            Value::String(failure.agent_id.as_str().to_owned()),
+        );
+        line.insert(
+            "conversationId".to_owned(),
+            match &failure.conversation_id {
+                Some(id) => Value::String(id.as_str().to_owned()),
+                None => Value::Null,
+            },
+        );
+        line.insert("noun".to_owned(), opt_string(&failure.noun));
+        line.insert("verb".to_owned(), opt_string(&failure.verb));
+        line.insert(
+            "flags_seen".to_owned(),
+            Value::Array(
+                failure
+                    .flags_seen
+                    .iter()
+                    .map(|flag| Value::String(flag.clone()))
+                    .collect(),
+            ),
+        );
+        line.insert("error_code".to_owned(), opt_string(&failure.error_code));
+        line.insert(
+            "error_subkind".to_owned(),
+            opt_string(&failure.error_subkind),
+        );
+        line.insert(
+            "error_message".to_owned(),
+            opt_string(&failure.error_message),
+        );
+        line.insert(
+            "duration_ms".to_owned(),
+            match failure.duration_ms {
+                // A finite, non-negative f64 always maps to a JSON number; the fallback
+                // is unreachable but keeps the projection total rather than panicking.
+                Some(duration) => Number::from_f64(duration.get())
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null),
+                None => Value::Null,
+            },
+        );
+        line.insert("status".to_owned(), Value::String("failure".to_owned()));
+
+        // Object serialization is infallible for this map (only strings, numbers, null,
+        // and a string array); the fallback keeps `record` non-panicking.
+        serde_json::to_vec(&Value::Object(line)).unwrap_or_default()
+    }
+}
+
+impl<C: AuditClock> CliPreflightAuditSink for CliPreflightFileSink<C> {
+    fn record(&self, failure: CliPreflightFailure) {
+        let line = self.line_bytes(&failure);
+        self.writer.enqueue(line);
+    }
+}
+
+fn opt_string(value: &Option<String>) -> serde_json::Value {
+    match value {
+        Some(text) => serde_json::Value::String(text.clone()),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// The per-boot filename stamp: the product's `new Date().toISOString().replace(/[:.]/g, '-')`.
+fn filename_stamp(unix_millis: i64) -> String {
+    iso8601_utc_millis(unix_millis).replace([':', '.'], "-")
+}
+
+/// Formats signed Unix milliseconds as a UTC ISO-8601 instant with millisecond
+/// precision and a `Z` suffix — exactly `Date.now()` fed to `new Date(_).toISOString()`.
+///
+/// Pure and clock-free so the whole edge is pinned by fixed-input tests. Uses Howard
+/// Hinnant's `civil_from_days` so it is correct across leap years and, like the product,
+/// for pre-1970 instants (a negative millisecond count) as well as positive ones.
+fn iso8601_utc_millis(unix_millis: i64) -> String {
+    let days = unix_millis.div_euclid(86_400_000);
+    let ms_of_day = unix_millis.rem_euclid(86_400_000);
+    let (year, month, day) = civil_from_days(days);
+    let hour = ms_of_day / 3_600_000;
+    let minute = (ms_of_day / 60_000) % 60;
+    let second = (ms_of_day / 1_000) % 60;
+    let milli = ms_of_day % 1_000;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{milli:03}Z")
+}
+
+/// Civil (year, month, day) from a count of days since the Unix epoch (1970-01-01).
+/// Howard Hinnant's algorithm, valid for the entire representable range.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let year = if month <= 2 { year + 1 } else { year };
+    (year, month, day)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use silverhand_backend_core::cli_preflight_audit::NonNegativeFiniteF64;
+    use silverhand_backend_core::identity::AgentId;
+    use std::future::Future;
+    use std::io;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    #[derive(Clone)]
+    struct FixedClock(i64);
+
+    impl AuditClock for FixedClock {
+        fn now_unix_millis(&self) -> i64 {
+            self.0
+        }
+    }
+
+    // 2023-11-14T22:13:20.123Z in milliseconds.
+    const ANCHOR_MS: i64 = 1_700_000_123_123;
+
+    #[test]
+    fn iso_matches_date_now_to_iso_string_at_known_instants() {
+        assert_eq!(iso8601_utc_millis(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(
+            iso8601_utc_millis(1_700_000_000_123),
+            "2023-11-14T22:13:20.123Z"
+        );
+        // A leap day, to exercise civil_from_days across a leap year.
+        // 2024-02-29T00:00:00.000Z = 1709164800000 ms.
+        assert_eq!(
+            iso8601_utc_millis(1_709_164_800_000),
+            "2024-02-29T00:00:00.000Z"
+        );
+    }
+
+    #[test]
+    fn filename_stamp_replaces_colons_and_dots() {
+        assert_eq!(filename_stamp(0), "1970-01-01T00-00-00-000Z");
+        assert_eq!(filename_stamp(ANCHOR_MS), "2023-11-14T22-15-23-123Z");
+    }
+
+    /// An `AsyncWrite` that parks forever on its first write, signalling once it has been
+    /// polled so a test knows the writer task is wedged mid-write with the queue empty.
+    struct BlockingWriter {
+        started: Option<oneshot::Sender<()>>,
+    }
+
+    impl AsyncWrite for BlockingWriter {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            if let Some(started) = self.started.take() {
+                let _ = started.send(());
+            }
+            Poll::Pending
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    /// An `AsyncWrite` whose every write fails, to drive the durable-failure transition.
+    struct FailingWriter;
+
+    impl AsyncWrite for FailingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Err(io::Error::other("disk gone")))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::Error::other("disk gone")))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// An `AsyncWrite` whose writes and flushes succeed but whose `shutdown` fails, to
+    /// prove a close-time I/O fault is a durable failure and not a faked clean close.
+    struct FlushOkShutdownFailsWriter;
+
+    impl AsyncWrite for FlushOkShutdownFailsWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::Error::other("close syscall failed")))
+        }
+    }
+
+    /// An `AsyncWrite` whose first write panics, so the spawned writer task terminates
+    /// abnormally and `close()` observes a `JoinHandle` error.
+    struct PanickingWriter;
+
+    impl AsyncWrite for PanickingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            panic!("writer task blew up mid-write")
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// An `AsyncWrite` that records every written byte into a shared buffer, and whose
+    /// `shutdown` parks (signalling once it has begun) until the test releases it. Letting
+    /// the writer task sit inside `finish`'s `shutdown` gives the test a deterministic
+    /// point — provably after the drain loop and after the receiver has been closed — at
+    /// which to attempt a post-barrier send and inspect where it went.
+    struct RecordingGatedShutdownWriter {
+        written: Arc<std::sync::Mutex<Vec<u8>>>,
+        began_shutdown: Option<oneshot::Sender<()>>,
+        release: oneshot::Receiver<()>,
+    }
+
+    impl AsyncWrite for RecordingGatedShutdownWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.written.lock().unwrap().extend_from_slice(buf);
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            if let Some(began) = self.began_shutdown.take() {
+                let _ = began.send(());
+            }
+            match Pin::new(&mut self.release).poll(cx) {
+                Poll::Ready(_) => Poll::Ready(Ok(())),
+                Poll::Pending => Poll::Pending,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_full_queue_drops_the_line_but_keeps_the_writer_healthy() {
+        let (started_tx, started_rx) = oneshot::channel();
+        let writer = CategorizedJsonlWriter::spawn(
+            BlockingWriter {
+                started: Some(started_tx),
+            },
+            "cli-test.log".to_owned(),
+            1,
+        );
+        // The task receives this line and parks in the (never-completing) write.
+        writer.enqueue(b"one".to_vec());
+        started_rx.await.unwrap();
+        // The queue (capacity 1) is now empty; this fills it, the next overflows it.
+        writer.enqueue(b"two".to_vec());
+        writer.enqueue(b"three".to_vec());
+        assert_eq!(writer.dropped_lines(), 1, "the overflowing line is dropped");
+        assert_eq!(
+            writer.state(),
+            WriterState::Healthy,
+            "a full queue is transient backpressure, never a failed writer"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_write_error_terminates_the_writer_as_failed_and_is_observable() {
+        let writer = CategorizedJsonlWriter::spawn(FailingWriter, "cli-test.log".to_owned(), 8);
+        writer.enqueue(b"doomed".to_vec());
+        // close() awaits the task's join, so on return the failure transition has settled.
+        writer.close().await;
+        assert_eq!(writer.state(), WriterState::Failed);
+        // A closed/failed writer keeps dropping observably rather than faking success.
+        writer.enqueue(b"after".to_vec());
+        assert!(writer.dropped_lines() >= 1);
+    }
+
+    #[tokio::test]
+    async fn close_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = CategorizedJsonlWriter::open(dir.path(), "cli", "stamp")
+            .await
+            .unwrap();
+        writer.close().await;
+        writer.close().await; // second close is a no-op, never a panic or a hang
+        assert_eq!(writer.state(), WriterState::ClosedShutdown);
+    }
+
+    /// The close barrier: every line whose `try_send` returned `Ok` before shutdown lands
+    /// on disk, and any send after the barrier is an OBSERVABLE drop — never a silent
+    /// `Ok` for a line that will never be written. A writer that ended its shutdown drain
+    /// on a transient empty (the pre-fix `try_recv` loop) would accept the post-barrier
+    /// line with `Ok` (drop counter stays 0) and lose it: this test fails against that.
+    #[tokio::test]
+    async fn close_is_an_accepted_line_barrier() {
+        let written = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let (began_tx, began_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let writer = CategorizedJsonlWriter::spawn(
+            RecordingGatedShutdownWriter {
+                written: written.clone(),
+                began_shutdown: Some(began_tx),
+                release: release_rx,
+            },
+            "cli-test.log".to_owned(),
+            64,
+        );
+
+        // Two lines accepted before the barrier.
+        writer.enqueue(b"A".to_vec());
+        writer.enqueue(b"B".to_vec());
+
+        // Close on another task: it signals shutdown, drains A+B to the writer, then parks
+        // inside `finish`'s gated `shutdown`, having already closed intake.
+        let closing = {
+            let writer = writer.clone();
+            tokio::spawn(async move { writer.close().await })
+        };
+
+        // The writer has reached `shutdown`, i.e. it is strictly past the drain loop and
+        // the receiver is closed. A send now must be an observable drop, not a fake `Ok`.
+        began_rx.await.unwrap();
+        writer.enqueue(b"C-after-barrier".to_vec());
+        assert_eq!(
+            writer.dropped_lines(),
+            1,
+            "a send after the close barrier is an observable drop, never a silent accept-and-lose"
+        );
+
+        // Let the gated shutdown complete and the close finish.
+        let _ = release_tx.send(());
+        closing.await.unwrap();
+
+        assert_eq!(writer.state(), WriterState::ClosedShutdown);
+        let on_disk = String::from_utf8(written.lock().unwrap().clone()).unwrap();
+        assert_eq!(
+            on_disk, "A\nB\n",
+            "both lines accepted before the barrier landed; the post-barrier line did not"
+        );
+    }
+
+    /// A close-time `shutdown` I/O fault is a durable failure, not a clean close: the
+    /// writer must not report `ClosedShutdown` when it failed to finalize its file.
+    #[tokio::test]
+    async fn a_shutdown_error_at_close_is_a_durable_failure_not_a_clean_close() {
+        let writer =
+            CategorizedJsonlWriter::spawn(FlushOkShutdownFailsWriter, "cli-test.log".to_owned(), 8);
+        writer.enqueue(b"one".to_vec());
+        writer.close().await;
+        assert_eq!(
+            writer.state(),
+            WriterState::Failed,
+            "a failed close syscall must not be reported as a clean shutdown"
+        );
+    }
+
+    /// If the writer task terminates abnormally (a panic), `close()` observes the
+    /// `JoinHandle` error and fails closed — it never leaves a `Healthy`/`ClosedShutdown`
+    /// illusion for a worker that died.
+    #[tokio::test]
+    async fn a_writer_task_panic_is_observed_by_close_as_failed() {
+        let writer = CategorizedJsonlWriter::spawn(PanickingWriter, "cli-test.log".to_owned(), 8);
+        writer.enqueue(b"boom".to_vec());
+        writer.close().await;
+        assert_eq!(
+            writer.state(),
+            WriterState::Failed,
+            "an abnormal worker termination is a durable failure, never a clean close"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_facade_projects_the_exact_wire_line_and_persists_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = CliPreflightFileSink::open(
+            dir.path().to_path_buf(),
+            AppTag::Desktop,
+            FixedClock(ANCHOR_MS),
+        )
+        .await
+        .unwrap();
+
+        // A record exercising every arm: present + absent optionals, empty flags, and a
+        // fractional duration that must survive verbatim.
+        sink.record(CliPreflightFailure {
+            agent_id: AgentId::parse("agent-7").unwrap(),
+            conversation_id: None,
+            noun: Some("message".to_owned()),
+            verb: None,
+            flags_seen: Vec::new(),
+            error_code: Some("E_STRICT_FLAG".to_owned()),
+            error_subkind: None,
+            error_message: Some("unknown flag --nope".to_owned()),
+            duration_ms: Some(NonNegativeFiniteF64::new(12.5).unwrap()),
+        });
+        sink.close().await;
+
+        // The file is named for this boot's UTC stamp.
+        let expected_name = format!("cli-{}.log", filename_stamp(ANCHOR_MS));
+        let path = dir.path().join(&expected_name);
+        let contents = tokio::fs::read_to_string(&path).await.unwrap();
+        let line = contents.lines().next().expect("one recorded line");
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+        let object = value.as_object().unwrap();
+
+        assert_eq!(object["ts"], "2023-11-14T22:15:23.123Z");
+        assert_eq!(object["level"], "warn");
+        assert_eq!(object["msg"], "cli.preflight_failure");
+        assert_eq!(object["app"], "silverhand-desktop");
+        assert!(object["pid"].is_number());
+        assert_eq!(object["category"], "cli.preflight_failure");
+        assert_eq!(object["agentId"], "agent-7");
+        assert!(
+            object["conversationId"].is_null(),
+            "absent optional is explicit null"
+        );
+        assert_eq!(object["noun"], "message");
+        assert!(object["verb"].is_null());
+        assert_eq!(
+            object["flags_seen"],
+            serde_json::json!([]),
+            "empty flags is [] not null"
+        );
+        assert_eq!(object["error_code"], "E_STRICT_FLAG");
+        assert!(object["error_subkind"].is_null());
+        assert_eq!(object["error_message"], "unknown flag --nope");
+        assert_eq!(
+            object["duration_ms"],
+            serde_json::json!(12.5),
+            "fractional ms is verbatim"
+        );
+        assert_eq!(object["status"], "failure");
+
+        assert_eq!(sink.state(), WriterState::ClosedShutdown);
+    }
+}

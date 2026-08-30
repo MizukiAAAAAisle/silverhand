@@ -360,6 +360,11 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-core", "access"),
     ("backend-core", "auth"),
     ("backend-core", "blob_store"),
+    // #task:2256 CLI preflight-failure audit domain: the typed record + the narrow sink
+    // port `#2250`'s handler depends on. A non-seam production module the host-agent seam
+    // lane did not add — it owes no labeled seam line and is not fenced against
+    // composition, so it closes into this non-seam baseline rather than `SEAM_ROOT_MODULES`.
+    ("backend-core", "cli_preflight_audit"),
     ("backend-core", "direct_pair_read"),
     ("backend-core", "host_runtime"),
     ("backend-core", "identity"),
@@ -372,6 +377,11 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-core", "viewer_workspace_sort"),
     ("backend-core", "workspace_cold_read"),
     ("backend-core", "workspace_face"),
+    // #task:2256 categorized-file audit sink: the OS adapter that owns the CLI
+    // preflight-failure log file and its writer lifecycle, home of the reusable
+    // `CategorizedJsonlWriter` primitive. A non-seam production module the host-agent seam
+    // lane did not add, in the same non-seam baseline as its sibling `blob_store`.
+    ("backend-filesystem", "audit_sink"),
     ("backend-filesystem", "blob_store"),
     ("backend-server", "access"),
     ("backend-server", "auth"),
@@ -1017,20 +1027,24 @@ fn g0_every_lane_module_sits_in_the_inventory_that_guards_it() {
     );
 
     // The fifth workspace crate `backend-filesystem` is now in `CRATE_ROOTS`, so the
-    // loop above scans both of its declarations. Prove those classifications are
+    // loop above scans all of its declarations. Prove those classifications are
     // load-bearing rather than trusting a reader: driven against the REAL filesystem
-    // root with the registry emptied, BOTH names are reported — the inherited
-    // `blob_store` and this lane's seam entry `runtime_detection` — so deleting either
-    // classification turns G0 red. Without filesystem in the scan range, those entries
-    // would be dead and their deletion silent, which is the second-layer false-green
-    // this closes.
+    // root with the registry emptied, EVERY name is reported — the inherited
+    // `blob_store`, this lane's seam entry `runtime_detection`, and #task:2256's
+    // `audit_sink` — so deleting any classification turns G0 red. Without filesystem in
+    // the scan range, those entries would be dead and their deletion silent, which is the
+    // second-layer false-green this closes.
     assert_eq!(
         classification_gaps(
             &root_module_declarations("backend-filesystem"),
             &BTreeSet::new(),
         )
         .0,
-        vec!["blob_store".to_owned(), "runtime_detection".to_owned()],
+        vec![
+            "audit_sink".to_owned(),
+            "blob_store".to_owned(),
+            "runtime_detection".to_owned()
+        ],
         "deleting backend-filesystem's root classification must turn G0 red"
     );
 

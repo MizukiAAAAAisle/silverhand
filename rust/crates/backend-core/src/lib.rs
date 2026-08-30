@@ -29,6 +29,7 @@ pub mod auth;
 pub mod avatar;
 pub mod blob_store;
 pub mod capability;
+pub mod cli_preflight_audit;
 pub mod cold_read;
 pub mod credential;
 pub mod direct_pair_read;
