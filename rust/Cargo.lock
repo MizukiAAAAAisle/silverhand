@@ -1406,6 +1406,7 @@ dependencies = [
  "silverhand-backend-filesystem",
  "silverhand-backend-sqlite",
  "sqlx",
+ "subtle",
  "syn 3.0.3",
  "tempfile",
  "thiserror",

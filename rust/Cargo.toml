@@ -33,6 +33,7 @@ silverhand-backend-filesystem = { path = "crates/backend-filesystem" }
 silverhand-backend-server = { path = "crates/backend-server" }
 silverhand-backend-sqlite = { path = "crates/backend-sqlite" }
 sqlx = { version = "=0.9.0", default-features = false, features = ["derive", "macros", "migrate", "runtime-tokio", "sqlite"] }
+subtle = { version = "=2.6.1", default-features = false }
 syn = { version = "=3.0.3", default-features = false, features = ["full", "parsing"] }
 tempfile = "=3.27.0"
 thiserror = "=2.0.20"
