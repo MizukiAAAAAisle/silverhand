@@ -1,8 +1,19 @@
-//! SQLite adapter for the agent runtime-state read port (#task:2248 scaffold).
-//! Same-named sibling of
-//! `silverhand_backend_core::agent_runtime_state_read`; source-bound projection
-//! reads only, minting no write authority.
+//! SQLite adapter for the agent runtime-state cold read.
 //!
-//! Scaffold only — no adapter yet; UNMOUNTED. The implementing lane fills it with
-//! `mod`/`use` declarations here and adapter files beside this `mod.rs`, touching no
-//! shared declaration.
+//! It supplies the facts [`silverhand_backend_core::agent_runtime_state_read`]
+//! declares, resolved together on ONE `BEGIN DEFERRED` snapshot: the agent's ACL
+//! arms + stage, its COMPLETE participation set (each row carrying its archived flag
+//! and this viewer's readability), and its durable seats with per-scope undelivered
+//! queue depth.
+//!
+//! The single leaf [`cold_read`] holds the pool, the one deferred-snapshot read, the
+//! strict decoders, and the read-model impl; this namespace only re-exports it. See
+//! that leaf for the shared-authority (ACL/redaction/participation macros),
+//! strict-decode, and TOCTOU-closing contracts.
+
+mod cold_read;
+
+pub use cold_read::{AgentRuntimeStateColdReadError, SqliteAgentRuntimeStateColdRead};
+
+#[cfg(test)]
+mod tests;

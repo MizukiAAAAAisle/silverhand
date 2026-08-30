@@ -1,9 +1,29 @@
-//! Workspace data-plane core capability — the shared data-plane/codec/adapter port
-//! family the workspace data-plane route surface consumes (#task:2248 scaffold). A
-//! new top-level bounded context distinct from the workspace read/detail/metadata
-//! verticals, so it owns its own crate-root namespace here and a same-named SQLite
-//! adapter namespace.
+//! Workspace data-plane core capability: the port family behind the two-column
+//! agent workspace pane.
 //!
-//! Scaffold only — no port, use case, DTO or factory yet; UNMOUNTED. The
-//! implementing lane fills it with `mod`/`use` declarations here and capability
-//! files beside this `mod.rs`, touching no shared declaration.
+//! A new top-level bounded context, distinct from the workspace
+//! read/detail/metadata verticals — its reason to change is "how an agent's own
+//! files are reached and scoped", not "how a workspace is described". It owns two
+//! seams:
+//!
+//!  - [`fs`] — the [`WorkspaceDataPlane`] transport port and its transport-neutral
+//!    facts/faults. The daemon owns virtual-path resolution; the port keeps the
+//!    caller-supplied path opaque.
+//!  - [`scope`] — the single-transaction [`AgentWorkspaceScopeRead`] reader and the
+//!    pure [`resolve_agent_workspace_scope`] resolver that judges which workspace a
+//!    scoped read reaches and whether the caller may reach it.
+//!
+//! UNMOUNTED at this leaf: the composition root wires the SQLite reader and the
+//! owning-host adapter to a route at convergence.
+
+mod fs;
+mod scope;
+
+pub use fs::{
+    WorkspaceDataPlane, WorkspaceFileRead, WorkspaceFsFault, WorkspaceFsFaultCode,
+    WorkspaceNodeKind, WorkspaceTree, WorkspaceTreeNode,
+};
+pub use scope::{
+    AgentWorkspaceScopeFacts, AgentWorkspaceScopeRead, AgentWorkspaceScopeRefusal,
+    AgentWorkspaceScopeResolution, resolve_agent_workspace_scope,
+};

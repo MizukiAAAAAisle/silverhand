@@ -1,7 +1,11 @@
-//! SQLite adapter for the agent audit read port (#task:2248 scaffold). Same-named
-//! sibling of `silverhand_backend_core::agent_audit_read`; source-bound projection
-//! reads only.
+//! SQLite adapter for the owner-audit read port
+//! ([`silverhand_backend_core::agent_audit_read`]). Same-named sibling of the core
+//! port; source-bound projection reads only, one `BEGIN DEFERRED` snapshot per face.
 //!
-//! Scaffold only — no adapter yet; UNMOUNTED. The implementing lane fills it with
-//! `mod`/`use` declarations here and adapter files beside this `mod.rs`, touching no
-//! shared declaration.
+//! The namespace declares and re-exports only — the projection itself lives in
+//! [`store`], which documents how one snapshot carries facts AND data and how every
+//! reused authority is the ONE authority.
+
+mod store;
+
+pub use store::{AgentAuditReadError, SqliteAgentAuditRead};

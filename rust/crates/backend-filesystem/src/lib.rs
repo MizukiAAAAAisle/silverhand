@@ -11,5 +11,6 @@
 //! rather than reached from a route: everything that starts a child process on this
 //! machine is in one place, behind a port the application declares.
 
+pub mod audit_sink;
 pub mod blob_store;
 pub mod runtime_detection;

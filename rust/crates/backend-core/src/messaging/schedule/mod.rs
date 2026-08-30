@@ -11,16 +11,27 @@
 //! The durable claim/settle unit of work and the near-wake timer driver are
 //! separate modules; product create/list/cancel never depend on the timer.
 
+pub mod cancel;
 pub mod orchestrator;
+pub mod read;
 pub mod recurrence;
 pub mod settlement;
 pub mod spec;
 
+pub use cancel::{
+    CancelDecision, CancelTarget, CapabilityVerdict, OwnerBind, ScheduleCancelFacts,
+    ScheduleCancelOutcome, ScheduleCancelUnitOfWork, bind_owner, evaluate_capability,
+    evaluate_cancel,
+};
 pub use orchestrator::{
     ClaimedSchedule, Clock, DeliveryMaterial, DueCandidate, EmptyScheduleId, InvalidDeliveryText,
     ProcessError, ProcessOutcome, SCHEDULE_MESSAGE_MAX_LEN, SCHEDULE_TITLE_MAX_LEN, ScheduleId,
     ScheduleMessage, ScheduleStore, ScheduleTitle, ScheduleWake, WakeContext, WakeFailed,
     process_one,
+};
+pub use read::{
+    InvalidScheduleLimit, InvalidStatusFilter, ScheduleListLimit, ScheduleListQuery,
+    ScheduleListReadModel, ScheduleStatusFilter, ScheduleView, target_label,
 };
 pub use recurrence::{
     AdvanceError, Advancement, CadenceFault, CronNextOccurrence, CronOutcome, CronQuery,

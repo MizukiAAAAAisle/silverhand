@@ -3,6 +3,8 @@
 //! concept. Self-scoped like its siblings: the runtime credential layer pins
 //! `{aid}` to the token's own agent before any handler runs.
 //!
-//! Scaffold only: no route, handler, DTO, factory, port or mount yet —
-//! UNMOUNTED. The implementing lane fills it with `mod`/`use` declarations here
-//! and route files beside this `mod.rs`, touching no shared declaration.
+//! Route files sit beside this `mod.rs`; each is declared here and mounted by
+//! the composition root through the family's self-pin credential layer. The
+//! routers stay UNMOUNTED until backend-app wires them.
+
+pub mod cli_trace;

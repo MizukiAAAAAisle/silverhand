@@ -3,6 +3,10 @@
 //! text/schema/transaction modes behind that port and returns application facts, no
 //! driver type crossing the boundary.
 //!
-//! Scaffold only — no adapter yet; UNMOUNTED. The implementing lane fills it with
-//! `mod`/`use` declarations here and adapter files beside this `mod.rs`, touching no
-//! shared declaration.
+//! The adapter [`SqliteEmbeddedBootstrap`] implements
+//! `silverhand_backend_core::embedded_bootstrap::EmbeddedBootstrapUnitOfWork`
+//! behind one `BEGIN IMMEDIATE` transaction. UNMOUNTED.
+
+mod adapter;
+
+pub use adapter::{SqliteEmbeddedBootstrap, SqliteEmbeddedBootstrapError};

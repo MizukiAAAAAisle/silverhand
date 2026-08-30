@@ -3,6 +3,13 @@
 //! top-level bounded context: not the human-credentialed session, not the runtime
 //! credential, so it earns its own crate-root namespace.
 //!
-//! Scaffold only — no port, use case, DTO or factory yet; UNMOUNTED. The
-//! implementing lane fills it with `mod`/`use` declarations here and capability
-//! files beside this `mod.rs`, touching no shared declaration.
+//! The choose/create authority and its session-issuing flow live in [`flow`];
+//! the port [`EmbeddedBootstrapUnitOfWork`] is implemented by the SQLite adapter.
+//! UNMOUNTED — no composition root names this yet.
+
+mod flow;
+
+pub use flow::{
+    BootstrapChoice, BootstrapPorts, EmbeddedBootstrap, EmbeddedBootstrapError,
+    EmbeddedBootstrapUnitOfWork, bootstrap_session,
+};

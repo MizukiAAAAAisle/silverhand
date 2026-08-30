@@ -27,7 +27,9 @@ use silverhand_backend_core::{
     teardown::computer_delete::DeleteComputer,
 };
 use silverhand_backend_filesystem::{
-    blob_store::LocalBlobStore, runtime_detection::MachineRuntimeDetector,
+    audit_sink::{AppTag, CliPreflightFileSink},
+    blob_store::LocalBlobStore,
+    runtime_detection::MachineRuntimeDetector,
 };
 use silverhand_backend_server::{
     access, agent_name_availability,
@@ -153,6 +155,15 @@ const DEPLOYMENT_PROFILE_ENV: &str = "SILVERHAND_DEPLOYMENT_PROFILE";
 /// Optional. When set to a truthy value, public signup is closed; otherwise it is
 /// open, matching the product default.
 const DISABLE_SIGNUP_ENV: &str = "SILVERHAND_DISABLE_SIGNUP";
+/// Optional. The directory categorized log files (the CLI preflight-failure audit
+/// among them) are written to. GENERAL, not CLI-specific: a future second audit
+/// surface writes its own `<prefix>-<utc>.log` under the SAME directory. The Rust
+/// backend NEVER self-derives this root — no hard-coded `~/.silverhand/logs`; the
+/// launcher hands it an explicit path exactly like the database and blobs roots.
+/// Unset (or empty) is a distinct, legitimate state — audit logging is simply
+/// unconfigured — NOT a startup failure; only a configured directory that cannot be
+/// opened fails startup.
+const LOG_DIR_ENV: &str = "SILVERHAND_LOG_DIR";
 const BASELINE_MIGRATION_STEP: i64 = const_parse_i64(env!("SILVERHAND_BASELINE_MIGRATION_STEP"));
 const CURRENT_MIGRATION_STEP: i64 = const_parse_i64(env!("SILVERHAND_CURRENT_MIGRATION_STEP"));
 const MIGRATION_STEPS: &str = env!("SILVERHAND_MIGRATION_STEPS");
@@ -182,9 +193,18 @@ pub struct AppConfig {
     deployment_profile: DeploymentProfile,
     /// Whether public signup is open. Advertised by `/api/server/info`.
     signup_enabled: bool,
+    /// The categorized-log root, or `None` when audit logging is unconfigured. The
+    /// composition opens the CLI preflight-failure sink here; `None` is a legitimate
+    /// unconfigured state, distinct from a configured-but-unopenable directory (which
+    /// fails startup).
+    log_dir: Option<PathBuf>,
 }
 
 impl AppConfig {
+    // The arity mirrors the launcher-provided config field set (each field is an
+    // independent, separately-validated input), not a factorable parameter cluster; a
+    // params struct would only restate `AppConfig` itself.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         database_path: PathBuf,
         blobs_root: PathBuf,
@@ -193,6 +213,7 @@ impl AppConfig {
         daemon_npm_spec: Option<String>,
         deployment_profile: DeploymentProfile,
         signup_enabled: bool,
+        log_dir: Option<PathBuf>,
     ) -> Result<Self, ConfigError> {
         if database_path.as_os_str().is_empty() {
             return Err(ConfigError::EmptyDatabasePath);
@@ -202,6 +223,14 @@ impl AppConfig {
         }
         if allowed_origins.is_empty() {
             return Err(ConfigError::EmptyAllowedOrigins);
+        }
+        // An explicitly-supplied but empty log directory is a launcher mistake, not the
+        // unconfigured state — the latter is `None`, reached by an unset env var.
+        if log_dir
+            .as_ref()
+            .is_some_and(|dir| dir.as_os_str().is_empty())
+        {
+            return Err(ConfigError::EmptyLogDir);
         }
         let daemon_npm_spec = daemon_npm_spec
             .map(|value| value.trim().to_owned())
@@ -214,6 +243,7 @@ impl AppConfig {
             daemon_npm_spec,
             deployment_profile,
             signup_enabled,
+            log_dir,
         })
     }
 
@@ -241,6 +271,12 @@ impl AppConfig {
             deployment_profile,
             env::var(DISABLE_SIGNUP_ENV).ok().as_deref(),
         )?;
+        // Unset or blank means audit logging is simply unconfigured (`None`); a set path
+        // is taken verbatim. The backend never fabricates a default root.
+        let log_dir = env::var(LOG_DIR_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from);
         Self::new(
             database_path,
             blobs_root,
@@ -249,6 +285,7 @@ impl AppConfig {
             daemon_npm_spec,
             deployment_profile,
             signup_enabled,
+            log_dir,
         )
     }
 
@@ -303,6 +340,8 @@ pub enum ConfigError {
     EmptyDatabasePath,
     #[error("blob storage root must not be empty")]
     EmptyBlobsRoot,
+    #[error("categorized log directory must not be empty when set")]
+    EmptyLogDir,
     #[error("event websocket origin allowlist must not be empty")]
     EmptyAllowedOrigins,
     #[error("listen address is invalid")]
@@ -393,6 +432,12 @@ pub struct PreparedApp {
     /// the daemon transport its legs drive is still alive — cancelling any in-flight leg and
     /// rejecting any dispatched afterward, exactly like the deletion resumer above.
     create_aftermath: CreateAftermath,
+    /// #2256: the ONE composition-owned CLI preflight-failure audit sink, or `None` when
+    /// no log directory is configured. Carried so BOTH shutdown paths flush+close the
+    /// same instance idempotently; it holds a background writer task whose queued lines
+    /// must be drained to disk before the process exits. `None` is a live, legitimate
+    /// state — recording is a no-op when audit logging is unconfigured.
+    cli_audit_sink: Option<CliPreflightFileSink<SystemProcessClock>>,
     /// #2234 CP7a (test-only): a clone of the ONE runtime-credential authority the
     /// `agent_products` perimeter is wrapped with. Carried so a composition test can mint a
     /// real bearer through `dispatch_start` against the SAME in-memory token store the mounted
@@ -419,6 +464,21 @@ impl PreparedApp {
             &self.presence_timers,
         )
         .await;
+        // #2256: drain and close the audit sink's writer task. Independent of the
+        // transports above, so it runs last; idempotent, so the serve-path close below
+        // and this method never double-close a shared instance into a hang.
+        if let Some(sink) = &self.cli_audit_sink {
+            sink.close().await;
+        }
+    }
+
+    /// A clone of the composition-owned CLI audit sink, for composition tests to record
+    /// through the REAL `prepare()`-constructed sink (and to witness its terminal state
+    /// after close). The sink shares its writer via `Arc`, so the clone drives the SAME
+    /// file. `None` when no log directory was configured.
+    #[cfg(test)]
+    fn cli_audit_sink(&self) -> Option<CliPreflightFileSink<SystemProcessClock>> {
+        self.cli_audit_sink.clone()
     }
 }
 
@@ -650,6 +710,27 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // rather than open a second root.
     let blob_store = open("blob store", LocalBlobStore::open(&config.blobs_root)).await?;
 
+    // #2256: the ONE CLI preflight-failure audit sink. Constructed here in the
+    // composition root — the only layer that owns a filesystem side effect's lifecycle —
+    // and stamped with the launcher's `app` base (embedded launcher → the desktop base,
+    // remote-only launcher → the server base), sampling this boot's UTC filename from the
+    // single process wall clock. A configured directory that cannot be opened fails
+    // startup (a configured sink must never silently degrade to a no-op); an unconfigured
+    // directory yields `None` and recording is simply absent.
+    let cli_audit_app = match config.deployment_profile {
+        DeploymentProfile::Embedded => AppTag::Desktop,
+        DeploymentProfile::RemoteOnly => AppTag::Server,
+    };
+    let cli_audit_sink = match &config.log_dir {
+        Some(log_dir) => Some(
+            open(
+                "cli preflight audit sink",
+                CliPreflightFileSink::open(log_dir.clone(), cli_audit_app, SystemProcessClock),
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let hub = ScopeEventHub::production().map_err(|source| StartupError::Composition {
         name: "scope event hub",
         source: Box::new(source),
@@ -1507,6 +1588,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         presence_timers,
         deletion_resumer,
         create_aftermath,
+        cli_audit_sink,
         #[cfg(test)]
         test_runtime_credentials,
     })
@@ -1592,6 +1674,7 @@ where
         presence_timers,
         deletion_resumer,
         create_aftermath,
+        cli_audit_sink,
         #[cfg(test)]
             test_runtime_credentials: _,
     } = app;
@@ -1609,8 +1692,14 @@ where
         .into_future();
     tokio::pin!(server);
     tokio::pin!(shutdown);
-    tokio::select! {
-        result = &mut server => result.map_err(StartupError::Serve),
+    let outcome = tokio::select! {
+        result = &mut server => {
+            // The server terminated on its own — an error return, or an unexpected
+            // completion — WITHOUT our shutdown signal. The audit sink still owns lines
+            // accepted before this instant; its drain+close runs in the shared tail
+            // below, so this path can never lose them to a bare object drop.
+            result.map_err(StartupError::Serve)
+        }
         signal = &mut shutdown => {
             let _ = shutdown_tx.send(());
             // #2234 CP3: the resumer stops scheduling FIRST — synchronously, while the
@@ -1625,10 +1714,24 @@ where
             // then an immediate presence dispose, daemon close concurrent but never
             // wedged between the two.
             shut_down_transports(&event_controller, &daemon_controller, &presence_timers).await;
-            server.await.map_err(StartupError::Serve)?;
-            signal.map_err(|source| StartupError::ShutdownSignal(Box::new(source)))
+            server
+                .as_mut()
+                .await
+                .map_err(StartupError::Serve)
+                .and_then(|()| {
+                    signal.map_err(|source| StartupError::ShutdownSignal(Box::new(source)))
+                })
         }
+    };
+    // #2256: the audit sink's drain+close is the LAST step on EVERY termination path —
+    // the graceful signal arm and a server-first error return alike — so accepted lines
+    // are never lost to a bare object drop, and it runs after the transports the signal
+    // arm tore down. Idempotent, so it is a safe no-op if any other entry point already
+    // closed the shared instance.
+    if let Some(sink) = &cli_audit_sink {
+        sink.close().await;
     }
+    outcome
 }
 
 async fn shutdown_signal() -> Result<(), std::io::Error> {
@@ -1742,6 +1845,12 @@ mod tests {
     }
 
     fn config(path: PathBuf) -> AppConfig {
+        config_with_log_dir(path, None)
+    }
+
+    /// [`config`] with an explicit categorized-log directory, so a composition test can
+    /// drive `prepare()` into constructing a REAL CLI audit sink at a known path.
+    fn config_with_log_dir(path: PathBuf, log_dir: Option<PathBuf>) -> AppConfig {
         // A sibling blobs dir inside the fixture's tempdir, created on blob-store open.
         let blobs_root = path.parent().unwrap().join("blobs");
         AppConfig::new(
@@ -1756,6 +1865,7 @@ mod tests {
             // perimeter) and `/readyz` omits the fanout key.
             DeploymentProfile::Embedded,
             true,
+            log_dir,
         )
         .unwrap()
     }
@@ -1775,6 +1885,7 @@ mod tests {
             Some("@silverhand-ai/daemon@test".to_owned()),
             DeploymentProfile::RemoteOnly,
             true,
+            None,
         )
         .unwrap()
     }
@@ -2104,6 +2215,7 @@ mod tests {
                 None,
                 DeploymentProfile::Embedded,
                 true,
+                None,
             ),
             Err(ConfigError::EmptyDatabasePath)
         ));
@@ -2116,6 +2228,7 @@ mod tests {
                 None,
                 DeploymentProfile::Embedded,
                 true,
+                None,
             ),
             Err(ConfigError::EmptyBlobsRoot)
         ));
@@ -2128,9 +2241,112 @@ mod tests {
                 None,
                 DeploymentProfile::Embedded,
                 true,
+                None,
             ),
             Err(ConfigError::EmptyAllowedOrigins)
         ));
+    }
+
+    /// #2256 production falsifier: `prepare()` under a configured log directory builds a
+    /// REAL categorized-file sink (not a double), a line recorded through it survives the
+    /// composition's own shutdown drain to `<log-dir>/cli-<utc>.log`, and that line
+    /// carries the exact queryable field contract — including the launcher-derived `app`
+    /// base, an absent optional as explicit `null`, and a fractional `duration_ms`
+    /// verbatim. Closing through `close_connections` also witnesses the sink reaching its
+    /// terminal closed state.
+    #[tokio::test]
+    async fn prepare_builds_a_real_cli_audit_sink_that_persists_the_exact_contract() {
+        use silverhand_backend_core::cli_preflight_audit::{
+            CliPreflightAuditSink, CliPreflightFailure, NonNegativeFiniteF64,
+        };
+        use silverhand_backend_filesystem::audit_sink::WriterState;
+
+        let fixture = fixture(true).await;
+        let log_dir = tempfile::tempdir().unwrap();
+        let config = config_with_log_dir(fixture.path.clone(), Some(log_dir.path().to_path_buf()));
+        let app = prepare(&config).await.unwrap();
+
+        let sink = app
+            .cli_audit_sink()
+            .expect("a configured log directory constructs a real sink");
+        sink.record(CliPreflightFailure {
+            agent_id: AgentId::parse("agent-42").unwrap(),
+            conversation_id: None,
+            noun: Some("message".to_owned()),
+            verb: Some("send".to_owned()),
+            flags_seen: vec!["--strict".to_owned()],
+            error_code: Some("E_UNKNOWN_FLAG".to_owned()),
+            error_subkind: None,
+            error_message: Some("unknown flag --nope".to_owned()),
+            duration_ms: Some(NonNegativeFiniteF64::new(3.5).unwrap()),
+        });
+
+        // The composition's own shutdown path drains the writer to disk and closes it.
+        app.close_connections().await;
+        assert_eq!(
+            sink.state(),
+            WriterState::ClosedShutdown,
+            "close_connections witnesses the sink terminally closed"
+        );
+
+        // Exactly one `cli-<utc>.log` for this boot.
+        let mut names = Vec::new();
+        let mut entries = tokio::fs::read_dir(log_dir.path()).await.unwrap();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        assert_eq!(names.len(), 1, "one file per boot: {names:?}");
+        assert!(
+            names[0].starts_with("cli-") && names[0].ends_with(".log"),
+            "unexpected filename: {}",
+            names[0]
+        );
+
+        let contents = tokio::fs::read_to_string(log_dir.path().join(&names[0]))
+            .await
+            .unwrap();
+        let line = contents.lines().next().expect("the recorded line");
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+        let object = value.as_object().unwrap();
+        assert_eq!(object["level"], "warn");
+        assert_eq!(object["msg"], "cli.preflight_failure");
+        assert_eq!(
+            object["app"], "silverhand-desktop",
+            "embedded launcher base"
+        );
+        assert!(object["pid"].is_number());
+        assert_eq!(object["category"], "cli.preflight_failure");
+        assert_eq!(object["status"], "failure");
+        assert_eq!(object["agentId"], "agent-42");
+        assert!(
+            object["conversationId"].is_null(),
+            "absent optional is null"
+        );
+        assert_eq!(object["noun"], "message");
+        assert_eq!(object["verb"], "send");
+        assert_eq!(object["flags_seen"], serde_json::json!(["--strict"]));
+        assert_eq!(object["error_code"], "E_UNKNOWN_FLAG");
+        assert!(object["error_subkind"].is_null());
+        assert_eq!(object["error_message"], "unknown flag --nope");
+        assert_eq!(
+            object["duration_ms"],
+            serde_json::json!(3.5),
+            "fractional ms verbatim"
+        );
+    }
+
+    /// With no log directory configured, `prepare()` leaves the sink unconfigured
+    /// (`None`) — a legitimate state, not a startup failure — and `close_connections`
+    /// over that absence is a harmless no-op.
+    #[tokio::test]
+    async fn prepare_leaves_the_audit_sink_unconfigured_without_a_log_dir() {
+        let fixture = fixture(true).await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        assert!(
+            app.cli_audit_sink().is_none(),
+            "no log directory means no sink"
+        );
+        app.close_connections().await;
     }
 
     #[tokio::test]

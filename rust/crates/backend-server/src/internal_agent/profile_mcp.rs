@@ -12,17 +12,20 @@
 //! (403) pre-checks all collapse into the layer's indistinguishable `401`, and the
 //! handler trusts `credential.agent()` and takes no path param.
 //!
-//! ## What this lane owns, and what it defers
+//! ## What this lane owns, and what it shares
 //!
-//! This checkpoint owns the MCP-specific consumer surface: the wire admission (the
-//! POST config validation via [`parse_mcp_config`], the probe request schema), the
-//! wire projection of a probe outcome, and the mapping of a data-plane fault code
-//! to an HTTP status. It does NOT own the transport: the production
+//! This checkpoint owns the internal consumer surface: the self-pinned routing, the
+//! credential-composition guard, and the POST config-replace path (its `mcp.json`
+//! validation via [`parse_mcp_config`] and its write response). The HTTP wire it
+//! shares with the public management faces — the probe request grammar and its one
+//! stateless rule, the probe-outcome projection, the data-plane fault→HTTP mapping,
+//! and the raw-config read body — lives in the single crate-private
+//! [`wire`](crate::host_agent::public_profile_mcp::wire) vocabulary both routers consume;
+//! neither re-declares it. It does NOT own the transport: the production
 //! [`AgentProfileMcpDataPlane`] adapter is #2231's, reusing #2224's correlated-RPC
 //! data-plane root, wired at the backend-app #2234 CP7b mount. Deterministic fakes
 //! prove the handler orchestration but not mounting or effect-completeness; the
-//! backend-app composition gate proves those over the real daemon wire. This lane
-//! copies none of #2224's dispatch machinery.
+//! backend-app composition gate proves those over the real daemon wire.
 //!
 //! ## A probe failure is a 200, not an HTTP error
 //!
@@ -39,19 +42,16 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use garde::Validate;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use silverhand_backend_core::{
-    agent_profile_mcp::{
-        AgentProfileMcpDataPlane, McpDataPlaneFault, McpDataPlaneFaultCode, McpProbeCommand,
-        McpProbeOutcome, McpProbePhase, McpProbeServerInfo, McpProbeTool,
-    },
-    mcp_config::parse_mcp_config,
+    agent_profile_mcp::AgentProfileMcpDataPlane, mcp_config::parse_mcp_config,
     runtime_credential::RuntimePrincipal,
 };
 
+use crate::host_agent::public_profile_mcp::wire::{
+    ProbeRequest, ReadConfigResponse, data_plane_error, probe_outcome_wire,
+};
 use crate::wire_admission::ValidatedJson;
-use crate::wire_patch::RequiredPatchField;
 
 /// The product route template for reading/replacing the config. `{aid}` is consumed
 /// by the credential layer, which self-pins it.
@@ -81,10 +81,6 @@ where
         .with_state(data_plane)
 }
 
-// ===========================================================================
-// Shared response helpers.
-// ===========================================================================
-
 /// The composition-fault `500`: a route reached without its credential layer must
 /// not dispatch. Never a `401` — that verdict is the layer's alone.
 fn missing_credential(route: &str) -> Response {
@@ -95,61 +91,9 @@ fn missing_credential(route: &str) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR_BODY).into_response()
 }
 
-/// Render a data-plane fault as the product's `{ error, code }` envelope at the
-/// status its code maps to. `code` is a CLOSED taxonomy (#2231's adapter already
-/// folded any unclassified upstream error into `DaemonInternalError`), so both
-/// the status and the stable wire token are exhaustive matches — nothing an
-/// adapter produces can widen the CLI's `code` union or leak a raw upstream string.
-fn data_plane_error(fault: McpDataPlaneFault) -> Response {
-    (
-        data_plane_status(fault.code),
-        Json(serde_json::json!({
-            "error": fault.message,
-            "code": data_plane_wire_code(fault.code),
-        })),
-    )
-        .into_response()
-}
-
-/// The HTTP status for each closed fault code, matching the product's
-/// `mapDataPlaneError` result statuses (`workspace-data-plane.ts`). Exhaustive by
-/// construction: a new code forces a new arm here, so the code→status tail can
-/// never silently fall through.
-fn data_plane_status(code: McpDataPlaneFaultCode) -> StatusCode {
-    match code {
-        McpDataPlaneFaultCode::InvalidConfig => StatusCode::BAD_REQUEST,
-        McpDataPlaneFaultCode::AgentDeleting => StatusCode::CONFLICT,
-        McpDataPlaneFaultCode::HostAttachPending | McpDataPlaneFaultCode::FsUnavailable => {
-            StatusCode::SERVICE_UNAVAILABLE
-        }
-        McpDataPlaneFaultCode::DaemonTimeout => StatusCode::GATEWAY_TIMEOUT,
-        McpDataPlaneFaultCode::DaemonInternalError => StatusCode::BAD_GATEWAY,
-    }
-}
-
-/// The stable wire token echoed in the CLI's `{ error, code }`, matching the TS
-/// data-plane code strings. Exhaustive: the token union is the contract.
-fn data_plane_wire_code(code: McpDataPlaneFaultCode) -> &'static str {
-    match code {
-        McpDataPlaneFaultCode::HostAttachPending => "host_attach_pending",
-        McpDataPlaneFaultCode::DaemonTimeout => "daemon_timeout",
-        McpDataPlaneFaultCode::DaemonInternalError => "daemon_internal_error",
-        McpDataPlaneFaultCode::FsUnavailable => "fs_unavailable",
-        McpDataPlaneFaultCode::InvalidConfig => "invalid_config",
-        McpDataPlaneFaultCode::AgentDeleting => "agent_deleting",
-    }
-}
-
 // ===========================================================================
 // GET — read the config.
 // ===========================================================================
-
-/// `{ raw: string | null }` — the verbatim `mcp.json` text, or `null` when the file
-/// does not exist (the normal empty state, never a `404`).
-#[derive(Serialize)]
-struct ReadConfigResponse {
-    raw: Option<String>,
-}
 
 async fn read_config<D>(
     credential: Option<Extension<RuntimePrincipal>>,
@@ -173,8 +117,10 @@ where
 
 /// `{ ok: true, bytes_written: number }` — the daemon's byte count for the written
 /// `mcp.json`. `bytes_written` is an `i64` sourced from the port's
-/// [`McpBytesWritten`], which has already guaranteed a JS-safe value, so the wire
-/// number is always exactly representable by a JavaScript consumer.
+/// [`McpBytesWritten`](silverhand_backend_core::agent_profile_mcp::McpBytesWritten),
+/// which has already guaranteed a JS-safe value, so the wire number is always exactly
+/// representable by a JavaScript consumer. (Internal-only: the public management faces
+/// carry no config write.)
 #[derive(Serialize)]
 struct WriteConfigResponse {
     ok: bool,
@@ -223,47 +169,6 @@ where
 // POST probe — a one-shot live probe.
 // ===========================================================================
 
-/// The probe request: `{ server_name, include_tools? }`, strict. `server_name` is
-/// the RAW user-visible name (never the `silverhand_<scope>__` runtime spelling).
-///
-/// Admission rides the frozen [`ValidatedJson`] model, so the pre-migration blanket
-/// `400 { error, code: "invalid_input" }` is gone and the failure surface splits by
-/// KIND, exactly as the sibling internal routes now do. Structural faults ride axum's
-/// own `Json` rejection, forwarded verbatim: a malformed body is a native `400`, while
-/// a missing/duplicate/unknown key, a wrong-typed field, or a present
-/// `include_tools: null` is a native `422`. A top-level NON-object shape (an array such
-/// as `["srv", true]`, a scalar, `null`) is likewise a native `422`: `ValidatedJson`
-/// decodes through the shared `ObjectOnly` floor (#2246), so serde can never bind an
-/// array to these fields positionally into a dispatch. An empty `server_name` decodes
-/// fine and then fails the `garde` rule, so it is the semantic
-/// `422 { "error": "invalid input" }` (the `Report` is never serialized). The
-/// `code: "invalid_input"` discriminator is deliberately dropped — the data-plane fault
-/// envelope (`data_plane_error`) still carries `{ error, code }` unchanged.
-#[derive(Deserialize, Validate)]
-#[serde(deny_unknown_fields)]
-struct ProbeRequest {
-    #[garde(custom(server_name_present))]
-    server_name: String,
-    // Tri-state via the frozen `RequiredPatchField`: absent → `Missing` (defaults to
-    // `false`), present `true`/`false` → `Value`, present `null` → a native `422`
-    // decode error. `#[serde(default)]` supplies `Missing` when the key is absent.
-    #[serde(default)]
-    #[garde(skip)]
-    include_tools: RequiredPatchField<bool>,
-}
-
-/// `garde` rule: `server_name` must be non-empty. This is a RAW `!is_empty()` check —
-/// NOT trimmed — mirroring the product's `z.string().min(1)` (a character count, not a
-/// trimmed length), so a whitespace-only name (`" "`) is accepted and bound to the
-/// probe command verbatim.
-fn server_name_present(value: &str, _: &()) -> garde::Result {
-    if value.is_empty() {
-        Err(garde::Error::new("server_name must not be empty"))
-    } else {
-        Ok(())
-    }
-}
-
 async fn probe<D>(
     credential: Option<Extension<RuntimePrincipal>>,
     State(data_plane): State<D>,
@@ -276,98 +181,13 @@ where
         return missing_credential(PROFILE_MCP_PROBE_PATH);
     };
 
-    let command = McpProbeCommand {
-        server_name: request.server_name,
-        include_tools: match request.include_tools {
-            RequiredPatchField::Missing => false,
-            RequiredPatchField::Value(value) => value,
-        },
-    };
+    let command = request.into_command();
 
     match data_plane.probe(credential.agent(), &command).await {
         // A connect/handshake/tools failure is NOT an HTTP error — it rides the 200
         // body as `{ ok: false, phase }`. Only a transport fault (the `Err` arm) is.
         Ok(outcome) => Json(probe_outcome_wire(&outcome)).into_response(),
         Err(fault) => data_plane_error(fault),
-    }
-}
-
-/// `{ ok, phase, message?, server_info?, tools? }` — the `McpProbeResult` the CLI
-/// reads. Absent optional fields are OMITTED (never explicit `null`), mirroring the
-/// product's `.strict()` optionals. `message` is already redacted upstream.
-#[derive(Serialize)]
-struct ProbeOutcomeWire {
-    ok: bool,
-    phase: ProbePhaseWire,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    server_info: Option<ProbeServerInfoWire>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<ProbeToolWire>>,
-}
-
-/// The probe phase, serialized to the product's snake_case tokens
-/// (`parse`/`not_found`/`connect`/`initialize`/`tools`).
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum ProbePhaseWire {
-    Parse,
-    NotFound,
-    Connect,
-    Initialize,
-    Tools,
-}
-
-#[derive(Serialize)]
-struct ProbeServerInfoWire {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    version: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ProbeToolWire {
-    name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-}
-
-fn probe_phase_wire(phase: McpProbePhase) -> ProbePhaseWire {
-    match phase {
-        McpProbePhase::Parse => ProbePhaseWire::Parse,
-        McpProbePhase::NotFound => ProbePhaseWire::NotFound,
-        McpProbePhase::Connect => ProbePhaseWire::Connect,
-        McpProbePhase::Initialize => ProbePhaseWire::Initialize,
-        McpProbePhase::Tools => ProbePhaseWire::Tools,
-    }
-}
-
-fn probe_outcome_wire(outcome: &McpProbeOutcome) -> ProbeOutcomeWire {
-    ProbeOutcomeWire {
-        ok: outcome.ok,
-        phase: probe_phase_wire(outcome.phase),
-        message: outcome.message.clone(),
-        server_info: outcome.server_info.as_ref().map(probe_server_info_wire),
-        tools: outcome
-            .tools
-            .as_ref()
-            .map(|tools| tools.iter().map(probe_tool_wire).collect()),
-    }
-}
-
-fn probe_server_info_wire(info: &McpProbeServerInfo) -> ProbeServerInfoWire {
-    ProbeServerInfoWire {
-        name: info.name.clone(),
-        version: info.version.clone(),
-    }
-}
-
-fn probe_tool_wire(tool: &McpProbeTool) -> ProbeToolWire {
-    ProbeToolWire {
-        name: tool.name.clone(),
-        description: tool.description.clone(),
     }
 }
 
@@ -383,7 +203,10 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_profile_mcp::McpBytesWritten,
+        agent_profile_mcp::{
+            McpBytesWritten, McpDataPlaneFault, McpDataPlaneFaultCode, McpProbeCommand,
+            McpProbeOutcome, McpProbePhase, McpProbeServerInfo, McpProbeTool,
+        },
         identity::{AgentId, DaemonInstanceId},
         persistence::PersistenceFailure,
         runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},
@@ -1108,39 +931,5 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert!(data_plane.consulted());
         assert_eq!(data_plane.asked_for(), vec!["a1".to_string()]);
-    }
-
-    // ---- status + wire mapping ----
-
-    /// Every closed fault code maps to its product HTTP status AND its stable wire
-    /// token. Exhaustive over the enum: a new variant forces a new row here, so a
-    /// code can never fall through to a wildcard or leak a raw upstream string.
-    #[test]
-    fn every_fault_code_maps_to_its_status_and_wire_token() {
-        use McpDataPlaneFaultCode::*;
-        let table = [
-            (InvalidConfig, StatusCode::BAD_REQUEST, "invalid_config"),
-            (AgentDeleting, StatusCode::CONFLICT, "agent_deleting"),
-            (
-                HostAttachPending,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "host_attach_pending",
-            ),
-            (
-                FsUnavailable,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "fs_unavailable",
-            ),
-            (DaemonTimeout, StatusCode::GATEWAY_TIMEOUT, "daemon_timeout"),
-            (
-                DaemonInternalError,
-                StatusCode::BAD_GATEWAY,
-                "daemon_internal_error",
-            ),
-        ];
-        for (code, status, wire) in table {
-            assert_eq!(data_plane_status(code), status, "status for {code:?}");
-            assert_eq!(data_plane_wire_code(code), wire, "wire token for {code:?}");
-        }
     }
 }

@@ -170,6 +170,43 @@ impl PairEvidence {
         [&self.a, &self.b]
     }
 
+    /// The conversation this pair names. `pub(crate)`: the agent-audit chats list
+    /// reuses this pair decode + counterpart resolution for its direct-pair arm.
+    pub(crate) fn conversation(&self) -> &ConversationId {
+        &self.conversation
+    }
+
+    /// The pair's creation instant in ms — the audit list's `created_at` and part of
+    /// its sort key.
+    pub(crate) fn created_at_ms(&self) -> i64 {
+        self.created_at_ms
+    }
+
+    /// Both endpoints, so the audit arm can compute the survivor read-only fact the
+    /// same way the DM list does.
+    pub(crate) fn both_endpoints(&self) -> [&Endpoint; 2] {
+        self.endpoints()
+    }
+
+    /// The endpoint that is NOT the audited agent. Exactly one endpoint must name the
+    /// agent; a pair where both or neither do is a decode defect — never a guessed
+    /// counterpart — so it fails closed, mirroring the TS `resolveCounterpart` match
+    /// count.
+    pub(crate) fn counterpart_of_agent(
+        &self,
+        agent: &AgentId,
+    ) -> Result<&Endpoint, DirectPairReadError> {
+        let a_is_agent = matches!(&self.a.identity, PrincipalIdentity::Agent(id) if id == agent);
+        let b_is_agent = matches!(&self.b.identity, PrincipalIdentity::Agent(id) if id == agent);
+        match (a_is_agent, b_is_agent) {
+            (true, false) => Ok(&self.b),
+            (false, true) => Ok(&self.a),
+            _ => Err(DirectPairReadError::MalformedIdentity {
+                field: "conversations.direct_pair_endpoints",
+            }),
+        }
+    }
+
     pub(crate) fn counterpart(&self, viewer: &UserId) -> Result<Endpoint, DirectPairReadError> {
         let a_is_viewer = matches!(&self.a.identity, PrincipalIdentity::Human(id) if id == viewer);
         let b_is_viewer = matches!(&self.b.identity, PrincipalIdentity::Human(id) if id == viewer);
@@ -209,6 +246,12 @@ impl Endpoint {
             identity,
             deleted_at_ms,
         })
+    }
+
+    /// Whether this endpoint carries a deletion tombstone. `pub(crate)`: the audit
+    /// direct-pair arm folds this into the survivor read-only fact.
+    pub(crate) fn is_deleted(&self) -> bool {
+        self.deleted_at_ms.is_some()
     }
 }
 
@@ -273,7 +316,9 @@ impl LivePrincipals {
         Ok(live)
     }
 
-    fn exists(&self, endpoint: &Endpoint) -> bool {
+    /// Whether the endpoint's live principal row is present. `pub(crate)`: the audit
+    /// direct-pair arm computes the survivor read-only fact through this same check.
+    pub(crate) fn exists(&self, endpoint: &Endpoint) -> bool {
         match &endpoint.identity {
             PrincipalIdentity::Agent(id) => self.agents.contains_key(id.as_str()),
             PrincipalIdentity::Human(id) => self.users.contains_key(id.as_str()),

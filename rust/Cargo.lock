@@ -1383,9 +1383,11 @@ version = "0.1.0"
 dependencies = [
  "getrandom 0.4.3",
  "rustix",
+ "serde_json",
  "silverhand-backend-core",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1406,6 +1408,7 @@ dependencies = [
  "silverhand-backend-filesystem",
  "silverhand-backend-sqlite",
  "sqlx",
+ "subtle",
  "syn 3.0.3",
  "tempfile",
  "thiserror",
