@@ -14,9 +14,8 @@ use std::{
 
 use axum::{
     Router,
-    body::Bytes,
     extract::{Extension, Path, State},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::post,
 };
 use serde::Deserialize;
@@ -30,9 +29,10 @@ use silverhand_backend_core::{
     runtime_credential::RuntimePrincipal,
 };
 
+use crate::wire_admission::{ValidatedJson, ValidatedJsonRejection, invalid_input};
 use wire::{
-    detail_success, internal_error, internal_error_response, invalid_reaction, mutation_refusal,
-    mutation_success, not_found, parse_agent_body, parse_human_body,
+    AgentReactRaw, HumanReactRaw, detail_success, internal_error, internal_error_response,
+    invalid_reaction, mutation_refusal, mutation_success, not_found,
 };
 
 pub const HUMAN_PATH: &str = "/api/messages/{id}/reactions";
@@ -91,7 +91,7 @@ async fn human_add<M, R, A>(
     state: State<ReactionState<M, R, A>>,
     principal: Option<Extension<UserId>>,
     path: Path<MessagePath>,
-    body: Bytes,
+    body: Result<ValidatedJson<HumanReactRaw>, ValidatedJsonRejection>,
 ) -> Response
 where
     M: ReactionMutationPort,
@@ -105,7 +105,7 @@ async fn human_remove<M, R, A>(
     state: State<ReactionState<M, R, A>>,
     principal: Option<Extension<UserId>>,
     path: Path<MessagePath>,
-    body: Bytes,
+    body: Result<ValidatedJson<HumanReactRaw>, ValidatedJsonRejection>,
 ) -> Response
 where
     M: ReactionMutationPort,
@@ -119,7 +119,7 @@ async fn human_mutation<M, R, A>(
     State(state): State<ReactionState<M, R, A>>,
     principal: Option<Extension<UserId>>,
     Path(path): Path<MessagePath>,
-    body: Bytes,
+    body: Result<ValidatedJson<HumanReactRaw>, ValidatedJsonRejection>,
     change: ReactionChange,
 ) -> Response
 where
@@ -130,21 +130,27 @@ where
     let Some(Extension(viewer)) = principal else {
         return internal_error("reaction route reached without human principal");
     };
+    // The message coordinate is decided before the body, preserving the base anti-enumeration
+    // ladder (an unresolvable path id is an indistinguishable 404 that never depends on body
+    // validity). `MessageId::parse` only rejects an empty segment, which the router makes
+    // unreachable here — but the ordering is kept rather than inverted by this migration.
     let Ok(message) = MessageId::parse(path.id) else {
         return not_found();
     };
-    let body = match parse_human_body(&body) {
-        Ok(body) => body,
-        Err(error) => return error.into_response(),
+    // A structural body fault keeps its native rejection (400/415/422); there is no
+    // garde rule on the DTO, so the semantic arm never fires here.
+    let body = match body {
+        Ok(ValidatedJson(body)) => body,
+        Err(rejection) => return rejection.into_response(),
     };
-    mutate_human(&state.0, viewer, message, body, change).await
+    mutate_human(&state.0, viewer, message, body.emoji, change).await
 }
 
 async fn agent_add<M, R, A>(
     state: State<ReactionState<M, R, A>>,
     principal: Option<Extension<RuntimePrincipal>>,
     path: Path<AgentPath>,
-    body: Bytes,
+    body: Result<ValidatedJson<AgentReactRaw>, ValidatedJsonRejection>,
 ) -> Response
 where
     M: ReactionMutationPort,
@@ -158,7 +164,7 @@ async fn agent_remove<M, R, A>(
     state: State<ReactionState<M, R, A>>,
     principal: Option<Extension<RuntimePrincipal>>,
     path: Path<AgentPath>,
-    body: Bytes,
+    body: Result<ValidatedJson<AgentReactRaw>, ValidatedJsonRejection>,
 ) -> Response
 where
     M: ReactionMutationPort,
@@ -172,7 +178,7 @@ async fn agent_mutation<M, R, A>(
     State(state): State<ReactionState<M, R, A>>,
     principal: Option<Extension<RuntimePrincipal>>,
     Path(path): Path<AgentPath>,
-    body: Bytes,
+    body: Result<ValidatedJson<AgentReactRaw>, ValidatedJsonRejection>,
     change: ReactionChange,
 ) -> Response
 where
@@ -186,20 +192,29 @@ where
     let Ok(path_agent) = AgentId::parse(path.aid) else {
         return not_found();
     };
+    // Identity is self-pinned: a path agent that is not the authenticated principal is an
+    // indistinguishable 404 before the body is consulted — the path coordinate never
+    // overrides the credential.
     if principal.agent() != &path_agent {
         return not_found();
     }
-    let (message, emoji) = match parse_agent_body(&body) {
-        Ok(body) => body,
-        Err(error) => return error.into_response(),
+    // A structural body fault keeps its native rejection; no garde rule fires here.
+    let body = match body {
+        Ok(ValidatedJson(body)) => body,
+        Err(rejection) => return rejection.into_response(),
     };
-    let message = MessageId::parse(message).expect("agent body parser rejects an empty message id");
+    // `message_id` grammar is a domain verdict, not an admission rule: an empty/malformed id
+    // collapses to the minimal semantic 422, never a panic. The emoji stays deferred so an
+    // invalid emoji paired with a hidden/unauthorized target still refuses 404/403.
+    let Ok(message) = MessageId::parse(body.message_id) else {
+        return invalid_input();
+    };
     mutate_agent(
         &state.0,
         principal.agent().clone(),
         principal.source().cloned(),
         message,
-        emoji,
+        body.emoji,
         change,
     )
     .await
