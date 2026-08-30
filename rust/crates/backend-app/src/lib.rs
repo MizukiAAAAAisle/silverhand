@@ -13,7 +13,10 @@ use std::{
 use axum::Router;
 use silverhand_backend_core::{
     access::{EnrollmentClock, unix_millis},
-    auth::{EntropySessionTokenMint, HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
+    auth::{
+        EntropySessionTokenMint, HumanSessionAuthenticator, SessionTokenMint, SessionTtl,
+        SystemSessionClock,
+    },
     blob_store::StorageKind,
     credential::Argon2idPasswordHasher,
     host_runtime::{
@@ -27,7 +30,7 @@ use silverhand_backend_core::{
     teardown::computer_delete::DeleteComputer,
 };
 use silverhand_backend_filesystem::{
-    audit_sink::{AppTag, CliPreflightFileSink},
+    audit_sink::{AgentAuditFileSink, AppTag, CliPreflightFileSink},
     blob_store::LocalBlobStore,
     runtime_detection::MachineRuntimeDetector,
 };
@@ -40,11 +43,12 @@ use silverhand_backend_server::{
         DaemonDeliveryController, DaemonDeliveryRuntime, DaemonHostConnections,
         OnboardingDeliveryAdapter,
     },
-    direct_pairs,
+    direct_pairs, embedded_bootstrap,
     host_agent::{
-        agent_avatar, agent_avatar_write, agent_clear_session, agent_create, agent_delete,
-        agent_detail, agent_list, agent_patch, agent_presence, agent_runtime_switch, agent_stop,
-        availability,
+        agent_audit, agent_avatar, agent_avatar_write, agent_clear_session, agent_create,
+        agent_delete, agent_detail, agent_list, agent_patch, agent_presence, agent_runtime_state,
+        agent_runtime_switch, agent_stop, availability, public_profile_mcp,
+        schedule_management::{schedule_cancel_router, schedule_list_router},
     },
     host_agent_background::{
         agent_deletion_resumer::AgentDeletionResumer, presence_grace_timer::PresenceGraceTimers,
@@ -54,6 +58,7 @@ use silverhand_backend_server::{
     host_resources, host_runtime,
     human_auth::{self, HumanAuthDeps},
     internal_agent::{
+        diagnostics::cli_trace::cli_trace_router,
         peer_profile::{PeerProfilePorts, peer_profile_router},
         profile::self_profile_router,
         profile_mcp::profile_mcp_router,
@@ -91,12 +96,13 @@ use silverhand_backend_server::{
         ScopeEventHub, SystemDisconnectClock, compose_presence_vertical,
     },
     users::{self, UsersDeps},
-    workspace_detail, workspace_metadata_write, workspace_name_availability,
+    workspace_data_plane, workspace_detail, workspace_metadata_write, workspace_name_availability,
     workspace_rename_fanout::WorkspaceRenameFanoutAdapter,
     workspaces,
 };
 use silverhand_backend_sqlite::{
     access::SqliteAccessStore,
+    agent_audit_read::SqliteAgentAuditRead,
     agent_availability_read::SqliteAgentAvailabilityColdRead,
     agent_avatar_read::SqliteAgentAvatarRead,
     agent_detail_read::SqliteAgentDetailColdRead,
@@ -104,16 +110,22 @@ use silverhand_backend_sqlite::{
     agent_presence_read::SqliteAgentPresenceColdRead,
     agent_profile_read::SqliteAgentProfileRead,
     agent_profile_write::SqliteAgentProfileWrite,
+    agent_runtime_state_read::SqliteAgentRuntimeStateColdRead,
     auth::SqliteSessionStore,
     computer_agents_read::SqliteComputerAgentsRead,
     credential::SqliteCredentialStore,
     direct_pair_read::SqliteDirectPairReadModel,
+    embedded_bootstrap::SqliteEmbeddedBootstrap,
     handle_namespace::SqliteHandleNamespace,
     host_agent::SqliteHostAgentStore,
     host_resources_read::SqliteHostResourcesColdRead,
     host_runtime::SqliteHostRuntimeStore,
     human_registration::SqliteHumanRegistration,
-    messaging::{HostEnvironment, MessagingStore, task::SqliteTaskStore},
+    messaging::{
+        HostEnvironment, MessagingStore,
+        schedule::{SqliteScheduleCancel, SqliteScheduleListRead},
+        task::SqliteTaskStore,
+    },
     runtime_credential::SqliteRuntimeCustodyStore,
     runtime_delivery::SqliteRuntimeDeliveryStore,
     scope_event::SqliteEventScopeAuthority,
@@ -123,6 +135,7 @@ use silverhand_backend_sqlite::{
     user_presence_last_seen::SqliteLastSeenSink,
     workspace_audience_read::SqliteWorkspaceAudienceRead,
     workspace_cold_read::SqliteWorkspaceColdRead,
+    workspace_data_plane::SqliteWorkspaceScopeStore,
     workspace_detail_read::SqliteWorkspaceDetailRead,
     workspace_metadata_write::SqliteWorkspaceMetadataWrite,
     workspace_name_availability::SqliteRegularWorkspaceNamespace,
@@ -155,15 +168,24 @@ const DEPLOYMENT_PROFILE_ENV: &str = "SILVERHAND_DEPLOYMENT_PROFILE";
 /// Optional. When set to a truthy value, public signup is closed; otherwise it is
 /// open, matching the product default.
 const DISABLE_SIGNUP_ENV: &str = "SILVERHAND_DISABLE_SIGNUP";
-/// Optional. The directory categorized log files (the CLI preflight-failure audit
-/// among them) are written to. GENERAL, not CLI-specific: a future second audit
-/// surface writes its own `<prefix>-<utc>.log` under the SAME directory. The Rust
-/// backend NEVER self-derives this root — no hard-coded `~/.silverhand/logs`; the
-/// launcher hands it an explicit path exactly like the database and blobs roots.
-/// Unset (or empty) is a distinct, legitimate state — audit logging is simply
-/// unconfigured — NOT a startup failure; only a configured directory that cannot be
-/// opened fails startup.
+/// Required at startup. The directory categorized log files (the CLI preflight-failure
+/// and agent owner-audit streams among them) are written to. GENERAL, not CLI-specific:
+/// every audit surface writes its own `<prefix>-<utc>.log` under the SAME directory. The
+/// Rust backend NEVER self-derives this root — no hard-coded `~/.silverhand/logs`; the
+/// launcher hands it an explicit path exactly like the database and blobs roots. Unset or
+/// blank becomes the typed [`StartupError::AuditLogDirectoryRequired`] mount refusal: once
+/// the two producers are mounted there is no legitimate production no-sink state.
 const LOG_DIR_ENV: &str = "SILVERHAND_LOG_DIR";
+/// Optional. The path the embedded-bootstrap one-shot token file is written to when
+/// the process is on the embedded profile bound to a loopback address. This is the
+/// convergence-owned launcher contract: the backend NEVER self-derives it (no
+/// hard-coded `~/.silverhand/…`) — the launcher hands it an explicit path exactly
+/// like the database, blobs, and log roots. Unset (or empty) means no token file is
+/// armed; combined with a non-embedded or non-loopback listener the authority stays
+/// disabled and configured stale artifacts are cleaned best-effort. Environment blank is
+/// normalized to unset by [`AppConfig::from_env`]; direct construction with
+/// `AppConfig::new(..., Some(PathBuf::new()))` is invalid.
+const BOOTSTRAP_TOKEN_PATH_ENV: &str = "SILVERHAND_BOOTSTRAP_TOKEN_PATH";
 const BASELINE_MIGRATION_STEP: i64 = const_parse_i64(env!("SILVERHAND_BASELINE_MIGRATION_STEP"));
 const CURRENT_MIGRATION_STEP: i64 = const_parse_i64(env!("SILVERHAND_CURRENT_MIGRATION_STEP"));
 const MIGRATION_STEPS: &str = env!("SILVERHAND_MIGRATION_STEPS");
@@ -193,11 +215,16 @@ pub struct AppConfig {
     deployment_profile: DeploymentProfile,
     /// Whether public signup is open. Advertised by `/api/server/info`.
     signup_enabled: bool,
-    /// The categorized-log root, or `None` when audit logging is unconfigured. The
-    /// composition opens the CLI preflight-failure sink here; `None` is a legitimate
-    /// unconfigured state, distinct from a configured-but-unopenable directory (which
-    /// fails startup).
+    /// The categorized-log root. `None` is representable only so startup can return the
+    /// typed [`StartupError::AuditLogDirectoryRequired`] refusal; it is not a legitimate
+    /// production state now that both audit producers are mounted. A configured but
+    /// unopenable directory also fails startup.
     log_dir: Option<PathBuf>,
+    /// The embedded-bootstrap one-shot token file path, or `None` when the launcher
+    /// did not supply one. Whether a token is actually armed is a further AND with the
+    /// embedded profile and the actual bound listener being loopback, decided only after
+    /// `TcpListener::bind` succeeds; this field is only the launcher-provided coordinate.
+    bootstrap_token_path: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -214,6 +241,7 @@ impl AppConfig {
         deployment_profile: DeploymentProfile,
         signup_enabled: bool,
         log_dir: Option<PathBuf>,
+        bootstrap_token_path: Option<PathBuf>,
     ) -> Result<Self, ConfigError> {
         if database_path.as_os_str().is_empty() {
             return Err(ConfigError::EmptyDatabasePath);
@@ -224,13 +252,22 @@ impl AppConfig {
         if allowed_origins.is_empty() {
             return Err(ConfigError::EmptyAllowedOrigins);
         }
-        // An explicitly-supplied but empty log directory is a launcher mistake, not the
-        // unconfigured state — the latter is `None`, reached by an unset env var.
+        // An explicitly-supplied but empty log directory is a config mistake. `None`
+        // remains representable so bound-listener preparation can surface the more
+        // specific mounted-producer startup refusal.
         if log_dir
             .as_ref()
             .is_some_and(|dir| dir.as_os_str().is_empty())
         {
             return Err(ConfigError::EmptyLogDir);
+        }
+        // Same rule as the log dir: `None` (unset) is the legitimate no-token state; an
+        // explicitly-supplied empty path is a launcher mistake.
+        if bootstrap_token_path
+            .as_ref()
+            .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            return Err(ConfigError::EmptyBootstrapTokenPath);
         }
         let daemon_npm_spec = daemon_npm_spec
             .map(|value| value.trim().to_owned())
@@ -244,6 +281,7 @@ impl AppConfig {
             deployment_profile,
             signup_enabled,
             log_dir,
+            bootstrap_token_path,
         })
     }
 
@@ -271,9 +309,17 @@ impl AppConfig {
             deployment_profile,
             env::var(DISABLE_SIGNUP_ENV).ok().as_deref(),
         )?;
-        // Unset or blank means audit logging is simply unconfigured (`None`); a set path
-        // is taken verbatim. The backend never fabricates a default root.
+        // Unset or blank is retained as `None` so startup can emit the typed
+        // `AuditLogDirectoryRequired` mount refusal; a set path is taken verbatim. The
+        // backend never fabricates a default root.
         let log_dir = env::var(LOG_DIR_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from);
+        // Unset or blank means no bootstrap token file is provisioned; a set path is
+        // taken verbatim (the embedded+actual-bound-loopback AND is applied only after
+        // binding succeeds).
+        let bootstrap_token_path = env::var(BOOTSTRAP_TOKEN_PATH_ENV)
             .ok()
             .filter(|value| !value.trim().is_empty())
             .map(PathBuf::from);
@@ -286,6 +332,7 @@ impl AppConfig {
             deployment_profile,
             signup_enabled,
             log_dir,
+            bootstrap_token_path,
         )
     }
 
@@ -342,6 +389,8 @@ pub enum ConfigError {
     EmptyBlobsRoot,
     #[error("categorized log directory must not be empty when set")]
     EmptyLogDir,
+    #[error("embedded-bootstrap token path must not be empty when set")]
+    EmptyBootstrapTokenPath,
     #[error("event websocket origin allowlist must not be empty")]
     EmptyAllowedOrigins,
     #[error("listen address is invalid")]
@@ -360,6 +409,12 @@ pub enum StartupError {
     Config(#[from] ConfigError),
     #[error("database schema admission failed")]
     Schema(#[source] SchemaAdmissionError),
+    #[error(
+        "a categorized audit log directory (SILVERHAND_LOG_DIR) is required: the mounted \
+         CLI-preflight and agent owner-audit routes are durable audit producers and may not \
+         run without a sink"
+    )]
+    AuditLogDirectoryRequired,
     #[error("failed to open production adapter {name}")]
     Adapter {
         name: &'static str,
@@ -374,6 +429,10 @@ pub enum StartupError {
     },
     #[error("failed to bind the configured listener")]
     Bind(#[source] std::io::Error),
+    #[error("failed to read the bound listener address")]
+    BoundListenerAddress(#[source] std::io::Error),
+    #[error("failed to provision the embedded-bootstrap token file")]
+    BootstrapToken(#[source] std::io::Error),
     #[error("served backend failed")]
     Serve(#[source] std::io::Error),
     #[error("shutdown signal authority failed")]
@@ -416,9 +475,9 @@ type ProductionAgentDeletionResumer = AgentDeletionResumer<
 
 pub struct PreparedApp {
     pub router: Router,
-    /// The live boot facts the `/readyz` router reads. Carried out of `prepare()` so
-    /// [`serve`] — which holds the already-bound `TcpListener` — can mark `listen_ready`
-    /// as a witnessed consequence of serving, never `prepare()` and never a handler.
+    /// The live boot facts the `/readyz` router reads. Carried out of bound-listener
+    /// finalization so [`serve`] can mark `listen_ready` as a witnessed consequence of
+    /// serving, never merely binding/finalizing and never a handler.
     boot: BootProgress,
     event_controller: EventWebSocketController,
     daemon_controller: DaemonDeliveryController,
@@ -432,12 +491,29 @@ pub struct PreparedApp {
     /// the daemon transport its legs drive is still alive — cancelling any in-flight leg and
     /// rejecting any dispatched afterward, exactly like the deletion resumer above.
     create_aftermath: CreateAftermath,
-    /// #2256: the ONE composition-owned CLI preflight-failure audit sink, or `None` when
-    /// no log directory is configured. Carried so BOTH shutdown paths flush+close the
-    /// same instance idempotently; it holds a background writer task whose queued lines
-    /// must be drained to disk before the process exits. `None` is a live, legitimate
-    /// state — recording is a no-op when audit logging is unconfigured.
-    cli_audit_sink: Option<CliPreflightFileSink<SystemProcessClock>>,
+    /// #2256/#2257: the ONE composition-owned CLI preflight-failure audit sink. Required
+    /// (not optional) because #2257 MOUNTS its consumer — a mounted audit producer must
+    /// have a durable sink, so bound-listener finalization fails closed without a log
+    /// directory rather than degrading to a no-op. Carried so BOTH shutdown paths
+    /// flush+close the same instance
+    /// idempotently; it holds a background writer task whose queued lines must drain to
+    /// disk before the process exits.
+    cli_audit_sink: CliPreflightFileSink<SystemProcessClock>,
+    /// #2254/#2257: the ONE composition-owned owner-only agent-chat audit sink. Required on
+    /// the same footing as [`Self::cli_audit_sink`] — its owner-audit read routes are
+    /// mounted, so a durable sink is a startup precondition, never a no-op. Carried so BOTH
+    /// shutdown paths flush+close the same instance idempotently. It writes its OWN
+    /// `agent-audit-*` files through #2256's writer primitive and shares no record with the
+    /// CLI sink.
+    agent_audit_sink: AgentAuditFileSink<SystemProcessClock>,
+    /// #2255/#2257: the process-lifetime embedded-bootstrap one-shot token authority. When
+    /// armed (embedded profile + loopback listener + a launcher-provided path), it holds the
+    /// SHA-256 of a token whose plaintext was written to a `0600` file before serving; when
+    /// disabled it holds nothing. Carried so EVERY path after it can be armed — later
+    /// startup rollback, a server-first error, or graceful shutdown — runs the SAME
+    /// idempotent `cleanup`, deleting an UNCONSUMED token and disarming so it can never be
+    /// spent after. A bind failure occurs before minting and therefore creates no authority.
+    embedded_bootstrap_token: embedded_bootstrap::EmbeddedBootstrapTokenAuthority,
     /// #2234 CP7a (test-only): a clone of the ONE runtime-credential authority the
     /// `agent_products` perimeter is wrapped with. Carried so a composition test can mint a
     /// real bearer through `dispatch_start` against the SAME in-memory token store the mounted
@@ -467,18 +543,38 @@ impl PreparedApp {
         // #2256: drain and close the audit sink's writer task. Independent of the
         // transports above, so it runs last; idempotent, so the serve-path close below
         // and this method never double-close a shared instance into a hang.
-        if let Some(sink) = &self.cli_audit_sink {
-            sink.close().await;
-        }
+        self.cli_audit_sink.close().await;
+        // #2254/#2257: the agent-chat audit sink drains on the same footing — idempotent.
+        self.agent_audit_sink.close().await;
+        // #2255/#2257: the embedded-bootstrap token is disarmed and its unconsumed file
+        // unlinked on this teardown path too; idempotent and ENOENT-tolerant.
+        self.embedded_bootstrap_token.cleanup().await;
     }
 
     /// A clone of the composition-owned CLI audit sink, for composition tests to record
     /// through the REAL `prepare()`-constructed sink (and to witness its terminal state
     /// after close). The sink shares its writer via `Arc`, so the clone drives the SAME
-    /// file. `None` when no log directory was configured.
+    /// file.
     #[cfg(test)]
-    fn cli_audit_sink(&self) -> Option<CliPreflightFileSink<SystemProcessClock>> {
+    fn cli_audit_sink(&self) -> CliPreflightFileSink<SystemProcessClock> {
         self.cli_audit_sink.clone()
+    }
+
+    /// A clone of the composition-owned agent-chat audit sink, for composition tests to
+    /// record through the REAL `prepare()`-constructed sink. It shares its writer via
+    /// `Arc`, so the clone drives the SAME file.
+    #[cfg(test)]
+    fn agent_audit_sink(&self) -> AgentAuditFileSink<SystemProcessClock> {
+        self.agent_audit_sink.clone()
+    }
+
+    /// A clone of the composition-owned embedded-bootstrap token authority, for
+    /// composition tests to witness the enable/disable decision (`consume` succeeds only
+    /// on an armed authority) and its shutdown cleanup. The authority is `Arc`-backed, so
+    /// the clone shares the one in-memory one-shot cell the mounted route consults.
+    #[cfg(test)]
+    fn embedded_bootstrap_token(&self) -> embedded_bootstrap::EmbeddedBootstrapTokenAuthority {
+        self.embedded_bootstrap_token.clone()
     }
 }
 
@@ -511,7 +607,14 @@ async fn shut_down_transports(
     );
 }
 
-pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
+async fn prepare_for_bound_listener_observed<F>(
+    config: &AppConfig,
+    bound_listener_addr: SocketAddr,
+    observe_audit_sinks: F,
+) -> Result<PreparedApp, StartupError>
+where
+    F: FnOnce(CliPreflightFileSink<SystemProcessClock>, AgentAuditFileSink<SystemProcessClock>),
+{
     verify_schema(&config.database_path)
         .await
         .map_err(StartupError::Schema)?;
@@ -710,31 +813,79 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // rather than open a second root.
     let blob_store = open("blob store", LocalBlobStore::open(&config.blobs_root)).await?;
 
-    // #2256: the ONE CLI preflight-failure audit sink. Constructed here in the
-    // composition root — the only layer that owns a filesystem side effect's lifecycle —
-    // and stamped with the launcher's `app` base (embedded launcher → the desktop base,
-    // remote-only launcher → the server base), sampling this boot's UTC filename from the
-    // single process wall clock. A configured directory that cannot be opened fails
-    // startup (a configured sink must never silently degrade to a no-op); an unconfigured
-    // directory yields `None` and recording is simply absent.
+    // #2256/#2257: the ONE CLI preflight-failure audit sink and the ONE agent-chat
+    // audit sink. Both are constructed here in the composition root — the only layer that
+    // owns a filesystem side effect's lifecycle — and stamped with the launcher's `app`
+    // base (embedded launcher → the desktop base, remote-only launcher → the server
+    // base), sampling this boot's UTC filename from the single process wall clock.
+    //
+    // #2257 "durable sink BEFORE mount" (shiki option-B, closed at the composition layer):
+    // this task MOUNTS both audit producers (the `POST /internal/agents/{id}/cli-trace`
+    // records route and the owner-only agent-chat read routes). A mounted audit producer
+    // MUST have a durable, queryable sink — it may not answer success and silently drop the
+    // record. So a configured log directory is now a REQUIRED startup contract, not the
+    // optional construction #2256 shipped while UNMOUNTED: a missing directory fails startup
+    // fail-closed BEFORE the router is constructed, and a configured-but-unopenable directory
+    // fails startup the same way. There is no no-op sink arm; the mounted handler state only
+    // ever holds a recording-capable sink.
     let cli_audit_app = match config.deployment_profile {
         DeploymentProfile::Embedded => AppTag::Desktop,
         DeploymentProfile::RemoteOnly => AppTag::Server,
     };
-    let cli_audit_sink = match &config.log_dir {
-        Some(log_dir) => Some(
-            open(
-                "cli preflight audit sink",
-                CliPreflightFileSink::open(log_dir.clone(), cli_audit_app, SystemProcessClock),
-            )
-            .await?,
-        ),
-        None => None,
+    let audit_log_dir = config
+        .log_dir
+        .as_ref()
+        .ok_or(StartupError::AuditLogDirectoryRequired)?;
+    let cli_audit_sink = open(
+        "cli preflight audit sink",
+        CliPreflightFileSink::open(audit_log_dir.clone(), cli_audit_app, SystemProcessClock),
+    )
+    .await?;
+    // The agent-chat audit sink writes its OWN `agent-audit-*` files through #2256's
+    // `CategorizedJsonlWriter` — the same primitive as the CLI sink, but a DISTINCT file
+    // and writer task with its own typed projection; the two audit surfaces never share a
+    // record.
+    let agent_audit_sink = match open(
+        "agent audit sink",
+        AgentAuditFileSink::open(audit_log_dir.clone(), cli_audit_app, SystemProcessClock),
+    )
+    .await
+    {
+        Ok(sink) => sink,
+        Err(error) => {
+            // The first writer is already live. A second-writer startup failure must not
+            // strand it behind an unawaited drop: close it before the bound-listener seam
+            // returns the error and releases the listener.
+            cli_audit_sink.close().await;
+            return Err(error);
+        }
     };
-    let hub = ScopeEventHub::production().map_err(|source| StartupError::Composition {
-        name: "scope event hub",
-        source: Box::new(source),
-    })?;
+    // A zero-cost production observer; tests use it to retain clones of the exact two
+    // writers opened by this startup and prove that a later failure returns only after
+    // both have reached `ClosedShutdown`.
+    observe_audit_sinks(cli_audit_sink.clone(), agent_audit_sink.clone());
+    macro_rules! rollback_on_error {
+        ($operation:expr) => {
+            match $operation {
+                Ok(value) => value,
+                Err(error) => {
+                    // A bound listener already exists and both writers are live. Finish
+                    // their lifecycle before returning; `prepare_bound_listener` releases
+                    // the listener only after this awaited rollback completes.
+                    cli_audit_sink.close().await;
+                    agent_audit_sink.close().await;
+                    return Err(error);
+                }
+            }
+        };
+    }
+
+    let hub = rollback_on_error!(ScopeEventHub::production().map_err(|source| {
+        StartupError::Composition {
+            name: "scope event hub",
+            source: Box::new(source),
+        }
+    }));
     // The presence axis is one authority with two faces, built through the ONE
     // `compose_presence_vertical` factory so production and the composed E2E share
     // the identical construction. The `PresenceGraceTimers` inside is the
@@ -759,19 +910,24 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // `/api/me` perimeter performs.
     let session_issue = session_store.clone();
     let session_revoke = session_store.clone();
+    // #2255/#2257: the embedded-bootstrap grant issues a human session through the SAME
+    // `auth_sessions` store — cloned here before the authenticator moves the original.
+    let embedded_bootstrap_sessions = session_store.clone();
     let sessions =
         HumanSessionAuthenticator::new(session_store, SystemSessionClock, SessionTtl::default());
     let runtime_credentials = RuntimeCredentialAuthority::production(custody_store);
-    let daemon_runtime = DaemonDeliveryRuntime::production(
-        runtime_credentials.clone(),
-        delivery_store,
-        host_store.clone(),
-        hub.clone(),
-    )
-    .map_err(|source| StartupError::Composition {
-        name: "daemon delivery runtime",
-        source: Box::new(source),
-    })?;
+    let daemon_runtime = rollback_on_error!(
+        DaemonDeliveryRuntime::production(
+            runtime_credentials.clone(),
+            delivery_store,
+            host_store.clone(),
+            hub.clone(),
+        )
+        .map_err(|source| StartupError::Composition {
+            name: "daemon delivery runtime",
+            source: Box::new(source),
+        })
+    );
     // The read-only control handles now; the daemon websocket router is built later, once
     // the deletion resumer exists to be its mandatory host-ready observer (both descend
     // from this runtime's one registry — the binder and the observer are one truth).
@@ -1145,8 +1301,10 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     let avatar_blobs = SingleKindAvatarBlobs::new(blob_store.clone(), StorageKind::Local);
     // #2234 CP2 — the ONE avatar-blob root the three agent-avatar faces share (GET
     // serve, POST upload, DELETE clear), over the SAME `LocalBlobStore` the human
-    // avatar family uses, under the ambient `StorageKind::Local`.
-    let agent_avatar_blobs = SingleKindAvatarBlobs::new(blob_store, StorageKind::Local);
+    // avatar family uses, under the ambient `StorageKind::Local`. Cloned (not moved) so
+    // the raw `blob_store` handle survives for the #2254 agent-chat audit attachment
+    // serve below, which reads blobs directly, NOT through the avatar single-kind wrapper.
+    let agent_avatar_blobs = SingleKindAvatarBlobs::new(blob_store.clone(), StorageKind::Local);
     let users_router = users::router(
         UsersDeps {
             directory: user_store.clone(),
@@ -1172,6 +1330,66 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // `agent_profile_read` for the profile/peer reads — cloned, never a second store. The
     // three shared internal nodes carry disjoint-method unions: `/profile` (GET read + POST
     // write, across two factories), `/avatar` (POST set + DELETE clear, one factory).
+    // #2257 convergence: the five residual read/write stores the human-perimeter faces
+    // below bind, each the SOLE production adapter for its data contract, opened against
+    // the ONE database path. `SqliteAgentRuntimeStateColdRead` answers the runtime-state
+    // projection; `SqliteAgentAuditRead` the owner-only agent-chat audit reads;
+    // `SqliteScheduleListRead`/`SqliteScheduleCancel` the schedule list + cancel UoW;
+    // `SqliteWorkspaceScopeStore` the workspace-scope source-bind for the data-plane pane.
+    let runtime_state_cold_read = rollback_on_error!(
+        open(
+            "agent runtime-state cold read",
+            SqliteAgentRuntimeStateColdRead::open(&config.database_path),
+        )
+        .await
+    );
+    let agent_audit_read = rollback_on_error!(
+        open(
+            "agent-chat audit read",
+            SqliteAgentAuditRead::open(&config.database_path),
+        )
+        .await
+    );
+    let schedule_list_read = rollback_on_error!(
+        open(
+            "agent schedule list read",
+            SqliteScheduleListRead::open(&config.database_path),
+        )
+        .await
+    );
+    let schedule_cancel = rollback_on_error!(
+        open(
+            "agent schedule cancel",
+            SqliteScheduleCancel::open(&config.database_path),
+        )
+        .await
+    );
+    let workspace_scope_store = rollback_on_error!(
+        open(
+            "agent workspace scope read",
+            SqliteWorkspaceScopeStore::open(&config.database_path),
+        )
+        .await
+    );
+    // #2255/#2257 embedded-bootstrap deps assembled here (the token file write itself is
+    // deferred to the last-fallible step after `recover()` below): the choose-or-create
+    // UoW store, the CSPRNG session mint (its own handle — a create issues a real session),
+    // and a `user_changed` hub clone captured before `hub` is moved into `scope_events`.
+    let embedded_bootstrap_store = rollback_on_error!(
+        open(
+            "embedded bootstrap unit of work",
+            SqliteEmbeddedBootstrap::open(&config.database_path),
+        )
+        .await
+    );
+    let embedded_bootstrap_mint = EntropySessionTokenMint::new(OsEntropy);
+    let embedded_bootstrap_user_changed = hub.clone();
+    // #2249/#2257: the ONE agent-profile-MCP data plane, lifted to a binding so BOTH the
+    // internal self-scope face (below) and the PUBLIC read+probe pair (#2249, in
+    // `human_products`) ride the identical `ProductionAgentProfileMcpDataPlane` over the
+    // shared placement authority and the one live daemon registry — never a second data
+    // plane. It is `Clone` (shares the placement handle + registry accessor).
+    let mcp_data_plane = daemon_runtime.agent_profile_mcp_data_plane(agent_mcp_placement);
     let internal_agent_products = self_profile_router(agent_profile_read.clone())
         .merge(internal_profile_write_router(InternalProfileWriteState {
             writes: agent_profile_write.clone(),
@@ -1201,9 +1419,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         // for the `{agent, host, deleting}` fact, then the composition's ONE live daemon
         // registry (via `daemon_runtime`'s owning-host data plane) for the exact-custody wire —
         // never a second placement store or a second registry.
-        .merge(profile_mcp_router(
-            daemon_runtime.agent_profile_mcp_data_plane(agent_mcp_placement),
-        ));
+        .merge(profile_mcp_router(mcp_data_plane.clone()));
     let human_products = require_human_session(
         host.merge(human_writes)
             // Wave 3A checkpoint A6 (#2203): `POST /api/agents/{id}/direct-messages`, the
@@ -1362,11 +1578,59 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
                 agent_avatar_blobs.clone(),
             ))
             .merge(agent_avatar_write::router(
-                agent_detail_cold_read,
+                agent_detail_cold_read.clone(),
                 agent_profile_write,
                 agent_avatar_blobs,
                 hub.agent_changed_sink(),
                 SystemProcessClock,
+            ))
+            // #2257 convergence — the ten residual-wave human-perimeter faces, each behind
+            // this same `require_human_session` gate, each binding the SOLE production
+            // adapter opened above (no second store, no duplicate data plane).
+            //
+            // #2253: agent runtime-state projection (GET `/api/agents/{id}/runtime-state`).
+            // The cold-read answers the persisted shape; the ONE runtime-credential
+            // authority is BOTH the custody read and the slot-presentation focus port.
+            .merge(agent_runtime_state::router(
+                runtime_state_cold_read,
+                runtime_credentials.clone(),
+                runtime_credentials.clone(),
+            ))
+            // #2254: the three owner-only agent-chat audit faces (chats list, transcript,
+            // attachment). The read port is the source-bound `SqliteAgentAuditRead`; blobs
+            // are the RAW `LocalBlobStore` (attachments are not avatars); the durable audit
+            // sink is the required `AgentAuditFileSink` built above.
+            .merge(agent_audit::router(
+                agent_audit_read,
+                blob_store.clone(),
+                agent_audit_sink.clone(),
+            ))
+            // #2251: the two schedule faces — list (GET `/api/agents/{id}/schedules`) and
+            // cancel (POST `.../schedules/{scheduleId}/cancel`). Both re-use the ONE
+            // agent-detail cold read for source-binding; the list read and the cancel UoW
+            // are their own sole adapters.
+            .merge(schedule_list_router(
+                agent_detail_cold_read.clone(),
+                schedule_list_read,
+            ))
+            .merge(schedule_cancel_router(
+                agent_detail_cold_read.clone(),
+                schedule_cancel,
+            ))
+            // #2252: the two workspace data-plane faces (tree + file), the public agent-pane
+            // read. Agent-detail cold read source-binds; the scope store answers the
+            // workspace-scope fact; the data plane is the daemon runtime's ONE accessor.
+            .merge(workspace_data_plane::router(
+                agent_detail_cold_read.clone(),
+                workspace_scope_store,
+                daemon_runtime.workspace_data_plane(),
+            ))
+            // #2249: the public profile-MCP read + probe pair (GET `/api/agents/{id}/profile/mcp`
+            // + POST `.../profile/mcp/probe`), riding the SAME `mcp_data_plane` lifted above
+            // that the internal self-scope face consumes — one data plane, two perimeters.
+            .merge(public_profile_mcp::router(
+                agent_detail_cold_read.clone(),
+                mcp_data_plane,
             ))
             .merge(channel_directory::router(channel_directory_read))
             .merge(channel_lifecycle::router(channel_detail_read))
@@ -1472,6 +1736,10 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // bearer a test mints through this clone authenticates against the mounted router.
     #[cfg(test)]
     let test_runtime_credentials = runtime_credentials.clone();
+    // #2250/#2257: the CLI preflight-trace face rides the runtime-credential perimeter.
+    // Its sink is a clone of the ONE required `CliPreflightFileSink` opened above (the sink
+    // is `Clone` over an `Arc`/`Sender`-shared writer with an idempotent `close`, so the
+    // route and the PreparedApp-held original drain the SAME writer task).
     let agent_products = require_runtime_credential(
         agent_writes
             .merge(task_list_router(TaskListState {
@@ -1489,17 +1757,23 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             // nodes (no collision with the public `/api/agents/…` family), and the wrapping
             // layer below self-pins `{aid}` so a foreign or missing/invalid bearer is a uniform
             // 401 across every listed method.
-            .merge(internal_agent_products),
+            .merge(internal_agent_products)
+            // #2250: the CLI preflight-trace door (POST `/internal/agents/{aid}/cli-trace`),
+            // behind the SAME runtime-credential perimeter, recording each typed preflight
+            // failure through the required audit sink exactly once. The route and the
+            // PreparedApp-held original share (via `Arc`) the SAME writer task.
+            .merge(cli_trace_router(cli_audit_sink.clone())),
         runtime_credentials,
     );
 
-    let event_config =
+    let event_config = rollback_on_error!(
         EventWebSocketConfig::production(config.allowed_origins.clone()).map_err(|source| {
             StartupError::Composition {
                 name: "event websocket configuration",
                 source: Box::new(source),
             }
-        })?;
+        })
+    );
     let (event_router, event_controller) = silverhand_backend_server::scope_events::router(
         hub,
         sessions,
@@ -1519,7 +1793,7 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // live `boot` holder and the shared-pool write probe.
     let server_info_router = server_info::router(ServerAdvertisement {
         signup_enabled: config.signup_enabled,
-        bind_address_scope: classify_bind_address_scope(&config.listen_addr.ip().to_string()),
+        bind_address_scope: classify_bind_address_scope(&bound_listener_addr.ip().to_string()),
     });
     let health_router = health::router(server_mode, SystemProcessClock);
     let readyz_router = readiness::router(
@@ -1536,13 +1810,64 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
     // marker whose host is not yet attached simply waits for that host's `on_host_ready`
     // (driven by the daemon attach edge once the listener is up). A persistence failure
     // here aborts startup rather than serving with an unrecovered deletion backlog.
-    deletion_resumer
-        .recover()
-        .await
-        .map_err(|source| StartupError::Composition {
+    rollback_on_error!(deletion_resumer.recover().await.map_err(|source| {
+        StartupError::Composition {
             name: "agent deletion resumer recover",
             source: Box::new(source),
-        })?;
+        }
+    }));
+
+    // #2255/#2257: the embedded-bootstrap one-shot token authority is the LAST fallible
+    // startup step. The listener has already bound, and `bound_listener_addr` is the
+    // `local_addr()` witness from that exact listener; only now may the composition decide
+    // whether to mint/write, still before `serve` can accept. The arm decision uses the
+    // SAME loopback predicate the route applies to the live peer (`is_loopback_ip`, incl
+    // the IPv4-mapped form), gated on the embedded profile AND a launcher-provided path.
+    // When armed: mint a fresh CSPRNG plaintext, write it to a 0600 same-dir temp then
+    // atomically rename it into place, and retain only its hash — the raw token is never
+    // logged and is dropped here. Otherwise the authority stays disabled while startup
+    // best-effort removes both the final token file and its deterministic temp sibling.
+    // Missing artifacts are normal; unlink faults remain observable as warnings without
+    // exposing either artifact path or raw token contents.
+    let embedded_bootstrap_token = match &config.bootstrap_token_path {
+        Some(path)
+            if matches!(config.deployment_profile, DeploymentProfile::Embedded)
+                && embedded_bootstrap::is_loopback_ip(bound_listener_addr.ip()) =>
+        {
+            let minted = rollback_on_error!(embedded_bootstrap_mint.mint().map_err(|source| {
+                StartupError::Composition {
+                    name: "embedded bootstrap token mint",
+                    source: Box::new(source),
+                }
+            }));
+            let (secret, _hash) = minted.into_parts();
+            let plaintext = secret.into_wire();
+            rollback_on_error!(
+                write_bootstrap_token_file(path, &plaintext)
+                    .await
+                    .map_err(StartupError::BootstrapToken)
+            );
+            embedded_bootstrap::EmbeddedBootstrapTokenAuthority::enabled(&plaintext, path.clone())
+        }
+        maybe_path => {
+            if let Some(path) = maybe_path {
+                remove_stale_bootstrap_token(path).await;
+            }
+            embedded_bootstrap::EmbeddedBootstrapTokenAuthority::disabled()
+        }
+    };
+    // The router is built infallibly AFTER the token decision; it shares the one authority
+    // `Arc` with the PreparedApp-held handle, so a shutdown/rollback cleanup on that handle
+    // also disarms this route's view.
+    let embedded_bootstrap_router =
+        embedded_bootstrap::router(embedded_bootstrap::EmbeddedBootstrapDeps {
+            bootstrap: embedded_bootstrap_store,
+            mint: embedded_bootstrap_mint,
+            sessions: embedded_bootstrap_sessions,
+            user_changed: embedded_bootstrap_user_changed,
+            clock: SystemSessionClock,
+            token: embedded_bootstrap_token.clone(),
+        });
 
     Ok(PreparedApp {
         router: Router::new()
@@ -1573,6 +1898,14 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
             // `require_human_session`, which would reject the daemon's connect-token bearer
             // before the handler's own verification could run.
             .merge(host_resolve)
+            // #2255/#2257: the embedded-bootstrap first-run grant mounts at the TOP LEVEL,
+            // ahead of every session perimeter — it is the door through which the very
+            // first local viewer obtains a session, so it cannot sit behind
+            // `require_human_session`. Its own per-request `LoopbackPeer` gate and the
+            // one-shot token authority are the whole admission; a non-loopback peer,
+            // disabled authority, or wrong/spent token all collapse to the
+            // indistinguishable 404.
+            .merge(embedded_bootstrap_router)
             .merge(readyz_router)
             // The one app/proxy request-body ceiling (128 MiB resource cap), applied
             // as the OUTERMOST layer over the fully-composed router — ahead of every
@@ -1589,6 +1922,8 @@ pub async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
         deletion_resumer,
         create_aftermath,
         cli_audit_sink,
+        agent_audit_sink,
+        embedded_bootstrap_token,
         #[cfg(test)]
         test_runtime_credentials,
     })
@@ -1605,6 +1940,85 @@ where
         name,
         source: Box::new(source),
     })
+}
+
+/// Write the embedded-bootstrap token plaintext to a fresh file at `path`, created
+/// mode-0600 on unix, via a same-directory temp + atomic rename so a reader never
+/// observes a partial token and the final file is owner-only from the instant it is
+/// linked into place. The parent directory must already exist (the launcher owns it).
+/// The raw token flows only through here; it is never logged, and on any error the
+/// `io::Error` is returned WITHOUT the token in its message.
+async fn write_bootstrap_token_file(path: &Path, token: &str) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let tmp = bootstrap_token_tmp_path(path);
+    // Clear a leftover temp from a crashed prior boot so `create_new` below cannot fail
+    // spuriously; a missing temp is the normal case.
+    match tokio::fs::remove_file(&tmp).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let write_result = async {
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&tmp).await?;
+        file.write_all(token.as_bytes()).await?;
+        file.write_all(b"\n").await?;
+        file.sync_all().await?;
+        drop(file);
+        tokio::fs::rename(&tmp, path).await
+    }
+    .await;
+
+    if let Err(error) = write_result {
+        // A write/sync/rename fault must not leave a plaintext temp token behind. Preserve
+        // the original startup error; an unlink fault is separately observable and never
+        // includes the raw token.
+        if let Err(cleanup_error) = tokio::fs::remove_file(&tmp).await
+            && cleanup_error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                error = %cleanup_error,
+                "embedded bootstrap: failed to remove a partial token temp file"
+            );
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// The sibling temp path for the atomic token write (`<name>.tmp` in the same directory,
+/// so the final rename stays on one filesystem).
+fn bootstrap_token_tmp_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(".tmp");
+    path.with_file_name(name)
+}
+
+/// Best-effort removal of both stale token artifacts when the authority is NOT armed (not
+/// the embedded profile, or a non-loopback listener): the final file and the deterministic
+/// same-directory `.tmp` that a crashed write may have left behind. A missing artifact is
+/// success; any other unlink fault is observable as a warning and swallowed so cleanup
+/// never aborts startup. Neither artifact path nor its raw contents enter the log.
+async fn remove_stale_bootstrap_token(path: &Path) {
+    for artifact in [path.to_path_buf(), bootstrap_token_tmp_path(path)] {
+        match tokio::fs::remove_file(artifact).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "embedded bootstrap: failed to clear a stale token artifact"
+                );
+            }
+        }
+    }
 }
 
 async fn verify_schema(path: &Path) -> Result<(), SchemaAdmissionError> {
@@ -1646,14 +2060,52 @@ async fn verify_schema(path: &Path) -> Result<(), SchemaAdmissionError> {
     Ok(())
 }
 
-pub async fn run(config: AppConfig) -> Result<(), StartupError> {
-    let app = prepare(&config).await?;
+async fn bind_and_prepare(config: &AppConfig) -> Result<(TcpListener, PreparedApp), StartupError> {
+    // Bind FIRST. A bind failure therefore has no path to adapter construction, audit
+    // writer creation, bootstrap minting, or token-file I/O.
     let listener = TcpListener::bind(config.listen_addr)
         .await
         .map_err(StartupError::Bind)?;
-    // `run` only binds; the bound listener is the witness, and `serve` establishes
-    // `listen_ready` from it. So `run` cannot report readiness a caller-less `serve`
-    // would miss, and a bind that fails here never reaches a `mark`.
+    prepare_bound_listener(config, listener).await
+}
+
+async fn prepare_bound_listener(
+    config: &AppConfig,
+    listener: TcpListener,
+) -> Result<(TcpListener, PreparedApp), StartupError> {
+    prepare_bound_listener_observed(config, listener, |_, _| {}).await
+}
+
+async fn prepare_bound_listener_observed<F>(
+    config: &AppConfig,
+    listener: TcpListener,
+    observe_audit_sinks: F,
+) -> Result<(TcpListener, PreparedApp), StartupError>
+where
+    F: FnOnce(CliPreflightFileSink<SystemProcessClock>, AgentAuditFileSink<SystemProcessClock>),
+{
+    let bound_listener_addr = listener
+        .local_addr()
+        .map_err(StartupError::BoundListenerAddress)?;
+    match prepare_for_bound_listener_observed(config, bound_listener_addr, observe_audit_sinks)
+        .await
+    {
+        Ok(app) => Ok((listener, app)),
+        Err(error) => {
+            // bound-listener preparation explicitly closes every opened writer and
+            // cleans any token residue before returning an error. Drop the bound socket
+            // here so no failed composition can remain reachable.
+            drop(listener);
+            Err(error)
+        }
+    }
+}
+
+pub async fn run(config: AppConfig) -> Result<(), StartupError> {
+    let (listener, app) = bind_and_prepare(&config).await?;
+    // The bound listener is the bootstrap decision witness; `serve` establishes
+    // `listen_ready` from that SAME socket. A failed bind never minted a token, and a
+    // post-bind prepare failure released the socket before returning.
     serve(listener, app, shutdown_signal()).await
 }
 
@@ -1675,6 +2127,8 @@ where
         deletion_resumer,
         create_aftermath,
         cli_audit_sink,
+        agent_audit_sink,
+        embedded_bootstrap_token,
         #[cfg(test)]
             test_runtime_credentials: _,
     } = app;
@@ -1685,11 +2139,17 @@ where
     // caller can fake it without one — a prepared-but-unserved app stays 503.
     boot.mark_listen_ready();
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let server = axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            let _ = shutdown_rx.await;
-        })
-        .into_future();
+    // #2255/#2257: serve with per-connection `ConnectInfo<SocketAddr>` so the
+    // embedded-bootstrap `LoopbackPeer` gate can read the real TCP peer. Every other
+    // route ignores the extension; absent connect-info the gate fails closed to 404.
+    let server = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        let _ = shutdown_rx.await;
+    })
+    .into_future();
     tokio::pin!(server);
     tokio::pin!(shutdown);
     let outcome = tokio::select! {
@@ -1728,9 +2188,14 @@ where
     // are never lost to a bare object drop, and it runs after the transports the signal
     // arm tore down. Idempotent, so it is a safe no-op if any other entry point already
     // closed the shared instance.
-    if let Some(sink) = &cli_audit_sink {
-        sink.close().await;
-    }
+    cli_audit_sink.close().await;
+    // #2254/#2257: the agent-chat audit sink drains on the SAME last-step footing —
+    // idempotent.
+    agent_audit_sink.close().await;
+    // #2255/#2257: the embedded-bootstrap token is disarmed and any unconsumed file
+    // unlinked on EVERY termination path (graceful signal or server-first error) — the
+    // one-shot cleanup is idempotent and safe after a consume, and never re-arms.
+    embedded_bootstrap_token.cleanup().await;
     outcome
 }
 
@@ -1792,6 +2257,54 @@ mod tests {
 
     const TOKEN: &str = "valid-token";
     const TOKEN_HASH: &str = "OXoqnFv14szsOMJZa2grsb0F_m5OzqbBDPQnVf8iVAM";
+
+    /// Unit-composition convenience: obtain a real bound-listener witness, finalize the
+    /// app once through the production seam, then release the unused socket. Tests that
+    /// exercise serving or bootstrap lifecycle directly use [`bind_and_prepare`] so the
+    /// exact witnessed listener is also the one they serve.
+    async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
+        let (listener, app) = bind_and_prepare(config).await?;
+        drop(listener);
+        Ok(app)
+    }
+
+    /// #2257 static topology guard. The production source above the test module owns one
+    /// bind call, one bootstrap provision call, and one final router construction. There is
+    /// no legacy `prepare(config)` entry point that can build a serveable router without a
+    /// bound-listener witness; the same-name helper below exists only inside `cfg(test)`.
+    #[test]
+    fn production_has_one_bind_provision_and_router_finalize_path() {
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+        let production = source
+            .split("\n#[cfg(test)]\n#[path =")
+            .next()
+            .expect("the production prefix");
+
+        assert_eq!(
+            production
+                .matches("TcpListener::bind(config.listen_addr)")
+                .count(),
+            1,
+            "one production listener bind"
+        );
+        assert_eq!(
+            production
+                .matches("write_bootstrap_token_file(path, &plaintext)")
+                .count(),
+            1,
+            "one bootstrap provision call"
+        );
+        assert_eq!(
+            production.matches("router: Router::new()").count(),
+            1,
+            "one final router construction"
+        );
+        assert_eq!(
+            production.matches("async fn prepare(config:").count(),
+            0,
+            "no production witness-bypassing prepare entry point"
+        );
+    }
     // A second seeded principal: the admin actor who performs the enrollment. The
     // target viewer (TOKEN) and this admin are told apart purely by which seeded
     // session their bearer hashes to.
@@ -1844,12 +2357,25 @@ mod tests {
         }
     }
 
+    /// The default composition config. #2257 promotes a categorized-log directory to a
+    /// REQUIRED startup input (the mounted CLI-preflight and agent owner-audit routes are
+    /// durable audit producers), so the default supplies one — a `logs/` sibling inside
+    /// the fixture tempdir, created by the sink on open. Tests that must prove the
+    /// missing-directory fail-closed contract use [`config_without_log_dir`].
     fn config(path: PathBuf) -> AppConfig {
+        let log_dir = path.parent().unwrap().join("logs");
+        config_with_log_dir(path, Some(log_dir))
+    }
+
+    /// [`config`] with NO log directory: the resident falsifier for #2257's mount
+    /// precondition. Driving bound-listener finalization with this must fail closed with
+    /// [`StartupError::AuditLogDirectoryRequired`] — the audit routes never mount.
+    fn config_without_log_dir(path: PathBuf) -> AppConfig {
         config_with_log_dir(path, None)
     }
 
     /// [`config`] with an explicit categorized-log directory, so a composition test can
-    /// drive `prepare()` into constructing a REAL CLI audit sink at a known path.
+    /// drive composition into constructing a REAL CLI audit sink at a known path.
     fn config_with_log_dir(path: PathBuf, log_dir: Option<PathBuf>) -> AppConfig {
         // A sibling blobs dir inside the fixture's tempdir, created on blob-store open.
         let blobs_root = path.parent().unwrap().join("blobs");
@@ -1866,6 +2392,7 @@ mod tests {
             DeploymentProfile::Embedded,
             true,
             log_dir,
+            None,
         )
         .unwrap()
     }
@@ -1877,6 +2404,7 @@ mod tests {
     /// (uninstalled) fanout key.
     fn remote_config(path: PathBuf) -> AppConfig {
         let blobs_root = path.parent().unwrap().join("blobs");
+        let log_dir = path.parent().unwrap().join("logs");
         AppConfig::new(
             path,
             blobs_root,
@@ -1885,7 +2413,33 @@ mod tests {
             Some("@silverhand-ai/daemon@test".to_owned()),
             DeploymentProfile::RemoteOnly,
             true,
+            Some(log_dir),
             None,
+        )
+        .unwrap()
+    }
+
+    /// [`config`] variant that also pins the listen address, deployment profile, and the
+    /// embedded-bootstrap token path. The actual bound listener address, not this requested
+    /// address, completes the enable/disable decision. Blobs live in the fixture tempdir.
+    fn config_with_bootstrap(
+        path: PathBuf,
+        listen_addr: SocketAddr,
+        profile: DeploymentProfile,
+        token_path: Option<PathBuf>,
+    ) -> AppConfig {
+        let blobs_root = path.parent().unwrap().join("blobs");
+        let log_dir = path.parent().unwrap().join("logs");
+        AppConfig::new(
+            path,
+            blobs_root,
+            listen_addr,
+            vec![AllowedOrigin::parse("http://localhost:5173".to_owned()).unwrap()],
+            Some("@silverhand-ai/daemon@test".to_owned()),
+            profile,
+            true,
+            Some(log_dir),
+            token_path,
         )
         .unwrap()
     }
@@ -2216,6 +2770,7 @@ mod tests {
                 DeploymentProfile::Embedded,
                 true,
                 None,
+                None,
             ),
             Err(ConfigError::EmptyDatabasePath)
         ));
@@ -2229,6 +2784,7 @@ mod tests {
                 DeploymentProfile::Embedded,
                 true,
                 None,
+                None,
             ),
             Err(ConfigError::EmptyBlobsRoot)
         ));
@@ -2241,6 +2797,7 @@ mod tests {
                 None,
                 DeploymentProfile::Embedded,
                 true,
+                None,
                 None,
             ),
             Err(ConfigError::EmptyAllowedOrigins)
@@ -2266,9 +2823,7 @@ mod tests {
         let config = config_with_log_dir(fixture.path.clone(), Some(log_dir.path().to_path_buf()));
         let app = prepare(&config).await.unwrap();
 
-        let sink = app
-            .cli_audit_sink()
-            .expect("a configured log directory constructs a real sink");
+        let sink = app.cli_audit_sink();
         sink.record(CliPreflightFailure {
             agent_id: AgentId::parse("agent-42").unwrap(),
             conversation_id: None,
@@ -2289,20 +2844,20 @@ mod tests {
             "close_connections witnesses the sink terminally closed"
         );
 
-        // Exactly one `cli-<utc>.log` for this boot.
+        // The CLI audit line lands in this boot's `cli-<utc>.log`. #2257: `prepare()` now
+        // also opens this boot's `agent-audit-<utc>.log` in the SAME configured directory,
+        // so this asserts the cli file specifically rather than directory exclusivity.
         let mut names = Vec::new();
         let mut entries = tokio::fs::read_dir(log_dir.path()).await.unwrap();
         while let Some(entry) = entries.next_entry().await.unwrap() {
             names.push(entry.file_name().to_string_lossy().into_owned());
         }
-        assert_eq!(names.len(), 1, "one file per boot: {names:?}");
-        assert!(
-            names[0].starts_with("cli-") && names[0].ends_with(".log"),
-            "unexpected filename: {}",
-            names[0]
-        );
+        let cli_log = names
+            .iter()
+            .find(|name| name.starts_with("cli-") && name.ends_with(".log"))
+            .unwrap_or_else(|| panic!("a cli log for this boot: {names:?}"));
 
-        let contents = tokio::fs::read_to_string(log_dir.path().join(&names[0]))
+        let contents = tokio::fs::read_to_string(log_dir.path().join(cli_log))
             .await
             .unwrap();
         let line = contents.lines().next().expect("the recorded line");
@@ -2335,22 +2890,475 @@ mod tests {
         );
     }
 
-    /// With no log directory configured, `prepare()` leaves the sink unconfigured
-    /// (`None`) — a legitimate state, not a startup failure — and `close_connections`
-    /// over that absence is a harmless no-op.
+    /// #2255/#2257 convergence falsifier — the embedded-bootstrap ENABLE arm. Under the
+    /// embedded profile on a loopback listener with a launcher-provided token path,
+    /// the bound-listener seam mints a token, writes it to a `0600` file (plaintext +
+    /// trailing newline) BEFORE that listener can accept, and arms the authority with that token's
+    /// hash — proven here by consuming the exact plaintext the file holds. The raw token
+    /// lives only in the file the local client reads; it is never returned from `prepare`
+    /// nor recoverable from the authority.
     #[tokio::test]
-    async fn prepare_leaves_the_audit_sink_unconfigured_without_a_log_dir() {
+    async fn prepare_arms_the_embedded_bootstrap_token_on_a_loopback_embedded_listener() {
         let fixture = fixture(true).await;
-        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let token_dir = tempfile::tempdir().unwrap();
+        let token_path = token_dir.path().join("bootstrap.token");
+        let config = config_with_bootstrap(
+            fixture.path.clone(),
+            "127.0.0.1:0".parse().unwrap(),
+            DeploymentProfile::Embedded,
+            Some(token_path.clone()),
+        );
+        let (listener, app) = bind_and_prepare(&config).await.unwrap();
+        let bound = listener.local_addr().unwrap();
+        assert!(bound.ip().is_loopback(), "the actual bound IP is loopback");
+        assert_ne!(
+            bound.port(),
+            config.listen_addr.port(),
+            "`:0` resolved to the listener's concrete bound port"
+        );
+        drop(listener);
+
+        let raw = tokio::fs::read_to_string(&token_path).await.unwrap();
+        assert!(raw.ends_with('\n'), "the token file ends with a newline");
+        let plaintext = raw.trim_end_matches('\n');
+        assert!(!plaintext.is_empty(), "a non-empty token was minted");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = tokio::fs::metadata(&token_path)
+                .await
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "the token file is owner-only 0600");
+        }
+
+        // The authority is armed with THIS file's plaintext: consuming it succeeds
+        // exactly once, and the one-shot consume unlinks the file.
+        let token = app.embedded_bootstrap_token();
         assert!(
-            app.cli_audit_sink().is_none(),
-            "no log directory means no sink"
+            token.consume(plaintext).await,
+            "the armed authority accepts the file's plaintext"
+        );
+        assert!(!token.consume(plaintext).await, "the token is one-shot");
+        assert!(!token_path.exists(), "consume unlinks the token file");
+
+        app.close_connections().await;
+    }
+
+    /// The load-bearing witness differential: the already-bound listener is loopback while
+    /// the config value deliberately says wildcard. Finalization must arm from
+    /// `listener.local_addr()`; regressing to `config.listen_addr.ip()` disables this token
+    /// and reddens the test. Production obtains the listener from the same config, but this
+    /// differential seals which value the finalize seam is actually authorized to trust.
+    #[tokio::test]
+    async fn bootstrap_decision_uses_the_bound_listener_witness_not_the_config_value() {
+        let fixture = fixture(true).await;
+        let token_dir = tempfile::tempdir().unwrap();
+        let token_path = token_dir.path().join("bootstrap.token");
+        let config = config_with_bootstrap(
+            fixture.path.clone(),
+            "0.0.0.0:0".parse().unwrap(),
+            DeploymentProfile::Embedded,
+            Some(token_path.clone()),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let actual = listener.local_addr().unwrap();
+        assert!(actual.ip().is_loopback());
+        assert!(!config.listen_addr.ip().is_loopback());
+
+        let (listener, app) = prepare_bound_listener(&config, listener).await.unwrap();
+        assert_eq!(listener.local_addr().unwrap(), actual);
+        let raw = tokio::fs::read_to_string(&token_path).await.unwrap();
+        assert!(
+            app.embedded_bootstrap_token().consume(raw.trim_end()).await,
+            "the authority arms from the actual loopback listener"
+        );
+        drop(listener);
+        app.close_connections().await;
+    }
+
+    /// #2255/#2257 convergence falsifier — a NON-LOOPBACK listener disables the authority.
+    /// Even under the embedded profile with a token path, a wildcard actual bind means the
+    /// route's `LoopbackPeer` gate could never trust a peer, so finalization best-effort
+    /// removes stale final/temp token artifacts and arms nothing; every consume fails.
+    /// Unlink faults remain warning-observable while the authority stays disabled.
+    #[tokio::test]
+    async fn prepare_disables_embedded_bootstrap_on_a_non_loopback_listener() {
+        let fixture = fixture(true).await;
+        let token_dir = tempfile::tempdir().unwrap();
+        let token_path = token_dir.path().join("bootstrap.token");
+        tokio::fs::write(&token_path, b"stale-token\n")
+            .await
+            .unwrap();
+        let token_tmp_path = bootstrap_token_tmp_path(&token_path);
+        tokio::fs::write(&token_tmp_path, b"stale-raw-temp-token\n")
+            .await
+            .unwrap();
+        let config = config_with_bootstrap(
+            fixture.path.clone(),
+            "0.0.0.0:0".parse().unwrap(),
+            DeploymentProfile::Embedded,
+            Some(token_path.clone()),
+        );
+        let (listener, app) = bind_and_prepare(&config).await.unwrap();
+        assert_eq!(
+            listener.local_addr().unwrap().ip(),
+            "0.0.0.0".parse::<std::net::IpAddr>().unwrap(),
+            "the decision witness is the actual wildcard listener"
+        );
+        drop(listener);
+        assert!(
+            !token_path.exists(),
+            "a non-loopback listener best-effort clears the stale final token"
+        );
+        assert!(
+            !token_tmp_path.exists(),
+            "a non-loopback listener best-effort clears a crashed boot's raw temp token"
+        );
+        assert!(
+            !app.embedded_bootstrap_token().consume("anything").await,
+            "the authority is disabled off loopback"
         );
         app.close_connections().await;
     }
 
+    /// #2255/#2257 convergence falsifier — the REMOTE-ONLY profile disables the authority.
+    /// Embedded-bootstrap is an embedded-only first-run grant; on a loopback listener under
+    /// the remote-only profile no token is provisioned.
     #[tokio::test]
-    async fn startup_refuses_missing_or_unowned_schema_before_a_listener_exists() {
+    async fn prepare_disables_embedded_bootstrap_for_a_remote_only_profile() {
+        let fixture = fixture(true).await;
+        let token_dir = tempfile::tempdir().unwrap();
+        let token_path = token_dir.path().join("bootstrap.token");
+        let token_tmp_path = bootstrap_token_tmp_path(&token_path);
+        tokio::fs::write(&token_path, b"stale-token\n")
+            .await
+            .unwrap();
+        tokio::fs::write(&token_tmp_path, b"stale-raw-temp-token\n")
+            .await
+            .unwrap();
+        let app = prepare(&config_with_bootstrap(
+            fixture.path.clone(),
+            "127.0.0.1:0".parse().unwrap(),
+            DeploymentProfile::RemoteOnly,
+            Some(token_path.clone()),
+        ))
+        .await
+        .unwrap();
+        assert!(
+            !token_path.exists(),
+            "the remote-only profile best-effort clears the stale final token"
+        );
+        assert!(
+            !token_tmp_path.exists(),
+            "the remote-only profile best-effort clears a crashed boot's raw temp token"
+        );
+        assert!(
+            !app.embedded_bootstrap_token().consume("anything").await,
+            "the authority is disabled under remote-only"
+        );
+        app.close_connections().await;
+    }
+
+    /// #2255/#2257 convergence falsifier — NO token path disables the authority. The
+    /// embedded+loopback AND still needs the launcher to name a file; without one there is
+    /// nothing to provision and the route stays a closed 404.
+    #[tokio::test]
+    async fn prepare_disables_embedded_bootstrap_without_a_token_path() {
+        let fixture = fixture(true).await;
+        let app = prepare(&config_with_bootstrap(
+            fixture.path.clone(),
+            "127.0.0.1:0".parse().unwrap(),
+            DeploymentProfile::Embedded,
+            None,
+        ))
+        .await
+        .unwrap();
+        assert!(
+            !app.embedded_bootstrap_token().consume("anything").await,
+            "the authority is disabled without a launcher token path"
+        );
+        app.close_connections().await;
+    }
+
+    /// #2255/#2257 — an UNCONSUMED token is unlinked on graceful shutdown. The real
+    /// connect-info `serve()` runs its termination tail on the shutdown signal, and the
+    /// token authority's idempotent cleanup deletes the file no client ever consumed.
+    /// (Serving to completion also witnesses that switching to
+    /// `into_make_service_with_connect_info` did not break a plain start/stop.)
+    #[tokio::test]
+    async fn serve_unlinks_an_unconsumed_embedded_bootstrap_token_on_shutdown() {
+        let fixture = fixture(true).await;
+        let token_dir = tempfile::tempdir().unwrap();
+        let token_path = token_dir.path().join("bootstrap.token");
+        let config = config_with_bootstrap(
+            fixture.path.clone(),
+            "127.0.0.1:0".parse().unwrap(),
+            DeploymentProfile::Embedded,
+            Some(token_path.clone()),
+        );
+        let (listener, app) = bind_and_prepare(&config).await.unwrap();
+        assert!(
+            token_path.exists(),
+            "armed: the token file exists before serving"
+        );
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+
+        assert!(
+            !token_path.exists(),
+            "graceful shutdown unlinks the unconsumed token"
+        );
+    }
+
+    /// #2255/#2257 — bind failure happens BEFORE every provision step. When the address is
+    /// already occupied the seam returns `Bind` with zero audit-writer files, zero token
+    /// mint/write, and therefore no rollback artifact.
+    #[tokio::test]
+    async fn run_unlinks_the_embedded_bootstrap_token_when_the_bind_fails() {
+        let fixture = fixture(true).await;
+        let token_dir = tempfile::tempdir().unwrap();
+        let token_path = token_dir.path().join("bootstrap.token");
+
+        // Occupy a loopback address so the subsequent `run` bind is guaranteed to fail.
+        let occupier = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let occupied = occupier.local_addr().unwrap();
+
+        let config = config_with_bootstrap(
+            fixture.path.clone(),
+            occupied,
+            DeploymentProfile::Embedded,
+            Some(token_path.clone()),
+        );
+        let log_dir = config.log_dir.clone().unwrap();
+        let Err(error) = run(config).await else {
+            panic!("binding an occupied address must fail");
+        };
+        assert!(
+            matches!(error, StartupError::Bind(_)),
+            "a bind error, not a token error: {error:?}"
+        );
+        assert!(
+            !token_path.exists(),
+            "bind failure has no path to token mint/write"
+        );
+        assert!(
+            !log_dir.exists(),
+            "bind failure has no path to either audit writer"
+        );
+    }
+
+    /// A post-bind token-provision failure returns only after the listener is released and
+    /// both already-open audit writers have drained into the terminal closed state. This is
+    /// the rollback witness that excludes merely cancelling the startup future while its
+    /// background writer tasks remain live.
+    #[tokio::test]
+    async fn post_bind_startup_failure_closes_writers_and_leaves_no_token() {
+        use silverhand_backend_filesystem::audit_sink::WriterState;
+
+        let fixture = fixture(true).await;
+        let token_path = fixture
+            .path
+            .parent()
+            .unwrap()
+            .join("missing-token-parent/bootstrap.token");
+        let config = config_with_bootstrap(
+            fixture.path.clone(),
+            "127.0.0.1:0".parse().unwrap(),
+            DeploymentProfile::Embedded,
+            Some(token_path.clone()),
+        );
+        let listener = TcpListener::bind(config.listen_addr).await.unwrap();
+        let bound = listener.local_addr().unwrap();
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let observed_for_startup = observed.clone();
+
+        let Err(error) = prepare_bound_listener_observed(&config, listener, move |cli, agent| {
+            *observed_for_startup.lock().unwrap() = Some((cli, agent));
+        })
+        .await
+        else {
+            panic!("an absent token parent must fail provisioning");
+        };
+        assert!(matches!(error, StartupError::BootstrapToken(_)));
+        assert!(!token_path.exists(), "no final token survives rollback");
+        assert!(
+            !bootstrap_token_tmp_path(&token_path).exists(),
+            "no plaintext temp token survives rollback"
+        );
+
+        let (cli, agent) = observed.lock().unwrap().take().unwrap();
+        assert_eq!(cli.state(), WriterState::ClosedShutdown);
+        assert_eq!(agent.state(), WriterState::ClosedShutdown);
+
+        // The error arm released the exact bound socket only after the awaited writer
+        // rollback, so its address is immediately reusable.
+        let rebound = TcpListener::bind(bound).await.unwrap();
+        drop(rebound);
+    }
+
+    /// #2254/#2257 — `prepare()` under a configured log directory wires a RECORDING agent
+    /// audit sink over #2256's categorized writer: an event recorded through the real
+    /// sink drains to `<log-dir>/agent-audit-<utc>.log`, and `close_connections`
+    /// witnesses the writer terminally closed. The full per-variant field contract is
+    /// owned and tested by the filesystem sink; this proves the composition WIRING.
+    #[tokio::test]
+    async fn prepare_wires_a_recording_agent_audit_sink_that_persists_a_line() {
+        use silverhand_backend_core::agent_audit_read::{AgentAuditEvent, AgentAuditSink};
+        use silverhand_backend_core::identity::UserId;
+        use silverhand_backend_filesystem::audit_sink::WriterState;
+
+        let fixture = fixture(true).await;
+        let log_dir = tempfile::tempdir().unwrap();
+        let config = config_with_log_dir(fixture.path.clone(), Some(log_dir.path().to_path_buf()));
+        let app = prepare(&config).await.unwrap();
+
+        let sink = app.agent_audit_sink();
+        sink.record(AgentAuditEvent::ChatsListed {
+            viewer: UserId::parse("user-1").unwrap(),
+            agent_id: AgentId::parse("agent-7").unwrap(),
+            chat_count: 3,
+        });
+
+        app.close_connections().await;
+        assert_eq!(
+            sink.state(),
+            WriterState::ClosedShutdown,
+            "close_connections witnesses the agent-audit writer terminally closed"
+        );
+
+        let mut names = Vec::new();
+        let mut entries = tokio::fs::read_dir(log_dir.path()).await.unwrap();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        let audit = names
+            .iter()
+            .find(|name| name.starts_with("agent-audit-") && name.ends_with(".log"))
+            .expect("an agent-audit log for this boot");
+        let contents = tokio::fs::read_to_string(log_dir.path().join(audit))
+            .await
+            .unwrap();
+        let line = contents.lines().next().expect("the recorded line");
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(value["category"], "agent.chats_listed");
+        assert_eq!(value["agentId"], "agent-7");
+        assert_eq!(value["chatCount"], 3);
+    }
+
+    /// #2257 P0 resident falsifier — a categorized-log directory is now a REQUIRED
+    /// startup input, not an option. #2256 allowed the sink to be constructed only
+    /// optionally because its routes were UNMOUNTED; #2257 mounts two real audit
+    /// producers (CLI-preflight records + agent owner-audit reads), so a missing
+    /// directory MUST fail `prepare()` CLOSED — the router is never constructed and
+    /// neither audit route can mount or succeed. This drives the real `prepare()`, not
+    /// just a config helper, and asserts the explicit typed startup error.
+    #[tokio::test]
+    async fn prepare_fails_closed_without_an_audit_log_directory() {
+        let fixture = fixture(true).await;
+        let Err(error) = prepare(&config_without_log_dir(fixture.path.clone())).await else {
+            panic!("a missing audit log directory must fail prepare() closed");
+        };
+        assert!(
+            matches!(error, StartupError::AuditLogDirectoryRequired),
+            "the mount precondition surfaces as the typed startup error: {error:?}"
+        );
+    }
+
+    /// #2257 P0 — the two mounted audit producers each write their OWN prefixed, typed
+    /// projection while sharing #2256's categorized-writer primitive: a CLI-preflight
+    /// failure lands ONLY in `cli-<utc>.log` and an agent-audit read lands ONLY in
+    /// `agent-audit-<utc>.log`. The shared writer never cross-contaminates records.
+    #[tokio::test]
+    async fn the_two_audit_sinks_write_disjoint_prefixed_streams() {
+        use silverhand_backend_core::agent_audit_read::{AgentAuditEvent, AgentAuditSink};
+        use silverhand_backend_core::cli_preflight_audit::{
+            CliPreflightAuditSink, CliPreflightFailure,
+        };
+        use silverhand_backend_core::identity::UserId;
+
+        let fixture = fixture(true).await;
+        let log_dir = tempfile::tempdir().unwrap();
+        let config = config_with_log_dir(fixture.path.clone(), Some(log_dir.path().to_path_buf()));
+        let app = prepare(&config).await.unwrap();
+
+        app.cli_audit_sink().record(CliPreflightFailure {
+            agent_id: AgentId::parse("agent-cli").unwrap(),
+            conversation_id: None,
+            noun: Some("message".to_owned()),
+            verb: Some("send".to_owned()),
+            flags_seen: Vec::new(),
+            error_code: Some("capability_denied".to_owned()),
+            error_subkind: None,
+            error_message: None,
+            duration_ms: None,
+        });
+        app.agent_audit_sink().record(AgentAuditEvent::ChatsListed {
+            viewer: UserId::parse("viewer-audit").unwrap(),
+            agent_id: AgentId::parse("agent-audit").unwrap(),
+            chat_count: 4,
+        });
+
+        app.close_connections().await;
+
+        let mut cli_names = Vec::new();
+        let mut audit_names = Vec::new();
+        let mut entries = tokio::fs::read_dir(log_dir.path()).await.unwrap();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.ends_with(".log") {
+                continue;
+            }
+            if name.starts_with("agent-audit-") {
+                audit_names.push(name);
+            } else if name.starts_with("cli-") {
+                cli_names.push(name);
+            }
+        }
+        assert_eq!(cli_names.len(), 1, "exactly one cli stream: {cli_names:?}");
+        assert_eq!(
+            audit_names.len(),
+            1,
+            "exactly one agent-audit stream: {audit_names:?}"
+        );
+
+        let cli = tokio::fs::read_to_string(log_dir.path().join(&cli_names[0]))
+            .await
+            .unwrap();
+        let audit = tokio::fs::read_to_string(log_dir.path().join(&audit_names[0]))
+            .await
+            .unwrap();
+
+        // The CLI stream carries only the CLI projection; the agent audit never leaks in.
+        assert!(
+            cli.contains("agent-cli") && cli.contains("capability_denied"),
+            "cli stream holds the cli record: {cli}"
+        );
+        assert!(
+            !cli.contains("agent.chats_listed") && !cli.contains("viewer-audit"),
+            "cli stream never carries an agent-audit record: {cli}"
+        );
+
+        // ...and symmetrically for the agent-audit stream.
+        assert!(
+            audit.contains("agent.chats_listed") && audit.contains("agent-audit"),
+            "audit stream holds the agent-audit record: {audit}"
+        );
+        assert!(
+            !audit.contains("capability_denied") && !audit.contains("agent-cli"),
+            "audit stream never carries a cli record: {audit}"
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_refuses_missing_or_unowned_schema_before_serving() {
         let directory = tempfile::tempdir().unwrap();
         let missing = directory.path().join("missing.sqlite");
         let Err(error) = prepare(&config(missing.clone())).await else {
@@ -3615,13 +4623,14 @@ mod tests {
     }
 
     /// Gate 1 of the CP2 convergence closure — the composed root's COMPLETE positive
-    /// mounted table. It enumerates every `(method, path)` `prepare()` mounts across
+    /// mounted table. It enumerates every `(method, path)` the bound-listener finalizer
+    /// mounts across
     /// ALL lanes (already-served + #2193 + #2194 + #2196 + #2195 + #2198 + #2218 + the
     /// #2219 CP4 batch-B custody doors + the #2223 CP3 workspace-metadata / human-`me`
     /// doors + the #2223 CP4 directory/avatar doors + the #2223 CP5 host residual doors +
     /// the #2234 CP1 host-management doors + the #2234 CP2 public-agent write doors + the
-    /// #2234 CP3 public agent-DELETE door) as
-    /// seventy-nine entries — sixty-seven behind the human
+    /// #2234 CP3 public agent-DELETE door + the #2257 residual wave) as
+    /// one hundred and three entries — eighty-one behind the human
     /// session perimeter (including #2218's authenticated `/api/runtimes`, the three #2219
     /// host custody/credential doors, the four #2223 CP5 host residual doors: detail,
     /// revoke, connect-token rotate and delete, the six #2234 CP1 host-management doors:
@@ -3637,10 +4646,9 @@ mod tests {
     /// handler's own status (never the perimeter's bodiless `401`), and never the `404`
     /// fallback. Removing any mounted route's
     /// `.merge(...)` from `prepare()` flips its entry to `404` and reddens this gate.
-    /// The tables are named consts with per-table `assert_eq!(len)` (67 / 3 / 2, plus
-    /// the four #2218/#2219 anon faces asserted by exact status/body and the #2223 CP3
-    /// signup/login/logout trio asserted by presence-plus-handler-reach) so a mis-added or
-    /// mis-deleted row reddens the count directly.
+    /// The tables are named consts with per-table `assert_eq!(len)` (81 human / 12 runtime
+    /// / 2 WebSocket / 7 anonymous / 1 connect-info-gated) so a mis-added or mis-deleted
+    /// row reddens the count directly.
     ///
     /// This is a PRESENCE ledger, not a closed universe: black-box probing cannot
     /// prove "no further route was silently added" (axum exposes no route
@@ -3663,10 +4671,10 @@ mod tests {
         let router = app.router;
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // The sixty-seven human-perimeter product doors. Anonymous (no bearer) → the human
+        // The eighty-one human-perimeter product doors. Anonymous (no bearer) → the human
         // session perimeter's `401` envelope, never a `404`: each path IS mounted and
         // guarded. (`.layer` runs the perimeter for any matched human route.)
-        const HUMAN_PERIMETER_DOORS: [(&str, &str); 71] = [
+        const HUMAN_PERIMETER_DOORS: [(&str, &str); 81] = [
             ("POST", "/api/hosts"),
             // #2219 CP4 host-custody batch B — the three perimeter-guarded custody doors.
             // `GET /api/hosts` shares the path node with the invite POST above, so its anon
@@ -3824,8 +4832,21 @@ mod tests {
             // the full reserve→materialize→provision-graph→201 reach are borne by
             // `the_composition_agent_create_face_drives_the_full_saga_and_post_commit_effects`.
             ("POST", "/api/agents"),
+            // #2257 convergence: the ten residual-wave human-perimeter doors. Anon on each
+            // → the perimeter's bodiless 401 (the door IS mounted and guarded); the
+            // authenticated behavior of each is borne by its owning leaf's suite.
+            ("GET", "/api/agents/agent-1/runtime-state"),
+            ("GET", "/api/agents/agent-1/chats"),
+            ("GET", "/api/agents/agent-1/chats/conv-1/messages"),
+            ("GET", "/api/agents/agent-1/chats/conv-1/attachments/att-1"),
+            ("GET", "/api/agents/agent-1/schedules"),
+            ("POST", "/api/agents/agent-1/schedules/sched-1/cancel"),
+            ("GET", "/api/agents/agent-1/workspace/tree"),
+            ("GET", "/api/agents/agent-1/workspace/file"),
+            ("GET", "/api/agents/agent-1/profile/mcp"),
+            ("POST", "/api/agents/agent-1/profile/mcp/probe"),
         ];
-        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 71);
+        assert_eq!(HUMAN_PERIMETER_DOORS.len(), 81);
         for (method, path) in HUMAN_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -3835,11 +4856,11 @@ mod tests {
         // The runtime-perimeter internal doors. Anonymous → the runtime credential
         // perimeter's `401` on the matched route, never `404`. The original three (#2226-era
         // send/tasks/stale), the #2234 CP7a self-scope profile family (`/profile` GET+POST,
-        // `/avatar` POST+DELETE, `/peer-profile` GET), and the #2234 CP7b profile-MCP family:
-        // `/profile/mcp` GET+POST (disjoint union across read/write on one factory) and
-        // `/profile/mcp/probe` POST. All eleven ride the ONE `require_runtime_credential`
-        // layer, so anon on any listed method is the same bodiless 401.
-        const RUNTIME_PERIMETER_DOORS: [(&str, &str); 11] = [
+        // `/avatar` POST+DELETE, `/peer-profile` GET), the #2234 CP7b profile-MCP family
+        // (`/profile/mcp` GET+POST + `/profile/mcp/probe` POST), and the #2250/#2257
+        // cli-trace door. All twelve ride the ONE `require_runtime_credential` layer, so anon
+        // on any listed method is the same bodiless 401.
+        const RUNTIME_PERIMETER_DOORS: [(&str, &str); 12] = [
             ("POST", "/internal/agents/agent-1/send-message"),
             ("GET", "/internal/agents/agent-1/tasks"),
             ("POST", "/internal/agents/agent-1/stale-message-resolution"),
@@ -3851,8 +4872,11 @@ mod tests {
             ("GET", "/internal/agents/agent-1/profile/mcp"),
             ("POST", "/internal/agents/agent-1/profile/mcp"),
             ("POST", "/internal/agents/agent-1/profile/mcp/probe"),
+            // #2250/#2257: the CLI preflight-trace door, behind the SAME runtime-credential
+            // perimeter. Anon → the bodiless 401.
+            ("POST", "/internal/agents/agent-1/cli-trace"),
         ];
-        assert_eq!(RUNTIME_PERIMETER_DOORS.len(), 11);
+        assert_eq!(RUNTIME_PERIMETER_DOORS.len(), 12);
         for (method, path) in RUNTIME_PERIMETER_DOORS {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -3874,8 +4898,8 @@ mod tests {
         // three #2218 root faces self-distinguish by status (200/200/503, none of which the
         // perimeter or the 404 fallback returns): discovery and liveness always answer 200;
         // `/readyz` on this prepared-but-not-served router answers 503 because
-        // `listen_ready` is a serving-boundary fact that `prepare()` does not mark
-        // (migrations are marked, the listener is not bound).
+        // `listen_ready` is a serving-boundary fact that composition does not mark
+        // (migrations are marked, but serving has not begun).
         for (method, path, expected) in [
             ("GET", "/api/server/info", StatusCode::OK),
             ("GET", "/api/health", StatusCode::OK),
@@ -3904,6 +4928,19 @@ mod tests {
         assert_eq!(
             body, r#"{"error":"unauthorized","error_code":"unauthorized"}"#,
             "anonymous resolve reaches its own handler, not the perimeter"
+        );
+
+        // #2255/#2257: `POST /auth/embedded-bootstrap` is mounted at the top level, but its
+        // `LoopbackPeer` extractor fails closed to 404 when a request carries no
+        // `ConnectInfo<SocketAddr>` (the in-process helper injects none), so an anon POST
+        // cannot witness the mount. An UNLISTED method on the same node witnesses it
+        // instead: 405 (the node exists) rather than 404 (no node), because method routing
+        // precedes the extractor. Deleting the merge flips this to 404.
+        let (status, _) = request(&router, "GET", "/auth/embedded-bootstrap", None).await;
+        assert_eq!(
+            status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "embedded-bootstrap must be MOUNTED (an unlisted method → 405, not 404)"
         );
 
         // #2223 CP3: the #2193 CP2 signup/login/logout trio is mounted ahead of the human
@@ -4214,16 +5251,17 @@ mod tests {
 
     /// Gate 2 of the CP2 convergence closure — the #2195 host-agent control-plane lane
     /// as a bidirectionally CLOSED universe of 54, every entry itemized `(method, path)`
-    /// in a named table that is mechanically checksummed: the four tables' lengths are
-    /// pinned (`35`/`4`/`15`/`0`), every `(method, path)` across the union is unique,
-    /// landed is disjoint from residual, and the union is exactly `54`. This is the
-    /// lane's ORIGINAL owned total (it still counts the three dynamic host reads since
-    /// handed to #2198). Deleting a row, or copying one between tables, breaks the
-    /// checksum — `(35 + 4) + (15 + 0) == 54` is an assertion, not prose.
+    /// in a named table that is mechanically checksummed: the five tables' lengths are
+    /// pinned (`49`/`4`/`1`/`0`/`0`), every `(method, path)` across the union is unique,
+    /// landed is disjoint from residual and from connect-info-gated, and the union is
+    /// exactly `54`. This is the lane's ORIGINAL owned total (it still counts the three
+    /// dynamic host reads since handed to #2198). Deleting a row, or copying one between
+    /// tables, breaks the checksum — `(49 + 4) + 1 + (0 + 0) == 54` is an assertion,
+    /// not prose.
     ///
     /// Every one of the 54 routes is FALSIFIABLE — none rests on an
     /// unfalsifiable anon `401`:
-    /// * The 35 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
+    /// * The 49 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
     ///   perimeter OR the runtime-credential perimeter → anon `401` (both perimeters emit the
     ///   SAME `{"error":"unauthorized"}` bodiless envelope). Includes #2218's authenticated
     ///   `/api/runtimes`, three of
@@ -4246,7 +5284,11 @@ mod tests {
     ///   `/api/agents` node, driving the reserve→materialize→provision-graph saga; and the
     ///   five #2234 CP7a internal self-scope faces behind the RUNTIME-credential perimeter:
     ///   `GET`+`POST /internal/agents/{aid}/profile`, `POST`+`DELETE /internal/agents/{aid}/avatar`,
-    ///   and `GET /internal/agents/{aid}/peer-profile`).
+    ///   and `GET /internal/agents/{aid}/peer-profile`); the three #2234 CP7b internal
+    ///   profile-MCP faces; and the eleven #2257 residual-wave faces: runtime-state, the
+    ///   three agent-chat audit faces, the two schedule faces, the two workspace-data-plane
+    ///   faces, the public profile-MCP read + probe pair (all human-perimeter), and
+    ///   `POST /internal/agents/{aid}/cli-trace` (runtime-credential).
     ///   Deleting any one's `.merge(...)` flips it to `404` and reddens this gate
     ///   (delete-landed RED).
     /// * The 4 ANON-LANDED routes are mounted ahead of every perimeter → an anonymous
@@ -4257,9 +5299,16 @@ mod tests {
     ///   whose `error_code` body (asserted after the loop) proves it landed anonymously and
     ///   not behind the perimeter. Neither the guarded (bodiless) `401` nor the absent
     ///   `404`. Deleting any one's `.merge(...)` flips it to `404` and reddens this gate.
-    /// * 15 RESIDUAL routes probe a path that matches NO mounted route → anon `404`.
-    ///   Mounting any one flips it to its perimeter's `401`/`405` and reddens this gate
-    ///   (mount-residual RED).
+    /// * The 1 CONNECT-INFO-GATED route (`POST /auth/embedded-bootstrap`, #2255/#2257) is
+    ///   mounted at the top level, but its `LoopbackPeer` extractor fails closed to `404`
+    ///   when a request carries no `ConnectInfo<SocketAddr>` — and the in-process test
+    ///   helper injects none, so an anon POST is a 404 indistinguishable from unmounted and
+    ///   cannot witness the mount. Instead an UNLISTED method on the same node answers
+    ///   `405` (node present) rather than `404` (no node); deleting its `.merge(...)` flips
+    ///   that to `404` and reddens this gate.
+    /// * 0 RESIDUAL routes remain — every residual-wave face is mounted (#2257). The loop
+    ///   stays as the mount-residual RED tripwire: a row re-added here that is actually
+    ///   mounted fails its anon-`404` assertion.
     /// * 0 METHOD-SHADOW residuals remain: `POST /api/agents` was the last one, mounted by
     ///   #2234 CP6 as a second method on the GET-list `/api/agents` node (now landed). Its
     ///   authenticated GET-list-vs-POST-create dispatch is borne by the create composition
@@ -4382,6 +5431,23 @@ mod tests {
             ("GET", "/internal/agents/agent-1/profile/mcp"),
             ("POST", "/internal/agents/agent-1/profile/mcp"),
             ("POST", "/internal/agents/agent-1/profile/mcp/probe"),
+            // #2257 convergence: the eleven residual-wave faces now MOUNTED. Ten sit behind
+            // the human perimeter → anon 401 (runtime-state, the three agent-chat audit
+            // faces, the two schedule faces, the two workspace-data-plane faces, and the
+            // public profile-MCP read + probe pair); the last, cli-trace, sits behind the
+            // runtime-credential perimeter → anon 401. Deleting any one's `.merge(...)`
+            // flips it back to 404 and reddens this gate (delete-landed RED).
+            ("GET", "/api/agents/agent-1/runtime-state"),
+            ("GET", "/api/agents/agent-1/chats"),
+            ("GET", "/api/agents/agent-1/chats/conv-1/messages"),
+            ("GET", "/api/agents/agent-1/chats/conv-1/attachments/att-1"),
+            ("GET", "/api/agents/agent-1/schedules"),
+            ("POST", "/api/agents/agent-1/schedules/sched-1/cancel"),
+            ("GET", "/api/agents/agent-1/workspace/tree"),
+            ("GET", "/api/agents/agent-1/workspace/file"),
+            ("GET", "/api/agents/agent-1/profile/mcp"),
+            ("POST", "/api/agents/agent-1/profile/mcp/probe"),
+            ("POST", "/internal/agents/agent-1/cli-trace"),
         ];
         // The 4 ANON-LANDED routes: mounted ahead of every perimeter, so an anonymous
         // probe reaches the handler. #2218's server/info and health answer 200; readyz
@@ -4400,42 +5466,29 @@ mod tests {
                 StatusCode::UNAUTHORIZED,
             ),
         ];
-        // 12 RESIDUAL routes whose path matches no mounted route → anon 404.
-        const CLEAN_RESIDUAL: &[(&str, &str)] = &[
-            // routes.ts remaining (1)
-            ("POST", "/auth/embedded-bootstrap"),
-            // hosts remaining (0 of 15; list/resolve/claim-or-create/rotate-token landed by
-            // #2219, detail/revoke/connect-token-rotate/delete by #2223 CP5, and
-            // disconnect/proxy-config(GET+PUT)/runtime-catalog/status + `PATCH /api/hosts/{id}`
-            // by #2234 CP1 — all now perimeter-landed above)
-            // agents residual (10 of 20; name-availability + PATCH /api/agents/{id} are
-            // now perimeter-landed by #2234 CP2; the three avatar faces likewise; DELETE
-            // /api/agents/{id} by #2234 CP3; clear-session + PUT .../runtime by #2234 CP4;
-            // POST .../stop by #2234 CP5; POST /api/agents by #2234 CP6 — all now landed)
-            ("GET", "/api/agents/agent-1/workspace/tree"),
-            ("GET", "/api/agents/agent-1/workspace/file"),
-            ("GET", "/api/agents/agent-1/profile/mcp"),
-            ("POST", "/api/agents/agent-1/profile/mcp/probe"),
-            ("GET", "/api/agents/agent-1/runtime-state"),
-            ("GET", "/api/agents/agent-1/chats"),
-            ("GET", "/api/agents/agent-1/chats/conv-1/messages"),
-            ("GET", "/api/agents/agent-1/chats/conv-1/attachments/att-1"),
-            ("GET", "/api/agents/agent-1/schedules"),
-            ("POST", "/api/agents/agent-1/schedules/sched-1/cancel"),
-            // internal profile-MCP (0 of 3) — MOUNTED by #2234 CP7b, moved to LANDED above
-            // internal profile (5) — MOUNTED by #2234 CP7a, moved to LANDED above
-            // diagnostic (1)
-            ("POST", "/internal/agents/agent-1/cli-trace"),
-        ];
+        // The 1 CONNECT-INFO-GATED route: `POST /auth/embedded-bootstrap` is MOUNTED at
+        // the top level, but its `LoopbackPeer` extractor fails closed to 404 when the
+        // request carries no `ConnectInfo<SocketAddr>` — and the in-process `request()`
+        // helper injects none. So an anon POST is a 404 INDISTINGUISHABLE from unmounted,
+        // and cannot witness the mount. The mount is instead witnessed by an UNLISTED
+        // method on the same path node answering 405 (the node exists) rather than 404
+        // (no node) — see the dedicated probe after the loops below. Its live-peer
+        // loopback/token behavior is owned by #2255 and the ConnectInfo proofs.
+        const CONNECT_INFO_GATED: &[(&str, &str)] = &[("POST", "/auth/embedded-bootstrap")];
+        // 0 RESIDUAL routes remain: every residual-wave face is now mounted (#2257). A new
+        // residual row re-added here must answer anon 404, and mounting it must move the
+        // row to LANDED (or CONNECT_INFO_GATED) — this is the mount-residual RED tripwire.
+        const CLEAN_RESIDUAL: &[(&str, &str)] = &[];
         // 0 METHOD-SHADOW residuals remain: `POST /api/agents` was the last one, mounted by
         // #2234 CP6 (now a second method on the GET-list `/api/agents` node, landed above).
         const METHOD_SHADOW_RESIDUAL: &[(&str, &str)] = &[];
 
-        // ── Mechanical checksum: (38 + 4) + (12 + 0) == 54, all unique, landed ∩
-        // residual = ∅ ──
-        assert_eq!(LANDED.len(), 38);
+        // ── Mechanical checksum: (49 + 4) + 1 + (0 + 0) == 54, all unique, landed ∩
+        // residual ∩ connect-info-gated = ∅ ──
+        assert_eq!(LANDED.len(), 49);
         assert_eq!(ANON_LANDED.len(), 4);
-        assert_eq!(CLEAN_RESIDUAL.len(), 12);
+        assert_eq!(CONNECT_INFO_GATED.len(), 1);
+        assert_eq!(CLEAN_RESIDUAL.len(), 0);
         assert_eq!(METHOD_SHADOW_RESIDUAL.len(), 0);
         let landed: std::collections::HashSet<(&str, &str)> = LANDED
             .iter()
@@ -4447,14 +5500,21 @@ mod tests {
             .chain(METHOD_SHADOW_RESIDUAL)
             .copied()
             .collect();
-        assert_eq!(landed.len(), 42, "landed rows are unique");
-        assert_eq!(residual.len(), 12, "residual rows are unique");
+        let connect_info_gated: std::collections::HashSet<(&str, &str)> =
+            CONNECT_INFO_GATED.iter().copied().collect();
+        assert_eq!(landed.len(), 53, "landed rows are unique");
+        assert_eq!(residual.len(), 0, "residual rows are unique");
+        assert_eq!(connect_info_gated.len(), 1, "connect-info rows are unique");
         assert!(
             landed.is_disjoint(&residual),
             "landed and residual are disjoint"
         );
+        assert!(
+            landed.is_disjoint(&connect_info_gated),
+            "landed and connect-info-gated are disjoint"
+        );
         assert_eq!(
-            landed.len() + residual.len(),
+            landed.len() + residual.len() + connect_info_gated.len(),
             54,
             "the closed universe is 54"
         );
@@ -4466,7 +5526,7 @@ mod tests {
         let bearer = format!("Bearer {TOKEN}");
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // ── 38 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
+        // ── 49 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
         for (method, path) in LANDED {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(
@@ -4495,13 +5555,41 @@ mod tests {
             "anon resolve reaches its own handler, not the perimeter"
         );
 
-        // ── 12 CLEAN RESIDUAL → anon 404 (mount-residual RED) ──
+        // ── 0 CLEAN RESIDUAL → none remain; every residual-wave face is mounted (#2257).
+        // The loop is kept as the mount-residual RED tripwire: a row re-added to
+        // CLEAN_RESIDUAL that is actually mounted would fail its anon-404 assertion. ──
         for (method, path) in CLEAN_RESIDUAL {
             let (status, _) = request(&router, method, path, None).await;
             assert_eq!(
                 status,
                 StatusCode::NOT_FOUND,
                 "clean residual {method} {path} must be unmounted (404)"
+            );
+        }
+
+        // ── 1 CONNECT-INFO-GATED → the mount is witnessed by an UNLISTED method on the
+        // same node answering 405 (node present) rather than 404 (no node). An anon POST
+        // through the in-process helper is a fail-closed 404 (no ConnectInfo → non-loopback
+        // → the indistinguishable refusal), so it CANNOT witness the mount; only the
+        // method-shadow can. Deleting the `.merge(embedded_bootstrap_router)` flips the GET
+        // to 404 and reddens this gate. ──
+        for (post_method, path) in CONNECT_INFO_GATED {
+            // The listed method, anon and connect-info-less: fail-closed 404, NOT a
+            // distinguishable rejection — the #2255 loopback contract.
+            let (post_status, _) = request(&router, post_method, path, None).await;
+            assert_eq!(
+                post_status,
+                StatusCode::NOT_FOUND,
+                "connect-info-gated {post_method} {path}: no ConnectInfo fails closed to 404"
+            );
+            // An unlisted method on the SAME node proves the node exists (mounted): 405, not
+            // 404. Runs BEFORE the loopback gate (method routing precedes the extractor), so
+            // it is unaffected by the absent ConnectInfo.
+            let (shadow_status, _) = request(&router, "GET", path, None).await;
+            assert_eq!(
+                shadow_status,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "connect-info-gated {path} must be MOUNTED (an unlisted method → 405, not 404)"
             );
         }
 

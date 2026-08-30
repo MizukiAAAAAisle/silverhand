@@ -13,8 +13,8 @@
 //!    pure [`resolve_agent_workspace_scope`] resolver that judges which workspace a
 //!    scoped read reaches and whether the caller may reach it.
 //!
-//! UNMOUNTED at this leaf: the composition root wires the SQLite reader and the
-//! owning-host adapter to a route at convergence.
+//! Backend-app consumes these ports in production: it wires the SQLite scope reader and
+//! the owning-host adapter into the two mounted human-perimeter routes.
 
 mod fs;
 mod scope;

@@ -5,7 +5,8 @@
 //!
 //! The adapter [`SqliteEmbeddedBootstrap`] implements
 //! `silverhand_backend_core::embedded_bootstrap::EmbeddedBootstrapUnitOfWork`
-//! behind one `BEGIN IMMEDIATE` transaction. UNMOUNTED.
+//! behind one `BEGIN IMMEDIATE` transaction. Backend-app injects this exact adapter into
+//! the mounted production bootstrap route.
 
 mod adapter;
 

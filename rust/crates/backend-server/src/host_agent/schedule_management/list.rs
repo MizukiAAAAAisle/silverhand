@@ -532,7 +532,12 @@ mod tests {
         // ignored, so the first `active`/`50` decide.
         let reads = creator_reads(ListOutcome::Views(vec![]));
         let last_query = reads.last_query.clone();
-        let reply = list_with(reads, "status=active&status=paused&limit=50&limit=999", true).await;
+        let reply = list_with(
+            reads,
+            "status=active&status=paused&limit=50&limit=999",
+            true,
+        )
+        .await;
         assert_eq!(reply.status, StatusCode::OK);
         let query = last_query.lock().unwrap().clone().unwrap();
         assert_eq!(

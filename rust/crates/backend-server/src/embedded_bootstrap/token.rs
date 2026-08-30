@@ -105,6 +105,24 @@ impl EmbeddedBootstrapTokenAuthority {
         }
         true
     }
+
+    /// Best-effort cleanup of an UNCONSUMED token file at graceful shutdown or a
+    /// startup rollback. Idempotent and race-safe with [`consume`](Self::consume):
+    /// whichever runs first takes the file path under the write lock and unlinks it;
+    /// the other observes `None` and is a no-op. It ALSO nulls the in-memory hash, so
+    /// a token cleaned up at shutdown can never be spent afterward. A missing file
+    /// (already consumed, or never written for a disabled authority) is success; any
+    /// other unlink fault is logged and swallowed — cleanup NEVER re-arms the token.
+    pub async fn cleanup(&self) {
+        let to_unlink = {
+            let mut state = self.inner.write().await;
+            state.token_hash = None;
+            state.file_path.take()
+        };
+        if let Some(path) = to_unlink {
+            remove_token_file(&path).await;
+        }
+    }
 }
 
 /// The sole hash-comparison site for the bootstrap token, in constant time via the
@@ -247,5 +265,48 @@ mod tests {
         let authority = EmbeddedBootstrapTokenAuthority::enabled("secret", file);
         assert!(authority.consume("secret").await);
         assert!(!authority.consume("secret").await, "still one-shot");
+    }
+
+    #[tokio::test]
+    async fn cleanup_unlinks_an_unconsumed_token_and_disarms() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("token");
+        tokio::fs::write(&file, b"secret\n").await.unwrap();
+        let authority = EmbeddedBootstrapTokenAuthority::enabled("secret", file.clone());
+
+        authority.cleanup().await;
+        assert!(
+            !file.exists(),
+            "shutdown cleanup removes the unconsumed file"
+        );
+        assert!(
+            !authority.consume("secret").await,
+            "a cleaned-up token can never be spent afterward"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_after_consume_is_a_safe_no_op() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("token");
+        tokio::fs::write(&file, b"secret\n").await.unwrap();
+        let authority = EmbeddedBootstrapTokenAuthority::enabled("secret", file.clone());
+
+        assert!(
+            authority.consume("secret").await,
+            "consume spends + unlinks"
+        );
+        assert!(!file.exists());
+        // Shutdown still runs cleanup; the file is already gone (ENOENT) — no panic,
+        // no error, no re-arm.
+        authority.cleanup().await;
+        assert!(!authority.consume("secret").await, "still spent");
+    }
+
+    #[tokio::test]
+    async fn cleanup_is_idempotent_and_safe_on_a_disabled_authority() {
+        let authority = EmbeddedBootstrapTokenAuthority::disabled();
+        authority.cleanup().await;
+        authority.cleanup().await; // second cleanup is a no-op, never a panic
     }
 }

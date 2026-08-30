@@ -22,10 +22,10 @@
 //! one typed audit event ([`AgentAuditSink`]); every refusal and every read/blob
 //! failure emits none.
 //!
-//! The audit sink is composed UNMOUNTED here (#task:2254): no production backing is
-//! wired, and #task:2256 owns the durable structured-audit representation this seam
-//! will feed. The composition-root mount of [`router`] is the packaging context's
-//! job, not this factory's.
+//! Backend-app mounts [`router`] behind the human perimeter with the SQLite read model,
+//! shared blob store, and the production `AgentAuditFileSink`. That sink is the typed
+//! durable backing over the shared categorized JSONL writer; this route factory retains
+//! only bounded-context transport and owner-gate responsibilities.
 
 use std::sync::Arc;
 

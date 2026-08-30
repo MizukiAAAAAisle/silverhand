@@ -48,6 +48,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
+use silverhand_backend_core::agent_audit_read::{AgentAuditEvent, AgentAuditSink};
 use silverhand_backend_core::cli_preflight_audit::{CliPreflightAuditSink, CliPreflightFailure};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -64,6 +65,11 @@ const DIAGNOSTIC_TARGET: &str = "silverhand::categorized_audit";
 
 /// The categorized-log filename prefix for CLI audit lines: `cli-<utc>.log`.
 const CLI_PREFIX: &str = "cli";
+
+/// The categorized-log filename prefix for agent owner-audit evidence lines:
+/// `agent-audit-<utc>.log`. A DISTINCT file from `cli-*.log` — the two audit surfaces
+/// reuse the same [`CategorizedJsonlWriter`] primitive but never the same file.
+const AGENT_AUDIT_PREFIX: &str = "agent-audit";
 
 /// How many enqueued-but-unwritten lines the bounded channel holds before it applies
 /// backpressure by dropping. Preflight failures are rare and each line is tiny, so this
@@ -503,6 +509,172 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
+/// The production agent owner-audit sink: a typed facade over one
+/// [`CategorizedJsonlWriter`] that projects an [`AgentAuditEvent`] into one flat,
+/// per-field-addressable `agent-audit-<utc>.log` line.
+///
+/// This is the ONE durable backing #task:2256's reusable writer feeds for #task:2254's
+/// owner-audit seam: it reuses the exact same primitive (bounded queue, single writer
+/// task, idempotent drain/close, best-effort non-blocking record) with its OWN prefix
+/// and its OWN projection — never `tracing`, never a generic event bus, never the CLI
+/// record, and never a second writer implementation. Cloning shares the one underlying
+/// writer, so a clone injected into router state and one kept for shutdown close the
+/// SAME file.
+#[derive(Clone)]
+pub struct AgentAuditFileSink<C: AuditClock> {
+    writer: CategorizedJsonlWriter,
+    clock: C,
+    app: AppTag,
+    pid: u32,
+}
+
+impl<C: AuditClock> AgentAuditFileSink<C> {
+    /// Opens the `agent-audit-<utc>.log` file for this boot under `dir` and spawns its
+    /// writer. The per-boot UTC stamp is sampled from `clock` once, here; an open failure
+    /// is surfaced so the composition root can fail startup.
+    pub async fn open(dir: PathBuf, app: AppTag, clock: C) -> std::io::Result<Self> {
+        let stamp = filename_stamp(clock.now_unix_millis());
+        let writer = CategorizedJsonlWriter::open(&dir, AGENT_AUDIT_PREFIX, &stamp).await?;
+        Ok(Self {
+            writer,
+            clock,
+            app,
+            pid: std::process::id(),
+        })
+    }
+
+    /// Drains, flushes, and closes the underlying file. Idempotent (see
+    /// [`CategorizedJsonlWriter::close`]).
+    pub async fn close(&self) {
+        self.writer.close().await;
+    }
+
+    /// The underlying writer's health, for shutdown-close witnessing and diagnostics.
+    pub fn state(&self) -> WriterState {
+        self.writer.state()
+    }
+
+    /// How many lines this sink has dropped over its life.
+    pub fn dropped_lines(&self) -> u64 {
+        self.writer.dropped_lines()
+    }
+
+    fn line_bytes(&self, event: &AgentAuditEvent) -> Vec<u8> {
+        use serde_json::{Map, Number, Value};
+
+        let ts = iso8601_utc_millis(self.clock.now_unix_millis());
+        let mut line = Map::new();
+        // Envelope, mirroring the CLI sink's `{ ts, level, msg, ...base }` prefix. A
+        // successful audited read is `info`, not the CLI failure's `warn`.
+        line.insert("ts".to_owned(), Value::String(ts));
+        line.insert("level".to_owned(), Value::String("info".to_owned()));
+        line.insert(
+            "msg".to_owned(),
+            Value::String("agent.audit_event".to_owned()),
+        );
+        line.insert(
+            "app".to_owned(),
+            Value::String(self.app.as_str().to_owned()),
+        );
+        line.insert("pid".to_owned(), Value::Number(Number::from(self.pid)));
+        // Business fields: `category` is the per-variant group-by key an operator greps,
+        // and every id/count is its own independently-addressable top-level key. Ids reuse
+        // the CLI line's camelCase for the shared identifiers (`agentId`,
+        // `conversationId`); this is a new evidence surface with no prior wire reader, so
+        // the shape is internally consistent rather than inherited.
+        match event {
+            AgentAuditEvent::ChatsListed {
+                viewer,
+                agent_id,
+                chat_count,
+            } => {
+                line.insert(
+                    "category".to_owned(),
+                    Value::String("agent.chats_listed".to_owned()),
+                );
+                line.insert(
+                    "viewer".to_owned(),
+                    Value::String(viewer.as_str().to_owned()),
+                );
+                line.insert(
+                    "agentId".to_owned(),
+                    Value::String(agent_id.as_str().to_owned()),
+                );
+                line.insert(
+                    "chatCount".to_owned(),
+                    Value::Number(Number::from(*chat_count)),
+                );
+            }
+            AgentAuditEvent::TranscriptRead {
+                viewer,
+                agent_id,
+                conversation_id,
+                message_count,
+            } => {
+                line.insert(
+                    "category".to_owned(),
+                    Value::String("agent.transcript_read".to_owned()),
+                );
+                line.insert(
+                    "viewer".to_owned(),
+                    Value::String(viewer.as_str().to_owned()),
+                );
+                line.insert(
+                    "agentId".to_owned(),
+                    Value::String(agent_id.as_str().to_owned()),
+                );
+                line.insert(
+                    "conversationId".to_owned(),
+                    Value::String(conversation_id.as_str().to_owned()),
+                );
+                line.insert(
+                    "messageCount".to_owned(),
+                    Value::Number(Number::from(*message_count)),
+                );
+            }
+            AgentAuditEvent::AttachmentRead {
+                viewer,
+                agent_id,
+                conversation_id,
+                attachment_id,
+            } => {
+                line.insert(
+                    "category".to_owned(),
+                    Value::String("agent.attachment_read".to_owned()),
+                );
+                line.insert(
+                    "viewer".to_owned(),
+                    Value::String(viewer.as_str().to_owned()),
+                );
+                line.insert(
+                    "agentId".to_owned(),
+                    Value::String(agent_id.as_str().to_owned()),
+                );
+                line.insert(
+                    "conversationId".to_owned(),
+                    Value::String(conversation_id.as_str().to_owned()),
+                );
+                line.insert(
+                    "attachmentId".to_owned(),
+                    Value::String(attachment_id.as_str().to_owned()),
+                );
+            }
+        }
+        line.insert("status".to_owned(), Value::String("success".to_owned()));
+
+        // Object serialization is infallible for this map (only strings and numbers); the
+        // fallback keeps `record` non-panicking.
+        serde_json::to_vec(&Value::Object(line)).unwrap_or_default()
+    }
+}
+
+impl<C: AuditClock> AgentAuditSink for AgentAuditFileSink<C> {
+    fn record(&self, event: AgentAuditEvent) {
+        let line = self.line_bytes(&event);
+        self.writer.enqueue(line);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -855,6 +1027,82 @@ mod tests {
             "fractional ms is verbatim"
         );
         assert_eq!(object["status"], "failure");
+
+        assert_eq!(sink.state(), WriterState::ClosedShutdown);
+    }
+
+    #[tokio::test]
+    async fn the_agent_audit_facade_projects_each_variant_addressably_and_persists() {
+        use silverhand_backend_core::identity::{AgentId, ConversationId, UserId};
+        use silverhand_backend_core::messaging::AttachmentId;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sink = AgentAuditFileSink::open(
+            dir.path().to_path_buf(),
+            AppTag::Server,
+            FixedClock(ANCHOR_MS),
+        )
+        .await
+        .unwrap();
+
+        sink.record(AgentAuditEvent::ChatsListed {
+            viewer: UserId::parse("viewer-1").unwrap(),
+            agent_id: AgentId::parse("agent-7").unwrap(),
+            chat_count: 3,
+        });
+        sink.record(AgentAuditEvent::TranscriptRead {
+            viewer: UserId::parse("viewer-1").unwrap(),
+            agent_id: AgentId::parse("agent-7").unwrap(),
+            conversation_id: ConversationId::parse("conv-9").unwrap(),
+            message_count: 42,
+        });
+        sink.record(AgentAuditEvent::AttachmentRead {
+            viewer: UserId::parse("viewer-1").unwrap(),
+            agent_id: AgentId::parse("agent-7").unwrap(),
+            conversation_id: ConversationId::parse("conv-9").unwrap(),
+            attachment_id: AttachmentId::parse("att-2").unwrap(),
+        });
+        sink.close().await;
+
+        let expected_name = format!("agent-audit-{}.log", filename_stamp(ANCHOR_MS));
+        let path = dir.path().join(&expected_name);
+        let contents = tokio::fs::read_to_string(&path).await.unwrap();
+        let lines: Vec<serde_json::Value> = contents
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 3, "one line per recorded event");
+
+        // Shared envelope on every line: info level, the audit msg, the server app tag.
+        for line in &lines {
+            let o = line.as_object().unwrap();
+            assert_eq!(o["ts"], "2023-11-14T22:15:23.123Z");
+            assert_eq!(o["level"], "info");
+            assert_eq!(o["msg"], "agent.audit_event");
+            assert_eq!(o["app"], "silverhand-server");
+            assert!(o["pid"].is_number());
+            assert_eq!(o["viewer"], "viewer-1");
+            assert_eq!(o["agentId"], "agent-7");
+            assert_eq!(o["status"], "success");
+        }
+
+        // ChatsListed: category + chatCount are addressable; no conversation/attachment.
+        let listed = lines[0].as_object().unwrap();
+        assert_eq!(listed["category"], "agent.chats_listed");
+        assert_eq!(listed["chatCount"], serde_json::json!(3));
+        assert!(listed.get("conversationId").is_none());
+
+        // TranscriptRead: conversationId + messageCount addressable.
+        let read = lines[1].as_object().unwrap();
+        assert_eq!(read["category"], "agent.transcript_read");
+        assert_eq!(read["conversationId"], "conv-9");
+        assert_eq!(read["messageCount"], serde_json::json!(42));
+
+        // AttachmentRead: conversationId + attachmentId addressable.
+        let att = lines[2].as_object().unwrap();
+        assert_eq!(att["category"], "agent.attachment_read");
+        assert_eq!(att["conversationId"], "conv-9");
+        assert_eq!(att["attachmentId"], "att-2");
 
         assert_eq!(sink.state(), WriterState::ClosedShutdown);
     }

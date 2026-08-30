@@ -13,9 +13,9 @@
 //! invalid query never precedes it), and cancel re-binds the schedule's own
 //! owner inside its atomic unit of work.
 //!
-//! UNMOUNTED: the routers here are constructed but not yet mounted by the
-//! composition root — that is a separate integration step. The domain lives in
-//! `backend-core::messaging::schedule`; this is only the agent-scoped surface.
+//! Backend-app mounts both routers behind the human perimeter and injects the sole
+//! production detail read plus schedule list/cancel units. The domain remains in
+//! `backend-core::messaging::schedule`; this module is only the agent-scoped surface.
 
 mod cancel;
 mod list;

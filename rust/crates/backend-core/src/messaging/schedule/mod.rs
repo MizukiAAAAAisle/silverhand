@@ -20,8 +20,8 @@ pub mod spec;
 
 pub use cancel::{
     CancelDecision, CancelTarget, CapabilityVerdict, OwnerBind, ScheduleCancelFacts,
-    ScheduleCancelOutcome, ScheduleCancelUnitOfWork, bind_owner, evaluate_capability,
-    evaluate_cancel,
+    ScheduleCancelOutcome, ScheduleCancelUnitOfWork, bind_owner, evaluate_cancel,
+    evaluate_capability,
 };
 pub use orchestrator::{
     ClaimedSchedule, Clock, DeliveryMaterial, DueCandidate, EmptyScheduleId, InvalidDeliveryText,

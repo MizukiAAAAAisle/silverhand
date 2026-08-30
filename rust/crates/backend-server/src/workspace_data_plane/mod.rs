@@ -5,9 +5,8 @@
 //! — over the one owning-host correlated-RPC data plane. [`route::router`] mounts
 //! the shared admission ladder (principal → visibility → owner-only authority →
 //! workspace scope → opaque path) and projects the daemon's answer; the daemon
-//! stays the sole virtual-path authority. The subtree is file-disjoint and
-//! UNMOUNTED: a composition root wires the three ports and mounts the router at
-//! convergence.
+//! stays the sole virtual-path authority. Backend-app wires the three production ports
+//! and mounts this router once behind the human perimeter.
 //!
 //!  * [`codec`] — the transport-owned params/result schemas for the two commands.
 //!  * [`adapter`] — [`ProductionWorkspaceDataPlane`], the daemon-backed port with a

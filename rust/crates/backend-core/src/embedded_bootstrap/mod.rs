@@ -4,8 +4,8 @@
 //! credential, so it earns its own crate-root namespace.
 //!
 //! The choose/create authority and its session-issuing flow live in [`flow`];
-//! the port [`EmbeddedBootstrapUnitOfWork`] is implemented by the SQLite adapter.
-//! UNMOUNTED — no composition root names this yet.
+//! the port [`EmbeddedBootstrapUnitOfWork`] is implemented by the SQLite adapter and
+//! consumed by backend-app's mounted production bootstrap route.
 
 mod flow;
 

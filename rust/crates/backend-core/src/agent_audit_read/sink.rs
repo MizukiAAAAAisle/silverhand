@@ -4,12 +4,11 @@
 //! emits exactly one typed event; any refusal or read/blob failure emits none. This
 //! is the functional audit-evidence contract (#task:2254), not incidental logging.
 //!
-//! The sink is a typed port, deliberately NOT a raw `tracing` call: a durable,
-//! queryable structured-audit backing is owned by #task:2256, and this trait is the
-//! consumption seam it will implement. In #task:2254 the route is composed with this
-//! port UNMOUNTED — no production backing is wired — and the effect is proven with a
-//! counting fake. The event shape is minimal on purpose; #task:2256 owns the durable
-//! representation and may adapt this seam when it lands.
+//! The sink is a typed port, deliberately NOT a raw `tracing` call. Backend-app injects
+//! the production `silverhand_backend_filesystem::audit_sink::AgentAuditFileSink`, whose
+//! flat, queryable JSONL projection reuses the shared categorized writer. This core crate
+//! retains only the event and port contract; counting fakes remain available to prove the
+//! route effect without importing filesystem policy.
 
 use crate::identity::{AgentId, ConversationId, UserId};
 use crate::messaging::AttachmentId;

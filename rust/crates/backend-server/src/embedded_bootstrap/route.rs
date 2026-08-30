@@ -1,8 +1,7 @@
 //! `POST /auth/embedded-bootstrap` — the embedded first-run session grant, ported
-//! from the `routes.ts` embedded handler. UNMOUNTED in this leaf: [`router`] builds
-//! the route but no composition root names it, and production `axum::serve` is not
-//! yet switched to `into_make_service_with_connect_info` (the ratified convergence
-//! step). The handler is a thin transport over
+//! from the `routes.ts` embedded handler. The backend-app composition mounts [`router`]
+//! once at the top level and serves through
+//! `into_make_service_with_connect_info::<SocketAddr>()`. The handler is a thin transport over
 //! [`silverhand_backend_core::embedded_bootstrap::bootstrap_session`].
 //!
 //! ## Every pre-verdict failure collapses to an indistinguishable 404
@@ -88,7 +87,17 @@ where
 /// Whether an IP is a loopback address: IPv4 `127.0.0.0/8`, IPv6 `::1`, or an
 /// IPv4-mapped loopback `::ffff:127.x.x.x`. `SocketAddr` carries no hostname, so
 /// there is deliberately no `localhost` branch.
-fn is_loopback_ip(ip: IpAddr) -> bool {
+///
+/// # Convergence-owned surface
+///
+/// This is `pub` solely so the composition root can decide, at startup, whether to
+/// arm the embedded-bootstrap token authority using the SAME loopback judgement the
+/// request-time [`LoopbackPeer`] gate applies to the bound listener's local address.
+/// It is the ONE loopback predicate for this authority — the launcher must not grow
+/// a second `IpAddr::is_loopback` / config-string variant that could drift from the
+/// gate. It belongs to the embedded-bootstrap authority, not a general network
+/// helper: do not reuse it for unrelated address checks, and do not glob re-export it.
+pub fn is_loopback_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_loopback(),
         IpAddr::V6(v6) => {
@@ -120,9 +129,9 @@ pub struct EmbeddedBootstrapDeps<Uow, Mint, Iss, Sink, Clk> {
     pub token: EmbeddedBootstrapTokenAuthority,
 }
 
-/// Build the single-route embedded-bootstrap router. NOT mounted: production wiring
-/// (and the `serve()` connect-info switch the loopback gate needs) is the ratified
-/// convergence step, not this leaf.
+/// Build the single-route embedded-bootstrap router. Backend-app mounts this once at the
+/// top level and serves it with socket connect-info; this factory remains responsible only
+/// for the bounded route state and handler.
 pub fn router<Uow, Mint, Iss, Sink, Clk>(
     deps: EmbeddedBootstrapDeps<Uow, Mint, Iss, Sink, Clk>,
 ) -> Router

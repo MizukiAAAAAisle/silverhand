@@ -84,7 +84,8 @@ const FLAGS_MAX_LEN: usize = 64;
 /// sink is a REQUIRED argument — there is no stateless form of this route, because a route
 /// that could not record would silently swallow the audit fact. The self-pin credential
 /// layer is composed in front by backend-app, exactly as for the profile read/write
-/// siblings; this router stays UNMOUNTED until convergence wires the layer and the sink.
+/// siblings. Backend-app mounts this router behind that layer with the required
+/// `CliPreflightFileSink` production backing.
 pub fn cli_trace_router<S>(sink: S) -> Router
 where
     S: CliPreflightAuditSink,
