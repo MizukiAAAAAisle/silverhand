@@ -1036,11 +1036,17 @@ mod tests {
 
     #[tokio::test]
     async fn a_structurally_wrong_body_keeps_the_native_422() {
-        // Valid JSON that cannot decode into the body type — a non-object, a wrong field
-        // type, a present `runtime`, or a present-null `display_name` — surfaces axum's
-        // native `Json` 422 (a text body, NOT the semantic envelope), never a fused 400.
+        // Valid JSON that cannot decode into the body type — a non-object top-level shape,
+        // a wrong field type, a present `runtime`, or a present-null `display_name` —
+        // surfaces axum's native `Json` 422 (a text body, NOT the semantic envelope),
+        // never a fused 400. A top-level array is sealed structurally by the shared
+        // object-only gate BEFORE any positional field bind: `["Renamed"]` would otherwise
+        // bind `display_name` positionally and WRITE, and `[]` would decode to an
+        // all-Missing struct and reach semantic validation — both now refuse structurally.
         for body in [
             "5",
+            "[]",                       // empty seq — no longer decodes to an all-default struct
+            r#"["Renamed"]"#,           // value-shaped array — the positional-bind write bypass
             r#"{"runtime":"codex"}"#,   // z.never() → Forbidden decode error
             r#"{"display_name":null}"#, // not nullable → RequiredPatchField error
             r#"{"display_name":123}"#,  // not a string
@@ -1067,10 +1073,11 @@ mod tests {
     #[tokio::test]
     async fn a_semantic_rule_fault_is_the_minimal_422_invalid_input() {
         // A well-formed body the STATELESS rules or the cross-field step reject: no
-        // named field, a garde predicate, or the `display_name` authority.
+        // named field, a garde predicate, or the `display_name` authority. (A top-level
+        // array is NOT here — the object-only gate refuses it structurally before it can
+        // decode to an empty struct; see `a_structurally_wrong_body_keeps_the_native_422`.)
         for body in [
             "{}",                             // no fields (refine)
-            "[]",                             // empty seq → struct-from-seq defaults → empty
             r#"{"unknown":1}"#,               // unknown-only → stripped → empty
             r#"{"display_name":""}"#,         // trimmed to empty → min(1) fails
             r#"{"reasoning_effort":"BAD"}"#,  // uppercase → regex fails
