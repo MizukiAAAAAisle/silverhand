@@ -91,6 +91,13 @@ macro_rules! agent_participation_predicate {
          (c.endpoint_b_kind = 'agent' AND c.endpoint_b_id = ?))))"
     };
 }
+// Re-exported at `pub(crate)` so the crate-root `agent_runtime_state_read` adapter
+// composes its "all conversations this agent is a party to" list projection from
+// the SAME participation predicate the send gate and task-read set use, rather than
+// a second SQL spelling. Grammar unchanged; this only widens reach. The set port
+// [`SELECT_AGENT_PARTICIPATING_SET`] is a candidate-set narrowing, not a full
+// enumeration, so it cannot stand in for the list read — only the shared predicate can.
+pub(crate) use agent_participation_predicate;
 
 const SELECT_AGENT_PARTICIPATES: &str = concat!(
     "SELECT 1 FROM conversations c WHERE c.id = ? AND ",

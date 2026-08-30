@@ -54,7 +54,12 @@ macro_rules! human_participation_source {
         )
     };
 }
-pub(super) use human_participation_source;
+// Re-exported at `pub(crate)` (not `pub(super)`) so the crate-root
+// `agent_runtime_state_read` adapter composes its source-bound list projection
+// from the SAME strict human-participation authority this module owns, rather
+// than a second SQL spelling of who may read a conversation. Grammar unchanged;
+// this only widens the reach of the existing rule.
+pub(crate) use human_participation_source;
 
 const SELECT_PARTICIPATING_VIEWER: &str = concat!(
     "WITH p(viewer,conversation) AS (SELECT ?,?) SELECT source_viewer FROM (SELECT ",
