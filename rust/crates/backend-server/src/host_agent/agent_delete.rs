@@ -72,7 +72,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::delete,
 };
-use serde_json::{Value, json};
+use serde::Deserialize;
+use serde_json::json;
 use silverhand_backend_core::{
     agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     agent_lifecycle::MaterializationStatus,
@@ -471,14 +472,29 @@ fn map_run_outcome(outcome: DeletionRunOutcome) -> Response {
 /// schema, so bad JSON, a missing confirm, and `confirm: false`/non-boolean are ONE
 /// refusal. `z.object` strips unknown keys, so extra keys alongside `confirm: true`
 /// still pass.
+///
+/// Typed route-local (no `Value`/`Map` replica), and — per the DELETE ordering contract
+/// — decoded ONLY here on the active branch, AFTER the single detail snapshot has
+/// selected it. A failed row returns row-only 204 without ever reaching this decode.
+#[derive(Debug, Default, Deserialize)]
+struct ConfirmBody {
+    #[serde(default)]
+    confirm: bool,
+}
+
 fn confirmed(body: &Bytes) -> bool {
-    let Ok(value) = serde_json::from_slice::<Value>(body) else {
-        return false;
-    };
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    object.get("confirm") == Some(&Value::Bool(true))
+    // `catch(() => ({}))`: ANY decode fault — malformed JSON, a non-object, or a
+    // wrong-typed `confirm` — collapses to the default (`confirm: false`), the single
+    // refusal. Only an explicit `confirm: true` (extra keys stripped) opens the gate.
+    //
+    // Decoded through the shared object-only floor (#2246): `z.object` refuses a JSON
+    // array, but a bare derived `Deserialize` would bind `[true]` positionally to
+    // `confirm`, opening the consent gate off a shape TS rejects. `from_object_slice`
+    // makes a top-level array/scalar a decode fault like any other — collapsing to the
+    // single `false` refusal — without this leaf re-rolling an object visitor.
+    crate::wire_admission::from_object_slice::<ConfirmBody>(body)
+        .map(|parsed| parsed.confirm)
+        .unwrap_or_default()
 }
 
 /// `c.req.query('retry') === 'true'`: the single key matched literally (Hono
@@ -1272,6 +1288,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_failed_row_ignores_a_confirming_body_and_stays_row_only_204() {
+        // Branch-order gate: the confirm decode is reachable ONLY on the active branch.
+        // A failed row dispatches row-only on the snapshot's status alone — even a body
+        // that WOULD satisfy the gate never diverts it into the active begin path.
+        // (`inert_lifecycle` also `unreachable!()`s on begin, so begins==0 is doubly
+        // guarded.)
+        let reply = run(
+            FakeReads::present(creator_facts(MaterializationStatus::Failed)),
+            FakeTeardown::new(TeardownOutcome::Commit),
+            inert_lifecycle(),
+            inert_dispatch(),
+            FakeResidue::new(false),
+            inert_availability(),
+            "a1",
+            "",
+            r#"{"confirm":true}"#,
+            true,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::NO_CONTENT);
+        assert_eq!(reply.teardowns, 1);
+        assert_eq!(reply.begins, 0);
+    }
+
+    #[tokio::test]
+    async fn a_failed_row_with_a_positional_array_body_stays_row_only_204() {
+        // The failed branch never decodes the body at all, so the `[true]` array that the
+        // active branch now refuses (object-only floor, #2246) is equally inert here: the
+        // row-only dispatch rides the snapshot status, not the body. begins==0 is doubly
+        // guarded by `inert_lifecycle`'s `unreachable!()` on begin.
+        let reply = run(
+            FakeReads::present(creator_facts(MaterializationStatus::Failed)),
+            FakeTeardown::new(TeardownOutcome::Commit),
+            inert_lifecycle(),
+            inert_dispatch(),
+            FakeResidue::new(false),
+            inert_availability(),
+            "a1",
+            "",
+            "[true]",
+            true,
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::NO_CONTENT);
+        assert_eq!(reply.teardowns, 1);
+        assert_eq!(reply.begins, 0);
+    }
+
+    #[tokio::test]
     async fn a_failed_row_announce_failure_does_not_flip_the_204() {
         let reply = run(
             FakeReads::present(creator_facts(MaterializationStatus::Failed)),
@@ -1394,6 +1459,11 @@ mod tests {
             r#"{"confirm":false}"#,
             r#"{"confirm":"true"}"#,
             "5",
+            // The accepted-set falsifier: a bare derived `ConfirmBody` would bind the
+            // JSON array `[true]` positionally to `confirm` and open the gate off a shape
+            // TS's `z.object` rejects. The shared object-only floor (#2246) makes it a
+            // decode fault like any other — one refusal, zero begins.
+            "[true]",
         ] {
             let reply = active_run(
                 "",

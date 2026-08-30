@@ -152,10 +152,8 @@ where
 /// NOT `#[serde(default)]`. See the module docs for why a plain two-arm `Deserialize`
 /// (routing an absent key through `visit_none`) collapses `missing` into `null`.
 ///
-/// Landed here by #2244 ahead of its first consumer (the mounted runtime-switch lane,
-/// #2241); `allow(dead_code)` covers that one-commit gap and is removed when #2241 wires
-/// it. Resident tests exercise it now, so the shape is proven before a route depends on it.
-#[allow(dead_code)]
+/// The mounted runtime-switch face (#2241) is its first consumer; resident tests exercise
+/// every arm independently of that route.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RequiredNullable<T> {
     /// The key was present and explicitly `null`.
@@ -164,7 +162,6 @@ pub(crate) enum RequiredNullable<T> {
     Value(T),
 }
 
-#[allow(dead_code)]
 impl<T> RequiredNullable<T> {
     /// Decode a PRESENT key's value: `null` → [`Null`](Self::Null), any other value →
     /// [`Value`](Self::Value). A wrong JSON type surfaces as `T`'s own decode error.
