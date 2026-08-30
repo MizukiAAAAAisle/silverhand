@@ -1,7 +1,4 @@
-use crate::{
-    messaging::{HostEnvironment, MessagingStore},
-    unread_read::{UnreadReadModelError, attention_badge_counts},
-};
+use crate::messaging::{HostEnvironment, MessagingStore};
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
@@ -10,7 +7,7 @@ use silverhand_backend_core::{
     persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
-use std::{collections::BTreeMap, num::NonZeroU64};
+use std::num::NonZeroU64;
 use thiserror::Error;
 
 #[derive(Clone)]
@@ -39,8 +36,6 @@ pub enum NotificationStoreError {
     MalformedTimestamp,
     #[error("stored notification payload is not a JSON object")]
     MalformedPayload,
-    #[error("tiered attention badge projection failed")]
-    Badge(#[source] UnreadReadModelError),
     #[error("clock failed")]
     Clock(#[source] silverhand_backend_core::messaging::EnvironmentUnavailable),
 }
@@ -48,27 +43,6 @@ impl From<NotificationStoreError> for PersistenceFailure {
     fn from(value: NotificationStoreError) -> Self {
         Self::from_source(value)
     }
-}
-
-fn changed_badge_workspaces(
-    before: Vec<(WorkspaceId, i64)>,
-    after: Vec<(WorkspaceId, i64)>,
-) -> BadgeWorkspaceSet {
-    let mut counts = BTreeMap::<String, (WorkspaceId, i64, i64)>::new();
-    for (workspace, count) in before {
-        counts.insert(workspace.as_str().to_owned(), (workspace, count, 0));
-    }
-    for (workspace, count) in after {
-        counts
-            .entry(workspace.as_str().to_owned())
-            .and_modify(|entry| entry.2 = count)
-            .or_insert((workspace, 0, count));
-    }
-    BadgeWorkspaceSet::from_workspaces(
-        counts
-            .into_values()
-            .filter_map(|(workspace, before, after)| (before != after).then_some(workspace)),
-    )
 }
 
 fn opt<T>(
@@ -218,9 +192,6 @@ impl<E: SendClock + Clone + Send + Sync + 'static> NotificationClearPort
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(NotificationStoreError::from)?;
-        let badge_before = attention_badge_counts(&mut tx, &viewer)
-            .await
-            .map_err(NotificationStoreError::Badge)?;
         let rows = match &selector {
             NotificationClearSelector::Id(v) => sqlx::query("SELECT n.id,n.kind,n.user_id,n.agent_id,n.workspace_id,n.conversation_id,n.message_id,m.thread_root_id,n.source_workspace_id,n.source_conversation_id,n.source_message_id,n.payload,n.read_at,n.created_at FROM notifications n LEFT JOIN messages m ON m.id=n.message_id WHERE n.user_id=? AND n.read_at IS NULL AND n.id=? ORDER BY n.id").bind(viewer.as_str()).bind(v.as_str()).fetch_all(&mut *tx).await,
             NotificationClearSelector::Workspace(v) => sqlx::query("SELECT n.id,n.kind,n.user_id,n.agent_id,n.workspace_id,n.conversation_id,n.message_id,m.thread_root_id,n.source_workspace_id,n.source_conversation_id,n.source_message_id,n.payload,n.read_at,n.created_at FROM notifications n LEFT JOIN messages m ON m.id=n.message_id WHERE n.user_id=? AND n.read_at IS NULL AND n.workspace_id=? ORDER BY n.id").bind(viewer.as_str()).bind(v.as_str()).fetch_all(&mut *tx).await,
@@ -247,13 +218,12 @@ impl<E: SendClock + Clone + Send + Sync + 'static> NotificationClearPort
             .map_err(NotificationStoreError::from)
             .map(|done| marked += done.rows_affected())?;
         }
-        let badge_after = attention_badge_counts(&mut tx, &viewer)
-            .await
-            .map_err(NotificationStoreError::Badge)?;
-        let badge_workspaces = changed_badge_workspaces(badge_before, badge_after);
         tx.commit().await.map_err(NotificationStoreError::from)?;
+        // The witness carries only the target result. No absolute badge projection is
+        // sealed here: the client refetches the authoritative roll-up on the thin unread
+        // signal, so an out-of-order effect cannot write back a stale count.
         Ok(match NonZeroU64::new(marked) {
-            Some(marked) => CommittedNotificationClear::changed(viewer, marked, badge_workspaces),
+            Some(marked) => CommittedNotificationClear::changed(viewer, marked),
             None => CommittedNotificationClear::unchanged(viewer),
         })
     }

@@ -1,8 +1,9 @@
 use super::*;
 use axum::{
     body::{Body, to_bytes},
-    http::{Method, Request},
+    http::{Method, Request, StatusCode},
 };
+use serde_json::{Value, json};
 use std::{
     convert::Infallible,
     io,
@@ -56,7 +57,6 @@ impl NotificationClearPort for Ports {
         Ok(CommittedNotificationClear::changed(
             viewer,
             NonZeroU64::new(1).unwrap(),
-            BadgeWorkspaceSet::from_workspaces([WorkspaceId::parse("w").unwrap()]),
         ))
     }
 }
@@ -71,14 +71,6 @@ impl NotificationAftermath for Effects {
         Err(NotificationClearFailure::from_source(io::Error::other(
             "hub",
         )))
-    }
-    async fn badge_changed(
-        &self,
-        _: &CommittedNotificationClear,
-        w: &WorkspaceId,
-    ) -> Result<(), NotificationClearFailure> {
-        self.0.lock().unwrap().push(format!("badge:{}", w.as_str()));
-        Ok(())
     }
 }
 async fn call(
@@ -112,6 +104,28 @@ async fn call_raw(
     let body =
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     (status, body)
+}
+
+/// Like [`call_raw`] but returns only the status and never parses the body, for the
+/// native structural rejections (400/415/422) whose bodies are axum's own plaintext,
+/// not JSON.
+async fn status_of(
+    app: Router,
+    method: Method,
+    path: &str,
+    body: String,
+    auth: bool,
+) -> StatusCode {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    if auth {
+        request.extensions_mut().insert(UserId::parse("u").unwrap());
+    }
+    app.oneshot(request).await.unwrap().status()
 }
 
 #[tokio::test]
@@ -151,37 +165,148 @@ async fn four_selectors_map_exactly_and_effect_failure_keeps_committed_200() {
         .await;
         assert_eq!((status, body), (StatusCode::OK, json!({"marked":1})));
         assert_eq!(ports.calls.lock().unwrap().as_slice(), [expected]);
-        assert_eq!(effects.0.lock().unwrap().as_slice(), ["unread", "badge:w"]);
+        assert_eq!(effects.0.lock().unwrap().as_slice(), ["unread"]);
     }
 }
 
 #[tokio::test]
-async fn a_wrong_typed_higher_priority_selector_never_falls_through_to_all() {
+async fn a_wrong_typed_higher_priority_selector_is_native_422_with_zero_reach() {
+    // `{"id":7,"all":true}` — `id` is a wrong field type. Under `ValidatedJson`'s
+    // object-only path this is axum's native `JsonDataError` → 422 with the native
+    // body (NOT the old Zod 400 + issues array, and NOT a fall-through to `all`).
+    // No selector is derived, so neither the clear port nor the aftermath is reached.
     let ports = Ports::default();
     let effects = Effects::default();
-    let (status, body) = call(
+    let status = status_of(
         router(ports.clone(), ports.clone(), effects.clone()),
         Method::POST,
         READ_PATH,
-        json!({"id":7,"all":true}),
+        json!({"id":7,"all":true}).to_string(),
         true,
     )
     .await;
-    assert_eq!(
-        (status, body),
-        (
-            StatusCode::BAD_REQUEST,
-            json!({"error":"invalid input","issues":[{
-                "code":"invalid_type",
-                "expected":"string",
-                "received":"number",
-                "path":["id"],
-                "message":"Expected string, received number"
-            }]})
-        )
-    );
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(ports.calls.lock().unwrap().is_empty());
     assert!(effects.0.lock().unwrap().is_empty());
+}
+
+// ===================== admission falsifiers (refusal plane) =====================
+//
+// The shared `notification-wire.json` oracle carries only the ACCEPTED plane (the
+// drift-prone parity boundary). The refusal plane is the Rust migration's sanctioned
+// divergence from the TS Zod path (native structural 400/415/422 + a minimal
+// semantic 422, no issue array), so it is pinned here, per-implementation. Every
+// refusal reaches neither the clear port nor the aftermath.
+
+#[tokio::test]
+async fn a_value_shaped_positional_array_never_reaches_the_authority() {
+    // The sharp bypass: a JSON array whose first element is a valid selector string
+    // would positionally bind to `id` on a naive `#[derive(Deserialize)]` struct.
+    // `ObjectOnly<T>` rejects the non-object shape structurally (native 422) before
+    // any bind, so the value-shaped array can NEVER reach the clear authority. This
+    // falsifier fails the instant object-only admission regresses.
+    let ports = Ports::default();
+    let effects = Effects::default();
+    let status = status_of(
+        router(ports.clone(), ports.clone(), effects.clone()),
+        Method::POST,
+        READ_PATH,
+        r#"["notification-1"]"#.to_owned(),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(ports.calls.lock().unwrap().is_empty());
+    assert!(effects.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_scalar_body_is_native_422_with_zero_reach() {
+    let ports = Ports::default();
+    let effects = Effects::default();
+    let status = status_of(
+        router(ports.clone(), ports.clone(), effects.clone()),
+        Method::POST,
+        READ_PATH,
+        "true".to_owned(),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(ports.calls.lock().unwrap().is_empty());
+    assert!(effects.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn malformed_json_is_native_400_with_zero_reach() {
+    let ports = Ports::default();
+    let effects = Effects::default();
+    let status = status_of(
+        router(ports.clone(), ports.clone(), effects.clone()),
+        Method::POST,
+        READ_PATH,
+        "{".to_owned(),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(ports.calls.lock().unwrap().is_empty());
+    assert!(effects.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_missing_content_type_is_native_415_with_zero_reach() {
+    let ports = Ports::default();
+    let effects = Effects::default();
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(READ_PATH)
+        .body(Body::from(r#"{"all":true}"#.to_owned()))
+        .unwrap();
+    let mut request = request;
+    request.extensions_mut().insert(UserId::parse("u").unwrap());
+    let response = router(ports.clone(), ports.clone(), effects.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert!(ports.calls.lock().unwrap().is_empty());
+    assert!(effects.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_empty_and_all_false_bodies_are_minimal_semantic_422_with_zero_reach() {
+    // The schema `.refine` (at least one selector): a blank body, an all-empty body,
+    // and `{"all":false}` each fail the ONE container rule → the minimal semantic
+    // `422 {"error":"invalid input"}` (no issues array). Unknown keys are stripped,
+    // so `{"unknown":"x"}` is still selector-less. None reach the authority.
+    for body in [
+        json!({}),
+        json!({"id":"","workspace_id":"","conversation_id":""}),
+        json!({"all":false}),
+        json!({"unknown":"x"}),
+    ] {
+        let ports = Ports::default();
+        let effects = Effects::default();
+        let (status, response) = call(
+            router(ports.clone(), ports.clone(), effects.clone()),
+            Method::POST,
+            READ_PATH,
+            body.clone(),
+            true,
+        )
+        .await;
+        assert_eq!(
+            (status, response),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"error":"invalid input"})
+            ),
+            "{body}"
+        );
+        assert!(ports.calls.lock().unwrap().is_empty(), "{body}");
+        assert!(effects.0.lock().unwrap().is_empty(), "{body}");
+    }
 }
 
 #[tokio::test]
@@ -273,7 +398,6 @@ impl NotificationClearPort for FixturePorts {
         Ok(CommittedNotificationClear::changed(
             viewer,
             NonZeroU64::new(marked).unwrap(),
-            BadgeWorkspaceSet::default(),
         ))
     }
 }
@@ -344,5 +468,5 @@ async fn production_router_consumes_the_ts_signed_notification_wire_closed_set()
         surfaces,
         std::collections::BTreeSet::from(["clear", "list", "unread"])
     );
-    assert_eq!(fixture.as_array().unwrap().len(), 16);
+    assert_eq!(fixture.as_array().unwrap().len(), 13);
 }

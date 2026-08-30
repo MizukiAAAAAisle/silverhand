@@ -458,10 +458,29 @@ export function applyAttentionFrame(
     return;
   }
   if (frame.kind === 'notification' || frame.kind === 'unread_updated') {
-    // `directed_unread_count` on the tier batch moves with both. The badge
-    // itself does NOT need invalidating here — its own absolute event rides
-    // the same transaction.
+    // `directed_unread_count` on the tier batch moves with both, so the modes batch
+    // always needs the re-read.
     void qc.invalidateQueries({ queryKey: ['attention', 'modes'] });
+    // The two `unread_updated` variants are discriminated by `conversation_id`
+    // presence (the canonical `isMessageUnreadUpdatedPayload` discriminator). The
+    // ENRICHED message variant (has `conversation_id`) rides its own absolute
+    // `attention_badge_updated` frame in the same transaction, so the badge roll-up
+    // is already covered. The THIN notification-clear variant (source #3: a directed
+    // notification going read) deliberately carries NO absolute badge frame — the
+    // migrated backend publishes a refetch signal instead of a standalone absolute
+    // count, because an absolute count published out of commit order would let an
+    // earlier clear's stale value win under this cache's last-write-wins apply. So
+    // for the thin variant the roll-up is authoritative-refetched HERE; two clears
+    // delivered out of order each just re-read the current committed roll-up and
+    // converge on it. A bare `notification` insert frame likewise carries no absolute
+    // count and needs the refetch. (See scope_events.rs NotificationUnreadCleared.)
+    const isEnrichedMessageVariant =
+      frame.kind === 'unread_updated' &&
+      typeof (frame.payload as { conversation_id?: unknown } | undefined)
+        ?.conversation_id === 'string';
+    if (!isEnrichedMessageVariant) {
+      void qc.invalidateQueries({ queryKey: attentionBadgesKey() });
+    }
   }
 }
 

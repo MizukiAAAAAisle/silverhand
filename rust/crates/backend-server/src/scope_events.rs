@@ -42,6 +42,9 @@ use silverhand_backend_core::{
     messaging::{
         CommittedMessageView, DirectPairOpenedFact, DirectPairOpenedPort, PrincipalIdentity,
         collaboration::{
+            notification::{
+                CommittedNotificationClear, NotificationAftermath, NotificationClearFailure,
+            },
             saved::{SavedAftermath, SavedChangeFact, SavedPublicationFailure},
             thread_follow::{
                 ThreadFollowAftermath, ThreadFollowChangedFact, ThreadFollowPublicationFailure,
@@ -329,12 +332,45 @@ enum ProductEvent {
     Notification(NotificationEvent),
     /// A viewer's unread state after this message, co-emitted with the badge below on
     /// the same placement. Never sent alone: the pair is what
-    /// [`ScopeEventHub::publish_unread_updated_to_viewer`] guarantees.
+    /// [`ScopeEventHub::publish_unread_updated_to_viewer`] guarantees FOR THE
+    /// CONVERSATION-DERIVED PATH — a message arrival or follow edge that moves ONE
+    /// conversation's unread. The directed-notification-clear path emits its own
+    /// [`NotificationUnreadCleared`](ProductEvent::NotificationUnreadCleared) frame
+    /// (same wire `kind`, a different, thinner payload) as a REFETCH SIGNAL and no
+    /// badge frame at all; that is a distinct product fact, not this
+    /// conversation-derived pair.
     UnreadUpdated(UnreadUpdated),
+    /// The directed-notification mark-read result on a viewer's OWN scope: the
+    /// TypeScript `publishToScope(viewer:<id>, 'unread_updated', { marked })`. It
+    /// serializes to the SAME wire `kind` as [`UnreadUpdated`](ProductEvent::UnreadUpdated)
+    /// but a thinner, DIFFERENT payload — `{ marked }`, and crucially NO
+    /// `conversation_id` — because the renderer discriminates the two `unread_updated`
+    /// variants solely by `conversation_id` presence (`viewer-unread-ingestor.ts`):
+    /// the enriched variant patches per-conversation badge caches, this "badge
+    /// variant" is a pure REFETCH SIGNAL the notification/attention hooks consume by
+    /// re-reading the authoritative roll-up. `marked` is non-load-bearing (the client
+    /// always refetches the count); it exists to mirror the TypeScript payload
+    /// exactly. This is NOT a conversation unread and must never masquerade as one —
+    /// hence its own variant rather than reusing the enriched struct with empty
+    /// fields. It carries no absolute badge value on purpose: publishing an absolute
+    /// count out of commit order under the client's last-write-wins consumer could
+    /// permanently write back a stale value, so the notification-clear path relies on
+    /// the refetch instead (a deliberate delivery divergence from the TypeScript route,
+    /// which shipped a standalone `attention_badge_updated`).
+    #[serde(rename = "unread_updated")]
+    NotificationUnreadCleared {
+        marked: u64,
+    },
     /// The viewer's tiered attention badge — positional unread plus directed mentions
-    /// — as ONE integer. Its own frame kind, but never its own event: a badge that
-    /// moved without the unread that moved it would be a value the client cannot
-    /// reconcile.
+    /// — as ONE integer. Its own frame kind. On the conversation-derived path it is
+    /// never its own event (a badge that moved without the unread that moved it would
+    /// be a value the client cannot reconcile, which is why
+    /// [`ScopeEventHub::publish_unread_updated_to_viewer`] co-emits the pair). NOTE:
+    /// this frame carries an ABSOLUTE count and its producers are NOT yet ordered
+    /// against each other by commit — a named residual. The directed-notification-clear
+    /// path deliberately does NOT produce this frame (it uses a thin refetch signal
+    /// instead); do not reintroduce a notification-clear badge here without a
+    /// cross-producer commit-order/versioning model.
     AttentionBadgeUpdated(AttentionBadge),
     /// A viewer's set of workspaces changed, so their `['workspaces']` read model
     /// is stale. A HINT by contract, exactly as in the TypeScript producer: the
@@ -617,6 +653,37 @@ impl ScopeEventHub {
         HubWorkspaceMetadataPublisher::new(self.clone(), audience)
     }
 
+    /// The directed-notification-clear context's post-commit effect, built over THIS
+    /// hub. A committed mark-read owes the acting viewer their OWN thin
+    /// `unread_updated { marked }` REFETCH SIGNAL and NO badge frame — the client
+    /// re-reads the authoritative attention roll-up over REST, so two clears delivered
+    /// out of commit order converge on the current committed state instead of letting
+    /// an earlier clear's stale absolute count win under a last-write-wins consumer.
+    /// It is the only production implementation of [`NotificationAftermath`]. It
+    /// composes the ONE hub (from `&self`) and seals no absolute projection value: the
+    /// witness carries the target `marked` count only, never a badge count.
+    /// [`HubNotificationAftermath::new`] stays crate-private, so the lane cannot point
+    /// its fan-out at a hub other than the one it publishes on, and the facade only
+    /// ever implements [`NotificationAftermath`] — it never grows into a general event
+    /// bus.
+    ///
+    /// ```compile_fail
+    /// use silverhand_backend_server::scope_events::{HubNotificationAftermath, ScopeEventHub};
+    ///
+    /// let hub = ScopeEventHub::production().unwrap();
+    /// let _ = HubNotificationAftermath::new(hub);
+    /// ```
+    ///
+    /// ```
+    /// use silverhand_backend_server::scope_events::ScopeEventHub;
+    ///
+    /// let hub = ScopeEventHub::production().unwrap();
+    /// let _ = hub.notification_aftermath();
+    /// ```
+    pub fn notification_aftermath(&self) -> HubNotificationAftermath {
+        HubNotificationAftermath::new(self.clone())
+    }
+
     /// The public agent-tuning write's post-commit `agent_changed` announce, built
     /// over THIS hub. Binds `backend-core`'s [`AgentChangedSink`] to the accepted
     /// [`publish_agent_changed`](ScopeEventHub::publish_agent_changed) producer, so the
@@ -891,12 +958,18 @@ impl ScopeEventHub {
         self.publish(EventScope::ConversationSide(conversation.clone()), event)
     }
 
-    /// The ONE door that emits an unread frame or an attention badge, and it emits
-    /// BOTH — the unread first, then the badge, to the same viewer scope. Neither
-    /// frame has any other producer, which is what makes the co-emit a structural
-    /// guarantee rather than a convention: a client can never receive a badge whose
-    /// unread never moved, nor an unread whose badge stayed behind — two values it
-    /// would have no way to reconcile.
+    /// The ONE door for the CONVERSATION-DERIVED unread+badge pair, and it emits
+    /// BOTH — the enriched unread first, then the badge, to the same viewer scope. On
+    /// this path neither frame has any other producer, which is what makes the co-emit
+    /// a structural guarantee rather than a convention: a client can never receive an
+    /// enriched-conversation badge whose unread never moved, nor an enriched unread
+    /// whose badge stayed behind — two values it would have no way to reconcile.
+    ///
+    /// The directed-notification-clear path is a SEPARATE product fact and does NOT
+    /// come through here: it emits a thin `unread_updated { marked }` refetch signal
+    /// via [`HubNotificationAftermath`] and no badge frame at all. The "single
+    /// producer" invariant this door guarantees is therefore scoped to the
+    /// conversation-derived pair, not to the `unread_updated` wire kind at large.
     ///
     /// The two ride ONE [`Self::publish_batch`] call, not two [`Self::publish`] calls:
     /// atomicity is what makes the guarantee true even at the sequence ceiling. Two
@@ -925,6 +998,28 @@ impl ScopeEventHub {
                     badge_count: viewer.badge_count,
                 }),
             ],
+        )
+    }
+
+    /// Publish the directed-notification mark-read result to the viewer's OWN scope:
+    /// the thin `unread_updated { marked }` badge-variant frame. It carries NO
+    /// `conversation_id`, so the renderer routes it as the badge/refetch signal, never
+    /// into the enriched per-conversation ingestor, and NO absolute badge value — the
+    /// client refetches the authoritative roll-up, which is what makes two clears
+    /// delivered out of order converge on the current committed state instead of
+    /// letting an earlier commit's stale count win. Distinct from
+    /// [`publish_unread_updated_to_viewer`](Self::publish_unread_updated_to_viewer):
+    /// that is the conversation-derived co-emit; this is a standalone product fact with
+    /// no conversation and no badge frame. Crate-private, and only
+    /// [`HubNotificationAftermath`] calls it.
+    fn publish_notification_unread_cleared_to_viewer(
+        &self,
+        viewer: &UserId,
+        marked: u64,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::NotificationUnreadCleared { marked },
         )
     }
 
@@ -1380,10 +1475,49 @@ impl<R: WorkspaceHumanAudienceReadPort> WorkspaceMetadataChangedSink
     }
 }
 
-/// The public agent-tuning write's post-commit `agent_changed` announce, over the
-/// real transport. A profile PATCH that commits owes clients the app-scope
-/// `{agent_id}` refresh hint; this narrow adapter binds `backend-core`'s
-/// [`AgentChangedSink`] to the ONE accepted producer
+/// The directed-notification-clear context's post-commit effect, over the real
+/// transport — the ONLY production [`NotificationAftermath`].
+///
+/// A committed mark-read is a DISTINCT product fact from the conversation-derived
+/// unread pair: it emits, to the acting viewer's own scope, exactly one thin
+/// `unread_updated { marked }` frame. That frame carries NO `conversation_id` and NO
+/// absolute badge value — it is a REFETCH SIGNAL. The client re-reads the
+/// authoritative attention roll-up over REST, so two clears delivered out of order
+/// each trigger a read of the CURRENT committed state and converge on it; an earlier
+/// commit's stale absolute count can never be written back (the failure mode that a
+/// sealed-and-published absolute value would have under a last-write-wins consumer).
+/// This leaf therefore publishes no `attention_badge_updated` frame at all; the
+/// general commit-order/versioning of that frame across all producers is a named
+/// residual, out of scope here.
+///
+/// Best-effort by the core contract: a scope-local transport failure is captured as
+/// the source of a [`NotificationClearFailure`] and returned, but it never flips the
+/// already-committed HTTP result. It composes the ONE hub — NOT a second event
+/// authority — and its constructor stays crate-private, so the lane cannot point its
+/// fan-out at a hub other than the one it publishes on. It only ever implements
+/// [`NotificationAftermath`]; it exposes no general publish.
+#[derive(Clone)]
+pub struct HubNotificationAftermath {
+    hub: ScopeEventHub,
+}
+
+impl HubNotificationAftermath {
+    pub(crate) fn new(hub: ScopeEventHub) -> Self {
+        Self { hub }
+    }
+}
+
+impl NotificationAftermath for HubNotificationAftermath {
+    async fn unread_changed(
+        &self,
+        fact: &CommittedNotificationClear,
+    ) -> Result<(), NotificationClearFailure> {
+        self.hub
+            .publish_notification_unread_cleared_to_viewer(fact.viewer(), fact.marked())
+            .map_err(NotificationClearFailure::from_source)
+    }
+}
+
 /// ([`ScopeEventHub::publish_agent_changed`]) so the tuning write neither invents a
 /// second event authority nor hand-copies a `publishToScope`. Best-effort by the
 /// core contract: a transport failure is mapped to the source of an
@@ -2824,6 +2958,10 @@ mod tests {
 
     use futures_util::{SinkExt, StreamExt};
     use silverhand_backend_core::cold_read::presence::LastSeenAt;
+    use silverhand_backend_core::messaging::collaboration::notification::{
+        CommittedNotificationClear, NotificationAftermath, NotificationClearFailure,
+        NotificationClearPort, NotificationClearSelector, clear_notifications,
+    };
     use silverhand_backend_core::{
         auth::{AuthenticateHumanSession, SessionBearer},
         direct_pair_read::DirectPairReadModel,
@@ -5407,6 +5545,193 @@ mod tests {
         );
     }
 
+    // ============ directed-notification-clear aftermath, on the REAL hub ============
+
+    /// A fake clear port that seals a committed witness with a fixed `marked` count —
+    /// the shape the SQLite authority returns (target result only, no badge value). It
+    /// lets the hub proof drive the ONE production `NotificationAftermath` over a real
+    /// transport without a database.
+    struct SealedClear {
+        marked: u64,
+    }
+    impl NotificationClearPort for SealedClear {
+        type Error = std::convert::Infallible;
+        async fn clear(
+            &self,
+            viewer: UserId,
+            _: NotificationClearSelector,
+        ) -> Result<CommittedNotificationClear, Self::Error> {
+            Ok(match std::num::NonZeroU64::new(self.marked) {
+                Some(marked) => CommittedNotificationClear::changed(viewer, marked),
+                None => CommittedNotificationClear::unchanged(viewer),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_committed_notification_clear_emits_exactly_one_thin_refetch_signal() {
+        let hub = ScopeEventHub::test("epoch-1");
+        let viewer = UserId::parse("viewer-1").unwrap();
+        let port = SealedClear { marked: 2 };
+
+        // The ONE production aftermath, derived from THIS hub. No fake sink.
+        let result = clear_notifications(
+            &port,
+            &hub.notification_aftermath(),
+            viewer.clone(),
+            NotificationClearSelector::All,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.committed().marked(), 2);
+        assert!(result.first_failure().is_none());
+
+        // The acting viewer's OWN scope carries EXACTLY one thin `unread_updated`
+        // frame — a refetch signal. No conversation-derived co-emit, and crucially NO
+        // `attention_badge_updated` frame at all: the notification-clear path publishes
+        // no absolute badge value, so an out-of-order delivery cannot write back a
+        // stale count.
+        let frames = scope_events(&hub, EventScope::Viewer(viewer.clone()));
+        assert!(
+            matches!(
+                frames.as_slice(),
+                [ProductEvent::NotificationUnreadCleared { marked: 2 }]
+            ),
+            "the viewer scope carried {frames:?}"
+        );
+        assert!(
+            !frames
+                .iter()
+                .any(|f| matches!(f, ProductEvent::AttentionBadgeUpdated(_))),
+            "notification-clear must publish no absolute badge frame: {frames:?}"
+        );
+
+        // The exact wire JSON: kind `unread_updated`, payload `{marked}`, and NO
+        // `conversation_id` (the renderer's sole discriminator between the enriched and
+        // the thin refetch-signal variants).
+        assert_eq!(
+            serde_json::to_value(&frames[0]).unwrap(),
+            json!({ "kind": "unread_updated", "payload": { "marked": 2 } })
+        );
+
+        // Confinement by SEPARATION: another viewer's scope is untouched.
+        let other = scope_events(&hub, EventScope::Viewer(UserId::parse("viewer-2").unwrap()));
+        assert!(other.is_empty(), "a foreign viewer received {other:?}");
+    }
+
+    #[tokio::test]
+    async fn a_zero_marked_notification_clear_emits_no_frames() {
+        // Both the unchanged witness and a `marked == 0` change publish nothing: the
+        // core guard on `marked > 0` means no unread signal is emitted and the viewer
+        // scope stays empty.
+        let hub = ScopeEventHub::test("epoch-1");
+        let viewer = UserId::parse("viewer-1").unwrap();
+        let port = SealedClear { marked: 0 };
+        let result = clear_notifications(
+            &port,
+            &hub.notification_aftermath(),
+            viewer.clone(),
+            NotificationClearSelector::All,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.committed().marked(), 0);
+        let frames = scope_events(&hub, EventScope::Viewer(viewer));
+        assert!(frames.is_empty(), "a no-op clear emitted {frames:?}");
+    }
+
+    /// The concurrency falsifier (Cindy R1 P0). Two clears for the SAME viewer are
+    /// committed and their effects published in DELIBERATELY REVERSED order: the first
+    /// clear's thin event is emitted only AFTER the second clear's, exactly the
+    /// interleaving that would let an earlier commit's stale ABSOLUTE badge count win
+    /// under the client's last-write-wins consumer.
+    ///
+    /// Because the notification-clear path publishes NO absolute badge value — only a
+    /// thin refetch signal — no frame on the viewer scope carries a badge count, in ANY
+    /// order. The client therefore re-reads the authoritative roll-up on whichever
+    /// signal arrives last and converges on the current committed state; there is no
+    /// stale value to write back. This test asserts the structural guarantee that makes
+    /// that safe: across a reversed-order emission, the replay holds only thin
+    /// `unread_updated` refetch signals and ZERO `attention_badge_updated` frames from
+    /// this path. The pre-fix implementation (which sealed an absolute count and emitted
+    /// a standalone badge) would fail this assertion.
+    #[tokio::test]
+    async fn out_of_order_notification_clears_publish_no_absolute_badge_to_reconcile() {
+        let hub = ScopeEventHub::test("epoch-1");
+        let viewer = UserId::parse("viewer-1").unwrap();
+
+        // Clear A commits first (fact: a larger residual), clear B commits second (fact:
+        // fewer). We then emit B's effect BEFORE A's — the reversed order.
+        let clear_a = clear_notifications(
+            &SealedClear { marked: 3 },
+            &NoopAftermath, // A: commit only, effect deferred
+            viewer.clone(),
+            NotificationClearSelector::All,
+        )
+        .await
+        .unwrap();
+        let clear_b = clear_notifications(
+            &SealedClear { marked: 1 },
+            &NoopAftermath, // B: commit only, effect deferred
+            viewer.clone(),
+            NotificationClearSelector::All,
+        )
+        .await
+        .unwrap();
+
+        // Emit the effects in REVERSED commit order through the real production
+        // aftermath: B (later commit) first, then A (earlier commit).
+        let aftermath = hub.notification_aftermath();
+        aftermath.unread_changed(clear_b.committed()).await.unwrap();
+        aftermath.unread_changed(clear_a.committed()).await.unwrap();
+
+        let frames = scope_events(&hub, EventScope::Viewer(viewer));
+        // Two thin refetch signals landed (order does not matter — each just re-triggers
+        // the authoritative read), and NOT ONE absolute badge frame exists for the
+        // client to reconcile out of order.
+        assert_eq!(
+            frames
+                .iter()
+                .filter(|f| matches!(f, ProductEvent::NotificationUnreadCleared { .. }))
+                .count(),
+            2,
+            "both clears' refetch signals must land: {frames:?}"
+        );
+        assert!(
+            !frames
+                .iter()
+                .any(|f| matches!(f, ProductEvent::AttentionBadgeUpdated(_))),
+            "no absolute badge frame may exist to be reconciled out of order: {frames:?}"
+        );
+    }
+
+    /// A commit-only aftermath: it participates in `clear_notifications` (so the witness
+    /// is produced) but publishes nothing, letting the falsifier above sequence the real
+    /// hub effects by hand in a chosen order.
+    struct NoopAftermath;
+    impl NotificationAftermath for NoopAftermath {
+        async fn unread_changed(
+            &self,
+            _: &CommittedNotificationClear,
+        ) -> Result<(), NotificationClearFailure> {
+            Ok(())
+        }
+    }
+
+    /// The production-impl inventory guard: `NotificationAftermath` now has a REAL
+    /// production implementation ([`HubNotificationAftermath`]), not only `#[cfg(test)]`
+    /// fakes. This binding compiles only while that production impl exists, so deleting
+    /// it (regressing the trait to test-only) fails the build here rather than shipping a
+    /// route whose effect is a fake. It is a type-level existence proof.
+    #[test]
+    fn the_notification_aftermath_has_a_production_implementation() {
+        fn assert_impls_aftermath<T: NotificationAftermath>() {}
+        assert_impls_aftermath::<HubNotificationAftermath>();
+        // And it is reachable through the sanctioned `&self` factory on the real hub.
+        let hub = ScopeEventHub::test("epoch-1");
+        let _: HubNotificationAftermath = hub.notification_aftermath();
+    }
+
     #[tokio::test]
     async fn workspace_unread_arrival_and_clearing_ride_one_co_emit_live_and_cold() {
         let directory = tempfile::tempdir().unwrap();
@@ -6838,6 +7163,7 @@ mod tests {
             ProductEvent::Message(_) => "message",
             ProductEvent::Notification(_) => "notification",
             ProductEvent::UnreadUpdated(_) => "unread_updated",
+            ProductEvent::NotificationUnreadCleared { .. } => "unread_updated",
             ProductEvent::AttentionBadgeUpdated(_) => "attention_badge_updated",
             ProductEvent::ViewerWorkspacesChanged { .. } => "viewer_workspaces_changed",
             ProductEvent::SavedChanged(_) => "saved_changed",
@@ -6896,6 +7222,10 @@ mod tests {
                 workspace_unread_count: 1,
                 latest_unread: None,
             }),
+            // The directed-notification-clear badge variant shares the `unread_updated`
+            // wire kind with the enriched frame above but carries a different, thinner
+            // payload; the serde-tag assertion below proves both map to the same kind.
+            ProductEvent::NotificationUnreadCleared { marked: 3 },
             ProductEvent::AttentionBadgeUpdated(AttentionBadge {
                 workspace_id: "w-1".to_owned(),
                 badge_count: 1,

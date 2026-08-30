@@ -33,6 +33,14 @@ function expectedBody(entry: any): unknown {
 }
 
 describe('notification wire is signed by the production TypeScript routes', () => {
+  // The shared fixture is the ACCEPTED-plane parity oracle: list projection, the
+  // parseInt/clamp/default accepted set, selector precedence (including an empty
+  // high-priority id falling through) and unknown-field stripping — the drift-prone
+  // behaviour the Rust migration must keep byte-for-byte. The refusal plane
+  // deliberately DIVERGES between implementations (TS Zod returns
+  // `400 {error,issues}`; the Rust route returns native structural 400/415/422 and a
+  // minimal semantic `422 {error:"invalid input"}` with no issue array), so those
+  // cases are pinned per-implementation, not through this shared oracle.
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
