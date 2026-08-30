@@ -2003,12 +2003,15 @@ mod tests {
     }
 
     // Same as `request_with_body` but declares `Content-Type: application/json`.
-    // #2245 convergence harness-only fix: after #2242 the internal MCP probe face
-    // reaches the handler through the frozen `ValidatedJson` admission (#2246
-    // object-only floor), whose native Axum extractor requires the JSON content
-    // type and answers `415` without it — so this composition harness must send
-    // the header the probe's real product clients already send. Production
-    // routing/composition is unchanged; only the probe legs use this helper.
+    // #2245 convergence harness-only fix: the validator wave migrated every JSON
+    // write face onto the frozen `ValidatedJson` admission (#2246 object-only
+    // floor), whose native Axum extractor requires the JSON content type and
+    // answers `415` without it — the ratified, deliberate wave contract (see
+    // `host_agent/agent_patch.rs`: "a missing `Content-Type` is `415`"). These
+    // mount-composition assertions predate the wave and drove those faces with a
+    // bodiless / CT-less client, so they must now send the header every real
+    // product client already sends. Production routing/composition is unchanged;
+    // only these test call sites carry the header.
     async fn json_request_with_body(
         router: &Router,
         method: &str,
@@ -2426,11 +2429,12 @@ mod tests {
         assert_eq!(direct_pairs.0, StatusCode::OK);
         assert_eq!(direct_pairs.1, r#"{"direct_pairs":[]}"#);
 
-        let host = request(
+        let host = json_request_with_body(
             &app.router,
             "POST",
             "/api/hosts",
             Some(&format!("Bearer {TOKEN}")),
+            Body::from("{}"),
         )
         .await;
         assert_eq!(host.0, StatusCode::OK, "{}", host.1);
@@ -4336,7 +4340,14 @@ mod tests {
         // Authenticated POST (empty body) → the invite handler: it mints a pending
         // user-managed computer off live SQLite and reveals the connect token. The INVITE
         // shape carries `host_id` + `connect_token` and no `hosts` array.
-        let (status, body) = request(&router, "POST", "/api/hosts", Some(&bearer)).await;
+        let (status, body) = json_request_with_body(
+            &router,
+            "POST",
+            "/api/hosts",
+            Some(&bearer),
+            Body::from("{}"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "authed POST /api/hosts: {body}");
         let invited: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert!(
@@ -6422,7 +6433,7 @@ mod tests {
 
             // ── Fact 2: runtime-switch commits, announces once, and survives the restart failure. ──
             let app_high_water_before = fresh_scope_high_water(address, "app").await;
-            let (status, body) = request_with_body(
+            let (status, body) = json_request_with_body(
                 &router,
                 "PUT",
                 "/api/agents/a-switch/runtime",
@@ -7524,7 +7535,14 @@ mod tests {
         let bearer = format!("Bearer {TOKEN}");
 
         // Authenticated invite mints a pending computer and reveals its connect token.
-        let (status, body) = request(&router, "POST", "/api/hosts", Some(&bearer)).await;
+        let (status, body) = json_request_with_body(
+            &router,
+            "POST",
+            "/api/hosts",
+            Some(&bearer),
+            Body::from("{}"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "invite: {body}");
         let invited: serde_json::Value = serde_json::from_str(&body).unwrap();
         let host_id = invited["host_id"].as_str().unwrap().to_owned();
@@ -7590,7 +7608,7 @@ mod tests {
 
         // A well-formed claim mints a local computer and reveals its first token.
         let claim_body = r#"{"installation_id":"11111111-1111-4111-8111-111111111111"}"#;
-        let (status, body) = request_with_body(
+        let (status, body) = json_request_with_body(
             &router,
             "POST",
             "/api/hosts/claim-or-create",
@@ -7612,8 +7630,11 @@ mod tests {
             "claim reveals the minted token: {body}"
         );
 
-        // A malformed installation_id is a request-classification 400, never a lookup.
-        let (status, body) = request_with_body(
+        // A malformed installation_id reaches the frozen `ValidatedJson` admission and
+        // collapses to the wave's minimal semantic `422 {"error":"invalid input"}` (the
+        // ratified `is_uuid` garde rule; see `host_runtime/claim.rs`
+        // `a_semantic_value_fault_is_the_minimal_422_before_the_claim`), never a lookup.
+        let (status, body) = json_request_with_body(
             &router,
             "POST",
             "/api/hosts/claim-or-create",
@@ -7621,7 +7642,7 @@ mod tests {
             Body::from(r#"{"installation_id":"not-a-uuid"}"#),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "bad uuid: {body}");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "bad uuid: {body}");
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&body).unwrap()["error"],
             "invalid input",
@@ -7686,7 +7707,7 @@ mod tests {
 
         // Claim mints a local computer under RemoteOnly too — the perimeter chain mounts
         // claim regardless of profile.
-        let (status, body) = request_with_body(
+        let (status, body) = json_request_with_body(
             &router,
             "POST",
             "/api/hosts/claim-or-create",
@@ -7967,10 +7988,13 @@ mod tests {
 
         // Shared-node checksum: since CP6 the `/api/agents` node serves BOTH `GET` (this
         // list) and `POST` (create) — a disjoint-method merge, not a clobber. A bare POST
-        // (bearer, but no idempotency key / body) is no longer method-shadowed (405); it
-        // reaches the mounted create handler's admission and is refused as invalid input.
+        // (bearer, but no JSON content type) is no longer method-shadowed (405); it reaches
+        // the mounted create handler's frozen `ValidatedJson` admission, which — absent the
+        // JSON content type — refuses with the wave's ratified native `415` before the body
+        // runs (see `host_agent/agent_patch.rs`: "a missing `Content-Type` is `415`"). The
+        // non-405 refusal is the mount proof; the exact status is the ratified wire contract.
         let (status, body) = request(&router, "POST", path, Some(&bearer)).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{body}");
     }
 
     /// The direct-pair initiation TARGET for viewer `user-1`: one host and one active
