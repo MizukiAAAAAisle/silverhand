@@ -270,7 +270,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::messaging::admission::{IssuePathSegment, ShapeIssue};
 
     /// What one command asked for, in the terms these two doors can differ in.
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -490,10 +489,10 @@ mod tests {
         Some(serde_json::json!({"content": "hello", "target": "#conv:conv-2"}))
     }
 
-    fn payload_issues(refusal: AgentRefusal) -> Vec<ShapeIssue> {
+    fn assert_payload_invalid(refusal: AgentRefusal) {
         match refusal {
-            AgentRefusal::Payload(PayloadRefusal::Shape(issues)) => issues,
-            other => panic!("expected a shape refusal, got {other:?}"),
+            AgentRefusal::Payload(PayloadRefusal::Invalid) => {}
+            other => panic!("expected a payload refusal, got {other:?}"),
         }
     }
 
@@ -631,16 +630,13 @@ mod tests {
     async fn the_agent_door_refuses_a_body_that_names_no_target() {
         let unit = CountingUnitOfWork::default();
 
-        for (body, code) in [
-            (serde_json::json!({"content": "hello"}), "invalid_type"),
-            (
-                serde_json::json!({"content": "hello", "target": null}),
-                "invalid_type",
-            ),
-            (
-                serde_json::json!({"content": "hello", "target": ""}),
-                "too_small",
-            ),
+        // The three ways a body fails to name an address — the field absent, present
+        // `null`, present empty — are ONE refusal now: a `target` rule failed. The door
+        // no longer publishes which, only that the body was not a send it can act on.
+        for body in [
+            serde_json::json!({"content": "hello"}),
+            serde_json::json!({"content": "hello", "target": null}),
+            serde_json::json!({"content": "hello", "target": ""}),
         ] {
             let outcome = agent_send(
                 &agent_slot(),
@@ -651,15 +647,48 @@ mod tests {
             )
             .await;
 
-            let issues = payload_issues(outcome.expect_err("a send with no address was accepted"));
-            assert_eq!(issues.len(), 1, "{body}");
-            assert_eq!(issues[0].code, code, "{body}");
-            assert_eq!(
-                issues[0].path,
-                vec![IssuePathSegment::Field("target")],
-                "{body}"
-            );
+            assert_payload_invalid(outcome.expect_err("a send with no address was accepted"));
         }
+        assert_eq!(unit.calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// A VALUE-SHAPED POSITIONAL ARRAY IS NOT AN ENVELOPE. Serde's derived struct
+    /// `Deserialize` binds a JSON array to a struct's fields positionally, so WITHOUT the
+    /// shared object floor `["hello"]` would decode as `{content:"hello"}` and `["hello",
+    /// "#conv:conv-2"]` as `{content, target}` — an array-shaped body slipping into a send
+    /// authority. Both send doors decode through the shared `ObjectOnly<T>`, so each array is
+    /// the one minimal payload refusal instead, and — the human door with access already
+    /// GRANTED, so the body floor is the only thing that can stop it — the write unit is
+    /// never reached. This asserts the accepted set narrowed and authority zero-reach, not a
+    /// typed `JsonRejection` source chain (these Value-first doors fold every fault to the
+    /// same refusal).
+    #[tokio::test]
+    async fn a_value_shaped_positional_array_is_refused_at_both_send_doors() {
+        let unit = CountingUnitOfWork::default();
+
+        let human = human_send(
+            &conversation(),
+            &user(),
+            Some(serde_json::json!(["hello"])),
+            &Channel(Ok(())),
+            ports(&unit),
+        )
+        .await;
+        assert!(
+            matches!(human, Err(HumanRefusal::Payload(PayloadRefusal::Invalid))),
+            "a value-shaped array bound the human envelope positionally"
+        );
+
+        let agent = agent_send(
+            &agent_slot(),
+            Some(serde_json::json!(["hello", "#conv:conv-2"])),
+            &Address::main_line(),
+            &Grant(Ok(())),
+            ports(&unit),
+        )
+        .await;
+        assert_payload_invalid(agent.expect_err("a value-shaped array bound the agent envelope"));
+
         assert_eq!(unit.calls.load(Ordering::SeqCst), 0);
     }
 

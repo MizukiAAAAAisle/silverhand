@@ -49,7 +49,7 @@ use super::{
     references::MarkdownReferencePositions,
     send_request::{
         MESSAGE_SEND_MAX_BODY_BYTES, agent_content_too_large, human_content_too_large,
-        invalid_input, missing_identifier,
+        missing_identifier,
     },
 };
 
@@ -337,9 +337,7 @@ fn human_wire(refusal: HumanRefusal) -> Response {
             gate_refusal(StatusCode::FORBIDDEN, "forbidden")
         }
         HumanRefusal::Authority(cause) => authority_failure(&cause),
-        HumanRefusal::Payload(PayloadRefusal::Shape(issues)) => {
-            invalid_input(issues).into_response()
-        }
+        HumanRefusal::Payload(PayloadRefusal::Invalid) => crate::wire_admission::invalid_input(),
         HumanRefusal::Payload(PayloadRefusal::ContentTooLarge { actual_bytes }) => {
             human_content_too_large(actual_bytes).into_response()
         }
@@ -349,9 +347,7 @@ fn human_wire(refusal: HumanRefusal) -> Response {
 
 fn agent_wire(refusal: AgentRefusal) -> Response {
     match refusal {
-        AgentRefusal::Payload(PayloadRefusal::Shape(issues)) => {
-            invalid_input(issues).into_response()
-        }
+        AgentRefusal::Payload(PayloadRefusal::Invalid) => crate::wire_admission::invalid_input(),
         AgentRefusal::Payload(PayloadRefusal::ContentTooLarge { actual_bytes }) => {
             agent_content_too_large(actual_bytes).into_response()
         }

@@ -14,7 +14,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use serde_json::{Map, Value, json};
+use garde::Validate;
+use serde::Deserialize;
+use serde_json::{Value, json};
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId},
     messaging::{
@@ -165,7 +167,7 @@ where
     };
     let admitted = match admit_request(request) {
         Ok(admitted) => admitted,
-        Err(issues) => return invalid(issues),
+        Err(()) => return crate::wire_admission::invalid_input(),
     };
 
     let source = match state
@@ -230,105 +232,66 @@ async fn request_json(request: Request) -> Result<Value, Box<Response>> {
     }
 }
 
-fn admit_request(value: Value) -> Result<AdmittedRequest, Vec<Value>> {
-    let Value::Object(fields) = value else {
-        return Err(vec![invalid_type_issue("object", json_type(&value), None)]);
-    };
-    let mut issues = Vec::new();
-    let conversation = required_non_empty(&fields, "conversation_id", &mut issues);
-    let stale_event_id = required_non_empty(&fields, "stale_event_id", &mut issues);
-    let obsolete = required_obsolete(&fields, &mut issues);
-    let (Some(conversation), Some(stale_event_id), true) = (conversation, stale_event_id, obsolete)
-    else {
-        return Err(issues);
-    };
-    let conversation = ConversationId::parse(conversation)
-        .expect("non-empty conversation ids are the domain admission rule");
-    Ok(AdmittedRequest {
-        conversation,
-        stale_event_id,
-    })
+/// The strict typed envelope this route accepts. All three members are REQUIRED — none
+/// is `.optional()` in the reference — so a missing or wrong-typed one is a native decode
+/// fault, and the two identifiers carry the `.min(1)` half of their `z.string().min(1)` as
+/// a stateless garde rule. It has no `deny_unknown_fields`: the reference schema is not
+/// `.strict()`, so an unknown member is stripped rather than refused.
+#[derive(Debug, Deserialize, Validate)]
+struct StaleResolutionBody {
+    #[garde(length(min = 1))]
+    conversation_id: String,
+    #[garde(length(min = 1))]
+    stale_event_id: String,
+    #[garde(skip)]
+    resolution_reason: ObsoleteReason,
 }
 
-fn required_non_empty(
-    fields: &Map<String, Value>,
-    key: &'static str,
-    issues: &mut Vec<Value>,
-) -> Option<String> {
-    match fields.get(key) {
-        Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
-        Some(Value::String(_)) => {
-            issues.push(json!({
-                "code":"too_small","minimum":1,"type":"string","inclusive":true,
-                "exact":false,"message":"String must contain at least 1 character(s)",
-                "path":[key]
-            }));
-            None
-        }
-        raw => {
-            issues.push(invalid_type_issue(
-                "string",
-                raw.map_or("undefined", json_type),
-                Some(key),
-            ));
-            None
-        }
+/// The one resolution a stale draft may report here: `obsolete`, the reference's
+/// `z.literal('obsolete')`. A single-variant enum makes every other string a native
+/// decode fault rather than a hand-rolled literal check.
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ObsoleteReason {
+    Obsolete,
+}
+
+impl TryFrom<StaleResolutionBody> for AdmittedRequest {
+    type Error = ();
+
+    fn try_from(raw: StaleResolutionBody) -> Result<Self, Self::Error> {
+        // Shape-checked and dropped: decoding `resolution_reason` as the single-variant
+        // `ObsoleteReason` IS the `z.literal('obsolete')` rule, and the route reports the
+        // outcome from its own const, so the field carries no further.
+        let ObsoleteReason::Obsolete = raw.resolution_reason;
+        // The `.min(1)` already ran, so this parse cannot fail on emptiness; it is the
+        // domain id's own authority all the same, and its fallible arm collapses to the
+        // one semantic refusal rather than an `expect`.
+        let conversation = ConversationId::parse(raw.conversation_id).map_err(|_| ())?;
+        Ok(AdmittedRequest {
+            conversation,
+            stale_event_id: raw.stale_event_id,
+        })
     }
 }
 
-fn required_obsolete(fields: &Map<String, Value>, issues: &mut Vec<Value>) -> bool {
-    match fields.get("resolution_reason") {
-        Some(Value::String(value)) if value == "obsolete" => true,
-        raw => {
-            let mut issue = Map::new();
-            if let Some(value) = raw {
-                issue.insert("received".to_owned(), value.clone());
-            }
-            issue.insert("code".to_owned(), json!("invalid_literal"));
-            issue.insert("expected".to_owned(), json!("obsolete"));
-            issue.insert("path".to_owned(), json!(["resolution_reason"]));
-            issue.insert(
-                "message".to_owned(),
-                json!("Invalid literal value, expected \"obsolete\""),
-            );
-            issues.push(Value::Object(issue));
-            false
-        }
-    }
-}
-
-fn invalid_type_issue(expected: &str, received: &str, field: Option<&str>) -> Value {
-    let message = if received == "undefined" {
-        "Required".to_owned()
-    } else {
-        format!("Expected {expected}, received {received}")
-    };
-    json!({
-        "code":"invalid_type",
-        "expected":expected,
-        "received":received,
-        "path":field.map_or_else(Vec::<&str>::new, |field| vec![field]),
-        "message":message,
-    })
-}
-
-fn json_type(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-
-fn invalid(issues: Vec<Value>) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({"error":"invalid input","issues":issues})),
-    )
-        .into_response()
+/// Decode the body into its typed envelope, enforce the stateless rules, then normalize.
+/// Any fault — structural, semantic, or the id parse — is the one semantic refusal; an
+/// unreadable body arrived as an empty object, so its required fields are simply missing.
+///
+/// The top-level object floor (rejecting a value-shaped array serde would bind to the
+/// struct positionally) is the shared [`ObjectOnly<T>`](crate::wire_admission::ObjectOnly)
+/// map-only wrapper from the `ValidatedJson` anchor (#2246), consumed here rather than
+/// restated as a route-local `Value` check. This route decodes Value-first to keep the
+/// bounded-body/identity ordering, so duplicate keys were already collapsed last-wins at the
+/// `serde_json::from_slice::<Value>` parse — a route-order exception, not native duplicate
+/// rejection.
+fn admit_request(value: Value) -> Result<AdmittedRequest, ()> {
+    let crate::wire_admission::ObjectOnly(raw): crate::wire_admission::ObjectOnly<
+        StaleResolutionBody,
+    > = serde_json::from_value(value).map_err(|_| ())?;
+    raw.validate().map_err(|_| ())?;
+    AdmittedRequest::try_from(raw)
 }
 
 fn capability_denied() -> Response {

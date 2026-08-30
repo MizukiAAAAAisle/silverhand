@@ -8,10 +8,12 @@
 //! vocabulary into a product-facing shape — so nothing here touches `crate::wire`.
 //!
 //!
-//! WHAT IT NO LONGER OWNS: the shape itself. Deciding what a request IS belongs
-//! to [`super::admission`], the one authority for it; this module only renders the
-//! refusals that decision produces. Two definitions of an issue would let the two
-//! doors describe one rule differently.
+//! WHAT IT NO LONGER OWNS: the shape itself, NOR its refusal. Deciding what a
+//! request IS belongs to [`super::admission`], the one authority for it; rendering a
+//! shape/semantic refusal belongs to [`crate::wire_admission::invalid_input`], the one
+//! `422 {"error":"invalid input"}` every mounted write face shares. This module renders
+//! only the two answers that are THIS door's own: the ingress fence's envelope bound and
+//! the content cap, whose two wordings are a contract the shared refusal cannot express.
 //!
 //! The two doors differ in wording where the reference implementation differs, and
 //! that is a contract rather than an accident: the agent door tells a runtime what to
@@ -23,7 +25,6 @@
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 
-use super::admission::ShapeIssue;
 use silverhand_backend_core::messaging::MAX_MESSAGE_CONTENT_BYTES;
 
 /// The content cap as a reader sees it named. The bytes are the authority; this is
@@ -96,24 +97,6 @@ pub fn human_content_too_large(actual_bytes: usize) -> impl IntoResponse {
             code: CONTENT_TOO_LARGE.to_owned(),
             max_bytes: MAX_MESSAGE_CONTENT_BYTES,
             actual_bytes,
-        }),
-    )
-}
-
-/// A response, so it serializes and is never parsed: the issues it carries name their
-/// codes and paths with borrowed statics, which have nothing to deserialize into.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct InvalidInput {
-    pub error: String,
-    pub issues: Vec<ShapeIssue>,
-}
-
-pub fn invalid_input(issues: Vec<ShapeIssue>) -> impl IntoResponse {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(InvalidInput {
-            error: "invalid input".to_owned(),
-            issues,
         }),
     )
 }

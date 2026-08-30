@@ -316,10 +316,11 @@ async fn every_door_local_preflight_refuses_before_pair_allocation() {
     // The reply-target refusal is asserted as the EXACT wire envelope, not a substring:
     // a `contains` on the marker would pass a wrong message, an extra or missing field,
     // or any non-contract body that merely mentions the code. The two cells that answer
-    // the reply target therefore pin the whole object. The shape (`content`) and cap
-    // (`content_too_large`) cells keep a marker here — each has its own dedicated exact
-    // evidence elsewhere (`invalid_input` issues; `each_door_words_the_content_cap_for_its_own_caller`
-    // pins `max_bytes`/`actual_bytes`).
+    // the reply target therefore pin the whole object. The shape cell (a body carrying
+    // no content) is now the shared semantic refusal `422 {"error":"invalid input"}`,
+    // pinned exactly — the door no longer publishes which field was wrong. The cap cell
+    // keeps a marker here; `each_door_words_the_content_cap_for_its_own_caller` pins its
+    // `max_bytes`/`actual_bytes`.
     enum Expect {
         Exact(Value),
         Contains(&'static str),
@@ -334,8 +335,19 @@ async fn every_door_local_preflight_refuses_before_pair_allocation() {
         (
             Body::from("{}"),
             None,
-            StatusCode::BAD_REQUEST,
-            Expect::Contains("\"content\""),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Expect::Exact(json!({ "error": "invalid input" })),
+        ),
+        // A value-shaped positional array. Serde's derived struct would bind `["x"]` to the
+        // envelope's fields positionally (content="x"), so without the shared `ObjectOnly`
+        // floor this array — with authority already GRANTED for this fixture — would allocate
+        // the pair and reach the send unit. It is the same minimal `422 {"error":"invalid
+        // input"}` and never reaches allocation (`opens`) or the write unit (`unit_calls`).
+        (
+            Body::from(json!(["x"]).to_string()),
+            None,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Expect::Exact(json!({ "error": "invalid input" })),
         ),
         (
             Body::from(json!({"content":"x","reply_to_message_id":"root"}).to_string()),
@@ -520,8 +532,12 @@ async fn ordinary_body_driver_failure_uses_the_typescript_empty_object_catch() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["issues"][0]["path"], json!(["content"]));
+    // An unreadable body becomes `None`, which admission treats as an empty object: the
+    // required content is then missing and the shared semantic refusal answers. The
+    // reference's own empty-object catch lands on the same "says nothing" verdict; the
+    // door renders it `422 {"error":"invalid input"}` rather than a field-path issue.
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body, json!({ "error": "invalid input" }));
     assert_eq!(opens.load(Ordering::SeqCst), 0);
     assert_eq!(unit_calls.load(Ordering::SeqCst), 0);
 }
@@ -750,18 +766,39 @@ async fn production_sqlite_router_consumes_every_typescript_signed_wire_cell() {
             None,
         )
         .await;
-        assert_eq!(
-            status.as_u16(),
-            entry["status"].as_u64().unwrap() as u16,
-            "{}",
-            entry["name"]
-        );
-        assert_eq!(
-            normalize_success(body),
-            fixture_body(entry, &fixture),
-            "{}",
-            entry["name"]
-        );
+        // The `admission_only` cells sign only that the schema REFUSES the body: the TS
+        // parity wire test skips them (`if (entry.admission_only) continue;`) because
+        // their fixture body is the pre-migration Zod issue list, not a mounted wire. In
+        // the shared governance model every one is the single semantic refusal
+        // `422 {"error":"invalid input"}`, and none mints a pair — so this consumer
+        // branches exactly as the TS test does rather than reading that schema-level body.
+        if entry.get("admission_only").and_then(Value::as_bool) == Some(true) {
+            assert_eq!(
+                status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{}",
+                entry["name"]
+            );
+            assert_eq!(
+                body,
+                json!({ "error": "invalid input" }),
+                "{}",
+                entry["name"]
+            );
+        } else {
+            assert_eq!(
+                status.as_u16(),
+                entry["status"].as_u64().unwrap() as u16,
+                "{}",
+                entry["name"]
+            );
+            assert_eq!(
+                normalize_success(body),
+                fixture_body(entry, &fixture),
+                "{}",
+                entry["name"]
+            );
+        }
 
         let mut db = sqlx::SqliteConnection::connect(path.to_str().unwrap())
             .await
