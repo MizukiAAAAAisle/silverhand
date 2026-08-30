@@ -17,6 +17,7 @@
 //! not here: they are shared across route families (this one and #task:2226's
 //! internal faces), so they are not owned by any one family's namespace.
 
+pub mod agent_audit;
 pub mod agent_avatar;
 pub mod agent_avatar_write;
 pub mod agent_clear_session;
@@ -26,9 +27,12 @@ pub mod agent_detail;
 pub mod agent_list;
 pub mod agent_patch;
 pub mod agent_presence;
+pub mod agent_runtime_state;
 pub mod agent_runtime_switch;
 pub mod agent_stop;
 pub mod availability;
 pub mod host_attachment;
 mod online_viewers;
 pub mod presence;
+pub mod public_profile_mcp;
+pub mod schedule_management;

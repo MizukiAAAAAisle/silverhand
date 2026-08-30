@@ -6,6 +6,7 @@
 //! wire adapters live in sibling crates and project from application facts.
 
 pub mod access;
+pub mod agent_audit_read;
 pub mod agent_availability_read;
 pub mod agent_avatar;
 pub mod agent_avatar_write;
@@ -21,6 +22,7 @@ pub mod agent_presence_read;
 pub mod agent_profile_mcp;
 pub mod agent_profile_read;
 pub mod agent_profile_write;
+pub mod agent_runtime_state_read;
 pub mod agent_runtime_switch;
 pub mod agents;
 pub mod auth;
@@ -30,6 +32,7 @@ pub mod capability;
 pub mod cold_read;
 pub mod credential;
 pub mod direct_pair_read;
+pub mod embedded_bootstrap;
 pub mod host_resources_read;
 pub mod host_runtime;
 pub mod human_auth_flows;
@@ -55,6 +58,7 @@ pub mod viewer_workspace_sort;
 pub mod wire_number;
 pub mod wire_text;
 pub mod workspace_cold_read;
+pub mod workspace_data_plane;
 pub mod workspace_detail_read;
 pub mod workspace_face;
 pub mod workspace_metadata_write;

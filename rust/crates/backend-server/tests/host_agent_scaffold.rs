@@ -178,6 +178,19 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // entry below and its production blob adapter the sibling `avatar_blob` entry —
     // both wired by the #task:2223 integration over #task:2221's local blob store.
     ("backend-core", "avatar"),
+    // #task:2248 — residual-wave core capability/read ports a file-disjoint
+    // implementation lane needs alongside the server route surface, pre-declared here
+    // so four lanes never race the same `lib.rs`/ledger. The embedded-bootstrap UoW and
+    // the workspace data-plane port family are genuinely new top-level contexts; the two
+    // agent projections carry the `*_read` suffix marking a source-bound read
+    // (`agent_audit_read` deliberately distinct from the `capability::agent_audit`
+    // decision vocabulary). Each has a same-named SQLite adapter in the backend-sqlite
+    // block below. Directory-shaped scaffolds — no port/adapter/route/mount yet, so all
+    // are absent from `ACTIVATION_NAMESPACES` (UNMOUNTED).
+    ("backend-core", "agent_audit_read"),
+    ("backend-core", "agent_runtime_state_read"),
+    ("backend-core", "embedded_bootstrap"),
+    ("backend-core", "workspace_data_plane"),
     ("backend-filesystem", "runtime_detection"),
     // #task:2223 — the production avatar blob adapter (`SingleKindAvatarBlobs`),
     // bridging the #task:2222 `avatar` capability to #task:2221's local blob store
@@ -244,6 +257,22 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // hub. Assembled into the workspace-metadata-write mount by the #task:2223
     // integration (best-effort after commit), not a standalone route.
     ("backend-server", "workspace_rename_fanout"),
+    // #task:2248 — the residual-wave route-family scaffold. Only two families are
+    // genuinely NEW top-level bounded contexts and earn a crate root: the embedded
+    // bootstrap (its own auth/token lifecycle) and the workspace data plane (a shared
+    // data-plane/codec/adapter family). Both are directory namespaces declared so a
+    // file-disjoint implementation lane can land its route surface; neither carries a
+    // route, handler, DTO, factory, port, or mount yet, and neither is named by a
+    // composition root, so both are absent from `ACTIVATION_NAMESPACES` — UNMOUNTED.
+    //
+    // The other residual route surfaces are NOT new crate roots: they are submodules of
+    // the bounded contexts that already own them, so they add no crate-root seam and ride
+    // the existing `host_agent`/`internal_agent` entries — `host_agent::public_profile_mcp`,
+    // `host_agent::agent_runtime_state`, `host_agent::agent_audit`,
+    // `host_agent::schedule_management` (public-agent management plane), and
+    // `internal_agent::diagnostics` (internal runtime-credentialed family).
+    ("backend-server", "embedded_bootstrap"),
+    ("backend-server", "workspace_data_plane"),
     ("backend-sqlite", "agent_availability_read"),
     ("backend-sqlite", "agent_detail_read"),
     ("backend-sqlite", "agent_list_read"),
@@ -274,6 +303,13 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // mounted (the app composition root is out of this task's scope).
     ("backend-sqlite", "computer_agents_read"),
     ("backend-sqlite", "workspace_audience_read"),
+    // #task:2248 — the same-named SQLite adapters for the residual-wave core ports
+    // above. Each is the sibling of its `backend-core` entry; directory-shaped
+    // scaffolds with no adapter yet, UNMOUNTED.
+    ("backend-sqlite", "agent_audit_read"),
+    ("backend-sqlite", "agent_runtime_state_read"),
+    ("backend-sqlite", "embedded_bootstrap"),
+    ("backend-sqlite", "workspace_data_plane"),
     ("backend-sqlite", "write_probe"),
 ];
 
@@ -396,6 +432,24 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-server", "host_control"),
     ("backend-server", "internal_agent"),
     ("backend-server", "ops"),
+    // #task:2248 — the two residual-wave families that earn a new crate root
+    // (embedded bootstrap, workspace data plane); directory-shaped so an
+    // implementation lane can add route submodules within its own subtree without
+    // touching a shared declaration. The other residual surfaces are submodules of
+    // `host_agent`/`internal_agent` and are not crate-root seams.
+    ("backend-server", "embedded_bootstrap"),
+    ("backend-server", "workspace_data_plane"),
+    // #task:2248 — the residual-wave core ports and their SQLite adapters are all
+    // directory-shaped scaffolds too, so they join this inventory (G0 holds it to the
+    // exact directory-shaped subset of the seam ledger).
+    ("backend-core", "agent_audit_read"),
+    ("backend-core", "agent_runtime_state_read"),
+    ("backend-core", "embedded_bootstrap"),
+    ("backend-core", "workspace_data_plane"),
+    ("backend-sqlite", "agent_audit_read"),
+    ("backend-sqlite", "agent_runtime_state_read"),
+    ("backend-sqlite", "embedded_bootstrap"),
+    ("backend-sqlite", "workspace_data_plane"),
     ("backend-sqlite", "host_agent"),
 ];
 

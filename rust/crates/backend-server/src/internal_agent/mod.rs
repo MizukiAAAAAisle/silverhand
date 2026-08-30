@@ -7,6 +7,7 @@
 
 mod wire;
 
+pub mod diagnostics;
 pub mod peer_profile;
 pub mod profile;
 pub mod profile_mcp;
