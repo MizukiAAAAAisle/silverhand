@@ -5695,7 +5695,12 @@ mod tests {
         // per-host registry, misses, and is HostAttachPending 503 — and NO new command crosses
         // the attached daemon (no no-op success, no mis-route onto the one live leaf).
         for (method, path, body, json_ct) in [
-            ("GET", "/internal/agents/agent-2/profile/mcp", Body::empty(), false),
+            (
+                "GET",
+                "/internal/agents/agent-2/profile/mcp",
+                Body::empty(),
+                false,
+            ),
             (
                 "POST",
                 "/internal/agents/agent-2/profile/mcp",
