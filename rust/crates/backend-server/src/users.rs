@@ -44,7 +44,7 @@
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Extension, FromRequest, Multipart, Path, Request, State},
+    extract::{Extension, FromRequest, Multipart, Path, Request, State, multipart::MultipartError},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -64,6 +64,7 @@ use silverhand_backend_core::{
 use crate::auth::{PublicJsonUnauthorized, require_human_session};
 use crate::error;
 use crate::human_auth::{UserDto, log_lost_announce};
+use crate::multipart_transport::{accumulate_capped, declared_content_type};
 
 /// `apiPaths.users`.
 pub const USERS_PATH: &str = "/api/users";
@@ -74,11 +75,6 @@ pub const USER_AVATAR_PATH: &str = "/api/users/{id}/avatar";
 
 /// The safe-500 body, a bare `text/plain`, matching the crate's other routes.
 const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
-
-/// The declared content type a multipart file part with no (or an empty) type
-/// falls back to — the product's `file.type || 'application/octet-stream'`. It is
-/// outside the avatar allowlist, so it deterministically yields `415`.
-const DEFAULT_UPLOAD_CONTENT_TYPE: &str = "application/octet-stream";
 
 // ===========================================================================
 // Composition
@@ -375,8 +371,8 @@ struct UploadedFile {
 /// stream/decoding fault yields `Err` (→ the `formData()` throw's 400).
 async fn first_file_field(
     multipart: &mut Multipart,
-) -> Result<Option<UploadedFile>, axum::extract::multipart::MultipartError> {
-    while let Some(field) = multipart.next_field().await? {
+) -> Result<Option<UploadedFile>, MultipartError> {
+    while let Some(mut field) = multipart.next_field().await? {
         if field.name() != Some("file") {
             continue;
         }
@@ -385,47 +381,20 @@ async fn first_file_field(
             return Ok(None);
         }
         // `file.type || 'application/octet-stream'`: an absent OR empty part
-        // content type falls back to the octet-stream default (→ 415 later).
-        let content_type = field
-            .content_type()
-            .filter(|value| !value.is_empty())
-            .unwrap_or(DEFAULT_UPLOAD_CONTENT_TYPE)
-            .to_owned();
-        let bytes = read_field_bounded(field).await?;
+        // content type falls back to the octet-stream default (→ 415 later);
+        // the raw declared type flows to `AvatarContentType::parse` unfolded.
+        let content_type = declared_content_type(&field);
+        // Retain at most `AVATAR_MAX_BYTES + 1`: the extra byte lets `validate_avatar`
+        // tell a `5 MiB` file (accept) from `5 MiB + 1` (the exact `413`). This face
+        // returns at the first `file` part, so the over-cap tail is left for the
+        // request to finish — there is no following part to reach.
+        let bytes = accumulate_capped(&mut field, AVATAR_MAX_BYTES as usize + 1).await?;
         return Ok(Some(UploadedFile {
             bytes,
             content_type,
         }));
     }
     Ok(None)
-}
-
-/// Read a multipart file part into memory, bounded at `AVATAR_MAX_BYTES + 1`.
-///
-/// axum's [`Multipart`] applies no envelope cap of its own (the served app owns
-/// the global 128 MiB/request limit — a later integration seam this leaf does not
-/// mount), and the domain's size check runs on the buffered bytes, so an unbounded
-/// `field.bytes()` would aggregate an arbitrarily large body into memory before
-/// the `413` ever fired. Instead we stream chunks and stop the instant we hold one
-/// byte past the cap: that single extra byte is exactly enough for
-/// [`validate_avatar`] to return the precise `avatar_too_large` (a `5 MiB` file
-/// succeeds; `5 MiB + 1` — or anything larger — yields the exact `413`), while the
-/// buffer never exceeds `AVATAR_MAX_BYTES + 1`.
-async fn read_field_bounded(
-    mut field: axum::extract::multipart::Field<'_>,
-) -> Result<Vec<u8>, axum::extract::multipart::MultipartError> {
-    // Read at most cap + 1 bytes: enough to detect "over the cap", never more.
-    let limit = AVATAR_MAX_BYTES as usize + 1;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = field.chunk().await? {
-        let room = limit - bytes.len();
-        if chunk.len() >= room {
-            bytes.extend_from_slice(&chunk[..room]);
-            break;
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(bytes)
 }
 
 // ===========================================================================

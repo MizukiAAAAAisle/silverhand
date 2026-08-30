@@ -36,10 +36,7 @@
 
 use axum::{
     Json,
-    extract::{
-        FromRequest, Multipart, Request,
-        multipart::{Field, MultipartError},
-    },
+    extract::{FromRequest, Multipart, Request, multipart::Field},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -49,10 +46,7 @@ use silverhand_backend_core::{
     user_identity::DisplayName,
 };
 
-/// The declared content type a file part with no (or an empty) `Content-Type`
-/// falls back to — the product's `file.type || 'application/octet-stream'`. It is
-/// outside the avatar allowlist, so it deterministically yields `415`.
-const DEFAULT_UPLOAD_CONTENT_TYPE: &str = "application/octet-stream";
+use crate::multipart_transport::{accumulate_capped, declared_content_type, drain};
 
 /// The maximum `description` length in UTF-16 code units — the product's
 /// `z.string().max(2000)`. Distinct from the display-name bound: no trim, and an
@@ -244,7 +238,7 @@ pub async fn admit_avatar_upload(
     // `form.get('file') instanceof File`); `None` = no `file` part seen yet.
     let mut file_slot: Option<Option<UploadedFile>> = None;
     loop {
-        let field = match multipart.next_field().await {
+        let mut field = match multipart.next_field().await {
             Ok(Some(field)) => field,
             Ok(None) => break,
             Err(_) => return Err(ProfileAdmissionRefusal::MultipartRequired),
@@ -260,7 +254,7 @@ pub async fn admit_avatar_upload(
                     // Stops at the cap + 1; the field's remaining chunks (if any) are
                     // driven off the stream by the next `next_field()`, so an oversize
                     // candidate never lets a later envelope fault slip past unseen.
-                    let bytes = read_field_bounded(field)
+                    let bytes = accumulate_capped(&mut field, AVATAR_MAX_BYTES as usize + 1)
                         .await
                         .map_err(|_| ProfileAdmissionRefusal::MultipartRequired)?;
                     file_slot = Some(Some(UploadedFile {
@@ -268,13 +262,17 @@ pub async fn admit_avatar_upload(
                         content_type,
                     }));
                 } else {
-                    drain(field).await?;
+                    drain(&mut field)
+                        .await
+                        .map_err(|_| ProfileAdmissionRefusal::MultipartRequired)?;
                     file_slot = Some(None);
                 }
             }
             // Every other part — unknown, duplicate, or a later `file` — is drained to
             // advance the stream with zero accumulation, so the loop reaches true EOF.
-            _ => drain(field).await?,
+            _ => drain(&mut field)
+                .await
+                .map_err(|_| ProfileAdmissionRefusal::MultipartRequired)?,
         }
     }
 
@@ -311,7 +309,7 @@ pub async fn admit_profile_edit(
     let mut file_slot: Option<Option<UploadedFile>> = None;
 
     loop {
-        let field = match multipart.next_field().await {
+        let mut field = match multipart.next_field().await {
             Ok(Some(field)) => field,
             Ok(None) => break,
             Err(_) => return Err(ProfileAdmissionRefusal::MultipartRequired),
@@ -331,7 +329,9 @@ pub async fn admit_profile_edit(
                 // First slot wins, File or not: a File here is a present-but-invalid
                 // action, not an absent one.
                 if is_file {
-                    drain(field).await?;
+                    drain(&mut field)
+                        .await
+                        .map_err(|_| ProfileAdmissionRefusal::MultipartRequired)?;
                     avatar_action_slot = Some(AvatarActionSlot::NonText);
                 } else {
                     avatar_action_slot = Some(AvatarActionSlot::Text(field_text(field).await?));
@@ -340,7 +340,7 @@ pub async fn admit_profile_edit(
             Some("file") if file_slot.is_none() => {
                 if is_file {
                     let content_type = declared_content_type(&field);
-                    let bytes = read_field_bounded(field)
+                    let bytes = accumulate_capped(&mut field, AVATAR_MAX_BYTES as usize + 1)
                         .await
                         .map_err(|_| ProfileAdmissionRefusal::MultipartRequired)?;
                     file_slot = Some(Some(UploadedFile {
@@ -349,13 +349,17 @@ pub async fn admit_profile_edit(
                     }));
                 } else {
                     // A `file`-named plain field: present, but not a `File`.
-                    drain(field).await?;
+                    drain(&mut field)
+                        .await
+                        .map_err(|_| ProfileAdmissionRefusal::MultipartRequired)?;
                     file_slot = Some(None);
                 }
             }
             _ => {
                 // An unknown or duplicate part: drain it so the stream advances.
-                drain(field).await?;
+                drain(&mut field)
+                    .await
+                    .map_err(|_| ProfileAdmissionRefusal::MultipartRequired)?;
             }
         }
     }
@@ -428,7 +432,7 @@ enum AvatarActionSlot {
 }
 
 // ===========================================================================
-// Multipart plumbing (local to this route family).
+// Route-local admission helpers (transport plumbing is shared).
 // ===========================================================================
 
 /// A multipart `file` part reduced to what avatar validation needs.
@@ -447,56 +451,6 @@ fn validate_candidate(file: UploadedFile) -> Result<ValidatedAvatar, ProfileAdmi
         }),
         Err(rejection) => Err(ProfileAdmissionRefusal::Avatar(rejection)),
     }
-}
-
-/// The part's declared content type, lowercased — the product's
-/// `input.contentType.toLowerCase()` before `validateAvatarFile`. An absent OR empty
-/// value falls back to the octet-stream default (→ `415` later). Only ASCII case is
-/// folded: no trim and no `;params` stripping, so `image/png; charset=x` stays
-/// outside the exact allowlist and still yields `415`.
-fn declared_content_type(field: &Field<'_>) -> String {
-    field
-        .content_type()
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase())
-        .unwrap_or_else(|| DEFAULT_UPLOAD_CONTENT_TYPE.to_owned())
-}
-
-/// Read a multipart file part into memory, bounded at `AVATAR_MAX_BYTES + 1`.
-///
-/// The domain size check runs on the buffered bytes, so an unbounded read would
-/// aggregate an arbitrarily large body before the `413` fired (the global request
-/// perimeter is a later mount, not this leaf's). We stop the instant we hold one
-/// byte past the cap: exactly enough for [`validate_avatar`] to return the precise
-/// `avatar_too_large` (a `5 MiB` file succeeds; `5 MiB + 1` — or anything larger —
-/// yields the `413`), while the buffer never exceeds `AVATAR_MAX_BYTES + 1`.
-async fn read_field_bounded(mut field: Field<'_>) -> Result<Vec<u8>, MultipartError> {
-    let limit = AVATAR_MAX_BYTES as usize + 1;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = field.chunk().await? {
-        let room = limit - bytes.len();
-        if chunk.len() >= room {
-            bytes.extend_from_slice(&chunk[..room]);
-            break;
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(bytes)
-}
-
-/// Advance past a part we do not consume, folding a stream fault into the terminal
-/// `multipart/form-data required` refusal (the product's `formData()` throw). Chunks
-/// are discarded as they arrive with ZERO accumulation, so an unknown or duplicate
-/// part can never charge the whole request ceiling into memory — the same bounded
-/// discipline as [`read_field_bounded`].
-async fn drain(mut field: Field<'_>) -> Result<(), ProfileAdmissionRefusal> {
-    while field
-        .chunk()
-        .await
-        .map_err(|_| ProfileAdmissionRefusal::MultipartRequired)?
-        .is_some()
-    {}
-    Ok(())
 }
 
 /// Read a non-file part's value as text, folding a decode fault into the terminal
@@ -774,16 +728,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_uppercase_declared_mime_is_lowercased_and_admitted() {
-        // TS lowercases contentType before validateAvatarFile: `IMAGE/PNG` admits.
+    async fn an_uppercase_declared_mime_is_admitted() {
+        // The transport passes the declared type through unfolded; `validate_avatar`'s
+        // `AvatarContentType::parse` lowercases before its exact match, so `IMAGE/PNG` admits.
         let request = multipart_request(&[Part::file("file", "IMAGE/PNG", vec![1, 2, 3])]);
         let avatar = admit_avatar_upload(request).await.expect("admitted");
         assert_eq!(avatar.content_type(), AvatarContentType::Png);
     }
 
     #[tokio::test]
-    async fn a_declared_mime_with_params_stays_unsupported_after_lowercasing() {
-        // Only ASCII case is folded — no `;params` stripping — so a parameterized
+    async fn a_declared_mime_with_params_stays_unsupported() {
+        // The sole MIME authority lowercases but never strips `;params`, so a parameterized
         // type is outside the exact allowlist and is 415, matching TS.
         let request = multipart_request(&[Part::file("file", "IMAGE/PNG; CHARSET=X", vec![1])]);
         let refusal = admit_avatar_upload(request).await.unwrap_err();

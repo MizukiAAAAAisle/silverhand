@@ -191,6 +191,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // context; admission seams like the adapters above, NOT activation namespaces.
     ("backend-server", "wire_admission"),
     ("backend-server", "wire_patch"),
+    // #task:2242 — the crate-private multipart STREAM transport vocabulary
+    // (`declared_content_type` / `accumulate_capped` / `drain`) shared by the four
+    // mounted avatar/profile upload faces. Route-neutral transport plumbing only — it
+    // holds no route policy, MIME allowlist, or admission seam — placed by its bounded
+    // context like the wire framework above, NOT an activation namespace.
+    ("backend-server", "multipart_transport"),
     // #task:2231 — the production typed adapter for the accepted internal
     // profile-MCP port, sharing the owning-host registry and exposing no raw
     // dispatcher. Wired into the internal MCP routes by the #task:2234 integration (CP7b).
