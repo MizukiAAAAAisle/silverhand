@@ -2002,6 +2002,37 @@ mod tests {
         (status, String::from_utf8(body.to_vec()).unwrap())
     }
 
+    // Same as `request_with_body` but declares `Content-Type: application/json`.
+    // #2245 convergence harness-only fix: after #2242 the internal MCP probe face
+    // reaches the handler through the frozen `ValidatedJson` admission (#2246
+    // object-only floor), whose native Axum extractor requires the JSON content
+    // type and answers `415` without it — so this composition harness must send
+    // the header the probe's real product clients already send. Production
+    // routing/composition is unchanged; only the probe legs use this helper.
+    async fn json_request_with_body(
+        router: &Router,
+        method: &str,
+        uri: &str,
+        bearer: Option<&str>,
+        body: Body,
+    ) -> (StatusCode, String) {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json");
+        if let Some(bearer) = bearer {
+            builder = builder.header("authorization", bearer);
+        }
+        let response = router
+            .clone()
+            .oneshot(builder.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8(body.to_vec()).unwrap())
+    }
+
     async fn http_over_tcp(
         address: SocketAddr,
         method: &str,
@@ -5595,7 +5626,7 @@ mod tests {
         );
 
         // Probe → probe command carrying source + payload, projected.
-        let (status, body) = request_with_body(
+        let (status, body) = json_request_with_body(
             &router,
             "POST",
             "/internal/agents/agent-1/profile/mcp/probe",
@@ -5663,21 +5694,30 @@ mod tests {
         // ---- (2) zero wire: agent-2's owning host is detached. Every face resolves the live
         // per-host registry, misses, and is HostAttachPending 503 — and NO new command crosses
         // the attached daemon (no no-op success, no mis-route onto the one live leaf).
-        for (method, path, body) in [
-            ("GET", "/internal/agents/agent-2/profile/mcp", Body::empty()),
+        for (method, path, body, json_ct) in [
+            ("GET", "/internal/agents/agent-2/profile/mcp", Body::empty(), false),
             (
                 "POST",
                 "/internal/agents/agent-2/profile/mcp",
                 Body::from("{\"mcpServers\":{}}"),
+                false,
             ),
             (
                 "POST",
                 "/internal/agents/agent-2/profile/mcp/probe",
                 Body::from(serde_json::json!({ "server_name": "srv" }).to_string()),
+                true,
             ),
         ] {
-            let (status, body) =
-                request_with_body(&router, method, path, Some(&bearer_2), body).await;
+            // The probe reaches the handler through the frozen `ValidatedJson` admission
+            // (#2242/#2246), so its leg must carry the JSON content type to be classified as
+            // HostAttachPending 503 rather than a pre-handler 415; the raw/verbatim write and
+            // the bodiless read are content-type agnostic and keep the plain harness call.
+            let (status, body) = if json_ct {
+                json_request_with_body(&router, method, path, Some(&bearer_2), body).await
+            } else {
+                request_with_body(&router, method, path, Some(&bearer_2), body).await
+            };
             assert_eq!(
                 status,
                 StatusCode::SERVICE_UNAVAILABLE,
