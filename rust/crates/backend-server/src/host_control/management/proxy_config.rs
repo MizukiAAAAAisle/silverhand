@@ -17,6 +17,8 @@ use crate::{
     daemon_delivery::OwningHostDataPlane,
     error,
     host_control::proxy_config::{self, ProxyConfig, ProxyConfigOutcome, ProxyConfigRequest},
+    wire_admission::from_object_slice,
+    wire_patch::PatchField,
 };
 
 use super::{internal_error, read_body};
@@ -76,7 +78,7 @@ where
     let Some(config) = read_body(request.into_body())
         .await
         .ok()
-        .and_then(|body| serde_json::from_slice::<ProxyBody>(&body).ok())
+        .and_then(|body| from_object_slice::<ProxyBody>(&body).ok())
         .and_then(ProxyBody::into_config)
     else {
         return coded("invalid input", None, 400);
@@ -172,18 +174,32 @@ impl IntoResponse for ResolveRefusal {
     }
 }
 
+/// The proxy-config body. `proxy_url` is optional-but-present-nullable in the wire
+/// vocab: the frozen [`PatchField`] tells an ABSENT key from an explicit `null`. This
+/// route keeps its post-auth admission (the anti-enum `404` runs before the body), and a
+/// decode failure and an absent `proxy_url` both funnel to the same explicit `400` this
+/// handler already returned, so the `#[serde(default)]` Missing arm is mapped EXPLICITLY
+/// to the refusal rather than relying on a missing-field decode error. No
+/// `deny_unknown_fields`: this route tolerates stray keys as it did before.
+///
+/// The post-auth decode goes through the shared [`from_object_slice`] object-only floor:
+/// a bare `serde_json::from_slice` would bind a JSON array positionally, so `[null,["codex"]]`
+/// would decode to `proxy_url: null` + `proxy_runtimes: ["codex"]` and DISPATCH a real config.
+/// The floor refuses any top-level non-object before that positional bind; the resulting
+/// decode fault takes the same `400` this handler already returns, ahead of `resolve`/dispatch.
 #[derive(Deserialize)]
 struct ProxyBody {
-    proxy_url: serde_json::Value,
+    #[serde(default)]
+    proxy_url: PatchField<String>,
     proxy_runtimes: Vec<String>,
 }
 
 impl ProxyBody {
     fn into_config(self) -> Option<ProxyConfig> {
         let proxy_url = match self.proxy_url {
-            serde_json::Value::Null => None,
-            serde_json::Value::String(value) => Some(value),
-            _ => return None,
+            PatchField::Missing => return None,
+            PatchField::Null => None,
+            PatchField::Value(value) => Some(value),
         };
         let proxy_runtimes = self
             .proxy_runtimes
@@ -225,4 +241,41 @@ fn coded(message: &'static str, code: Option<&'static str>, status: u16) -> Resp
         Json(body),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The handler's SOLE body decode gate is `from_object_slice::<ProxyBody>` (the
+    // `.and_then(|body| from_object_slice…ok())` in `write`). A decode `Err` collapses to
+    // `None`, so `into_config` never runs and the handler returns `400` before `resolve`
+    // and dispatch. These assertions pin that gate directly: no data-plane scaffolding is
+    // needed to prove a value-shaped array can never reach the config dispatch.
+
+    #[test]
+    fn a_value_shaped_array_is_refused_before_any_positional_field_bind() {
+        // Under a bare `from_slice`, this would bind `proxy_url: null` +
+        // `proxy_runtimes: ["codex"]` positionally and yield a dispatchable config.
+        assert!(from_object_slice::<ProxyBody>(br#"[null,["codex"]]"#).is_err());
+    }
+
+    #[test]
+    fn an_empty_array_is_refused_rather_than_defaulting_the_body() {
+        assert!(from_object_slice::<ProxyBody>(br#"[]"#).is_err());
+    }
+
+    #[test]
+    fn the_equivalent_object_still_decodes_and_dispatches() {
+        // The object-only floor must not narrow the real object contract: the same values
+        // in object shape decode and produce a live config.
+        let body =
+            from_object_slice::<ProxyBody>(br#"{"proxy_url":null,"proxy_runtimes":["codex"]}"#)
+                .expect("object body decodes through the floor");
+        let config = body
+            .into_config()
+            .expect("null url + one runtime is a valid config");
+        assert!(config.proxy_url.is_none());
+        assert_eq!(config.proxy_runtimes.len(), 1);
+    }
 }

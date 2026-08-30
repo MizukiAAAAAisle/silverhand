@@ -181,11 +181,6 @@ where
 /// and every `T` verdict hold identically, the decode is single-pass, and the error type
 /// stays `serde_json::Error` — the caller's existing mapping into its route rejection is
 /// unchanged. No leaf re-rolls this gate.
-// `#[allow]` covers the window before the direct-decode consumers land: #2240 (DELETE
-// empty-body fast path, then this on a nonempty body) and #2241 (agent DELETE confirm
-// gate, decoded only on the Active branch). Both consume this anchor tip; remove the
-// attribute when the first lands.
-#[allow(dead_code)]
 pub(crate) fn from_object_slice<T>(bytes: &[u8]) -> Result<T, serde_json::Error>
 where
     T: DeserializeOwned,

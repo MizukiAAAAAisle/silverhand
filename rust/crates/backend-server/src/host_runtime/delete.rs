@@ -20,26 +20,31 @@
 //!     `daemon_disconnect_failure`). This route logs that residue and still answers
 //!     `200`, exactly as the TypeScript route swallows its disconnect failure.
 //!
-//! `cascade_dependents` is ONE boolean of consent, decoded here from a lenient body
-//! (`HostDeleteInputSchema`: an object whose only field is optional, unknown keys
-//! stripped, a missing or malformed body defaulting to no cascade). It is not
-//! authorization — the domain re-decides legality under the lock regardless.
+//! `cascade_dependents` is ONE boolean of consent. An EMPTY body is the common no-cascade
+//! call and short-circuits to [`CascadeConsent::Absent`] before any decode. A non-empty body
+//! is decoded from its raw bytes through the shared object-only floor ([`from_object_slice`]),
+//! so a malformed body is status-classified to `400`, and a non-boolean or `null`
+//! `cascade_dependents` and a non-object shape classify to `422` (fieldless body, not the
+//! semantic envelope); unknown keys are still stripped and a missing key is still absent
+//! consent. Like the base route this decode ignores `Content-Type` entirely (there is no
+//! `415` gate). It is not authorization — the domain re-decides legality under the lock
+//! regardless.
 //!
 //! The four teardown ports are REQUIREMENT SEAMS threaded through the generics and left
 //! UNMOUNTED; the composition root binds the real read model, write mechanism, cascade
 //! effects and websocket controller (#task:2197). The human principal's ABSENCE is a
-//! composition fault, so it takes a fail-closed `500` having read nothing.
+//! composition fault, so it takes a fail-closed `500`.
 
 use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    body::Bytes,
-    extract::{Extension, Path, State},
+    body::to_bytes,
+    extract::{Extension, Path, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
     host_runtime::aftermath::DaemonConnectionControl,
     identity::{HostId, UserId},
@@ -55,8 +60,10 @@ use silverhand_backend_core::{
 };
 
 use crate::error;
+use crate::wire_admission::from_object_slice;
+use crate::wire_patch::RequiredPatchField;
 
-use super::{ErrorBody, ZodIssue, host_not_found, internal_error, invalid_input};
+use super::{ErrorBody, host_not_found, internal_error};
 
 /// The product route template, in axum's `{id}` capture syntax.
 pub const HOST_DELETE_PATH: &str = "/api/hosts/{id}";
@@ -114,7 +121,7 @@ async fn handle_delete<R, U, E, D>(
     Path(host_id): Path<String>,
     requester: Option<Extension<UserId>>,
     State(state): State<DeleteState<R, U, E, D>>,
-    body: Bytes,
+    request: Request,
 ) -> Response
 where
     R: AgentTeardownReadPort,
@@ -128,14 +135,15 @@ where
     };
 
     // A malformed id names no computer — the same 404 an absent row gets, so the surface
-    // never distinguishes "unparseable" from "not there".
+    // never distinguishes "unparseable" from "not there". Decoded BEFORE the body so a
+    // malformed id keeps its 404 rather than surfacing a body fault.
     let Ok(computer) = HostId::parse(host_id) else {
         return host_not_found();
     };
 
-    let consent = match parse_consent(&body) {
+    let consent = match decode_consent(request).await {
         Ok(consent) => consent,
-        Err(issues) => return invalid_input(issues),
+        Err(refusal) => return refusal.into_response(),
     };
 
     let host_id_echo = computer.as_str().to_owned();
@@ -174,50 +182,83 @@ where
     }
 }
 
-/// Decode the one boolean of consent from the request body.
+/// The consent body: an object whose one optional, NON-nullable field is the cascade
+/// confirmation. Serde owns its structure — a wrong-typed or `null` `cascade_dependents`
+/// is a native decode fault, unknown keys are stripped, and a missing key is `Missing`.
+/// No `deny_unknown_fields`, matching the lenient `HostDeleteInputSchema`.
+#[derive(Deserialize)]
+struct DeleteConsentBody {
+    #[serde(default)]
+    cascade_dependents: RequiredPatchField<bool>,
+}
+
+/// Decode the one boolean of consent from the request body — the small typed route-local
+/// boundary the frozen model calls for. Ordering is NOT ownership admission: a malformed
+/// host id is a `404` before any body classification (the `HostId::parse` gate above), and a
+/// valid-looking id's body is classified here BEFORE ownership is ever consulted — the domain
+/// re-decides not-theirs under the lock in `state.delete.execute`, after this decode. This
+/// gate is a host-id shape check plus a body decode, never an ownership check.
 ///
-/// Mirrors `HostDeleteInputSchema.safeParse(await c.req.json().catch(() => ({})))`: a
-/// malformed or empty body becomes an empty object (no cascade), unknown keys are
-/// stripped, and only a present-but-non-boolean `cascade_dependents` or a non-object
-/// top level is a `400`.
-fn parse_consent(body: &[u8]) -> Result<CascadeConsent, Vec<ZodIssue>> {
-    let value = serde_json::from_slice::<serde_json::Value>(body)
-        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
-    match value {
-        serde_json::Value::Object(map) => match map.get("cascade_dependents") {
-            None => Ok(CascadeConsent::Absent),
-            Some(serde_json::Value::Bool(confirmed)) => Ok(if *confirmed {
-                CascadeConsent::Confirmed
-            } else {
+/// An empty body is the common no-cascade call: it short-circuits to
+/// [`CascadeConsent::Absent`] before any JSON decode. A non-empty body is decoded from its
+/// raw bytes through the shared object-only floor [`from_object_slice`], so a top-level
+/// non-object (`[]`, `[true]`, a scalar) is a decode fault refused before any positional
+/// field bind — a bare derive would bind `[true]` positionally onto `cascade_dependents` and
+/// CONFIRM the cascade. The fault is status-classified: a malformed body to `400`; a
+/// non-boolean or `null` `cascade_dependents` and any non-object shape to `422`. Like the base
+/// route the decode ignores `Content-Type` (there is no `415`). `Missing` and an explicit
+/// `false` are both absent consent; only an explicit `true` confirms the cascade.
+async fn decode_consent(request: Request) -> Result<CascadeConsent, ConsentFault> {
+    let bytes = match to_bytes(request.into_body(), usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(_) => return Err(ConsentFault::Internal),
+    };
+    if bytes.is_empty() {
+        return Ok(CascadeConsent::Absent);
+    }
+
+    match from_object_slice::<DeleteConsentBody>(&bytes) {
+        Ok(body) => Ok(match body.cascade_dependents {
+            RequiredPatchField::Value(true) => CascadeConsent::Confirmed,
+            RequiredPatchField::Value(false) | RequiredPatchField::Missing => {
                 CascadeConsent::Absent
-            }),
-            Some(other) => Err(vec![ZodIssue::InvalidType {
-                code: "invalid_type",
-                expected: "boolean",
-                received: json_type(other),
-                path: vec!["cascade_dependents".to_owned()],
-                message: format!("Expected boolean, received {}", json_type(other)),
-            }]),
-        },
-        other => Err(vec![ZodIssue::InvalidType {
-            code: "invalid_type",
-            expected: "object",
-            received: json_type(&other),
-            path: Vec::new(),
-            message: format!("Expected object, received {}", json_type(&other)),
-        }]),
+            }
+        }),
+        Err(error) => Err(ConsentFault::Decode(error)),
     }
 }
 
-/// The Zod-facing name of a JSON value's type, for the invalid-input message.
-fn json_type(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "boolean",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
+/// A body-decode fault, kept as a small fieldless-plus-native verdict rather than an
+/// eagerly-built `Response` so `decode_consent`'s `Result` stays cheap
+/// (`result_large_err`). `Decode` carries serde's own [`serde_json::Error`] so its
+/// [`classify`](serde_json::Error::classify) drives a status-aligned structural response at
+/// the call site: `Data → 422`, `Syntax`/`Eof → 400`. This is NOT an axum `JsonRejection` —
+/// there is no native typed source or body to preserve; the answer is that bare status with a
+/// fieldless body, never our semantic `invalid input` envelope.
+enum ConsentFault {
+    Internal,
+    Decode(serde_json::Error),
+}
+
+impl IntoResponse for ConsentFault {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Internal => internal_error(),
+            Self::Decode(error) => match error.classify() {
+                // A data fault (wrong type, `null`, non-object shape) classifies to `422`; a
+                // syntax/eof fault to `400`. An IO fault reading an in-memory slice cannot
+                // happen, but fail closed if it somehow does. This is a status classification,
+                // not a native-body passthrough: the response is that bare status with a
+                // fieldless body, never the semantic `{"error":"invalid input"}` envelope.
+                serde_json::error::Category::Data => {
+                    StatusCode::UNPROCESSABLE_ENTITY.into_response()
+                }
+                serde_json::error::Category::Syntax | serde_json::error::Category::Eof => {
+                    StatusCode::BAD_REQUEST.into_response()
+                }
+                serde_json::error::Category::Io => internal_error(),
+            },
+        }
     }
 }
 
@@ -701,11 +742,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn malformed_json_falls_back_to_no_cascade() {
-        let world = World::admitting(Some(committed(Vec::new())));
+    async fn a_malformed_nonempty_body_is_a_native_400_before_the_write() {
+        // The old `catch(() => ({}))` empty-object fallback is gone: a non-empty malformed
+        // body is a native syntax fault (`400`), not a silent no-cascade, and the write is
+        // never reached.
+        let world = World::admitting(None);
         let reply = delete(&world, "not json").await;
-        assert_eq!(reply.status, StatusCode::OK);
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+        assert_ne!(reply.body, r#"{"error":"invalid input"}"#);
+        assert_eq!(world.cascade_calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_empty_body_is_absent_consent_even_without_a_content_type() {
+        // The empty-body fast path short-circuits before any decode, so it needs no
+        // `Content-Type` and is never stolen by the native `415`.
+        let world = World::admitting(Some(committed(Vec::new())));
+        let app = router(DeleteComputer::new(
+            world.clone(),
+            world.clone(),
+            world.clone(),
+            world.clone(),
+        ));
+        let request = Request::delete(format!("/api/hosts/{COMPUTER}"))
+            .extension(user(REQUESTER))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(world.consent_seen(), Some(CascadeConsent::Absent));
+    }
+
+    #[tokio::test]
+    async fn a_nonempty_body_without_a_content_type_still_decodes_matching_base() {
+        // The consent decode reads raw bytes through the object-only floor and ignores
+        // `Content-Type`, exactly as the base route did: a well-formed object body without a
+        // `Content-Type` header decodes and confirms rather than earning a `415`.
+        let world = World::admitting(Some(committed(Vec::new())));
+        let app = router(DeleteComputer::new(
+            world.clone(),
+            world.clone(),
+            world.clone(),
+            world.clone(),
+        ));
+        let request = Request::delete(format!("/api/hosts/{COMPUTER}"))
+            .extension(user(REQUESTER))
+            .body(Body::from(r#"{"cascade_dependents":true}"#))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(world.consent_seen(), Some(CascadeConsent::Confirmed));
     }
 
     #[tokio::test]
@@ -829,45 +915,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_non_boolean_cascade_dependents_is_a_400_before_the_write() {
+    async fn a_non_boolean_cascade_dependents_is_a_native_422_before_the_write() {
+        // A present but wrong-typed `cascade_dependents` is a native data fault (`422`),
+        // not our semantic envelope, and never reaches the write.
         let world = World::admitting(None);
         let reply = delete(&world, r#"{"cascade_dependents":"yes"}"#).await;
-        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            parsed(&reply.body),
-            json!({
-                "error": "invalid input",
-                "issues": [{
-                    "code": "invalid_type",
-                    "expected": "boolean",
-                    "received": "string",
-                    "path": ["cascade_dependents"],
-                    "message": "Expected boolean, received string"
-                }]
-            })
-        );
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_ne!(reply.body, r#"{"error":"invalid input"}"#);
         assert_eq!(world.cascade_calls(), 0);
     }
 
     #[tokio::test]
-    async fn a_non_object_body_is_a_400_before_the_write() {
+    async fn a_null_cascade_dependents_is_a_native_422_before_the_write() {
+        // The field is optional but NON-nullable: a present `null` is a native decode
+        // fault (`422`), never silent no-cascade.
+        let world = World::admitting(None);
+        let reply = delete(&world, r#"{"cascade_dependents":null}"#).await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(world.cascade_calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_non_object_body_is_a_native_422_before_the_write() {
         let world = World::admitting(None);
         let reply = delete(&world, "[1,2]").await;
-        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            parsed(&reply.body),
-            json!({
-                "error": "invalid input",
-                "issues": [{
-                    "code": "invalid_type",
-                    "expected": "object",
-                    "received": "array",
-                    "path": [],
-                    "message": "Expected object, received array"
-                }]
-            })
-        );
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_ne!(reply.body, r#"{"error":"invalid input"}"#);
         assert_eq!(world.cascade_calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_value_shaped_array_body_never_confirms_the_cascade() {
+        // The object-only floor is what stops a positional bind: without it, `[true]` would
+        // bind `cascade_dependents=true` by declaration order and CONFIRM the destructive
+        // cascade. The empty array `[]` would bind all-default (Missing → Absent), silently
+        // admitting a non-object body. Both must be native `422`s that never reach the write.
+        for body in ["[true]", "[]"] {
+            let world = World::admitting(None);
+            let reply = delete(&world, body).await;
+            assert_eq!(
+                reply.status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "array-shaped body {body} must be a native data fault"
+            );
+            assert_ne!(reply.body, r#"{"error":"invalid input"}"#);
+            assert_eq!(
+                world.cascade_calls(),
+                0,
+                "array-shaped body {body} must never reach the cascade write"
+            );
+        }
     }
 
     #[tokio::test]

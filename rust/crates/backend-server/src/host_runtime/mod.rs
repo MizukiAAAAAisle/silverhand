@@ -1,17 +1,14 @@
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    body::Bytes,
     extract::{Extension, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
 };
-use serde::{
-    Deserialize, Deserializer, Serialize,
-    de::{IgnoredAny, MapAccess, SeqAccess, Visitor},
-};
+use garde::Validate;
+use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
     host_runtime::{
         environment::{Clock, EntropySource},
@@ -22,6 +19,7 @@ use silverhand_backend_core::{
 };
 
 use crate::error;
+use crate::wire_admission::ValidatedJson;
 
 pub mod cascade_effects;
 pub mod claim;
@@ -85,7 +83,7 @@ pub(super) fn resolve_daemon_npm_spec(configured: Option<String>) -> String {
 async fn create_host<U, R, C>(
     State(state): State<HostRuntimeState<U, R, C>>,
     principal: Option<Extension<UserId>>,
-    body: Bytes,
+    ValidatedJson(_body): ValidatedJson<CreateHostBody>,
 ) -> Response
 where
     U: HostInviteUnitOfWork,
@@ -96,10 +94,6 @@ where
         tracing::error!("host invite route reached without its human principal fact");
         return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
     };
-
-    if let Some(response) = validate_empty_object(&body) {
-        return response;
-    }
 
     match state.0.create_host_invite.execute(user_id).await {
         Ok(fact) => {
@@ -115,203 +109,17 @@ where
     }
 }
 
-fn validate_empty_object(body: &[u8]) -> Option<Response> {
-    let shape = serde_json::from_slice::<TopLevelJson>(body)
-        .unwrap_or_else(|_| TopLevelJson::Object(Vec::new()));
-    match shape {
-        TopLevelJson::Object(keys) if keys.is_empty() => None,
-        TopLevelJson::Object(keys) => {
-            let message = unrecognized_keys_message(&keys);
-            Some(invalid_input(vec![ZodIssue::UnrecognizedKeys {
-                code: "unrecognized_keys",
-                keys,
-                path: Vec::new(),
-                message,
-            }]))
-        }
-        TopLevelJson::Other(received) => Some(invalid_input(vec![ZodIssue::InvalidType {
-            code: "invalid_type",
-            expected: "object",
-            received,
-            path: Vec::new(),
-            message: format!("Expected object, received {received}"),
-        }])),
-    }
-}
-
-pub(super) fn unrecognized_keys_message(keys: &[String]) -> String {
-    let quoted = keys
-        .iter()
-        .map(|key| format!("'{key}'"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("Unrecognized key(s) in object: {quoted}")
-}
-
-enum TopLevelJson {
-    Object(Vec<String>),
-    Other(&'static str),
-}
-
-impl<'de> Deserialize<'de> for TopLevelJson {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(TopLevelJsonVisitor)
-    }
-}
-
-struct TopLevelJsonVisitor;
-
-impl<'de> Visitor<'de> for TopLevelJsonVisitor {
-    type Value = TopLevelJson;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a JSON value")
-    }
-
-    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
-    where
-        M: MapAccess<'de>,
-    {
-        let mut keys = Vec::new();
-        let mut seen = HashSet::new();
-        while let Some(key) = map.next_key::<String>()? {
-            if seen.insert(key.clone()) {
-                keys.push(key);
-            }
-            map.next_value::<IgnoredAny>()?;
-        }
-        Ok(TopLevelJson::Object(js_object_keys(keys)))
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        while sequence.next_element::<IgnoredAny>()?.is_some() {}
-        Ok(TopLevelJson::Other("array"))
-    }
-
-    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
-        Ok(TopLevelJson::Other("boolean"))
-    }
-
-    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
-        Ok(TopLevelJson::Other("number"))
-    }
-
-    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
-        Ok(TopLevelJson::Other("number"))
-    }
-
-    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
-        Ok(TopLevelJson::Other("number"))
-    }
-
-    fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E> {
-        Ok(TopLevelJson::Other("string"))
-    }
-
-    fn visit_string<E>(self, _value: String) -> Result<Self::Value, E> {
-        Ok(TopLevelJson::Other("string"))
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(TopLevelJson::Other("null"))
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(TopLevelJson::Other("null"))
-    }
-}
-
-pub(super) fn js_object_keys(keys: Vec<String>) -> Vec<String> {
-    let mut indexes = Vec::new();
-    let mut named = Vec::new();
-    for key in keys {
-        match js_array_index(&key) {
-            Some(index) => indexes.push((index, key)),
-            None => named.push(key),
-        }
-    }
-    indexes.sort_unstable_by_key(|(index, _)| *index);
-    indexes
-        .into_iter()
-        .map(|(_, key)| key)
-        .chain(named)
-        .collect()
-}
-
-fn js_array_index(key: &str) -> Option<u32> {
-    if key != "0" && key.starts_with('0') {
-        return None;
-    }
-    let index = key.parse::<u32>().ok()?;
-    (index != u32::MAX && index.to_string() == key).then_some(index)
-}
-
-pub(super) fn invalid_input(issues: Vec<ZodIssue>) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(InvalidInputResponse {
-            error: "invalid input",
-            issues,
-        }),
-    )
-        .into_response()
-}
-
-#[derive(Serialize)]
-struct InvalidInputResponse {
-    error: &'static str,
-    issues: Vec<ZodIssue>,
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-pub(super) enum ZodIssue {
-    UnrecognizedKeys {
-        code: &'static str,
-        keys: Vec<String>,
-        path: Vec<String>,
-        message: String,
-    },
-    InvalidType {
-        code: &'static str,
-        expected: &'static str,
-        received: &'static str,
-        path: Vec<String>,
-        message: String,
-    },
-    InvalidString {
-        validation: &'static str,
-        code: &'static str,
-        message: &'static str,
-        path: Vec<String>,
-    },
-    TooSmall {
-        code: &'static str,
-        minimum: i64,
-        #[serde(rename = "type")]
-        value_type: &'static str,
-        inclusive: bool,
-        exact: bool,
-        message: &'static str,
-        path: Vec<String>,
-    },
-    TooBig {
-        code: &'static str,
-        maximum: i64,
-        #[serde(rename = "type")]
-        value_type: &'static str,
-        inclusive: bool,
-        exact: bool,
-        message: &'static str,
-        path: Vec<String>,
-    },
-}
+/// The create-host body carries no fields: the invite is minted entirely from the
+/// authenticated principal, so the sole valid body is the empty object `{}`. Decoding
+/// runs through the frozen [`ValidatedJson`] extractor, whose shared object-only floor
+/// commits the decode to a JSON object BEFORE the empty struct's positional seq decode —
+/// so a bare `[]` can never decode to this all-default struct and mint an invite. A
+/// malformed body, a wrong top-level shape, and any stray key keep axum's native `Json`
+/// classification (`400`/`422`/`415`) — this route publishes no validation-issue schema of
+/// its own. `deny_unknown_fields` turns a stray key into a native data fault (`422`).
+#[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+struct CreateHostBody {}
 
 /// The anti-enumeration refusal shared by every host route that names a computer: an
 /// absent computer and one the requester does not own collapse to the same `404`, so
@@ -592,7 +400,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn strict_unknown_fields_preserve_zod_input_order_before_the_uow() {
+    async fn an_unknown_key_is_a_native_data_fault_and_never_reaches_the_uow() {
+        // `deny_unknown_fields` turns any stray key into a native serde DATA fault: the
+        // frozen extractor forwards axum's classification (422 today) verbatim — no issue
+        // array, no semantic envelope — and the UoW is never entered.
         let store = CountingStore::default();
         let (status, body) = response(
             test_router(store.clone()),
@@ -600,55 +411,61 @@ mod tests {
             "{\"zeta\":true,\"alpha\":true}",
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            body,
-            "{\"error\":\"invalid input\",\"issues\":[{\"code\":\"unrecognized_keys\",\"keys\":[\"zeta\",\"alpha\"],\"path\":[],\"message\":\"Unrecognized key(s) in object: 'zeta', 'alpha'\"}]}"
-        );
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
-            parity_fixture()["unknown_field"]["body"]
-        );
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_ne!(body, "{\"error\":\"invalid input\"}");
         assert_eq!(store.calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
-    async fn raw_unknown_fields_match_json_parse_and_object_keys_semantics() {
-        for entry in parity_fixture()["raw_unknown_fields"].as_array().unwrap() {
+    async fn a_non_object_shape_is_a_native_422_and_never_reaches_the_uow() {
+        // The shared object-only floor commits the decode to a JSON object, so EVERY
+        // top-level non-object — the empty array `[]` (which a bare empty struct would have
+        // decoded as `Ok` and MINTED a host invite), a populated array, or any scalar — is a
+        // uniform native data fault (`422`) refused before the empty struct's positional seq
+        // decode. Never our semantic envelope, and the UoW is never entered.
+        for raw in ["[]", "[1,2]", "\"text\"", "42", "true", "null"] {
             let store = CountingStore::default();
-            let raw_body = entry["raw_body"].as_str().unwrap();
-            let (status, body) = response(test_router(store.clone()), Some(user()), raw_body).await;
-            assert_eq!(status.as_u16(), entry["status"].as_u64().unwrap() as u16);
+            let (status, body) = response(test_router(store.clone()), Some(user()), raw).await;
             assert_eq!(
-                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
-                entry["body"]
+                status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "shape {raw:?} status {status}"
             );
-            assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+            assert_ne!(body, "{\"error\":\"invalid input\"}", "shape {raw:?}");
+            assert_eq!(store.calls.load(Ordering::SeqCst), 0, "shape {raw:?}");
         }
     }
 
     #[tokio::test]
-    async fn non_object_shapes_match_zod_before_the_uow() {
-        for entry in parity_fixture()["invalid_shapes"].as_array().unwrap() {
-            let store = CountingStore::default();
-            let raw_body = serde_json::to_string(&entry["request"]).unwrap();
-            let (status, body) =
-                response(test_router(store.clone()), Some(user()), &raw_body).await;
-            assert_eq!(status.as_u16(), entry["status"].as_u64().unwrap() as u16);
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
-                entry["body"]
-            );
-            assert_eq!(store.calls.load(Ordering::SeqCst), 0);
-        }
-    }
-
-    #[tokio::test]
-    async fn malformed_json_keeps_the_ts_empty_object_fallback() {
+    async fn malformed_json_is_a_native_400_and_never_reaches_the_uow() {
+        // The old TS empty-object fallback is gone: a malformed body is a native syntax
+        // fault (400), not a silent coercion to `{}`.
         let store = CountingStore::default();
         let (status, _) = response(test_router(store.clone()), Some(user()), "not-json").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(store.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn an_empty_body_is_a_native_400_and_never_reaches_the_uow() {
+        // Empty bytes are no longer coerced to `{}`: native `Json` rejects an empty body
+        // as a syntax fault (400) before the UoW.
+        let store = CountingStore::default();
+        let (status, _) = response(test_router(store.clone()), Some(user()), "").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_missing_content_type_is_a_native_415_and_never_reaches_the_uow() {
+        // Native `Json` requires the `application/json` content-type; its absence is a
+        // native `415` before the UoW (the old fallback accepted any content-type).
+        let store = CountingStore::default();
+        let mut request = Request::post(HOSTS_PATH).body(Body::from("{}")).unwrap();
+        request.extensions_mut().insert(user());
+        let response = test_router(store.clone()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(store.calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
