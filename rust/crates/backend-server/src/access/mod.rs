@@ -3,10 +3,16 @@
 //! Two authorization doors stay separate and ordered here, exactly as in the
 //! TypeScript route. The **request-boundary door**
 //! ([`WorkspaceAccessPolicy`](silverhand_backend_core::access::WorkspaceAccessPolicy))
-//! resolves the workspace and the caller's role floor and answers *before the
-//! body is even validated*, so a non-member cannot probe input shape. Only when
-//! it admits does the **application door** run — agent existence, then
-//! creator-ownership, then the atomic write — inside
+//! runs FIRST, before the body is decoded: it resolves the workspace and the
+//! caller's role floor and answers a non-member (`403`) or an unknown workspace
+//! (`404`) without the body being buffered, so a caller without standing cannot
+//! probe the body's shape or which product arm it would select. Only when the
+//! floor admits is the body decoded — through the shared
+//! [`ObjectOnly<T>`](crate::wire_admission::ObjectOnly) object floor via a
+//! DEFERRED `Json` extraction — so a structurally malformed / wrong-shaped
+//! (top-level array/scalar/null) / wrong-typed body keeps its native framework
+//! rejection, and only then does the **application door** run — agent existence,
+//! then creator-ownership, then the atomic write — inside
 //! [`add_workspace_agent_member`]. The order is observable through the ports and
 //! pinned by the contract test.
 //!
@@ -26,8 +32,7 @@ pub mod wire;
 
 use axum::{
     Extension, Json, Router,
-    body::Bytes,
-    extract::{Path, State},
+    extract::{FromRequest, Path, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
@@ -42,8 +47,9 @@ use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId}
 use silverhand_backend_core::persistence::PersistenceFailure;
 
 use crate::error;
+use crate::wire_admission::ObjectOnly;
 use wire::{
-    AGENT_NOT_FOUND, AGENT_NOT_OWNED_CODE, AGENT_NOT_OWNED_MESSAGE, AddMemberRequest,
+    AGENT_NOT_FOUND, AGENT_NOT_OWNED_CODE, AGENT_NOT_OWNED_MESSAGE, AddMemberRaw, AddMemberRequest,
     AddWorkspaceAgentMemberResponse, AddWorkspaceHumanMemberResponse, ErrorBody, FORBIDDEN,
     INTERNAL_ERROR_BODY, INVALID_INPUT, USER_NOT_FOUND, WORKSPACE_MEMBERS_PATH,
     WORKSPACE_NOT_FOUND, WorkspaceMemberDto,
@@ -87,19 +93,30 @@ where
 
 /// `POST /api/workspaces/{id}/members` for an agent or human member.
 ///
-/// The body is taken as raw bytes and parsed only after the boundary door
-/// admits, so the member floor still answers a non-member before input is
-/// validated. The caller's identity is the single `UserId` the human-session
-/// perimeter injected; this handler turns it into the application
-/// [`Principal`], which is therefore always `Principal::Human` on this route.
-/// Its absence means the route was composed without that perimeter — a
-/// composition fault, so it takes the lane's safe `500` rather than an extractor
-/// rejection that would masquerade as a product answer.
+/// The governance FLOOR runs BEFORE the body is decoded: the handler takes an
+/// owned `Request` and resolves the workspace and the caller's role floor first,
+/// so a non-member (`403`) or an unknown workspace (`404`) is answered without the
+/// body ever being buffered or decoded — a caller without standing cannot probe
+/// the body's shape or which product arm it would select, whether the body is
+/// malformed, a top-level array, or a valid object. Only once the floor admits is
+/// the body decoded through the shared [`ObjectOnly<T>`] object floor via a
+/// DEFERRED `Json::<ObjectOnly<AddMemberRaw>>::from_request`, which keeps the
+/// native structural rejections (malformed → `400`, wrong-type / wrong-shape —
+/// including a top-level array a derived struct visitor would fill positionally —
+/// / duplicate-key → `422`, missing Content-Type → `415`). A structurally valid
+/// body that matches no product arm is then the minimal semantic `422`. The
+/// caller's identity is the single `UserId` the human-session perimeter injected;
+/// this handler turns it into the application [`Principal`], always
+/// `Principal::Human` on this route. Its absence means the route was composed
+/// without that perimeter — a composition fault, so it takes the lane's safe
+/// `500`.
+///
+/// [`ObjectOnly<T>`]: crate::wire_admission::ObjectOnly
 async fn add_member<P, A, S, C>(
     Path(workspace_id): Path<String>,
     viewer: Option<Extension<UserId>>,
     State(state): State<AccessState<P, A, S, C>>,
-    body: Bytes,
+    request: Request,
 ) -> Result<Response, AccessError>
 where
     P: WorkspaceAccessPolicy,
@@ -124,7 +141,7 @@ where
     };
 
     // The member FLOOR, common to both branches, answers before the body is
-    // parsed: `Member` and `Admin` both clear it. A policy persistence failure
+    // decoded: `Member` and `Admin` both clear it. A policy persistence failure
     // is surfaced to the single error seam, never rendered here.
     let governance = state
         .policy
@@ -140,8 +157,25 @@ where
         WorkspaceGovernance::Member | WorkspaceGovernance::Admin => {}
     }
 
-    let Some(request) = AddMemberRequest::from_body(&body) else {
-        return Ok(refusal(StatusCode::BAD_REQUEST, INVALID_INPUT, None));
+    // Body decode is DEFERRED past the floor: a `404`/`403` caller is answered
+    // above without their body ever being buffered, so the ratified
+    // floor-before-body ordering (a non-member cannot probe the body verdict) is
+    // preserved. Only once the floor admits does the shared `ObjectOnly<T>` map
+    // floor + native `Json` own the structural rejections (a top-level array is a
+    // native `422`, never a positionally-classified enrollment).
+    let raw = match Json::<ObjectOnly<AddMemberRaw>>::from_request(request, &()).await {
+        Ok(Json(ObjectOnly(raw))) => raw,
+        Err(rejection) => return Ok(rejection.into_response()),
+    };
+
+    // Only a structurally valid object reaches here. A body no product arm accepts
+    // is the minimal semantic refusal `422`.
+    let Ok(request) = AddMemberRequest::try_from(raw) else {
+        return Ok(refusal(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            INVALID_INPUT,
+            None,
+        ));
     };
 
     match request {

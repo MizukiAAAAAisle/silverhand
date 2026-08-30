@@ -42,27 +42,32 @@
 //! records its own error chain. A description-only edit, a no-op rename to the same
 //! display, and an archive drive neither.
 //!
-//! ## Refusal ORDERING is a product contract
+//! ## Refusal ORDERING: the governance floor stays BEFORE body admission
 //!
 //! The TypeScript route answers, in this exact order:
 //! `404` (absent workspace / agent-home) → `403` (governance floor) →
-//! `400` (body shape) → `409` (name collision) → `200`. The `403`-BEFORE-`400`
-//! rung is why this surface reads the caller's governance facts and applies the
-//! floor ([`governance_floor_verdict`]) with a PRE-LOCK
-//! [`WorkspaceGovernanceFactsRead`] BEFORE it parses the body: a caller without
-//! standing must not be able to probe body shape. Rename requires the `Admin`
-//! floor, archive the `Owner` floor — a distinction the collapsed governance
-//! ceiling cannot express, so the floor door is used, not the ceiling.
+//! body admission → `409` (name collision) → `200`. The `403`-BEFORE-body rung is
+//! the one named security invariant this surface keeps under the frozen admission
+//! model: it reads the caller's governance facts and applies the floor
+//! ([`governance_floor_verdict`]) with a PRE-LOCK [`WorkspaceGovernanceFactsRead`]
+//! BEFORE the body is decoded, so a caller without standing cannot probe body
+//! shape. Rename requires the `Admin` floor, archive the `Owner` floor — a
+//! distinction the collapsed governance ceiling cannot express, so the floor door
+//! is used, not the ceiling.
 //!
-//! The body is READ only after the floor passes: the handler takes a `Request`
-//! (not the eager `Bytes` extractor) and drains it once the caller is known to
-//! govern the workspace, so a `404`/`403` caller never has their body buffered.
-//! This surface imposes NO size cap of its own — a body-size perimeter (and any
-//! `413`) is an application-wide policy applied by `DefaultBodyLimit` at the mount
-//! seam, exactly like the production `viewer_workspaces_changed` sink is; the
-//! product route itself has no limit, so the leaf inventing a narrower one would be
-//! an unauthorized regression. The order is therefore `404 → 403 → 400 → 409 →
-//! 200`, matching the TypeScript route (which also reads the body after the floor).
+//! To keep that ordering the handler takes an owned `Request` (never an eager body
+//! extractor) and decodes it with a DEFERRED `Json::<ObjectOnly<Raw>>::from_request`
+//! only after the floor admits, so a `404`/`403` caller never has their body
+//! buffered. The shared [`ObjectOnly<T>`](crate::wire_admission::ObjectOnly) map
+//! floor rejects a top-level array/scalar/null (a derived struct visitor would
+//! otherwise decode a JSON array into fields positionally); the native decode owns
+//! the remaining structural rejections (malformed → `400`, wrong
+//! type/shape/duplicate-key → `422`, missing content-type → `415`) and introduces
+//! axum's application-wide `DefaultBodyLimit` (2 MiB) — the same framework default
+//! the served app applies everywhere, not an endpoint-local cap; the product route
+//! itself has no bespoke limit. A structurally valid body that satisfies no
+//! acceptance arm — including the empty "no fields to update" object — is the
+//! minimal semantic `422 { "error": "invalid input" }`.
 //!
 //! That pre-lock verdict can go stale (a demotion may commit in the seam before
 //! the write lock). Guarding that is the WRITE's job: the domain re-derives the
@@ -71,31 +76,19 @@
 //! faithfully; they never change the answer for any input the pre-lock door
 //! already graded.
 //!
-//! ## The `400` body reproduces the Zod issues byte-for-byte
+//! ## Semantic admission is the minimal terminal `422`
 //!
-//! Unlike `GET /name-availability` (which collapses every name refusal to one
-//! `invalid`), this surface publishes the refusal PRECEDENCE on the wire: the
-//! `400` body is `{ error: "invalid input", issues: [...] }`, and the issue
-//! `code` distinguishes an empty name (`too_small`) from an over-long one
-//! (`too_big`) from a forbidden scalar (`custom`) from an empty edit
-//! (`custom` "no fields to update"). A client can branch on that code, so it is
-//! part of the contract, not a library-internal detail — the ordered
-//! [`CanonicalWorkspaceName::parse`] exists precisely to make it observable.
-//!
-//! The [`wire`] submodule therefore reproduces the Zod 3 issue objects — the
-//! issue `code`, the per-code field set, the field values, and the issues-ARRAY
-//! order (a multi-field body reports `name` before `description`) — that
-//! `UpdateWorkspaceInputSchema` / `ArchiveWorkspaceInputSchema` emit. This is a
-//! deliberate compatibility projection at the transport boundary, NOT structural
-//! transliteration of Zod, and it is pinned by the shared cross-language parity
-//! fixture (`packages/backend/tests/fixtures/workspace-metadata-write/`) whose
-//! expected bodies are signed by the real Zod oracle first. The gate compares
-//! STRUCTURALLY: JSON object member order is semantically insignificant
-//! (RFC 8259), so a conformant client cannot observe it, and neither the TS
-//! oracle (`toEqual`) nor the Rust replay (`Value` equality) asserts it. The
-//! struct field declaration order below follows Zod's real emission only so the
-//! served bytes read naturally; it is cosmetic, not the contract. What IS the
-//! contract — codes, values, and array order — is what both halves verify.
+//! This surface takes the frozen admission model's terminal semantic refusal:
+//! `422 { "error": "invalid input" }`, with NO Zod `issues` array. The prior port
+//! reproduced the Zod-3 issue objects (code / field set / values / array order)
+//! under a cross-language parity fixture; that projection and its
+//! `admission-cases.json` gate are RETIRED — no shared response schema pins
+//! `issues` and no client branches on the issue `code`. The ordered
+//! [`CanonicalWorkspaceName::parse`] authority still decides acceptance (empty vs
+//! over-long vs forbidden-scalar all refuse), but the refusal is no longer
+//! distinguished on the wire. The now-dead TS oracle
+//! (`workspace-metadata-write-admission-parity.test.ts`) and its fixture were
+//! deleted with this migration; nothing pins the issue bytes anymore.
 //!
 //! ## Faults take the lane's safe `500`, never a JSON envelope
 //!
@@ -109,29 +102,32 @@
 
 use axum::{
     Json, Router,
-    body::{Bytes, to_bytes},
-    extract::{Extension, Path, Request, State},
+    extract::{Extension, FromRequest, Path, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::patch,
 };
 use std::future::Future;
 
-use serde::Serialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use silverhand_backend_core::access::WorkspaceGovernanceFloor;
+use silverhand_backend_core::workspace_name::CanonicalWorkspaceName;
 use silverhand_backend_core::{
     access::{WorkspaceGovernanceFactsRead, WorkspaceRole, governance_floor_verdict},
     identity::{Principal, UserId, WorkspaceId},
     workspace_face::WorkspaceFace,
     workspace_metadata_write::{
         WorkspaceArchiveUpdate, WorkspaceMetadataAnnounce, WorkspaceMetadataChangedSink,
-        WorkspaceMetadataUpdateWithAnnounce, WorkspaceMetadataWriteUnitOfWork, WorkspaceNameChange,
-        archive_workspace, update_workspace_metadata_and_announce,
+        WorkspaceMetadataEdit, WorkspaceMetadataUpdateWithAnnounce,
+        WorkspaceMetadataWriteUnitOfWork, WorkspaceNameChange, archive_workspace,
+        update_workspace_metadata_and_announce,
     },
 };
 
 use crate::error;
+use crate::wire_admission;
+use crate::wire_admission::ObjectOnly;
+use crate::wire_patch::{PatchField, RequiredPatchField};
 use crate::workspaces::ViewerWorkspaceDto;
 
 /// The rename/describe route template, in axum's `{id}` capture syntax. An empty
@@ -315,12 +311,24 @@ where
         Err(()) => return internal_error(),
     }
 
-    // Body read is DEFERRED past the floor (no endpoint-imposed size cap; any
-    // application-wide body-size perimeter is a mount-seam policy).
-    let body = read_body(request).await;
-    let edit = match wire::parse_update_body(&parse_json_or_empty(&body)) {
-        Ok(edit) => edit,
-        Err(issues) => return invalid_input(issues),
+    // Body decode is DEFERRED past the floor: a `404`/`403` caller is answered
+    // above without their body ever being buffered. Only once the floor admits is
+    // the request consumed by the native `Json` extractor, wrapped in the shared
+    // [`ObjectOnly<T>`] object floor so a top-level array/scalar/null is a native
+    // structural rejection (a derived struct visitor would otherwise fill fields
+    // positionally from a JSON array). The native structural rejections (malformed
+    // / wrong-type / missing content-type) are preserved, and axum's
+    // application-wide `DefaultBodyLimit` (2 MiB) still applies — the same
+    // framework default the served app applies everywhere, not an endpoint-local
+    // cap.
+    let raw = match Json::<ObjectOnly<WorkspaceUpdateRaw>>::from_request(request, &()).await {
+        Ok(Json(ObjectOnly(raw))) => raw,
+        Err(rejection) => return rejection.into_response(),
+    };
+    // A structurally valid body no arm accepts — including the "no fields to
+    // update" refine — is the minimal semantic 422.
+    let Ok(edit) = WorkspaceMetadataEdit::try_from(raw) else {
+        return wire_admission::invalid_input();
     };
 
     let now_ms = state.clock.now_unix_millis();
@@ -429,12 +437,13 @@ where
         Err(()) => return internal_error(),
     }
 
-    // Body read is DEFERRED past the floor (no endpoint-imposed size cap).
-    let body = read_body(request).await;
-    let archived = match wire::parse_archive_body(&parse_json_or_empty(&body)) {
-        Ok(archived) => archived,
-        Err(issues) => return invalid_input(issues),
+    // Body decode is DEFERRED past the floor, exactly as the rename route above,
+    // and through the same shared [`ObjectOnly<T>`] object floor.
+    let raw = match Json::<ObjectOnly<WorkspaceArchiveRaw>>::from_request(request, &()).await {
+        Ok(Json(ObjectOnly(raw))) => raw,
+        Err(rejection) => return rejection.into_response(),
     };
+    let archived = raw.archived;
 
     let now_ms = state.clock.now_unix_millis();
     match archive_workspace(&state.writes, principal, &workspace_id, archived, now_ms).await {
@@ -478,31 +487,61 @@ where
     }
 }
 
-/// Drain the request body into memory, DEFERRED past the governance floor so an
-/// unauthorized (`404`/`403`) caller never has their body buffered. No
-/// endpoint-specific size cap is imposed here — an application-wide body-size
-/// perimeter is a mount-seam concern (a `DefaultBodyLimit` layer over the served
-/// app), never a limit this component-complete leaf invents. A body-stream read
-/// failure folds to an empty body, mirroring the product's
-/// `await c.req.json().catch(() => ({}))` (which swallows any read failure into an
-/// empty object), so the schema then reports "no fields to update" rather than the
-/// leaf surfacing a transport error as a bespoke status.
-async fn read_body(request: Request) -> Bytes {
-    to_bytes(request.into_body(), usize::MAX)
-        .await
-        .unwrap_or_default()
+/// The `PATCH /api/workspaces/{id}` body, decoded by the native `Json` extractor
+/// once the governance floor admits. `name` is a [`RequiredPatchField`] (absent
+/// key → the "no name" arm; present `null`/non-string → a native decode fault,
+/// as Zod's optional `WorkspaceNameSchema` refuses a present non-string), while
+/// `description` is a full tri-state [`PatchField`] because `z.string().nullable()`
+/// makes a present `null` a MEANINGFUL "clear", distinct from an absent key.
+#[derive(Debug, Deserialize)]
+struct WorkspaceUpdateRaw {
+    #[serde(default)]
+    name: RequiredPatchField<String>,
+    #[serde(default)]
+    description: PatchField<String>,
 }
 
-/// Read the request body as JSON, mirroring the product's
-/// `await c.req.json().catch(() => ({}))`: an empty or unparseable body becomes an
-/// empty object (which the update schema refuses as "no fields to update" and the
-/// archive schema refuses as a missing `archived`). A well-formed but non-object
-/// JSON value is returned verbatim so the schema reports the root type mismatch.
-fn parse_json_or_empty(body: &Bytes) -> Value {
-    if body.is_empty() {
-        return Value::Object(serde_json::Map::new());
+impl TryFrom<WorkspaceUpdateRaw> for WorkspaceMetadataEdit {
+    type Error = ();
+
+    /// Reproduce `UpdateWorkspaceInputSchema` acceptance: normalize a present
+    /// `name` through the sole [`CanonicalWorkspaceName::parse`] authority, treat a
+    /// present `description` key (value OR `null`) as a field, and require at least
+    /// one field — the Zod `.refine`, which `Err(())` (the minimal semantic 422)
+    /// otherwise. A present-`null` description is a "clear", not a fail, exactly as
+    /// the nullable schema counts it a field.
+    fn try_from(raw: WorkspaceUpdateRaw) -> Result<Self, ()> {
+        let name = match raw.name {
+            RequiredPatchField::Missing => None,
+            RequiredPatchField::Value(text) => {
+                Some(CanonicalWorkspaceName::parse(&text).map_err(|_| ())?)
+            }
+        };
+        let description_present = !matches!(raw.description, PatchField::Missing);
+        let description = match raw.description {
+            PatchField::Missing | PatchField::Null => None,
+            PatchField::Value(text) => Some(text),
+        };
+
+        match (name, description_present) {
+            (Some(name), true) => {
+                Ok(WorkspaceMetadataEdit::NameAndDescription { name, description })
+            }
+            (Some(name), false) => Ok(WorkspaceMetadataEdit::Name(name)),
+            (None, true) => Ok(WorkspaceMetadataEdit::Description(description)),
+            // No field survived: the schema's "no fields to update" refine.
+            (None, false) => Err(()),
+        }
     }
-    serde_json::from_slice(body).unwrap_or_else(|_| Value::Object(serde_json::Map::new()))
+}
+
+/// The `PATCH /api/workspaces/{id}/archive` body: a required `archived: boolean`,
+/// exactly as `ArchiveWorkspaceInputSchema`. A missing key or a non-boolean is a
+/// native decode fault (no semantic arm), so this route has no `422 invalid input`
+/// path of its own.
+#[derive(Debug, Deserialize)]
+struct WorkspaceArchiveRaw {
+    archived: bool,
 }
 
 /// Success body: `{ "workspace": {ViewerWorkspaceDto} }`, mirroring
@@ -544,383 +583,6 @@ fn name_taken() -> Response {
     (StatusCode::CONFLICT, Json(ErrorBody { error: NAME_TAKEN })).into_response()
 }
 
-fn invalid_input(issues: Vec<wire::ZodIssue>) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(wire::InvalidInputBody {
-            error: "invalid input",
-            issues,
-        }),
-    )
-        .into_response()
-}
-
 fn internal_error() -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR_BODY).into_response()
-}
-
-/// The Zod-3 issue compatibility projection for the `400` body.
-///
-/// This reproduces the issue objects `UpdateWorkspaceInputSchema` and
-/// `ArchiveWorkspaceInputSchema` emit — the `code`, the per-code field set, the
-/// values, and the issues-array order. The struct field declaration order also
-/// follows Zod's real emission (`custom`/`too_small`/`too_big` put `message`
-/// before `path`; `invalid_type` puts it after) so the served bytes read
-/// naturally, but that ordering is cosmetic: JSON object member order is
-/// insignificant (RFC 8259) and the shared parity fixture pins these bodies
-/// structurally, against the real Zod oracle.
-mod wire {
-    use serde::Serialize;
-    use serde_json::Value;
-    use silverhand_backend_core::workspace_metadata_write::WorkspaceMetadataEdit;
-    use silverhand_backend_core::workspace_name::{
-        CanonicalWorkspaceName, MAX_CODE_POINTS, WorkspaceNameIssue,
-    };
-
-    /// `{ error: "invalid input", issues: [...] }`.
-    #[derive(Serialize)]
-    pub(super) struct InvalidInputBody {
-        pub(super) error: &'static str,
-        pub(super) issues: Vec<ZodIssue>,
-    }
-
-    /// One Zod issue. Untagged so each arm serializes as its own object with its
-    /// own field order; the `code` string lives inside each arm's struct.
-    #[derive(Serialize)]
-    #[serde(untagged)]
-    pub(super) enum ZodIssue {
-        Custom(CustomIssue),
-        TooSmall(TooSmallIssue),
-        TooBig(TooBigIssue),
-        InvalidType(InvalidTypeIssue),
-    }
-
-    #[derive(Serialize)]
-    pub(super) struct CustomIssue {
-        code: &'static str,
-        message: String,
-        path: Vec<&'static str>,
-    }
-
-    #[derive(Serialize)]
-    pub(super) struct TooSmallIssue {
-        code: &'static str,
-        minimum: i64,
-        #[serde(rename = "type")]
-        kind: &'static str,
-        inclusive: bool,
-        message: String,
-        path: Vec<&'static str>,
-    }
-
-    #[derive(Serialize)]
-    pub(super) struct TooBigIssue {
-        code: &'static str,
-        maximum: i64,
-        #[serde(rename = "type")]
-        kind: &'static str,
-        inclusive: bool,
-        message: String,
-        path: Vec<&'static str>,
-    }
-
-    #[derive(Serialize)]
-    pub(super) struct InvalidTypeIssue {
-        code: &'static str,
-        expected: &'static str,
-        received: &'static str,
-        path: Vec<&'static str>,
-        message: String,
-    }
-
-    fn custom(message: impl Into<String>, path: Vec<&'static str>) -> ZodIssue {
-        ZodIssue::Custom(CustomIssue {
-            code: "custom",
-            message: message.into(),
-            path,
-        })
-    }
-
-    fn too_small(message: impl Into<String>, path: Vec<&'static str>) -> ZodIssue {
-        ZodIssue::TooSmall(TooSmallIssue {
-            code: "too_small",
-            minimum: 1,
-            kind: "string",
-            inclusive: true,
-            message: message.into(),
-            path,
-        })
-    }
-
-    fn too_big(message: impl Into<String>, path: Vec<&'static str>) -> ZodIssue {
-        ZodIssue::TooBig(TooBigIssue {
-            code: "too_big",
-            maximum: MAX_CODE_POINTS as i64,
-            kind: "string",
-            inclusive: true,
-            message: message.into(),
-            path,
-        })
-    }
-
-    /// Zod's `getParsedType` for the value actually present: the `received` label
-    /// on an `invalid_type` issue. A missing key is `"undefined"` and is handled
-    /// by the caller, since it has no `Value` to inspect.
-    fn parsed_type(value: &Value) -> &'static str {
-        match value {
-            Value::Null => "null",
-            Value::Bool(_) => "boolean",
-            Value::Number(_) => "number",
-            Value::String(_) => "string",
-            Value::Array(_) => "array",
-            Value::Object(_) => "object",
-        }
-    }
-
-    fn invalid_type(
-        expected: &'static str,
-        received: &'static str,
-        message: impl Into<String>,
-        path: Vec<&'static str>,
-    ) -> ZodIssue {
-        ZodIssue::InvalidType(InvalidTypeIssue {
-            code: "invalid_type",
-            expected,
-            received,
-            path,
-            message: message.into(),
-        })
-    }
-
-    /// The name-refusal issue for a value at `path`, mirroring
-    /// `WorkspaceNameSchema`'s three `ctx.addIssue` arms.
-    fn name_issue(issue: WorkspaceNameIssue) -> ZodIssue {
-        match issue {
-            WorkspaceNameIssue::Empty => {
-                too_small("workspace name must not be empty", vec!["name"])
-            }
-            WorkspaceNameIssue::TooLong { .. } => too_big(
-                format!("workspace name must be at most {MAX_CODE_POINTS} characters"),
-                vec!["name"],
-            ),
-            WorkspaceNameIssue::ForbiddenCodePoint { .. } => custom(
-                "workspace name contains a character that is not addressable",
-                vec!["name"],
-            ),
-        }
-    }
-
-    /// Validate the body of `PATCH /api/workspaces/{id}` exactly as
-    /// `UpdateWorkspaceInputSchema` does: `name?` is a `WorkspaceNameSchema`,
-    /// `description?` is `string | null`, and at least one field must be present.
-    /// A field-shape issue aborts the object (Zod skips the `refine` on invalid
-    /// data), so a wrong-typed field never also reports "no fields to update".
-    pub(super) fn parse_update_body(body: &Value) -> Result<WorkspaceMetadataEdit, Vec<ZodIssue>> {
-        let Value::Object(object) = body else {
-            // A well-formed non-object JSON value: the root type mismatch, exactly
-            // as `z.object` reports it before any field is read.
-            return Err(vec![invalid_type(
-                "object",
-                parsed_type(body),
-                format!("Expected object, received {}", parsed_type(body)),
-                vec![],
-            )]);
-        };
-
-        let mut issues = Vec::new();
-
-        // Field order mirrors the schema declaration: `name`, then `description`.
-        let mut name: Option<CanonicalWorkspaceName> = None;
-        let name_present = object.contains_key("name");
-        if let Some(raw) = object.get("name") {
-            match raw {
-                Value::String(text) => match CanonicalWorkspaceName::parse(text) {
-                    Ok(parsed) => name = Some(parsed),
-                    Err(issue) => issues.push(name_issue(issue)),
-                },
-                other => issues.push(invalid_type(
-                    "string",
-                    parsed_type(other),
-                    format!("Expected string, received {}", parsed_type(other)),
-                    vec!["name"],
-                )),
-            }
-        }
-
-        let description_present = object.contains_key("description");
-        let mut description: Option<String> = None;
-        if let Some(raw) = object.get("description") {
-            match raw {
-                // `z.string().nullable()`: a string sets it, `null` clears it.
-                Value::String(text) => description = Some(text.clone()),
-                Value::Null => description = None,
-                other => issues.push(invalid_type(
-                    "string",
-                    parsed_type(other),
-                    format!("Expected string, received {}", parsed_type(other)),
-                    vec!["description"],
-                )),
-            }
-        }
-
-        if !issues.is_empty() {
-            return Err(issues);
-        }
-
-        // The object parsed; now the `refine`. `description: null` counts as a
-        // present field, so it clears rather than fails the "no fields" gate.
-        match (name, name_present, description_present) {
-            (Some(name), _, true) => {
-                Ok(WorkspaceMetadataEdit::NameAndDescription { name, description })
-            }
-            (Some(name), _, false) => Ok(WorkspaceMetadataEdit::Name(name)),
-            (None, false, true) => Ok(WorkspaceMetadataEdit::Description(description)),
-            // No field survived: the `refine` message, at the root path.
-            (None, _, false) => Err(vec![custom("no fields to update", vec![])]),
-            // `name` present but unparsed is impossible here: a name issue would
-            // have returned above. Kept exhaustive without a fabricated arm.
-            (None, true, true) => Ok(WorkspaceMetadataEdit::Description(description)),
-        }
-    }
-
-    /// Validate the body of `PATCH /api/workspaces/{id}/archive` exactly as
-    /// `ArchiveWorkspaceInputSchema` does: a required `archived: boolean`.
-    pub(super) fn parse_archive_body(body: &Value) -> Result<bool, Vec<ZodIssue>> {
-        let Value::Object(object) = body else {
-            return Err(vec![invalid_type(
-                "object",
-                parsed_type(body),
-                format!("Expected object, received {}", parsed_type(body)),
-                vec![],
-            )]);
-        };
-
-        match object.get("archived") {
-            Some(Value::Bool(archived)) => Ok(*archived),
-            // A missing required key is Zod's `received: "undefined"`, message
-            // "Required".
-            None => Err(vec![invalid_type(
-                "boolean",
-                "undefined",
-                "Required",
-                vec!["archived"],
-            )]),
-            Some(other) => Err(vec![invalid_type(
-                "boolean",
-                parsed_type(other),
-                format!("Expected boolean, received {}", parsed_type(other)),
-                vec!["archived"],
-            )]),
-        }
-    }
-}
-
-/// Rust half of the cross-language admission (400) parity gate: the SAME
-/// `admission-cases.json` the TS oracle
-/// (`packages/backend/tests/workspace-metadata-write-admission-parity.test.ts`)
-/// signs against the real Zod schemas is replayed here through the production
-/// `wire` projection. Each `input` body is parsed, expected to refuse, and the
-/// built `400` envelope is asserted equal to the shared `expected`. The
-/// comparison is structural (`serde_json::Value` equality), which preserves the
-/// contractual issues-ARRAY order while ignoring insignificant object member
-/// order — exactly the equality the TS `toEqual` oracle applies.
-#[cfg(test)]
-mod admission_parity {
-    use super::wire::{self, InvalidInputBody, ZodIssue};
-    use serde_json::{Value, json};
-
-    const ADMISSION_CASES: &str = include_str!(
-        "../../../../packages/backend/tests/fixtures/workspace-metadata-write/admission-cases.json"
-    );
-
-    /// Project a refusal into the exact `400` body the route serves.
-    fn envelope(issues: Vec<ZodIssue>) -> Value {
-        serde_json::to_value(InvalidInputBody {
-            error: "invalid input",
-            issues,
-        })
-        .expect("the invalid-input body serializes")
-    }
-
-    #[test]
-    fn the_wire_projection_matches_the_shared_update_envelopes() {
-        let fixture: Value = serde_json::from_str(ADMISSION_CASES).unwrap();
-        let cases = fixture["update"].as_array().expect("update cases");
-        assert!(!cases.is_empty(), "the fixture must carry update cases");
-        for case in cases {
-            let name = case["name"].as_str().unwrap();
-            let issues = wire::parse_update_body(&case["input"])
-                .err()
-                .unwrap_or_else(|| panic!("{name}: every admission case must refuse"));
-            assert_eq!(envelope(issues), case["expected"], "{name}");
-        }
-    }
-
-    #[test]
-    fn the_wire_projection_matches_the_shared_archive_envelopes() {
-        let fixture: Value = serde_json::from_str(ADMISSION_CASES).unwrap();
-        let cases = fixture["archive"].as_array().expect("archive cases");
-        assert!(!cases.is_empty(), "the fixture must carry archive cases");
-        for case in cases {
-            let name = case["name"].as_str().unwrap();
-            let issues = wire::parse_archive_body(&case["input"])
-                .err()
-                .unwrap_or_else(|| panic!("{name}: every admission case must refuse"));
-            assert_eq!(envelope(issues), case["expected"], "{name}");
-        }
-    }
-
-    /// Project an ACCEPTED update edit onto the impl-neutral shape the TS oracle
-    /// signs: `name` is null or the transform's `{name, key}` display+fold pair,
-    /// `description` is the tri-state `"untouched"` / `"clear"` / `{ "set": .. }`.
-    fn project_update(
-        edit: &silverhand_backend_core::workspace_metadata_write::WorkspaceMetadataEdit,
-    ) -> Value {
-        let name = match edit.requested_name() {
-            Some(n) => json!({ "name": n.name(), "key": n.key() }),
-            None => Value::Null,
-        };
-        let description = match edit.requested_description() {
-            None => json!("untouched"),
-            Some(None) => json!("clear"),
-            Some(Some(text)) => json!({ "set": text }),
-        };
-        json!({ "name": name, "description": description })
-    }
-
-    #[test]
-    fn the_wire_projection_matches_the_shared_admitted_update_edits() {
-        let fixture: Value = serde_json::from_str(ADMISSION_CASES).unwrap();
-        let cases = fixture["admitted_update"]
-            .as_array()
-            .expect("admitted update cases");
-        assert!(
-            !cases.is_empty(),
-            "the fixture must carry admitted update cases"
-        );
-        for case in cases {
-            let name = case["name"].as_str().unwrap();
-            let edit = wire::parse_update_body(&case["input"])
-                .unwrap_or_else(|_| panic!("{name}: every admitted case must parse"));
-            assert_eq!(project_update(&edit), case["expected"], "{name}");
-        }
-    }
-
-    #[test]
-    fn the_wire_projection_matches_the_shared_admitted_archive_flags() {
-        let fixture: Value = serde_json::from_str(ADMISSION_CASES).unwrap();
-        let cases = fixture["admitted_archive"]
-            .as_array()
-            .expect("admitted archive cases");
-        assert!(
-            !cases.is_empty(),
-            "the fixture must carry admitted archive cases"
-        );
-        for case in cases {
-            let name = case["name"].as_str().unwrap();
-            let archived = wire::parse_archive_body(&case["input"])
-                .unwrap_or_else(|_| panic!("{name}: every admitted case must parse"));
-            assert_eq!(Value::Bool(archived), case["expected"], "{name}");
-        }
-    }
 }

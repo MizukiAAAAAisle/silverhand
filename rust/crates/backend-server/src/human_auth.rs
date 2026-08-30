@@ -14,8 +14,11 @@
 //! [`silverhand_backend_core::user_identity`]: the domain owns the security
 //! ordering (hash → handle → email), the uniform credential answer, the
 //! committed-fact seal, the change gate, and the `user_changed` announce fate.
-//! This module's only jobs are request-boundary admission (parse the body into
-//! value objects, enforce the transport length bounds Zod imposes) and the wire
+//! This module's only jobs are request-boundary admission — the frozen
+//! [`ValidatedJson<T>`](crate::wire_admission::ValidatedJson) extractor decodes
+//! the body into a typed DTO (native `Json` owns JSON syntax / wrong-type /
+//! content-type rejection), garde enforces the transport password bounds, and a
+//! `TryFrom`/`into_command` normalizes the identity value objects — and the wire
 //! projection.
 //!
 //! ## Token delivery is BEARER, never a cookie
@@ -33,16 +36,15 @@
 //!
 //! ## Two deliberate, reachability-priced wire divergences (flagged for review)
 //!
-//! 1. The `400` body is terminally `{ "error": "invalid input" }`, WITHOUT the
-//!    Zod `issues` array the TS route also emits, AND the empty `PATCH /api/me`
-//!    object (the Zod `.refine` "no fields to update") collapses to the same body
-//!    rather than TS's distinct `{ "error": "no fields to update" }`. No shared
-//!    response schema pins `issues`, and no consumer branches on it or on the
-//!    refine string (unlike the sibling workspace-metadata surface, whose issue
-//!    CODES a client can act on and which therefore reproduces them under a shared
-//!    parity fixture). Reproducing the full Zod issue projection here would be a
-//!    large, drift-prone surface with no reachable consumer, so the observable
-//!    `error` string is preserved as one terminal `invalid input`.
+//! 1. A semantic-admission failure is terminally `422 { "error": "invalid input" }`,
+//!    WITHOUT the Zod `issues` array the TS route also emits, AND the empty
+//!    `PATCH /api/me` object (the Zod `.refine` "no fields to update") collapses to
+//!    the same body rather than TS's distinct `{ "error": "no fields to update" }`.
+//!    No shared response schema pins `issues`, and no consumer branches on it or on
+//!    the refine string. This surface takes the frozen admission model's minimal
+//!    semantic refusal; native JSON structural faults (malformed / wrong-type /
+//!    missing content-type) keep their native `400`/`422`/`415`, and the old
+//!    hand-rolled `400 invalid input` for those structural cases is gone.
 //! 2. Under the bearer perimeter, an authenticated session that resolves to no
 //!    `users` row is a dangling pointer — persistence corruption — so `GET`/`PATCH
 //!    /api/me` take the lane's safe-500 (bare `text/plain`), NOT the TS `404
@@ -59,14 +61,13 @@
 
 use axum::{
     Json, Router,
-    body::{Bytes, to_bytes},
-    extract::{Extension, Request, State},
+    extract::{Extension, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use serde::Serialize;
-use serde_json::Value;
+use garde::Validate;
+use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
     auth::{
         AuthenticateHumanSession, IssuedSessionSecret, SessionAudit, SessionBearer, SessionClock,
@@ -90,6 +91,8 @@ use crate::auth::{PublicJsonUnauthorized, require_human_session};
 use crate::bearer::strict_bearer_credential;
 use crate::error;
 use crate::messaging::author_wire::principal_avatar_url;
+use crate::wire_admission::{self, ValidatedJson, ValidatedJsonRejection};
+use crate::wire_patch::RequiredPatchField;
 
 /// `authPaths.signup`.
 pub const SIGNUP_PATH: &str = "/auth/signup";
@@ -218,7 +221,8 @@ where
 #[allow(clippy::type_complexity)]
 async fn signup<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>(
     State(deps): State<HumanAuthDeps<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>>,
-    request: Request,
+    headers: HeaderMap,
+    body: Result<ValidatedJson<SignupRaw>, ValidatedJsonRejection>,
 ) -> Response
 where
     Ha: HandleNamespaceRead,
@@ -234,17 +238,25 @@ where
     Sink: UserChangedSink,
     Clk: SessionClock,
 {
-    // The typed 403 is decided BEFORE the body is read: disabled signup must not
-    // let a caller probe body shape.
+    // The typed 403 is decided BEFORE the body verdict is consulted: disabled
+    // signup must not let a caller probe body shape. Wrapping the extractor in a
+    // `Result` lets the body decode (native structural / garde semantic) resolve
+    // during extraction WITHOUT failing the request, so this gate still answers
+    // first for any body.
     if !deps.signup_enabled {
         return signup_disabled();
     }
 
-    // Audit breadcrumbs are captured from the headers before the body moves.
-    let audit = capture_audit(request.headers());
-    let body = read_body(request).await;
-    let Some(command) = parse_signup_body(&body, audit) else {
-        return invalid_input();
+    // Audit breadcrumbs come from the headers, extracted before the body.
+    let audit = capture_audit(&headers);
+    let raw = match body {
+        Ok(ValidatedJson(raw)) => raw,
+        // A structural fault keeps its native rejection; a garde-rule fault is the
+        // minimal semantic 422 — both handled by the shared rejection renderer.
+        Err(rejection) => return rejection.into_response(),
+    };
+    let Ok(command) = raw.into_command(audit) else {
+        return wire_admission::invalid_input();
     };
 
     let now_ms = deps.clock.now_unix_millis();
@@ -282,7 +294,8 @@ where
 #[allow(clippy::type_complexity)]
 async fn login<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>(
     State(deps): State<HumanAuthDeps<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>>,
-    request: Request,
+    headers: HeaderMap,
+    ValidatedJson(raw): ValidatedJson<LoginRaw>,
 ) -> Response
 where
     Ha: HandleNamespaceRead,
@@ -298,10 +311,9 @@ where
     Sink: UserChangedSink,
     Clk: SessionClock,
 {
-    let audit = capture_audit(request.headers());
-    let body = read_body(request).await;
-    let Some(command) = parse_login_body(&body, audit) else {
-        return invalid_input();
+    let audit = capture_audit(&headers);
+    let Ok(command) = raw.into_command(audit) else {
+        return wire_admission::invalid_input();
     };
 
     let now_ms = deps.clock.now_unix_millis();
@@ -418,7 +430,7 @@ where
 async fn me_patch<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>(
     viewer: Option<Extension<UserId>>,
     State(deps): State<HumanAuthDeps<Ha, El, Hr, Reg, Mint, Iss, Rev, Cred, Rd, Wr, Sink, Clk>>,
-    request: Request,
+    ValidatedJson(raw): ValidatedJson<MePatchRaw>,
 ) -> Response
 where
     Ha: HandleNamespaceRead,
@@ -439,12 +451,11 @@ where
         return internal_error();
     };
 
-    let body = read_body(request).await;
-    let display_name = match parse_profile_patch(&body) {
-        ProfilePatch::DisplayName(display_name) => display_name,
-        // A malformed body, an invalid `display_name`, AND the empty/no-fields
-        // object all collapse to the one terminal 400 (ratified divergence #1).
-        ProfilePatch::Invalid => return invalid_input(),
+    // An invalid `display_name` value AND the empty/no-fields object both collapse
+    // to the one terminal semantic 422 (ratified divergence #1). A malformed or
+    // wrong-typed body was already refused by the native `Json` decode.
+    let Ok(display_name) = DisplayName::try_from(raw) else {
+        return wire_admission::invalid_input();
     };
 
     let now_ms = deps.clock.now_unix_millis();
@@ -481,13 +492,107 @@ where
 // Request-boundary admission
 // ===========================================================================
 
-/// Drain the request body into memory. A stream-read failure folds to an empty
-/// body (mirroring the product's `c.req.json().catch(...)`), which the parsers
-/// then refuse as malformed input rather than surfacing a transport error.
-async fn read_body(request: Request) -> Bytes {
-    to_bytes(request.into_body(), usize::MAX)
-        .await
-        .unwrap_or_default()
+/// The `POST /auth/signup` body, decoded by the native `Json` extractor and then
+/// bounded by garde. `email`/`password`/`name` are required strings — an absent
+/// or wrong-typed one is a native decode fault. `display_name` is
+/// `.optional()`: absent is fine, but a present `null` or non-string is a native
+/// decode fault, exactly as Zod's `DisplayNameSchema.optional()` refuses a
+/// present non-string. The password bounds are the only rule garde enforces
+/// here; the identity fields normalize in [`SignupRaw::into_command`].
+#[derive(Debug, Deserialize, Validate)]
+struct SignupRaw {
+    #[garde(skip)]
+    email: String,
+    #[garde(custom(password_within(SIGNUP_PASSWORD_MIN_UTF16)))]
+    password: String,
+    #[garde(skip)]
+    name: String,
+    #[serde(default)]
+    #[garde(skip)]
+    display_name: RequiredPatchField<String>,
+}
+
+impl SignupRaw {
+    /// Normalize the admitted body into the domain command, injecting the audit
+    /// captured from the headers. `Err(())` is a request-local normalization
+    /// failure (bad email grammar, handle regex, or display-name charset) — the
+    /// caller renders it as the minimal semantic 422.
+    fn into_command(self, audit: SessionAudit) -> Result<SignupCommand, ()> {
+        let email = EmailAddress::parse(&self.email).map_err(|_| ())?;
+        let handle = ParticipantHandle::parse(&self.name).map_err(|_| ())?;
+        let display_name = match self.display_name {
+            // `.optional()` admits an absent key as "no display name".
+            RequiredPatchField::Missing => None,
+            RequiredPatchField::Value(raw) => Some(DisplayName::parse(&raw).map_err(|_| ())?),
+        };
+        Ok(SignupCommand {
+            email,
+            handle,
+            password: self.password,
+            display_name,
+            audit,
+        })
+    }
+}
+
+/// The `POST /auth/login` body: `email` and `password`, both required strings.
+/// The password floor is `min(1)` here (not signup's `8`); the max is shared.
+#[derive(Debug, Deserialize, Validate)]
+struct LoginRaw {
+    #[garde(skip)]
+    email: String,
+    #[garde(custom(password_within(LOGIN_PASSWORD_MIN_UTF16)))]
+    password: String,
+}
+
+impl LoginRaw {
+    /// Normalize the admitted body into the login command, injecting the audit.
+    fn into_command(self, audit: SessionAudit) -> Result<LoginCommand, ()> {
+        let email = EmailAddress::parse(&self.email).map_err(|_| ())?;
+        Ok(LoginCommand {
+            email,
+            password: self.password,
+            audit,
+        })
+    }
+}
+
+/// The `PATCH /api/me` body: `{ display_name?: DisplayNameSchema }` with a
+/// `.refine(keys > 0)`. `display_name` is a [`RequiredPatchField`] so an absent
+/// key is the refine's "no fields" (a semantic 422 in [`TryFrom`]) while a
+/// present `null` or non-string is a native decode fault.
+#[derive(Debug, Deserialize, Validate)]
+struct MePatchRaw {
+    #[serde(default)]
+    #[garde(skip)]
+    display_name: RequiredPatchField<String>,
+}
+
+impl TryFrom<MePatchRaw> for DisplayName {
+    type Error = ();
+
+    fn try_from(raw: MePatchRaw) -> Result<Self, ()> {
+        match raw.display_name {
+            // The refine's "no fields to update" collapses to the terminal 422.
+            RequiredPatchField::Missing => Err(()),
+            RequiredPatchField::Value(value) => DisplayName::parse(&value).map_err(|_| ()),
+        }
+    }
+}
+
+/// A garde field rule bounding a raw password to `[min, PASSWORD_MAX_UTF16]`
+/// UTF-16 code units, delegating the count to the route-local [`within_utf16`]
+/// authority (JS `.length`). The domain deliberately takes an UNvalidated
+/// password (`sign_up`/`log_in`), so these transport bounds live at the wire,
+/// not in a value object.
+fn password_within(min: usize) -> impl Fn(&String, &()) -> garde::Result {
+    move |value, _| {
+        if within_utf16(value, min, PASSWORD_MAX_UTF16) {
+            Ok(())
+        } else {
+            Err(garde::Error::new("password length is out of bounds"))
+        }
+    }
 }
 
 /// Capture the forensic breadcrumbs a session records, mirroring the TS
@@ -512,86 +617,6 @@ fn first_forwarded_for(headers: &HeaderMap) -> Option<String> {
     let raw = header_value(headers, "x-forwarded-for")?;
     let first = raw.split(',').next()?.trim();
     (!first.is_empty()).then(|| first.to_owned())
-}
-
-/// Admit a signup body exactly as `AuthSignupInputSchema` does: `email`
-/// (`z.string().trim().email().max(320)`), `password`
-/// (`z.string().min(8).max(1024)`), `name` (the participant-handle regex), and an
-/// OPTIONAL `display_name`. Any missing/mistyped/failing field collapses to
-/// `None` (the route's `400`); the domain never sees an unadmitted value.
-fn parse_signup_body(body: &Bytes, audit: SessionAudit) -> Option<SignupCommand> {
-    let value: Value = serde_json::from_slice(body).ok()?;
-    let object = value.as_object()?;
-
-    let email = EmailAddress::parse(object.get("email")?.as_str()?).ok()?;
-    let password = object.get("password")?.as_str()?.to_owned();
-    if !within_utf16(&password, SIGNUP_PASSWORD_MIN_UTF16, PASSWORD_MAX_UTF16) {
-        return None;
-    }
-    let handle = ParticipantHandle::parse(object.get("name")?.as_str()?).ok()?;
-    let display_name = match object.get("display_name") {
-        // `.optional()` admits an absent key, not a `null` or non-string value.
-        None => None,
-        Some(Value::String(raw)) => Some(DisplayName::parse(raw).ok()?),
-        Some(_) => return None,
-    };
-
-    Some(SignupCommand {
-        email,
-        handle,
-        password,
-        display_name,
-        audit,
-    })
-}
-
-/// Admit a login body exactly as `AuthLoginInputSchema` does: `email` and
-/// `password` (`z.string().min(1).max(1024)` — note `min(1)`, not signup's 8).
-fn parse_login_body(body: &Bytes, audit: SessionAudit) -> Option<LoginCommand> {
-    let value: Value = serde_json::from_slice(body).ok()?;
-    let object = value.as_object()?;
-
-    let email = EmailAddress::parse(object.get("email")?.as_str()?).ok()?;
-    let password = object.get("password")?.as_str()?.to_owned();
-    if !within_utf16(&password, LOGIN_PASSWORD_MIN_UTF16, PASSWORD_MAX_UTF16) {
-        return None;
-    }
-
-    Some(LoginCommand {
-        email,
-        password,
-        audit,
-    })
-}
-
-/// The two admission verdicts for `PATCH /api/me`'s body, mirroring
-/// `UpdateUserProfileInputSchema` (`{ display_name?: DisplayNameSchema }` with a
-/// `.refine(keys > 0)`). The refine's "no fields" case is NOT a distinct verdict:
-/// it collapses into [`Invalid`](ProfilePatch::Invalid) with every other malformed
-/// body, since the ratified `400` is one terminal `invalid input`.
-enum ProfilePatch {
-    /// A valid `display_name` was supplied.
-    DisplayName(DisplayName),
-    /// Malformed body, an invalid `display_name` value, OR no fields at all.
-    Invalid,
-}
-
-fn parse_profile_patch(body: &Bytes) -> ProfilePatch {
-    let Ok(value) = serde_json::from_slice::<Value>(body) else {
-        return ProfilePatch::Invalid;
-    };
-    let Some(object) = value.as_object() else {
-        return ProfilePatch::Invalid;
-    };
-    match object.get("display_name") {
-        // No `display_name` key is the refine's "no fields" — one terminal 400.
-        None => ProfilePatch::Invalid,
-        Some(Value::String(raw)) => match DisplayName::parse(raw) {
-            Ok(display_name) => ProfilePatch::DisplayName(display_name),
-            Err(_) => ProfilePatch::Invalid,
-        },
-        Some(_) => ProfilePatch::Invalid,
-    }
 }
 
 /// `z.string().min(min).max(max)` on the UTF-16 code-unit length (JS `.length`).
@@ -723,16 +748,6 @@ fn unauthorized() -> Response {
         StatusCode::UNAUTHORIZED,
         Json(ErrorBody {
             error: "unauthorized",
-        }),
-    )
-        .into_response()
-}
-
-fn invalid_input() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ErrorBody {
-            error: "invalid input",
         }),
     )
         .into_response()
