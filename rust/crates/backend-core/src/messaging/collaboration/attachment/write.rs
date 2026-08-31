@@ -12,11 +12,12 @@ use crate::{
     blob_store::{BlobAliasId, StoredBlob},
     identity::{ConversationId, UserId},
     messaging::AttachmentId,
+    wire_number::JsSafeInteger,
 };
 
 use super::{
-    ATTACHMENT_WIRE_MAX_SAFE_INTEGER, AttachmentContentType, AttachmentCreator, AttachmentFilename,
-    AttachmentReadIdentityMismatch, AttachmentRecord,
+    AttachmentContentType, AttachmentCreator, AttachmentFilename, AttachmentReadIdentityMismatch,
+    AttachmentRecord,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -198,12 +199,15 @@ impl AttachmentCreateCommand {
         blob: StoredBlob,
         created_at: i64,
     ) -> Result<Self, InvalidAttachmentWriteCommand> {
-        if size == 0 {
+        let size = JsSafeInteger::new(size).map_err(|_| InvalidAttachmentWriteCommand)?;
+        let created_at =
+            JsSafeInteger::new(created_at).map_err(|_| InvalidAttachmentWriteCommand)?;
+        if size.get() < 1 || created_at.get() < 0 {
             return Err(InvalidAttachmentWriteCommand);
         }
         let alias = BlobAliasId::from_semantic_id(attachment.as_str())
             .map_err(|_| InvalidAttachmentWriteCommand)?;
-        let record = AttachmentRecord::projected(
+        let record = AttachmentRecord::projected_safe(
             attachment,
             requested.clone(),
             Some(requested.clone()),
@@ -211,7 +215,7 @@ impl AttachmentCreateCommand {
             size,
             content_type,
             blob,
-            1,
+            JsSafeInteger::new(1).expect("one is wire-safe"),
             AttachmentCreator::Human(viewer.clone()),
             created_at,
         )
@@ -246,7 +250,7 @@ pub struct AttachmentContentUpdateCommand {
     viewer: UserId,
     requested: AttachmentId,
     expected_content_type: AttachmentContentType,
-    replacement_size: i64,
+    replacement_size: JsSafeInteger,
     replacement_blob: StoredBlob,
 }
 
@@ -258,7 +262,9 @@ impl AttachmentContentUpdateCommand {
         replacement_size: i64,
         replacement_blob: StoredBlob,
     ) -> Result<Self, InvalidAttachmentWriteCommand> {
-        if !(1..=ATTACHMENT_WIRE_MAX_SAFE_INTEGER).contains(&replacement_size) {
+        let replacement_size =
+            JsSafeInteger::new(replacement_size).map_err(|_| InvalidAttachmentWriteCommand)?;
+        if replacement_size.get() < 1 {
             return Err(InvalidAttachmentWriteCommand);
         }
         BlobAliasId::from_semantic_id(requested.as_str())
@@ -284,7 +290,7 @@ impl AttachmentContentUpdateCommand {
         &self.expected_content_type
     }
 
-    pub const fn replacement_size(&self) -> i64 {
+    pub const fn replacement_size(&self) -> JsSafeInteger {
         self.replacement_size
     }
 
@@ -406,8 +412,9 @@ impl AttachmentContentUpdatedFact {
     ) -> Result<Self, AttachmentWriteIdentityMismatch> {
         let expected_revision = before
             .content_revision()
+            .get()
             .checked_add(1)
-            .filter(|value| *value <= ATTACHMENT_WIRE_MAX_SAFE_INTEGER)
+            .and_then(|value| JsSafeInteger::new(value).ok())
             .ok_or(AttachmentWriteIdentityMismatch)?;
         if authority.participant() != command.viewer()
             || authority.conversation() != before.channel()
@@ -496,7 +503,7 @@ impl BoundAttachmentContentUpdated {
 pub struct AttachmentChangedFact {
     attachment: AttachmentId,
     conversation: ConversationId,
-    content_revision: i64,
+    content_revision: JsSafeInteger,
 }
 
 impl AttachmentChangedFact {
@@ -518,7 +525,7 @@ impl AttachmentChangedFact {
         &self.conversation
     }
 
-    pub const fn content_revision(&self) -> i64 {
+    pub const fn content_revision(&self) -> JsSafeInteger {
         self.content_revision
     }
 }
@@ -869,7 +876,7 @@ mod tests {
                 &AttachmentId::parse("a").unwrap(),
             )
             .unwrap();
-        assert_eq!(bound.changed().content_revision(), 2);
+        assert_eq!(bound.changed().content_revision().get(), 2);
         assert_eq!(
             bound.authority().source(),
             AttachmentWriteAuthoritySource::WorkspaceSeatAndMembership
@@ -892,8 +899,8 @@ mod tests {
             AttachmentContentUpdatedFact::committed(
                 &update_command("attachments/a/new.png"),
                 &authority("u"),
-                record(ATTACHMENT_WIRE_MAX_SAFE_INTEGER, "attachments/a/old.png"),
-                record(ATTACHMENT_WIRE_MAX_SAFE_INTEGER, "attachments/a/new.png"),
+                record(JsSafeInteger::MAX, "attachments/a/old.png"),
+                record(JsSafeInteger::MAX, "attachments/a/new.png"),
             )
             .is_err()
         );

@@ -12,21 +12,22 @@ use silverhand_backend_core::{
         AttachmentId, PrincipalIdentity,
         collaboration::{
             attachment::{
-                ATTACHMENT_WIRE_MAX_SAFE_INTEGER, AgentAttachmentContentUpdateCommand,
-                AgentAttachmentContentUpdateRefusal, AgentAttachmentContentUpdateUnitOfWork,
-                AgentAttachmentContentUpdatedFact, AgentAttachmentCreateCommand,
-                AgentAttachmentCreateRefusal, AgentAttachmentCreateUnitOfWork,
-                AgentAttachmentCreatedFact, AgentAttachmentDownloadFact,
-                AgentAttachmentDownloadReadPort, AgentAttachmentLocateFact,
-                AgentAttachmentLocateReadPort, AgentAttachmentReadRefusal, AgentAttachmentRuntime,
-                AgentAttachmentUpdateAdmission, AgentAttachmentUpdateAdmissionPort,
-                AgentAttachmentUpdateAdmissionRefusal, AgentAttachmentUploadAdmission,
-                AgentAttachmentUploadAdmissionPort, AgentAttachmentUploadRefusal, AttachmentRecord,
+                AgentAttachmentContentUpdateCommand, AgentAttachmentContentUpdateRefusal,
+                AgentAttachmentContentUpdateUnitOfWork, AgentAttachmentContentUpdatedFact,
+                AgentAttachmentCreateCommand, AgentAttachmentCreateRefusal,
+                AgentAttachmentCreateUnitOfWork, AgentAttachmentCreatedFact,
+                AgentAttachmentDownloadFact, AgentAttachmentDownloadReadPort,
+                AgentAttachmentLocateFact, AgentAttachmentLocateReadPort,
+                AgentAttachmentReadRefusal, AgentAttachmentRuntime, AgentAttachmentUpdateAdmission,
+                AgentAttachmentUpdateAdmissionPort, AgentAttachmentUpdateAdmissionRefusal,
+                AgentAttachmentUploadAdmission, AgentAttachmentUploadAdmissionPort,
+                AgentAttachmentUploadRefusal, AttachmentRecord,
             },
             channel_lifecycle::ChannelLifecyclePlacement,
         },
     },
     persistence::PersistenceFailure,
+    wire_number::JsSafeInteger,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;
@@ -376,8 +377,9 @@ impl SqliteAgentAttachment {
         }
         let next_revision = before
             .content_revision()
+            .get()
             .checked_add(1)
-            .filter(|value| *value <= ATTACHMENT_WIRE_MAX_SAFE_INTEGER)
+            .and_then(|value| JsSafeInteger::new(value).ok())
             .ok_or(AgentAttachmentStoreError::RevisionExhausted)?;
         if swap_attachment_content_row(
             &mut tx,

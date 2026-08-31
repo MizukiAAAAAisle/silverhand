@@ -134,10 +134,10 @@ where
             return internal_error();
         }
     };
-    if i64::try_from(read.actual_size()).ok() != Some(record.size()) {
+    if i64::try_from(read.actual_size()).ok() != Some(record.size().get()) {
         tracing::error!(
             attachment = attachment.as_str(),
-            expected = record.size(),
+            expected = record.size().get(),
             actual = read.actual_size(),
             "audited attachment blob size differs from committed row"
         );

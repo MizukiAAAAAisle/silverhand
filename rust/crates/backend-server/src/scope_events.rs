@@ -42,6 +42,7 @@ use silverhand_backend_core::{
     messaging::{
         CommittedMessageView, DirectPairOpenedFact, DirectPairOpenedPort, PrincipalIdentity,
         collaboration::{
+            attachment::{AttachmentChangedFact, AttachmentChangedPublisher},
             notification::{
                 CommittedNotificationClear, NotificationAftermath, NotificationClearFailure,
             },
@@ -71,6 +72,7 @@ use silverhand_backend_core::{
 
 use crate::host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers};
 use crate::messaging::aftermath::MessagingAftermath;
+use crate::messaging::collaboration::attachment::changed_event as attachment_changed_payload;
 use crate::messaging::collaboration::saved::changed_event as saved_changed_payload;
 use crate::messaging::message_wire::{copy_dto, message_event_payload, rename_dto};
 use tokio::{
@@ -404,6 +406,12 @@ enum ProductEvent {
     /// authority ([`crate::messaging::collaboration::saved::changed_event`]); this
     /// transport routes that projection and re-decides nothing.
     SavedChanged(Value),
+    /// One attachment's committed bytes changed. Cursor-inert conversation-side
+    /// invalidation: the attachment capability's sole projector already sealed the
+    /// `{attachment_id, content_revision}` payload, and this transport only routes it
+    /// to the attachment's sealed conversation. It is deliberately not a message-scope
+    /// event and therefore cannot advance or impersonate a message cursor.
+    AttachmentChanged(Value),
     #[cfg(test)]
     Test {
         value: String,
@@ -1319,6 +1327,22 @@ impl SavedAftermath for ScopeEventHub {
     async fn announce(&self, fact: &SavedChangeFact) -> Result<(), SavedPublicationFailure> {
         self.publish_saved_changed(fact)
             .map_err(SavedPublicationFailure::from_source)
+    }
+}
+
+/// The attachment context's cursor-inert post-commit invalidation over the real
+/// product transport. The committed fact owns both routing authority and payload
+/// authority: this adapter reads its sealed conversation and reuses the attachment
+/// context's one wire projector. Keeping the hub error as the associated error leaves
+/// the concrete transport failure visible to the route's best-effort logger.
+impl AttachmentChangedPublisher for ScopeEventHub {
+    type Error = ScopeEventHubError;
+
+    async fn publish(&self, fact: &AttachmentChangedFact) -> Result<(), Self::Error> {
+        self.publish(
+            EventScope::ConversationSide(fact.conversation().clone()),
+            ProductEvent::AttachmentChanged(attachment_changed_payload(fact)),
+        )
     }
 }
 
@@ -2964,15 +2988,21 @@ mod tests {
     };
     use silverhand_backend_core::{
         auth::{AuthenticateHumanSession, SessionBearer},
+        blob_store::{BlobStorageKey, StorageKind, StoredBlob},
         direct_pair_read::DirectPairReadModel,
         identity::{AgentId, DaemonInstanceId},
         messaging::{
-            AddressedPrincipals, CapabilityDenied, CreatedMessage, DirectLineAuthority,
-            DirectPairOpenedPort, DirectPairParticipants, EnvironmentUnavailable, MessageContent,
-            MessageId, NotificationId, OpenDirectPairError, ParticipantHandle, PrincipalKind,
-            ReferencePositions, SendActor, SendCapability, SendDestination, SendEntropy,
-            SendMessage, SendMessageDraft, SendMessageError, SendMessageOutcome,
-            SendMessageUnitOfWork,
+            AddressedPrincipals, AttachmentId, CapabilityDenied, CreatedMessage,
+            DirectLineAuthority, DirectPairOpenedPort, DirectPairParticipants,
+            EnvironmentUnavailable, MessageContent, MessageId, NotificationId, OpenDirectPairError,
+            ParticipantHandle, PrincipalKind, ReferencePositions, SendActor, SendCapability,
+            SendDestination, SendEntropy, SendMessage, SendMessageDraft, SendMessageError,
+            SendMessageOutcome, SendMessageUnitOfWork,
+            collaboration::attachment::{
+                AttachmentContentType, AttachmentContentUpdateCommand,
+                AttachmentContentUpdatedFact, AttachmentCreator, AttachmentFilename,
+                AttachmentRecord, AttachmentWriteAuthority,
+            },
             mention_cc::{CommittedMentionCopy, MentionCopyOutcome},
             post_commit::{
                 CopyNotification, EffectStep, IdleStart, MainDelivery, MentionIntent,
@@ -7117,6 +7147,127 @@ mod tests {
         db.close().await.unwrap();
     }
 
+    fn committed_attachment_change() -> AttachmentChangedFact {
+        let viewer = UserId::parse("user-1").unwrap();
+        let conversation = ConversationId::parse("conversation-1").unwrap();
+        let attachment = AttachmentId::parse("attachment-1").unwrap();
+        let content_type = AttachmentContentType::parse("text/plain").unwrap();
+        let before = AttachmentRecord::projected(
+            attachment.clone(),
+            conversation.clone(),
+            Some(conversation.clone()),
+            AttachmentFilename::parse("note.txt").unwrap(),
+            4,
+            content_type.clone(),
+            StoredBlob::new(
+                StorageKind::Local,
+                BlobStorageKey::parse("attachments/attachment-1/revision-1.txt").unwrap(),
+            ),
+            1,
+            AttachmentCreator::Human(viewer.clone()),
+            1,
+        )
+        .unwrap();
+        let replacement = StoredBlob::new(
+            StorageKind::Local,
+            BlobStorageKey::parse("attachments/attachment-1/revision-2.txt").unwrap(),
+        );
+        let command = AttachmentContentUpdateCommand::new(
+            viewer.clone(),
+            attachment.clone(),
+            content_type.clone(),
+            5,
+            replacement.clone(),
+        )
+        .unwrap();
+        let after = AttachmentRecord::projected(
+            attachment.clone(),
+            conversation.clone(),
+            Some(conversation.clone()),
+            AttachmentFilename::parse("note.txt").unwrap(),
+            5,
+            content_type,
+            replacement,
+            2,
+            AttachmentCreator::Human(viewer.clone()),
+            1,
+        )
+        .unwrap();
+        let authority =
+            AttachmentWriteAuthority::workspace(conversation, viewer.clone(), viewer.clone())
+                .unwrap();
+        AttachmentContentUpdatedFact::committed(&command, &authority, before, after)
+            .unwrap()
+            .bind(&viewer, &attachment)
+            .unwrap()
+            .changed()
+    }
+
+    #[test]
+    fn the_production_hub_implements_the_attachment_changed_port_with_its_real_error() {
+        fn requires_production_impl<T>()
+        where
+            T: AttachmentChangedPublisher<Error = ScopeEventHubError>,
+        {
+        }
+
+        requires_production_impl::<ScopeEventHub>();
+    }
+
+    #[tokio::test]
+    async fn attachment_changed_is_exactly_one_cursor_inert_conversation_side_frame() {
+        let hub = ScopeEventHub::test("epoch-1");
+        let fact = committed_attachment_change();
+
+        AttachmentChangedPublisher::publish(&hub, &fact)
+            .await
+            .unwrap();
+
+        let side = scope_events(
+            &hub,
+            EventScope::ConversationSide(fact.conversation().clone()),
+        );
+        assert_eq!(side.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&side[0]).unwrap(),
+            json!({
+                "kind": "attachment_changed",
+                "payload": {
+                    "attachment_id": "attachment-1",
+                    "content_revision": 2,
+                },
+            })
+        );
+
+        assert!(
+            scope_events(&hub, EventScope::Conversation(fact.conversation().clone())).is_empty(),
+            "an attachment invalidation must not advance the message scope"
+        );
+        assert!(scope_events(&hub, EventScope::Viewer(user())).is_empty());
+        assert!(scope_events(&hub, EventScope::App).is_empty());
+        assert!(
+            scope_events(
+                &hub,
+                EventScope::ConversationSide(
+                    ConversationId::parse("conversation-foreign").unwrap()
+                )
+            )
+            .is_empty(),
+            "a sealed fact must not leak to a foreign conversation"
+        );
+    }
+
+    #[tokio::test]
+    async fn attachment_changed_exposes_the_concrete_hub_failure() {
+        let hub = ScopeEventHub::test("epoch-1");
+        poison_registry(&hub);
+
+        let error = AttachmentChangedPublisher::publish(&hub, &committed_attachment_change())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ScopeEventHubError::RegistryPoisoned));
+    }
+
     /// The closed set of product-event wire `kind`s this transport is allowed to emit.
     /// A `&str` set precisely because `kind` is a string at the wire boundary: nothing but
     /// an explicit enumeration can tell a renamed or newly-added kind from a supported one.
@@ -7140,6 +7291,7 @@ mod tests {
         "attention_badge_updated",
         "viewer_workspaces_changed",
         "saved_changed",
+        "attachment_changed",
     ];
 
     /// The wire `kind` a product event MUST serialize as. Exhaustive by construction: a new
@@ -7167,6 +7319,7 @@ mod tests {
             ProductEvent::AttentionBadgeUpdated(_) => "attention_badge_updated",
             ProductEvent::ViewerWorkspacesChanged { .. } => "viewer_workspaces_changed",
             ProductEvent::SavedChanged(_) => "saved_changed",
+            ProductEvent::AttachmentChanged(_) => "attachment_changed",
             ProductEvent::Test { .. } => "test",
         }
     }
@@ -7250,6 +7403,9 @@ mod tests {
             // authority cannot be exercised here: `SavedChangeFact` is deliberately
             // un-constructable outside `backend-core` (private `committed`/`fact`).
             ProductEvent::SavedChanged(json!({ "message_id": "m-1", "action": "save" })),
+            ProductEvent::AttachmentChanged(
+                json!({ "attachment_id": "attachment-1", "content_revision": 2 }),
+            ),
         ];
         let mut produced = std::collections::BTreeSet::new();
         for event in &samples {

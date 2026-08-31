@@ -55,6 +55,8 @@ use silverhand_backend_core::{
         },
         environment::EnvironmentUnavailable,
     },
+    wire_number::JsSafeInteger,
+    wire_text,
 };
 use silverhand_backend_filesystem::blob_store::{LocalBlobAliasOutcome, LocalBlobAliasStore};
 
@@ -269,8 +271,8 @@ where
             return internal();
         }
     };
-    if i64::try_from(read.actual_size()).ok() != Some(record.size()) {
-        tracing::error!(attachment=%attachment.as_str(), expected=record.size(), actual=read.actual_size(), "attachment blob size differs from committed row");
+    if i64::try_from(read.actual_size()).ok() != Some(record.size().get()) {
+        tracing::error!(attachment=%attachment.as_str(), expected=record.size().get(), actual=read.actual_size(), "attachment blob size differs from committed row");
         return internal();
     }
     download_success(record, read.into_bytes())
@@ -639,7 +641,9 @@ async fn multipart_envelope(
             })
         })?;
     let mut found = None;
+    let mut file_seen = false;
     let mut target = None;
+    let mut target_seen = false;
     loop {
         let field = multipart.next_field().await.map_err(|failure| {
             Box::new(if failure.status() == StatusCode::PAYLOAD_TOO_LARGE {
@@ -653,28 +657,28 @@ async fn multipart_envelope(
             })
         })?;
         let Some(field) = field else { break };
-        if capture_target
-            && field.name() == Some("target")
-            && field.file_name().is_none()
-            && target.is_none()
-        {
-            let bytes = field.bytes().await.map_err(|failure| {
-                Box::new(if failure.status() == StatusCode::PAYLOAD_TOO_LARGE {
-                    coded(
-                        StatusCode::PAYLOAD_TOO_LARGE,
-                        "attachment exceeds 10 MiB",
-                        "too_large",
-                    )
-                } else {
-                    error(StatusCode::BAD_REQUEST, "multipart/form-data required")
-                })
-            })?;
-            target = String::from_utf8(bytes.to_vec()).ok();
+        if capture_target && field.name() == Some("target") && !target_seen {
+            target_seen = true;
+            if field.file_name().is_none() {
+                let bytes = field.bytes().await.map_err(|failure| {
+                    Box::new(if failure.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                        coded(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            "attachment exceeds 10 MiB",
+                            "too_large",
+                        )
+                    } else {
+                        error(StatusCode::BAD_REQUEST, "multipart/form-data required")
+                    })
+                })?;
+                target = String::from_utf8(bytes.to_vec()).ok();
+            }
             continue;
         }
-        if field.name() != Some("file") || found.is_some() {
+        if field.name() != Some("file") || file_seen {
             continue;
         }
+        file_seen = true;
         let Some(filename) = field.file_name().map(str::to_owned) else {
             continue;
         };
@@ -760,15 +764,25 @@ where
         deleted: &silverhand_backend_core::blob_store::StoredBlob,
         alias: &silverhand_backend_core::blob_store::BlobAliasId,
     ) -> Result<(), Self::Error> {
-        self.0
-            .delete(deleted)
-            .await
-            .map_err(|error| BlobMaintenanceError::from_source("delete attachment blob", error))?;
-        self.0
-            .delete_alias(deleted, alias)
-            .await
-            .map_err(|error| BlobMaintenanceError::from_source("delete attachment alias", error))?;
-        Ok(())
+        let physical =
+            self.0.delete(deleted).await.map_err(|error| {
+                BlobMaintenanceError::from_source("delete attachment blob", error)
+            });
+        let alias =
+            self.0.delete_alias(deleted, alias).await.map_err(|error| {
+                BlobMaintenanceError::from_source("delete attachment alias", error)
+            });
+
+        // Both committed cleanup legs are best-effort and independent. A physical
+        // deletion failure must not strand the stable alias merely because it happened
+        // first; report both failures when both authorities reject cleanup.
+        match (physical, alias) {
+            (Ok(_), Ok(_)) => Ok(()),
+            (Err(error), Ok(_)) | (Ok(_), Err(error)) => Err(error),
+            (Err(primary), Err(secondary)) => {
+                Err(BlobMaintenanceError::combined(primary, secondary))
+            }
+        }
     }
 }
 
@@ -789,7 +803,33 @@ impl BlobMaintenanceError {
     fn message(operation: &'static str, message: &'static str) -> Self {
         Self::from_source(operation, std::io::Error::other(message))
     }
+
+    fn combined(primary: Self, secondary: Self) -> Self {
+        Self::from_source(
+            "delete attachment blob and alias",
+            CombinedBlobMaintenanceFailures { primary, secondary },
+        )
+    }
 }
+
+#[derive(Debug)]
+struct CombinedBlobMaintenanceFailures {
+    primary: BlobMaintenanceError,
+    secondary: BlobMaintenanceError,
+}
+
+impl fmt::Display for CombinedBlobMaintenanceFailures {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "primary [{}]; secondary [{}]",
+            crate::error::describe(&self.primary),
+            crate::error::describe(&self.secondary)
+        )
+    }
+}
+
+impl Error for CombinedBlobMaintenanceFailures {}
 
 impl fmt::Display for BlobMaintenanceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -916,7 +956,7 @@ fn parse_list_query(raw: ListQueryWire) -> Result<AttachmentListQuery, Box<Respo
     };
     let since = parse_epoch(raw.since.as_deref(), "since")?;
     let until = parse_epoch(raw.until.as_deref(), "until")?;
-    AttachmentListQuery::new(limit, cursor, sender, since, until)
+    AttachmentListQuery::new_safe(limit, cursor, sender, since, until)
         .map_err(|_| Box::new(invalid_filter("since must be strictly less than until")))
 }
 
@@ -924,7 +964,7 @@ fn parse_limit(raw: Option<&str>) -> u16 {
     let Some(raw) = raw else {
         return DEFAULT_LIST_LIMIT;
     };
-    let raw = raw.trim_start();
+    let raw = crate::messaging::admission::ecmascript_trim(raw);
     if raw.starts_with('-') {
         return DEFAULT_LIST_LIMIT;
     }
@@ -944,7 +984,10 @@ fn parse_limit(raw: Option<&str>) -> u16 {
     }
 }
 
-fn parse_epoch(raw: Option<&str>, name: &'static str) -> Result<Option<i64>, Box<Response>> {
+fn parse_epoch(
+    raw: Option<&str>,
+    name: &'static str,
+) -> Result<Option<JsSafeInteger>, Box<Response>> {
     let Some(raw) = raw else { return Ok(None) };
     let message = match name {
         "since" => "since must be a non-negative integer epoch-ms",
@@ -956,6 +999,7 @@ fn parse_epoch(raw: Option<&str>, name: &'static str) -> Result<Option<i64>, Box
     let value = raw
         .parse::<i64>()
         .map_err(|_| Box::new(invalid_filter(message)))?;
+    let value = JsSafeInteger::new(value).map_err(|_| Box::new(invalid_filter(message)))?;
     Ok(Some(value))
 }
 
@@ -968,8 +1012,8 @@ fn decode_cursor(raw: &str) -> Result<AttachmentListCursor, ()> {
         .ok_or(())?;
     let appeared_at = values[0].as_i64().ok_or(())?;
     let attachment = values[1].as_str().ok_or(())?;
-    AttachmentListCursor::new(
-        appeared_at,
+    AttachmentListCursor::new_safe(
+        JsSafeInteger::new(appeared_at).map_err(|_| ())?,
         AttachmentId::parse(attachment).map_err(|_| ())?,
     )
     .map_err(|_| ())
@@ -977,7 +1021,7 @@ fn decode_cursor(raw: &str) -> Result<AttachmentListCursor, ()> {
 
 fn encode_cursor(cursor: &AttachmentListCursor) -> String {
     URL_SAFE_NO_PAD.encode(
-        serde_json::to_vec(&(cursor.appeared_at(), cursor.attachment().as_str()))
+        serde_json::to_vec(&(cursor.appeared_at().get(), cursor.attachment().as_str()))
             .expect("typed attachment cursor always serializes"),
     )
 }
@@ -1006,7 +1050,7 @@ fn list_item_json(
             "from_kind": from_kind,
             "from_user_id": from_user_id,
             "from_agent_id": from_agent_id,
-            "appeared_at": source.appeared_at(),
+            "appeared_at": source.appeared_at().get(),
         }
     })
 }
@@ -1044,20 +1088,20 @@ fn record_json(record: &AttachmentRecord) -> Value {
         "channel_id": record.channel().as_str(),
         "source_conversation_id": record.source_conversation().map(ConversationId::as_str),
         "filename": record.filename().as_str(),
-        "size": record.size(),
+        "size": record.size().get(),
         "content_type": record.content_type().as_str(),
         "storage": record.blob().storage().as_str(),
-        "content_revision": record.content_revision(),
+        "content_revision": record.content_revision().get(),
         "created_by_kind": record.creator().kind(),
         "created_by_id": record.creator().id(),
-        "created_at": record.created_at(),
+        "created_at": record.created_at().get(),
     })
 }
 
 pub fn changed_event(fact: &AttachmentChangedFact) -> Value {
     json!({
         "attachment_id": fact.attachment().as_str(),
-        "content_revision": fact.content_revision(),
+        "content_revision": fact.content_revision().get(),
     })
 }
 
@@ -1074,7 +1118,8 @@ pub(crate) fn download_success(record: &AttachmentRecord, bytes: Vec<u8>) -> Res
     );
     response.headers_mut().insert(
         header::CONTENT_LENGTH,
-        HeaderValue::from_str(&record.size().to_string()).expect("nonnegative size is a header"),
+        HeaderValue::from_str(&record.size().get().to_string())
+            .expect("nonnegative size is a header"),
     );
     response.headers_mut().insert(
         header::CONTENT_DISPOSITION,
@@ -1089,7 +1134,7 @@ pub(crate) fn download_success(record: &AttachmentRecord, bytes: Vec<u8>) -> Res
 }
 
 fn content_disposition(filename: &str) -> String {
-    let name = filename.trim();
+    let name = crate::messaging::admission::ecmascript_trim(filename);
     let name = if name.is_empty() {
         "download.bin"
     } else {
@@ -1127,15 +1172,24 @@ fn sanitize_filename(raw: &str) -> Option<String> {
                 character
             }
         })
-        .filter(|character| !character.is_control())
+        .filter(|character| !matches!(character, '\0'..='\u{1f}'))
         .collect();
-    let cleaned = cleaned.trim();
+    let cleaned = crate::messaging::admission::ecmascript_trim(&cleaned);
     if cleaned.is_empty() {
         return None;
     }
-    let mut end = cleaned.len().min(255);
-    while !cleaned.is_char_boundary(end) {
-        end -= 1;
+    if wire_text::within_utf16_max(cleaned, 255) {
+        return Some(cleaned.to_owned());
+    }
+    let mut units = 0;
+    let mut end = 0;
+    for (offset, character) in cleaned.char_indices() {
+        let next = units + character.len_utf16();
+        if next > 255 {
+            break;
+        }
+        units = next;
+        end = offset + character.len_utf8();
     }
     Some(cleaned[..end].to_owned())
 }
@@ -1147,7 +1201,7 @@ fn detect_content_type(
 ) -> Option<AttachmentContentType> {
     let normalized = explicit
         .and_then(|value| value.split(';').next())
-        .map(str::trim)
+        .map(crate::messaging::admission::ecmascript_trim)
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     let generic = matches!(

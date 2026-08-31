@@ -14,11 +14,12 @@ use crate::{
     identity::{AgentId, ConversationId},
     messaging::{AttachmentId, DirectPairAllocation, ResolvedStream},
     runtime_credential::RuntimePrincipal,
+    wire_number::JsSafeInteger,
 };
 
 use super::{
-    ATTACHMENT_WIRE_MAX_SAFE_INTEGER, AttachmentChangedFact, AttachmentContentType,
-    AttachmentCreator, AttachmentFilename, AttachmentRecord,
+    AttachmentChangedFact, AttachmentContentType, AttachmentCreator, AttachmentFilename,
+    AttachmentRecord,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -280,12 +281,15 @@ impl AgentAttachmentCreateCommand {
         blob: StoredBlob,
         created_at: i64,
     ) -> Result<Self, InvalidAgentAttachmentWriteCommand> {
-        if size == 0 {
+        let size = JsSafeInteger::new(size).map_err(|_| InvalidAgentAttachmentWriteCommand)?;
+        let created_at =
+            JsSafeInteger::new(created_at).map_err(|_| InvalidAgentAttachmentWriteCommand)?;
+        if size.get() < 1 || created_at.get() < 0 {
             return Err(InvalidAgentAttachmentWriteCommand);
         }
         let alias = BlobAliasId::from_semantic_id(attachment.as_str())
             .map_err(|_| InvalidAgentAttachmentWriteCommand)?;
-        let record = AttachmentRecord::projected(
+        let record = AttachmentRecord::projected_safe(
             attachment,
             admitted.conversation().clone(),
             Some(admitted.conversation().clone()),
@@ -293,7 +297,7 @@ impl AgentAttachmentCreateCommand {
             size,
             content_type,
             blob,
-            1,
+            JsSafeInteger::new(1).expect("one is wire-safe"),
             AttachmentCreator::Agent(admitted.agent().clone()),
             created_at,
         )
@@ -503,7 +507,7 @@ pub struct AgentAttachmentContentUpdateCommand {
     requested: AttachmentId,
     conversation: ConversationId,
     expected_content_type: AttachmentContentType,
-    replacement_size: i64,
+    replacement_size: JsSafeInteger,
     replacement_blob: StoredBlob,
 }
 
@@ -513,7 +517,9 @@ impl AgentAttachmentContentUpdateCommand {
         replacement_size: i64,
         replacement_blob: StoredBlob,
     ) -> Result<Self, InvalidAgentAttachmentWriteCommand> {
-        if !(1..=ATTACHMENT_WIRE_MAX_SAFE_INTEGER).contains(&replacement_size) {
+        let replacement_size =
+            JsSafeInteger::new(replacement_size).map_err(|_| InvalidAgentAttachmentWriteCommand)?;
+        if replacement_size.get() < 1 {
             return Err(InvalidAgentAttachmentWriteCommand);
         }
         BlobAliasId::from_semantic_id(admitted.record().id().as_str())
@@ -548,7 +554,7 @@ impl AgentAttachmentContentUpdateCommand {
         &self.expected_content_type
     }
 
-    pub const fn replacement_size(&self) -> i64 {
+    pub const fn replacement_size(&self) -> JsSafeInteger {
         self.replacement_size
     }
 
@@ -586,8 +592,9 @@ impl AgentAttachmentContentUpdatedFact {
     ) -> Result<Self, AgentAttachmentIdentityMismatch> {
         let expected_revision = before
             .content_revision()
+            .get()
             .checked_add(1)
-            .filter(|value| *value <= ATTACHMENT_WIRE_MAX_SAFE_INTEGER)
+            .and_then(|value| JsSafeInteger::new(value).ok())
             .ok_or(AgentAttachmentIdentityMismatch)?;
         if selected.record != before
             || selected.runtime != command.runtime
@@ -1107,7 +1114,8 @@ mod tests {
             fact.bind(&runtime, &attachment("id"))
                 .unwrap()
                 .changed()
-                .content_revision(),
+                .content_revision()
+                .get(),
             2
         );
     }

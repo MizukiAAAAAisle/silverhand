@@ -549,8 +549,8 @@ where
             return internal();
         }
     };
-    if i64::try_from(read.actual_size()).ok() != Some(record.size()) {
-        tracing::error!(attachment=%attachment.as_str(), expected=record.size(), actual=read.actual_size(), "agent attachment blob size differs from committed row");
+    if i64::try_from(read.actual_size()).ok() != Some(record.size().get()) {
+        tracing::error!(attachment=%attachment.as_str(), expected=record.size().get(), actual=read.actual_size(), "agent attachment blob size differs from committed row");
         return internal();
     }
     download_success(record, read.into_bytes())
