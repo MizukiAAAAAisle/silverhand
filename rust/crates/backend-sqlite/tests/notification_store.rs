@@ -31,7 +31,7 @@ async fn seeded(path: &std::path::Path) {
 }
 
 #[tokio::test]
-async fn viewer_read_and_atomic_clear_return_exact_committed_workspaces() {
+async fn viewer_read_and_atomic_clear_return_the_marked_count() {
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("n.sqlite");
     seeded(&path).await;
@@ -63,13 +63,6 @@ async fn viewer_read_and_atomic_clear_return_exact_committed_workspaces() {
         .await
         .unwrap();
     assert_eq!(by_id.marked(), 1);
-    assert_eq!(
-        by_id
-            .badge_workspaces()
-            .map(|workspace| workspace.as_str())
-            .collect::<Vec<_>>(),
-        ["w1"]
-    );
     let by_workspace = n
         .clear(
             viewer.clone(),
@@ -80,7 +73,6 @@ async fn viewer_read_and_atomic_clear_return_exact_committed_workspaces() {
         .await
         .unwrap();
     assert_eq!(by_workspace.marked(), 1);
-    assert_eq!(by_workspace.badge_workspaces().count(), 0);
     let by_conversation = n
         .clear(
             viewer.clone(),
@@ -91,13 +83,11 @@ async fn viewer_read_and_atomic_clear_return_exact_committed_workspaces() {
         .await
         .unwrap();
     assert_eq!(by_conversation.marked(), 1);
-    assert_eq!(by_conversation.badge_workspaces().count(), 0);
     let committed = n
         .clear(viewer.clone(), NotificationClearSelector::All)
         .await
         .unwrap();
     assert_eq!(committed.marked(), 1);
-    assert_eq!(committed.badge_workspaces().count(), 0);
     assert!(
         n.list(
             &viewer,

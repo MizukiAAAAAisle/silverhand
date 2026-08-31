@@ -6,20 +6,95 @@ mod tests;
 use axum::{
     Json, Router,
     extract::{Extension, Query, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use serde_json::{Value, json};
+use garde::Validate;
+use serde::Deserialize;
+use serde_json::json;
 use silverhand_backend_core::{
     identity::{ConversationId, UserId, WorkspaceId},
     messaging::{NotificationId, collaboration::notification::*},
 };
 use std::{collections::HashMap, sync::Arc};
 
+use crate::wire_admission::ValidatedJson;
+
 pub const LIST_PATH: &str = "/api/notifications";
 pub const UNREAD_PATH: &str = "/api/notifications/unread";
 pub const READ_PATH: &str = "/api/notifications/read";
+
+/// The mark-read request body — the closed object mirroring the TypeScript
+/// `MarkNotificationsReadInputSchema`. It is an OPEN object exactly as the Zod
+/// schema is (no `deny_unknown_fields`): an unknown key is stripped, never a `422`.
+/// Serde owns the structure (a non-object shape or a wrong field type is a native
+/// decode fault via [`ValidatedJson`]'s object-only path); the single garde rule
+/// carries only the schema-level `.refine` — "specify at least one selector" — as a
+/// stateless semantic refusal. Selector PRECEDENCE and the empty-string
+/// falls-through are the route's derivation, not a field rule, so they are not
+/// spelled twice.
+#[derive(Debug, Default, Deserialize, Validate)]
+#[garde(context(()))]
+#[garde(allow_unvalidated)]
+#[garde(custom(requires_a_selector))]
+struct MarkNotificationsRead {
+    id: Option<String>,
+    workspace_id: Option<String>,
+    conversation_id: Option<String>,
+    all: Option<bool>,
+}
+
+/// The schema-level refine: at least one selector must be present and truthy. As a
+/// CONTAINER rule it reads the whole struct, mirroring the TypeScript truthiness
+/// exactly — an empty-string id/workspace/conversation is NOT a selector (falsy),
+/// and `all` counts only when literally `true`. A blank body, an all-empty body, or
+/// `{"all":false}` fails this one rule → the minimal semantic `422`.
+fn requires_a_selector(body: &MarkNotificationsRead, _: &()) -> garde::Result {
+    if body.selector().is_some() {
+        Ok(())
+    } else {
+        Err(garde::Error::new(
+            "must specify id, workspace_id, conversation_id, or all",
+        ))
+    }
+}
+
+impl MarkNotificationsRead {
+    /// Resolve the committed selector by TypeScript precedence: `id`, then
+    /// `workspace_id`, then `conversation_id`, then `all`. A present-but-empty string
+    /// is falsy and skipped (matching the TS `if (id)` truthiness), so a
+    /// higher-priority empty field falls through to the next selector rather than
+    /// winning as a malformed id. A syntactically present but unparseable id yields
+    /// `None` at that arm and likewise falls through — the same as an empty string —
+    /// so the selector is only ever a well-formed coordinate.
+    fn selector(&self) -> Option<NotificationClearSelector> {
+        if let Some(value) = self.id.as_deref().filter(|value| !value.is_empty()) {
+            NotificationId::parse(value)
+                .ok()
+                .map(NotificationClearSelector::Id)
+        } else if let Some(value) = self
+            .workspace_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            WorkspaceId::parse(value)
+                .ok()
+                .map(NotificationClearSelector::Workspace)
+        } else if let Some(value) = self
+            .conversation_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            ConversationId::parse(value)
+                .ok()
+                .map(NotificationClearSelector::Conversation)
+        } else if self.all == Some(true) {
+            Some(NotificationClearSelector::All)
+        } else {
+            None
+        }
+    }
+}
 
 struct Inner<R, C, A> {
     reads: R,
@@ -96,62 +171,24 @@ async fn unread<R: NotificationReadPort, C: NotificationClearPort, A: Notificati
 async fn clear<R: NotificationReadPort, C: NotificationClearPort, A: NotificationAftermath>(
     State(s): State<NotificationState<R, C, A>>,
     principal: Option<Extension<UserId>>,
-    body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+    body: Result<
+        ValidatedJson<MarkNotificationsRead>,
+        crate::wire_admission::ValidatedJsonRejection,
+    >,
 ) -> Response {
-    let value = match body {
-        Ok(Json(v)) => v,
-        Err(_) => return invalid_selector(),
+    // Structure and content-type are axum's native verdict (object-only decode →
+    // 400/415/422); the one garde rule collapses to the minimal semantic 422. Both
+    // planes are decided BEFORE any principal or authority is touched — a
+    // well-formed selector is required to reach the write, but a request that fails
+    // admission never reaches the clear port or the aftermath.
+    let ValidatedJson(request) = match body {
+        Ok(request) => request,
+        Err(rejection) => return rejection.into_response(),
     };
-    let Some(o) = value.as_object() else {
-        return invalid_root_type(&value);
-    };
-    let mut issues = Vec::new();
-    for key in ["id", "workspace_id", "conversation_id"] {
-        if let Some(value) = o.get(key)
-            && !value.is_string()
-        {
-            issues.push(type_issue("string", value, key));
-        }
-    }
-    if let Some(value) = o.get("all")
-        && !value.is_boolean()
-    {
-        issues.push(type_issue("boolean", value, "all"));
-    }
-    if !issues.is_empty() {
-        return invalid_issues(issues);
-    }
-    let selector = if let Some(v) = o
-        .get("id")
-        .and_then(Value::as_str)
-        .filter(|v| !v.is_empty())
-    {
-        NotificationId::parse(v)
-            .ok()
-            .map(NotificationClearSelector::Id)
-    } else if let Some(v) = o
-        .get("workspace_id")
-        .and_then(Value::as_str)
-        .filter(|v| !v.is_empty())
-    {
-        WorkspaceId::parse(v)
-            .ok()
-            .map(NotificationClearSelector::Workspace)
-    } else if let Some(v) = o
-        .get("conversation_id")
-        .and_then(Value::as_str)
-        .filter(|v| !v.is_empty())
-    {
-        ConversationId::parse(v)
-            .ok()
-            .map(NotificationClearSelector::Conversation)
-    } else if o.get("all") == Some(&Value::Bool(true)) {
-        Some(NotificationClearSelector::All)
-    } else {
-        None
-    };
-    let Some(selector) = selector else {
-        return invalid_selector();
+    // Admission guaranteed a selector exists (the refine), so this is infallible;
+    // resolving it here keeps the precedence in one place.
+    let Some(selector) = request.selector() else {
+        return crate::wire_admission::invalid_input();
     };
     let Some(viewer) = viewer(principal) else {
         return internal();
@@ -220,56 +257,12 @@ fn is_ecmascript_trim_whitespace(value: char) -> bool {
                 | '\r'
     )
 }
-fn notification_wire(n: &Notification) -> Value {
-    json!({"id":n.id.as_str(),"kind":n.kind.as_str(),"user_id":n.user.as_ref().map(|v|v.as_str()),"agent_id":n.agent.as_ref().map(|v|v.as_str()),"workspace_id":n.workspace.as_ref().map(|v|v.as_str()),"conversation_id":n.conversation.as_ref().map(|v|v.as_str()),"message_id":n.message.as_ref().map(|v|v.as_str()),"thread_root_id":n.thread_root.as_ref().map(|v|v.as_str()),"source_workspace_id":n.source_workspace.as_ref().map(|v|v.as_str()),"source_conversation_id":n.source_conversation.as_ref().map(|v|v.as_str()),"source_message_id":n.source_message.as_ref().map(|v|v.as_str()),"payload":n.payload_json.as_deref().and_then(|v|serde_json::from_str::<Value>(v).ok()),"read_at":n.read_at.map(NotificationTimestamp::get),"created_at":n.created_at.get()})
-}
-fn received_type(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-fn type_issue(expected: &'static str, value: &Value, key: &'static str) -> Value {
-    let received = received_type(value);
-    json!({
-        "code":"invalid_type",
-        "expected":expected,
-        "received":received,
-        "path":[key],
-        "message":format!("Expected {expected}, received {received}")
-    })
-}
-fn invalid_root_type(value: &Value) -> Response {
-    let received = received_type(value);
-    invalid_issues(vec![json!({
-        "code":"invalid_type",
-        "expected":"object",
-        "received":received,
-        "path":[],
-        "message":format!("Expected object, received {received}")
-    })])
-}
-fn invalid_selector() -> Response {
-    invalid_issues(vec![json!({
-        "code":"custom",
-        "message":"must specify id, workspace_id, conversation_id, or all",
-        "path":[]
-    })])
-}
-fn invalid_issues(issues: Vec<Value>) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({"error":"invalid input","issues":issues})),
-    )
-        .into_response()
+fn notification_wire(n: &Notification) -> serde_json::Value {
+    json!({"id":n.id.as_str(),"kind":n.kind.as_str(),"user_id":n.user.as_ref().map(|v|v.as_str()),"agent_id":n.agent.as_ref().map(|v|v.as_str()),"workspace_id":n.workspace.as_ref().map(|v|v.as_str()),"conversation_id":n.conversation.as_ref().map(|v|v.as_str()),"message_id":n.message.as_ref().map(|v|v.as_str()),"thread_root_id":n.thread_root.as_ref().map(|v|v.as_str()),"source_workspace_id":n.source_workspace.as_ref().map(|v|v.as_str()),"source_conversation_id":n.source_conversation.as_ref().map(|v|v.as_str()),"source_message_id":n.source_message.as_ref().map(|v|v.as_str()),"payload":n.payload_json.as_deref().and_then(|v|serde_json::from_str::<serde_json::Value>(v).ok()),"read_at":n.read_at.map(NotificationTimestamp::get),"created_at":n.created_at.get()})
 }
 fn internal() -> Response {
     (
-        StatusCode::INTERNAL_SERVER_ERROR,
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({"error":"internal server error"})),
     )
         .into_response()

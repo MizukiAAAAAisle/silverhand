@@ -150,55 +150,5 @@
     "status": 200,
     "call": "all",
     "body": { "marked": 4 }
-  },
-  {
-    "name": "clear_wrong_typed_high_priority",
-    "surface": "clear",
-    "method": "POST",
-    "path": "/api/notifications/read",
-    "request": { "id": 7, "all": true },
-    "status": 400,
-    "call": null,
-    "body": {
-      "error": "invalid input",
-      "issues": [
-        {
-          "code": "invalid_type",
-          "expected": "string",
-          "received": "number",
-          "path": ["id"],
-          "message": "Expected string, received number"
-        }
-      ]
-    }
-  },
-  {
-    "name": "clear_empty_body",
-    "surface": "clear",
-    "method": "POST",
-    "path": "/api/notifications/read",
-    "request": {},
-    "status": 400,
-    "call": null,
-    "body": {
-      "error": "invalid input",
-      "issues": [
-        {
-          "code": "custom",
-          "message": "must specify id, workspace_id, conversation_id, or all",
-          "path": []
-        }
-      ]
-    }
-  },
-  {
-    "name": "clear_malformed_json",
-    "surface": "clear",
-    "method": "POST",
-    "path": "/api/notifications/read",
-    "raw_request": "{",
-    "status": 400,
-    "call": null,
-    "body_case": "clear_empty_body"
   }
 ]

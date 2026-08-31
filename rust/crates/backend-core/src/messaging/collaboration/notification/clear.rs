@@ -25,15 +25,10 @@ mod tests {
             Ok(CommittedNotificationClear::changed(
                 viewer,
                 NonZeroU64::new(2).unwrap(),
-                BadgeWorkspaceSet::from_workspaces([
-                    WorkspaceId::parse("w1").unwrap(),
-                    WorkspaceId::parse("w1").unwrap(),
-                    WorkspaceId::parse("w2").unwrap(),
-                ]),
             ))
         }
     }
-    struct Effects(Mutex<Vec<&'static str>>);
+    struct Effects(Mutex<u32>);
     #[derive(Debug, thiserror::Error)]
     #[error("boom")]
     struct Boom;
@@ -42,24 +37,13 @@ mod tests {
             &self,
             _: &CommittedNotificationClear,
         ) -> Result<(), NotificationClearFailure> {
-            self.0.lock().unwrap().push("unread");
+            *self.0.lock().unwrap() += 1;
             Err(NotificationClearFailure::from_source(Boom))
-        }
-        async fn badge_changed(
-            &self,
-            _: &CommittedNotificationClear,
-            w: &WorkspaceId,
-        ) -> Result<(), NotificationClearFailure> {
-            self.0
-                .lock()
-                .unwrap()
-                .push(if w.as_str() == "w1" { "w1" } else { "w2" });
-            Ok(())
         }
     }
     #[tokio::test]
-    async fn committed_clear_attempts_every_effect_and_keeps_the_first_failure() {
-        let effects = Effects(Mutex::new(vec![]));
+    async fn a_committed_clear_fires_the_unread_effect_once_and_keeps_its_failure() {
+        let effects = Effects(Mutex::new(0));
         let result = clear_notifications(
             &Port,
             &effects,
@@ -68,84 +52,79 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(effects.0.into_inner().unwrap(), ["unread", "w1", "w2"]);
+        // The unread signal fires exactly once for a change, and a transport failure is
+        // carried on the result rather than flipping the already-committed clear.
+        assert_eq!(*effects.0.lock().unwrap(), 1);
         assert_eq!(result.committed().marked(), 2);
         assert!(result.first_failure().is_some());
     }
+
+    struct Unchanged;
+    impl NotificationClearPort for Unchanged {
+        type Error = Infallible;
+        async fn clear(
+            &self,
+            viewer: UserId,
+            _: NotificationClearSelector,
+        ) -> Result<CommittedNotificationClear, Self::Error> {
+            Ok(CommittedNotificationClear::unchanged(viewer))
+        }
+    }
+    struct CountingEffects(Mutex<u32>);
+    impl NotificationAftermath for CountingEffects {
+        async fn unread_changed(
+            &self,
+            _: &CommittedNotificationClear,
+        ) -> Result<(), NotificationClearFailure> {
+            *self.0.lock().unwrap() += 1;
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn an_unchanged_clear_fires_no_effect() {
+        let effects = CountingEffects(Mutex::new(0));
+        let result = clear_notifications(
+            &Unchanged,
+            &effects,
+            UserId::parse("u").unwrap(),
+            NotificationClearSelector::All,
+        )
+        .await
+        .unwrap();
+        assert_eq!(*effects.0.lock().unwrap(), 0);
+        assert_eq!(result.committed().marked(), 0);
+        assert!(result.first_failure().is_none());
+    }
 }
 
+/// The committed witness of a directed-notification mark-read: who acted, and how many
+/// rows the write actually moved. It carries NO absolute badge projection — that value
+/// is deliberately left to the client's authoritative REST refetch, because an absolute
+/// count published out of commit order under a last-write-wins consumer can permanently
+/// write back a stale value (see the module effect contract). The write authority seals
+/// only the target result (`marked`); "which badge value is current" is never sealed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommittedNotificationClear {
     viewer: UserId,
-    change: NotificationClearChange,
-}
-
-/// A canonical, duplicate-free set of workspaces whose absolute tiered badge
-/// changed across the committed clear.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct BadgeWorkspaceSet(Vec<WorkspaceId>);
-
-impl BadgeWorkspaceSet {
-    pub fn from_workspaces(workspaces: impl IntoIterator<Item = WorkspaceId>) -> Self {
-        let mut workspaces = workspaces.into_iter().collect::<Vec<_>>();
-        workspaces.sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
-        workspaces.dedup_by(|left, right| left.as_str() == right.as_str());
-        Self(workspaces)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &WorkspaceId> {
-        self.0.iter()
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum NotificationClearChange {
-    Unchanged,
-    Changed {
-        marked: NonZeroU64,
-        badge_workspaces: BadgeWorkspaceSet,
-    },
+    marked: u64,
 }
 
 impl CommittedNotificationClear {
     pub fn unchanged(viewer: UserId) -> Self {
-        Self {
-            viewer,
-            change: NotificationClearChange::Unchanged,
-        }
+        Self { viewer, marked: 0 }
     }
 
-    pub fn changed(
-        viewer: UserId,
-        marked: NonZeroU64,
-        badge_workspaces: BadgeWorkspaceSet,
-    ) -> Self {
+    pub fn changed(viewer: UserId, marked: NonZeroU64) -> Self {
         Self {
             viewer,
-            change: NotificationClearChange::Changed {
-                marked,
-                badge_workspaces,
-            },
+            marked: marked.get(),
         }
     }
     pub fn viewer(&self) -> &UserId {
         &self.viewer
     }
     pub fn marked(&self) -> u64 {
-        match &self.change {
-            NotificationClearChange::Unchanged => 0,
-            NotificationClearChange::Changed { marked, .. } => marked.get(),
-        }
-    }
-    pub fn badge_workspaces(&self) -> impl Iterator<Item = &WorkspaceId> {
-        match &self.change {
-            NotificationClearChange::Unchanged => None,
-            NotificationClearChange::Changed {
-                badge_workspaces, ..
-            } => Some(badge_workspaces.iter()),
-        }
-        .into_iter()
-        .flatten()
+        self.marked
     }
 }
 
@@ -158,15 +137,15 @@ pub trait NotificationClearPort {
     ) -> impl Future<Output = Result<CommittedNotificationClear, Self::Error>> + Send;
 }
 
+/// The post-commit effect of a directed-notification clear: a single viewer-private
+/// signal that the viewer's unread state changed. It carries no absolute projection
+/// value; a consumer treats it as a refetch trigger for the authoritative read, so
+/// out-of-order delivery of two clears converges on the current committed state rather
+/// than letting an earlier commit's stale value win.
 pub trait NotificationAftermath {
     fn unread_changed(
         &self,
         fact: &CommittedNotificationClear,
-    ) -> impl Future<Output = Result<(), NotificationClearFailure>> + Send;
-    fn badge_changed(
-        &self,
-        fact: &CommittedNotificationClear,
-        workspace: &WorkspaceId,
     ) -> impl Future<Output = Result<(), NotificationClearFailure>> + Send;
 }
 
@@ -206,17 +185,13 @@ pub async fn clear_notifications<P: NotificationClearPort>(
 ) -> Result<ClearNotifications, P::Error> {
     let committed = port.clear(viewer, selector).await?;
     let mut first_failure = None;
-    if committed.marked() > 0 {
-        if let Err(error) = aftermath.unread_changed(&committed).await {
-            first_failure = Some(error);
-        }
-        for workspace in committed.badge_workspaces() {
-            if let Err(error) = aftermath.badge_changed(&committed, workspace).await
-                && first_failure.is_none()
-            {
-                first_failure = Some(error);
-            }
-        }
+    // A no-op clear moved no unread state, so it owes no signal. A real change fires the
+    // unread signal exactly once; a transport failure is retained but never flips the
+    // already-committed result.
+    if committed.marked() > 0
+        && let Err(error) = aftermath.unread_changed(&committed).await
+    {
+        first_failure = Some(error);
     }
     Ok(ClearNotifications {
         committed,
