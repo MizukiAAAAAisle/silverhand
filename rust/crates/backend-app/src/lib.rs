@@ -30,10 +30,12 @@ use silverhand_backend_core::{
     teardown::computer_delete::DeleteComputer,
 };
 use silverhand_backend_filesystem::{
-    audit_sink::{AgentAuditFileSink, AppTag, CliPreflightFileSink},
+    audit_sink::{AgentAuditFileSink, AppTag, CliAuditFile, CliPreflightFileSink},
     blob_store::LocalBlobStore,
     runtime_detection::MachineRuntimeDetector,
 };
+#[cfg(test)]
+use silverhand_backend_server::internal_agent::cli_invoke::CLI_INVOKE_PRODUCTION_PERIMETER;
 use silverhand_backend_server::{
     access, agent_name_availability,
     auth::{PublicJsonUnauthorized, require_human_session},
@@ -58,6 +60,7 @@ use silverhand_backend_server::{
     host_resources, host_runtime,
     human_auth::{self, HumanAuthDeps},
     internal_agent::{
+        cli_invoke::audit_cli_invocations,
         diagnostics::cli_trace::cli_trace_router,
         peer_profile::{PeerProfilePorts, peer_profile_router},
         profile::self_profile_router,
@@ -491,14 +494,16 @@ pub struct PreparedApp {
     /// the daemon transport its legs drive is still alive — cancelling any in-flight leg and
     /// rejecting any dispatched afterward, exactly like the deletion resumer above.
     create_aftermath: CreateAftermath,
-    /// #2256/#2257: the ONE composition-owned CLI preflight-failure audit sink. Required
-    /// (not optional) because #2257 MOUNTS its consumer — a mounted audit producer must
+    /// #2256/#2261: the ONE composition-owned CLI audit-file lifecycle owner. Its two
+    /// narrow facades record preflight failures and authenticated invocations into the
+    /// same `cli-*.log`; neither facade can open or close the writer. Required
+    /// (not optional) because mounted audit producers must
     /// have a durable sink, so bound-listener finalization fails closed without a log
     /// directory rather than degrading to a no-op. Carried so BOTH shutdown paths
     /// flush+close the same instance
     /// idempotently; it holds a background writer task whose queued lines must drain to
     /// disk before the process exits.
-    cli_audit_sink: CliPreflightFileSink<SystemProcessClock>,
+    cli_audit_sink: CliAuditFile<SystemProcessClock>,
     /// #2254/#2257: the ONE composition-owned owner-only agent-chat audit sink. Required on
     /// the same footing as [`Self::cli_audit_sink`] — its owner-audit read routes are
     /// mounted, so a durable sink is a startup precondition, never a no-op. Carried so BOTH
@@ -557,7 +562,7 @@ impl PreparedApp {
     /// file.
     #[cfg(test)]
     fn cli_audit_sink(&self) -> CliPreflightFileSink<SystemProcessClock> {
-        self.cli_audit_sink.clone()
+        self.cli_audit_sink.preflight_sink()
     }
 
     /// A clone of the composition-owned agent-chat audit sink, for composition tests to
@@ -813,15 +818,15 @@ where
     // rather than open a second root.
     let blob_store = open("blob store", LocalBlobStore::open(&config.blobs_root)).await?;
 
-    // #2256/#2257: the ONE CLI preflight-failure audit sink and the ONE agent-chat
-    // audit sink. Both are constructed here in the composition root — the only layer that
+    // #2256/#2261: the ONE CLI audit-file owner and the ONE agent-chat audit sink. Both
+    // are constructed here in the composition root — the only layer that
     // owns a filesystem side effect's lifecycle — and stamped with the launcher's `app`
     // base (embedded launcher → the desktop base, remote-only launcher → the server
     // base), sampling this boot's UTC filename from the single process wall clock.
     //
-    // #2257 "durable sink BEFORE mount" (shiki option-B, closed at the composition layer):
-    // this task MOUNTS both audit producers (the `POST /internal/agents/{id}/cli-trace`
-    // records route and the owner-only agent-chat read routes). A mounted audit producer
+    // "durable sink BEFORE mount" (shiki option-B, closed at the composition layer):
+    // the CLI owner serves both `cli.preflight_failure` and `cli.invoke`, while the
+    // agent-audit owner serves the owner-only chat reads. A mounted audit producer
     // MUST have a durable, queryable sink — it may not answer success and silently drop the
     // record. So a configured log directory is now a REQUIRED startup contract, not the
     // optional construction #2256 shipped while UNMOUNTED: a missing directory fails startup
@@ -837,8 +842,8 @@ where
         .as_ref()
         .ok_or(StartupError::AuditLogDirectoryRequired)?;
     let cli_audit_sink = open(
-        "cli preflight audit sink",
-        CliPreflightFileSink::open(audit_log_dir.clone(), cli_audit_app, SystemProcessClock),
+        "CLI audit file",
+        CliAuditFile::open(audit_log_dir.clone(), cli_audit_app, SystemProcessClock),
     )
     .await?;
     // The agent-chat audit sink writes its OWN `agent-audit-*` files through #2256's
@@ -863,7 +868,7 @@ where
     // A zero-cost production observer; tests use it to retain clones of the exact two
     // writers opened by this startup and prove that a later failure returns only after
     // both have reached `ClosedShutdown`.
-    observe_audit_sinks(cli_audit_sink.clone(), agent_audit_sink.clone());
+    observe_audit_sinks(cli_audit_sink.preflight_sink(), agent_audit_sink.clone());
     macro_rules! rollback_on_error {
         ($operation:expr) => {
             match $operation {
@@ -1736,11 +1741,11 @@ where
     // bearer a test mints through this clone authenticates against the mounted router.
     #[cfg(test)]
     let test_runtime_credentials = runtime_credentials.clone();
-    // #2250/#2257: the CLI preflight-trace face rides the runtime-credential perimeter.
-    // Its sink is a clone of the ONE required `CliPreflightFileSink` opened above (the sink
-    // is `Clone` over an `Arc`/`Sender`-shared writer with an idempotent `close`, so the
-    // route and the PreparedApp-held original drain the SAME writer task).
-    let agent_products = require_runtime_credential(
+    // #2250/#2261: both CLI audit facades ride this runtime-credential perimeter. The
+    // invoke middleware is inside auth (so 401/auth-storage failures are zero-record) and
+    // outside handlers; cli-trace uses the sibling preflight facade and is explicitly
+    // excluded from invoke counting. Both share the ONE owner closed by PreparedApp.
+    let observed_agent_products = audit_cli_invocations(
         agent_writes
             .merge(task_list_router(TaskListState {
                 boards: task_list_boards,
@@ -1762,9 +1767,10 @@ where
             // behind the SAME runtime-credential perimeter, recording each typed preflight
             // failure through the required audit sink exactly once. The route and the
             // PreparedApp-held original share (via `Arc`) the SAME writer task.
-            .merge(cli_trace_router(cli_audit_sink.clone())),
-        runtime_credentials,
+            .merge(cli_trace_router(cli_audit_sink.preflight_sink())),
+        cli_audit_sink.invoke_sink(),
     );
+    let agent_products = require_runtime_credential(observed_agent_products, runtime_credentials);
 
     let event_config = rollback_on_error!(
         EventWebSocketConfig::production(config.allowed_origins.clone()).map_err(|source| {
@@ -2888,6 +2894,125 @@ mod tests {
             serde_json::json!(3.5),
             "fractional ms verbatim"
         );
+    }
+
+    /// #2261 production wiring falsifier: the real prepared router, the same runtime
+    /// credential authority held by its perimeter, the real invoke middleware/facade, and
+    /// the composition-owned writer form one chain. The anonymous call is zero-record;
+    /// the admitted call produces exactly one flat `cli.invoke` line after shutdown drain.
+    #[tokio::test]
+    async fn prepare_records_one_authenticated_cli_invoke_and_zero_pre_auth_lines() {
+        use std::{
+            convert::Infallible,
+            future::Future,
+            sync::{Arc, Mutex},
+        };
+
+        use silverhand_backend_core::{
+            identity::{ConversationId, DaemonInstanceId},
+            runtime_credential::RuntimeScope,
+        };
+        use silverhand_backend_server::runtime_credential::{
+            RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
+        };
+
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let pool = SqlitePoolOptions::new()
+            .connect(fixture.path.to_str().unwrap())
+            .await
+            .unwrap();
+        for statement in [
+            "INSERT INTO hosts (id, name, kind, created_at, user_id) \
+             VALUES ('h-cli-audit', 'host-cli-audit', 'remote', 1, 'user-1')",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, \
+             created_by_user_id, materialization_status, session_scope) \
+             VALUES ('agent-cli-audit', 'agent-cli-audit', 'qoder', 'h-cli-audit', \
+                     1, 1, 'user-1', 'active', 'agent')",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        pool.close().await;
+
+        let log_dir = tempfile::tempdir().unwrap();
+        let app = prepare(&config_with_log_dir(
+            fixture.path.clone(),
+            Some(log_dir.path().to_path_buf()),
+        ))
+        .await
+        .unwrap();
+
+        #[derive(Clone, Default)]
+        struct CapturingStart(Arc<Mutex<Option<String>>>);
+        impl RuntimeStartTransport for CapturingStart {
+            type Error = Infallible;
+
+            fn dispatch(
+                &self,
+                handoff: &RuntimeStartHandoff,
+            ) -> impl Future<Output = Result<(), RuntimeDispatchFailure<Self::Error>>> + Send
+            {
+                *self.0.lock().unwrap() = Some(handoff.daemon_auth_token().to_owned());
+                std::future::ready(Ok(()))
+            }
+        }
+
+        let transport = CapturingStart::default();
+        app.test_runtime_credentials
+            .dispatch_start(
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-cli-audit").unwrap(),
+                },
+                DaemonInstanceId::parse("daemon-cli-audit").unwrap(),
+                ConversationId::parse(CONVERSATION_ID).unwrap(),
+                &transport,
+            )
+            .await
+            .unwrap();
+        let bearer = format!("Bearer {}", transport.0.lock().unwrap().clone().unwrap());
+        let path = "/internal/agents/agent-cli-audit/profile";
+
+        let (status, body) = request(&app.router, "GET", path, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        let (status, body) = request(&app.router, "GET", path, Some(&bearer)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        app.close_connections().await;
+
+        let mut entries = tokio::fs::read_dir(log_dir.path()).await.unwrap();
+        let mut cli_log = None;
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("cli-") && name.ends_with(".log") {
+                assert!(
+                    cli_log.replace(entry.path()).is_none(),
+                    "one CLI file per boot"
+                );
+            }
+        }
+        let contents = tokio::fs::read_to_string(cli_log.expect("the real CLI audit file"))
+            .await
+            .unwrap();
+        let lines: Vec<serde_json::Value> = contents
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            lines.len(),
+            1,
+            "anonymous auth refusal is zero-record and the admitted request is exact-one"
+        );
+        let line = &lines[0];
+        assert_eq!(line["category"], "cli.invoke");
+        assert_eq!(line["agentId"], "agent-cli-audit");
+        assert_eq!(line["noun"], "profile");
+        assert_eq!(line["verb"], "get");
+        assert_eq!(line["method"], "GET");
+        assert_eq!(line["route_suffix"], "profile");
+        assert_eq!(line["http_status"], 200);
+        assert_eq!(line["status"], "success");
+        assert!(line["request_id"].as_str().is_some());
+        assert!(line["duration_ms"].is_number());
     }
 
     /// #2255/#2257 convergence falsifier — the embedded-bootstrap ENABLE arm. Under the
@@ -4860,25 +4985,11 @@ mod tests {
         // (`/profile/mcp` GET+POST + `/profile/mcp/probe` POST), and the #2250/#2257
         // cli-trace door. All twelve ride the ONE `require_runtime_credential` layer, so anon
         // on any listed method is the same bodiless 401.
-        const RUNTIME_PERIMETER_DOORS: [(&str, &str); 12] = [
-            ("POST", "/internal/agents/agent-1/send-message"),
-            ("GET", "/internal/agents/agent-1/tasks"),
-            ("POST", "/internal/agents/agent-1/stale-message-resolution"),
-            ("GET", "/internal/agents/agent-1/profile"),
-            ("POST", "/internal/agents/agent-1/profile"),
-            ("POST", "/internal/agents/agent-1/avatar"),
-            ("DELETE", "/internal/agents/agent-1/avatar"),
-            ("GET", "/internal/agents/agent-1/peer-profile"),
-            ("GET", "/internal/agents/agent-1/profile/mcp"),
-            ("POST", "/internal/agents/agent-1/profile/mcp"),
-            ("POST", "/internal/agents/agent-1/profile/mcp/probe"),
-            // #2250/#2257: the CLI preflight-trace door, behind the SAME runtime-credential
-            // perimeter. Anon → the bodiless 401.
-            ("POST", "/internal/agents/agent-1/cli-trace"),
-        ];
-        assert_eq!(RUNTIME_PERIMETER_DOORS.len(), 12);
-        for (method, path) in RUNTIME_PERIMETER_DOORS {
-            let (status, body) = request(&router, method, path, None).await;
+        assert_eq!(CLI_INVOKE_PRODUCTION_PERIMETER.len(), 12);
+        for (method, path_template) in CLI_INVOKE_PRODUCTION_PERIMETER {
+            let path = path_template.replace("{aid}", "agent-1");
+            let method = (*method).as_str();
+            let (status, body) = request(&router, method, &path, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
             assert_eq!(body, unauthorized, "{method} {path}");
         }

@@ -365,6 +365,10 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     // lane did not add — it owes no labeled seam line and is not fenced against
     // composition, so it closes into this non-seam baseline rather than `SEAM_ROOT_MODULES`.
     ("backend-core", "cli_preflight_audit"),
+    // #task:2261 authenticated CLI-invocation audit domain: a second narrow record/sink
+    // contract sharing the composition-owned CLI audit file. It is likewise a mounted,
+    // non-seam production module and belongs in this closed baseline.
+    ("backend-core", "cli_invoke_audit"),
     ("backend-core", "direct_pair_read"),
     ("backend-core", "host_runtime"),
     ("backend-core", "identity"),

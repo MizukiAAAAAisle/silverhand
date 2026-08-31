@@ -31,6 +31,7 @@ use super::{
     aftermath::SendAftermath,
     execute::{ResolvedSendContext, execute},
 };
+use crate::internal_agent::cli_invoke::CliInvokeRequestContext;
 
 /// The machinery a send needs whichever door it came through: where a body may
 /// address from, who may open a direct line, and the write unit itself.
@@ -190,12 +191,32 @@ where
 /// an anchored slot has target == source once reach has passed, and an unanchored one has no
 /// ambient source to fall back on. Passing the credential's conversation as the send's source
 /// would have aimed every unanchored send at a stream nobody named.
+#[cfg(test)]
 pub(crate) async fn agent_send<A, C, P, D, U, F>(
     credential: &RuntimePrincipal,
     raw_body: Option<serde_json::Value>,
     address: &A,
     capability: &C,
     ports: SendPorts<'_, P, D, U, F>,
+) -> Result<SendMessageOutcome, AgentRefusal>
+where
+    A: TargetAddress,
+    C: SendCapability,
+    P: ReferencePositions,
+    D: DirectLineAuthority,
+    U: SendMessageUnitOfWork,
+    F: SendAftermath,
+{
+    agent_send_observed(credential, raw_body, address, capability, ports, None).await
+}
+
+pub(crate) async fn agent_send_observed<A, C, P, D, U, F>(
+    credential: &RuntimePrincipal,
+    raw_body: Option<serde_json::Value>,
+    address: &A,
+    capability: &C,
+    ports: SendPorts<'_, P, D, U, F>,
+    audit: Option<&CliInvokeRequestContext>,
 ) -> Result<SendMessageOutcome, AgentRefusal>
 where
     A: TargetAddress,
@@ -224,6 +245,10 @@ where
         .await
         .map_err(|source| AgentRefusal::Authority(crate::error::BoundaryFailure::new(source)))?
         .map_err(|CapabilityDenied| AgentRefusal::CapabilityDenied)?;
+
+    if let (Some(audit), Some(reason)) = (audit, request.stale_resolution_reason()) {
+        audit.set_stale_reason(reason);
+    }
 
     let destination = match stream.thread_root {
         Some(root) => SendDestination::Thread(root),
@@ -264,6 +289,7 @@ mod tests {
     };
     use silverhand_backend_core::persistence::PersistenceFailure;
     use silverhand_backend_core::{
+        cli_invoke_audit::CliStaleResolutionReason,
         identity::{AgentId, DaemonInstanceId},
         messaging::ThreadRootId,
         runtime_credential::{RuntimeCustody, RuntimeGeneration},
@@ -899,6 +925,58 @@ mod tests {
                 .map(|command| command.freshness_bypass)
                 .collect::<Vec<_>>(),
             vec![true, false, false]
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_audit_fact_is_set_only_after_target_reach_and_capability() {
+        let unit = CountingUnitOfWork::default();
+        let body = || {
+            Some(serde_json::json!({
+                "content": "hello",
+                "target": "#conv:conv-2",
+                "stale_event_id": "evt-secret",
+                "stale_resolution_reason": "revised"
+            }))
+        };
+
+        let target_refused = CliInvokeRequestContext::default();
+        let _ = agent_send_observed(
+            &agent_slot(),
+            body(),
+            &Address::refuses(AddressRefusal::Unresolved),
+            &Grant(Ok(())),
+            ports(&unit),
+            Some(&target_refused),
+        )
+        .await;
+        assert_eq!(target_refused.stale_reason(), None);
+
+        let capability_refused = CliInvokeRequestContext::default();
+        let _ = agent_send_observed(
+            &agent_slot(),
+            body(),
+            &Address::main_line(),
+            &Grant(Err(CapabilityDenied)),
+            ports(&unit),
+            Some(&capability_refused),
+        )
+        .await;
+        assert_eq!(capability_refused.stale_reason(), None);
+
+        let authorized = CliInvokeRequestContext::default();
+        let _ = agent_send_observed(
+            &agent_slot(),
+            body(),
+            &Address::main_line(),
+            &Grant(Ok(())),
+            ports(&unit),
+            Some(&authorized),
+        )
+        .await;
+        assert_eq!(
+            authorized.stale_reason(),
+            Some(CliStaleResolutionReason::Revised)
         );
     }
 }

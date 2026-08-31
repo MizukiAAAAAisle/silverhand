@@ -59,7 +59,10 @@ use serde::{Deserialize, Deserializer};
 use serde_json::json;
 use silverhand_backend_core::wire_text;
 
-use crate::wire_patch::PatchField;
+use crate::{
+    internal_agent::cli_invoke::{CliInvokeResponseMeta, attach_response_meta},
+    wire_patch::PatchField,
+};
 
 /// The one terminal semantic-refusal string, shared with the sibling write faces and
 /// the ratified `PATCH /api/me` precedent. Validation never publishes its reasons.
@@ -68,11 +71,12 @@ const INVALID_INPUT: &str = "invalid input";
 /// The minimal semantic-validation refusal: `422 {"error":"invalid input"}`. Structural
 /// decode faults do NOT come here — they keep axum's native `Json` rejection.
 pub(crate) fn invalid_input() -> Response {
-    (
+    let response = (
         StatusCode::UNPROCESSABLE_ENTITY,
         Json(json!({ "error": INVALID_INPUT })),
     )
-        .into_response()
+        .into_response();
+    attach_response_meta(response, CliInvokeResponseMeta::invalid_value())
 }
 
 /// The two planes on which `ValidatedJson` can refuse, kept as distinct TYPES so the
@@ -113,7 +117,10 @@ impl IntoResponse for ValidatedJsonRejection {
     fn into_response(self) -> Response {
         match self {
             // Pure delegation: the native status/body/headers pass through untouched.
-            ValidatedJsonRejection::Json(rejection) => rejection.into_response(),
+            ValidatedJsonRejection::Json(rejection) => {
+                let metadata = CliInvokeResponseMeta::invalid_json(&rejection);
+                attach_response_meta(rejection.into_response(), metadata)
+            }
             ValidatedJsonRejection::Semantic => invalid_input(),
         }
     }

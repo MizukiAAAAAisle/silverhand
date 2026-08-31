@@ -219,6 +219,20 @@ describe('CLI invoke route map', () => {
     }
   });
 
+  it('maps both registered react-message methods to the same CLI surface', () => {
+    expect(
+      CLI_INVOKE_ROUTES
+        .filter(route => route.suffix === 'react-message')
+        .map(route => route.method)
+        .sort(),
+    ).toEqual(['DELETE', 'POST']);
+    expect(lookupCliRoute('DELETE', 'react-message')).toEqual({
+      noun: 'message',
+      verb: 'react',
+      routeSuffix: 'react-message',
+    });
+  });
+
   it('lookupCliRoute returns null for unrelated suffixes', () => {
     expect(lookupCliRoute('GET', 'cli-trace')).toBeNull();
     expect(lookupCliRoute('POST', 'cli-trace')).toBeNull();

@@ -40,7 +40,7 @@ use std::sync::Arc;
 
 use super::{
     ack::send_ack,
-    adapters::{AgentRefusal, HumanRefusal, SendPorts, agent_send, human_send},
+    adapters::{AgentRefusal, HumanRefusal, SendPorts, agent_send_observed, human_send},
     admission::PayloadRefusal,
     aftermath::SendAftermath,
     agent_output::agent_send_output,
@@ -52,6 +52,7 @@ use super::{
         missing_identifier,
     },
 };
+use crate::internal_agent::cli_invoke::CliInvokeRequestContext;
 
 /// Everything the doors need, supplied by whoever composes them.
 ///
@@ -176,9 +177,13 @@ where
     let Some(credential) = request.extensions().get::<RuntimePrincipal>().cloned() else {
         return composition_failure("agent credential");
     };
+    let audit = request
+        .extensions()
+        .get::<CliInvokeRequestContext>()
+        .cloned();
     let body = collected(request).await;
 
-    match agent_send(
+    match agent_send_observed(
         &credential,
         body,
         &state.target_address,
@@ -189,6 +194,7 @@ where
             unit_of_work: &state.unit_of_work,
             aftermath: &state.aftermath,
         },
+        audit.as_ref(),
     )
     .await
     {
