@@ -439,7 +439,10 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
 /// The organization gate uses these CP tables ONLY as a root-COVERAGE compatibility check
 /// (they still cover the current root tree exactly once), never as a landed/residual
 /// authority. Organization accounting stays separate from route/product ledgers.
-const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[("backend-core", "agents")];
+const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
+    ("backend-app", "application_orchestration"),
+    ("backend-core", "agents"),
+];
 
 /// The seam modules that are DIRECTORY modules, owning a `<name>/mod.rs`. G5 reads
 /// that file, so a flat module must not appear here — the gate would then fail on a

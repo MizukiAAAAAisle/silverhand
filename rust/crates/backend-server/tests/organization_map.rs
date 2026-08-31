@@ -929,12 +929,12 @@ fn physical_targets_are_full_paths_and_landed_is_mechanical() {
 #[test]
 fn landed_set_is_exactly_the_self_named_context_roots() {
     // A root is mechanically landed iff its current path equals its physical_target. The
-    // only such roots at the anchor are the self-named top-level contexts (module name ==
-    // owner namespace): embedded_bootstrap, workspace_data_plane, host_runtime in each
-    // crate that declares them. Every other root targets crate::ns::leaf and is residual.
+    // such roots are the self-named top-level contexts (module name == owner namespace).
+    // Every other root targets crate::ns::leaf and is residual.
     let map = load_map();
     let landed = mechanically_landed(&map);
     let expected: BTreeSet<(String, String)> = [
+        ("backend-app", "application_orchestration"),
         ("backend-core", "embedded_bootstrap"),
         ("backend-server", "embedded_bootstrap"),
         ("backend-sqlite", "embedded_bootstrap"),

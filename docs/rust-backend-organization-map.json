@@ -3141,6 +3141,19 @@
     },
     {
       "crate": "backend-app",
+      "module": "application_orchestration",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "application_orchestration",
+        "structural_role": "composition"
+      },
+      "migration": {
+        "physical_target": "backend-app::application_orchestration"
+      }
+    },
+    {
+      "crate": "backend-app",
       "module": "request_perimeter",
       "source_shape": "file",
       "needs_ruling": false,
