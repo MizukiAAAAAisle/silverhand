@@ -38,7 +38,9 @@ use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
     human_auth_flows::HandleNamespaceRead,
     identity::UserId,
-    participant_handle_availability::{ParticipantHandleAvailability, probe_participant_handle},
+    identity_access::participant_handle_availability::{
+        ParticipantHandleAvailability, probe_participant_handle,
+    },
 };
 
 use crate::error;

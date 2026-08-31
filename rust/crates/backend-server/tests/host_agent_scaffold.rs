@@ -78,6 +78,14 @@ const CRATE_ROOTS: &[&str] = &[
 /// Flat modules belong here too. One table serving every gate is what let a flat
 /// module sit in no inventory at all, guarded by nothing and with no signal, so
 /// membership here answers only "did this lane declare it at a root".
+///
+/// An entry is the CURRENT OWNING ROOT NAMESPACE, not a fixed flat module name
+/// (#task:2272). When a lane module relocates under an organization namespace
+/// (e.g. `crate::identity_access::participant_handle_availability`), its owning root
+/// becomes the container `identity_access`, listed here ONCE — its old flat entry is
+/// removed. This ledger never descends into a container to re-inventory the leaves; the
+/// organization map/gate (docs/rust-backend-organization-map.json) is the sole authority
+/// for a leaf's owner, physical target and residual/landed status inside the namespace.
 const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_availability_read"),
     ("backend-core", "agent_detail_read"),
@@ -102,7 +110,8 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_presence_read"),
     // #task:2225 — the public agent-lifecycle and avatar route family (Rust Wave 3).
     // Core capability ports and orchestration for the handle-availability probe
-    // (route 1, `participant_handle_availability`), the agent tuning/profile write
+    // (route 1, now under the `identity_access` namespace — see below), the agent
+    // tuning/profile write
     // (route 2, `agent_profile_write`), the agent avatar byte fetch (route 5,
     // `agent_avatar`), and the agent avatar upload/clear lifecycle (routes 3/4,
     // `agent_avatar_write`, which reuses the single `agent_profile_write` row writer).
@@ -111,7 +120,16 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_avatar"),
     ("backend-core", "agent_avatar_write"),
     ("backend-core", "agent_profile_write"),
-    ("backend-core", "participant_handle_availability"),
+    // #task:2272 — the handle-availability probe's core module was relocated under the
+    // C1 `identity_access` namespace (`crate::identity_access::participant_handle_availability`).
+    // This ledger guards the current OWNING ROOT NAMESPACE only: the container is declared
+    // once at the crate root and owns no accidental second declaration. The organization
+    // map/gate (docs/rust-backend-organization-map.json) is the authority for each leaf's
+    // owner, physical target and residual/landed status inside the namespace — this seam
+    // entry does NOT descend into the container to re-inventory its leaves. As further C1
+    // leaves relocate, their old crate-root entries are removed and `identity_access` stays
+    // a single entry here.
+    ("backend-core", "identity_access"),
     // The agent-scoped bulk runtime stop (POST /api/agents/{id}/stop): its
     // source-bound snapshot read port and the aggregation use case. It consumes
     // #task:2227's `scope_runtime_stop` capability per seat and mints no new stop
@@ -476,6 +494,11 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-sqlite", "embedded_bootstrap"),
     ("backend-sqlite", "workspace_data_plane"),
     ("backend-sqlite", "host_agent"),
+    // #task:2272 — the C1 `identity_access` relocation namespace is directory-shaped
+    // (declared once at the crate root with a `mod.rs`), so it joins this directory-shaped
+    // subset of the seam ledger. It is a namespace CONTAINER: its leaves' owners live in the
+    // organization map/gate, not here.
+    ("backend-core", "identity_access"),
 ];
 
 /// The modules a composition must name to ACTIVATE this lane: rules that decide, a
@@ -1263,11 +1286,15 @@ fn g4_the_seam_touches_only_crate_roots_and_only_as_declarations() {
     ));
 
     for (crate_dir, namespace) in SEAM_ROOT_MODULES {
-        // A seam root module is a `mod` declaration at exactly one root. Its visibility
-        // is orthogonal to that invariant: most are `pub mod`, but a crate-private
-        // shared authority (e.g. `agent_wire`) is `pub(crate) mod` and is still declared
-        // exactly once. Accept either spelling; the fork guard below stays visibility-
-        // agnostic via `declares_or_reexports`.
+        // A seam root entry is the CURRENT OWNING ROOT NAMESPACE and is a `mod`
+        // declaration at exactly one root — whether it is a leaf module or an organization
+        // namespace CONTAINER (e.g. `identity_access`) that owns relocated leaves beneath it
+        // (#task:2272). Either way the invariant is the same: declared once at its crate
+        // root, no unregistered second owner elsewhere; the gate never descends into a
+        // container. Its visibility is orthogonal to that invariant: most are `pub mod`, but
+        // a crate-private shared authority (e.g. `agent_wire`) is `pub(crate) mod` and is
+        // still declared exactly once. Accept either spelling; the fork guard below stays
+        // visibility-agnostic via `declares_or_reexports`.
         let pub_declaration = format!("pub mod {namespace};");
         let crate_declaration = format!("pub(crate) mod {namespace};");
         let root = rust_root()

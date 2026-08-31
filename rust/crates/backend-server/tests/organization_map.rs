@@ -206,14 +206,16 @@ fn is_cfg_test(attr: &syn::Attribute) -> bool {
 /// Independent source_shape: `hybrid` iff a `<m>.rs` main body AND a `<m>/` directory that
 /// carries PRODUCTION child `mod` declarations both exist; `directory` for a namespace
 /// directory; else `file`. A sibling directory holding only test fixtures (no production
-/// child `mod`) is NOT a hybrid — the `<m>.rs` is the real module.
-fn derive_source_shape(crate_src: &Path, module: &str) -> String {
-    let dir = crate_src.join(module);
-    let file = crate_src.join(format!("{module}.rs"));
+/// child `mod`) is NOT a hybrid — the `<m>.rs` is the real module. `base` is the directory
+/// the module's `<m>.rs` / `<m>/` sits in — the crate `src/` for a residual root, or
+/// `src/<namespace>/` for a landed root (#task:2272).
+fn derive_source_shape(base: &Path, module: &str) -> String {
+    let dir = base.join(module);
+    let file = base.join(format!("{module}.rs"));
     let has_dir = dir.is_dir();
     let has_file = file.exists();
     if has_dir && has_file {
-        if child_mod_decls(crate_src, module).is_empty() {
+        if child_mod_decls(base, module).is_empty() {
             "file".to_owned()
         } else {
             "hybrid".to_owned()
@@ -227,11 +229,12 @@ fn derive_source_shape(crate_src: &Path, module: &str) -> String {
 
 /// The child `mod NAME;` declarations of a directory/hybrid root, read from whichever of
 /// `<m>/mod.rs` or `<m>.rs` declares them. This is the independent authority the split
-/// `members` must close against.
-fn child_mod_decls(crate_src: &Path, module: &str) -> Vec<String> {
+/// `members` must close against. `base` is the directory the module sits in (see
+/// [`derive_source_shape`]).
+fn child_mod_decls(base: &Path, module: &str) -> Vec<String> {
     for candidate in [
-        crate_src.join(module).join("mod.rs"),
-        crate_src.join(format!("{module}.rs")),
+        base.join(module).join("mod.rs"),
+        base.join(format!("{module}.rs")),
     ] {
         if candidate.exists() {
             return module_declarations(&read(&candidate))
@@ -241,6 +244,179 @@ fn child_mod_decls(crate_src: &Path, module: &str) -> Vec<String> {
         }
     }
     Vec::new()
+}
+
+// ---------------------------------------------------------------------------
+// Module-location model (#task:2272): a settled row's module lives at EXACTLY one
+// physical place, and the gate discovers which from the real tree — never from a stored
+// flag. A RESIDUAL root still sits at the crate root (`crate::module`); a LANDED root has
+// been moved under its target namespace (`crate::namespace::leaf`) and now sits in
+// `src/<namespace>/`. The namespace directory itself is a CONTAINER, not a business unit:
+// it is declared at the crate root but is not a map row, and its members are the landed
+// leaves. This is the minimal, honest evolution of the #2265 crate-root scan so a real
+// relocation neither passes vacuously nor forces the map to keep describing the old shape.
+// ---------------------------------------------------------------------------
+
+/// Whether a module file/dir physically exists directly under `base` (a `<m>.rs` or a
+/// `<m>/` directory).
+fn module_exists_in(base: &Path, module: &str) -> bool {
+    base.join(format!("{module}.rs")).exists() || base.join(module).is_dir()
+}
+
+/// Where a settled row's module physically resides. Landed iff it sits at its
+/// `physical_target` under the owner namespace; residual iff it still sits at the crate
+/// root. EXACTLY ONE must be true — both present is an un-cleaned coexistence, neither is a
+/// missing module — either fails the gate. Returns `(is_landed, base_dir, leaf)`, where
+/// `base_dir` is the directory the module sits in and `leaf` its final segment.
+fn resolve_settled_location(
+    crate_src: &Path,
+    module: &str,
+    physical_target: &str,
+) -> (bool, PathBuf, String) {
+    // physical_target is `crate::[namespace::]leaf`; segments after the crate name are the
+    // module path under `src/`. A self-named context root (`crate::module`) has no extra
+    // namespace and is trivially landed at the root.
+    let segs: Vec<&str> = physical_target.split("::").collect();
+    let under_src = &segs[1..]; // module path segments beneath the crate
+    let leaf = (*under_src.last().expect("physical_target has a leaf")).to_owned();
+    let target_base = {
+        let mut b = crate_src.to_path_buf();
+        for seg in &under_src[..under_src.len() - 1] {
+            b = b.join(seg);
+        }
+        b
+    };
+    let at_root = module_exists_in(crate_src, module);
+    // Self-named context roots (target_base == crate_src, leaf == module) are landed at the
+    // root by construction; treat them as landed, not as a root/target coexistence.
+    let self_named = target_base == crate_src && leaf == module;
+    if self_named {
+        assert!(
+            at_root,
+            "{module}: self-named context root must exist at the crate root ({})",
+            crate_src.display()
+        );
+        return (true, crate_src.to_path_buf(), leaf);
+    }
+    let at_target = module_exists_in(&target_base, &leaf);
+    assert!(
+        at_root ^ at_target,
+        "{module}: a settled module must reside at EXACTLY one of its crate root \
+         (`{module}`, residual) or its physical_target (`{physical_target}`, landed) — \
+         at_root={at_root} at_target={at_target}. Both present is an uncleaned coexistence; \
+         neither is a missing module."
+    );
+    if at_target {
+        (true, target_base, leaf)
+    } else {
+        (false, crate_src.to_path_buf(), module.to_owned())
+    }
+}
+
+/// The map's target namespaces (owner → namespace), as a `(crate-agnostic)` set of
+/// namespace idents. Read from `target_namespaces` — the single authority (#task:2272).
+fn target_namespaces(map: &Value) -> BTreeSet<String> {
+    map["target_namespaces"]["by_business_owner"]
+        .as_object()
+        .expect("target_namespaces.by_business_owner object")
+        .values()
+        .map(|v| v.as_str().expect("namespace string").to_owned())
+        .collect()
+}
+
+/// Per `(crate, namespace)` role in the real tree — the model #task:2272's proof point must
+/// get right, because a self-named context and a relocation container are NOT mutually
+/// exclusive. A single root namespace `crate::host_runtime` can BOTH be its own landed
+/// business unit (a settled row `module == "host_runtime"`, the directory as a whole) AND
+/// descend to contribute landed leaves (`crate::host_runtime::agent_bulk_stop`). A pure
+/// container (e.g. `identity_access`) only descends. This is decided PER (crate, namespace),
+/// never by globally excluding a namespace that happens to be self-named somewhere.
+struct NamespaceRole {
+    /// The namespace has a self-named settled row (`module == namespace`): it is itself one
+    /// landed business unit keyed `(crate, namespace)`, and the `namespace/` directory's
+    /// non-leaf children are that context's OWN internal submodules (not business rows).
+    has_self_row: bool,
+    /// The leaf module names (children of `namespace/`) that are settled rows whose
+    /// `physical_target` is `crate::namespace::leaf` — the relocated business units that have
+    /// landed here. Verified to physically reside here by [`resolve_settled_location`].
+    landed_leaves: BTreeSet<String>,
+}
+
+/// For a `(crate, namespace)`, read the map to find its self-row (if any) and the settled
+/// rows whose target is `crate::namespace::leaf` that have physically landed in `namespace/`.
+fn namespace_role(
+    map: &Value,
+    crate_name: &str,
+    crate_src: &Path,
+    namespace: &str,
+) -> NamespaceRole {
+    let mut has_self_row = false;
+    let mut landed_leaves = BTreeSet::new();
+    for r in map["crate_roots"].as_array().expect("crate_roots array") {
+        if as_str(r, "crate") != crate_name || r.get("target").is_none() {
+            continue;
+        }
+        let cfg_test = r.get("cfg_test").and_then(Value::as_bool).unwrap_or(false);
+        if cfg_test {
+            continue;
+        }
+        let module = as_str(r, "module");
+        let pt = as_str(&r["migration"], "physical_target");
+        if module == namespace && pt == format!("{crate_name}::{namespace}") {
+            has_self_row = true;
+        }
+        // A row whose target is `crate::namespace::leaf`: it belongs to THIS namespace. It is
+        // counted as landed only if the resolver finds it physically under `namespace/`.
+        let expected_prefix = format!("{crate_name}::{namespace}::");
+        if let Some(leaf) = pt.strip_prefix(&expected_prefix)
+            && !leaf.contains("::")
+        {
+            let (is_landed, _base, resolved_leaf) = resolve_settled_location(crate_src, module, pt);
+            if is_landed {
+                landed_leaves.insert(resolved_leaf);
+            }
+        }
+    }
+    NamespaceRole {
+        has_self_row,
+        landed_leaves,
+    }
+}
+
+/// The keys a namespace directory contributes to the universe, and which of its `mod.rs`
+/// children are unaccounted — the PURE decision at the heart of #task:2272's P0. A namespace
+/// can be BOTH a self-named context (keyed `(crate, ns)`) AND a relocation container (each
+/// landed leaf keyed `(crate, ns::leaf)`); the two are not exclusive.
+///
+/// Returns `(keys, unaccounted_children)`. A child is accounted iff it is a landed leaf OR —
+/// when the namespace has a self-named context row — ANY other child (absorbed as an
+/// internal submodule of that context). This is a deliberate trade-off, NOT a closed-set
+/// classification of a context's internals: when `has_self_row` is true, `unaccounted` is
+/// always empty — this function does NOT prove a stray module inside a self-named / dual-role
+/// context is illegal (that is intentionally left to the context's own decomposition, not
+/// re-inventoried here). It therefore closes ONLY the PURE-CONTAINER case: a namespace with
+/// no self row must have every child be a landed leaf, so a stray module there is red. What
+/// guards a real relocated leaf against going missing or coexisting at two paths is the
+/// settled-row `resolve_settled_location` check, not this child scan.
+fn namespace_universe_keys(
+    krate: &str,
+    namespace: &str,
+    role: &NamespaceRole,
+    children: &[String],
+) -> (BTreeSet<(String, String)>, Vec<String>) {
+    let mut keys = BTreeSet::new();
+    if role.has_self_row {
+        keys.insert((krate.to_owned(), namespace.to_owned()));
+    }
+    for leaf in &role.landed_leaves {
+        keys.insert((krate.to_owned(), format!("{namespace}::{leaf}")));
+    }
+    let unaccounted: Vec<String> = children
+        .iter()
+        .filter(|c| !role.landed_leaves.contains(*c) && !role.has_self_row)
+        .cloned()
+        .collect();
+    (keys, unaccounted)
 }
 
 fn as_str<'a>(row: &'a Value, key: &str) -> &'a str {
@@ -269,23 +445,75 @@ fn load_map() -> Value {
     serde_json::from_str(&read(&path)).expect("organization map is valid JSON")
 }
 
-/// The independent crate-root universe: every `mod NAME;` in every workspace crate's
-/// `lib.rs`, keyed `(crate, module)`, with whether it is `#[cfg(test)]`. Crate scope comes
-/// from the workspace manifest, not a gate constant.
+/// The independent crate-root universe, keyed `(crate, full_path)` with whether it is
+/// `#[cfg(test)]`. Crate scope comes from the workspace manifest, not a gate constant.
+///
+/// A top-level `mod NAME;` in a crate's `lib.rs` is one of:
+/// - a RESIDUAL business unit (keyed `NAME`) — not a target namespace, or a namespace with
+///   no directory yet;
+/// - a NAMESPACE DIRECTORY. Decided PER (crate, namespace) via [`namespace_role`], it may
+///   simultaneously be a SELF-NAMED CONTEXT (its own landed unit, keyed `NAME`) and a
+///   RELOCATION CONTAINER (descends to landed leaves, keyed `NAME::LEAF`) — the two are NOT
+///   mutually exclusive (#task:2272). The scan descends one level. For a PURE container (no
+///   self row) every child of `NAME/mod.rs` must be a landed leaf, so a stray module there is
+///   red. For a self-named / dual-role context the non-leaf children are its OWN internal
+///   decomposition and are deliberately NOT re-classified here (see [`namespace_universe_keys`]) —
+///   a stray module inside such a context is not caught by this scan. What keeps a real
+///   relocated leaf from going missing or coexisting at two paths is the settled-row
+///   `resolve_settled_location` check, not this child scan.
 fn scanned_crate_roots() -> HashMap<(String, String), bool> {
     let root = rust_root();
+    let map = load_map();
+    let namespaces = target_namespaces(&map);
     let mut universe = HashMap::new();
     for krate in workspace_crates() {
-        let lib = root.join("crates").join(&krate).join("src/lib.rs");
+        let crate_src = root.join("crates").join(&krate).join("src");
+        let lib = crate_src.join("lib.rs");
         if !lib.exists() {
             continue; // a non-library crate (e.g. a binary-only member) has no lib.rs
         }
         for (module, cfg_test) in module_declarations(&read(&lib)) {
-            let prior = universe.insert((krate.clone(), module.clone()), cfg_test);
+            let is_namespace_dir = namespaces.contains(&module) && crate_src.join(&module).is_dir();
+            if !is_namespace_dir {
+                let prior = universe.insert((krate.clone(), module.clone()), cfg_test);
+                assert!(
+                    prior.is_none(),
+                    "{krate}/src/lib.rs declares `{module}` more than once"
+                );
+                continue;
+            }
+            // A namespace directory: a self-named context and/or a relocation container.
+            let role = namespace_role(&map, &krate, &crate_src, &module);
+            let container_mod = crate_src.join(&module).join("mod.rs");
             assert!(
-                prior.is_none(),
-                "{krate}/src/lib.rs declares `{module}` more than once"
+                container_mod.exists(),
+                "{krate}: namespace directory `{module}` has no {module}/mod.rs"
             );
+            let children: Vec<String> = module_declarations(&read(&container_mod))
+                .into_iter()
+                .map(|(c, _)| c)
+                .collect();
+            let (keys, unaccounted) = namespace_universe_keys(&krate, &module, &role, &children);
+            // PURE-CONTAINER teeth: for a namespace with NO self row, every child of
+            // NAME/mod.rs must be a landed leaf, so a stray module there is red. For a
+            // self-named / dual-role context, non-leaf children are its own internals and are
+            // NOT flagged here (a trade-off — not a closed-set classification of internals).
+            // A relocated leaf going missing / coexisting is guarded by the settled-row
+            // resolver, not this scan.
+            assert!(
+                unaccounted.is_empty(),
+                "{krate}: `{module}/mod.rs` declares {unaccounted:?} in a PURE container \
+                 (no self-named context row), which are not landed relocation leaves (settled \
+                 rows targeting `{krate}::{module}::<leaf>`) — unclassified"
+            );
+            for key in keys {
+                let cfg = key.1 == module && cfg_test; // only the self-row carries lib.rs cfg
+                let prior = universe.insert(key.clone(), cfg);
+                assert!(
+                    prior.is_none(),
+                    "{krate}: namespace `{module}` yields duplicate universe key {key:?}"
+                );
+            }
         }
     }
     assert!(
@@ -294,6 +522,31 @@ fn scanned_crate_roots() -> HashMap<(String, String), bool> {
         universe.len()
     );
     universe
+}
+
+/// A settled map row's identity in the scanned universe: `crate::namespace::leaf` once it
+/// has landed under its owner namespace, else its residual crate-root `module`. Derived from
+/// the REAL tree via [`resolve_settled_location`], never from a stored flag. A `cfg_test`
+/// row (a `#[cfg(test)]` / `#[path=…]` test-support declaration, e.g. `current_schema`) is
+/// not a physically relocatable production module — it keeps its crate-root identity and is
+/// never resolved against a namespace target (#task:2272).
+fn row_universe_key(crate_src: &Path, row: &Value) -> (String, String) {
+    let krate = as_str(row, "crate").to_owned();
+    let module = as_str(row, "module");
+    let cfg_test = row
+        .get("cfg_test")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !cfg_test && row.get("target").is_some() {
+        let pt = as_str(&row["migration"], "physical_target");
+        let (is_landed, _base, _leaf) = resolve_settled_location(crate_src, module, pt);
+        if is_landed && pt.split("::").count() >= 3 {
+            // `crate::namespace::leaf` → universe key `namespace::leaf`.
+            let tail = pt.splitn(2, "::").nth(1).unwrap().to_owned();
+            return (krate, tail);
+        }
+    }
+    (krate, module.to_owned())
 }
 
 #[test]
@@ -326,19 +579,28 @@ fn crate_roots_are_covered_exactly_once() {
     let map = load_map();
     let scanned = scanned_crate_roots();
     let rows = map["crate_roots"].as_array().expect("crate_roots array");
+    let root = rust_root();
 
     let mut seen: HashSet<(String, String)> = HashSet::new();
     for row in rows {
         let krate = as_str(row, "crate").to_owned();
         let module = as_str(row, "module").to_owned();
-        let key = (krate.clone(), module.clone());
+        // Match the row to the tree by its CURRENT location: a landed row appears in the
+        // universe as `namespace::leaf`, a residual row as its crate-root `module`
+        // (#task:2272). The map row's leaf identity stays `module`; only where it is found
+        // moves.
+        let crate_src = root.join("crates").join(&krate).join("src");
+        let key = row_universe_key(&crate_src, row);
         assert!(
             seen.insert(key.clone()),
             "map lists {krate}::{module} more than once"
         );
         assert!(
             scanned.contains_key(&key),
-            "map classifies {krate}::{module}, which no crate lib.rs declares"
+            "map classifies {krate}::{module} (expected in the tree at `{}::{}`), which the \
+             crate-root scan does not find there",
+            key.0,
+            key.1
         );
     }
     let mapped: HashSet<(String, String)> = seen;
@@ -387,14 +649,23 @@ fn every_row_is_a_strict_target_xor_split_union() {
             "{context}: a row is exactly one of target / split_required"
         );
 
-        // source_shape is re-derived, never trusted.
+        // source_shape is re-derived, never trusted — at the module's CURRENT location. A
+        // settled row may have landed under its namespace (`src/<ns>/`); a split row is
+        // residual by construction and still sits at the crate root (#task:2272).
         let declared_shape = as_str(row, "source_shape");
         let cfg_test = row
             .get("cfg_test")
             .and_then(Value::as_bool)
             .unwrap_or(false);
         if !cfg_test {
-            let derived = derive_source_shape(&crate_src, module);
+            let (shape_base, shape_leaf) = if has_target {
+                let pt = as_str(&row["migration"], "physical_target");
+                let (_landed, base, leaf) = resolve_settled_location(&crate_src, module, pt);
+                (base, leaf)
+            } else {
+                (crate_src.clone(), module.to_owned())
+            };
+            let derived = derive_source_shape(&shape_base, &shape_leaf);
             assert_eq!(
                 declared_shape, derived,
                 "{context}: source_shape `{declared_shape}` disagrees with the tree (`{derived}`)"
@@ -814,20 +1085,27 @@ fn scanned_roots() -> BTreeSet<(String, String)> {
     scanned_crate_roots().into_keys().collect()
 }
 
-/// The mechanically-landed roots: a settled row whose CURRENT full path equals its full
-/// physical_target. These are exactly the self-named top-level context roots
-/// (embedded_bootstrap / workspace_data_plane / host_runtime), which already reside at their
-/// target; every other root targets a namespaced path it does not yet occupy.
+/// The mechanically-landed roots: a settled row whose module physically RESIDES at its
+/// full `physical_target` — derived from the real tree, never a stored flag (#task:2272).
+/// At the #2265 anchor this is exactly the self-named top-level context roots
+/// (embedded_bootstrap / workspace_data_plane / host_runtime); as relocation waves land
+/// modules under their namespaces, each relocated leaf joins this set and leaves the
+/// residual set. Keyed `(crate, full_path)` so a landed leaf is identified by where it now
+/// lives (`namespace::leaf`), matching the scanned universe.
 fn mechanically_landed(map: &Value) -> BTreeSet<(String, String)> {
+    let root = rust_root();
     let mut landed = BTreeSet::new();
     for r in map["crate_roots"].as_array().expect("crate_roots array") {
-        if r.get("target").is_some() {
+        let cfg_test = r.get("cfg_test").and_then(Value::as_bool).unwrap_or(false);
+        if !cfg_test && r.get("target").is_some() {
             let crate_name = as_str(r, "crate");
             let module = as_str(r, "module");
-            let current = format!("{crate_name}::{module}");
+            let crate_src = root.join("crates").join(crate_name).join("src");
             let pt = as_str(&r["migration"], "physical_target");
-            if current == pt {
-                landed.insert((crate_name.to_owned(), module.to_owned()));
+            let (is_landed, _base, _leaf) = resolve_settled_location(&crate_src, module, pt);
+            if is_landed {
+                let key = row_universe_key(&crate_src, r);
+                landed.insert(key);
             }
         }
     }
@@ -927,33 +1205,53 @@ fn physical_targets_are_full_paths_and_landed_is_mechanical() {
 }
 
 #[test]
-fn landed_set_is_exactly_the_self_named_context_roots() {
-    // A root is mechanically landed iff its current path equals its physical_target. The
-    // only such roots at the anchor are the self-named top-level contexts (module name ==
-    // owner namespace): embedded_bootstrap, workspace_data_plane, host_runtime in each
-    // crate that declares them. Every other root targets crate::ns::leaf and is residual.
+fn landed_is_tree_derived_self_named_contexts_are_landed_and_nested_leaves_exist() {
+    // The landed/residual split is derived ONLY by the resolver against the real tree — no
+    // stored status, and (P1, #task:2272) no hand-maintained per-wave name list to keep in
+    // sync with each git mv. This holds two GENERAL invariants instead:
+    //
+    //  (1) every self-named context row (module == its owner namespace) is landed — it
+    //      resides at its own `crate::module` path by construction; and
+    //  (2) at least one NESTED leaf (`crate::ns::leaf`) is landed — i.e. a real relocation
+    //      has happened and the container path is exercised, not just the self-named roots.
+    //
+    // The full landed/residual sets themselves stay resolver+tree-derived (see
+    // `residual_is_scanned_minus_landed_from_map_and_tree`); this test only proves the SHAPE
+    // of what landing produces, so no second ledger is copied.
     let map = load_map();
+    let ns_by_owner = validated_namespaces(&map, &load_axes(&map));
     let landed = mechanically_landed(&map);
-    let expected: BTreeSet<(String, String)> = [
-        ("backend-core", "embedded_bootstrap"),
-        ("backend-server", "embedded_bootstrap"),
-        ("backend-sqlite", "embedded_bootstrap"),
-        ("backend-core", "workspace_data_plane"),
-        ("backend-server", "workspace_data_plane"),
-        ("backend-sqlite", "workspace_data_plane"),
-        ("backend-core", "host_runtime"),
-        ("backend-server", "host_runtime"),
-        ("backend-sqlite", "host_runtime"),
-    ]
-    .into_iter()
-    .map(|(c, m)| (c.to_owned(), m.to_owned()))
-    .collect();
-    assert_eq!(
-        landed,
-        expected,
-        "mechanically-landed set drifted: unexpected={:?} missing={:?}",
-        &landed - &expected,
-        &expected - &landed
+
+    // (1) Every self-named context row is landed.
+    let mut self_named_rows = 0usize;
+    for r in map["crate_roots"].as_array().expect("crate_roots array") {
+        let cfg_test = r.get("cfg_test").and_then(Value::as_bool).unwrap_or(false);
+        if cfg_test || r.get("target").is_none() {
+            continue;
+        }
+        let owner = as_str(&r["target"], "business_owner");
+        let module = as_str(r, "module");
+        if ns_by_owner[owner] == module {
+            self_named_rows += 1;
+            let crate_name = as_str(r, "crate").to_owned();
+            assert!(
+                landed.contains(&(crate_name.clone(), module.to_owned())),
+                "self-named context {crate_name}::{module} must be tree-landed at its own path"
+            );
+        }
+    }
+    assert!(
+        self_named_rows >= 3,
+        "expected several self-named context rows, found {self_named_rows}"
+    );
+
+    // (2) At least one nested leaf `ns::leaf` has landed — a real relocation is exercised.
+    let nested_landed: Vec<&(String, String)> =
+        landed.iter().filter(|(_c, m)| m.contains("::")).collect();
+    assert!(
+        !nested_landed.is_empty(),
+        "no nested landed leaf found — the relocation container path is unexercised; \
+         landed={landed:?}"
     );
 }
 
@@ -986,8 +1284,17 @@ fn residual_is_scanned_minus_landed_from_map_and_tree() {
 #[test]
 fn cp_inventories_are_a_root_coverage_compatibility_check_only() {
     // The three CP tables retain their original G4/G5 seam semantics; here they are used
-    // ONLY to confirm they still cover the current root tree exactly once (a compatibility
-    // check), NOT as a landed/residual authority. No entry is reclassified.
+    // ONLY to confirm they still cover the current CRATE-ROOT tree exactly once (a
+    // compatibility check), NOT as a landed/residual authority. No entry is reclassified.
+    //
+    // Per the #task:2272 layering: the scaffold seam ledger keys by the CURRENT OWNING ROOT
+    // NAMESPACE. A landed leaf `ns::leaf` is owned at the crate root by its container `ns`
+    // (a single seam entry), NOT re-inventoried leaf by leaf. So the coverage compares CP
+    // against the scanned tree PROJECTED to its crate-root owner: a landed leaf collapses to
+    // its namespace container, a residual root stays itself. The organization map/gate is the
+    // authority for the leaves inside a container; the scaffold only sees the container.
+    let map = load_map();
+    let namespaces = target_namespaces(&map);
     let scaffold = read(&rust_root().join("crates/backend-server/tests/host_agent_scaffold.rs"));
     let seam = cp_table(&scaffold, "SEAM_ROOT_MODULES");
     let did_not_add = cp_table(&scaffold, "ROOT_MODULES_WE_DID_NOT_ADD");
@@ -1002,12 +1309,256 @@ fn cp_inventories_are_a_root_coverage_compatibility_check_only() {
         "CP: SEAM∪DID and ORGANIZATION overlap"
     );
     let cp_all: BTreeSet<(String, String)> = sd.union(&organization).cloned().collect();
-    let scanned = scanned_roots();
+    // Project the scanned tree to its crate-root owner: `ns::leaf` (a landed leaf) → `ns`
+    // (its root namespace); everything else is a crate-root module already. A self-named
+    // context's own `(crate, ns)` entry projects to itself, so it and its landed leaves fold
+    // into the SAME single owning-root entry — the scaffold sees one seam root, not leaves.
+    let scanned_root_owners = project_to_root_owners(scanned_roots(), &namespaces);
     assert_eq!(
         cp_all,
-        scanned,
-        "CP inventories do not cover the scanned root tree exactly: cp-only={:?} tree-only={:?}",
-        &cp_all - &scanned,
-        &scanned - &cp_all
+        scanned_root_owners,
+        "CP inventories do not cover the crate-root tree exactly: cp-only={:?} tree-only={:?}",
+        &cp_all - &scanned_root_owners,
+        &scanned_root_owners - &cp_all
+    );
+}
+
+/// Collapse a scanned-tree universe to its CRATE-ROOT owners: a landed leaf `ns::leaf`
+/// (whose `ns` is a target namespace) folds into its root namespace `ns`; every other entry
+/// is already a crate-root module and stays itself. A self-named context's own `(crate, ns)`
+/// entry stays `ns`, so it and any landed leaves beneath it collapse to ONE owning-root
+/// entry. This is the projection the scaffold seam ledger is compared against — it sees
+/// owning roots, never a namespace's leaves (#task:2272).
+fn project_to_root_owners(
+    universe: BTreeSet<(String, String)>,
+    namespaces: &BTreeSet<String>,
+) -> BTreeSet<(String, String)> {
+    universe
+        .into_iter()
+        .map(|(krate, module)| match module.split_once("::") {
+            Some((ns, _leaf)) if namespaces.contains(ns) => (krate, ns.to_owned()),
+            _ => (krate, module),
+        })
+        .collect()
+}
+
+#[test]
+fn falsifier_a_self_named_context_and_a_relocation_container_coexist_without_losing_leaves() {
+    // #task:2272 P0 falsifier: a self-named context and a relocation container are NOT
+    // mutually exclusive. A single root namespace (e.g. `host_runtime`) can be BOTH its own
+    // landed business unit AND the container a wave relocates leaves into. Prove the pure
+    // universe-key decision keeps both keys and never drops a landed leaf — driven
+    // synthetically so it holds before the host_runtime wave exists. Note the deliberate
+    // scope: the closed-set "stray child is red" check applies to PURE containers only; a
+    // self-named context's non-leaf children are its own internals and are intentionally not
+    // re-classified here.
+
+    // (A) DUAL ROLE: self row present + a landed leaf. Both keys must appear. The context's
+    // non-leaf children are absorbed as its internals — `unaccounted` is empty by design
+    // (this function does NOT close a self-named context's internals; that is the trade-off).
+    let dual = NamespaceRole {
+        has_self_row: true,
+        landed_leaves: ["agent_bulk_stop".to_owned()].into_iter().collect(),
+    };
+    let children = vec![
+        "aftermath".to_owned(),       // context-internal submodule
+        "computer".to_owned(),        // context-internal submodule
+        "agent_bulk_stop".to_owned(), // relocated leaf
+    ];
+    let (keys, unaccounted) =
+        namespace_universe_keys("backend-core", "host_runtime", &dual, &children);
+    assert!(
+        keys.contains(&("backend-core".to_owned(), "host_runtime".to_owned())),
+        "the self-named context must remain its own root business unit"
+    );
+    assert!(
+        keys.contains(&(
+            "backend-core".to_owned(),
+            "host_runtime::agent_bulk_stop".to_owned()
+        )),
+        "the relocated leaf must appear as its own ns::leaf unit and NOT be swallowed by the \
+         context — the P0 regression"
+    );
+    assert!(
+        unaccounted.is_empty(),
+        "a self-named context absorbs its non-leaf children (by design, not a closed-set \
+         check): {unaccounted:?}"
+    );
+
+    // (A') TRADE-OFF MADE EXPLICIT: even a genuinely stray child inside a self-named context
+    // is absorbed, not flagged — the child scan does NOT close a context's internals. This
+    // asserts the actual (weaker) behavior so the comments above cannot overclaim.
+    let (_keys, unaccounted_with_stray) = namespace_universe_keys(
+        "backend-core",
+        "host_runtime",
+        &dual,
+        &[
+            "aftermath".to_owned(),
+            "totally_stray".to_owned(),
+            "agent_bulk_stop".to_owned(),
+        ],
+    );
+    assert!(
+        unaccounted_with_stray.is_empty(),
+        "a self-named context does NOT flag a stray internal child — that is the documented \
+         trade-off, not a closed-set guarantee: {unaccounted_with_stray:?}"
+    );
+
+    // (B) PURE CONTAINER: no self row. A landed leaf is kept; ANY other child is unaccounted
+    // (no context to absorb it) — a stray module in a PURE container turns the scan red. This
+    // is the ONLY case the child scan flags; a real leaf's missing/coexistence is guarded by
+    // the settled-row resolver, not here.
+    let container = NamespaceRole {
+        has_self_row: false,
+        landed_leaves: ["participant_handle_availability".to_owned()]
+            .into_iter()
+            .collect(),
+    };
+    let (keys, unaccounted) = namespace_universe_keys(
+        "backend-core",
+        "identity_access",
+        &container,
+        &[
+            "participant_handle_availability".to_owned(),
+            "stray".to_owned(),
+        ],
+    );
+    assert!(
+        keys.contains(&(
+            "backend-core".to_owned(),
+            "identity_access::participant_handle_availability".to_owned()
+        )),
+        "a pure container's landed leaf is its own unit"
+    );
+    assert!(
+        !keys.contains(&("backend-core".to_owned(), "identity_access".to_owned())),
+        "a pure container has no self business row"
+    );
+    assert_eq!(
+        unaccounted,
+        vec!["stray".to_owned()],
+        "a non-leaf child of a pure container is unclassified (turns the scan red)"
+    );
+
+    // (C) REAL TREE: at the anchor `host_runtime` already IS a self-named context directory
+    // in each crate that declares it — proof the dual model reads the real tree, not just a
+    // synthetic role. It has a self row and (pre-wave) no landed leaves yet; when its wave
+    // lands leaves, branch (A)'s logic keeps both. Its many internal submodules do NOT leak
+    // into the universe as unclassified today, which the green `scanned_crate_roots` relies
+    // on.
+    let map = load_map();
+    let root = rust_root();
+    let hr_core = namespace_role(
+        &map,
+        "backend-core",
+        &root.join("crates/backend-core/src"),
+        "host_runtime",
+    );
+    assert!(
+        hr_core.has_self_row,
+        "backend-core::host_runtime is a self-named context at the anchor"
+    );
+    assert!(
+        hr_core.landed_leaves.is_empty(),
+        "no host_runtime leaf has landed yet at the anchor (its wave is later): {:?}",
+        hr_core.landed_leaves
+    );
+}
+
+#[test]
+fn falsifier_a_stale_flat_seam_entry_for_a_relocated_leaf_is_red() {
+    // #task:2272 falsifier: once a leaf relocates under a container, the scaffold seam
+    // ledger must key it by the CONTAINER, not keep the old flat leaf entry. Prove the
+    // coverage check rejects a stale flat entry: with the leaf landed at
+    // `identity_access::participant_handle_availability` in the tree, a CP set that still
+    // lists the flat `participant_handle_availability` (and lacks the container) must
+    // mismatch — the flat entry is cp-only and the container is tree-only.
+    let containers: BTreeSet<String> = ["identity_access".to_owned()].into_iter().collect();
+    let tree: BTreeSet<(String, String)> = [
+        (
+            "backend-core",
+            "identity_access::participant_handle_availability",
+        ),
+        ("backend-core", "agents"),
+    ]
+    .into_iter()
+    .map(|(c, m)| (c.to_owned(), m.to_owned()))
+    .collect();
+    let projected = project_to_root_owners(tree, &containers);
+    let expected_ok: BTreeSet<(String, String)> = [
+        ("backend-core", "identity_access"),
+        ("backend-core", "agents"),
+    ]
+    .into_iter()
+    .map(|(c, m)| (c.to_owned(), m.to_owned()))
+    .collect();
+    // The honest CP (keyed by the container) matches the projection.
+    assert_eq!(
+        projected, expected_ok,
+        "projection must fold the leaf into its container"
+    );
+    // The stale CP (flat leaf, no container) does NOT match — the check turns red.
+    let stale_cp: BTreeSet<(String, String)> = [
+        ("backend-core", "participant_handle_availability"),
+        ("backend-core", "agents"),
+    ]
+    .into_iter()
+    .map(|(c, m)| (c.to_owned(), m.to_owned()))
+    .collect();
+    assert_ne!(
+        stale_cp, projected,
+        "a stale flat seam entry for a relocated leaf must fail CP coverage"
+    );
+    assert!(
+        (&stale_cp - &projected).contains(&(
+            "backend-core".to_owned(),
+            "participant_handle_availability".to_owned()
+        )),
+        "the stale flat entry must be reported as cp-only"
+    );
+    assert!(
+        (&projected - &stale_cp)
+            .contains(&("backend-core".to_owned(), "identity_access".to_owned())),
+        "the container must be reported as tree-only against a stale CP"
+    );
+}
+
+#[test]
+fn falsifier_a_missing_or_duplicate_namespace_root_is_red() {
+    // #task:2272 falsifier: the namespace container must be declared exactly once at the
+    // crate root. Prove both failure directions against the real tree via the same scanner
+    // helpers the gate uses, from synthetic lib.rs fixtures — no reliance on another change.
+
+    // (1) MISSING: a lib.rs that declares the container is required for the scan to descend;
+    // a lib.rs WITHOUT `identity_access` would leave the landed leaf undiscovered and the
+    // map row `participant_handle_availability` (expected at `identity_access::…`)
+    // unmatched. Prove the container-recursion is what surfaces the leaf: parsing a lib.rs
+    // that omits the container yields no `identity_access` root at all.
+    let lib_without_container = "#![forbid(unsafe_code)]\n\npub mod agents;\npub mod identity;\n";
+    let roots: BTreeSet<String> = module_declarations(lib_without_container)
+        .into_iter()
+        .map(|(m, _)| m)
+        .collect();
+    assert!(
+        !roots.contains("identity_access"),
+        "a lib.rs missing the namespace container declares no such root — the landed leaf \
+         would be undiscovered and its map row unmatched (red)"
+    );
+
+    // (2) DUPLICATE: two `pub mod identity_access;` lines at one root. `scanned_crate_roots`
+    // asserts a root is declared at most once ("declares `identity_access` more than once");
+    // module_declarations returns both, so a dedup-free consumer sees the duplicate. Prove
+    // the duplicate is observable (the scanner's more-than-once assertion fires on it).
+    let lib_with_duplicate =
+        "#![forbid(unsafe_code)]\n\npub mod identity_access;\npub mod identity_access;\n";
+    let decls: Vec<String> = module_declarations(lib_with_duplicate)
+        .into_iter()
+        .map(|(m, _)| m)
+        .collect();
+    assert_eq!(
+        decls.iter().filter(|m| *m == "identity_access").count(),
+        2,
+        "a duplicated namespace-root declaration is observable to the scan (its \
+         more-than-once assertion turns the gate red)"
     );
 }
