@@ -97,7 +97,7 @@ use crate::error;
 use crate::host_agent_background::agent_deletion_resumer::{
     AgentDeletionResumer, DeletionFenceBinder, DeletionRunOutcome,
 };
-use crate::scope_events::AgentAvailabilityEdge;
+use crate::host_runtime::scope_event_publishers::AgentAvailabilityEdge;
 
 /// The product route template, in axum's `{id}` capture syntax. Shares the path
 /// with `PATCH /api/agents/{id}`; the composition root merges the two methods on

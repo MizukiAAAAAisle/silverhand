@@ -29,8 +29,9 @@ use silverhand_backend_core::{
 };
 
 use crate::{
+    foundation::{scope_event_transport::ScopeEventHubError, scope_event_wire::DaemonSideEvent},
     host_control::status_seed::{AttachedStatusCustody, CustodyUnavailable, HostRuntimeActivity},
-    scope_events::{DaemonSideEvent, ScopeEventHub, ScopeEventHubError},
+    host_runtime::scope_event_publishers::HubHostRuntimeEvents,
 };
 
 #[derive(Debug)]
@@ -71,7 +72,7 @@ impl RuntimeExitPostCommit {
 #[derive(Clone)]
 pub(crate) struct DaemonRuntimeEventOwner<P> {
     durable: P,
-    hub: ScopeEventHub,
+    hub: HubHostRuntimeEvents,
     state: Arc<Mutex<RuntimeOwnerState>>,
 }
 
@@ -227,7 +228,7 @@ impl<P> DaemonRuntimeEventOwner<P>
 where
     P: DaemonEventDurablePort,
 {
-    pub(crate) fn new(durable: P, hub: ScopeEventHub) -> Self {
+    pub(crate) fn new(durable: P, hub: HubHostRuntimeEvents) -> Self {
         Self {
             durable,
             hub,
@@ -1942,7 +1943,9 @@ mod tests {
     ) -> DaemonRuntimeEventOwner<()> {
         let owner = DaemonRuntimeEventOwner {
             durable: (),
-            hub: crate::scope_events::ScopeEventHub::production().unwrap(),
+            hub: crate::foundation::scope_event_transport::ScopeEventHub::production()
+                .unwrap()
+                .host_runtime_events(),
             state: std::sync::Arc::new(std::sync::Mutex::new(RuntimeOwnerState::default())),
         };
         owner.state.lock().unwrap().runs.extend(entries);

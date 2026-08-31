@@ -24,8 +24,8 @@ use silverhand_backend_core::{
 use crate::{
     clock::ProcessClock,
     error,
+    foundation::scope_event_transport::ScopeEventHub,
     host_runtime::host_wire::{HostDto, host_wire},
-    scope_events::ScopeEventHub,
     wire_admission::from_object_slice,
     wire_patch::PatchField,
 };
@@ -70,8 +70,14 @@ pub struct ScopeEventHostLabelChange<R> {
     hub: ScopeEventHub,
 }
 
+impl ScopeEventHub {
+    pub fn host_label_change<R>(&self, agents: R) -> ScopeEventHostLabelChange<R> {
+        ScopeEventHostLabelChange::new(agents, self.clone())
+    }
+}
+
 impl<R> ScopeEventHostLabelChange<R> {
-    pub fn new(agents: R, hub: ScopeEventHub) -> Self {
+    pub(crate) fn new(agents: R, hub: ScopeEventHub) -> Self {
         Self { agents, hub }
     }
 }

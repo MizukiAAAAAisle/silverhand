@@ -47,6 +47,9 @@ use silverhand_backend_server::{
         OnboardingDeliveryAdapter,
     },
     direct_pairs, embedded_bootstrap,
+    foundation::scope_event_transport::{
+        AllowedOrigin, EventWebSocketConfig, EventWebSocketController, ScopeEventHub,
+    },
     host_agent::{
         agent_audit, agent_avatar, agent_avatar_write, agent_clear_session, agent_create,
         agent_delete, agent_detail, agent_list, agent_patch, agent_presence, agent_runtime_state,
@@ -56,7 +59,7 @@ use silverhand_backend_server::{
     host_agent_background::{
         agent_deletion_resumer::AgentDeletionResumer, presence_grace_timer::PresenceGraceTimers,
     },
-    host_control::management::{self, update::ScopeEventHostLabelChange},
+    host_control::management,
     host_control::runtime_availability::DataPlaneRuntimeAvailabilityProbe,
     host_resources, host_runtime,
     human_auth::{self, HumanAuthDeps},
@@ -101,11 +104,10 @@ use silverhand_backend_server::{
     },
     password_hasher::SpawnBlockingHasher,
     runtime_credential::{RuntimeCredentialAuthority, require_runtime_credential},
-    scope_events::{
-        AllowedOrigin, EventWebSocketConfig, EventWebSocketController, HubPresenceSink,
-        ScopeEventHub, SystemDisconnectClock, compose_presence_vertical,
-    },
     users::{self, UsersDeps},
+    viewer_read_model::presence::{
+        HubPresencePublisher, SystemDisconnectClock, compose_presence_vertical,
+    },
     workspace_data_plane, workspace_detail, workspace_metadata_write, workspace_name_availability,
     workspace_rename_fanout::WorkspaceRenameFanoutAdapter,
     workspaces,
@@ -406,7 +408,10 @@ pub enum ConfigError {
     #[error("listen address is invalid")]
     InvalidListenAddress(#[source] std::net::AddrParseError),
     #[error("event websocket origin is invalid")]
-    InvalidOrigin(#[source] silverhand_backend_server::scope_events::InvalidAllowedOrigin),
+    InvalidOrigin(
+        #[source]
+        silverhand_backend_server::foundation::scope_event_transport::InvalidAllowedOrigin,
+    ),
     #[error("deployment profile {0:?} is not one of: embedded, remote-only")]
     InvalidDeploymentProfile(String),
     #[error("SILVERHAND_DISABLE_SIGNUP {0:?} must be 0 or 1")]
@@ -491,7 +496,7 @@ pub struct PreparedApp {
     boot: BootProgress,
     event_controller: EventWebSocketController,
     daemon_controller: DaemonDeliveryController,
-    presence_timers: PresenceGraceTimers<SqliteLastSeenSink, HubPresenceSink>,
+    presence_timers: PresenceGraceTimers<SqliteLastSeenSink, HubPresencePublisher>,
     /// The single agent-deletion resumer, already `recover`ed at boot. Carried so
     /// shutdown can `close` it FIRST — before any transport closes — so the shutdown
     /// window never keeps scheduling against a daemon that is being torn down.
@@ -608,7 +613,7 @@ impl PreparedApp {
 async fn shut_down_transports(
     event_controller: &EventWebSocketController,
     daemon_controller: &DaemonDeliveryController,
-    presence_timers: &PresenceGraceTimers<SqliteLastSeenSink, HubPresenceSink>,
+    presence_timers: &PresenceGraceTimers<SqliteLastSeenSink, HubPresencePublisher>,
 ) {
     tokio::join!(
         async {
@@ -912,14 +917,14 @@ where
     // the identical construction. The `PresenceGraceTimers` inside is the
     // `OnlineViewers` the presence GET route reads AND, wrapped in a
     // `PresenceConnectionFeed`, the transport's connect/disconnect sink; a decided
-    // offline fact projects once through the `HubPresenceSink` into
+    // offline fact projects once through the `HubPresencePublisher` into
     // `EventScope::App`; it is never re-injected downstream. Production seals the
     // disconnect instant with the system wall clock and takes the 20s grace TS
     // parity fixes (`index.ts` passes no override).
     let (presence_router, presence_feed, presence_timers) = compose_presence_vertical(
         presence_cold_read,
         last_seen_sink,
-        hub.clone(),
+        hub.presence_publisher(),
         SystemDisconnectClock,
         GraceWindow::from_millis_or_default(None),
     );
@@ -942,7 +947,7 @@ where
             runtime_credentials.clone(),
             delivery_store,
             host_store.clone(),
-            hub.clone(),
+            hub.host_runtime_events(),
         )
         .map_err(|source| StartupError::Composition {
             name: "daemon delivery runtime",
@@ -954,7 +959,8 @@ where
     // from this runtime's one registry — the binder and the observer are one truth).
     let daemon_controller = daemon_runtime.controller();
 
-    let target_address = messaging_store.target_address(hub.clone(), TargetAddressRefusalLog);
+    let target_address =
+        messaging_store.target_address(hub.messaging_events(), TargetAddressRefusalLog);
     // Internal attachment upload resolves its canonical target through the SAME address
     // authority the send door uses. `SqliteTargetAddress` is a shared-pool clone and keeps
     // the same direct-pair-open hub + refusal observer; no parallel resolver is constructed.
@@ -1139,11 +1145,10 @@ where
     );
     // #2234 CP1: the host-management family's post-commit label-change effect. It reuses
     // the one computer-agents read authority and the one scope-event hub already in this
-    // composition (both `.clone()`d — `hub` is moved into `scope_events::router` below),
+    // composition (both `.clone()`d — `hub` is moved into the event router below),
     // publishing the existing `agent_changed` invalidation for every agent on the renamed
     // computer. No second read model, no second publisher.
-    let host_label_change =
-        ScopeEventHostLabelChange::new(computer_agents_read.clone(), hub.clone());
+    let host_label_change = hub.host_label_change(computer_agents_read.clone());
     let host_rotate_connect_token = host_runtime::rotate_connect_token::router(
         host_store.clone(),
         RotateConnectToken::new(
@@ -1159,7 +1164,7 @@ where
     // daemon's exact-seat stop + host-local file purge, and physical blob deletion on the
     // one local blob root. The teardown read/write ports are the one `SqliteHostAgentStore`.
     let cascade_effects = host_runtime::cascade_effects::ProductionComputerCascadeEffects::new(
-        host_runtime::cascade_effects::HubAgentDeletedAnnouncer::new(hub.clone()),
+        hub.agent_deleted_announcer(),
         daemon_controller.cascade_daemon_effects(),
         blob_store.clone(),
     );
@@ -1282,7 +1287,7 @@ where
     let workspace_rename_fanout = WorkspaceRenameFanoutAdapter::new(
         workspace_rename_messaging,
         daemon_runtime.effects(),
-        hub.clone(),
+        hub.workspace_rename_publisher(),
     );
     let workspace_metadata_sink = hub.workspace_metadata_changed_sink(workspace_audience_read);
     // The five human identity/session routes, generic over each capability. In
@@ -1306,7 +1311,7 @@ where
             credentials: credential_store,
             reads: user_store.clone(),
             writes: user_store.clone(),
-            user_changed: hub.clone(),
+            user_changed: hub.user_changed_sink(),
             clock: SystemSessionClock,
             signup_enabled: config.signup_enabled,
         },
@@ -1337,7 +1342,7 @@ where
             reads: user_store.clone(),
             avatar_writes: user_store,
             blobs: avatar_blobs,
-            user_changed: hub.clone(),
+            user_changed: hub.user_changed_sink(),
             clock: SystemSessionClock,
         },
         sessions.clone(),
@@ -1399,7 +1404,7 @@ where
     // #2255/#2257 embedded-bootstrap deps assembled here (the token file write itself is
     // deferred to the last-fallible step after `recover()` below): the choose-or-create
     // UoW store, the CSPRNG session mint (its own handle — a create issues a real session),
-    // and a `user_changed` hub clone captured before `hub` is moved into `scope_events`.
+    // and a `user_changed` adapter captured before `hub` is moved into the event router.
     let embedded_bootstrap_store = rollback_on_error!(
         open(
             "embedded bootstrap unit of work",
@@ -1408,7 +1413,7 @@ where
         .await
     );
     let embedded_bootstrap_mint = EntropySessionTokenMint::new(OsEntropy);
-    let embedded_bootstrap_user_changed = hub.clone();
+    let embedded_bootstrap_user_changed = hub.user_changed_sink();
     // #2249/#2257: the ONE agent-profile-MCP data plane, lifted to a binding so BOTH the
     // internal self-scope face (below) and the PUBLIC read+probe pair (#2249, in
     // `human_products`) ride the identical `ProductionAgentProfileMcpDataPlane` over the
@@ -1421,16 +1426,22 @@ where
     // aftermath. All six public + four internal attachment faces share one read adapter,
     // one write adapter, one agent adapter, the process's ONE blob root, and the SAME hub
     // as the cursor-inert `attachment_changed` publisher.
-    let human_reactions =
-        reaction::human_router(reaction_store.clone(), reaction_store.clone(), hub.clone());
-    let agent_reactions =
-        reaction::agent_router(reaction_store.clone(), reaction_store, hub.clone());
+    let human_reactions = reaction::human_router(
+        reaction_store.clone(),
+        reaction_store.clone(),
+        hub.reaction_publisher(),
+    );
+    let agent_reactions = reaction::agent_router(
+        reaction_store.clone(),
+        reaction_store,
+        hub.reaction_publisher(),
+    );
     let human_attachments = attachment::router(
         attachment_reads,
         attachment_writes,
         blob_store.clone(),
         HostAttachmentEnvironment,
-        hub.clone(),
+        hub.attachment_publisher(),
     );
     let agent_attachment_products = agent_attachment_upload_router(
         agent_attachment_target,
@@ -1441,7 +1452,7 @@ where
     .merge(agent_attachment_update_router(
         agent_attachments.clone(),
         blob_store.clone(),
-        hub.clone(),
+        hub.attachment_publisher(),
     ))
     .merge(agent_attachment_locate_router(
         agent_attachments.clone(),
@@ -1725,7 +1736,11 @@ where
                 thread_follow_store,
                 thread_follow_aftermath,
             ))
-            .merge(saved::router(saved_store.clone(), saved_store, hub.clone()))
+            .merge(saved::router(
+                saved_store.clone(),
+                saved_store,
+                hub.saved_publisher(),
+            ))
             // Same path as the send POST already merged via `human_writes`. axum
             // accumulates the GET and the POST into one method router on the
             // shared path node, so neither shadows the other; only a repeated
@@ -1754,7 +1769,7 @@ where
             .merge(access::router(
                 access_store.clone(),
                 access_store,
-                hub.clone(),
+                hub.workspace_membership_publisher(),
                 SystemEnrollmentClock,
             ))
             // #2219 CP4 batch B, behind this same human perimeter. `host_list`'s
@@ -1853,16 +1868,17 @@ where
             }
         })
     );
-    let (event_router, event_controller) = silverhand_backend_server::scope_events::router(
-        hub,
-        sessions,
-        scope_authority,
-        // The transport's connect/disconnect sink is the presence feed sharing the
-        // single `PresenceGraceTimers` above with the presence GET route. A live WS
-        // connection marks the viewer online in the very set that route reads.
-        presence_feed,
-        event_config,
-    );
+    let (event_router, event_controller) =
+        silverhand_backend_server::foundation::scope_event_transport::router(
+            hub,
+            sessions,
+            scope_authority,
+            // The transport's connect/disconnect sink is the presence feed sharing the
+            // single `PresenceGraceTimers` above with the presence GET route. A live WS
+            // connection marks the viewer online in the very set that route reads.
+            presence_feed,
+            event_config,
+        );
 
     // The three ANONYMOUS root faces — mounted at the top level, ahead of no perimeter,
     // because a supervisor probes liveness/readiness and a client reads discovery before
@@ -2312,12 +2328,12 @@ mod tests {
     };
     use silverhand_backend_server::{
         daemon_delivery::{HOST_WEBSOCKET_PATH, OUTBOUND_PROTOCOL_VERSION},
-        host_agent_background::agent_deletion_resumer::DeletionRunOutcome,
-        messaging::MESSAGE_SEND_MAX_BODY_BYTES,
-        scope_events::{
+        foundation::scope_event_transport::{
             DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH, EVENT_WS_SESSION_COOKIE,
             MINIMUM_CLIENT_API_EPOCH,
         },
+        host_agent_background::agent_deletion_resumer::DeletionRunOutcome,
+        messaging::MESSAGE_SEND_MAX_BODY_BYTES,
     };
     use sqlx::{Connection, Executor};
     use tempfile::TempDir;
@@ -11859,9 +11875,10 @@ mod tests {
             user_presence_last_seen::LastSeenSink,
         };
         use silverhand_backend_server::{
+            foundation::scope_event_transport::ConnectionLifecycle,
             host_agent::presence::{self, PRESENCE_PATH},
             host_agent_background::presence_grace_timer::PresenceFactSink,
-            scope_events::{ConnectionLifecycle, PresenceConnectionFeed},
+            viewer_read_model::presence::PresenceConnectionFeed,
         };
 
         use super::*;

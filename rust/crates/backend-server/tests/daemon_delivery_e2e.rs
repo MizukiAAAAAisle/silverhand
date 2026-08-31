@@ -64,6 +64,11 @@ use silverhand_backend_server::{
         HOST_PROTOCOL_VERSION, HOST_WEBSOCKET_PATH, HostDataPlaneCustody,
         OUTBOUND_PROTOCOL_VERSION, OwningHostDataPlane, UPDATE_REQUIRED_CLOSE_REASON,
     },
+    foundation::scope_event_transport::{
+        AllowedOrigin, ConnectionLifecycle, DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH,
+        EVENT_WS_SESSION_COOKIE, EventWebSocketConfig, EventWebSocketController, ScopeEventHub,
+        router as scope_event_router,
+    },
     host_agent_background::agent_deletion_resumer::HostReadyObserver,
     host_control::admission::ProtocolMismatchRefusal,
     host_control::management::{self, update::HostLabelChangeEffect},
@@ -81,11 +86,6 @@ use silverhand_backend_server::{
     },
     runtime_control::ProductionRuntimeControl,
     runtime_credential::RuntimeCredentialAuthority,
-    scope_events::{
-        AllowedOrigin, ConnectionLifecycle, DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH,
-        EVENT_WS_SESSION_COOKIE, EventWebSocketConfig, EventWebSocketController, ScopeEventHub,
-        router as scope_event_router,
-    },
 };
 use silverhand_backend_sqlite::{
     auth::SqliteSessionStore, host_agent::SqliteHostAgentStore,
@@ -278,7 +278,7 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
         RuntimeCredentialAuthority::production(custody),
         data,
         hosts,
-        event_hub.clone(),
+        event_hub.host_runtime_events(),
     )
     .unwrap();
     let runtime_control = runtime.runtime_control();

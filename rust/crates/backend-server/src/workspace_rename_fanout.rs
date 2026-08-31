@@ -94,8 +94,8 @@ mod tests {
     use silverhand_backend_sqlite::messaging::collaboration::workspace_rename_messaging::SqliteWorkspaceRenameMessaging;
 
     use super::*;
+    use crate::conversation_messaging::scope_event_publishers::HubWorkspaceRenamePublisher;
     use crate::daemon_delivery::DaemonDeliveryEffects;
-    use crate::scope_events::ScopeEventHub;
 
     /// The wiring risk this leaf carries is that the three CONCRETE production types
     /// do not compose into the route's requirement — the store must satisfy all
@@ -122,7 +122,7 @@ mod tests {
             WorkspaceRenameFanoutAdapter<
                 SqliteWorkspaceRenameMessaging<E>,
                 DaemonDeliveryEffects<C, D, H>,
-                ScopeEventHub,
+                HubWorkspaceRenamePublisher,
             >,
         >();
     }

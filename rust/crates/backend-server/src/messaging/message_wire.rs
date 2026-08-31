@@ -14,7 +14,7 @@
 //! together — this one projector, both audiences genuinely consuming it, and an exact
 //! integration gate that locks the two whole JSON payloads projected from the same
 //! committed fact
-//! ([`crate::scope_events`]'s `the_ack_is_the_conversation_frame_plus_a_sender_only_diagnostic`,
+//! ([`crate::foundation::scope_event_transport`]'s `the_ack_is_the_conversation_frame_plus_a_sender_only_diagnostic`,
 //! which drives the real broadcast door and the real ACK off one committed send, on both
 //! the main-line and reply arms). A shared helper alone would not; it is the gate that
 //! proves it.

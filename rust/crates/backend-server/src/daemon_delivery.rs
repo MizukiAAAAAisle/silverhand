@@ -84,13 +84,12 @@ use crate::{
         AttachedStatusCustody, CustodyUnavailable, DaemonCustody, HostStatusSeeds, SeedAttempt,
     },
     host_control::status_snapshot::{self, StatusSnapshotOutcome, StatusSnapshotRequest},
-    host_runtime::detail::ConnectedHostName,
+    host_runtime::{detail::ConnectedHostName, scope_event_publishers::HubHostRuntimeEvents},
     messaging::references::MarkdownReferencePositions,
     runtime_credential::{
         RuntimeCredentialAuthority, RuntimeDispatchFailure, RuntimeStartFailure,
         RuntimeStartHandoff, RuntimeStartTransport, RuntimeStopTransport,
     },
-    scope_events::ScopeEventHub,
     scope_runtime_stop::ProductionScopeRuntimeStop,
 };
 
@@ -291,7 +290,7 @@ where
         credentials: RuntimeCredentialAuthority<C>,
         data: D,
         host_credentials: H,
-        event_hub: ScopeEventHub,
+        event_hub: HubHostRuntimeEvents,
     ) -> Result<Self, DaemonDeliveryBuildError> {
         Self::new(
             credentials,
@@ -307,7 +306,7 @@ where
         data: D,
         host_credentials: H,
         config: DaemonDeliveryConfig,
-        event_hub: ScopeEventHub,
+        event_hub: HubHostRuntimeEvents,
     ) -> Result<Self, DaemonDeliveryBuildError> {
         let registry = DaemonRegistry::new()?;
         let events = DaemonRuntimeEventOwner::new(data.clone(), event_hub);
@@ -4808,7 +4807,9 @@ mod tests {
                 SqliteRuntimeDeliveryStore::open(&path).await.unwrap(),
                 SqliteHostRuntimeStore::open(&path).await.unwrap(),
                 DaemonDeliveryConfig::production(),
-                ScopeEventHub::production().unwrap(),
+                crate::foundation::scope_event_transport::ScopeEventHub::production()
+                    .unwrap()
+                    .host_runtime_events(),
             )
             .unwrap();
             let host = HostId::parse("host-a").unwrap();
@@ -5274,7 +5275,6 @@ mod tests {
             daemon_delivery::{DaemonDeliveryConfig, DaemonDeliveryRuntime},
             daemon_events::{AgentRunStateWire, AgentRunStatus, HydratedRuntime},
             runtime_credential::RuntimeCredentialAuthority,
-            scope_events::ScopeEventHub,
         };
 
         const CONVERSATION: &str = "conversation0001";
@@ -5338,7 +5338,9 @@ mod tests {
                 data,
                 hosts,
                 DaemonDeliveryConfig::production(),
-                ScopeEventHub::production().unwrap(),
+                crate::foundation::scope_event_transport::ScopeEventHub::production()
+                    .unwrap()
+                    .host_runtime_events(),
             )
             .unwrap()
         }

@@ -23,8 +23,8 @@ use silverhand_backend_filesystem::blob_store::{LocalBlobStore, LocalBlobStoreEr
 
 use crate::{
     daemon_delivery::{DaemonCascadeEffects, DaemonHostConnections},
+    foundation::scope_event_transport::ScopeEventHub,
     host_agent_background::agent_deletion_resumer::AgentDeletionResumer,
-    scope_events::ScopeEventHub,
 };
 
 /// The one cross-lane dependency: publish the terminal identity event for a
@@ -48,10 +48,16 @@ pub struct HubAgentDeletedAnnouncer {
     hub: ScopeEventHub,
 }
 
+impl ScopeEventHub {
+    pub fn agent_deleted_announcer(&self) -> HubAgentDeletedAnnouncer {
+        HubAgentDeletedAnnouncer::new(self.clone())
+    }
+}
+
 impl HubAgentDeletedAnnouncer {
     /// Adapt the one process hub into the cascade's announcement seam. The hub is the
     /// same instance every other producer publishes on; this adapter mints none of its own.
-    pub fn new(hub: ScopeEventHub) -> Self {
+    pub(crate) fn new(hub: ScopeEventHub) -> Self {
         Self { hub }
     }
 }
