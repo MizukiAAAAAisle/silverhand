@@ -1948,6 +1948,83 @@ async fn a_version_this_server_cannot_read_is_refused_without_recording_a_reason
 }
 
 #[tokio::test]
+async fn malformed_runtime_owner_payloads_close_the_attached_connection_as_protocol_faults() {
+    let fixture = fixture("malformed-runtime-owner-payloads.sqlite").await;
+    let malformed = [
+        (
+            "consumed",
+            json!({
+                "direction": "daemon_to_server",
+                "type": "event",
+                "kind": "runtime_delivery_consumed",
+                "runtime_scope": {
+                    "kind": "conversation",
+                    "conversation_id": CONVERSATION,
+                    "agent_id": AGENT,
+                },
+                "conversation_id": CONVERSATION,
+                "agent_id": AGENT,
+                "runtime_generation": 1,
+                "ts": 200,
+            }),
+        ),
+        (
+            "failed",
+            json!({
+                "direction": "daemon_to_server",
+                "type": "event",
+                "kind": "runtime_delivery_failed",
+                "runtime_scope": {
+                    "kind": "conversation",
+                    "conversation_id": CONVERSATION,
+                    "agent_id": AGENT,
+                },
+                "conversation_id": CONVERSATION,
+                "agent_id": AGENT,
+                "runtime_generation": 1,
+                "delivery_ids": [1],
+                "reason": "not_a_runtime_failure_reason",
+                "ts": 201,
+            }),
+        ),
+        (
+            "exit",
+            json!({
+                "direction": "daemon_to_server",
+                "type": "event",
+                "kind": "runtime_exit",
+                "runtime_scope": {
+                    "kind": "conversation",
+                    "conversation_id": CONVERSATION,
+                    "agent_id": AGENT,
+                },
+                "conversation_id": CONVERSATION,
+                "agent_id": AGENT,
+                "runtime_generation": 1,
+                "code": 1,
+                "intentional": "false",
+                "ts": 202,
+            }),
+        ),
+    ];
+
+    for (name, frame) in malformed {
+        let mut socket = connect(fixture.address).await;
+        complete_attachment(&mut socket, &fixture.controller).await;
+        socket
+            .send(Message::Text(frame.to_string().into()))
+            .await
+            .unwrap();
+        expect_close(&mut socket, CloseCode::Protocol, "invalid_daemon_frame").await;
+        wait_for_free_host_slot(&fixture.controller).await;
+        assert_eq!(fixture.controller.active_connection_count(), 0, "{name}");
+    }
+
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
 async fn a_refusal_is_withheld_by_a_live_dialer_resurfaces_on_its_close_and_only_custody_clears_it()
 {
     let fixture = fixture("refusal-sequence.sqlite").await;

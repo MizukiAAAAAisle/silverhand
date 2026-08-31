@@ -28,6 +28,22 @@ use crate::{
     },
 };
 
+impl<C, D, H> DaemonDeliveryRuntime<C, D, H>
+where
+    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    D: silverhand_backend_core::runtime_delivery::RuntimeDispatchReadPort
+        + silverhand_backend_core::runtime_delivery::RuntimeInboxCustodyPort
+        + silverhand_backend_core::runtime_event::DaemonEventDurablePort,
+    H: silverhand_backend_core::host_runtime::custody::HostCredentialLookup,
+{
+    pub fn agent_run_states_router<A>(&self, admission: A) -> Router
+    where
+        A: ChannelDetailReadPort + Send + Sync + 'static,
+    {
+        router(admission, self.clone())
+    }
+}
+
 pub const CHANNEL_AGENT_RUN_STATES_PATH: &str = "/api/channels/{id}/agent-run-states";
 
 /// A live owner snapshot source. Implementations must return one atomic

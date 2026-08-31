@@ -723,7 +723,7 @@ fn cp_table(source: &str, name: &str) -> BTreeSet<(String, String)> {
 // a SELF-NAMED top-level context root (module name == owner namespace: embedded_bootstrap /
 // workspace_data_plane / host_runtime) targets its own path `crate::module`. landed is
 // derived mechanically: a root is landed iff its CURRENT full path (`crate::module`) equals
-// its physical_target — that is exactly the self-named context roots (9 across the three
+// its physical_target — that is exactly the self-named context roots across the three
 // crates); every other root targets a namespaced path it does not yet occupy and is
 // residual. residual = scanned roots − mechanically-landed, derived from the map + real tree
 // ONLY. The CP inventories in host_agent_scaffold.rs keep their original G4/G5 semantics and
@@ -816,7 +816,7 @@ fn scanned_roots() -> BTreeSet<(String, String)> {
 
 /// The mechanically-landed roots: a settled row whose CURRENT full path equals its full
 /// physical_target. These are exactly the self-named top-level context roots
-/// (embedded_bootstrap / workspace_data_plane / host_runtime), which already reside at their
+/// (including context roots introduced by landed migrations), which already reside at their
 /// target; every other root targets a namespaced path it does not yet occupy.
 fn mechanically_landed(map: &Value) -> BTreeSet<(String, String)> {
     let mut landed = BTreeSet::new();
@@ -929,9 +929,7 @@ fn physical_targets_are_full_paths_and_landed_is_mechanical() {
 #[test]
 fn landed_set_is_exactly_the_self_named_context_roots() {
     // A root is mechanically landed iff its current path equals its physical_target. The
-    // only such roots at the anchor are the self-named top-level contexts (module name ==
-    // owner namespace): embedded_bootstrap, workspace_data_plane, host_runtime in each
-    // crate that declares them. Every other root targets crate::ns::leaf and is residual.
+    // Such roots are self-named top-level contexts (module name == owner namespace).
     let map = load_map();
     let landed = mechanically_landed(&map);
     let expected: BTreeSet<(String, String)> = [
@@ -944,6 +942,10 @@ fn landed_set_is_exactly_the_self_named_context_roots() {
         ("backend-core", "host_runtime"),
         ("backend-server", "host_runtime"),
         ("backend-sqlite", "host_runtime"),
+        ("backend-server", "application_orchestration"),
+        ("backend-server", "conversation_messaging"),
+        ("backend-server", "foundation"),
+        ("backend-server", "identity_access"),
     ]
     .into_iter()
     .map(|(c, m)| (c.to_owned(), m.to_owned()))

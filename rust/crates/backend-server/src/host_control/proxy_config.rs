@@ -11,8 +11,7 @@ use serde_json::{Value, json};
 use silverhand_backend_core::agents::runtime::RuntimeKind;
 
 use crate::daemon_delivery::{
-    HostDataPlaneCommandKind, HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest,
-    OwningHostDataPlane,
+    HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest, OwningHostDataPlane, command,
 };
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -46,13 +45,7 @@ pub async fn get(
     dispatch: &OwningHostDataPlane,
     request: ProxyConfigRequest,
 ) -> ProxyConfigOutcome {
-    round_trip(
-        dispatch,
-        request,
-        HostDataPlaneCommandKind::ProxyConfigGet,
-        json!({}),
-    )
-    .await
+    round_trip(dispatch, request, command::proxy_config_get(json!({}))).await
 }
 
 pub async fn set(
@@ -68,26 +61,18 @@ pub async fn set(
             .map(RuntimeKind::as_str)
             .collect::<Vec<_>>(),
     });
-    round_trip(
-        dispatch,
-        request,
-        HostDataPlaneCommandKind::ProxyConfigSet,
-        params,
-    )
-    .await
+    round_trip(dispatch, request, command::proxy_config_set(params)).await
 }
 
 async fn round_trip(
     dispatch: &OwningHostDataPlane,
     request: ProxyConfigRequest,
-    kind: HostDataPlaneCommandKind,
-    params: Value,
+    command: command::EncodedDaemonCommand,
 ) -> ProxyConfigOutcome {
     let answer = match dispatch
         .dispatch(HostDataPlaneRequest {
             custody: request.custody.clone(),
-            kind,
-            params,
+            command,
             timeout: COMMAND_TIMEOUT,
         })
         .await

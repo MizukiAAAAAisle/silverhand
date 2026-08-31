@@ -21,8 +21,12 @@ use silverhand_backend_core::{
 use crate::error;
 use crate::wire_admission::ValidatedJson;
 
+pub mod agent_materialize;
 pub mod cascade_effects;
 pub mod claim;
+pub(crate) mod daemon_runtime_codecs;
+pub(crate) mod daemon_runtime_owner;
+pub(crate) mod daemon_runtime_transport;
 pub mod delete;
 pub mod detail;
 pub(crate) mod host_wire;
@@ -31,6 +35,8 @@ pub mod resolve;
 pub mod revoke;
 pub mod rotate_connect_token;
 pub mod rotate_token;
+pub mod runtime_control;
+pub mod scope_runtime_stop;
 
 use host_wire::HostDto;
 

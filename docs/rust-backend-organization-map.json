@@ -1937,96 +1937,68 @@
     },
     {
       "crate": "backend-server",
-      "module": "daemon_delivery",
-      "source_shape": "hybrid",
+      "module": "application_orchestration",
+      "source_shape": "directory",
       "needs_ruling": false,
-      "split_required": {
-        "kind": "hybrid",
-        "current_container": {
-          "source_shape": "hybrid"
-        },
-        "child_groups": [
-          {
-            "group": "runtime_lifecycle_codecs",
-            "business_owner": "C2",
-            "structural_role": "adapter",
-            "members": [
-              "runtime_start_codec",
-              "runtime_stop_codec",
-              "runtime_clear_session_codec"
-            ],
-            "target_parent_namespace": "backend-server::host_runtime",
-            "needs_ruling": true
-          },
-          {
-            "group": "materialize_codec",
-            "business_owner": "application_orchestration",
-            "structural_role": "adapter",
-            "members": [
-              "agent_materialize_codec"
-            ],
-            "target_parent_namespace": "backend-server::application_orchestration",
-            "needs_ruling": true
-          },
-          {
-            "group": "profile_mcp_codec",
-            "business_owner": "C1",
-            "structural_role": "adapter",
-            "members": [
-              "agent_profile_mcp_codec"
-            ],
-            "target_parent_namespace": "backend-server::identity_access",
-            "needs_ruling": true
-          }
-        ],
-        "file_responsibilities": [
-          {
-            "responsibility": "registry_generation_fifo_pending_deadline_rawwire_selectloop",
-            "business_owner": "foundation",
-            "structural_role": "transport",
-            "target_parent_namespace": "backend-server::foundation",
-            "needs_ruling": true
-          },
-          {
-            "responsibility": "runtime_host_lifecycle_adapters",
-            "business_owner": "C2",
-            "structural_role": "adapter",
-            "target_parent_namespace": "backend-server::host_runtime",
-            "needs_ruling": true
-          },
-          {
-            "responsibility": "messaging_post_commit_adapters",
-            "business_owner": "C3",
-            "structural_role": "adapter",
-            "target_parent_namespace": "backend-server::conversation_messaging",
-            "needs_ruling": true
-          },
-          {
-            "responsibility": "teardown_purge_and_agent_materialization_sagas",
-            "business_owner": "application_orchestration",
-            "structural_role": "adapter",
-            "target_parent_namespace": "backend-server::application_orchestration",
-            "needs_ruling": true
-          },
-          {
-            "responsibility": "profile_mcp",
-            "business_owner": "C1",
-            "structural_role": "adapter",
-            "target_parent_namespace": "backend-server::identity_access",
-            "needs_ruling": true
-          },
-          {
-            "responsibility": "workspace_fs",
-            "business_owner": "workspace_data_plane",
-            "structural_role": "adapter",
-            "target_parent_namespace": "backend-server::workspace_data_plane",
-            "needs_ruling": true
-          }
-        ]
+      "target": {
+        "business_owner": "application_orchestration",
+        "structural_role": "composition"
       },
-      "note": "#2268: hybrid. child_groups close the 5 codec subfiles; file_responsibilities restore the 7541-line daemon_delivery.rs main-body owners (frozen #2268 mapping)",
       "migration": {
-        "split": true
+        "physical_target": "backend-server::application_orchestration"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "conversation_messaging",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "composition"
+      },
+      "migration": {
+        "physical_target": "backend-server::conversation_messaging"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "foundation",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "composition"
+      },
+      "migration": {
+        "physical_target": "backend-server::foundation"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "identity_access",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "composition"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "daemon_delivery",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "application_orchestration",
+        "structural_role": "composition"
+      },
+      "note": "#2269: compatibility-only facade. Sealed command/connection truth moved to foundation::daemon_{command,transport}; runtime adapters/codecs to host_runtime::{runtime_control,scope_runtime_stop,daemon_runtime_transport,daemon_runtime_codecs}; teardown/purge to host_runtime::cascade_effects; token rotation and host lifecycle projections to their host-runtime/host-control owners; materialize adapter to host_runtime::agent_materialize with its codec in application_orchestration; profile-MCP adapter/codec to identity_access; messaging effects to conversation_messaging::daemon_post_commit; workspace refusal/codec ownership remains workspace_data_plane.",
+      "migration": {
+        "physical_target": "backend-server::application_orchestration::daemon_delivery"
       }
     },
     {
@@ -3314,15 +3286,6 @@
     "backend-core::cold_read split group 'presence' final leaf module name",
     "backend-core::policy split group 'agent_presence' final leaf module name",
     "backend-core::policy split group 'human_presence_grace' final leaf module name",
-    "backend-server::daemon_delivery split group 'runtime_lifecycle_codecs' final leaf module name",
-    "backend-server::daemon_delivery split group 'materialize_codec' final leaf module name",
-    "backend-server::daemon_delivery split group 'profile_mcp_codec' final leaf module name",
-    "backend-server::daemon_delivery split group 'registry_generation_fifo_pending_deadline_rawwire_selectloop' final leaf module name",
-    "backend-server::daemon_delivery split group 'runtime_host_lifecycle_adapters' final leaf module name",
-    "backend-server::daemon_delivery split group 'messaging_post_commit_adapters' final leaf module name",
-    "backend-server::daemon_delivery split group 'teardown_purge_and_agent_materialization_sagas' final leaf module name",
-    "backend-server::daemon_delivery split group 'profile_mcp' final leaf module name",
-    "backend-server::daemon_delivery split group 'workspace_fs' final leaf module name",
     "backend-server::daemon_events split group 'runtime_settlement_state_codecs' final leaf module name",
     "backend-server::daemon_events split group 'conversation_activity_projection_publisher' final leaf module name",
     "backend-server::daemon_events split group 'user_presence_publication' final leaf module name",
@@ -3355,7 +3318,7 @@
   "task": "#2265",
   "base_commit": "3a819c889d296ffddb9b762e5d44f3de540137fe",
   "migration_ledger": {
-    "note": "Organization residual/landed is derived, NOT stored. A settled crate_root carries a full physical_target Rust module path: a normal row targets crate::namespace::leaf, while a self-named top-level context root (module name == owner namespace: embedded_bootstrap / workspace_data_plane / host_runtime) targets its own path crate::module (already at its target). A split row is residual by construction and its GROUPS carry only target_parent_namespace (crate::owner-ns) + needs_ruling — the final leaf module name is unevidenced (see open_rulings), NOT a fabricated full target. A root is LANDED iff its current full path equals its physical_target; mechanically that is exactly the self-named context roots (9 across the three crates), and residual = scanned roots − landed (from the map + real tree only). The CP root inventories in host_agent_scaffold.rs keep their original G4/G5 seam semantics and are used only as a root-coverage compatibility check, never as a landed/residual authority. Route/product ledgers stay separate."
+    "note": "Organization residual/landed is derived, NOT stored. A settled crate_root carries a full physical_target Rust module path: a normal row targets crate::namespace::leaf, while a self-named top-level context root targets its own path crate::module (already at its target). #2269 adds the landed backend-server application_orchestration, conversation_messaging, foundation and identity_access roots beside the existing embedded_bootstrap / workspace_data_plane / host_runtime roots. A split row is residual by construction and unresolved groups carry only target_parent_namespace + needs_ruling. A root is LANDED iff its current full path equals its physical_target; residual = scanned roots − landed. The CP root inventories remain only a root-coverage compatibility check."
   },
   "target_namespaces": {
     "note": "The real Rust module namespace each business_owner relocates into. physical_target is a full path crate::namespace::leaf. landed is derived mechanically (current full path == physical_target); no row is landed until it actually resides at its full target path. Namespaces must be legal Rust idents, unique, and cover exactly the business_owner axis.",
