@@ -3,13 +3,47 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use serde::Serialize;
+use garde::Validate;
+use serde::{Deserialize, Serialize};
 use silverhand_backend_core::messaging::collaboration::reaction::{
     InvalidReactionEmoji, ReactionChange, ReactionChangedFact, ReactionDetail,
     ReactionMutationOutcome, ReactionMutationRefusal,
 };
 
 pub const MESSAGE_REACTION_CHANGED_EVENT: &str = "message_reaction_changed";
+
+/// Human mutation body (`POST`/`DELETE /api/messages/{id}/reactions`). The message id
+/// is a path coordinate, so the body carries only the emoji. A closed object: an unknown
+/// key is a native decode fault, an array-shaped body is rejected by the shared
+/// [`ObjectOnly`](crate::wire_admission::ObjectOnly) floor inside [`ValidatedJson`], and a
+/// non-string `emoji` keeps axum's native typed rejection. There is NO garde rule — emoji
+/// grammar is a domain verdict resolved by [`ReactionEmoji`](silverhand_backend_core::messaging::collaboration::reaction::ReactionEmoji)
+/// under the write lock, never an admission-stage refusal.
+///
+/// [`ValidatedJson`]: crate::wire_admission::ValidatedJson
+#[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub(super) struct HumanReactRaw {
+    #[garde(skip)]
+    pub(super) emoji: String,
+}
+
+/// Agent mutation body (`POST`/`DELETE /internal/agents/{aid}/react-message`). The agent
+/// route is conversation-scoped, so the target message id rides the body. Both fields are
+/// plain strings at admission: `message_id`'s domain shape is decided by
+/// [`MessageId::parse`](silverhand_backend_core::messaging::MessageId::parse) and the emoji
+/// grammar by the domain path under the write lock — deferring both is what lets an invalid
+/// emoji paired with a hidden/unauthorized target refuse as 404/403, not 422 (proved by the
+/// `agent_invalid_emoji_*` cases). Closed object, no garde rule, same structural guarantees
+/// as [`HumanReactRaw`].
+#[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AgentReactRaw {
+    #[garde(skip)]
+    pub(super) message_id: String,
+    #[garde(skip)]
+    pub(super) emoji: String,
+}
 
 #[derive(Serialize)]
 struct ErrorBody {
@@ -160,117 +194,7 @@ pub(super) fn invalid_reaction(error: InvalidReactionEmoji) -> Response {
         "invalid_reaction",
     )
 }
-pub(super) struct InvalidInput(Vec<serde_json::Value>);
 
-impl InvalidInput {
-    pub(super) fn into_response(self) -> Response {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error":"invalid input","issues":self.0})),
-        )
-            .into_response()
-    }
-}
-
-pub(super) fn parse_human_body(bytes: &[u8]) -> Result<String, InvalidInput> {
-    let value = serde_json::from_slice::<serde_json::Value>(bytes)
-        .unwrap_or_else(|_| serde_json::json!({}));
-    let object = match value.as_object() {
-        Some(object) => object,
-        None => return Err(invalid_root(&value)),
-    };
-    required_string(object.get("emoji"), "emoji").map_err(|issue| invalid_issues(vec![issue]))
-}
-
-pub(super) fn parse_agent_body(bytes: &[u8]) -> Result<(String, String), InvalidInput> {
-    let value = serde_json::from_slice::<serde_json::Value>(bytes)
-        .unwrap_or_else(|_| serde_json::json!({}));
-    let object = match value.as_object() {
-        Some(object) => object,
-        None => return Err(invalid_root(&value)),
-    };
-    let mut issues = Vec::new();
-    let message = match required_string(object.get("message_id"), "message_id") {
-        Ok(message) if message.is_empty() => {
-            issues.push(serde_json::json!({
-                "code":"too_small",
-                "minimum":1,
-                "type":"string",
-                "inclusive":true,
-                "exact":false,
-                "message":"String must contain at least 1 character(s)",
-                "path":["message_id"]
-            }));
-            None
-        }
-        Ok(message) => Some(message),
-        Err(issue) => {
-            issues.push(issue);
-            None
-        }
-    };
-    let emoji = match required_string(object.get("emoji"), "emoji") {
-        Ok(emoji) => Some(emoji),
-        Err(issue) => {
-            issues.push(issue);
-            None
-        }
-    };
-    match (message, emoji) {
-        (Some(message), Some(emoji)) => Ok((message, emoji)),
-        _ => Err(invalid_issues(issues)),
-    }
-}
-
-fn required_string(
-    value: Option<&serde_json::Value>,
-    member: &'static str,
-) -> Result<String, serde_json::Value> {
-    match value {
-        Some(serde_json::Value::String(value)) => Ok(value.clone()),
-        value => {
-            let received = value.map(json_type).unwrap_or("undefined");
-            let message = if value.is_none() {
-                "Required".to_owned()
-            } else {
-                format!("Expected string, received {received}")
-            };
-            Err(serde_json::json!({
-                "code":"invalid_type",
-                "expected":"string",
-                "received":received,
-                "path":[member],
-                "message":message
-            }))
-        }
-    }
-}
-
-fn invalid_root(value: &serde_json::Value) -> InvalidInput {
-    let received = json_type(value);
-    invalid_issues(vec![serde_json::json!({
-        "code":"invalid_type",
-        "expected":"object",
-        "received":received,
-        "path":[],
-        "message":format!("Expected object, received {received}")
-    })])
-}
-
-fn invalid_issues(issues: Vec<serde_json::Value>) -> InvalidInput {
-    InvalidInput(issues)
-}
-
-fn json_type(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "boolean",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
-    }
-}
 pub(super) fn not_found() -> Response {
     (
         StatusCode::NOT_FOUND,

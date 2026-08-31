@@ -194,15 +194,24 @@ async fn call_raw(
     uri: &str,
     body: impl Into<String>,
 ) -> (StatusCode, Value) {
+    call_with_content_type(app, method, uri, body, Some("application/json")).await
+}
+
+/// Like [`call_raw`] but lets the caller omit or override the `Content-Type` header, so an
+/// admission test can drive the missing/wrong content-type → native 415 discriminator.
+async fn call_with_content_type(
+    app: axum::Router,
+    method: Method,
+    uri: &str,
+    body: impl Into<String>,
+    content_type: Option<&str>,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(content_type) = content_type {
+        builder = builder.header("content-type", content_type);
+    }
     let response = app
-        .oneshot(
-            Request::builder()
-                .method(method)
-                .uri(uri)
-                .header("content-type", "application/json")
-                .body(Body::from(body.into()))
-                .unwrap(),
-        )
+        .oneshot(builder.body(Body::from(body.into())).unwrap())
         .await
         .unwrap();
     let status = response.status();
@@ -474,7 +483,34 @@ fn runtime_principal(source: &str) -> RuntimePrincipal {
 }
 
 #[tokio::test]
-async fn production_routes_consume_every_ts_signed_wire_case() {
+async fn production_routes_consume_the_shared_fixture_cases_and_every_case_is_accounted_for() {
+    // The consumed-shared set is COLLECTED AT RUNTIME, not hand-listed: every real read of a
+    // shared fixture case goes through `case`/`event`, which registers the name. A case's
+    // response body and its event are two distinct consumption channels of the SAME entry, so
+    // each channel rejects its own duplicate read while the two share one name-set. If a
+    // production-route `assert_eq!(..., case("agent_add"))` is deleted, the name is never
+    // inserted and the final union stops equalling `all_names` — there is no separate 20-name
+    // truth that could drift out of sync with what the test executes.
+    let consumed = std::cell::RefCell::new(std::collections::BTreeSet::<String>::new());
+    let body_reads = std::cell::RefCell::new(std::collections::BTreeSet::<String>::new());
+    let event_reads = std::cell::RefCell::new(std::collections::BTreeSet::<String>::new());
+    let case = |name: &str| -> (StatusCode, Value) {
+        assert!(
+            body_reads.borrow_mut().insert(name.to_owned()),
+            "shared fixture case {name} body consumed twice"
+        );
+        consumed.borrow_mut().insert(name.to_owned());
+        fixture_case(name)
+    };
+    let event = |name: &str| -> Value {
+        assert!(
+            event_reads.borrow_mut().insert(name.to_owned()),
+            "shared fixture case {name} event consumed twice"
+        );
+        consumed.borrow_mut().insert(name.to_owned());
+        fixture_event(name)
+    };
+
     let (_directory, path, store, events) = seeded().await;
     let human = router(store.reactions(), store.reactions(), events.clone())
         .layer(Extension(UserId::parse("user-1").unwrap()));
@@ -527,44 +563,22 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
     ] {
         assert_eq!(
             call(human.clone(), method, uri, body).await,
-            fixture_case(name),
+            case(name),
             "{name}"
         );
     }
-    assert_eq!(
-        call_raw(
-            human.clone(),
-            Method::POST,
-            "/api/messages/message-1/reactions",
-            "{",
-        )
-        .await,
-        fixture_case("human_malformed_json")
-    );
-    assert_eq!(
-        call(
-            human.clone(),
-            Method::POST,
-            "/api/messages/message-1/reactions",
-            json!({}),
-        )
-        .await,
-        fixture_case("human_missing_emoji")
-    );
-    assert_eq!(
-        call(
-            human.clone(),
-            Method::POST,
-            "/api/messages/message-1/reactions",
-            json!({"emoji":7}),
-        )
-        .await,
-        fixture_case("human_non_string_emoji")
-    );
+    // NOTE: the human admission faults (malformed JSON, missing/non-string `emoji`) are NOT
+    // consumed from the shared TS-signed fixture. The TS route returns `400` with a Zod
+    // `issues[]` report; the Rust route routes the body through the shared
+    // `ValidatedJson<HumanReactRaw>` admission, so a structural fault keeps axum's native
+    // rejection and no validator report is serialized. That accepted-set deviation is pinned
+    // by `human_structural_admission_pins_exact_native_status_without_a_validator_report`
+    // below, which asserts the exact native status + zero handler reach without pinning
+    // native wording.
     let first = events.0.lock().unwrap()[0].clone();
     assert_eq!(
         serde_json::to_value(wire::changed_event(&first)).unwrap(),
-        fixture_event("human_add")
+        event("human_add")
     );
     sqlx::query("UPDATE conversations SET closed_at=1 WHERE id='conversation-1'")
         .execute(&mut db)
@@ -578,7 +592,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             json!({"emoji":"👍"})
         )
         .await,
-        fixture_case("closed_conversation")
+        case("closed_conversation")
     );
     sqlx::query("UPDATE conversations SET closed_at=NULL, archived_at=1 WHERE id='conversation-1'")
         .execute(&mut db)
@@ -592,7 +606,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             json!({"emoji":"👍"})
         )
         .await,
-        fixture_case("archived_conversation")
+        case("archived_conversation")
     );
     sqlx::query("UPDATE conversations SET archived_at=NULL WHERE id='conversation-1'")
         .execute(&mut db)
@@ -633,7 +647,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             Value::Null,
         )
         .await,
-        fixture_case("human_detail")
+        case("human_detail")
     );
     assert_eq!(
         call(
@@ -643,7 +657,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             Value::Null,
         )
         .await,
-        fixture_case("human_detail_missing")
+        case("human_detail_missing")
     );
     let invisible = router(store.reactions(), store.reactions(), events.clone())
         .layer(Extension(UserId::parse("user-2").unwrap()));
@@ -655,21 +669,16 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             Value::Null,
         )
         .await,
-        fixture_case("human_detail_invisible")
+        case("human_detail_invisible")
     );
 
     let agent = router(store.reactions(), store.reactions(), events.clone())
         .layer(Extension(runtime_principal("conversation-1")));
-    assert_eq!(
-        call(
-            agent.clone(),
-            Method::POST,
-            "/internal/agents/agent-1/react-message",
-            json!({"message_id":"","emoji":"🎯"}),
-        )
-        .await,
-        fixture_case("agent_empty_message_id")
-    );
+    // NOTE: an empty `message_id` is NOT consumed from the shared fixture. The TS route
+    // returns `400` with a Zod `too_small` issue; the Rust route decodes `message_id` as a
+    // plain string and lets `MessageId::parse` reject the empty value into the minimal
+    // semantic `422 {"error":"invalid input"}` — no validator report. Pinned by
+    // `agent_empty_message_id_is_the_minimal_semantic_422_without_touching_the_store` below.
     assert_eq!(
         call(
             agent.clone(),
@@ -678,7 +687,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             json!({"message_id":"message-1","emoji":"not emoji"}),
         )
         .await,
-        fixture_case("agent_invalid_reaction")
+        case("agent_invalid_reaction")
     );
     assert_eq!(
         call(
@@ -688,7 +697,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             json!({"message_id":"message-1","emoji":"🎯"})
         )
         .await,
-        fixture_case("agent_add")
+        case("agent_add")
     );
     assert_eq!(
         call(
@@ -698,7 +707,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             json!({"message_id":"message-1","emoji":"🎯"}),
         )
         .await,
-        fixture_case("agent_remove")
+        case("agent_remove")
     );
     assert_eq!(
         call(
@@ -708,7 +717,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             json!({"message_id":"message-1","emoji":"🎯"}),
         )
         .await,
-        fixture_case("agent_remove_idempotent")
+        case("agent_remove_idempotent")
     );
     let agent_remove = events
         .0
@@ -724,7 +733,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
         .clone();
     assert_eq!(
         serde_json::to_value(wire::changed_event(&agent_remove)).unwrap(),
-        fixture_event("agent_remove")
+        event("agent_remove")
     );
     let cross_event_count = events.0.lock().unwrap().len();
     let cross_row_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM message_reactions")
@@ -741,7 +750,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             json!({"message_id":"message-1","emoji":"🚀"})
         )
         .await,
-        fixture_case("agent_wrong_source")
+        case("agent_wrong_source")
     );
     assert_eq!(
         call(
@@ -751,7 +760,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             json!({"message_id":"missing","emoji":"not emoji"}),
         )
         .await,
-        fixture_case("agent_invalid_emoji_missing_target")
+        case("agent_invalid_emoji_missing_target")
     );
     assert_eq!(
         call(
@@ -761,7 +770,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             json!({"message_id":"message-1","emoji":"not emoji"}),
         )
         .await,
-        fixture_case("agent_invalid_emoji_wrong_source")
+        case("agent_invalid_emoji_wrong_source")
     );
     sqlx::query("DELETE FROM workspace_agent_capabilities WHERE workspace_id='workspace-1' AND agent_id='agent-1' AND capability='send_messages'").execute(&mut db).await.unwrap();
     let denied = router(store.reactions(), store.reactions(), events.clone())
@@ -774,7 +783,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             json!({"message_id":"message-1","emoji":"🚀"})
         )
         .await,
-        fixture_case("agent_capability_denied")
+        case("agent_capability_denied")
     );
     let denied = router(store.reactions(), store.reactions(), Events::default())
         .layer(Extension(runtime_principal("conversation-1")));
@@ -786,7 +795,7 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
             json!({"message_id":"message-1","emoji":"not emoji"}),
         )
         .await,
-        fixture_case("agent_invalid_emoji_capability_denied")
+        case("agent_invalid_emoji_capability_denied")
     );
     assert_eq!(events.0.lock().unwrap().len(), cross_event_count);
     let rows_after_cross: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM message_reactions")
@@ -800,21 +809,39 @@ async fn production_routes_consume_every_ts_signed_wire_case() {
         "/../../../packages/backend/tests/fixtures/reaction-wire.json"
     )))
     .unwrap();
-    let surfaces = fixture
+    let all_names = fixture
         .as_array()
         .unwrap()
         .iter()
-        .map(|case| case["surface"].as_str().unwrap())
+        .map(|entry| entry["name"].as_str().unwrap().to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    // Mechanical completeness gate, driven by RUNTIME evidence. `consumed` was filled by the
+    // `case`/`event` wrappers as each shared case was actually read above — there is no
+    // separate hand-maintained name list. The four admission cases are the ONLY fixture cases
+    // Rust deliberately does not consume (they diverge to native structural rejections pinned
+    // by the resident `*_structural_admission_*` tests; TS keeps signing its own 400+issues
+    // shape). If a shared case stops being consumed, its name never enters `consumed` and the
+    // union below no longer equals `all_names`; if a fixture case is added or removed, the same
+    // assertion fails — without anyone remembering the 24 names.
+    let consumed = consumed.into_inner();
+    let admission_deviations = std::collections::BTreeSet::from([
+        "human_malformed_json".to_owned(),
+        "human_missing_emoji".to_owned(),
+        "human_non_string_emoji".to_owned(),
+        "agent_empty_message_id".to_owned(),
+    ]);
+    assert!(
+        consumed.is_disjoint(&admission_deviations),
+        "a consumed shared case must not also be a named admission deviation"
+    );
+    let accounted = consumed
+        .union(&admission_deviations)
+        .cloned()
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
-        surfaces,
-        std::collections::BTreeSet::from([
-            "agent_delete",
-            "agent_post",
-            "human_delete",
-            "human_get",
-            "human_post",
-        ])
+        accounted, all_names,
+        "every fixture case must be either a consumed shared case or a named admission deviation"
     );
 }
 
@@ -1029,4 +1056,285 @@ async fn publication_failure_is_audited_once_without_compensating_the_committed_
         "{chain}"
     );
     assert!(chain.contains("scope event hub failed"), "{chain}");
+}
+
+// ===========================================================================
+// Accepted-set deviation from the shared TS-signed fixture (#2259).
+//
+// The TS routes decode with Zod and, on a structural body fault, return `400` with a
+// serialized `issues[]` report. The Rust routes decode through the shared
+// `ValidatedJson<{Human,Agent}ReactRaw>` admission, so a structural fault keeps axum's
+// native rejection and NO validator report is ever serialized. These resident tests pin
+// that deviation: native status + minimal semantic body (only where a semantic verdict
+// applies) + handler/store zero-reach — never the native rejection wording, which is not a
+// product contract. They replace the `human_malformed_json`, `human_missing_emoji`,
+// `human_non_string_emoji`, and `agent_empty_message_id` cases that Rust no longer consumes
+// from the fixture (TS keeps signing those from its own routes).
+// ===========================================================================
+
+/// A mutation + read port that fails the test if any admission-fault request reaches the
+/// application layer. Its methods are never expected to run for a rejected body.
+#[derive(Clone, Copy)]
+struct NeverReached;
+
+impl silverhand_backend_core::messaging::collaboration::reaction::ReactionMutationPort
+    for NeverReached
+{
+    type Error = std::io::Error;
+    async fn mutate(
+        &self,
+        _mutation: silverhand_backend_core::messaging::collaboration::reaction::ReactionMutation,
+    ) -> Result<
+        Result<
+            silverhand_backend_core::messaging::collaboration::reaction::CommittedReaction,
+            silverhand_backend_core::messaging::collaboration::reaction::ReactionMutationRefusal,
+        >,
+        Self::Error,
+    > {
+        panic!("a rejected admission body reached the reaction mutation store");
+    }
+}
+
+impl silverhand_backend_core::messaging::collaboration::reaction::ReactionReadPort
+    for NeverReached
+{
+    type Error = std::io::Error;
+    async fn detail(
+        &self,
+        _viewer: &UserId,
+        _message: &MessageId,
+    ) -> Result<
+        Result<
+            Vec<silverhand_backend_core::messaging::collaboration::reaction::ReactionDetail>,
+            silverhand_backend_core::messaging::collaboration::reaction::ReactionReadRefusal,
+        >,
+        Self::Error,
+    > {
+        panic!("a rejected admission body reached the reaction detail read");
+    }
+    async fn aggregates(
+        &self,
+        _viewer: &Reactor,
+        _messages: &[MessageId],
+    ) -> Result<
+        Vec<(
+            MessageId,
+            Vec<silverhand_backend_core::messaging::collaboration::reaction::ReactionAggregate>,
+        )>,
+        Self::Error,
+    > {
+        panic!("a rejected admission body reached the reaction aggregate read");
+    }
+}
+
+/// A never-called aftermath: a rejected body must publish nothing.
+#[derive(Clone, Copy)]
+struct NeverAnnounced;
+
+impl ReactionAftermath for NeverAnnounced {
+    async fn announce(
+        &self,
+        _fact: &ReactionChangedFact,
+    ) -> Result<
+        (),
+        silverhand_backend_core::messaging::collaboration::reaction::ReactionPublicationFailure,
+    > {
+        panic!("a rejected admission body published a reaction-changed event");
+    }
+}
+
+fn human_admission_app() -> axum::Router {
+    router(NeverReached, NeverReached, NeverAnnounced)
+        .layer(Extension(UserId::parse("user-1").unwrap()))
+}
+
+fn agent_admission_app() -> axum::Router {
+    router(NeverReached, NeverReached, NeverAnnounced)
+        .layer(Extension(runtime_principal("conversation-1")))
+}
+
+/// A structural fault must never leak a Zod-style `issues[]` report and (there being no
+/// garde rule on either DTO) must never collapse to the minimal semantic envelope.
+fn assert_no_validator_report(name: &str, value: &Value) {
+    if let Some(object) = value.as_object() {
+        assert!(
+            !object.contains_key("issues"),
+            "{name}: a Zod-style issues report leaked: {value}"
+        );
+        assert_ne!(
+            value,
+            &json!({ "error": "invalid input" }),
+            "{name}: a structural fault must not collapse to the semantic body"
+        );
+    }
+}
+
+#[tokio::test]
+async fn human_structural_admission_pins_exact_native_status_without_a_validator_report() {
+    // Structural faults keep axum's native `Json` rejection. Status is an EXTERNAL
+    // accepted-set contract, so it is pinned exactly (never the wording): malformed syntax is
+    // 400; a data fault that decoded as JSON but violated the object-only floor / the DTO
+    // (wrong type, missing required field, unknown field, array/scalar shape) is 422. Content
+    // -type faults are covered separately below. The store/aftermath are never reached (the
+    // panicking `NeverReached`/`NeverAnnounced` ports), and the body is never a serialized
+    // validator report nor the minimal semantic envelope (there is no garde rule).
+    for (name, body, expected) in [
+        ("malformed_json", "{".to_owned(), StatusCode::BAD_REQUEST),
+        (
+            "missing_emoji",
+            json!({}).to_string(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "non_string_emoji",
+            json!({ "emoji": 7 }).to_string(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "unknown_field",
+            json!({ "emoji": "👍", "surprise": 1 }).to_string(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        // The array-shaped-body bypass the shared ObjectOnly floor closes.
+        (
+            "value_shaped_array",
+            json!(["👍"]).to_string(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "empty_array",
+            json!([]).to_string(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "top_level_scalar",
+            json!(42).to_string(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        let (status, value) = call_raw(
+            human_admission_app(),
+            Method::POST,
+            "/api/messages/message-1/reactions",
+            body,
+        )
+        .await;
+        assert_eq!(status, expected, "{name}: native structural status");
+        assert_no_validator_report(name, &value);
+    }
+}
+
+#[tokio::test]
+async fn human_content_type_faults_are_the_native_415() {
+    // A missing or non-JSON content-type keeps axum's native 415; the store is never reached.
+    for (name, content_type) in [("missing", None), ("wrong", Some("text/plain"))] {
+        let (status, value) = call_with_content_type(
+            human_admission_app(),
+            Method::POST,
+            "/api/messages/message-1/reactions",
+            json!({ "emoji": "👍" }).to_string(),
+            content_type,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "{name} content-type"
+        );
+        assert_no_validator_report(name, &value);
+    }
+}
+
+#[tokio::test]
+async fn agent_empty_message_id_is_the_minimal_semantic_422_without_touching_the_store() {
+    // An empty `message_id` decodes structurally (it is a valid JSON string) but is a domain
+    // verdict: `MessageId::parse` rejects it, and the route collapses that to the minimal
+    // semantic `422 {"error":"invalid input"}` — no Zod `too_small` issue, and the store is
+    // never reached (proved by the panicking `NeverReached` port).
+    let (status, body) = call(
+        agent_admission_app(),
+        Method::POST,
+        "/internal/agents/agent-1/react-message",
+        json!({ "message_id": "", "emoji": "🎯" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body, json!({ "error": "invalid input" }));
+}
+
+#[tokio::test]
+async fn agent_structural_admission_pins_exact_native_status_without_a_validator_report() {
+    for (name, body, expected) in [
+        ("malformed_json", "{".to_owned(), StatusCode::BAD_REQUEST),
+        (
+            "missing_message_id",
+            json!({ "emoji": "🎯" }).to_string(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "missing_emoji",
+            json!({ "message_id": "message-1" }).to_string(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "non_string_message_id",
+            json!({ "message_id": 7, "emoji": "🎯" }).to_string(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "unknown_field",
+            json!({ "message_id": "message-1", "emoji": "🎯", "surprise": 1 }).to_string(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "value_shaped_array",
+            json!(["message-1", "🎯"]).to_string(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        let (status, value) = call_raw(
+            agent_admission_app(),
+            Method::POST,
+            "/internal/agents/agent-1/react-message",
+            body,
+        )
+        .await;
+        assert_eq!(status, expected, "{name}: native structural status");
+        assert_no_validator_report(name, &value);
+    }
+}
+
+#[tokio::test]
+async fn agent_content_type_faults_are_the_native_415() {
+    for (name, content_type) in [("missing", None), ("wrong", Some("text/plain"))] {
+        let (status, value) = call_with_content_type(
+            agent_admission_app(),
+            Method::POST,
+            "/internal/agents/agent-1/react-message",
+            json!({ "message_id": "message-1", "emoji": "🎯" }).to_string(),
+            content_type,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "{name} content-type"
+        );
+        assert_no_validator_report(name, &value);
+    }
+}
+
+#[tokio::test]
+async fn agent_self_pin_refuses_a_mismatched_path_before_the_body_is_consulted() {
+    // The path agent is not the authenticated principal: an indistinguishable 404 stands even
+    // though the body would otherwise be a structural fault, proving identity is checked
+    // before the body and the store is never reached.
+    let (status, _body) = call_raw(
+        agent_admission_app(),
+        Method::POST,
+        "/internal/agents/agent-999/react-message",
+        "{".to_owned(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
