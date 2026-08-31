@@ -192,7 +192,7 @@ async fn update_reach_is_a_product_refusal_while_agent_slot_commits() {
         .unwrap()
         .bind(&runtime, &attachment("existing"))
         .unwrap();
-    assert_eq!(committed.after().content_revision(), 2);
+    assert_eq!(committed.after().content_revision().get(), 2);
     assert_eq!(
         committed.after().blob().key().as_str(),
         "attachments/target/new.png"

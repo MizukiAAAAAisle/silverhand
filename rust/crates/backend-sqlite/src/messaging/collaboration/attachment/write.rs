@@ -11,19 +11,20 @@ use silverhand_backend_core::{
         AttachmentId, PrincipalIdentity,
         collaboration::{
             attachment::{
-                ATTACHMENT_WIRE_MAX_SAFE_INTEGER, AttachmentContentUpdateCommand,
-                AttachmentContentUpdateRefusal, AttachmentContentUpdateUnitOfWork,
-                AttachmentContentUpdatedFact, AttachmentCreateAdmission, AttachmentCreateCommand,
-                AttachmentCreateRefusal, AttachmentCreateUnitOfWork, AttachmentCreatedFact,
-                AttachmentCreator, AttachmentDeleteCommand, AttachmentDeleteRefusal,
-                AttachmentDeleteUnitOfWork, AttachmentDeletedFact, AttachmentMutationAdmission,
-                AttachmentWriteAdmissionPort, AttachmentWriteAdmissionRefusal,
-                AttachmentWriteAuthority, ChannelAttachmentReadRefusal,
+                AttachmentContentUpdateCommand, AttachmentContentUpdateRefusal,
+                AttachmentContentUpdateUnitOfWork, AttachmentContentUpdatedFact,
+                AttachmentCreateAdmission, AttachmentCreateCommand, AttachmentCreateRefusal,
+                AttachmentCreateUnitOfWork, AttachmentCreatedFact, AttachmentCreator,
+                AttachmentDeleteCommand, AttachmentDeleteRefusal, AttachmentDeleteUnitOfWork,
+                AttachmentDeletedFact, AttachmentMutationAdmission, AttachmentWriteAdmissionPort,
+                AttachmentWriteAdmissionRefusal, AttachmentWriteAuthority,
+                ChannelAttachmentReadRefusal,
             },
             channel_lifecycle::ChannelLifecyclePlacement,
         },
     },
     persistence::PersistenceFailure,
+    wire_number::JsSafeInteger,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;
@@ -306,8 +307,9 @@ impl SqliteAttachmentWrite {
         }
         let next_revision = before
             .content_revision()
+            .get()
             .checked_add(1)
-            .filter(|value| *value <= ATTACHMENT_WIRE_MAX_SAFE_INTEGER)
+            .and_then(|value| JsSafeInteger::new(value).ok())
             .ok_or(AttachmentWriteStoreError::RevisionExhausted)?;
         if swap_attachment_content_row(
             &mut tx,
@@ -368,7 +370,7 @@ impl SqliteAttachmentWrite {
             .bind(command.requested().as_str())
             .bind(selected.blob().storage().as_str())
             .bind(selected.blob().key().as_str())
-            .bind(selected.content_revision())
+            .bind(selected.content_revision().get())
             .execute(&mut *tx)
             .await?;
         if deleted.rows_affected() != 1 {
@@ -390,14 +392,14 @@ pub(super) async fn insert_attachment_row(
         .bind(record.channel().as_str())
         .bind(record.source_conversation().map(ConversationId::as_str))
         .bind(record.filename().as_str())
-        .bind(record.size())
+        .bind(record.size().get())
         .bind(record.content_type().as_str())
         .bind(record.blob().storage().as_str())
         .bind(record.blob().key().as_str())
         .bind(record.creator().kind())
         .bind(record.creator().id())
-        .bind(record.created_at())
-        .bind(record.content_revision())
+        .bind(record.created_at().get())
+        .bind(record.content_revision().get())
         .execute(&mut **tx)
         .await?
         .rows_affected())
@@ -407,17 +409,17 @@ pub(super) async fn swap_attachment_content_row(
     tx: &mut Transaction<'_, Sqlite>,
     before: &silverhand_backend_core::messaging::collaboration::attachment::AttachmentRecord,
     replacement: &silverhand_backend_core::blob_store::StoredBlob,
-    replacement_size: i64,
-    next_revision: i64,
+    replacement_size: JsSafeInteger,
+    next_revision: JsSafeInteger,
 ) -> Result<u64, sqlx::Error> {
     Ok(sqlx::query(UPDATE_CONTENT)
         .bind(replacement.key().as_str())
-        .bind(replacement_size)
-        .bind(next_revision)
+        .bind(replacement_size.get())
+        .bind(next_revision.get())
         .bind(before.id().as_str())
         .bind(before.blob().storage().as_str())
         .bind(before.blob().key().as_str())
-        .bind(before.content_revision())
+        .bind(before.content_revision().get())
         .execute(&mut **tx)
         .await?
         .rows_affected())

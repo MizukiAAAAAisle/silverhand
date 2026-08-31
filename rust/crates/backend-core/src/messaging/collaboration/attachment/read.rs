@@ -12,15 +12,13 @@ use crate::{
     blob_store::StoredBlob,
     identity::{AgentId, ConversationId, UserId},
     messaging::{AttachmentId, MessageAuthor, MessageId, MessageSeq, ThreadRootId},
+    wire_number::JsSafeInteger,
+    wire_text,
 };
 
-const MAX_FILENAME_BYTES: usize = 255;
+const MAX_FILENAME_UTF16: usize = 255;
 const MAX_CONTENT_TYPE_BYTES: usize = 255;
 const MAX_LIST_LIMIT: u16 = 100;
-/// Largest integer whose exact value survives a JSON round trip through an
-/// ECMAScript `number` consumer.
-pub const ATTACHMENT_WIRE_MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AttachmentFilename(String);
 
@@ -28,10 +26,10 @@ impl AttachmentFilename {
     pub fn parse(raw: impl Into<String>) -> Result<Self, InvalidAttachmentFilename> {
         let raw = raw.into();
         if raw.is_empty()
-            || raw.len() > MAX_FILENAME_BYTES
+            || !wire_text::within_utf16_max(&raw, MAX_FILENAME_UTF16)
             || raw.contains('/')
             || raw.contains('\\')
-            || raw.chars().any(char::is_control)
+            || raw.bytes().any(|byte| byte <= 0x1f)
         {
             return Err(InvalidAttachmentFilename);
         }
@@ -115,12 +113,12 @@ pub struct AttachmentRecord {
     channel: ConversationId,
     source_conversation: Option<ConversationId>,
     filename: AttachmentFilename,
-    size: i64,
+    size: JsSafeInteger,
     content_type: AttachmentContentType,
     blob: StoredBlob,
-    content_revision: i64,
+    content_revision: JsSafeInteger,
     creator: AttachmentCreator,
-    created_at: i64,
+    created_at: JsSafeInteger,
 }
 
 impl AttachmentRecord {
@@ -137,10 +135,38 @@ impl AttachmentRecord {
         creator: AttachmentCreator,
         created_at: i64,
     ) -> Result<Self, InvalidAttachmentRecord> {
-        if !(0..=ATTACHMENT_WIRE_MAX_SAFE_INTEGER).contains(&size)
-            || !(1..=ATTACHMENT_WIRE_MAX_SAFE_INTEGER).contains(&content_revision)
-            || !(0..=ATTACHMENT_WIRE_MAX_SAFE_INTEGER).contains(&created_at)
-        {
+        let size = JsSafeInteger::new(size).map_err(|_| InvalidAttachmentRecord)?;
+        let content_revision =
+            JsSafeInteger::new(content_revision).map_err(|_| InvalidAttachmentRecord)?;
+        let created_at = JsSafeInteger::new(created_at).map_err(|_| InvalidAttachmentRecord)?;
+        Self::projected_safe(
+            id,
+            channel,
+            source_conversation,
+            filename,
+            size,
+            content_type,
+            blob,
+            content_revision,
+            creator,
+            created_at,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn projected_safe(
+        id: AttachmentId,
+        channel: ConversationId,
+        source_conversation: Option<ConversationId>,
+        filename: AttachmentFilename,
+        size: JsSafeInteger,
+        content_type: AttachmentContentType,
+        blob: StoredBlob,
+        content_revision: JsSafeInteger,
+        creator: AttachmentCreator,
+        created_at: JsSafeInteger,
+    ) -> Result<Self, InvalidAttachmentRecord> {
+        if size.get() < 0 || content_revision.get() < 1 || created_at.get() < 0 {
             return Err(InvalidAttachmentRecord);
         }
         Ok(Self {
@@ -173,7 +199,7 @@ impl AttachmentRecord {
         &self.filename
     }
 
-    pub const fn size(&self) -> i64 {
+    pub const fn size(&self) -> JsSafeInteger {
         self.size
     }
 
@@ -185,7 +211,7 @@ impl AttachmentRecord {
         &self.blob
     }
 
-    pub const fn content_revision(&self) -> i64 {
+    pub const fn content_revision(&self) -> JsSafeInteger {
         self.content_revision
     }
 
@@ -193,7 +219,7 @@ impl AttachmentRecord {
         &self.creator
     }
 
-    pub const fn created_at(&self) -> i64 {
+    pub const fn created_at(&self) -> JsSafeInteger {
         self.created_at
     }
 }
@@ -241,7 +267,7 @@ pub struct AttachmentListSource {
     message_seq: MessageSeq,
     author: Option<MessageAuthor>,
     actor: AttachmentSourceActor,
-    appeared_at: i64,
+    appeared_at: JsSafeInteger,
 }
 
 impl AttachmentListSource {
@@ -255,7 +281,29 @@ impl AttachmentListSource {
         actor: AttachmentSourceActor,
         appeared_at: i64,
     ) -> Result<Self, InvalidAttachmentListSource> {
-        if !(0..=ATTACHMENT_WIRE_MAX_SAFE_INTEGER).contains(&appeared_at)
+        let appeared_at =
+            JsSafeInteger::new(appeared_at).map_err(|_| InvalidAttachmentListSource)?;
+        Self::projected_safe(
+            message,
+            conversation,
+            thread_root,
+            message_seq,
+            author,
+            actor,
+            appeared_at,
+        )
+    }
+
+    pub fn projected_safe(
+        message: MessageId,
+        conversation: ConversationId,
+        thread_root: Option<ThreadRootId>,
+        message_seq: MessageSeq,
+        author: Option<MessageAuthor>,
+        actor: AttachmentSourceActor,
+        appeared_at: JsSafeInteger,
+    ) -> Result<Self, InvalidAttachmentListSource> {
+        if appeared_at.get() < 0
             || (matches!(&actor, AttachmentSourceActor::System) != author.is_none())
         {
             return Err(InvalidAttachmentListSource);
@@ -305,7 +353,7 @@ impl AttachmentListSource {
         &self.actor
     }
 
-    pub const fn appeared_at(&self) -> i64 {
+    pub const fn appeared_at(&self) -> JsSafeInteger {
         self.appeared_at
     }
 }
@@ -347,7 +395,7 @@ impl AttachmentListItem {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AttachmentListCursor {
-    appeared_at: i64,
+    appeared_at: JsSafeInteger,
     attachment: AttachmentId,
 }
 
@@ -356,7 +404,16 @@ impl AttachmentListCursor {
         appeared_at: i64,
         attachment: AttachmentId,
     ) -> Result<Self, InvalidAttachmentListQuery> {
-        if !(0..=ATTACHMENT_WIRE_MAX_SAFE_INTEGER).contains(&appeared_at) {
+        let appeared_at =
+            JsSafeInteger::new(appeared_at).map_err(|_| InvalidAttachmentListQuery)?;
+        Self::new_safe(appeared_at, attachment)
+    }
+
+    pub fn new_safe(
+        appeared_at: JsSafeInteger,
+        attachment: AttachmentId,
+    ) -> Result<Self, InvalidAttachmentListQuery> {
+        if appeared_at.get() < 0 {
             return Err(InvalidAttachmentListQuery);
         }
         Ok(Self {
@@ -365,7 +422,7 @@ impl AttachmentListCursor {
         })
     }
 
-    pub const fn appeared_at(&self) -> i64 {
+    pub const fn appeared_at(&self) -> JsSafeInteger {
         self.appeared_at
     }
 
@@ -386,8 +443,8 @@ pub struct AttachmentListQuery {
     limit: u16,
     cursor: Option<AttachmentListCursor>,
     sender: Option<AttachmentSenderFilter>,
-    since: Option<i64>,
-    until: Option<i64>,
+    since: Option<JsSafeInteger>,
+    until: Option<JsSafeInteger>,
 }
 
 impl AttachmentListQuery {
@@ -398,10 +455,28 @@ impl AttachmentListQuery {
         since: Option<i64>,
         until: Option<i64>,
     ) -> Result<Self, InvalidAttachmentListQuery> {
+        let since = since
+            .map(JsSafeInteger::new)
+            .transpose()
+            .map_err(|_| InvalidAttachmentListQuery)?;
+        let until = until
+            .map(JsSafeInteger::new)
+            .transpose()
+            .map_err(|_| InvalidAttachmentListQuery)?;
+        Self::new_safe(limit, cursor, sender, since, until)
+    }
+
+    pub fn new_safe(
+        limit: u16,
+        cursor: Option<AttachmentListCursor>,
+        sender: Option<AttachmentSenderFilter>,
+        since: Option<JsSafeInteger>,
+        until: Option<JsSafeInteger>,
+    ) -> Result<Self, InvalidAttachmentListQuery> {
         if limit == 0
             || limit > MAX_LIST_LIMIT
-            || since.is_some_and(|value| !(0..=ATTACHMENT_WIRE_MAX_SAFE_INTEGER).contains(&value))
-            || until.is_some_and(|value| !(0..=ATTACHMENT_WIRE_MAX_SAFE_INTEGER).contains(&value))
+            || since.is_some_and(|value| value.get() < 0)
+            || until.is_some_and(|value| value.get() < 0)
             || matches!((since, until), (Some(start), Some(end)) if start >= end)
         {
             return Err(InvalidAttachmentListQuery);
@@ -427,11 +502,11 @@ impl AttachmentListQuery {
         self.sender.as_ref()
     }
 
-    pub const fn since(&self) -> Option<i64> {
+    pub const fn since(&self) -> Option<JsSafeInteger> {
         self.since
     }
 
-    pub const fn until(&self) -> Option<i64> {
+    pub const fn until(&self) -> Option<JsSafeInteger> {
         self.until
     }
 }
@@ -761,6 +836,23 @@ mod tests {
     }
 
     #[test]
+    fn filename_grammar_matches_ecmascript_utf16_and_ascii_c0_boundaries() {
+        let exact = format!("{}a", "😀".repeat(127));
+        assert_eq!(exact.encode_utf16().count(), 255);
+        assert!(AttachmentFilename::parse(exact).is_ok());
+
+        let over = "😀".repeat(128);
+        assert_eq!(over.encode_utf16().count(), 256);
+        assert!(AttachmentFilename::parse(over).is_err());
+
+        assert!(AttachmentFilename::parse("note\u{001f}.txt").is_err());
+        assert!(
+            AttachmentFilename::parse("note\u{0085}.txt").is_ok(),
+            "ECMAScript's attachment sanitizer removes ASCII C0, not every Unicode control"
+        );
+    }
+
+    #[test]
     fn list_item_seals_reference_row_and_requested_conversation() {
         let source = AttachmentListSource::projected(
             MessageId::parse("m").unwrap(),
@@ -825,28 +917,18 @@ mod tests {
         assert!(AttachmentListQuery::new(50, None, None, Some(5), Some(5)).is_err());
         assert!(AttachmentListQuery::new(50, None, None, Some(-1), None).is_err());
         assert!(
-            AttachmentListQuery::new(
-                50,
-                None,
-                None,
-                Some(ATTACHMENT_WIRE_MAX_SAFE_INTEGER + 1),
-                None,
-            )
-            .is_err()
+            AttachmentListQuery::new(50, None, None, Some(JsSafeInteger::MAX + 1), None,).is_err()
         );
         assert!(
-            AttachmentListCursor::new(
-                ATTACHMENT_WIRE_MAX_SAFE_INTEGER + 1,
-                AttachmentId::parse("a").unwrap(),
-            )
-            .is_err()
+            AttachmentListCursor::new(JsSafeInteger::MAX + 1, AttachmentId::parse("a").unwrap(),)
+                .is_err()
         );
         assert!(AttachmentListQuery::new(50, None, None, Some(4), Some(5)).is_ok());
     }
 
     #[test]
     fn attachment_wire_scalars_reject_values_above_ecmascript_safe_integer() {
-        let max = ATTACHMENT_WIRE_MAX_SAFE_INTEGER;
+        let max = JsSafeInteger::MAX;
         let projected = |size, revision, created_at| {
             AttachmentRecord::projected(
                 AttachmentId::parse("a").unwrap(),

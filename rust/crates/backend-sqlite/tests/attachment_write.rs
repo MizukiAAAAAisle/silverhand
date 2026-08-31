@@ -6,8 +6,7 @@ use silverhand_backend_core::{
     messaging::{
         AttachmentId,
         collaboration::attachment::{
-            ATTACHMENT_WIRE_MAX_SAFE_INTEGER, AttachmentContentType,
-            AttachmentContentUpdateCommand, AttachmentContentUpdateRefusal,
+            AttachmentContentType, AttachmentContentUpdateCommand, AttachmentContentUpdateRefusal,
             AttachmentContentUpdateUnitOfWork, AttachmentCreateCommand, AttachmentCreateRefusal,
             AttachmentCreateUnitOfWork, AttachmentDeleteCommand, AttachmentDeleteRefusal,
             AttachmentDeleteUnitOfWork, AttachmentFilename, AttachmentPostCommitMaintenance,
@@ -15,6 +14,7 @@ use silverhand_backend_core::{
         },
     },
     persistence::PersistenceFailure,
+    wire_number::JsSafeInteger,
 };
 use silverhand_backend_sqlite::messaging::{
     MessagingStore, collaboration::attachment::AttachmentWriteStoreError,
@@ -277,7 +277,7 @@ async fn update_authority_is_reread_after_writer_reservation_then_seals_pointer_
         updated.after().blob().key().as_str(),
         "attachments/c/new.png"
     );
-    assert_eq!(updated.after().content_revision(), 2);
+    assert_eq!(updated.after().content_revision().get(), 2);
     assert_eq!(updated.changed().attachment().as_str(), "a");
 }
 
@@ -299,7 +299,7 @@ async fn revision_ceiling_is_rejected_before_update_and_repair_uses_same_port() 
         .await
         .unwrap();
     sqlx::query("UPDATE attachments SET content_revision=? WHERE id='a'")
-        .bind(ATTACHMENT_WIRE_MAX_SAFE_INTEGER)
+        .bind(JsSafeInteger::MAX)
         .execute(&mut db)
         .await
         .unwrap();
@@ -330,7 +330,7 @@ async fn revision_ceiling_is_rejected_before_update_and_repair_uses_same_port() 
     );
     assert_eq!(
         unchanged.get::<i64, _>("content_revision"),
-        ATTACHMENT_WIRE_MAX_SAFE_INTEGER
+        JsSafeInteger::MAX
     );
 
     sqlx::query("UPDATE attachments SET content_revision=1 WHERE id='a'")

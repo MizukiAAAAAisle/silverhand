@@ -14,19 +14,30 @@ use axum::{
 use futures_util::stream;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    blob_store::{
+        BlobAliasId, BlobDeleteOutcome, BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore,
+        StorageKind, StoredBlob,
+    },
     identity::UserId,
     messaging::{
         SendClock, SendEntropy,
-        collaboration::attachment::{AttachmentChangedFact, AttachmentChangedPublisher},
+        collaboration::attachment::{
+            AttachmentChangedFact, AttachmentChangedPublisher, AttachmentPostCommitMaintenance,
+        },
         environment::EnvironmentUnavailable,
     },
 };
-use silverhand_backend_filesystem::blob_store::LocalBlobStore;
+use silverhand_backend_filesystem::blob_store::{
+    LocalBlobAliasDeleteOutcome, LocalBlobAliasOutcome, LocalBlobAliasStore, LocalBlobStore,
+};
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection};
 use tower::ServiceExt;
 
-use super::{MAX_FILE_BYTES, MULTIPART_ENVELOPE_BYTES, changed_event, router};
+use super::{
+    BlobMaintenance, MAX_FILE_BYTES, MULTIPART_ENVELOPE_BYTES, changed_event, multipart_envelope,
+    router, sanitize_filename,
+};
 
 #[derive(Clone, Default)]
 struct Events(Arc<Mutex<Vec<AttachmentChangedFact>>>);
@@ -49,6 +60,125 @@ impl AttachmentChangedPublisher for FailingEvents {
     async fn publish(&self, _fact: &AttachmentChangedFact) -> Result<(), Self::Error> {
         Err(std::io::Error::other("publisher unavailable"))
     }
+}
+
+#[derive(Clone, Default)]
+struct FailingPhysicalDelete {
+    physical_deletes: Arc<AtomicU8>,
+    alias_deletes: Arc<AtomicU8>,
+}
+
+impl BlobStore for FailingPhysicalDelete {
+    type Error = std::io::Error;
+
+    async fn put(
+        &self,
+        _namespace: &BlobNamespace,
+        _normalized_content_type: &str,
+        _bytes: Vec<u8>,
+    ) -> Result<StoredBlob, Self::Error> {
+        Err(std::io::Error::other("unused put"))
+    }
+
+    async fn read(&self, _blob: &StoredBlob) -> Result<BlobReadOutcome, Self::Error> {
+        Err(std::io::Error::other("unused read"))
+    }
+
+    async fn delete(&self, _blob: &StoredBlob) -> Result<BlobDeleteOutcome, Self::Error> {
+        self.physical_deletes.fetch_add(1, Ordering::SeqCst);
+        Err(std::io::Error::other("physical delete failed"))
+    }
+}
+
+impl LocalBlobAliasStore for FailingPhysicalDelete {
+    type Error = std::io::Error;
+
+    async fn materialize_alias(
+        &self,
+        _physical: &StoredBlob,
+        _alias: &BlobAliasId,
+    ) -> Result<LocalBlobAliasOutcome, Self::Error> {
+        Err(std::io::Error::other("unused materialize"))
+    }
+
+    async fn delete_alias(
+        &self,
+        _physical: &StoredBlob,
+        _alias: &BlobAliasId,
+    ) -> Result<LocalBlobAliasDeleteOutcome, Self::Error> {
+        self.alias_deletes.fetch_add(1, Ordering::SeqCst);
+        Err(std::io::Error::other("alias delete failed"))
+    }
+}
+
+#[tokio::test]
+async fn committed_delete_attempts_both_cleanup_legs_and_reports_both_failures() {
+    let blobs = FailingPhysicalDelete::default();
+    let deleted = StoredBlob::new(
+        StorageKind::Local,
+        BlobStorageKey::parse("attachments/a/blob.bin").unwrap(),
+    );
+    let alias = BlobAliasId::from_semantic_id("a").unwrap();
+
+    let error =
+        AttachmentPostCommitMaintenance::deleted(&BlobMaintenance(blobs.clone()), &deleted, &alias)
+            .await
+            .unwrap_err();
+    assert_eq!(error.operation, "delete attachment blob and alias");
+    let chain = crate::error::describe(&error);
+    assert!(chain.contains("physical delete failed"), "{chain}");
+    assert!(chain.contains("alias delete failed"), "{chain}");
+    assert_eq!(blobs.physical_deletes.load(Ordering::SeqCst), 1);
+    assert_eq!(blobs.alias_deletes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn double_cleanup_failure_does_not_roll_back_committed_delete_http() {
+    let (_directory, database, store, _local_blobs, events) = seeded().await;
+    let mut db = SqliteConnection::connect(database.to_str().unwrap())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO attachments(\
+           id,channel_id,source_conversation_id,filename,size,content_type,storage,storage_key,\
+           created_by_kind,created_by_id,created_at,content_revision) VALUES \
+           ('cleanup','c','c','cleanup.bin',4,'application/octet-stream','local',\
+            'attachments/c/cleanup.bin','user','owner',1,1)",
+    )
+    .await
+    .unwrap();
+    db.close().await.unwrap();
+    let blobs = FailingPhysicalDelete::default();
+
+    let response = router(
+        store.attachment_reads(),
+        store.attachment_writes(),
+        blobs.clone(),
+        Environment::default(),
+        events,
+    )
+    .layer(Extension(UserId::parse("owner").unwrap()))
+    .oneshot(
+        Request::builder()
+            .method(Method::DELETE)
+            .uri("/api/attachments/cleanup")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(blobs.physical_deletes.load(Ordering::SeqCst), 1);
+    assert_eq!(blobs.alias_deletes.load(Ordering::SeqCst), 1);
+
+    let mut db = SqliteConnection::connect(database.to_str().unwrap())
+        .await
+        .unwrap();
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM attachments WHERE id='cleanup'")
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(remaining, 0);
 }
 
 #[derive(Clone, Default)]
@@ -126,6 +256,97 @@ fn multipart(field: &str, filename: &str, content_type: &str, bytes: &[u8]) -> (
     body.extend_from_slice(bytes);
     body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
     (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+type MultipartTestPart<'a> = (&'a str, Option<(&'a str, &'a str)>, &'a [u8]);
+
+fn multipart_parts(parts: &[MultipartTestPart<'_>]) -> (String, Vec<u8>) {
+    let boundary = "silverhand-attachment-duplicate-boundary";
+    let mut body = Vec::new();
+    for (name, file, bytes) in parts {
+        body.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"").as_bytes(),
+        );
+        if let Some((filename, content_type)) = file {
+            body.extend_from_slice(
+                format!("; filename=\"{filename}\"\r\nContent-Type: {content_type}").as_bytes(),
+            );
+        }
+        body.extend_from_slice(b"\r\n\r\n");
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+fn multipart_request(content_type: &str, body: Vec<u8>) -> Request<Body> {
+    Request::builder()
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .unwrap()
+}
+
+#[test]
+fn filename_sanitization_matches_the_typescript_utf16_and_trim_contract() {
+    assert_eq!(
+        sanitize_filename("\u{feff}a/\u{0085}\u{001f}b\u{feff}"),
+        Some("a_\u{0085}b".to_owned())
+    );
+
+    let exact = format!("{}a", "😀".repeat(127));
+    assert_eq!(sanitize_filename(&exact), Some(exact));
+    let over = format!("{}ab", "😀".repeat(127));
+    assert_eq!(
+        sanitize_filename(&over),
+        Some(format!("{}a", "😀".repeat(127)))
+    );
+
+    let split_discriminator = format!("{}😀", "a".repeat(254));
+    assert_eq!(
+        split_discriminator.encode_utf16().count(),
+        256,
+        "the final astral scalar crosses the 255-unit boundary"
+    );
+    assert_eq!(
+        sanitize_filename(&split_discriminator),
+        Some("a".repeat(254)),
+        "the sanitizer must not manufacture an isolated high surrogate"
+    );
+}
+
+#[tokio::test]
+async fn multipart_duplicate_names_follow_form_data_get_first_entry_semantics() {
+    let (content_type, body) = multipart_parts(&[
+        ("file", None, b"not-a-file"),
+        ("file", Some(("second.txt", "text/plain")), b"second"),
+    ]);
+    assert!(
+        multipart_envelope(multipart_request(&content_type, body), false)
+            .await
+            .is_err(),
+        "a later file must not rescue a first same-named string entry"
+    );
+
+    let (content_type, body) = multipart_parts(&[
+        ("file", Some(("first.txt", "text/plain")), b"first"),
+        ("file", Some(("second.txt", "text/plain")), b"second"),
+    ]);
+    let selected = multipart_envelope(multipart_request(&content_type, body), false)
+        .await
+        .unwrap();
+    assert_eq!(selected.file.filename, "first.txt");
+    assert_eq!(selected.file.bytes, b"first");
+
+    let (content_type, body) = multipart_parts(&[
+        ("target", Some(("wrong.txt", "text/plain")), b"wrong"),
+        ("target", None, b"conversation-2"),
+        ("file", Some(("first.txt", "text/plain")), b"first"),
+    ]);
+    let selected = multipart_envelope(multipart_request(&content_type, body), true)
+        .await
+        .unwrap();
+    assert_eq!(selected.target, None);
 }
 
 async fn call(
@@ -449,6 +670,32 @@ async fn multipart_envelope_preserves_the_full_file_cap_and_rejects_bad_shapes()
         String::from_utf8_lossy(&response)
     );
     assert_eq!(json_body(&response)["size"], MAX_FILE_BYTES as i64);
+}
+
+#[tokio::test]
+async fn chunked_multipart_cannot_bypass_the_file_cap_without_content_length() {
+    let (_directory, _database, store, blobs, events) = seeded().await;
+    let (content_type, body) = multipart(
+        "file",
+        "chunked.bin",
+        "application/octet-stream",
+        &vec![1; MAX_FILE_BYTES + 1],
+    );
+    let chunks = body
+        .chunks(64 * 1024)
+        .map(Bytes::copy_from_slice)
+        .collect::<Vec<_>>();
+    let streamed = Body::from_stream(stream::iter(chunks.into_iter().map(Ok::<_, Infallible>)));
+
+    let (status, _, _) = call(
+        app(&store, &blobs, &events, "owner"),
+        Method::POST,
+        "/api/channels/c/attachments",
+        Some(&content_type),
+        streamed,
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 #[tokio::test]

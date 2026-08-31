@@ -12,19 +12,19 @@ use silverhand_backend_core::{
         AttachmentId, FromKind, MessageId, MessageSeq, PrincipalIdentity, ThreadRootId,
         collaboration::{
             attachment::{
-                ATTACHMENT_WIRE_MAX_SAFE_INTEGER, AttachmentContentType, AttachmentCreator,
-                AttachmentDownloadFact, AttachmentDownloadReadPort, AttachmentDownloadRefusal,
-                AttachmentFilename, AttachmentListCursor, AttachmentListItem, AttachmentListPage,
-                AttachmentListQuery, AttachmentListReadPort, AttachmentListSource,
-                AttachmentRecord, AttachmentSenderFacet, AttachmentSenderFacetReadPort,
-                AttachmentSenderFacets, AttachmentSenderFilter, AttachmentSourceActor,
-                ChannelAttachmentReadRefusal,
+                AttachmentContentType, AttachmentCreator, AttachmentDownloadFact,
+                AttachmentDownloadReadPort, AttachmentDownloadRefusal, AttachmentFilename,
+                AttachmentListCursor, AttachmentListItem, AttachmentListPage, AttachmentListQuery,
+                AttachmentListReadPort, AttachmentListSource, AttachmentRecord,
+                AttachmentSenderFacet, AttachmentSenderFacetReadPort, AttachmentSenderFacets,
+                AttachmentSenderFilter, AttachmentSourceActor, ChannelAttachmentReadRefusal,
             },
             channel_directory::{ChannelVisibility, DirectoryRoster},
             channel_lifecycle::{ChannelLifecyclePlacement, ChannelLifecycleRow},
         },
     },
     persistence::PersistenceFailure,
+    wire_number::JsSafeInteger,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};
 use thiserror::Error;
@@ -232,9 +232,14 @@ impl SqliteAttachmentRead {
             .bind(sender_kind)
             .bind(sender_user)
             .bind(sender_agent)
-            .bind(query.since())
-            .bind(query.until())
-            .bind(query.cursor().map(AttachmentListCursor::appeared_at))
+            .bind(query.since().map(JsSafeInteger::get))
+            .bind(query.until().map(JsSafeInteger::get))
+            .bind(
+                query
+                    .cursor()
+                    .map(AttachmentListCursor::appeared_at)
+                    .map(JsSafeInteger::get),
+            )
             .bind(query.cursor().map(|cursor| cursor.attachment().as_str()))
             .bind(i64::from(query.limit()) + 1)
             .fetch_all(&mut *tx)
@@ -264,7 +269,7 @@ impl SqliteAttachmentRead {
         let next_cursor = has_more
             .then(|| {
                 let tail = items.last().expect("positive list limit guarantees a tail");
-                AttachmentListCursor::new(
+                AttachmentListCursor::new_safe(
                     tail.source().appeared_at(),
                     tail.attachment().id().clone(),
                 )
@@ -427,7 +432,7 @@ struct DecodedListRow {
     thread_root: Option<ThreadRootId>,
     message_seq: MessageSeq,
     actor: AttachmentSourceActor,
-    appeared_at: i64,
+    appeared_at: JsSafeInteger,
     author_evidence: AuthorEvidence,
 }
 
@@ -437,7 +442,7 @@ impl DecodedListRow {
         author: Option<silverhand_backend_core::messaging::MessageAuthor>,
         requested: &ConversationId,
     ) -> Result<AttachmentListItem, AttachmentReadStoreError> {
-        let source = AttachmentListSource::projected(
+        let source = AttachmentListSource::projected_safe(
             self.message,
             self.conversation,
             self.thread_root,
@@ -552,7 +557,7 @@ fn decode_attachment(row: &SqliteRow) -> Result<AttachmentRecord, AttachmentRead
         "attachments.content_revision",
     )?;
     let created_at = wire_nonnegative(row.try_get("a_created_at")?, "attachments.created_at")?;
-    AttachmentRecord::projected(
+    AttachmentRecord::projected_safe(
         id,
         channel,
         source_conversation,
@@ -624,16 +629,26 @@ fn from_kind(raw: &str) -> Result<FromKind, AttachmentReadStoreError> {
     }
 }
 
-fn wire_nonnegative(value: i64, field: &'static str) -> Result<i64, AttachmentReadStoreError> {
-    if (0..=ATTACHMENT_WIRE_MAX_SAFE_INTEGER).contains(&value) {
+fn wire_nonnegative(
+    value: i64,
+    field: &'static str,
+) -> Result<JsSafeInteger, AttachmentReadStoreError> {
+    let value =
+        JsSafeInteger::new(value).map_err(|_| AttachmentReadStoreError::Scalar { field })?;
+    if value.get() >= 0 {
         Ok(value)
     } else {
         Err(AttachmentReadStoreError::Scalar { field })
     }
 }
 
-fn wire_positive(value: i64, field: &'static str) -> Result<i64, AttachmentReadStoreError> {
-    if (1..=ATTACHMENT_WIRE_MAX_SAFE_INTEGER).contains(&value) {
+fn wire_positive(
+    value: i64,
+    field: &'static str,
+) -> Result<JsSafeInteger, AttachmentReadStoreError> {
+    let value =
+        JsSafeInteger::new(value).map_err(|_| AttachmentReadStoreError::Scalar { field })?;
+    if value.get() >= 1 {
         Ok(value)
     } else {
         Err(AttachmentReadStoreError::Scalar { field })
@@ -890,15 +905,7 @@ mod tests {
         add_workspace_user(&store, "member").await;
         seat(&store, "channel-1", "member").await;
         attachment(&store, "a", "channel-1", "local").await;
-        system_message(
-            &store,
-            "m",
-            "channel-1",
-            1,
-            ATTACHMENT_WIRE_MAX_SAFE_INTEGER + 1,
-            &["a"],
-        )
-        .await;
+        system_message(&store, "m", "channel-1", 1, JsSafeInteger::MAX + 1, &["a"]).await;
         let query = AttachmentListQuery::new(1, None, None, None, None).unwrap();
 
         assert!(matches!(
@@ -1015,7 +1022,7 @@ mod tests {
             ),
         ] {
             sqlx::query(sql)
-                .bind(ATTACHMENT_WIRE_MAX_SAFE_INTEGER + 1)
+                .bind(JsSafeInteger::MAX + 1)
                 .execute(&store.pool)
                 .await
                 .unwrap();
