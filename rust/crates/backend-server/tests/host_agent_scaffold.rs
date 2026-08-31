@@ -428,6 +428,17 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
 /// This whole file is CP1 history that #task:2209 deletes, so this table has no
 /// future: do not extend it into a durable inventory, do not build a union
 /// abstraction over the three lists, and do not carry it through convergence.
+///
+/// #task:2265 NOTE (organization anchor): these three CP root inventories keep their
+/// ORIGINAL G4/G5 seam semantics (single-owner accounting, seam-ledger membership) — they
+/// are NOT reclassified as an organization residual/landed ledger and no entry is moved
+/// between them for organization purposes. The organization residual/landed truth lives
+/// entirely in `docs/rust-backend-organization-map.json` + the real module tree: a root is
+/// `landed` iff its current full path equals its `physical_target` (a full
+/// `crate::namespace::leaf` Rust path), and `residual = scanned roots − mechanically-landed`.
+/// The organization gate uses these CP tables ONLY as a root-COVERAGE compatibility check
+/// (they still cover the current root tree exactly once), never as a landed/residual
+/// authority. Organization accounting stays separate from route/product ledgers.
 const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[("backend-core", "agents")];
 
 /// The seam modules that are DIRECTORY modules, owning a `<name>/mod.rs`. G5 reads

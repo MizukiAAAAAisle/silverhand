@@ -16,7 +16,7 @@
 //!     `409 has_dependents` carrying the very set it would have destroyed.
 //!  3. AFTERMATH — the disconnect, the runtime stops, the host-local purge and the blob
 //!     sweep are all best-effort and unrollbackable; the domain performs them after the
-//!     commit and hands back what it could not finish ([`DeletedComputer::residue`] and
+//!     commit and hands back what it could not finish (`DeletedComputer::residue` and
 //!     `daemon_disconnect_failure`). This route logs that residue and still answers
 //!     `200`, exactly as the TypeScript route swallows its disconnect failure.
 //!

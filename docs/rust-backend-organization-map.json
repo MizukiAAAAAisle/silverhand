@@ -1,0 +1,3380 @@
+{
+  "schema_version": 1,
+  "note": "Rust backend module organization map (#task:2265). Machine-readable classification authority consumed by the organization gates. Two axes: business_owner + structural_role. Every crate-root scanned is a row with independently-derived source_shape (file|directory|hybrid) and a STRICT tagged union: exactly one of target:{business_owner,structural_role} (settled) or split_required (residual). split_required is a kind-tagged object: directory_members (groups with members[] closed against the directory mod decls), file_responsibilities (logical grouping of a single large file, no child modules), or hybrid (a <m>.rs main body plus <m>/ production children — both child_groups closed against codec decls AND a non-empty file_responsibilities). This JSON is the ONLY classification authority the gates read; do not copy target allowlists elsewhere. The 33-table half is closed against the replayed final schema; the non-table half is an OPEN presence ledger. impl_status (rust_writer_known | ts_only | no_known_writer) reflects AUDITED KNOWN writers — human-audited (path,function) evidence, not an exhaustive static proof; the gate does not run a SQL analyzer (see writers_note). Consumes the frozen #2267 (scope_events) and #2268 (daemon_delivery/daemon_events) owner splits. See docs/rust-backend-ddd-context-map-v1.md for the DDD rationale (that document links here for ownership; this JSON is authoritative).",
+  "axes": {
+    "business_owner": [
+      "C1",
+      "C2",
+      "C3",
+      "C4",
+      "C5",
+      "viewer_read_model",
+      "platform_install",
+      "application_orchestration",
+      "foundation",
+      "workspace_data_plane",
+      "embedded_bootstrap"
+    ],
+    "structural_role": [
+      "domain",
+      "application",
+      "read_model",
+      "port",
+      "adapter",
+      "http",
+      "wire",
+      "transport",
+      "composition",
+      "test_support"
+    ]
+  },
+  "charters": {
+    "C1": "Identity & Access",
+    "C2": "Host & Runtime (control⟂execution)",
+    "C3": "Conversation & Messaging (incl. roster born with the conversation, delivery, attachments)",
+    "C4": "Tasks",
+    "C5": "Scheduling",
+    "viewer_read_model": "viewer-scoped read state written in a separate viewer tx",
+    "platform_install": "install-local authority: app_settings (key,value) legacy setting; NOT a fallback for writer-less tables",
+    "application_orchestration": "cross-context use-case saga; fanned-out context effects are owned by their contexts, not co-owned",
+    "foundation": "kernel/substrate vocabulary + technical substrate (identity, wire, blob/persistence ports, clock, bearer, multipart, DB probe, event/daemon transport substrate); no single product owner",
+    "workspace_data_plane": "self-declared top-level bounded context: how an agent's own files are reached and scoped",
+    "embedded_bootstrap": "self-declared top-level bounded context: choose/create bootstrap UoW + own auth/token lifecycle (incl token-file custody)"
+  },
+  "accounting": {
+    "production_roots": 140,
+    "test_support_roots": 3,
+    "total_scanned": 143,
+    "per_crate": {
+      "backend_core": 61,
+      "backend_server": 39,
+      "backend_sqlite": 37,
+      "backend_app": 3,
+      "backend_filesystem": 3
+    },
+    "rule": "every scanned `mod` decl gets exactly one row; #[cfg(test)] rows carry target.structural_role=test_support in the map (no external whitelist)"
+  },
+  "impl_status_rule": "AUDITED evidence, not an exhaustive static proof: impl_status ∈ rust_writer_known | ts_only | no_known_writer, derived from the recorded audited_rust_writers / audited_ts_writers. The gate only checks status agrees with that evidence shape and that each recorded writer path exists and is a production (non-test) source. Exhaustive write ownership is a named residual (residual_notes), not enforced here.",
+  "tables": [
+    {
+      "table": "users",
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "identity",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "attempt",
+          "path": "rust/crates/backend-sqlite/src/embedded_bootstrap/adapter.rs"
+        },
+        {
+          "function": "attempt",
+          "path": "rust/crates/backend-sqlite/src/human_registration.rs"
+        },
+        {
+          "function": "clear_avatar_pointer",
+          "path": "rust/crates/backend-sqlite/src/user_identity.rs"
+        },
+        {
+          "function": "write_avatar_pointer",
+          "path": "rust/crates/backend-sqlite/src/user_identity.rs"
+        },
+        {
+          "function": "write_display_name",
+          "path": "rust/crates/backend-sqlite/src/user_identity.rs"
+        },
+        {
+          "function": "write",
+          "path": "rust/crates/backend-sqlite/src/user_presence_last_seen.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/user-repo.ts"
+      ]
+    },
+    {
+      "table": "agents",
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "agent identity + created_by",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "write_row",
+          "path": "rust/crates/backend-sqlite/src/agent_profile_write.rs"
+        },
+        {
+          "function": "fail",
+          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+        },
+        {
+          "function": "fail_after_rolled_back_provision",
+          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+        },
+        {
+          "function": "flip_to_active_on",
+          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+        },
+        {
+          "function": "mark_stale_failed",
+          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+        },
+        {
+          "function": "reopen_failed",
+          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+        },
+        {
+          "function": "reserve",
+          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+        },
+        {
+          "function": "cascade_computer",
+          "path": "rust/crates/backend-sqlite/src/host_agent/cascade.rs"
+        },
+        {
+          "function": "begin",
+          "path": "rust/crates/backend-sqlite/src/host_agent/intent.rs"
+        },
+        {
+          "function": "complete",
+          "path": "rust/crates/backend-sqlite/src/host_agent/intent.rs"
+        },
+        {
+          "function": "abort",
+          "path": "rust/crates/backend-sqlite/src/host_agent/runtime_transition.rs"
+        },
+        {
+          "function": "begin",
+          "path": "rust/crates/backend-sqlite/src/host_agent/runtime_transition.rs"
+        },
+        {
+          "function": "complete",
+          "path": "rust/crates/backend-sqlite/src/host_agent/runtime_transition.rs"
+        },
+        {
+          "function": "tear_down_agent",
+          "path": "rust/crates/backend-sqlite/src/host_agent/teardown.rs"
+        },
+        {
+          "function": "stamp_agent_presence",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/agent-repo.ts",
+        "packages/backend/src/repos/agent-teardown-persistence.ts"
+      ]
+    },
+    {
+      "table": "workspaces",
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "workspace aggregate",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "attempt",
+          "path": "rust/crates/backend-sqlite/src/embedded_bootstrap/adapter.rs"
+        },
+        {
+          "function": "write_conversation_graph_on",
+          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+        },
+        {
+          "function": "write_archived",
+          "path": "rust/crates/backend-sqlite/src/workspace_metadata_write.rs"
+        },
+        {
+          "function": "write_metadata",
+          "path": "rust/crates/backend-sqlite/src/workspace_metadata_write.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/user-persistence.ts",
+        "packages/backend/src/repos/workspace-repo.ts"
+      ]
+    },
+    {
+      "table": "workspace_users",
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "human role axis; owner immovability",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "enroll_human_transaction",
+          "path": "rust/crates/backend-sqlite/src/access/mod.rs"
+        },
+        {
+          "function": "attempt",
+          "path": "rust/crates/backend-sqlite/src/embedded_bootstrap/adapter.rs"
+        },
+        {
+          "function": "write_conversation_graph_on",
+          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/workspace-repo.ts"
+      ]
+    },
+    {
+      "table": "workspace_members",
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "membership; member⇒capability atomic",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "enroll_agent_transaction",
+          "path": "rust/crates/backend-sqlite/src/access/mod.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/workspace-repo.ts"
+      ]
+    },
+    {
+      "table": "workspace_agent_capabilities",
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "capability axis",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "enroll_agent_transaction",
+          "path": "rust/crates/backend-sqlite/src/access/mod.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/agent-capability-repo.ts"
+      ]
+    },
+    {
+      "table": "auth_sessions",
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "session lifecycle",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "issue",
+          "path": "rust/crates/backend-sqlite/src/auth.rs"
+        },
+        {
+          "function": "revoke",
+          "path": "rust/crates/backend-sqlite/src/auth.rs"
+        },
+        {
+          "function": "verify_and_touch_transaction",
+          "path": "rust/crates/backend-sqlite/src/auth.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/auth-sessions-repo.ts"
+      ]
+    },
+    {
+      "table": "user_password_credentials",
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "password credential",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "attempt",
+          "path": "rust/crates/backend-sqlite/src/human_registration.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/auth-credentials-repo.ts"
+      ]
+    },
+    {
+      "table": "hosts",
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "host aggregate",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "cascade_computer",
+          "path": "rust/crates/backend-sqlite/src/host_agent/cascade.rs"
+        },
+        {
+          "function": "update_computer",
+          "path": "rust/crates/backend-sqlite/src/host_runtime/management.rs"
+        },
+        {
+          "function": "claim_local_computer",
+          "path": "rust/crates/backend-sqlite/src/host_runtime/mod.rs"
+        },
+        {
+          "function": "create_transaction",
+          "path": "rust/crates/backend-sqlite/src/host_runtime/mod.rs"
+        },
+        {
+          "function": "revoke_computer",
+          "path": "rust/crates/backend-sqlite/src/host_runtime/mod.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/host-repo.ts"
+      ]
+    },
+    {
+      "table": "host_credentials",
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "credential issue/rotate/revoke",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "create_transaction",
+          "path": "rust/crates/backend-sqlite/src/host_runtime/mod.rs"
+        },
+        {
+          "function": "issue_credential",
+          "path": "rust/crates/backend-sqlite/src/host_runtime/mod.rs"
+        },
+        {
+          "function": "revoke_computer",
+          "path": "rust/crates/backend-sqlite/src/host_runtime/mod.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/host-credentials-repo.ts"
+      ]
+    },
+    {
+      "table": "agent_runtime_slots",
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "read_model"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "observed slot projection",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "claim_transaction",
+          "path": "rust/crates/backend-sqlite/src/runtime_credential.rs"
+        },
+        {
+          "function": "finalize_transaction",
+          "path": "rust/crates/backend-sqlite/src/runtime_credential.rs"
+        },
+        {
+          "function": "commit_exit",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        },
+        {
+          "function": "commit_session_init",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        },
+        {
+          "function": "project_status",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        },
+        {
+          "function": "settle_clear_bound",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/runtime-slot-repo.ts"
+      ]
+    },
+    {
+      "table": "agent_runtime_events",
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "read_model"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "append-only runtime history",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "insert_event",
+          "path": "rust/crates/backend-sqlite/src/runtime_credential.rs"
+        },
+        {
+          "function": "insert_runtime_projection_event",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        },
+        {
+          "function": "settle_clear_bound",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/runtime-slot-repo.ts"
+      ]
+    },
+    {
+      "table": "agent_runtime_control_events",
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "read_model"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "append-only control history",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "settle_clear_bound",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/runtime-slot-repo.ts"
+      ]
+    },
+    {
+      "table": "conversations",
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "conversation aggregate root + seq",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "write_conversation_graph_on",
+          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+        },
+        {
+          "function": "create_inner",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_directory/create.rs"
+        },
+        {
+          "function": "archive_inner",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_lifecycle/mutation.rs"
+        },
+        {
+          "function": "rename_inner",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_lifecycle/mutation.rs"
+        },
+        {
+          "function": "visibility_inner",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_lifecycle/mutation.rs"
+        },
+        {
+          "function": "author_inner",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/workspace_rename_messaging.rs"
+        },
+        {
+          "function": "mint_direct_pair_on",
+          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+        },
+        {
+          "function": "reserve_next_seq_on",
+          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+        },
+        {
+          "function": "settle_clear_bound",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/conversation-repo.ts",
+        "packages/backend/src/repos/message-repo.ts"
+      ]
+    },
+    {
+      "table": "messages",
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "message insert + seq allocation",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "rename_inner",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_lifecycle/mutation.rs"
+        },
+        {
+          "function": "author_inner",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/workspace_rename_messaging.rs"
+        },
+        {
+          "function": "append_onboarding_system_message_on",
+          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+        },
+        {
+          "function": "insert_message",
+          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+        },
+        {
+          "function": "write_mention_copy",
+          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+        },
+        {
+          "function": "settle_clear_bound",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/message-repo.ts",
+        "packages/backend/src/runtime/reference-memo.ts"
+      ]
+    },
+    {
+      "table": "message_reactions",
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "reaction set per message",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "mutate",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/reaction/mutation.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/message-reaction-repo.ts"
+      ]
+    },
+    {
+      "table": "saved_messages",
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "saved set",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "save",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/saved/mutation.rs"
+        },
+        {
+          "function": "unsave",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/saved/mutation.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/saved-message-repo.ts"
+      ]
+    },
+    {
+      "table": "attachments",
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "attachment blob-metadata; upload single-table write, referenced into message tx as snapshot",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "delete_inner",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/attachment/write.rs"
+        },
+        {
+          "function": "insert_attachment_row",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/attachment/write.rs"
+        },
+        {
+          "function": "swap_attachment_content_row",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/attachment/write.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/attachment-repo.ts"
+      ]
+    },
+    {
+      "table": "thread_followers",
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "follow set",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "follow_inner",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/thread_follow.rs"
+        },
+        {
+          "function": "unfollow_inner",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/thread_follow.rs"
+        },
+        {
+          "function": "follow_actor",
+          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/thread-follower-repo.ts"
+      ]
+    },
+    {
+      "table": "conversation_stream_heads",
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "read_model"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "in-tx projection of latest seq",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "bump_stream_head_on",
+          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+        },
+        {
+          "function": "settle_clear_bound",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/message-repo.ts"
+      ]
+    },
+    {
+      "table": "conversation_inboxes",
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "Delivery enqueue side",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "reclaim_transition_inboxes",
+          "path": "rust/crates/backend-sqlite/src/host_agent/runtime_transition.rs"
+        },
+        {
+          "function": "ensure_delivery",
+          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+        },
+        {
+          "function": "ensure_inner",
+          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+        },
+        {
+          "function": "claim",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        },
+        {
+          "function": "commit_exit",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        },
+        {
+          "function": "release_owner",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/conversation-inbox-repo.ts"
+      ]
+    },
+    {
+      "table": "notifications",
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "Delivery sole write-owner; viewer invokes transition port",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "clear_notification",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/activity/observe.rs"
+        },
+        {
+          "function": "clear_stream_mentions",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/activity/observe.rs"
+        },
+        {
+          "function": "clear",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/notification/mod.rs"
+        },
+        {
+          "function": "notify_author_of_copy",
+          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+        },
+        {
+          "function": "record_mentions_transaction",
+          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/notification-repo.ts"
+      ]
+    },
+    {
+      "table": "conversation_users",
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "conversation roster; registration/removal = cross-context orchestration edge",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "attempt",
+          "path": "rust/crates/backend-sqlite/src/embedded_bootstrap/adapter.rs"
+        },
+        {
+          "function": "write_conversation_graph_on",
+          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+        },
+        {
+          "function": "insert_user_raw",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_directory/create.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/conversation-repo.ts"
+      ]
+    },
+    {
+      "table": "conversation_agents",
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "conversation agent roster",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "write_conversation_graph_on",
+          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+        },
+        {
+          "function": "create_inner",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_directory/create.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/conversation-repo.ts"
+      ]
+    },
+    {
+      "table": "conversation_events",
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "read_model"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "(conversation,agent) activity projection; NOT append-only (UPDATE refinement + retention DELETE)",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "insert_activity_row",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        },
+        {
+          "function": "refine_tool_call_input",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        },
+        {
+          "function": "upsert_text_activity",
+          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/conversation-event-repo.ts"
+      ]
+    },
+    {
+      "table": "tasks",
+      "target": {
+        "business_owner": "C4",
+        "structural_role": "domain"
+      },
+      "impl_status": "ts_only",
+      "invariant": "board-key↔placement biconditional",
+      "needs_ruling": false,
+      "audited_rust_writers": [],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/task-repo.ts"
+      ]
+    },
+    {
+      "table": "schedules",
+      "target": {
+        "business_owner": "C5",
+        "structural_role": "domain"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "owner-agent scoping; fire bounds",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "cancel_owned_schedule",
+          "path": "rust/crates/backend-sqlite/src/messaging/schedule/cancel.rs"
+        },
+        {
+          "function": "apply_settlement",
+          "path": "rust/crates/backend-sqlite/src/messaging/schedule/mod.rs"
+        },
+        {
+          "function": "claim",
+          "path": "rust/crates/backend-sqlite/src/messaging/schedule/mod.rs"
+        },
+        {
+          "function": "reset_stale_firing",
+          "path": "rust/crates/backend-sqlite/src/messaging/schedule/mod.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/schedule-repo.ts"
+      ]
+    },
+    {
+      "table": "conversation_reads",
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "read_model"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "viewer read cursors",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "advance_cursor",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/activity/observe.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/conversation-read-repo.ts"
+      ]
+    },
+    {
+      "table": "channel_attention_preferences",
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "read_model"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "viewer-scoped tx",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "commit_channel",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/attention_preference.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/channel-attention-preference-repo.ts"
+      ]
+    },
+    {
+      "table": "workspace_attention_preferences",
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "read_model"
+      },
+      "impl_status": "rust_writer_known",
+      "invariant": "viewer-scoped tx",
+      "needs_ruling": false,
+      "audited_rust_writers": [
+        {
+          "function": "commit_workspace",
+          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/attention_preference.rs"
+        }
+      ],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/workspace-attention-preference-repo.ts"
+      ]
+    },
+    {
+      "table": "user_sort_entry",
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "read_model"
+      },
+      "impl_status": "ts_only",
+      "invariant": "viewer list order",
+      "needs_ruling": false,
+      "audited_rust_writers": [],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/sort-repo.ts"
+      ]
+    },
+    {
+      "table": "user_list_sort_mode",
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "read_model"
+      },
+      "impl_status": "ts_only",
+      "invariant": "viewer list mode",
+      "needs_ruling": false,
+      "audited_rust_writers": [],
+      "audited_ts_writers": [
+        "packages/backend/src/repos/sort-repo.ts"
+      ]
+    },
+    {
+      "table": "app_settings",
+      "target": {
+        "business_owner": "platform_install",
+        "structural_role": "domain"
+      },
+      "impl_status": "no_known_writer",
+      "invariant": "install-local (key,value) singleton; no production writer",
+      "needs_ruling": false,
+      "audited_rust_writers": [],
+      "audited_ts_writers": []
+    }
+  ],
+  "crate_roots": [
+    {
+      "crate": "backend-core",
+      "module": "access",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::access"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_audit_read",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::agent_audit_read"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_availability_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime::agent_availability_read"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_avatar",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::agent_avatar"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_avatar_write",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::agent_avatar_write"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_bulk_stop",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime::agent_bulk_stop"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_creation",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "application_orchestration",
+        "structural_role": "application"
+      },
+      "note": "create saga over C1/C2/C3",
+      "migration": {
+        "physical_target": "backend-core::application_orchestration::agent_creation"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_detail_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::agent_detail_read"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_lifecycle",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::agent_lifecycle"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_list_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::agent_list_read"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_materialization",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "application_orchestration",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::application_orchestration::agent_materialization"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_materialize",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime::agent_materialize"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_peer_profile",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::agent_peer_profile"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_presence_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime::agent_presence_read"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_profile_mcp",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::agent_profile_mcp"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_profile_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::agent_profile_read"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_profile_write",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::agent_profile_write"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_runtime_state_read",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime::agent_runtime_state_read"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_runtime_switch",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime::agent_runtime_switch"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agents",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::agents"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "auth",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::auth"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "avatar",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "note": "users authority; agent avatar has its own module",
+      "migration": {
+        "physical_target": "backend-core::identity_access::avatar"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "blob_store",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "port"
+      },
+      "migration": {
+        "physical_target": "backend-core::foundation::blob_store"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "capability",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::capability"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "cli_invoke_audit",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::foundation::cli_invoke_audit"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "cli_preflight_audit",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::foundation::cli_preflight_audit"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "cold_read",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "split_required": {
+        "kind": "directory_members",
+        "current_container": {
+          "structural_role": "read_model"
+        },
+        "groups": [
+          {
+            "group": "availability",
+            "business_owner": "C2",
+            "structural_role": "read_model",
+            "members": [
+              "availability"
+            ],
+            "target_parent_namespace": "backend-core::host_runtime",
+            "needs_ruling": true
+          },
+          {
+            "group": "presence",
+            "business_owner": "viewer_read_model",
+            "structural_role": "read_model",
+            "members": [
+              "presence"
+            ],
+            "target_parent_namespace": "backend-core::viewer_read_model",
+            "needs_ruling": true
+          }
+        ]
+      },
+      "note": "only availability+presence live here; workspace/conversation/viewer cold-reads are their OWN crate-roots, not members",
+      "migration": {
+        "split": true
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "credential",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::credential"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "direct_pair_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::conversation_messaging::direct_pair_read"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "embedded_bootstrap",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "embedded_bootstrap",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::embedded_bootstrap"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "host_resources_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime::host_resources_read"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "host_runtime",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "human_auth_flows",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::human_auth_flows"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "identity",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "domain"
+      },
+      "note": "kernel id vocabulary; ~559 imports across all crates",
+      "migration": {
+        "physical_target": "backend-core::foundation::identity"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "internal_profile_write",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::internal_profile_write"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "mcp_config",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::mcp_config"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "messaging",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::conversation_messaging::messaging"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "name_canonicalization",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "domain"
+      },
+      "note": "shared, domain-neutral",
+      "migration": {
+        "physical_target": "backend-core::foundation::name_canonicalization"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "participant_handle_availability",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::participant_handle_availability"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "persistence",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "port"
+      },
+      "migration": {
+        "physical_target": "backend-core::foundation::persistence"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "policy",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "split_required": {
+        "kind": "directory_members",
+        "current_container": {
+          "structural_role": "domain"
+        },
+        "groups": [
+          {
+            "group": "agent_presence",
+            "business_owner": "C2",
+            "structural_role": "domain",
+            "members": [
+              "agent_presence"
+            ],
+            "target_parent_namespace": "backend-core::host_runtime",
+            "needs_ruling": true
+          },
+          {
+            "group": "human_presence_grace",
+            "business_owner": "viewer_read_model",
+            "structural_role": "domain",
+            "members": [
+              "presence_grace"
+            ],
+            "target_parent_namespace": "backend-core::viewer_read_model",
+            "needs_ruling": true
+          }
+        ]
+      },
+      "migration": {
+        "split": true
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "runtime_credential",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime::runtime_credential"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "runtime_delivery",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::conversation_messaging::runtime_delivery"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "runtime_event",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime::runtime_event"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "runtime_transition",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime::runtime_transition"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "scope_event",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "port"
+      },
+      "note": "EventScope + AuthorizeEventScope only",
+      "migration": {
+        "physical_target": "backend-core::foundation::scope_event"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "scope_runtime_stop",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime::scope_runtime_stop"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "teardown",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "application_orchestration",
+        "structural_role": "application"
+      },
+      "note": "whole agent/computer deletion saga (shared facts/write-boundary/eligibility/cascade); effect reaches 5 contexts but that is fan-out, not 5 owners",
+      "migration": {
+        "physical_target": "backend-core::application_orchestration::teardown"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "user_identity",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::user_identity"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "user_presence_cold_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::viewer_read_model::user_presence_cold_read"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "user_presence_last_seen",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "port"
+      },
+      "note": "LastSeenSink, not a read-model",
+      "migration": {
+        "physical_target": "backend-core::viewer_read_model::user_presence_last_seen"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "viewer_workspace_sort",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::viewer_read_model::viewer_workspace_sort"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "wire_number",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "wire"
+      },
+      "migration": {
+        "physical_target": "backend-core::foundation::wire_number"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "wire_text",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "wire"
+      },
+      "migration": {
+        "physical_target": "backend-core::foundation::wire_text"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "workspace_cold_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::workspace_cold_read"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "workspace_data_plane",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "workspace_data_plane",
+        "structural_role": "port"
+      },
+      "note": "self-declared top-level bounded context",
+      "migration": {
+        "physical_target": "backend-core::workspace_data_plane"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "workspace_detail_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::workspace_detail_read"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "workspace_face",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::workspace_face"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "workspace_metadata_write",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::workspace_metadata_write"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "workspace_name",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::workspace_name"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "workspace_name_availability",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::workspace_name_availability"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "access",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access::access"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "agent_materialize",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::host_runtime::agent_materialize"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "agent_name_availability",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access::agent_name_availability"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "agent_profile_mcp_data_plane",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access::agent_profile_mcp_data_plane"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "agent_wire",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "wire"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access::agent_wire"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "auth",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "http"
+      },
+      "note": "sibling auth/ holds only #[cfg(test)] JSON fixtures (no production child mods) → single target, not a hybrid",
+      "migration": {
+        "physical_target": "backend-server::identity_access::auth"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "avatar_blob",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access::avatar_blob"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "bearer",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "transport"
+      },
+      "migration": {
+        "physical_target": "backend-server::foundation::bearer"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "clock",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "transport"
+      },
+      "migration": {
+        "physical_target": "backend-server::foundation::clock"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "daemon_delivery",
+      "source_shape": "hybrid",
+      "needs_ruling": false,
+      "split_required": {
+        "kind": "hybrid",
+        "current_container": {
+          "source_shape": "hybrid"
+        },
+        "child_groups": [
+          {
+            "group": "runtime_lifecycle_codecs",
+            "business_owner": "C2",
+            "structural_role": "adapter",
+            "members": [
+              "runtime_start_codec",
+              "runtime_stop_codec",
+              "runtime_clear_session_codec"
+            ],
+            "target_parent_namespace": "backend-server::host_runtime",
+            "needs_ruling": true
+          },
+          {
+            "group": "materialize_codec",
+            "business_owner": "application_orchestration",
+            "structural_role": "adapter",
+            "members": [
+              "agent_materialize_codec"
+            ],
+            "target_parent_namespace": "backend-server::application_orchestration",
+            "needs_ruling": true
+          },
+          {
+            "group": "profile_mcp_codec",
+            "business_owner": "C1",
+            "structural_role": "adapter",
+            "members": [
+              "agent_profile_mcp_codec"
+            ],
+            "target_parent_namespace": "backend-server::identity_access",
+            "needs_ruling": true
+          }
+        ],
+        "file_responsibilities": [
+          {
+            "responsibility": "registry_generation_fifo_pending_deadline_rawwire_selectloop",
+            "business_owner": "foundation",
+            "structural_role": "transport",
+            "target_parent_namespace": "backend-server::foundation",
+            "needs_ruling": true
+          },
+          {
+            "responsibility": "runtime_host_lifecycle_adapters",
+            "business_owner": "C2",
+            "structural_role": "adapter",
+            "target_parent_namespace": "backend-server::host_runtime",
+            "needs_ruling": true
+          },
+          {
+            "responsibility": "messaging_post_commit_adapters",
+            "business_owner": "C3",
+            "structural_role": "adapter",
+            "target_parent_namespace": "backend-server::conversation_messaging",
+            "needs_ruling": true
+          },
+          {
+            "responsibility": "teardown_purge_and_agent_materialization_sagas",
+            "business_owner": "application_orchestration",
+            "structural_role": "adapter",
+            "target_parent_namespace": "backend-server::application_orchestration",
+            "needs_ruling": true
+          },
+          {
+            "responsibility": "profile_mcp",
+            "business_owner": "C1",
+            "structural_role": "adapter",
+            "target_parent_namespace": "backend-server::identity_access",
+            "needs_ruling": true
+          },
+          {
+            "responsibility": "workspace_fs",
+            "business_owner": "workspace_data_plane",
+            "structural_role": "adapter",
+            "target_parent_namespace": "backend-server::workspace_data_plane",
+            "needs_ruling": true
+          }
+        ]
+      },
+      "note": "#2268: hybrid. child_groups close the 5 codec subfiles; file_responsibilities restore the 7541-line daemon_delivery.rs main-body owners (frozen #2268 mapping)",
+      "migration": {
+        "split": true
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "daemon_events",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "split_required": {
+        "kind": "file_responsibilities",
+        "current_container": {
+          "source_shape": "file"
+        },
+        "responsibilities": [
+          {
+            "responsibility": "runtime_settlement_state_codecs",
+            "business_owner": "C2",
+            "structural_role": "application",
+            "target_parent_namespace": "backend-server::host_runtime",
+            "needs_ruling": true
+          },
+          {
+            "responsibility": "conversation_activity_projection_publisher",
+            "business_owner": "C3",
+            "structural_role": "adapter",
+            "target_parent_namespace": "backend-server::conversation_messaging",
+            "needs_ruling": true
+          },
+          {
+            "responsibility": "user_presence_publication",
+            "business_owner": "viewer_read_model",
+            "structural_role": "adapter",
+            "target_parent_namespace": "backend-server::viewer_read_model",
+            "needs_ruling": true
+          },
+          {
+            "responsibility": "agent_host_status_presence_publication",
+            "business_owner": "C2",
+            "structural_role": "adapter",
+            "target_parent_namespace": "backend-server::host_runtime",
+            "needs_ruling": true
+          }
+        ]
+      },
+      "note": "single file; logical responsibilities for the future large-file lane, not child modules",
+      "migration": {
+        "split": true
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "direct_pairs",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::conversation_messaging::direct_pairs"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "embedded_bootstrap",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "embedded_bootstrap",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::embedded_bootstrap"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "error",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "transport"
+      },
+      "migration": {
+        "physical_target": "backend-server::foundation::error"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "host_agent",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "split_required": {
+        "kind": "directory_members",
+        "current_container": {
+          "structural_role": "http"
+        },
+        "groups": [
+          {
+            "group": "public_agent_identity_profile",
+            "business_owner": "C1",
+            "structural_role": "http",
+            "members": [
+              "agent_audit",
+              "agent_avatar",
+              "agent_avatar_write",
+              "agent_detail",
+              "agent_list",
+              "agent_patch",
+              "public_profile_mcp"
+            ],
+            "target_parent_namespace": "backend-server::identity_access",
+            "needs_ruling": true
+          },
+          {
+            "group": "agent_runtime_control",
+            "business_owner": "C2",
+            "structural_role": "http",
+            "members": [
+              "agent_clear_session",
+              "agent_presence",
+              "agent_runtime_state",
+              "agent_runtime_switch",
+              "agent_stop",
+              "availability",
+              "host_attachment"
+            ],
+            "target_parent_namespace": "backend-server::host_runtime",
+            "needs_ruling": true
+          },
+          {
+            "group": "agent_provisioning_sagas",
+            "business_owner": "application_orchestration",
+            "structural_role": "http",
+            "members": [
+              "agent_create",
+              "agent_delete"
+            ],
+            "target_parent_namespace": "backend-server::application_orchestration",
+            "needs_ruling": true
+          },
+          {
+            "group": "viewer_presence",
+            "business_owner": "viewer_read_model",
+            "structural_role": "http",
+            "members": [
+              "online_viewers",
+              "presence"
+            ],
+            "target_parent_namespace": "backend-server::viewer_read_model",
+            "needs_ruling": true
+          },
+          {
+            "group": "schedule_management",
+            "business_owner": "C5",
+            "structural_role": "http",
+            "members": [
+              "schedule_management"
+            ],
+            "target_parent_namespace": "backend-server::scheduling",
+            "needs_ruling": true
+          }
+        ]
+      },
+      "note": "route-family umbrella; 19 child modules each covered exactly once",
+      "migration": {
+        "split": true
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "host_agent_background",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::host_runtime::host_agent_background"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "host_control",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::host_runtime::host_control"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "host_resources",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::host_runtime::host_resources"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "host_runtime",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::host_runtime"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "human_auth",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access::human_auth"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "internal_agent",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "split_required": {
+        "kind": "directory_members",
+        "current_container": {
+          "structural_role": "http"
+        },
+        "groups": [
+          {
+            "group": "internal_agent_profile",
+            "business_owner": "C1",
+            "structural_role": "http",
+            "members": [
+              "wire",
+              "peer_profile",
+              "profile",
+              "profile_mcp",
+              "profile_write",
+              "profile_write_admission"
+            ],
+            "target_parent_namespace": "backend-server::identity_access",
+            "needs_ruling": true
+          },
+          {
+            "group": "cli_diagnostics",
+            "business_owner": "foundation",
+            "structural_role": "http",
+            "members": [
+              "cli_invoke",
+              "diagnostics"
+            ],
+            "target_parent_namespace": "backend-server::foundation",
+            "needs_ruling": true
+          }
+        ]
+      },
+      "migration": {
+        "split": true
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "messaging",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::conversation_messaging::messaging"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "multipart_transport",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "transport"
+      },
+      "migration": {
+        "physical_target": "backend-server::foundation::multipart_transport"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "ops",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "split_required": {
+        "kind": "directory_members",
+        "current_container": {
+          "structural_role": "http"
+        },
+        "groups": [
+          {
+            "group": "runtimes",
+            "business_owner": "C2",
+            "structural_role": "http",
+            "members": [
+              "runtimes"
+            ],
+            "target_parent_namespace": "backend-server::host_runtime",
+            "needs_ruling": true
+          },
+          {
+            "group": "operational_composition",
+            "business_owner": "foundation",
+            "structural_role": "composition",
+            "members": [
+              "bind_address",
+              "deployment",
+              "health",
+              "readiness",
+              "server_info"
+            ],
+            "target_parent_namespace": "backend-server::foundation",
+            "needs_ruling": true
+          }
+        ]
+      },
+      "migration": {
+        "split": true
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "password_hasher",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access::password_hasher"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "runtime_control",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::host_runtime::runtime_control"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "runtime_credential",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::host_runtime::runtime_credential"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "scope_events",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "split_required": {
+        "kind": "file_responsibilities",
+        "current_container": {
+          "source_shape": "file"
+        },
+        "responsibilities": [
+          {
+            "responsibility": "transport_substrate",
+            "business_owner": "foundation",
+            "structural_role": "transport",
+            "target_parent_namespace": "backend-server::foundation",
+            "needs_ruling": true
+          },
+          {
+            "responsibility": "product_envelope",
+            "business_owner": "foundation",
+            "structural_role": "wire",
+            "target_parent_namespace": "backend-server::foundation",
+            "needs_ruling": true
+          },
+          {
+            "responsibility": "user_presence_policy_effect",
+            "business_owner": "viewer_read_model",
+            "structural_role": "application",
+            "target_parent_namespace": "backend-server::viewer_read_model",
+            "needs_ruling": true
+          },
+          {
+            "responsibility": "agent_presence_availability_adapters",
+            "business_owner": "C2",
+            "structural_role": "adapter",
+            "target_parent_namespace": "backend-server::host_runtime",
+            "needs_ruling": true
+          },
+          {
+            "responsibility": "identity_workspace_adapters",
+            "business_owner": "C1",
+            "structural_role": "adapter",
+            "target_parent_namespace": "backend-server::identity_access",
+            "needs_ruling": true
+          },
+          {
+            "responsibility": "messaging_notification_saved_reaction_attachment_direct_pair_adapters",
+            "business_owner": "C3",
+            "structural_role": "adapter",
+            "target_parent_namespace": "backend-server::conversation_messaging",
+            "needs_ruling": true
+          }
+        ]
+      },
+      "note": "#2267: single file; responsibilities, not child modules. shared transport lifecycle != business owner",
+      "migration": {
+        "split": true
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "scope_runtime_stop",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::host_runtime::scope_runtime_stop"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "users",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access::users"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "wire_admission",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "wire"
+      },
+      "migration": {
+        "physical_target": "backend-server::foundation::wire_admission"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "wire_patch",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "wire"
+      },
+      "migration": {
+        "physical_target": "backend-server::foundation::wire_patch"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "workspace_data_plane",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "workspace_data_plane",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::workspace_data_plane"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "workspace_detail",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access::workspace_detail"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "workspace_metadata_write",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access::workspace_metadata_write"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "workspace_name_availability",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access::workspace_name_availability"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "workspace_rename_fanout",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "application_orchestration",
+        "structural_role": "adapter"
+      },
+      "note": "wires committed C1 rename into C3/daemon/scope effects",
+      "migration": {
+        "physical_target": "backend-server::application_orchestration::workspace_rename_fanout"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "workspaces",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access::workspaces"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "current_schema",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "test_support"
+      },
+      "cfg_test": true,
+      "migration": {
+        "physical_target": "backend-server::foundation::current_schema"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "messaging",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::conversation_messaging::messaging"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "access",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::access"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "agent_audit_read",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::agent_audit_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "agent_availability_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::host_runtime::agent_availability_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "agent_avatar_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::agent_avatar_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "agent_detail_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::agent_detail_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "agent_list_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::agent_list_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "agent_presence_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::host_runtime::agent_presence_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "agent_profile_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::agent_profile_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "agent_profile_write",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::agent_profile_write"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "agent_runtime_state_read",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::host_runtime::agent_runtime_state_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "agent_view_acl",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::agent_view_acl"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "auth",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::auth"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "computer_agents_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::host_runtime::computer_agents_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "credential",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::credential"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "direct_pair_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::conversation_messaging::direct_pair_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "embedded_bootstrap",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "embedded_bootstrap",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::embedded_bootstrap"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "handle_namespace",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::handle_namespace"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "host_agent",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "split_required": {
+        "kind": "directory_members",
+        "current_container": {
+          "structural_role": "adapter"
+        },
+        "groups": [
+          {
+            "group": "agent_provisioning_teardown_sagas",
+            "business_owner": "application_orchestration",
+            "structural_role": "adapter",
+            "members": [
+              "agent_graph_read",
+              "agent_materialization",
+              "cascade",
+              "decode",
+              "facts",
+              "intent",
+              "teardown"
+            ],
+            "target_parent_namespace": "backend-sqlite::application_orchestration",
+            "needs_ruling": true
+          },
+          {
+            "group": "runtime_control_adapters",
+            "business_owner": "C2",
+            "structural_role": "adapter",
+            "members": [
+              "runtime_switch",
+              "runtime_transition"
+            ],
+            "target_parent_namespace": "backend-sqlite::host_runtime",
+            "needs_ruling": true
+          },
+          {
+            "group": "shared_store",
+            "business_owner": "foundation",
+            "structural_role": "adapter",
+            "members": [
+              "store"
+            ],
+            "target_parent_namespace": "backend-sqlite::foundation",
+            "needs_ruling": true
+          }
+        ]
+      },
+      "migration": {
+        "split": true
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "host_resources_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::host_runtime::host_resources_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "host_runtime",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::host_runtime"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "human_registration",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::human_registration"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "runtime_credential",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::host_runtime::runtime_credential"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "runtime_delivery",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::conversation_messaging::runtime_delivery"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "scope_event",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "adapter"
+      },
+      "note": "scope authority SQLite impl",
+      "migration": {
+        "physical_target": "backend-sqlite::foundation::scope_event"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "unread_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::viewer_read_model::unread_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "user_identity",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::user_identity"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "user_presence_cold_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::viewer_read_model::user_presence_cold_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "user_presence_last_seen",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::viewer_read_model::user_presence_last_seen"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "workspace_audience_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::workspace_audience_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "workspace_cold_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::workspace_cold_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "workspace_data_plane",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "workspace_data_plane",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::workspace_data_plane"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "workspace_detail_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::workspace_detail_read"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "workspace_metadata_write",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::workspace_metadata_write"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "workspace_name_availability",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::workspace_name_availability"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "write_probe",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "transport"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::foundation::write_probe"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "current_schema",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "test_support"
+      },
+      "cfg_test": true,
+      "migration": {
+        "physical_target": "backend-sqlite::foundation::current_schema"
+      }
+    },
+    {
+      "crate": "backend-app",
+      "module": "request_perimeter",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "transport"
+      },
+      "migration": {
+        "physical_target": "backend-app::foundation::request_perimeter"
+      }
+    },
+    {
+      "crate": "backend-app",
+      "module": "create_aftermath",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "application_orchestration",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-app::application_orchestration::create_aftermath"
+      }
+    },
+    {
+      "crate": "backend-app",
+      "module": "current_schema",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "test_support"
+      },
+      "cfg_test": true,
+      "migration": {
+        "physical_target": "backend-app::foundation::current_schema"
+      }
+    },
+    {
+      "crate": "backend-filesystem",
+      "module": "audit_sink",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-filesystem::foundation::audit_sink"
+      }
+    },
+    {
+      "crate": "backend-filesystem",
+      "module": "blob_store",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "adapter"
+      },
+      "note": "shared LocalBlobStore substrate; custody split in non-table ledger",
+      "migration": {
+        "physical_target": "backend-filesystem::foundation::blob_store"
+      }
+    },
+    {
+      "crate": "backend-filesystem",
+      "module": "runtime_detection",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-filesystem::host_runtime::runtime_detection"
+      }
+    }
+  ],
+  "nonschema_presence_ledger": [
+    {
+      "entry": "blob:user_avatar_bytes",
+      "authority": "backend-filesystem::blob_store",
+      "impl_owner": "LocalBlobStore",
+      "business_owner": "C1",
+      "structural_role": "adapter",
+      "note": "user avatar custody"
+    },
+    {
+      "entry": "blob:agent_avatar_bytes",
+      "authority": "backend-filesystem::blob_store",
+      "impl_owner": "LocalBlobStore",
+      "business_owner": "C1",
+      "structural_role": "adapter",
+      "note": "agent avatar custody"
+    },
+    {
+      "entry": "blob:attachment_bytes",
+      "authority": "backend-filesystem::blob_store",
+      "impl_owner": "LocalBlobStore",
+      "business_owner": "C3",
+      "structural_role": "adapter",
+      "note": "message attachment custody"
+    },
+    {
+      "entry": "blob:audit_attachment_read",
+      "authority": "backend-filesystem::blob_store",
+      "impl_owner": "LocalBlobStore",
+      "business_owner": "C1",
+      "structural_role": "adapter",
+      "note": "aligns with agent_audit_read source-bound owner-audit vertical"
+    },
+    {
+      "entry": "blob:cascade_cleanup",
+      "authority": "backend-filesystem::blob_store",
+      "impl_owner": "LocalBlobStore",
+      "business_owner": "application_orchestration",
+      "structural_role": "adapter",
+      "note": "delete-cascade byte cleanup"
+    },
+    {
+      "entry": "blob:shared_substrate",
+      "authority": "backend-filesystem::blob_store",
+      "impl_owner": "LocalBlobStore",
+      "business_owner": "foundation",
+      "structural_role": "transport",
+      "note": "single shared LocalBlobStore substrate"
+    },
+    {
+      "entry": "audit:cli_jsonl_sink",
+      "authority": "backend-filesystem::audit_sink + core::cli_invoke_audit/cli_preflight_audit",
+      "impl_owner": "CategorizedJsonlWriter",
+      "business_owner": "foundation",
+      "structural_role": "transport",
+      "note": "CLI trace sink; not folded into conversation_events"
+    },
+    {
+      "entry": "fs:runtime_detection",
+      "authority": "backend-filesystem::runtime_detection",
+      "impl_owner": "runtime_detection",
+      "business_owner": "C2",
+      "structural_role": "adapter"
+    },
+    {
+      "entry": "transport:scope_event_frames",
+      "authority": "core::scope_event + server::scope_events",
+      "impl_owner": "ScopeEventHub",
+      "business_owner": "foundation",
+      "structural_role": "transport",
+      "note": "per #2267: substrate is foundation; per-frame owners in the scope_events split"
+    },
+    {
+      "entry": "transport:daemon_frames",
+      "authority": "server::{daemon_delivery,daemon_events}",
+      "impl_owner": "daemon transport",
+      "business_owner": "foundation",
+      "structural_role": "transport",
+      "note": "per #2268: substrate is foundation; per-adapter owners in the daemon splits"
+    },
+    {
+      "entry": "fs:bootstrap_token_file",
+      "authority": "server::embedded_bootstrap write-bootstrap-token",
+      "impl_owner": "embedded_bootstrap",
+      "business_owner": "embedded_bootstrap",
+      "structural_role": "adapter",
+      "note": "token-file custody owned by embedded_bootstrap"
+    }
+  ],
+  "open_rulings": [
+    "backend-core::cold_read split group 'availability' final leaf module name",
+    "backend-core::cold_read split group 'presence' final leaf module name",
+    "backend-core::policy split group 'agent_presence' final leaf module name",
+    "backend-core::policy split group 'human_presence_grace' final leaf module name",
+    "backend-server::daemon_delivery split group 'runtime_lifecycle_codecs' final leaf module name",
+    "backend-server::daemon_delivery split group 'materialize_codec' final leaf module name",
+    "backend-server::daemon_delivery split group 'profile_mcp_codec' final leaf module name",
+    "backend-server::daemon_delivery split group 'registry_generation_fifo_pending_deadline_rawwire_selectloop' final leaf module name",
+    "backend-server::daemon_delivery split group 'runtime_host_lifecycle_adapters' final leaf module name",
+    "backend-server::daemon_delivery split group 'messaging_post_commit_adapters' final leaf module name",
+    "backend-server::daemon_delivery split group 'teardown_purge_and_agent_materialization_sagas' final leaf module name",
+    "backend-server::daemon_delivery split group 'profile_mcp' final leaf module name",
+    "backend-server::daemon_delivery split group 'workspace_fs' final leaf module name",
+    "backend-server::daemon_events split group 'runtime_settlement_state_codecs' final leaf module name",
+    "backend-server::daemon_events split group 'conversation_activity_projection_publisher' final leaf module name",
+    "backend-server::daemon_events split group 'user_presence_publication' final leaf module name",
+    "backend-server::daemon_events split group 'agent_host_status_presence_publication' final leaf module name",
+    "backend-server::host_agent split group 'public_agent_identity_profile' final leaf module name",
+    "backend-server::host_agent split group 'agent_runtime_control' final leaf module name",
+    "backend-server::host_agent split group 'agent_provisioning_sagas' final leaf module name",
+    "backend-server::host_agent split group 'viewer_presence' final leaf module name",
+    "backend-server::host_agent split group 'schedule_management' final leaf module name",
+    "backend-server::internal_agent split group 'internal_agent_profile' final leaf module name",
+    "backend-server::internal_agent split group 'cli_diagnostics' final leaf module name",
+    "backend-server::ops split group 'runtimes' final leaf module name",
+    "backend-server::ops split group 'operational_composition' final leaf module name",
+    "backend-server::scope_events split group 'transport_substrate' final leaf module name",
+    "backend-server::scope_events split group 'product_envelope' final leaf module name",
+    "backend-server::scope_events split group 'user_presence_policy_effect' final leaf module name",
+    "backend-server::scope_events split group 'agent_presence_availability_adapters' final leaf module name",
+    "backend-server::scope_events split group 'identity_workspace_adapters' final leaf module name",
+    "backend-server::scope_events split group 'messaging_notification_saved_reaction_attachment_direct_pair_adapters' final leaf module name",
+    "backend-sqlite::host_agent split group 'agent_provisioning_teardown_sagas' final leaf module name",
+    "backend-sqlite::host_agent split group 'runtime_control_adapters' final leaf module name",
+    "backend-sqlite::host_agent split group 'shared_store' final leaf module name"
+  ],
+  "accepted_not_reopened": [
+    "attachments->C3",
+    "conversation_users/conversation_agents->C3",
+    "app_settings->platform_install",
+    "teardown->single application_orchestration"
+  ],
+  "task": "#2265",
+  "base_commit": "3a819c889d296ffddb9b762e5d44f3de540137fe",
+  "migration_ledger": {
+    "note": "Organization residual/landed is derived, NOT stored. A settled crate_root carries a full physical_target Rust module path: a normal row targets crate::namespace::leaf, while a self-named top-level context root (module name == owner namespace: embedded_bootstrap / workspace_data_plane / host_runtime) targets its own path crate::module (already at its target). A split row is residual by construction and its GROUPS carry only target_parent_namespace (crate::owner-ns) + needs_ruling — the final leaf module name is unevidenced (see open_rulings), NOT a fabricated full target. A root is LANDED iff its current full path equals its physical_target; mechanically that is exactly the self-named context roots (9 across the three crates), and residual = scanned roots − landed (from the map + real tree only). The CP root inventories in host_agent_scaffold.rs keep their original G4/G5 seam semantics and are used only as a root-coverage compatibility check, never as a landed/residual authority. Route/product ledgers stay separate."
+  },
+  "target_namespaces": {
+    "note": "The real Rust module namespace each business_owner relocates into. physical_target is a full path crate::namespace::leaf. landed is derived mechanically (current full path == physical_target); no row is landed until it actually resides at its full target path. Namespaces must be legal Rust idents, unique, and cover exactly the business_owner axis.",
+    "by_business_owner": {
+      "C1": "identity_access",
+      "C2": "host_runtime",
+      "C3": "conversation_messaging",
+      "C4": "tasks",
+      "C5": "scheduling",
+      "viewer_read_model": "viewer_read_model",
+      "platform_install": "platform_install",
+      "application_orchestration": "application_orchestration",
+      "foundation": "foundation",
+      "workspace_data_plane": "workspace_data_plane",
+      "embedded_bootstrap": "embedded_bootstrap"
+    }
+  },
+  "writers_note": "audited_rust_writers / audited_ts_writers are KNOWN, human-audited write callsites (path + function), NOT an exhaustive static proof of every writer. impl_status = rust_writer_known | ts_only | no_known_writer reflects that audited evidence. Exhaustive write-ownership enforcement is a named residual for a future typed write-perimeter production refactor (see residual_notes); this map does not run a SQL static analyzer.",
+  "residual_notes": [
+    "Exhaustive Rust SQL-write ownership is NOT enforced by this map/gate; it is deferred to a future production refactor that converges all writes behind a typed UnitOfWork / single DB write perimeter, where the invariant can be carried by types or one gate rather than a test-time static analyzer."
+  ]
+}

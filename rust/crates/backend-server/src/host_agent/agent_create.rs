@@ -25,7 +25,7 @@
 //!     `idempotency_key_malformed`. Body admission precedes key admission, matching TS.
 //!  4. UNIT OF WORK — hand the admitted input, key, and `?retry=true` flag to the core
 //!     [`create_agent`], which owns the whole saga: idempotency dispatch, in-core
-//!     placement (returning a typed [`RuntimePlacementRefusal`], mapped through the ONE
+//!     placement (returning a typed `RuntimePlacementRefusal`, mapped through the ONE
 //!     canonical [`placement_refusal`] authority — an improvement over the TS
 //!     error-sniffing), the handle gate, the reserve INSERT, the capture-then-dispatch
 //!     host materialize (the attachment gate and the command speak ONE truth about which

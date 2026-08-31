@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![deny(rustdoc::broken_intra_doc_links)]
 //! The sole executable composition root for the Rust backend.
 
 use std::{
@@ -2346,43 +2347,12 @@ mod tests {
         Ok(app)
     }
 
-    /// #2257 static topology guard. The production source above the test module owns one
-    /// bind call, one bootstrap provision call, and one final router construction. There is
-    /// no legacy `prepare(config)` entry point that can build a serveable router without a
-    /// bound-listener witness; the same-name helper below exists only inside `cfg(test)`.
-    #[test]
-    fn production_has_one_bind_provision_and_router_finalize_path() {
-        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
-        let production = source
-            .split("\n#[cfg(test)]\n#[path =")
-            .next()
-            .expect("the production prefix");
-
-        assert_eq!(
-            production
-                .matches("TcpListener::bind(config.listen_addr)")
-                .count(),
-            1,
-            "one production listener bind"
-        );
-        assert_eq!(
-            production
-                .matches("write_bootstrap_token_file(path, &plaintext)")
-                .count(),
-            1,
-            "one bootstrap provision call"
-        );
-        assert_eq!(
-            production.matches("router: Router::new()").count(),
-            1,
-            "one final router construction"
-        );
-        assert_eq!(
-            production.matches("async fn prepare(config:").count(),
-            0,
-            "no production witness-bypassing prepare entry point"
-        );
-    }
+    // #2257's static topology guard (a string-count over include_str!(lib.rs)) is
+    // superseded by the #task:2265 composition checker in `build.rs`
+    // (`build_support/composition_check.rs`): a `syn` whole-crate production module-graph
+    // walk that closes the three semantic doors (bind / bootstrap-provision /
+    // router-finalize) with direct-callee + cardinality proofs and rejects alias / wrapper
+    // / function-value bypass, failing `cargo check` rather than a test.
     // A second seeded principal: the admin actor who performs the enrollment. The
     // target viewer (TOKEN) and this admin are told apart purely by which seeded
     // session their bearer hashes to.

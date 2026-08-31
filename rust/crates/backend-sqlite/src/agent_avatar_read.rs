@@ -3,8 +3,8 @@
 //! It reads the agents row's own `id` plus its `(avatar_storage_key,
 //! avatar_content_type)` pair and hands them to the core decoder
 //! ([`decode_agent_avatar_row`]), which enforces the strict four-state contract:
-//! both-absent → [`AgentAvatarRow::Absent`], both-present-and-valid →
-//! [`AgentAvatarRow::Present`], and any half-populated or malformed pair (or an
+//! both-absent → `AgentAvatarRow::Absent`, both-present-and-valid →
+//! `AgentAvatarRow::Present`, and any half-populated or malformed pair (or an
 //! unreadable row id) → an [`AgentAvatarRowCorruption`] this adapter surfaces as a
 //! [`PersistenceFailure`] (a safe `500`), never a silent `avatar not found`.
 //!

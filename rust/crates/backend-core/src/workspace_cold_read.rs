@@ -62,7 +62,7 @@ where
 }
 
 /// The unit of work the HTTP boundary depends on. Its one implementation opens a
-/// single deferred-read snapshot and runs [`load_workspace_cold_read`] over it,
+/// single deferred-read snapshot and runs `load_workspace_cold_read` over it,
 /// so the boundary stays generic over this port and is driven by a driver-free
 /// fake in tests.
 pub trait WorkspaceColdReadUnitOfWork {

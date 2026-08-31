@@ -15,7 +15,7 @@
 //!
 //! Both host-side facts are bound to the AGENT row's own host id, and the core
 //! rule seals that binding: facts describing another row are an
-//! [`AvailabilityFactsMismatch`], which is a composition defect no client can
+//! `AvailabilityFactsMismatch`, which is a composition defect no client can
 //! cause, so it takes the lane's safe `500` rather than a plausible `offline`.
 //!
 //! Like presence, the human principal is proof the authenticating perimeter ran.

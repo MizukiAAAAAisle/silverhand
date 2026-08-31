@@ -34,9 +34,10 @@ silverhand-backend-server = { path = "crates/backend-server" }
 silverhand-backend-sqlite = { path = "crates/backend-sqlite" }
 sqlx = { version = "=0.9.0", default-features = false, features = ["derive", "macros", "migrate", "runtime-tokio", "sqlite"] }
 subtle = { version = "=2.6.1", default-features = false }
-syn = { version = "=3.0.3", default-features = false, features = ["full", "parsing"] }
+syn = { version = "=3.0.3", default-features = false, features = ["full", "parsing", "visit", "extra-traits"] }
 tempfile = "=3.27.0"
 thiserror = "=2.0.20"
+toml = { version = "=0.8.23", default-features = false, features = ["parse"] }
 tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-tungstenite = "=0.29.0"
 tower = { version = "=0.5.3", features = ["util"] }

@@ -30,7 +30,7 @@
 //! runtime custody/focus ports. The guard is exact-generation: the live focus is
 //! projected onto the agent-scope seat ONLY when the live principal's generation
 //! matches the generation of the agent-scope seat IN THIS SNAPSHOT
-//! ([`AgentRuntimeStateFacts::agent_scope_generation`]). A re-claim that raced the read
+//! (`AgentRuntimeStateFacts::agent_scope_generation`). A re-claim that raced the read
 //! advances the generation, so its focus is ignored rather than spliced onto the stale
 //! seat. The focus conversation's readability is resolved through the SAME strict
 //! human-participation authority that redacts the participation set

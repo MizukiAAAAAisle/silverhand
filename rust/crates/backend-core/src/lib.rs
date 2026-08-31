@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![deny(rustdoc::broken_intra_doc_links)]
 //! `backend-core` — the driver-free application & domain boundary for the
 //! Silverhand Rust backend.
 //!

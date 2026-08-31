@@ -280,8 +280,8 @@ pub enum WorkspaceArchiveWrite {
 /// each self-deciding under its own write lock.
 ///
 /// The unit re-reads the authoritative row and the caller's role under the lock,
-/// applies the pure governance floor (`Admin` for [`update_metadata`], `Owner` for
-/// [`set_archived`]) via the shared
+/// applies the pure governance floor (`Admin` for `update_metadata`, `Owner` for
+/// `set_archived`) via the shared
 /// [`governance_floor_verdict`](crate::access::governance_floor_verdict), decides
 /// name collision against the regular namespace, writes, and returns the fact its
 /// own write produced. The `actor` is passed in so the adapter re-derives authority

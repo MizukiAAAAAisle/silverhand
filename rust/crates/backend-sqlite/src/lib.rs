@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![deny(rustdoc::broken_intra_doc_links)]
 //! SQLite adapters for `backend-core`'s ports.
 //!
 //! Everything specific to the engine stays inside this crate: SQL text, schema,

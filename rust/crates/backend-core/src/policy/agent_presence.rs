@@ -21,7 +21,7 @@
 //! `number` wire carries losslessly. A value outside that domain is corruption of
 //! a committed row, refused at decode — NOT saturated into [`i64::MAX`], which
 //! would wash a corrupt stamp into a legal deadline and let the writer treat it as
-//! "still online". Because the domain is closed at construction, [`away_at`] is a
+//! "still online". Because the domain is closed at construction, `away_at` is a
 //! total add that cannot overflow.
 
 use thiserror::Error;

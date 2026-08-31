@@ -34,7 +34,7 @@ impl ProcessClock for SystemProcessClock {
 }
 
 /// The workspace-metadata write leaf states its write instant as a narrow per-slice
-/// [`WorkspaceMetadataClock`] capability rather than depending on this hub directly, so
+/// `WorkspaceMetadataClock` capability rather than depending on this hub directly, so
 /// it stays unit-testable behind a pinned clock double. That capability is the SAME
 /// contract this port already answers — signed Unix milliseconds, `Date.now()` parity —
 /// so the one process-clock owner satisfies it directly. The composition injects

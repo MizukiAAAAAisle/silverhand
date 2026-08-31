@@ -1,7 +1,7 @@
 //! Resuming ONE durable agent-deletion attempt: the ordered fence-then-commit
 //! sequence and the retry taxonomy, with no scheduler.
 //!
-//! A durable deletion marker is fail-forward: once [`intent::begin_agent_deletion`]
+//! A durable deletion marker is fail-forward: once `intent::begin_agent_deletion`
 //! records it, the agent WILL be torn down, and every later failure is a retry rather
 //! than a lost cascade. This module owns the one ordered attempt that discharges a
 //! marker; the process-local scheduler that decides WHEN to run one, coalesces
@@ -20,9 +20,9 @@
 //!     mid-purge — and removes the home tree. This is the SINGLE child authority:
 //!     there is no per-seat stop on this path, which is why [`AgentDeletionResidue`]
 //!     has no such method to call.
-//!  2. Only if the purge SUCCEEDS does [`intent::complete_agent_deletion`] take the
+//!  2. Only if the purge SUCCEEDS does `intent::complete_agent_deletion` take the
 //!     compare-and-set that captures and deletes the rows. The purge acknowledgement
-//!     is carried into that call as a sealed [`intent::PurgeReceipt`], so the commit
+//!     is carried into that call as a sealed `intent::PurgeReceipt`, so the commit
 //!     is structurally unreachable without a real fence ack — not a re-check of which
 //!     generation is live, which between purge and commit could never be atomic.
 //!  3. The announcement and the blob sweep are post-commit residue: best-effort,

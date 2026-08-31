@@ -45,7 +45,7 @@ pub const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
 /// The top-level-object floor is NOT this DTO's job: a derived struct visitor
 /// also fills fields positionally from a JSON *array*, so decoding it bare would
 /// let `[null, "an-agent-id"]` classify as an agent enrollment. That shape floor
-/// is sealed ONCE for the whole crate by [`wire_admission::ObjectOnly<T>`], which
+/// is sealed ONCE for the whole crate by `wire_admission::ObjectOnly<T>`, which
 /// every consumer of this DTO decodes through (the route uses
 /// `Json<ObjectOnly<AddMemberRaw>>`); this stays an ordinary derive with no
 /// leaf-local grammar of its own.

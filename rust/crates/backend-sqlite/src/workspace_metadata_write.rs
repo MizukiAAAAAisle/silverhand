@@ -7,7 +7,7 @@
 //! seeds nothing. It decides nothing on its own either — the governance floor is
 //! [`governance_floor_verdict`](silverhand_backend_core::access::governance_floor_verdict)
 //! over the facts it re-reads UNDER the write lock, and the name-change gate and
-//! collision are decided against the domain's own [`CanonicalWorkspaceName`] fold,
+//! collision are decided against the domain's own `CanonicalWorkspaceName` fold,
 //! so this crate never re-implements the role axis or the name canonicalizer.
 //!
 //! The whole write is one `BEGIN IMMEDIATE` transaction, so the single writer is

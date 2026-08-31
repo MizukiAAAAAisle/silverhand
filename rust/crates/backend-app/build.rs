@@ -2,8 +2,17 @@ use std::{env, fs, path::PathBuf};
 
 use serde_json::Value;
 
+#[path = "build_support/composition_check.rs"]
+mod composition_check;
+
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest directory"));
+    println!("cargo:rerun-if-changed=build_support/composition_check.rs");
+    // #task:2265 — the composition semantic-door checker (replaces the former
+    // include_str! + string-count gate). A violation fails this build with the offending
+    // symbol and its enclosing function.
+    composition_check::check(&manifest.join("src"));
+
     let contract = manifest.join("../../../packages/shared/src/backend-migration-plan.json");
     println!("cargo:rerun-if-changed={}", contract.display());
     let source = fs::read_to_string(&contract).expect("read shared migration-plan authority");

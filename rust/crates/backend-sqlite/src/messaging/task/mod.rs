@@ -5,16 +5,16 @@
 //! not exist: the `tasks` table has an owner, and a second migration authority
 //! would be one too many.
 //!
-//! This module is the ASSEMBLY: it owns the store handle ([`SqliteTaskStore`]),
+//! This module is the ASSEMBLY: it owns the store handle (`SqliteTaskStore`),
 //! its connection setup, and the store-level failure vocabulary
-//! ([`TaskStoreError`] and the two erasing helpers that route a driver error and
+//! (`TaskStoreError` and the two erasing helpers that route a driver error and
 //! a decode corruption to their distinct safe-500 sources). Everything else lives
 //! in a leaf with a single reason to change:
 //!
-//!  - [`row`] — the committed-row decode and the cross-row board seal every read
+//!  - `row` — the committed-row decode and the cross-row board seal every read
 //!    shares (what a trustworthy `tasks` row IS), and the shared row projection;
-//!  - [`point_read`] — the single-task fact keyed by `tasks.id`;
-//!  - [`board_list`] — the [`TaskCandidateFetch`](silverhand_backend_core::messaging::task::TaskCandidateFetch)
+//!  - `point_read` — the single-task fact keyed by `tasks.id`;
+//!  - `board_list` — the [`TaskCandidateFetch`](silverhand_backend_core::messaging::task::TaskCandidateFetch)
 //!    adapter: the plural candidate fetch a board list trims (coordinate filters
 //!    only; participation, ordering, and limit are the core's).
 //!

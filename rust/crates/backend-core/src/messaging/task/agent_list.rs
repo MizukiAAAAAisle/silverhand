@@ -37,7 +37,7 @@
 //!  - a frame that derives no board → [`TaskListForbidden::NoReadableBoard`] (`403`).
 //!
 //! The `404`/`403` split is decided by the board-scope resolver — the one authority that
-//! reads the workspace row (see [`BoardResolution`]) — never by the wire remembering to
+//! reads the workspace row (see `BoardResolution`) — never by the wire remembering to
 //! merge codes.
 
 use std::future::Future;

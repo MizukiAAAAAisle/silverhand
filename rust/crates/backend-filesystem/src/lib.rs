@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![deny(rustdoc::broken_intra_doc_links)]
 //! Adapters for the local machine this process runs on.
 //!
 //! Two kinds of local fact live here: files this backend owns (the blob store), and

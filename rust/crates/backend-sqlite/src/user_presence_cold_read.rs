@@ -22,7 +22,7 @@
 //! suppressed still cannot carry a corrupt one to the wire. `created_at` is read
 //! only as the ordering key: `ORDER BY created_at ASC, id ASC` fixes ONE total
 //! order over the set so a tie cannot depend on the engine's incidental order,
-//! and the sealed [`PresenceSnapshot`] the boundary builds refuses anything else.
+//! and the sealed `PresenceSnapshot` the boundary builds refuses anything else.
 
 use std::{path::Path, time::Duration};
 

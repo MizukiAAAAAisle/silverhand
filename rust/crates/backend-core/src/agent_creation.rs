@@ -5,7 +5,7 @@
 //! idempotent lookup), the host-side materialize command
 //! ([`crate::agent_materialize`]), the placement rule ([`crate::host_runtime`]), the
 //! shared handle namespace ([`crate::human_auth_flows::HandleNamespaceRead`]) and id
-//! minting ([`crate::messaging::identity`]). It owns the DECISION at each step; the row
+//! minting (`crate::messaging::identity`). It owns the DECISION at each step; the row
 //! writes, the host command and the reads are ports.
 //!
 //! ## What this module is NOT
@@ -28,7 +28,7 @@
 //!   host. An offline capture inserts no pending row a synchronous create would then fail;
 //!   an offline retry reopens nothing and leaves the prior failure fact untouched.
 //! - **`dependent_row_insert_failed` is not a product code.** A dependent-graph write
-//!   failure surfaces as a [`MaterializationFault`] → safe `500`, matching the DELETE
+//!   failure surfaces as a `MaterializationFault` → safe `500`, matching the DELETE
 //!   face, rather than a `materializeFailed` code.
 //! - **A genuine materialize transport/protocol fault is a safe `500`, not a flip to
 //!   `failed`.** The [`AgentMaterializePort`] already turns the product-meaningful daemon

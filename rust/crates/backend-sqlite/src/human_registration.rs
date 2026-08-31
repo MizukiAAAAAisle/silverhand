@@ -10,7 +10,7 @@
 //!
 //! Only the handle and email conflicts the signup flow's security ordering must
 //! arbitrate surface as outcomes ([`HumanRegistration::HandleConflict`] /
-//! [`EmailConflict`]). Every OTHER driver rejection — a CHECK, a NOT NULL, a disk
+//! `EmailConflict`). Every OTHER driver rejection — a CHECK, a NOT NULL, a disk
 //! error — passes through as a [`PersistenceFailure`] and is NEVER laundered into a
 //! business answer: the conflict classifier decodes exactly the three uniqueness
 //! rules the `users` write can trip and nothing else, mirroring the product's

@@ -161,16 +161,35 @@ alternative (physically splitting the table) that we explicitly did *not* choose
 
 ## 2.1 Ownership resolution (findings 2 & 3)
 
-**Single table→owner map — every table has exactly one write-owner:**
+> **Authority note (#task:2265).** The machine-readable table→owner map now lives in
+> [`docs/rust-backend-organization-map.json`](./rust-backend-organization-map.json) and is
+> the SINGLE classification authority the organization gates read. This section is kept as
+> DDD **rationale** — the reasoning behind the owners — and is no longer a second copy of
+> the ownership table. Where this prose and the JSON ever disagree, **the JSON wins**; two
+> corrections #2265 made against the v1 prose below are already in the JSON and must not be
+> reintroduced here:
+>
+> - the v1 table listed only 30 of the 33 tables — `app_settings` (→ `platform_install`),
+>   `attachments` (→ C3), and `conversation_events` (→ C3, a read-model) were missing;
+> - `conversation_users` / `conversation_agents` are **C3** (the conversation roster is
+>   born inside the conversation-create transaction), not C1 membership; the
+>   registration-backfill / member-removal writes are cross-context orchestration edges,
+>   not C1 ownership.
 
-| Table(s) | Owner | Notes |
-|---|---|---|
-| `users`, `agents`, `workspaces`, `workspace_users`, `workspace_members`, `workspace_agent_capabilities`, `conversation_users`, `conversation_agents`, `auth_sessions`, `user_password_credentials` | C1 | membership + role + capability are all Access policy tables |
-| `hosts`, `host_credentials`, `agent_runtime_slots`, `agent_runtime_events`, `agent_runtime_control_events` | C2 | `host_credentials` is **not** in the authz model at all (grep-confirmed) ⇒ unambiguously Host, never co-owned by Access |
-| `conversations`, `messages`, `message_reactions`, `saved_messages`, `thread_followers`, `conversation_stream_heads`, `conversation_inboxes`, `notifications` | C3 | `conversation_inboxes` + `notifications` are owned **solely by C3's internal Delivery module** — enqueue, deliver/settle, fail, and mark-read/clear are all its transitions. The Viewer Read-Model *invokes* the mark-read/clear transition via a semantic port; it does not write these tables |
-| `tasks` | C4 | |
-| `schedules` | C5 | |
-| `conversation_reads`, `*_attention_preferences`, `user_sort_entry`, `user_list_sort_mode` | Viewer Read-Model | viewer-scoped tx only |
+**Rationale (owners are authoritative in the JSON):** every table has exactly one
+write-owner. C1 Identity & Access owns the human/agent identity, membership, role,
+capability, credential and session tables plus the authorization decision. C2 Host &
+Runtime owns `hosts`, `host_credentials`, and the append-only runtime slot/event tables
+(`host_credentials` is **not** in the authz model — grep-confirmed — so it is
+unambiguously Host, never co-owned by Access). C3 Conversation & Messaging owns the
+conversation aggregate, messages, reactions, saved, followers, stream-heads, and the
+Delivery tables `conversation_inboxes` + `notifications` (enqueue, deliver/settle, fail,
+and mark-read/clear are all its transitions; the Viewer Read-Model *invokes* the
+mark-read/clear transition via a semantic port, it does not write these tables), plus the
+conversation roster and the `conversation_events` activity read-model. C4 owns `tasks`,
+C5 owns `schedules`, and the Viewer Read-Model owns the viewer-scoped `conversation_reads`
+/ `*_attention_preferences` / `user_sort_entry` / `user_list_sort_mode`. The exact
+per-table owner, structural role and implementation status are in the JSON above.
 
 **Access owns the decision, not the resources.** `permissions.ts` (1111 lines) is a
 single pure module: every predicate is a function of `ctx.authorizationReads` (a

@@ -7,7 +7,7 @@
 //! persisted — never the plaintext itself.
 //!
 //! The session-row primary key is an opaque persistence surrogate the core
-//! deliberately does not model (see [`session_write`]); the adapter allocates it
+//! deliberately does not model (see `session_write`); the adapter allocates it
 //! here, mirroring the product's `randomBytes(12).toString('base64url')` — twelve
 //! entropy bytes rendered base64url without padding (exactly sixteen characters).
 //! The store therefore owns an [`EntropySource`], injected so tests are

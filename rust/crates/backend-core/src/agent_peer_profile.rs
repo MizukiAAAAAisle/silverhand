@@ -171,7 +171,7 @@ pub enum PeerProfileOutcome {
     HorizonForbidden,
     /// The caller can reach the workspace but lacks the `read_messages` capability —
     /// a `403` carrying the distinct `capability_denied` body. It is deliberately a
-    /// DIFFERENT response than [`HorizonForbidden`]: a caller who reaches this gate
+    /// DIFFERENT response than `HorizonForbidden`: a caller who reaches this gate
     /// has already earned the right to know the workspace is within its horizon.
     CapabilityDenied,
     /// The collapsed target `404` (unknown handle or non-member).

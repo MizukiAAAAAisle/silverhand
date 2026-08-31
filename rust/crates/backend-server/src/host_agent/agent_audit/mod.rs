@@ -14,7 +14,7 @@
 //! anti-enum floor read ([`AgentAuditReadModel::read_audit_subject`]) BEFORE any
 //! query is parsed: an absent row and a caller outside the visibility ACL both
 //! collapse to one `404 {"error":"agent not found"}` ([`owner_floor`] via
-//! [`can_view_agent`]), and a viewer who is not the creator is refused `403` before
+//! `can_view_agent`), and a viewer who is not the creator is refused `403` before
 //! the expensive data read runs. Stage B reads the gate facts TOGETHER WITH the data
 //! on ONE deferred snapshot and RE-RUNS the gate on those freshly-read facts, so
 //! there is no window for the facts to change between the decision and the read — no

@@ -5,7 +5,7 @@
 //!
 //! Three faces, one shape. Each is read on ONE deferred snapshot as a source-bound
 //! bundle that carries BOTH the facts its gate is decided against ([`AuditSubjectFacts`],
-//! and for the two per-conversation faces an [`AuditedConversation`]) AND the data it
+//! and for the two per-conversation faces an `AuditedConversation`) AND the data it
 //! projects. The route re-runs the `capability::agent_audit` gate on the bundle's own
 //! freshly-read facts before it projects or reads a blob, so there is no window between
 //! the gate and the read for the facts to change under — no TOCTOU, and no ACL/data

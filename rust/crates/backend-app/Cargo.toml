@@ -25,6 +25,8 @@ tracing-subscriber.workspace = true
 
 [build-dependencies]
 serde_json.workspace = true
+syn.workspace = true
+proc-macro2 = { version = "1", features = ["span-locations"] }
 
 [dev-dependencies]
 serde_json.workspace = true

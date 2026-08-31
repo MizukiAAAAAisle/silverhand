@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![deny(rustdoc::broken_intra_doc_links)]
 //! HTTP, WebSocket and wire projection boundary.
 
 pub mod access;
