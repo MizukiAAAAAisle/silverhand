@@ -73,10 +73,16 @@ use silverhand_backend_server::{
     messaging::{
         TargetAddressRefusalLog,
         collaboration::{
-            activity, attention_projection, channel_directory, channel_lifecycle,
+            activity,
+            attachment::{
+                self, HostAttachmentEnvironment, agent_attachment_download_router,
+                agent_attachment_locate_router, agent_attachment_update_router,
+                agent_attachment_upload_router,
+            },
+            attention_projection, channel_directory, channel_lifecycle,
             conversation_agent_activity, conversation_agent_directory, conversation_agent_runtime,
             conversation_message_window, conversation_ref, conversation_threads,
-            conversation_unread, human_search, message_unread, saved,
+            conversation_unread, human_search, message_unread, notification, reaction, saved,
             stale_message_resolution::{
                 TracingStaleMessageResolutionObserver, router as stale_message_resolution_router,
             },
@@ -664,6 +670,15 @@ where
     )
     .await?;
     let messaging_store = open("messaging", MessagingStore::open(&config.database_path)).await?;
+    // #2262 residual-wave convergence: every notification/reaction/attachment database
+    // capability is projected from this ONE production `MessagingStore` pool before the
+    // send write-door consumes the owner below. These are narrow cloned handles, never a
+    // reopen by path and never a second database authority.
+    let notification_store = messaging_store.notifications();
+    let reaction_store = messaging_store.reactions();
+    let attachment_reads = messaging_store.attachment_reads();
+    let attachment_writes = messaging_store.attachment_writes();
+    let agent_attachments = messaging_store.agent_attachments();
     // The board-list candidate fetch. A SECOND handle on the same product database, not a
     // second authority: `MessagingStore` settles which boards and rows this viewer may see,
     // this store only reads the joined `tasks` candidates that decision narrows.
@@ -939,6 +954,10 @@ where
     let daemon_controller = daemon_runtime.controller();
 
     let target_address = messaging_store.target_address(hub.clone(), TargetAddressRefusalLog);
+    // Internal attachment upload resolves its canonical target through the SAME address
+    // authority the send door uses. `SqliteTargetAddress` is a shared-pool clone and keeps
+    // the same direct-pair-open hub + refusal observer; no parallel resolver is constructed.
+    let agent_attachment_target = target_address.clone();
     // The task board list reads its board/capability/participation authority from the SAME
     // `MessagingStore` the send door holds; captured before `send_routers` consumes it as the
     // send unit-of-work.
@@ -1395,6 +1414,47 @@ where
     // shared placement authority and the one live daemon registry — never a second data
     // plane. It is `Clone` (shares the placement handle + registry accessor).
     let mcp_data_plane = daemon_runtime.agent_profile_mcp_data_plane(agent_mcp_placement);
+    // #2262: assemble the split-perimeter reaction and attachment families before the
+    // shared handles they borrow are moved into their public siblings. Both reaction
+    // routers share the ONE SQLite mutation/read authority and the real `ScopeEventHub`
+    // aftermath. All six public + four internal attachment faces share one read adapter,
+    // one write adapter, one agent adapter, the process's ONE blob root, and the SAME hub
+    // as the cursor-inert `attachment_changed` publisher.
+    let human_reactions =
+        reaction::human_router(reaction_store.clone(), reaction_store.clone(), hub.clone());
+    let agent_reactions =
+        reaction::agent_router(reaction_store.clone(), reaction_store, hub.clone());
+    let human_attachments = attachment::router(
+        attachment_reads,
+        attachment_writes,
+        blob_store.clone(),
+        HostAttachmentEnvironment,
+        hub.clone(),
+    );
+    let agent_attachment_products = agent_attachment_upload_router(
+        agent_attachment_target,
+        agent_attachments.clone(),
+        blob_store.clone(),
+        HostAttachmentEnvironment,
+    )
+    .merge(agent_attachment_update_router(
+        agent_attachments.clone(),
+        blob_store.clone(),
+        hub.clone(),
+    ))
+    .merge(agent_attachment_locate_router(
+        agent_attachments.clone(),
+        blob_store.clone(),
+    ))
+    .merge(agent_attachment_download_router(
+        agent_attachments,
+        blob_store.clone(),
+    ));
+    let notifications = notification::router(
+        notification_store.clone(),
+        notification_store,
+        hub.notification_aftermath(),
+    );
     let internal_agent_products = self_profile_router(agent_profile_read.clone())
         .merge(internal_profile_write_router(InternalProfileWriteState {
             writes: agent_profile_write.clone(),
@@ -1678,6 +1738,13 @@ where
             // the two tiered-attention doors.
             .merge(message_unread::router(message_unread_read))
             .merge(attention_projection::router(attention_projection_read))
+            // #2262: the 3 notification, 3 human reaction, and 6 human attachment faces
+            // all land behind the ONE human-session perimeter. The factories are split
+            // where a route family crosses perimeters, so no internal face can leak into
+            // this router and no public face can inherit runtime credentials.
+            .merge(notifications)
+            .merge(human_reactions)
+            .merge(human_attachments)
             // Host-resources read lane, Wave 3A checkpoint A5 (#2198). Rides its own
             // by-path cold-read pool captured above, kept distinct from the teardown
             // resource authority.
@@ -1763,6 +1830,11 @@ where
             // layer below self-pins `{aid}` so a foreign or missing/invalid bearer is a uniform
             // 401 across every listed method.
             .merge(internal_agent_products)
+            // #2262: the 2 reaction + 4 attachment internal faces are inside the typed
+            // `cli.invoke` middleware and, because runtime auth wraps that middleware
+            // below, record exactly once only after a principal has authenticated.
+            .merge(agent_reactions)
+            .merge(agent_attachment_products)
             // #2250: the CLI preflight-trace door (POST `/internal/agents/{aid}/cli-trace`),
             // behind the SAME runtime-credential perimeter, recording each typed preflight
             // failure through the required audit sink exactly once. The route and the
@@ -2896,12 +2968,13 @@ mod tests {
         );
     }
 
-    /// #2261 production wiring falsifier: the real prepared router, the same runtime
+    /// #2261/#2262 production wiring falsifier: the real prepared router, the same runtime
     /// credential authority held by its perimeter, the real invoke middleware/facade, and
     /// the composition-owned writer form one chain. The anonymous call is zero-record;
-    /// the admitted call produces exactly one flat `cli.invoke` line after shutdown drain.
+    /// each of the six newly mounted reaction/attachment faces produces exactly one typed
+    /// `cli.invoke`; and the sibling cli-trace face produces only its preflight record.
     #[tokio::test]
-    async fn prepare_records_one_authenticated_cli_invoke_and_zero_pre_auth_lines() {
+    async fn prepared_residual_faces_share_one_drained_cli_audit_owner() {
         use std::{
             convert::Infallible,
             future::Future,
@@ -2970,11 +3043,40 @@ mod tests {
             .await
             .unwrap();
         let bearer = format!("Bearer {}", transport.0.lock().unwrap().clone().unwrap());
-        let path = "/internal/agents/agent-cli-audit/profile";
-
-        let (status, body) = request(&app.router, "GET", path, None).await;
+        let reaction_path = "/internal/agents/agent-cli-audit/react-message";
+        let (status, body) = request(&app.router, "POST", reaction_path, None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
-        let (status, body) = request(&app.router, "GET", path, Some(&bearer)).await;
+
+        let faces = [
+            ("POST", reaction_path),
+            ("DELETE", reaction_path),
+            ("POST", "/internal/agents/agent-cli-audit/attachments"),
+            (
+                "PATCH",
+                "/internal/agents/agent-cli-audit/attachments/attachment-missing",
+            ),
+            (
+                "GET",
+                "/internal/agents/agent-cli-audit/attachments/attachment-missing/locate",
+            ),
+            (
+                "GET",
+                "/internal/agents/agent-cli-audit/attachments/attachment-missing/download",
+            ),
+        ];
+        for (method, path) in faces {
+            let (status, body) = request(&app.router, method, path, Some(&bearer)).await;
+            assert_ne!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
+        }
+
+        let (status, body) = json_request_with_body(
+            &app.router,
+            "POST",
+            "/internal/agents/agent-cli-audit/cli-trace",
+            Some(&bearer),
+            Body::from("{}"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{body}");
 
         app.close_connections().await;
@@ -2997,22 +3099,45 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
+        assert_eq!(lines.len(), 7, "six invokes plus the one cli-trace fact");
+        let invokes: Vec<_> = lines
+            .iter()
+            .filter(|line| line["category"] == "cli.invoke")
+            .collect();
+        assert_eq!(invokes.len(), 6, "one invoke per admitted residual face");
+        let actual: Vec<_> = invokes
+            .iter()
+            .map(|line| {
+                assert_eq!(line["agentId"], "agent-cli-audit");
+                assert!(line["request_id"].as_str().is_some());
+                assert!(line["duration_ms"].is_number());
+                (
+                    line["noun"].as_str().unwrap(),
+                    line["verb"].as_str().unwrap(),
+                    line["method"].as_str().unwrap(),
+                    line["route_suffix"].as_str().unwrap(),
+                )
+            })
+            .collect();
         assert_eq!(
-            lines.len(),
-            1,
-            "anonymous auth refusal is zero-record and the admitted request is exact-one"
+            actual,
+            [
+                ("message", "react", "POST", "react-message"),
+                ("message", "react", "DELETE", "react-message"),
+                ("file", "upload", "POST", "attachments"),
+                ("file", "update", "PATCH", "attachments/*"),
+                ("file", "view", "GET", "attachments/*/locate"),
+                ("file", "view", "GET", "attachments/*/download"),
+            ]
         );
-        let line = &lines[0];
-        assert_eq!(line["category"], "cli.invoke");
-        assert_eq!(line["agentId"], "agent-cli-audit");
-        assert_eq!(line["noun"], "profile");
-        assert_eq!(line["verb"], "get");
-        assert_eq!(line["method"], "GET");
-        assert_eq!(line["route_suffix"], "profile");
-        assert_eq!(line["http_status"], 200);
-        assert_eq!(line["status"], "success");
-        assert!(line["request_id"].as_str().is_some());
-        assert!(line["duration_ms"].is_number());
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line["category"] == "cli.preflight_failure")
+                .count(),
+            1,
+            "cli-trace is excluded from cli.invoke and shares the one file owner"
+        );
     }
 
     /// #2255/#2257 convergence falsifier — the embedded-bootstrap ENABLE arm. Under the
@@ -3394,6 +3519,34 @@ mod tests {
         assert!(
             matches!(error, StartupError::AuditLogDirectoryRequired),
             "the mount precondition surfaces as the typed startup error: {error:?}"
+        );
+    }
+
+    /// #2262: blob storage is a required production authority. If its configured root
+    /// cannot be opened, composition fails before returning any router and therefore
+    /// before any of the ten attachment faces can be exposed.
+    #[tokio::test]
+    async fn prepare_fails_closed_before_routes_when_blob_root_cannot_open() {
+        let fixture = fixture(true).await;
+        let log_dir = tempfile::tempdir().unwrap();
+        let blob_file = fixture.path.parent().unwrap().join("not-a-blob-directory");
+        tokio::fs::write(&blob_file, b"occupied").await.unwrap();
+        let mut config =
+            config_with_log_dir(fixture.path.clone(), Some(log_dir.path().to_path_buf()));
+        config.blobs_root = blob_file;
+
+        let Err(error) = prepare(&config).await else {
+            panic!("an unusable blob root must fail prepare() before route exposure");
+        };
+        assert!(
+            matches!(
+                error,
+                StartupError::Adapter {
+                    name: "blob store",
+                    ..
+                }
+            ),
+            "the required authority surfaces as the typed adapter error: {error:?}"
         );
     }
 
@@ -4983,9 +5136,10 @@ mod tests {
         // send/tasks/stale), the #2234 CP7a self-scope profile family (`/profile` GET+POST,
         // `/avatar` POST+DELETE, `/peer-profile` GET), the #2234 CP7b profile-MCP family
         // (`/profile/mcp` GET+POST + `/profile/mcp/probe` POST), and the #2250/#2257
-        // cli-trace door. All twelve ride the ONE `require_runtime_credential` layer, so anon
+        // cli-trace door, and #2262's six reaction/attachment doors. All eighteen ride the
+        // ONE `require_runtime_credential` layer, so anon
         // on any listed method is the same bodiless 401.
-        assert_eq!(CLI_INVOKE_PRODUCTION_PERIMETER.len(), 12);
+        assert_eq!(CLI_INVOKE_PRODUCTION_PERIMETER.len(), 18);
         for (method, path_template) in CLI_INVOKE_PRODUCTION_PERIMETER {
             let path = path_template.replace("{aid}", "agent-1");
             let method = (*method).as_str();
@@ -5329,6 +5483,17 @@ mod tests {
         address: std::net::SocketAddr,
     ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>
     {
+        subscribe_event_scope(address, "viewer:self", 0).await
+    }
+
+    /// Open a real authenticated event socket and subscribe to one named scope. The
+    /// expected high-water makes callers explicit about any pre-existing frame history.
+    async fn subscribe_event_scope(
+        address: std::net::SocketAddr,
+        scope: &str,
+        expected_seq: i64,
+    ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>
+    {
         let mut request = format!("ws://{address}{EVENT_WEBSOCKET_PATH}")
             .into_client_request()
             .unwrap();
@@ -5348,7 +5513,7 @@ mod tests {
         assert_eq!(next_socket_json(&mut socket).await["type"], "authenticated");
         socket
             .send(ClientMessage::Text(
-                serde_json::json!({ "type": "subscribe", "scope": "viewer:self" })
+                serde_json::json!({ "type": "subscribe", "scope": scope })
                     .to_string()
                     .into(),
             ))
@@ -5356,23 +5521,274 @@ mod tests {
             .unwrap();
         let subscribed = next_socket_json(&mut socket).await;
         assert_eq!(subscribed["type"], "subscribed", "{subscribed}");
-        assert_eq!(subscribed["seq"], 0, "fresh viewer scope baseline");
+        assert_eq!(subscribed["seq"], expected_seq, "scope baseline: {scope}");
         socket
     }
 
-    /// Gate 2 of the CP2 convergence closure — the #2195 host-agent control-plane lane
-    /// as a bidirectionally CLOSED universe of 54, every entry itemized `(method, path)`
+    /// #2262: notification clear runs through the prepared production SQLite store and
+    /// the SAME hub the mounted event transport serves. The aftermath emits one thin
+    /// viewer-private refetch signal — no absolute badge frame and no message-scope frame.
+    #[tokio::test]
+    async fn mounted_notification_clear_emits_one_thin_refetch_on_the_real_hub() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_workspace_conversation(&fixture.path).await;
+        seed_message(&fixture.path, "message-notification").await;
+        let pool = SqlitePoolOptions::new()
+            .connect(fixture.path.to_str().unwrap())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO notifications(id,kind,user_id,workspace_id,conversation_id,message_id,payload,created_at) \
+             VALUES('notification-1','mention_self','user-1',?,?,?,'{}',10)",
+        )
+        .bind(WORKSPACE_ID)
+        .bind(CONVERSATION_ID)
+        .bind("message-notification")
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+        let bearer = format!("Bearer {TOKEN}");
+        let mut socket = subscribe_own_viewer(address).await;
+        let app_before = fresh_scope_high_water(address, "app").await;
+
+        let response = http_over_tcp(
+            address,
+            "POST",
+            "/api/notifications/read",
+            Some(&bearer),
+            r#"{"all":true}"#,
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert_eq!(http_json_body(&response), serde_json::json!({"marked": 1}));
+
+        let frame = next_socket_json(&mut socket).await;
+        assert_eq!(frame["scope"], "viewer:user-1");
+        assert_eq!(frame["seq"], 1);
+        assert_eq!(frame["kind"], "unread_updated");
+        assert_eq!(frame["payload"], serde_json::json!({"marked": 1}));
+        assert_eq!(fresh_scope_high_water(address, "viewer:self").await, 1);
+        assert_eq!(
+            fresh_scope_high_water(address, &format!("conversation:{CONVERSATION_ID}")).await,
+            0,
+            "notification clear must not impersonate a message-stream update"
+        );
+        assert_eq!(
+            fresh_scope_high_water(address, "app").await,
+            app_before,
+            "notification clear must not publish an absolute app badge frame"
+        );
+
+        socket.close(None).await.unwrap();
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+    }
+
+    /// #2262: a mounted human reaction mutation commits through the production SQLite
+    /// reaction authority and publishes exactly one canonical message-stream delta on the
+    /// SAME hub. It must not leak onto the cursor-inert attachment side channel or any
+    /// viewer/app scope.
+    #[tokio::test]
+    async fn mounted_reaction_mutation_emits_one_canonical_delta_on_the_real_hub() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_workspace_conversation(&fixture.path).await;
+        seed_message(&fixture.path, "message-reaction").await;
+
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+        let bearer = format!("Bearer {TOKEN}");
+        let message_scope = format!("conversation:{CONVERSATION_ID}");
+        let mut socket = subscribe_event_scope(address, &message_scope, 0).await;
+        let app_before = fresh_scope_high_water(address, "app").await;
+
+        let response = http_over_tcp(
+            address,
+            "POST",
+            "/api/messages/message-reaction/reactions",
+            Some(&bearer),
+            r#"{"emoji":"👍"}"#,
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+        assert_eq!(
+            http_json_body(&response),
+            serde_json::json!({"changed": true, "emoji": "👍", "count": 1})
+        );
+
+        let frame = next_socket_json(&mut socket).await;
+        assert_eq!(frame["scope"], message_scope);
+        assert_eq!(frame["seq"], 1);
+        assert_eq!(frame["kind"], "message_reaction_changed");
+        assert_eq!(
+            frame["payload"],
+            serde_json::json!({
+                "message_id": "message-reaction",
+                "conversation_id": CONVERSATION_ID,
+                "thread_root_id": null,
+                "emoji": "👍",
+                "op": "add",
+                "reactor_kind": "user",
+                "reactor_id": "user-1",
+                "count": 1,
+            })
+        );
+        assert_eq!(
+            fresh_scope_high_water(address, &format!("conversation-side:{CONVERSATION_ID}")).await,
+            0,
+            "reaction deltas are canonical message events, never side-channel invalidations"
+        );
+        assert_eq!(fresh_scope_high_water(address, "viewer:self").await, 0);
+        assert_eq!(fresh_scope_high_water(address, "app").await, app_before);
+
+        socket.close(None).await.unwrap();
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+    }
+
+    /// #2262: public upload→update→download crosses the prepared production write/read
+    /// adapters and ONE `LocalBlobStore`. The committed update publishes exactly one
+    /// cursor-inert `attachment_changed` frame on the real conversation-side hub and no
+    /// canonical message/viewer/app frame.
+    #[tokio::test]
+    async fn mounted_attachment_update_is_cursor_inert_and_reuses_the_one_blob_root() {
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        seed_workspace_conversation(&fixture.path).await;
+        seed_message(&fixture.path, "message-attachment-anchor").await;
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let running = tokio::spawn(serve(listener, app, async move {
+            let _ = shutdown_rx.await;
+            Ok::<(), std::io::Error>(())
+        }));
+        let bearer = format!("Bearer {TOKEN}");
+        let boundary = "XBOUNDARY2262";
+        let multipart = |bytes: &[u8]| {
+            let mut body = Vec::new();
+            body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+            body.extend_from_slice(
+                b"Content-Disposition: form-data; name=\"file\"; filename=\"note.txt\"\r\n",
+            );
+            body.extend_from_slice(b"Content-Type: text/plain\r\n\r\n");
+            body.extend_from_slice(bytes);
+            body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+            body
+        };
+        let content_type = format!("multipart/form-data; boundary={boundary}");
+
+        let upload = http_over_tcp_typed(
+            address,
+            "POST",
+            &format!("/api/channels/{CONVERSATION_ID}/attachments"),
+            Some(&bearer),
+            &content_type,
+            &multipart(b"before"),
+        )
+        .await;
+        let (upload_head, upload_body) = split_http_response(&upload);
+        assert!(
+            upload_head.starts_with("HTTP/1.1 201 Created\r\n"),
+            "{upload_head}"
+        );
+        let upload_body: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
+        let attachment = upload_body["id"].as_str().unwrap().to_owned();
+
+        let side_scope = format!("conversation-side:{CONVERSATION_ID}");
+        let mut socket = subscribe_event_scope(address, &side_scope, 0).await;
+        let app_before = fresh_scope_high_water(address, "app").await;
+        let update = http_over_tcp_typed(
+            address,
+            "PATCH",
+            &format!("/api/attachments/{attachment}"),
+            Some(&bearer),
+            &content_type,
+            &multipart(b"after"),
+        )
+        .await;
+        let (update_head, update_body) = split_http_response(&update);
+        assert!(
+            update_head.starts_with("HTTP/1.1 200 OK\r\n"),
+            "{update_head}"
+        );
+        let update_body: serde_json::Value = serde_json::from_slice(&update_body).unwrap();
+        assert_eq!(update_body["content_revision"], 2);
+
+        let frame = next_socket_json(&mut socket).await;
+        assert_eq!(frame["scope"], side_scope);
+        assert_eq!(frame["seq"], 1);
+        assert_eq!(frame["kind"], "attachment_changed");
+        assert_eq!(
+            frame["payload"],
+            serde_json::json!({"attachment_id": attachment, "content_revision": 2})
+        );
+        assert_eq!(
+            fresh_scope_high_water(address, &format!("conversation:{CONVERSATION_ID}")).await,
+            0,
+            "attachment bytes never advance the message stream"
+        );
+        assert_eq!(fresh_scope_high_water(address, "viewer:self").await, 0);
+        assert_eq!(fresh_scope_high_water(address, "app").await, app_before);
+
+        let download = http_over_tcp_typed(
+            address,
+            "GET",
+            &format!("/api/attachments/{attachment}"),
+            Some(&bearer),
+            "application/json",
+            b"",
+        )
+        .await;
+        let (download_head, download_body) = split_http_response(&download);
+        assert!(
+            download_head.starts_with("HTTP/1.1 200 OK\r\n"),
+            "{download_head}"
+        );
+        assert_eq!(download_body, b"after");
+
+        socket.close(None).await.unwrap();
+        shutdown_tx.send(()).unwrap();
+        running.await.unwrap().unwrap();
+    }
+
+    /// The composition's migration-tracked route SUBSET as a bidirectionally closed set of
+    /// 72 unique method+path keys, every entry itemized `(method, path)`
     /// in a named table that is mechanically checksummed: the five tables' lengths are
-    /// pinned (`49`/`4`/`1`/`0`/`0`), every `(method, path)` across the union is unique,
+    /// pinned (`67`/`4`/`1`/`0`/`0`), every `(method, path)` across the union is unique,
     /// landed is disjoint from residual and from connect-info-gated, and the union is
-    /// exactly `54`. This is the lane's ORIGINAL owned total (it still counts the three
-    /// dynamic host reads since handed to #2198). Deleting a row, or copying one between
-    /// tables, breaks the checksum — `(49 + 4) + 1 + (0 + 0) == 54` is an assertion,
-    /// not prose.
+    /// exactly `72`. This is NOT the canonical global endpoint inventory: the unchanged TS
+    /// snapshot contains 184 registration rows collapsing to 181 unique method+path keys.
+    /// The accepted #2257 global identity was 103 mounted + 78 residual; #2262 adds exactly
+    /// 18 previously-residual keys, so the global identity is now
+    /// `181 = 121 mounted + 60 residual`. This narrower gate extends #2257's 54-key
+    /// migration-tracked subset by those same 18 notification/reaction/attachment keys.
+    /// Source registration counts are intentionally not used inside this subset: shared
+    /// path nodes contribute one key per method, and a duplicate registrar cannot inflate
+    /// the mounted identity. Deleting a row, or copying one between tables, breaks the
+    /// checksum — `(67 + 4) + 1 + (0 + 0) == 72` is an assertion, not prose.
     ///
-    /// Every one of the 54 routes is FALSIFIABLE — none rests on an
+    /// Every one of this subset's 72 routes is FALSIFIABLE — none rests on an
     /// unfalsifiable anon `401`:
-    /// * The 49 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
+    /// * The 67 PERIMETER-LANDED routes are mounted in `prepare()` behind a session
     ///   perimeter OR the runtime-credential perimeter → anon `401` (both perimeters emit the
     ///   SAME `{"error":"unauthorized"}` bodiless envelope). Includes #2218's authenticated
     ///   `/api/runtimes`, three of
@@ -5399,7 +5815,8 @@ mod tests {
     ///   profile-MCP faces; and the eleven #2257 residual-wave faces: runtime-state, the
     ///   three agent-chat audit faces, the two schedule faces, the two workspace-data-plane
     ///   faces, the public profile-MCP read + probe pair (all human-perimeter), and
-    ///   `POST /internal/agents/{aid}/cli-trace` (runtime-credential).
+    ///   `POST /internal/agents/{aid}/cli-trace` (runtime-credential); plus #2262's exactly
+    ///   18 notification/reaction/attachment faces (12 human + 6 runtime-credential).
     ///   Deleting any one's `.merge(...)` flips it to `404` and reddens this gate
     ///   (delete-landed RED).
     /// * The 4 ANON-LANDED routes are mounted ahead of every perimeter → an anonymous
@@ -5417,22 +5834,25 @@ mod tests {
     ///   cannot witness the mount. Instead an UNLISTED method on the same node answers
     ///   `405` (node present) rather than `404` (no node); deleting its `.merge(...)` flips
     ///   that to `404` and reddens this gate.
-    /// * 0 RESIDUAL routes remain — every residual-wave face is mounted (#2257). The loop
+    /// * 0 RESIDUAL rows remain INSIDE THIS 72-key migration-tracked subset — every face
+    ///   this subset declares is mounted through #2262. The canonical 181-key inventory
+    ///   still has 60 residual routes outside this subset. The loop
     ///   stays as the mount-residual RED tripwire: a row re-added here that is actually
     ///   mounted fails its anon-`404` assertion.
-    /// * 0 METHOD-SHADOW residuals remain: `POST /api/agents` was the last one, mounted by
+    /// * 0 METHOD-SHADOW residual rows remain inside this subset: `POST /api/agents` was
+    ///   its last one, mounted by
     ///   #2234 CP6 as a second method on the GET-list `/api/agents` node (now landed). Its
     ///   authenticated GET-list-vs-POST-create dispatch is borne by the create composition
-    ///   gate, so no method-shadow row remains in this universe.
+    ///   gate, so no method-shadow row remains in this migration-tracked subset.
     ///
-    /// RESIDUAL routes are NEVER implemented in this lane — they are disproved (404 or
-    /// 405), not built. A new registrar mounted into
-    /// `prepare()` at any of these paths MUST move its row from residual to landed here
+    /// SUBSET-RESIDUAL rows are NEVER implemented in this lane — they are disproved (404
+    /// or 405), not built. A new registrar mounted into `prepare()` at any path tracked by
+    /// this subset MUST move its row from residual to landed here
     /// (#2218 moved `/api/runtimes` to perimeter-landed and the three root faces to
     /// anon-landed).
     #[tokio::test]
-    async fn the_host_agent_lane_stays_a_closed_universe_of_fifty_four() {
-        // The 35 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
+    async fn the_migration_tracked_route_subset_stays_closed_at_seventy_two() {
+        // The 67 PERIMETER-LANDED routes, mounted in `prepare()` behind the human
         // perimeter OR the runtime-credential perimeter → anon 401 (both emit the same
         // `{"error":"unauthorized"}` envelope).
         const LANDED: &[(&str, &str)] = &[
@@ -5559,6 +5979,34 @@ mod tests {
             ("GET", "/api/agents/agent-1/profile/mcp"),
             ("POST", "/api/agents/agent-1/profile/mcp/probe"),
             ("POST", "/internal/agents/agent-1/cli-trace"),
+            // #2262 convergence: exactly 18 canonical method+path keys. These are route
+            // KEYS, not source-registration rows: a shared path contributes one row per
+            // method (reaction human 3, attachment public 6), and every key is counted
+            // once even where a factory accumulates methods onto one axum node.
+            ("GET", "/api/notifications"),
+            ("GET", "/api/notifications/unread"),
+            ("POST", "/api/notifications/read"),
+            ("POST", "/api/messages/message-1/reactions"),
+            ("DELETE", "/api/messages/message-1/reactions"),
+            ("GET", "/api/messages/message-1/reactions"),
+            ("POST", "/internal/agents/agent-1/react-message"),
+            ("DELETE", "/internal/agents/agent-1/react-message"),
+            ("POST", "/api/channels/channel-1/attachments"),
+            ("GET", "/api/channels/channel-1/attachments"),
+            ("GET", "/api/channels/channel-1/attachments/senders"),
+            ("GET", "/api/attachments/attachment-1"),
+            ("PATCH", "/api/attachments/attachment-1"),
+            ("DELETE", "/api/attachments/attachment-1"),
+            ("POST", "/internal/agents/agent-1/attachments"),
+            ("PATCH", "/internal/agents/agent-1/attachments/attachment-1"),
+            (
+                "GET",
+                "/internal/agents/agent-1/attachments/attachment-1/locate",
+            ),
+            (
+                "GET",
+                "/internal/agents/agent-1/attachments/attachment-1/download",
+            ),
         ];
         // The 4 ANON-LANDED routes: mounted ahead of every perimeter, so an anonymous
         // probe reaches the handler. #2218's server/info and health answer 200; readyz
@@ -5586,17 +6034,21 @@ mod tests {
         // (no node) — see the dedicated probe after the loops below. Its live-peer
         // loopback/token behavior is owned by #2255 and the ConnectInfo proofs.
         const CONNECT_INFO_GATED: &[(&str, &str)] = &[("POST", "/auth/embedded-bootstrap")];
-        // 0 RESIDUAL routes remain: every residual-wave face is now mounted (#2257). A new
-        // residual row re-added here must answer anon 404, and mounting it must move the
-        // row to LANDED (or CONNECT_INFO_GATED) — this is the mount-residual RED tripwire.
+        // 0 RESIDUAL rows remain INSIDE THIS 72-key migration-tracked subset: every face
+        // the subset declares is mounted through #2262. This is not a global claim: the
+        // unchanged 181-key canonical inventory still has 60 residual routes. A residual
+        // row re-added to this subset must answer anon 404, and mounting it must move the
+        // row to LANDED (or CONNECT_INFO_GATED) — this is the subset mount-residual RED
+        // tripwire.
         const CLEAN_RESIDUAL: &[(&str, &str)] = &[];
-        // 0 METHOD-SHADOW residuals remain: `POST /api/agents` was the last one, mounted by
-        // #2234 CP6 (now a second method on the GET-list `/api/agents` node, landed above).
+        // 0 METHOD-SHADOW residual rows remain inside this subset: `POST /api/agents` was
+        // its last one, mounted by #2234 CP6 (now a second method on the GET-list
+        // `/api/agents` node, landed above).
         const METHOD_SHADOW_RESIDUAL: &[(&str, &str)] = &[];
 
-        // ── Mechanical checksum: (49 + 4) + 1 + (0 + 0) == 54, all unique, landed ∩
-        // residual ∩ connect-info-gated = ∅ ──
-        assert_eq!(LANDED.len(), 49);
+        // ── Mechanical subset checksum: (67 + 4) + 1 + (0 + 0) == 72, all unique,
+        // subset-landed ∩ subset-residual ∩ connect-info-gated = ∅ ──
+        assert_eq!(LANDED.len(), 67);
         assert_eq!(ANON_LANDED.len(), 4);
         assert_eq!(CONNECT_INFO_GATED.len(), 1);
         assert_eq!(CLEAN_RESIDUAL.len(), 0);
@@ -5613,12 +6065,12 @@ mod tests {
             .collect();
         let connect_info_gated: std::collections::HashSet<(&str, &str)> =
             CONNECT_INFO_GATED.iter().copied().collect();
-        assert_eq!(landed.len(), 53, "landed rows are unique");
-        assert_eq!(residual.len(), 0, "residual rows are unique");
+        assert_eq!(landed.len(), 71, "landed rows are unique");
+        assert_eq!(residual.len(), 0, "subset residual rows are unique");
         assert_eq!(connect_info_gated.len(), 1, "connect-info rows are unique");
         assert!(
             landed.is_disjoint(&residual),
-            "landed and residual are disjoint"
+            "subset landed and residual rows are disjoint"
         );
         assert!(
             landed.is_disjoint(&connect_info_gated),
@@ -5626,8 +6078,8 @@ mod tests {
         );
         assert_eq!(
             landed.len() + residual.len() + connect_info_gated.len(),
-            54,
-            "the closed universe is 54"
+            72,
+            "the migration-tracked subset is 72"
         );
 
         let fixture = fixture(true).await;
@@ -5637,7 +6089,7 @@ mod tests {
         let bearer = format!("Bearer {TOKEN}");
         let unauthorized = r#"{"error":"unauthorized"}"#;
 
-        // ── 49 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
+        // ── 67 PERIMETER-LANDED → anon 401 (delete-landed RED) ──
         for (method, path) in LANDED {
             let (status, body) = request(&router, method, path, None).await;
             assert_eq!(
@@ -5666,9 +6118,11 @@ mod tests {
             "anon resolve reaches its own handler, not the perimeter"
         );
 
-        // ── 0 CLEAN RESIDUAL → none remain; every residual-wave face is mounted (#2257).
-        // The loop is kept as the mount-residual RED tripwire: a row re-added to
-        // CLEAN_RESIDUAL that is actually mounted would fail its anon-404 assertion. ──
+        // ── 0 CLEAN RESIDUAL inside the migration-tracked subset; this does not describe
+        // the canonical inventory's 60 residual routes. Every subset residual-wave face is
+        // mounted through #2262. The loop is kept as the subset mount-residual RED tripwire:
+        // a row re-added to CLEAN_RESIDUAL that is actually mounted would fail its anon-404
+        // assertion. ──
         for (method, path) in CLEAN_RESIDUAL {
             let (status, _) = request(&router, method, path, None).await;
             assert_eq!(
@@ -5704,10 +6158,11 @@ mod tests {
             );
         }
 
-        // ── 0 METHOD-SHADOW RESIDUAL → none remain (CP6 mounted the last one, `POST
-        // /api/agents`, as a second method on the GET-list node). The AUTHENTICATED-405
-        // probe stays as the structural gate for any future method-shadow row: a residual
-        // method re-added here must answer 405, and mis-mounting it reddens this. ──
+        // ── 0 METHOD-SHADOW RESIDUAL inside the migration-tracked subset (CP6 mounted its
+        // last one, `POST /api/agents`, as a second method on the GET-list node). The
+        // AUTHENTICATED-405 probe stays as the structural gate for any future subset
+        // method-shadow row: a residual method re-added here must answer 405, and
+        // mis-mounting it reddens this. ──
         for (method, path) in METHOD_SHADOW_RESIDUAL {
             let (status, body) = request(&router, method, path, Some(&bearer)).await;
             assert_eq!(
@@ -5715,6 +6170,265 @@ mod tests {
                 StatusCode::METHOD_NOT_ALLOWED,
                 "method-shadow residual {method} {path} must be method-unmounted (405): {body}"
             );
+        }
+    }
+
+    /// #2262 authenticated method/path discriminator for every newly-mounted key. The
+    /// closed ledger above proves each key is present behind the correct perimeter; this
+    /// companion crosses those perimeters with real human and runtime credentials and
+    /// proves every registered method reaches leaf-owned handler behavior (never axum's
+    /// `405`). Deliberately-absent resource coordinates keep this a composition test: the
+    /// leaves retain the authority/refusal/effect matrices, while exact handler-level
+    /// statuses distinguish each method from an unregistered sibling on the same node.
+    #[tokio::test]
+    async fn the_eighteen_convergence_keys_dispatch_after_real_authentication() {
+        use std::{
+            convert::Infallible,
+            future::Future,
+            sync::{Arc, Mutex},
+        };
+
+        use silverhand_backend_core::{
+            identity::{ConversationId, DaemonInstanceId},
+            runtime_credential::RuntimeScope,
+        };
+        use silverhand_backend_server::runtime_credential::{
+            RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
+        };
+
+        let fixture = fixture(true).await;
+        seed_human(&fixture.path).await;
+        let pool = SqlitePoolOptions::new()
+            .connect(fixture.path.to_str().unwrap())
+            .await
+            .unwrap();
+        for statement in [
+            "INSERT INTO hosts (id, name, kind, created_at, user_id) VALUES \
+             ('h-2262', 'host-2262', 'remote', 1, 'user-1')",
+            "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, \
+             created_by_user_id, materialization_status, session_scope) VALUES \
+             ('agent-2262', 'agent-2262', 'qoder', 'h-2262', 1, 1, 'user-1', 'active', 'agent')",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        pool.close().await;
+
+        let app = prepare(&config(fixture.path.clone())).await.unwrap();
+
+        #[derive(Clone, Default)]
+        struct CapturingStart(Arc<Mutex<Option<String>>>);
+        impl RuntimeStartTransport for CapturingStart {
+            type Error = Infallible;
+
+            fn dispatch(
+                &self,
+                handoff: &RuntimeStartHandoff,
+            ) -> impl Future<Output = Result<(), RuntimeDispatchFailure<Self::Error>>> + Send
+            {
+                *self.0.lock().unwrap() = Some(handoff.daemon_auth_token().to_owned());
+                std::future::ready(Ok(()))
+            }
+        }
+
+        let transport = CapturingStart::default();
+        app.test_runtime_credentials
+            .dispatch_start(
+                RuntimeScope::AgentSlot {
+                    agent: AgentId::parse("agent-2262").unwrap(),
+                },
+                DaemonInstanceId::parse("daemon-2262").unwrap(),
+                ConversationId::parse(CONVERSATION_ID).unwrap(),
+                &transport,
+            )
+            .await
+            .unwrap();
+        let agent_bearer = format!("Bearer {}", transport.0.lock().unwrap().clone().unwrap());
+        let human_bearer = format!("Bearer {TOKEN}");
+        let router = app.router;
+
+        struct Case {
+            method: &'static str,
+            path: &'static str,
+            bearer: &'static str,
+            json: Option<&'static str>,
+            expected: StatusCode,
+        }
+        let cases = [
+            Case {
+                method: "GET",
+                path: "/api/notifications",
+                bearer: "human",
+                json: None,
+                expected: StatusCode::OK,
+            },
+            Case {
+                method: "GET",
+                path: "/api/notifications/unread",
+                bearer: "human",
+                json: None,
+                expected: StatusCode::OK,
+            },
+            Case {
+                method: "POST",
+                path: "/api/notifications/read",
+                bearer: "human",
+                json: Some(r#"{"all":true}"#),
+                expected: StatusCode::OK,
+            },
+            Case {
+                method: "POST",
+                path: "/api/messages/message-absent/reactions",
+                bearer: "human",
+                json: Some(r#"{"emoji":"👍"}"#),
+                expected: StatusCode::NOT_FOUND,
+            },
+            Case {
+                method: "DELETE",
+                path: "/api/messages/message-absent/reactions",
+                bearer: "human",
+                json: Some(r#"{"emoji":"👍"}"#),
+                expected: StatusCode::NOT_FOUND,
+            },
+            Case {
+                method: "GET",
+                path: "/api/messages/message-absent/reactions",
+                bearer: "human",
+                json: None,
+                expected: StatusCode::NOT_FOUND,
+            },
+            Case {
+                method: "POST",
+                path: "/internal/agents/agent-2262/react-message",
+                bearer: "agent",
+                json: Some(r#"{"message_id":"message-absent","emoji":"👍"}"#),
+                expected: StatusCode::NOT_FOUND,
+            },
+            Case {
+                method: "DELETE",
+                path: "/internal/agents/agent-2262/react-message",
+                bearer: "agent",
+                json: Some(r#"{"message_id":"message-absent","emoji":"👍"}"#),
+                expected: StatusCode::NOT_FOUND,
+            },
+            Case {
+                method: "POST",
+                path: "/api/channels/channel-absent/attachments",
+                bearer: "human",
+                json: Some("{}"),
+                expected: StatusCode::NOT_FOUND,
+            },
+            Case {
+                method: "GET",
+                path: "/api/channels/channel-absent/attachments",
+                bearer: "human",
+                json: None,
+                expected: StatusCode::NOT_FOUND,
+            },
+            Case {
+                method: "GET",
+                path: "/api/channels/channel-absent/attachments/senders",
+                bearer: "human",
+                json: None,
+                expected: StatusCode::NOT_FOUND,
+            },
+            Case {
+                method: "GET",
+                path: "/api/attachments/attachment-absent",
+                bearer: "human",
+                json: None,
+                expected: StatusCode::NOT_FOUND,
+            },
+            Case {
+                method: "PATCH",
+                path: "/api/attachments/attachment-absent",
+                bearer: "human",
+                json: Some("{}"),
+                expected: StatusCode::NOT_FOUND,
+            },
+            Case {
+                method: "DELETE",
+                path: "/api/attachments/attachment-absent",
+                bearer: "human",
+                json: None,
+                expected: StatusCode::NOT_FOUND,
+            },
+            Case {
+                method: "POST",
+                path: "/internal/agents/agent-2262/attachments",
+                bearer: "agent",
+                json: Some("{}"),
+                expected: StatusCode::BAD_REQUEST,
+            },
+            Case {
+                method: "PATCH",
+                path: "/internal/agents/agent-2262/attachments/attachment-absent",
+                bearer: "agent",
+                json: Some("{}"),
+                expected: StatusCode::NOT_FOUND,
+            },
+            Case {
+                method: "GET",
+                path: "/internal/agents/agent-2262/attachments/attachment-absent/locate",
+                bearer: "agent",
+                json: None,
+                expected: StatusCode::NOT_FOUND,
+            },
+            Case {
+                method: "GET",
+                path: "/internal/agents/agent-2262/attachments/attachment-absent/download",
+                bearer: "agent",
+                json: None,
+                expected: StatusCode::NOT_FOUND,
+            },
+        ];
+        assert_eq!(cases.len(), 18);
+        for case in cases {
+            let bearer = match case.bearer {
+                "human" => &human_bearer,
+                "agent" => &agent_bearer,
+                _ => unreachable!(),
+            };
+            let (status, body) = match case.json {
+                Some(body) => {
+                    json_request_with_body(
+                        &router,
+                        case.method,
+                        case.path,
+                        Some(bearer),
+                        Body::from(body),
+                    )
+                    .await
+                }
+                None => request(&router, case.method, case.path, Some(bearer)).await,
+            };
+            assert_ne!(
+                status,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "{} {} did not dispatch: {body}",
+                case.method,
+                case.path,
+            );
+            assert_eq!(
+                status, case.expected,
+                "{} {}: {body}",
+                case.method, case.path
+            );
+        }
+
+        // Shared-node negative controls: admitted callers reach method dispatch, and an
+        // unregistered method is exactly 405. A catch-all could otherwise make every
+        // positive probe above look registered.
+        for (path, bearer) in [
+            ("/api/messages/message-absent/reactions", &human_bearer),
+            ("/api/attachments/attachment-absent", &human_bearer),
+            ("/internal/agents/agent-2262/react-message", &agent_bearer),
+            (
+                "/internal/agents/agent-2262/attachments/attachment-absent/locate",
+                &agent_bearer,
+            ),
+        ] {
+            let (status, _) = request(&router, "PUT", path, Some(bearer)).await;
+            assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "PUT {path}");
         }
     }
 

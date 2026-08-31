@@ -63,6 +63,47 @@ where
         reads,
         aftermath,
     }));
+    human_routes(state.clone()).merge(agent_routes(state))
+}
+
+/// The human-session half of the reaction capability. Kept as its own factory so the
+/// composition root cannot accidentally place the internal-agent face behind the human
+/// perimeter merely because both methods share one application state shape.
+pub fn human_router<M, R, A>(mutation: M, reads: R, aftermath: A) -> Router
+where
+    M: ReactionMutationPort + Send + Sync + 'static,
+    R: ReactionReadPort + Send + Sync + 'static,
+    A: ReactionAftermath + Send + Sync + 'static,
+{
+    human_routes(ReactionState(Arc::new(Inner {
+        mutation,
+        reads,
+        aftermath,
+    })))
+}
+
+/// The runtime-credential half of the reaction capability. Its separate factory is the
+/// perimeter boundary; production still passes clones of the same mutation/read/event
+/// authorities used by [`human_router`].
+pub fn agent_router<M, R, A>(mutation: M, reads: R, aftermath: A) -> Router
+where
+    M: ReactionMutationPort + Send + Sync + 'static,
+    R: ReactionReadPort + Send + Sync + 'static,
+    A: ReactionAftermath + Send + Sync + 'static,
+{
+    agent_routes(ReactionState(Arc::new(Inner {
+        mutation,
+        reads,
+        aftermath,
+    })))
+}
+
+fn human_routes<M, R, A>(state: ReactionState<M, R, A>) -> Router
+where
+    M: ReactionMutationPort + Send + Sync + 'static,
+    R: ReactionReadPort + Send + Sync + 'static,
+    A: ReactionAftermath + Send + Sync + 'static,
+{
     Router::new()
         .route(
             HUMAN_PATH,
@@ -70,6 +111,16 @@ where
                 .delete(human_remove::<M, R, A>)
                 .get(human_detail::<M, R, A>),
         )
+        .with_state(state)
+}
+
+fn agent_routes<M, R, A>(state: ReactionState<M, R, A>) -> Router
+where
+    M: ReactionMutationPort + Send + Sync + 'static,
+    R: ReactionReadPort + Send + Sync + 'static,
+    A: ReactionAftermath + Send + Sync + 'static,
+{
+    Router::new()
         .route(
             AGENT_PATH,
             post(agent_add::<M, R, A>).delete(agent_remove::<M, R, A>),

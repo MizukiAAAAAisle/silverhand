@@ -29,12 +29,24 @@ use silverhand_backend_core::{
 
 const CLI_TRACE_PATH: &str = "/internal/agents/{aid}/cli-trace";
 const AVATAR_PATH: &str = "/internal/agents/{aid}/avatar";
+const REACTION_PATH: &str = "/internal/agents/{aid}/react-message";
+const ATTACHMENTS_PATH: &str = "/internal/agents/{aid}/attachments";
+const ATTACHMENT_PATH: &str = "/internal/agents/{aid}/attachments/{attachment_id}";
+const ATTACHMENT_LOCATE_PATH: &str = "/internal/agents/{aid}/attachments/{attachment_id}/locate";
+const ATTACHMENT_DOWNLOAD_PATH: &str =
+    "/internal/agents/{aid}/attachments/{attachment_id}/download";
 
 /// Exact method/path perimeter currently composed under runtime credentials. Some faces
 /// intentionally have no CLI command identity, but they still produce an authenticated
 /// invocation record with the principal preserved.
 pub const CLI_INVOKE_PRODUCTION_PERIMETER: &[(CliInvokeMethod, &str)] = &[
     (CliInvokeMethod::Post, "/internal/agents/{aid}/send-message"),
+    (CliInvokeMethod::Post, REACTION_PATH),
+    (CliInvokeMethod::Delete, REACTION_PATH),
+    (CliInvokeMethod::Post, ATTACHMENTS_PATH),
+    (CliInvokeMethod::Patch, ATTACHMENT_PATH),
+    (CliInvokeMethod::Get, ATTACHMENT_LOCATE_PATH),
+    (CliInvokeMethod::Get, ATTACHMENT_DOWNLOAD_PATH),
     (CliInvokeMethod::Get, "/internal/agents/{aid}/tasks"),
     (
         CliInvokeMethod::Post,
@@ -79,6 +91,54 @@ const ROUTES: &[RouteDescriptor] = &[
         "message",
         "send",
         "send-message",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        REACTION_PATH,
+        "message",
+        "react",
+        "react-message",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Delete,
+        REACTION_PATH,
+        "message",
+        "react",
+        "react-message",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        ATTACHMENTS_PATH,
+        "file",
+        "upload",
+        "attachments",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Patch,
+        ATTACHMENT_PATH,
+        "file",
+        "update",
+        "attachments/*",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Get,
+        ATTACHMENT_LOCATE_PATH,
+        "file",
+        "view",
+        "attachments/*/locate",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Get,
+        ATTACHMENT_DOWNLOAD_PATH,
+        "file",
+        "view",
+        "attachments/*/download",
         &[],
     ),
     route(
@@ -541,7 +601,7 @@ mod tests {
                 left.path
             );
         }
-        assert_eq!(ROUTES.len(), 9);
+        assert_eq!(ROUTES.len(), 15);
         let mut accounted: Vec<_> = ROUTES
             .iter()
             .map(|route| (route.method, route.path))

@@ -46,6 +46,7 @@ use silverhand_backend_core::{
             notification::{
                 CommittedNotificationClear, NotificationAftermath, NotificationClearFailure,
             },
+            reaction::{ReactionAftermath, ReactionChangedFact, ReactionPublicationFailure},
             saved::{SavedAftermath, SavedChangeFact, SavedPublicationFailure},
             thread_follow::{
                 ThreadFollowAftermath, ThreadFollowChangedFact, ThreadFollowPublicationFailure,
@@ -73,6 +74,7 @@ use silverhand_backend_core::{
 use crate::host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers};
 use crate::messaging::aftermath::MessagingAftermath;
 use crate::messaging::collaboration::attachment::changed_event as attachment_changed_payload;
+use crate::messaging::collaboration::reaction::changed_event as reaction_changed_payload;
 use crate::messaging::collaboration::saved::changed_event as saved_changed_payload;
 use crate::messaging::message_wire::{copy_dto, message_event_payload, rename_dto};
 use tokio::{
@@ -406,6 +408,10 @@ enum ProductEvent {
     /// authority ([`crate::messaging::collaboration::saved::changed_event`]); this
     /// transport routes that projection and re-decides nothing.
     SavedChanged(Value),
+    /// A committed reaction delta on the canonical conversation message stream. The
+    /// reaction context owns the complete payload projector; this transport only routes
+    /// that sealed value to the conversation whose committed message changed.
+    MessageReactionChanged(Value),
     /// One attachment's committed bytes changed. Cursor-inert conversation-side
     /// invalidation: the attachment capability's sole projector already sealed the
     /// `{attachment_id, content_revision}` payload, and this transport only routes it
@@ -1343,6 +1349,21 @@ impl AttachmentChangedPublisher for ScopeEventHub {
             EventScope::ConversationSide(fact.conversation().clone()),
             ProductEvent::AttachmentChanged(attachment_changed_payload(fact)),
         )
+    }
+}
+
+/// The reaction context's post-commit event over the real product transport. Unlike
+/// attachment byte changes this is part of the canonical message stream, so it rides
+/// `Conversation` (not `ConversationSide`) and is consumed by the conversation ingestor.
+impl ReactionAftermath for ScopeEventHub {
+    async fn announce(&self, fact: &ReactionChangedFact) -> Result<(), ReactionPublicationFailure> {
+        let payload = serde_json::to_value(reaction_changed_payload(fact))
+            .map_err(ReactionPublicationFailure::from_source)?;
+        self.publish(
+            EventScope::Conversation(fact.conversation().clone()),
+            ProductEvent::MessageReactionChanged(payload),
+        )
+        .map_err(ReactionPublicationFailure::from_source)
     }
 }
 
@@ -3002,6 +3023,10 @@ mod tests {
                 AttachmentContentType, AttachmentContentUpdateCommand,
                 AttachmentContentUpdatedFact, AttachmentCreator, AttachmentFilename,
                 AttachmentRecord, AttachmentWriteAuthority,
+            },
+            collaboration::reaction::{
+                ReactionAftermath, ReactionChange, ReactionChangedFact, ReactionCount,
+                ReactionEmoji, Reactor,
             },
             mention_cc::{CommittedMentionCopy, MentionCopyOutcome},
             post_commit::{
@@ -7268,6 +7293,55 @@ mod tests {
         assert!(matches!(error, ScopeEventHubError::RegistryPoisoned));
     }
 
+    fn committed_reaction_change() -> ReactionChangedFact {
+        ReactionChangedFact::committed(
+            MessageId::parse("message-1").unwrap(),
+            ConversationId::parse("conversation-1").unwrap(),
+            Some(MessageId::parse("thread-1").unwrap()),
+            ReactionEmoji::parse("👍").unwrap(),
+            ReactionChange::Add,
+            Reactor::Human(UserId::parse("user-1").unwrap()),
+            ReactionCount::new(2).unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn reaction_aftermath_is_exactly_one_canonical_conversation_frame() {
+        let hub = ScopeEventHub::test("epoch-1");
+        let fact = committed_reaction_change();
+
+        ReactionAftermath::announce(&hub, &fact).await.unwrap();
+
+        let frames = scope_events(&hub, EventScope::Conversation(fact.conversation().clone()));
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&frames[0]).unwrap(),
+            json!({
+                "kind": "message_reaction_changed",
+                "payload": {
+                    "message_id": "message-1",
+                    "conversation_id": "conversation-1",
+                    "thread_root_id": "thread-1",
+                    "emoji": "👍",
+                    "op": "add",
+                    "reactor_kind": "user",
+                    "reactor_id": "user-1",
+                    "count": 2,
+                },
+            })
+        );
+        assert!(
+            scope_events(
+                &hub,
+                EventScope::ConversationSide(fact.conversation().clone())
+            )
+            .is_empty(),
+            "reaction deltas belong to the canonical message stream, not the side channel"
+        );
+        assert!(scope_events(&hub, EventScope::Viewer(user())).is_empty());
+        assert!(scope_events(&hub, EventScope::App).is_empty());
+    }
+
     /// The closed set of product-event wire `kind`s this transport is allowed to emit.
     /// A `&str` set precisely because `kind` is a string at the wire boundary: nothing but
     /// an explicit enumeration can tell a renamed or newly-added kind from a supported one.
@@ -7291,6 +7365,7 @@ mod tests {
         "attention_badge_updated",
         "viewer_workspaces_changed",
         "saved_changed",
+        "message_reaction_changed",
         "attachment_changed",
     ];
 
@@ -7319,6 +7394,7 @@ mod tests {
             ProductEvent::AttentionBadgeUpdated(_) => "attention_badge_updated",
             ProductEvent::ViewerWorkspacesChanged { .. } => "viewer_workspaces_changed",
             ProductEvent::SavedChanged(_) => "saved_changed",
+            ProductEvent::MessageReactionChanged(_) => "message_reaction_changed",
             ProductEvent::AttachmentChanged(_) => "attachment_changed",
             ProductEvent::Test { .. } => "test",
         }
@@ -7403,6 +7479,16 @@ mod tests {
             // authority cannot be exercised here: `SavedChangeFact` is deliberately
             // un-constructable outside `backend-core` (private `committed`/`fact`).
             ProductEvent::SavedChanged(json!({ "message_id": "m-1", "action": "save" })),
+            ProductEvent::MessageReactionChanged(json!({
+                "message_id": "m-1",
+                "conversation_id": "c-1",
+                "thread_root_id": null,
+                "emoji": "👍",
+                "op": "add",
+                "reactor_kind": "user",
+                "reactor_id": "user-1",
+                "count": 1
+            })),
             ProductEvent::AttachmentChanged(
                 json!({ "attachment_id": "attachment-1", "content_revision": 2 }),
             ),
