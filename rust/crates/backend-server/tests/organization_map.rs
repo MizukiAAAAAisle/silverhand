@@ -266,12 +266,14 @@ fn module_exists_in(base: &Path, module: &str) -> bool {
 /// Where a settled row's module physically resides. Landed iff it sits at its
 /// `physical_target` under the owner namespace; residual iff it still sits at the crate
 /// root. EXACTLY ONE must be true — both present is an un-cleaned coexistence, neither is a
-/// missing module — either fails the gate. The one named exception is an explicitly accepted
-/// **root compatibility facade** (`root_compatibility_facade: true` in the map, e.g. the
-/// #2269 `daemon_delivery` re-export shim): its real home is the physical_target and a thin
-/// re-export file is permitted to remain at the crate root, so at_root + at_target coexist
-/// legitimately and the row is landed at its target. Returns `(is_landed, base_dir, leaf)`,
-/// where `base_dir` is the directory the module sits in and `leaf` its final segment.
+/// missing module — either fails the gate. The named exceptions are the explicitly accepted
+/// **root compatibility facades** (a `migration.compatibility_facade: "crate::module"` full
+/// path in the map — exactly the five #2269 re-export shims: `daemon_delivery`,
+/// `agent_materialize`, `agent_profile_mcp_data_plane`, `runtime_control`,
+/// `scope_runtime_stop`): the real home is the `physical_target` and a thin re-export file is
+/// permitted to remain at the crate root, so at_root + at_target coexist legitimately and the
+/// row is landed at its target. Returns `(is_landed, base_dir, leaf)`, where `base_dir` is the
+/// directory the module sits in and `leaf` its final segment.
 fn resolve_settled_location(
     crate_name: &str,
     crate_src: &Path,
@@ -1512,12 +1514,14 @@ fn root_compatibility_facades_are_named_accepted_residuals_not_second_business_u
 
 #[test]
 fn root_compatibility_facades_are_thin_re_exports() {
-    // The one accepted exception to at_root XOR at_target (#task:2269 daemon_delivery) is a
-    // thin re-export shim kept at the crate root while the real module lives at its
-    // physical_target. Keep that exception honest: a facade's ROOT file must carry only
-    // module docs and `use`/`pub use` re-exports — no production item (fn / struct / enum /
-    // impl / trait / const / static / inline mod). A real second implementation smuggled
-    // back to the root would fail here, so the coexistence allowance cannot hide a fork.
+    // The exactly five accepted exceptions to at_root XOR at_target (#task:2269: the
+    // daemon_delivery / agent_materialize / agent_profile_mcp_data_plane / runtime_control /
+    // scope_runtime_stop re-export shims) are each a thin re-export shim kept at the crate
+    // root while the real module lives at its physical_target. Keep that exception honest: a
+    // facade's ROOT file must carry only module docs and `use`/`pub use` re-exports — no
+    // production item (fn / struct / enum / impl / trait / const / static / inline mod). A
+    // real second implementation smuggled back to the root would fail here, so the
+    // coexistence allowance cannot hide a fork.
     let map = load_map();
     let root = rust_root();
     let mut facades = 0usize;
@@ -1533,7 +1537,7 @@ fn root_compatibility_facades_are_thin_re_exports() {
         let file = crate_src.join(format!("{module}.rs"));
         assert!(
             file.exists(),
-            "{crate_name}::{module}: root_compatibility_facade must be a flat root file"
+            "{crate_name}::{module}: a compatibility_facade must be a flat root file"
         );
         let parsed = syn::parse_file(&read(&file)).expect("a parseable facade file");
         for item in &parsed.items {
