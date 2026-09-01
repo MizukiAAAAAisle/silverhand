@@ -13,7 +13,7 @@ use crate::{
         MessagingStore,
         author::{AuthorEvidence, resolve_authors},
     },
-    unread_read::{
+    viewer_read_model::unread_read::{
         CHANNEL_DEFAULT_MODE, channel_ambient_enters, effective_directed_mention, unread_guards,
     },
 };

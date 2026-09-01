@@ -18,7 +18,7 @@ use sqlx::{
 };
 use thiserror::Error;
 
-use crate::unread_read::{UnreadReadModelError, conversation_unread_counts};
+use crate::viewer_read_model::unread_read::{UnreadReadModelError, conversation_unread_counts};
 
 const DEFERRED_READ_BEGIN: &str = "BEGIN DEFERRED";
 const POOL_CONNECTIONS: u32 = 4;

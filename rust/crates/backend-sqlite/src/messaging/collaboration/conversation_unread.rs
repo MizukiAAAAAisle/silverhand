@@ -14,7 +14,7 @@ use thiserror::Error;
 
 use crate::{
     messaging::MessagingStore,
-    unread_read::{followed_thread_unread, message_unread_guards},
+    viewer_read_model::unread_read::{followed_thread_unread, message_unread_guards},
 };
 
 use super::conversation_participation::{

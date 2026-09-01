@@ -21,7 +21,7 @@ use crate::{
         MessagingStore,
         author::{AuthorEvidence, resolve_authors},
     },
-    unread_read::followed_thread_unread,
+    viewer_read_model::unread_read::followed_thread_unread,
 };
 
 use super::conversation_participation::{

@@ -88,7 +88,7 @@
         },
         {
           "function": "write",
-          "path": "rust/crates/backend-sqlite/src/user_presence_last_seen.rs"
+          "path": "rust/crates/backend-sqlite/src/viewer_read_model/user_presence_last_seen.rs"
         }
       ],
       "audited_ts_writers": [

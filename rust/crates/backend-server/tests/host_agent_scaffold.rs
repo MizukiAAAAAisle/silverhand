@@ -312,8 +312,16 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-sqlite", "user_identity"),
     ("backend-sqlite", "host_agent"),
     ("backend-sqlite", "host_resources_read"),
-    ("backend-sqlite", "user_presence_cold_read"),
-    ("backend-sqlite", "user_presence_last_seen"),
+    // #task:2290 — the `viewer_read_model` relocation namespace: a directory container
+    // declared once at the backend-sqlite crate root (`viewer_read_model/mod.rs`), owning
+    // the relocated presence/unread leaves (`user_presence_cold_read` SQLite read adapter,
+    // `user_presence_last_seen` SQLite write adapter implementing the core `LastSeenSink`
+    // port, and the inherited `unread_read` projection folded in from
+    // `ROOT_MODULES_WE_DID_NOT_ADD`). Their old flat crate-root entries are removed; the
+    // organization map/gate is the authority for each leaf's owner/target inside
+    // the container and this seam entry does NOT descend into it. The namespace closed at
+    // 3/3/0; this single owning-root entry is retained for the CP projection.
+    ("backend-sqlite", "viewer_read_model"),
     ("backend-sqlite", "workspace_detail_read"),
     ("backend-sqlite", "workspace_metadata_write"),
     ("backend-sqlite", "workspace_name_availability"),
@@ -371,7 +379,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
 /// covered by that container's seam entry via the CP projection). #task:2281 relocated the
 /// inherited `runtime_credential` and `runtime_event` vocabulary under the dual-role
 /// `host_runtime` context/namespace on the same terms (flat entries removed here, covered by
-/// the single `host_runtime` owning-root entry).
+/// the single `host_runtime` owning-root entry). #task:2290 relocated the inherited
+/// backend-sqlite `unread_read` projection under the new backend-sqlite `viewer_read_model`
+/// container on the same terms (its flat entry removed here, covered by that container's seam
+/// entry via the CP projection, alongside the two presence leaves folded from the seam ledger).
 ///
 /// CP1-temporary, with G3's accounting: it guards "every lane module is registered
 /// where it is guarded", it is deleted when the seam is extracted into the
@@ -423,7 +434,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-sqlite", "runtime_credential"),
     ("backend-sqlite", "runtime_delivery"),
     ("backend-sqlite", "scope_event"),
-    ("backend-sqlite", "unread_read"),
     ("backend-sqlite", "workspace_cold_read"),
 ];
 
@@ -529,6 +539,11 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // agent-creation / agent-materialization / teardown units. Same terms: one declaration at
     // the crate root, leaf owners live in the organization map/gate.
     ("backend-core", "application_orchestration"),
+    // #task:2290 — the backend-sqlite `viewer_read_model` relocation namespace, likewise a
+    // directory-shaped container (`viewer_read_model/mod.rs`) owning the relocated
+    // unread / presence-cold-read / last-seen leaves. Same terms: one declaration at the
+    // crate root, leaf owners live in the organization map/gate.
+    ("backend-sqlite", "viewer_read_model"),
 ];
 
 /// The modules a composition must name to ACTIVATE this lane: rules that decide, a

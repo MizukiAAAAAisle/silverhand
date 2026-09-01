@@ -1,7 +1,7 @@
 //! SQLite adapter for the durable half of presence: persisting a viewer's
 //! sealed last-seen instant.
 //!
-//! The write counterpart of [`crate::user_presence_cold_read`]. It mirrors the
+//! The write counterpart of [`crate::viewer_read_model::user_presence_cold_read`]. It mirrors the
 //! TypeScript `UserRepo.touchLastSeen` exactly — `UPDATE users SET last_seen_at =
 //! ? WHERE id = ?` — so the two implementations write the same column with the
 //! same single statement. The value is a sealed
@@ -104,7 +104,7 @@ mod tests {
     use sqlx::{Connection, Executor, Row, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
 
     async fn seed(path: &Path, users_sql: &'static str) {
         let options = SqliteConnectOptions::new()

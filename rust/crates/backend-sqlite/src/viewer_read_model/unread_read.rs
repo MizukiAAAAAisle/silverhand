@@ -66,7 +66,7 @@ macro_rules! unread_guards {
         concat!(
             "NOT EXISTS (SELECT 1 FROM conversations arch WHERE arch.id = m.conversation_id AND \
              arch.archived_at IS NOT NULL) AND ",
-            $crate::unread_read::message_unread_guards!()
+            $crate::viewer_read_model::unread_read::message_unread_guards!()
         )
     };
 }
@@ -101,9 +101,9 @@ pub(crate) use followed_thread_branch;
 macro_rules! followed_thread_unread {
     () => {
         concat!(
-            $crate::unread_read::unread_guards!(),
+            $crate::viewer_read_model::unread_read::unread_guards!(),
             " AND (",
-            $crate::unread_read::followed_thread_branch!(),
+            $crate::viewer_read_model::unread_read::followed_thread_branch!(),
             ")"
         )
     };
@@ -114,11 +114,11 @@ pub(crate) use followed_thread_unread;
 macro_rules! rollup_unread {
     () => {
         concat!(
-            $crate::unread_read::unread_guards!(),
+            $crate::viewer_read_model::unread_read::unread_guards!(),
             " AND ((",
-            $crate::unread_read::mainline_branch!(),
+            $crate::viewer_read_model::unread_read::mainline_branch!(),
             ") OR (",
-            $crate::unread_read::followed_thread_branch!(),
+            $crate::viewer_read_model::unread_read::followed_thread_branch!(),
             "))"
         )
     };

@@ -62,9 +62,9 @@ use silverhand_backend_sqlite::{
     direct_pair_read::SqliteDirectPairReadModel,
     messaging::MessagingStore,
     runtime_delivery::SqliteRuntimeDeliveryStore,
-    unread_read::{SqliteUnreadReadModel, UnreadReadModelError},
-    user_presence_cold_read::SqliteUserPresenceColdRead,
-    user_presence_last_seen::SqliteLastSeenSink,
+    viewer_read_model::unread_read::{SqliteUnreadReadModel, UnreadReadModelError},
+    viewer_read_model::user_presence_cold_read::SqliteUserPresenceColdRead,
+    viewer_read_model::user_presence_last_seen::SqliteLastSeenSink,
 };
 use sqlx::{Connection, SqliteConnection};
 use tokio::sync::Barrier;

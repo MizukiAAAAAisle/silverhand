@@ -17,7 +17,7 @@ use silverhand_backend_core::{
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use thiserror::Error;
 
-use crate::{messaging::MessagingStore, unread_read::rollup_unread};
+use crate::{messaging::MessagingStore, viewer_read_model::unread_read::rollup_unread};
 
 use super::conversation_participation::{
     ConversationParticipationStoreError, Placement, decode_conversation, decode_placement,

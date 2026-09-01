@@ -50,7 +50,7 @@ use silverhand_backend_server::{
     host_agent::presence::{PRESENCE_PATH, router},
     host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers},
 };
-use silverhand_backend_sqlite::user_presence_cold_read::SqliteUserPresenceColdRead;
+use silverhand_backend_sqlite::viewer_read_model::user_presence_cold_read::SqliteUserPresenceColdRead;
 use sqlx::{Connection, Executor, SqliteConnection};
 use tempfile::TempDir;
 use tower::ServiceExt;

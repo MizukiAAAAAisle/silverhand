@@ -2,7 +2,7 @@
 
 use crate::{
     messaging::MessagingStore,
-    unread_read::{
+    viewer_read_model::unread_read::{
         CHANNEL_DEFAULT_MODE, UnreadReadModelError, attention_badge_counts, directed_claim_count,
         effective_directed_mention,
     },
