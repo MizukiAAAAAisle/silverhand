@@ -57,9 +57,9 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{UserId, WorkspaceId},
     identity_access::workspace_face::WorkspaceFace,
-    persistence::PersistenceFailure,
 };
 
 /// A workspace's published face together with the identity facts the read

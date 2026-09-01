@@ -17,9 +17,9 @@
 //! must still be refused, proving the bound is the DEADLINE, not the raw stamp range.
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
     identity::AgentId,
-    persistence::PersistenceFailure,
     policy::agent_presence::{self, ActivityInstant},
 };
 use silverhand_backend_sqlite::agent_presence_read::SqliteAgentPresenceColdRead;

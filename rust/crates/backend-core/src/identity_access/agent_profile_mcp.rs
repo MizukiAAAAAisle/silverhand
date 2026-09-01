@@ -22,10 +22,10 @@
 
 use std::future::Future;
 
-use crate::wire_number::JsSafeInteger;
+use crate::foundation::wire_number::JsSafeInteger;
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, HostId},
-    persistence::PersistenceFailure,
 };
 
 /// The persisted routing and deletion fact for one profile-MCP operation.

@@ -1,4 +1,5 @@
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{ConversationId, UserId},
     messaging::{
         MessageId,
@@ -6,7 +7,6 @@ use silverhand_backend_core::{
             CommittedSave, CommittedUnsave, SavedMutationPort, SavedMutationRefusal,
         },
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{QueryBuilder, Row, Sqlite};
 

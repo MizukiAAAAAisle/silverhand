@@ -28,6 +28,7 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, Principal, UserId, WorkspaceId},
     identity_access::access::{
         WorkspaceGovernanceFacts, WorkspaceGovernanceFloor, WorkspaceRole, governance_floor_verdict,
@@ -37,7 +38,6 @@ use silverhand_backend_core::{
         PriorWorkspaceAddress, WorkspaceArchiveWrite, WorkspaceMetadataEdit,
         WorkspaceMetadataWrite, WorkspaceMetadataWriteUnitOfWork,
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,

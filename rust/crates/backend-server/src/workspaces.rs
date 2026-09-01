@@ -205,10 +205,10 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         identity::{UserId, WorkspaceId},
         identity_access::workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
         identity_access::workspace_face::WorkspaceFace,
-        persistence::PersistenceFailure,
         viewer_read_model::viewer_workspace_sort::{
             SortMode, ViewerSortEntry, ViewerSortState, WorkspaceSortScope,
         },

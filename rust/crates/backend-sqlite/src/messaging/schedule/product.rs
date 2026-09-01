@@ -9,11 +9,11 @@
 //! including `target_conversation_id`, which the schema back-fills to `""` — rides
 //! raw, exactly as the TypeScript `rowToDto` echoes it.
 
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::identity::AgentId;
 use silverhand_backend_core::messaging::schedule::{
     ScheduleId, ScheduleStatus, ScheduleView, target_label,
 };
-use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{Row, sqlite::SqliteRow};
 
 use super::{corrupt, decode_spec, driver};

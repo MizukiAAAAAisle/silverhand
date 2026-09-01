@@ -39,9 +39,9 @@
 use std::{error::Error, fmt, future::Future};
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::aftermath::CustodyEffectFailure,
     identity::AgentId,
-    persistence::PersistenceFailure,
     teardown::{
         contract::TeardownFailure,
         facts::StoredBlobRef,
@@ -277,9 +277,9 @@ mod tests {
 
     use super::*;
     use crate::{
+        foundation::persistence::PersistenceFailure,
         identity::HostId,
         identity_access::agent_lifecycle::MaterializationStatus,
-        persistence::PersistenceFailure,
         teardown::{
             contract::TeardownContractViolation,
             eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},

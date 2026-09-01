@@ -558,6 +558,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         identity_access::agent_avatar::{
             AgentAvatarBlobPointer, AgentAvatarBlobRead, AgentAvatarRow, OwnedAgentAvatarBlob,
         },
@@ -569,7 +570,6 @@ mod tests {
         },
         identity_access::agents::runtime::RuntimeKind,
         identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
-        persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
 

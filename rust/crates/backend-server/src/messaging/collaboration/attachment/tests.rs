@@ -14,7 +14,7 @@ use axum::{
 use futures_util::stream;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    blob_store::{
+    foundation::blob_store::{
         BlobAliasId, BlobDeleteOutcome, BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore,
         StorageKind, StoredBlob,
     },

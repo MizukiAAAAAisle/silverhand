@@ -192,12 +192,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         host_runtime::{
             aftermath::CustodyEffectFailure,
             computer::{ComputerRecord, HostKind, ProvisioningSource},
             revoke::{RevokeComputerAttempt, RevokedComputer},
         },
-        persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
 

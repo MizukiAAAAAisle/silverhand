@@ -39,12 +39,12 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, HostId, UserId},
     identity_access::agents::runtime::RuntimeKind,
     identity_access::capability::computer_access::{
         ComputerAccess, ComputerAccessRefused, ComputerOwnershipFacts, can_access_computer,
     },
-    persistence::PersistenceFailure,
 };
 
 /// One agent registered on a computer, in the four fields this face renders.

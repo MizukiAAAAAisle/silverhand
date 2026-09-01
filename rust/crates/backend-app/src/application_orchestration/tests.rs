@@ -561,7 +561,7 @@ fn config_has_no_implicit_database_listener_or_origin_defaults() {
 /// terminal closed state.
 #[tokio::test]
 async fn prepare_builds_a_real_cli_audit_sink_that_persists_the_exact_contract() {
-    use silverhand_backend_core::cli_preflight_audit::{
+    use silverhand_backend_core::foundation::cli_preflight_audit::{
         CliPreflightAuditSink, CliPreflightFailure, NonNegativeFiniteF64,
     };
     use silverhand_backend_filesystem::audit_sink::WriterState;
@@ -1228,7 +1228,7 @@ async fn prepare_fails_closed_before_routes_when_blob_root_cannot_open() {
 /// `agent-audit-<utc>.log`. The shared writer never cross-contaminates records.
 #[tokio::test]
 async fn the_two_audit_sinks_write_disjoint_prefixed_streams() {
-    use silverhand_backend_core::cli_preflight_audit::{
+    use silverhand_backend_core::foundation::cli_preflight_audit::{
         CliPreflightAuditSink, CliPreflightFailure,
     };
     use silverhand_backend_core::identity::UserId;
@@ -9234,10 +9234,10 @@ mod host_resources_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         host_runtime::host_resources_read::{HostResourcesFacts, HostResourcesReadModel},
         identity::HostId,
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
-        persistence::PersistenceFailure,
     };
     use silverhand_backend_server::{
         auth::{PublicJsonUnauthorized, require_human_session},
@@ -9511,8 +9511,8 @@ where
 mod presence_composition {
     use silverhand_backend_core::{
         cold_read::presence::{LastSeenAt, UserPresenceFacts},
+        foundation::persistence::PersistenceFailure,
         identity::UserId,
-        persistence::PersistenceFailure,
         policy::presence_grace::PresenceFact,
         viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
         viewer_read_model::user_presence_last_seen::LastSeenSink,

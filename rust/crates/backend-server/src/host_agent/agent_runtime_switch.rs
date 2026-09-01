@@ -64,6 +64,7 @@ use axum::{
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
+    foundation::name_canonicalization::is_ecmascript_trim_whitespace,
     host_runtime::agent_runtime_switch::{
         RuntimeAvailabilityProbe, RuntimeAvailabilityProbeFault, SwitchAgentRuntimeConfig,
         SwitchAgentRuntimeError, SwitchAgentRuntimeRequest, SwitchAgentSnapshotRead,
@@ -85,7 +86,6 @@ use silverhand_backend_core::{
         agent_view::{VisibleStages, can_view_agent},
     },
     messaging::collaboration::RuntimeControlPort,
-    name_canonicalization::is_ecmascript_trim_whitespace,
 };
 
 use crate::agent_wire::{AgentDto, reproject_committed_agent};
@@ -755,14 +755,14 @@ mod tests {
             _agent: &AgentId,
         ) -> Result<
             Option<AgentDetailFacts>,
-            silverhand_backend_core::persistence::PersistenceFailure,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
         > {
             self.calls.fetch_add(1, SeqCst);
             match &self.outcome {
                 ReadOutcome::Present(facts) => Ok(Some(facts.as_ref().clone())),
                 ReadOutcome::Absent => Ok(None),
                 ReadOutcome::Fails => Err(
-                    silverhand_backend_core::persistence::PersistenceFailure::from_source(
+                    silverhand_backend_core::foundation::persistence::PersistenceFailure::from_source(
                         io::Error::other("boom"),
                     ),
                 ),
@@ -787,7 +787,7 @@ mod tests {
             _agent: &AgentId,
         ) -> Result<
             Option<SwitchAgentSnapshot>,
-            silverhand_backend_core::persistence::PersistenceFailure,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
         > {
             Ok(self.snapshot.clone())
         }
@@ -826,23 +826,28 @@ mod tests {
         async fn list_pending_for_agent(
             &self,
             _agent: &AgentId,
-        ) -> Result<Vec<ConversationId>, silverhand_backend_core::persistence::PersistenceFailure>
-        {
+        ) -> Result<
+            Vec<ConversationId>,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
+        > {
             unreachable!("coordination must not run in these tests")
         }
         async fn list_pending_for_agent_since(
             &self,
             _agent: &AgentId,
             _since_ms: i64,
-        ) -> Result<Vec<ConversationId>, silverhand_backend_core::persistence::PersistenceFailure>
-        {
+        ) -> Result<
+            Vec<ConversationId>,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
+        > {
             unreachable!("coordination must not run in these tests")
         }
         async fn is_agent_participant(
             &self,
             _conversation: &ConversationId,
             _agent: &AgentId,
-        ) -> Result<bool, silverhand_backend_core::persistence::PersistenceFailure> {
+        ) -> Result<bool, silverhand_backend_core::foundation::persistence::PersistenceFailure>
+        {
             unreachable!("coordination must not run in these tests")
         }
     }
@@ -853,15 +858,19 @@ mod tests {
             _agent: &AgentId,
             _target: RuntimeKind,
             _now_ms: i64,
-        ) -> Result<BeginTransitionRecord, silverhand_backend_core::persistence::PersistenceFailure>
-        {
+        ) -> Result<
+            BeginTransitionRecord,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
+        > {
             unreachable!("transition write must not run in these tests")
         }
         async fn abort(
             &self,
             _lock: &RuntimeTransitionLock,
-        ) -> Result<AbortTransition, silverhand_backend_core::persistence::PersistenceFailure>
-        {
+        ) -> Result<
+            AbortTransition,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
+        > {
             unreachable!("transition write must not run in these tests")
         }
         async fn complete(
@@ -871,7 +880,7 @@ mod tests {
             _now_ms: i64,
         ) -> Result<
             CompleteTransitionRecord,
-            silverhand_backend_core::persistence::PersistenceFailure,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
         > {
             unreachable!("transition write must not run in these tests")
         }
@@ -883,7 +892,7 @@ mod tests {
             _lock: &RuntimeTransitionLock,
         ) -> Result<
             RuntimeTransitionSeatSnapshotRecord,
-            silverhand_backend_core::persistence::PersistenceFailure,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
         > {
             unreachable!("seat read must not run in these tests")
         }
@@ -895,7 +904,7 @@ mod tests {
             _lock: &RuntimeTransitionLock,
         ) -> Result<
             RuntimeTransitionInboxReclaimRecord,
-            silverhand_backend_core::persistence::PersistenceFailure,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
         > {
             unreachable!("inbox reclaim must not run in these tests")
         }
@@ -907,7 +916,7 @@ mod tests {
             _scope: RuntimeScope,
         ) -> Result<
             Option<RuntimePrincipal>,
-            silverhand_backend_core::persistence::PersistenceFailure,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
         > {
             unreachable!("custody must not run in these tests")
         }
@@ -917,8 +926,10 @@ mod tests {
         async fn agent_slot_presentation_focus(
             &self,
             _principal: RuntimePrincipal,
-        ) -> Result<Option<ConversationId>, silverhand_backend_core::persistence::PersistenceFailure>
-        {
+        ) -> Result<
+            Option<ConversationId>,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
+        > {
             unreachable!("focus must not run in these tests")
         }
     }

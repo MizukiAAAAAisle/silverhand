@@ -3,9 +3,9 @@
 use std::{error::Error, path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
+    foundation::scope_event::{AuthorizeEventScope, EventScope},
     identity::{ConversationId, UserId},
-    persistence::PersistenceFailure,
-    scope_event::{AuthorizeEventScope, EventScope},
 };
 use sqlx::{
     Row, SqlitePool,

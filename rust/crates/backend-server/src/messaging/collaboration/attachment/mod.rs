@@ -36,7 +36,9 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
+    foundation::blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
+    foundation::wire_number::JsSafeInteger,
+    foundation::wire_text,
     identity::{AgentId, ConversationId, UserId},
     messaging::{
         AttachmentId, SendClock, SendEntropy,
@@ -55,8 +57,6 @@ use silverhand_backend_core::{
         },
         environment::EnvironmentUnavailable,
     },
-    wire_number::JsSafeInteger,
-    wire_text,
 };
 use silverhand_backend_filesystem::blob_store::{LocalBlobAliasOutcome, LocalBlobAliasStore};
 
@@ -734,9 +734,9 @@ where
 
     async fn updated(
         &self,
-        before: &silverhand_backend_core::blob_store::StoredBlob,
-        after: &silverhand_backend_core::blob_store::StoredBlob,
-        alias: &silverhand_backend_core::blob_store::BlobAliasId,
+        before: &silverhand_backend_core::foundation::blob_store::StoredBlob,
+        after: &silverhand_backend_core::foundation::blob_store::StoredBlob,
+        alias: &silverhand_backend_core::foundation::blob_store::BlobAliasId,
     ) -> Result<(), Self::Error> {
         match self
             .0
@@ -761,8 +761,8 @@ where
 
     async fn deleted(
         &self,
-        deleted: &silverhand_backend_core::blob_store::StoredBlob,
-        alias: &silverhand_backend_core::blob_store::BlobAliasId,
+        deleted: &silverhand_backend_core::foundation::blob_store::StoredBlob,
+        alias: &silverhand_backend_core::foundation::blob_store::BlobAliasId,
     ) -> Result<(), Self::Error> {
         let physical =
             self.0.delete(deleted).await.map_err(|error| {
@@ -849,7 +849,7 @@ impl Error for BlobMaintenanceError {
 
 async fn cleanup_uncommitted<B: BlobStore>(
     blobs: &B,
-    blob: &silverhand_backend_core::blob_store::StoredBlob,
+    blob: &silverhand_backend_core::foundation::blob_store::StoredBlob,
     cause: &'static str,
 ) {
     if let Err(error) = blobs.delete(blob).await {

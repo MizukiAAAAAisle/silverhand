@@ -201,7 +201,7 @@ async fn resolve_focus<R, C, F>(
     agent: &AgentId,
     viewer: &UserId,
     snapshot_generation: Option<RuntimeGeneration>,
-) -> Result<PresentationFocus, silverhand_backend_core::persistence::PersistenceFailure>
+) -> Result<PresentationFocus, silverhand_backend_core::foundation::persistence::PersistenceFailure>
 where
     R: AgentRuntimeStateReadModel,
     C: RuntimeCustodyReadPort,

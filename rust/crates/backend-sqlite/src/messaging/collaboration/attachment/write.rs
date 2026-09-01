@@ -6,6 +6,8 @@
 
 use serde_json::Value;
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
+    foundation::wire_number::JsSafeInteger,
     identity::{ConversationId, UserId},
     messaging::{
         AttachmentId, PrincipalIdentity,
@@ -23,8 +25,6 @@ use silverhand_backend_core::{
             channel_lifecycle::ChannelLifecyclePlacement,
         },
     },
-    persistence::PersistenceFailure,
-    wire_number::JsSafeInteger,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;
@@ -408,7 +408,7 @@ pub(super) async fn insert_attachment_row(
 pub(super) async fn swap_attachment_content_row(
     tx: &mut Transaction<'_, Sqlite>,
     before: &silverhand_backend_core::messaging::collaboration::attachment::AttachmentRecord,
-    replacement: &silverhand_backend_core::blob_store::StoredBlob,
+    replacement: &silverhand_backend_core::foundation::blob_store::StoredBlob,
     replacement_size: JsSafeInteger,
     next_revision: JsSafeInteger,
 ) -> Result<u64, sqlx::Error> {

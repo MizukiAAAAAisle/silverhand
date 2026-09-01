@@ -21,9 +21,9 @@ use super::{
     read::OwnedComputer,
 };
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{HostId, UserId},
     identity_access::capability::computer_access::ComputerAccessHeld,
-    persistence::PersistenceFailure,
 };
 
 /// The one reason an owner may not revoke a computer that is theirs.

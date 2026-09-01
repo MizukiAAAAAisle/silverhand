@@ -13,7 +13,8 @@
 //! is `attached: false`, which is a fact the reachability rule reads as `Detached`.
 
 use silverhand_backend_core::{
-    cold_read::availability::HostAttachmentFacts, identity::HostId, persistence::PersistenceFailure,
+    cold_read::availability::HostAttachmentFacts, foundation::persistence::PersistenceFailure,
+    identity::HostId,
 };
 
 use crate::daemon_delivery::DaemonDeliveryController;

@@ -19,12 +19,12 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     identity_access::workspace_detail_read::{
         WorkspaceDetailForViewer, WorkspaceDetailReadUnitOfWork,
     },
     identity_access::workspace_face::WorkspaceFace,
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, SqlitePool,

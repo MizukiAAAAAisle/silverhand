@@ -393,6 +393,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         host_runtime::{
             aftermath::CustodyEffectFailure,
             computer::{HostKind, ProvisioningSource},
@@ -402,7 +403,6 @@ mod tests {
         identity_access::capability::computer_access::{
             ComputerAccess, ComputerOwnershipFacts, can_access_computer,
         },
-        persistence::PersistenceFailure,
         teardown::{
             cascade::{
                 CascadeAdmission, ComputerLifecycle, admit_cascade, hold_computer_lifecycle,

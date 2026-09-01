@@ -39,9 +39,9 @@ use super::{
     read::OwnedComputer,
 };
 use crate::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::computer::{ComputerRecord, HostKind},
     identity::HostId,
-    persistence::PersistenceFailure,
 };
 
 /// Why an app-managed rotation is refused.

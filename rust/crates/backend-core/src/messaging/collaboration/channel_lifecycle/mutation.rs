@@ -730,8 +730,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use crate::{
+        foundation::persistence::PersistenceFailure,
         messaging::collaboration::channel_directory::{ChannelStatus, DirectoryRoster},
-        persistence::PersistenceFailure,
     };
 
     use super::*;

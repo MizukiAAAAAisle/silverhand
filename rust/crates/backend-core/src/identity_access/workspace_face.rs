@@ -17,8 +17,8 @@
 use std::future::Future;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    persistence::PersistenceFailure,
 };
 
 /// One workspace on the authenticated viewer's published face.

@@ -571,12 +571,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         host_runtime::{
             computer::{ComputerRecord, HostKind, ProvisioningSource},
             custody::{CredentialSweep, NewLongLivedCredential},
             rotation::{DaemonRotationAck, RotatedTokenDelivery},
         },
-        persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
 

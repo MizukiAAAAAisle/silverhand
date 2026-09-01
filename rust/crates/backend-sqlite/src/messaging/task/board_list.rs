@@ -32,10 +32,10 @@
 //! fallback to an ambient board, and never the invalid `IN ()` — matching the TS arm's
 //! early `return []`.
 
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::messaging::task::{
     TaskCandidateFetch, TaskCandidateQuery, TaskListCandidate,
 };
-use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{QueryBuilder, Sqlite};
 
 use super::row::{
@@ -145,11 +145,11 @@ mod tests {
     use super::super::TaskStoreError;
     use super::*;
     use crate::current_schema;
+    use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use silverhand_backend_core::identity::{AgentId, ConversationId, WorkspaceId};
     use silverhand_backend_core::messaging::task::{
         BoardKey, TaskCandidateFetch, TaskListCandidate, TaskNumber, TaskStatus,
     };
-    use silverhand_backend_core::persistence::PersistenceFailure;
     use sqlx::{Connection, Row};
     use tempfile::TempDir;
 

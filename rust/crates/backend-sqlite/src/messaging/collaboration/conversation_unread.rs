@@ -1,13 +1,13 @@
 //! One-snapshot SQLite projection for `GET /api/conversations/:id/unread`.
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{ConversationId, UserId},
     messaging::collaboration::conversation_unread::{
         ConversationUnread, ConversationUnreadReadPort, ConversationUnreadRefusal, StreamUnread,
         ThreadUnread, UnreadCount,
     },
     messaging::{MessageId, MessageSeq, ThreadRootId},
-    persistence::PersistenceFailure,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;

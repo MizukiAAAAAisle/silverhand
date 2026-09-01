@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId},
     messaging::{
         AttachmentId, FromKind, MessageAuthor, MessageId, MessageSeq, PrincipalIdentity,
@@ -26,7 +27,6 @@ use silverhand_backend_core::{
         },
         task::{TaskId, TaskNumber, TaskStatus, TaskTitle},
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};
 use thiserror::Error;

@@ -9,11 +9,11 @@
 use std::{error::Error, future::Future};
 
 use crate::{
-    blob_store::StoredBlob,
+    foundation::blob_store::StoredBlob,
+    foundation::wire_number::JsSafeInteger,
+    foundation::wire_text,
     identity::{AgentId, ConversationId, UserId},
     messaging::{AttachmentId, MessageAuthor, MessageId, MessageSeq, ThreadRootId},
-    wire_number::JsSafeInteger,
-    wire_text,
 };
 
 const MAX_FILENAME_UTF16: usize = 255;
@@ -780,7 +780,7 @@ pub trait AttachmentDownloadReadPort {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blob_store::{BlobStorageKey, StorageKind};
+    use crate::foundation::blob_store::{BlobStorageKey, StorageKind};
 
     fn record(id: &str, channel: &str) -> AttachmentRecord {
         AttachmentRecord::projected(

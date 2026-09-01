@@ -16,13 +16,13 @@ use axum::{
 };
 use serde_json::Value;
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, UserId},
     identity_access::agent_detail_read::{
         AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
     },
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::agents::runtime::RuntimeKind,
-    persistence::PersistenceFailure,
 };
 use silverhand_backend_server::host_agent::schedule_management::schedule_cancel_router;
 use silverhand_backend_sqlite::messaging::schedule::SqliteScheduleCancel;

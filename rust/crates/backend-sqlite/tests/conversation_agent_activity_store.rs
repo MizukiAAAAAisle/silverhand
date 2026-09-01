@@ -57,7 +57,7 @@ async fn read(
         silverhand_backend_core::messaging::collaboration::conversation_agent_activity::ConversationAgentActivityPage,
         ConversationAgentActivityRefusal,
     >,
-    silverhand_backend_core::persistence::PersistenceFailure,
+    silverhand_backend_core::foundation::persistence::PersistenceFailure,
 >{
     let before = before.map(|value| {
         silverhand_backend_core::messaging::collaboration::conversation_agent_activity::ActivityBefore::Persisted(
@@ -79,7 +79,7 @@ async fn read(
 }
 
 fn storage_source(
-    error: &silverhand_backend_core::persistence::PersistenceFailure,
+    error: &silverhand_backend_core::foundation::persistence::PersistenceFailure,
 ) -> &ConversationAgentActivityStoreError {
     std::error::Error::source(error)
         .and_then(|source| source.downcast_ref())

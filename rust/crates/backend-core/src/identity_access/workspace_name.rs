@@ -14,7 +14,7 @@
 //! NFC, trim, empty, 128 cap, forbidden scan, fold) and only then checks 64.
 //!
 //! [`CanonicalWorkspaceName::parse`] therefore calls the shared
-//! [`crate::name_canonicalization`] primitive first — the ONE table/normalizer/fold
+//! [`crate::foundation::name_canonicalization`] primitive first — the ONE table/normalizer/fold
 //! in the backend, so there is no second Unicode table and no second canonicalizer —
 //! and applies its own 64 cap only to a name that already cleared the envelope. That
 //! ordering is load-bearing: it makes the refusal PRECEDENCE match TS byte-for-byte.
@@ -48,7 +48,7 @@
 
 use thiserror::Error;
 
-use crate::name_canonicalization::{NameCanonicalizationIssue, canonicalize_name};
+use crate::foundation::name_canonicalization::{NameCanonicalizationIssue, canonicalize_name};
 
 /// The maximum code-point length of a regular workspace name, measured on the
 /// NFC + trimmed display form. Narrower than the shared base envelope's cap, and

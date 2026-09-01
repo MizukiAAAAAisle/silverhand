@@ -17,6 +17,7 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::UserId,
     identity_access::avatar::{
         AvatarBlobPointer, AvatarContentType, AvatarPointerWrite, AvatarPointerWriteUnitOfWork,
@@ -27,7 +28,6 @@ use silverhand_backend_core::{
         UserProfileWriteUnitOfWork, UserRecord,
     },
     messaging::AvatarRevision,
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, SqlitePool,

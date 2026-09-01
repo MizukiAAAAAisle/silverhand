@@ -10,11 +10,11 @@
 use std::{error::Error, future::Future};
 
 use crate::{
-    blob_store::{BlobAliasId, StoredBlob},
+    foundation::blob_store::{BlobAliasId, StoredBlob},
+    foundation::wire_number::JsSafeInteger,
     host_runtime::runtime_credential::RuntimePrincipal,
     identity::{AgentId, ConversationId},
     messaging::{AttachmentId, DirectPairAllocation, ResolvedStream},
-    wire_number::JsSafeInteger,
 };
 
 use super::{
@@ -869,7 +869,7 @@ pub struct InvalidAgentAttachmentWriteCommand;
 mod tests {
     use super::*;
     use crate::{
-        blob_store::{BlobStorageKey, StorageKind},
+        foundation::blob_store::{BlobStorageKey, StorageKind},
         host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimeScope},
         identity::DaemonInstanceId,
     };

@@ -58,9 +58,9 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::AgentId,
     identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
-    persistence::PersistenceFailure,
 };
 
 /// The opaque pointer to an AGENT avatar blob (`agents.avatar_storage_key`).

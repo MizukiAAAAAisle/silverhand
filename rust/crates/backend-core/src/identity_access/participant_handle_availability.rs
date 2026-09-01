@@ -38,8 +38,9 @@
 //! does not vary by viewer has no natural reminder it sits behind the perimeter.
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity_access::human_auth_flows::HandleNamespaceRead,
-    identity_access::user_identity::ParticipantHandle, persistence::PersistenceFailure,
+    identity_access::user_identity::ParticipantHandle,
 };
 
 /// The verdict, as ONE value with three arms.

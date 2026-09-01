@@ -127,9 +127,9 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::future::Future;
 
+use crate::foundation::persistence::PersistenceFailure;
 use crate::host_runtime::runtime_credential::RuntimePrincipal;
 use crate::identity::{AgentId, ConversationId, UserId, WorkspaceId};
-use crate::persistence::PersistenceFailure;
 
 use super::aggregate::{BoardKey, TaskAggregate};
 use super::spec::{TaskId, TaskNumber};

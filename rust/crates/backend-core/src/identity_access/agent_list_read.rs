@@ -38,11 +38,11 @@
 use std::future::Future;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::AgentDetailFacts,
     identity_access::capability::agent_view::{ViewRefused, VisibleStages, can_view_agent},
     identity_access::capability::decision::Decision,
-    persistence::PersistenceFailure,
 };
 
 /// Loads every agent one viewer MAY see, as full detail bundles ordered

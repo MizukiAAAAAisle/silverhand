@@ -4,7 +4,7 @@
 //! the closed, privacy-safe fact it may hand to a sink. In particular, validator reports,
 //! request bodies, raw paths, query values, and arbitrary field names have no type here.
 
-use crate::{cli_preflight_audit::NonNegativeFiniteF64, identity::AgentId};
+use crate::{foundation::cli_preflight_audit::NonNegativeFiniteF64, identity::AgentId};
 
 /// The only input coordinate the coarse validation taxonomy currently publishes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -15,10 +15,10 @@
 //!    row's own `updated_at` as the cache-buster and never the storage locator.
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::AgentId,
     identity_access::agent_profile_read::{AgentProfileFact, AgentProfileReadModel},
     messaging::AvatarRevision,
-    persistence::PersistenceFailure,
 };
 use silverhand_backend_sqlite::agent_profile_read::SqliteAgentProfileRead;
 use sqlx::Connection;

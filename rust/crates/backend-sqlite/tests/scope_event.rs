@@ -2,8 +2,8 @@
 mod current_schema;
 
 use silverhand_backend_core::{
+    foundation::scope_event::{AuthorizeEventScope, EventScope},
     identity::{ConversationId, UserId, WorkspaceId},
-    scope_event::{AuthorizeEventScope, EventScope},
 };
 use silverhand_backend_sqlite::scope_event::SqliteEventScopeAuthority;
 use sqlx::Connection;

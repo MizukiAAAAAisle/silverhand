@@ -31,8 +31,8 @@ use axum::{
 use serde_json::Value;
 use silverhand_backend_core::{
     cold_read::availability::HostAttachmentFacts,
+    foundation::persistence::PersistenceFailure,
     identity::{HostId, UserId},
-    persistence::PersistenceFailure,
 };
 use silverhand_backend_server::host_agent::{
     availability::router, host_attachment::HostAttachment,

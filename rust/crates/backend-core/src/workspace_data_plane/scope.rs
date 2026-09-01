@@ -161,7 +161,10 @@ pub trait AgentWorkspaceScopeRead {
         viewer: &UserId,
         agent: &AgentId,
     ) -> impl std::future::Future<
-        Output = Result<AgentWorkspaceScopeFacts, crate::persistence::PersistenceFailure>,
+        Output = Result<
+            AgentWorkspaceScopeFacts,
+            crate::foundation::persistence::PersistenceFailure,
+        >,
     > + Send;
 }
 

@@ -188,7 +188,7 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
 
-    use silverhand_backend_core::persistence::PersistenceFailure;
+    use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use silverhand_backend_core::{
         identity::{AgentId, UserId},
         messaging::{

@@ -6,6 +6,7 @@
 //! whole committed image and only then returns an operation-specific fact.
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     identity_access::access::role_governs_workspace,
     messaging::{
@@ -23,7 +24,6 @@ use silverhand_backend_core::{
         conversation_title::CanonicalConversationTitle,
         environment::EnvironmentUnavailable,
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;

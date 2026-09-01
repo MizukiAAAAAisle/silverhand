@@ -14,7 +14,8 @@ use log_capture::LogBuffer;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
-    blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
+    foundation::blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
+    foundation::persistence::PersistenceFailure,
     host_runtime::aftermath::{CustodyEffectFailure, DaemonConnectionControl},
     host_runtime::runtime_credential::{
         ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeGeneration,
@@ -46,7 +47,6 @@ use silverhand_backend_core::{
         },
         post_commit::{IdleStart, MainDelivery},
     },
-    persistence::PersistenceFailure,
     runtime_delivery::{
         ClaimPendingInbox, DeliveryLeaseOwner, InboxDeliveryId, InboxSettlementDisposition,
         RuntimeDeliveryFailureReason, RuntimeDispatchReadPort, RuntimeDispatchTarget,

@@ -8,8 +8,8 @@ use std::{
 
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::RuntimePrincipal,
-    persistence::PersistenceFailure,
     runtime_delivery::{
         ClaimPendingInbox, ClaimedInboxBatch, DeliveryInstruction, DeliveryLeaseOwner,
         InboxDeliveryId, RuntimeDeliveryFailureReason, RuntimeDispatchTarget,

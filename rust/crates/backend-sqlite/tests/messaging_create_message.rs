@@ -4,6 +4,7 @@
 //! artifact under the system temp root; no live database is opened, and the store
 //! under test provisions nothing.
 
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::identity::{AgentId, ConversationId, UserId};
 use silverhand_backend_core::identity_access::agents::runtime::RuntimeKind;
 use silverhand_backend_core::messaging::ParticipantHandle;
@@ -26,7 +27,6 @@ use silverhand_backend_core::messaging::{
     ThreadListEntry, ThreadRootId, ThreadRootRefusal, attachments::AttachmentRef,
     thread_root_preview,
 };
-use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_sqlite::messaging::{HostEnvironment, MessagingStore};
 use sqlx::{Row, SqliteConnection};
 use std::{

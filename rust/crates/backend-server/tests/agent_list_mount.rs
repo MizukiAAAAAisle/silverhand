@@ -30,11 +30,11 @@ use axum::{
 };
 use serde_json::Value;
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::UserId,
     identity_access::agent_detail_read::AgentDetailFacts,
     identity_access::agent_list_read::AgentListReadModel,
     identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
-    persistence::PersistenceFailure,
 };
 use silverhand_backend_server::{
     auth::{PublicJsonUnauthorized, require_human_session},

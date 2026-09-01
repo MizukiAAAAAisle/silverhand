@@ -139,10 +139,10 @@ impl AddressedPrincipals {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::foundation::persistence::PersistenceFailure;
     use crate::messaging::{
         AgentId, ConversationId, SendActor, SendDestination, SendMessage, SendMessageDraft, UserId,
     };
-    use crate::persistence::PersistenceFailure;
     use std::{
         future::Future,
         task::{Context, Poll, Waker},

@@ -17,9 +17,9 @@
 use std::future::Future;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{ConversationId, UserId, WorkspaceId},
     messaging::identity::{MessageId, ThreadRootId},
-    persistence::PersistenceFailure,
 };
 
 /// Everything the unread publisher needs about one committed send, already decided.

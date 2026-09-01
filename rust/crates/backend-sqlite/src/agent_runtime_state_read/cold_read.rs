@@ -34,6 +34,7 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::agent_runtime_state_read::{
         AgentRuntimeStateFacts, AgentRuntimeStateReadModel, RuntimeParticipationFact,
         RuntimeSeatFact, RuntimeSeatScopeFact,
@@ -43,7 +44,6 @@ use silverhand_backend_core::{
     identity::{AgentId, ConversationId, UserId},
     identity_access::agent_lifecycle::MaterializationStatus,
     messaging::collaboration::conversation_ref::ConversationRosterPolicy,
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, SqlitePool,

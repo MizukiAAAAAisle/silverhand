@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::collaboration::channel_directory::{
         ActiveChannelDirectoryPort, ActiveWorkspaceChannelDirectory, ArchivedChannelRow,
@@ -10,7 +11,6 @@ use silverhand_backend_core::{
         DirectoryWorkspaceKind, GlobalArchivedChannelDirectory, GlobalArchivedChannelDirectoryPort,
         GlobalArchivedDirectoryRefusal, WorkspaceDirectoryRefusal,
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};
 use thiserror::Error;

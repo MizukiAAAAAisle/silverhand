@@ -20,8 +20,8 @@
 use std::future::Future;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, HostId},
-    persistence::PersistenceFailure,
 };
 
 /// Enumerates the agents bound to a computer, for the post-commit availability

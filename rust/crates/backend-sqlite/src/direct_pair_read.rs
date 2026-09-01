@@ -7,10 +7,10 @@ use silverhand_backend_core::{
         DirectPairCounterpart, DirectPairList, DirectPairListItem, DirectPairReadModel,
         DirectPairUnreadCount,
     },
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId},
     identity_access::agents::runtime::RuntimeKind,
     messaging::{AvatarRevision, PrincipalIdentity},
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,

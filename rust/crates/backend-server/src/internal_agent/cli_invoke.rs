@@ -18,12 +18,12 @@ use axum::{
 };
 use futures_util::FutureExt;
 use silverhand_backend_core::{
-    cli_invoke_audit::{
+    foundation::cli_invoke_audit::{
         CliInvoke, CliInvokeAuditSink, CliInvokeErrorCode, CliInvokeErrorKind, CliInvokeIssue,
         CliInvokeIssueCode, CliInvokeIssues, CliInvokeMethod, CliInvokeRoute,
         CliStaleResolutionReason,
     },
-    cli_preflight_audit::NonNegativeFiniteF64,
+    foundation::cli_preflight_audit::NonNegativeFiniteF64,
     host_runtime::runtime_credential::RuntimePrincipal,
 };
 

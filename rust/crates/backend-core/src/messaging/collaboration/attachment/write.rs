@@ -9,10 +9,10 @@
 use std::{error::Error, future::Future};
 
 use crate::{
-    blob_store::{BlobAliasId, StoredBlob},
+    foundation::blob_store::{BlobAliasId, StoredBlob},
+    foundation::wire_number::JsSafeInteger,
     identity::{ConversationId, UserId},
     messaging::AttachmentId,
-    wire_number::JsSafeInteger,
 };
 
 use super::{
@@ -758,7 +758,7 @@ pub trait AttachmentDeleteUnitOfWork {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blob_store::{BlobStorageKey, StorageKind};
+    use crate::foundation::blob_store::{BlobStorageKey, StorageKind};
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
     #[error("maintenance failed")]

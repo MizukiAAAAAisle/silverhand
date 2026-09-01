@@ -11,13 +11,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::identity_access::access::{
     AddAgentMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
     AgentWorkspaceMembership, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentClock,
     EnrollmentKey, add_workspace_agent_member,
 };
-use silverhand_backend_core::persistence::PersistenceFailure;
 
 const JOINED_AT_MS: i64 = 1_700_000_000_000;
 

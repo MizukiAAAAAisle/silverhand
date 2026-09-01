@@ -250,7 +250,7 @@ mod tests {
     };
 
     use silverhand_backend_core::cold_read::presence::LastSeenAt;
-    use silverhand_backend_core::persistence::PersistenceFailure;
+    use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use thiserror::Error;
     use tokio::sync::{
         Semaphore,

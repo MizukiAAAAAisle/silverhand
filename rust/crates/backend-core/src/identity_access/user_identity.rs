@@ -30,7 +30,7 @@ use std::future::Future;
 
 use thiserror::Error;
 
-use crate::{identity::UserId, persistence::PersistenceFailure};
+use crate::{foundation::persistence::PersistenceFailure, identity::UserId};
 
 // ===========================================================================
 // Value objects — the admission vocabulary of a human identity.
@@ -205,13 +205,13 @@ pub struct InvalidDisplayName;
 /// folds, reused from the shared name-canonicalization authority so this context
 /// never mints a second trim.
 fn trim_ecmascript(raw: &str) -> &str {
-    raw.trim_matches(crate::name_canonicalization::is_ecmascript_trim_whitespace)
+    raw.trim_matches(crate::foundation::name_canonicalization::is_ecmascript_trim_whitespace)
 }
 
 /// Whether a character is an ECMAScript trim-whitespace or an ASCII space — the
 /// gap alphabet the display-name deriver collapses.
 fn is_ascii_or_ecmascript_space(character: char) -> bool {
-    crate::name_canonicalization::is_ecmascript_trim_whitespace(character)
+    crate::foundation::name_canonicalization::is_ecmascript_trim_whitespace(character)
 }
 
 /// The display-name forbidden set: C0 controls, DEL + C1 controls, and the two

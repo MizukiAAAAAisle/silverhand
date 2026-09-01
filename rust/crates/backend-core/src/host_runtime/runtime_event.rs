@@ -10,9 +10,9 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{RuntimeEventTime, RuntimePrincipal},
     identity::{AgentId, ConversationId, UserId},
-    persistence::PersistenceFailure,
     runtime_delivery::{DeliveryLeaseOwner, InboxDeliveryId, InboxSettlementDisposition},
 };
 

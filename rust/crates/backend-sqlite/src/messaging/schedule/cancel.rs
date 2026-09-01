@@ -22,12 +22,12 @@
 
 use std::{path::Path, time::Duration};
 
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::identity::{AgentId, WorkspaceId};
 use silverhand_backend_core::messaging::schedule::{
     CancelTarget, CapabilityVerdict, Clock, OwnerBind, ScheduleCancelOutcome,
     ScheduleCancelUnitOfWork, ScheduleId, ScheduleStatus, bind_owner, evaluate_capability,
 };
-use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},

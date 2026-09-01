@@ -12,6 +12,7 @@ use std::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeEventTime, RuntimeFinalStatus, RuntimeGeneration, RuntimePrincipal,
         RuntimeScope,
@@ -20,7 +21,6 @@ use silverhand_backend_core::{
         CommitRuntimeConsumed, DaemonEventDurablePort, RuntimeEventAdmission,
     },
     identity::{AgentId, ConversationId, DaemonInstanceId},
-    persistence::PersistenceFailure,
     runtime_delivery::{
         DeliveryLeaseOwner, InboxDeliveryId, RuntimeDeliveryFailureReason, RuntimeDispatchReadPort,
         RuntimeDispatchTarget, RuntimeInboxCustodyPort,

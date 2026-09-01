@@ -281,7 +281,7 @@ mod tests {
             _decide: D,
         ) -> Result<
             UpdateComputerTransaction,
-            silverhand_backend_core::persistence::PersistenceFailure,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
         >
         where
             D: FnOnce(Option<ComputerRecord>) -> UpdateComputerDecision + Send,
@@ -311,7 +311,7 @@ mod tests {
             decide: D,
         ) -> Result<
             UpdateComputerTransaction,
-            silverhand_backend_core::persistence::PersistenceFailure,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
         >
         where
             D: FnOnce(Option<ComputerRecord>) -> UpdateComputerDecision + Send,

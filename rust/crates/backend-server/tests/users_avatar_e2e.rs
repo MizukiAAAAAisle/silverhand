@@ -28,6 +28,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::environment::OsEntropy,
     identity::UserId,
     identity_access::auth::{
@@ -43,7 +44,6 @@ use silverhand_backend_core::{
         PreparedPasswordCredential, RustCalibration,
     },
     identity_access::user_identity::{UserChangedAnnounceFailure, UserChangedSink},
-    persistence::PersistenceFailure,
 };
 use silverhand_backend_server::{
     human_auth::{self, HumanAuthDeps},

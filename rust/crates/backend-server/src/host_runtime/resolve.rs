@@ -180,12 +180,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         host_runtime::{
             computer::{ComputerRecord, HostKind, ProvisioningSource},
             custody::{CredentialAuthState, CredentialKind},
         },
         identity::UserId,
-        persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
 

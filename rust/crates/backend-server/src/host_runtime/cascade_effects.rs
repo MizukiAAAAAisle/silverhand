@@ -11,7 +11,7 @@ use std::{error::Error, fmt, future::Future, sync::Arc, time::Duration};
 use serde_json::{Value, json};
 
 use silverhand_backend_core::{
-    blob_store::{BlobStorageKey, BlobStore, StorageKind, StoredBlob},
+    foundation::blob_store::{BlobStorageKey, BlobStore, StorageKind, StoredBlob},
     host_runtime::aftermath::CustodyEffectFailure,
     identity::{AgentId, HostId},
     teardown::{
@@ -463,8 +463,8 @@ where
 
 #[derive(Debug)]
 enum BlobForgetError {
-    Storage(silverhand_backend_core::blob_store::UnknownStorageKind),
-    Key(silverhand_backend_core::blob_store::InvalidBlobStorageKey),
+    Storage(silverhand_backend_core::foundation::blob_store::UnknownStorageKind),
+    Key(silverhand_backend_core::foundation::blob_store::InvalidBlobStorageKey),
     Delete(LocalBlobStoreError),
 }
 

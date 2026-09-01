@@ -146,22 +146,22 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // organization map/gate is the authority for each leaf's owner/target inside the container
     // and this seam entry does NOT descend into it. Kept a single entry as further leaves land.
     ("backend-core", "viewer_read_model"),
+    // #task:2284 — the `foundation` relocation namespace: a directory container declared once
+    // at the crate root, owning the relocated shared-vocabulary leaves (blob store, CLI
+    // invoke/preflight audit, name canonicalization, persistence error/port vocabulary, the
+    // scope-event transport port, and the number/text primitives). Their old flat crate-root
+    // entries are removed; the organization map/gate owns each leaf's owner/target inside the
+    // container and this seam entry does NOT descend into it. Kept a single entry as the
+    // remaining `identity` leaf lands in a later wave.
+    ("backend-core", "foundation"),
     // #task:2193 — the workspace metadata/read vertical. Core primitives and ports;
     // their SQLite adapters and server routes are the sibling entries below. Mounted at
     // the app composition root by the #task:2223 integration. This vertical's core leaves
     // relocated under the `identity_access` namespace across #task:2274
     // (`workspace_detail_read`, `workspace_name_availability`) and #task:2276
     // (`workspace_metadata_write`, `workspace_name`); their owner/target lives in the
-    // organization map, not as flat seam entries here. `name_canonicalization` stays flat.
-    ("backend-core", "name_canonicalization"),
-    // Shared binary64-exact integer primitive. #task:2227's runtime-stop codec is
-    // the first migration consumer; domain positivity remains outside this module.
-    ("backend-core", "wire_number"),
-    // #task:2236 — the shared UTF-16 code-unit length primitive the validator anchor
-    // introduces. Pure value vocabulary (astral scalars count as 2 units, matching JS
-    // `String.length`); the garde adapter that delegates to it, and the PATCH presence
-    // algebra, are the server-owned `wire_admission`/`wire_patch` entries below.
-    ("backend-core", "wire_text"),
+    // organization map, not as flat seam entries here. `name_canonicalization`, `wire_number`,
+    // and `wire_text` relocated under the `foundation` namespace per #task:2284.
     // #task:2193 CP2 — the human credentialed-session vertical (signup/login/
     // logout + self profile). Core bounded contexts and their ports; the SQLite
     // adapters and the server route surface are the sibling entries below. Mounted at
@@ -375,23 +375,14 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     // composition) and owes no labeled seam line, so it closes into this non-seam baseline
     // rather than `SEAM_ROOT_MODULES`.
     ("backend-app", "create_aftermath"),
-    ("backend-core", "blob_store"),
-    // #task:2256 CLI preflight-failure audit domain: the typed record + the narrow sink
-    // port `#2250`'s handler depends on. A non-seam production module the host-agent seam
-    // lane did not add — it owes no labeled seam line and is not fenced against
-    // composition, so it closes into this non-seam baseline rather than `SEAM_ROOT_MODULES`.
-    ("backend-core", "cli_preflight_audit"),
-    // #task:2261 authenticated CLI-invocation audit domain: a second narrow record/sink
-    // contract sharing the composition-owned CLI audit file. It is likewise a mounted,
-    // non-seam production module and belongs in this closed baseline.
-    ("backend-core", "cli_invoke_audit"),
+    // #task:2284 — blob_store, cli_preflight_audit, cli_invoke_audit, persistence, and
+    // scope_event relocated under the `foundation` namespace; their flat entries are removed
+    // here and covered by the single `foundation` owning-root seam entry via the CP projection.
     ("backend-core", "direct_pair_read"),
     ("backend-core", "host_runtime"),
     ("backend-core", "identity"),
     ("backend-core", "messaging"),
-    ("backend-core", "persistence"),
     ("backend-core", "runtime_delivery"),
-    ("backend-core", "scope_event"),
     // #task:2256 categorized-file audit sink: the OS adapter that owns the CLI
     // preflight-failure log file and its writer lifecycle, home of the reusable
     // `CategorizedJsonlWriter` primitive. A non-seam production module the host-agent seam
@@ -502,6 +493,10 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // terms as `identity_access`: one declaration at the crate root, leaf owners live in the
     // organization map/gate.
     ("backend-core", "viewer_read_model"),
+    // #task:2284 — the `foundation` relocation namespace, likewise a directory-shaped
+    // container (`foundation/mod.rs`) owning the relocated shared-vocabulary leaves. Same
+    // terms: one declaration at the crate root, leaf owners live in the organization map/gate.
+    ("backend-core", "foundation"),
 ];
 
 /// The modules a composition must name to ACTIVATE this lane: rules that decide, a

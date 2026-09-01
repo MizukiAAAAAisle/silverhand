@@ -10,12 +10,12 @@ use axum::{
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::{
         environment::{Clock, EntropySource},
         invite::{CreateHostInvite, HostInviteError, HostInviteUnitOfWork},
     },
     identity::UserId,
-    persistence::PersistenceFailure,
 };
 
 use crate::error;

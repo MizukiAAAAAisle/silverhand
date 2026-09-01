@@ -185,11 +185,11 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         host_runtime::host_resources_read::{HostAgentResourceFact, HostResourcesFacts},
         identity::AgentId,
         identity_access::agents::runtime::RuntimeKind,
         identity_access::capability::computer_access::ComputerOwnershipFacts,
-        persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
 

@@ -9,8 +9,8 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, DaemonInstanceId},
-    persistence::PersistenceFailure,
 };
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

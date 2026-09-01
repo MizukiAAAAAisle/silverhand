@@ -365,6 +365,7 @@ where
 mod tests {
     use super::*;
     use crate::{
+        foundation::persistence::PersistenceFailure,
         identity_access::agent_avatar::{AgentAvatarBlobRead, OwnedAgentAvatarBlob},
         identity_access::agent_profile_write::{
             AdmittedAgentProfileEdit, AgentChangedAnnounceFailure, AgentRowBefore,
@@ -372,7 +373,6 @@ mod tests {
         },
         identity_access::agents::runtime::RuntimeKind,
         identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType},
-        persistence::PersistenceFailure,
     };
     use std::sync::{
         Arc, Mutex,

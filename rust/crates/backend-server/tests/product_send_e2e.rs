@@ -46,7 +46,7 @@ use axum::{
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use silverhand_backend_core::persistence::PersistenceFailure;
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::{
     host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
     identity::{AgentId, ConversationId, DaemonInstanceId, UserId},

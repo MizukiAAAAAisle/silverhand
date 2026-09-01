@@ -53,7 +53,7 @@ async fn read(
         silverhand_backend_core::messaging::collaboration::conversation_agent_runtime::ConversationAgentRuntimeProjection,
         ConversationAgentRuntimeRefusal,
     >,
-    silverhand_backend_core::persistence::PersistenceFailure,
+    silverhand_backend_core::foundation::persistence::PersistenceFailure,
 >{
     MessagingStore::open(path)
         .await
@@ -67,7 +67,7 @@ async fn read(
 }
 
 fn source(
-    error: &silverhand_backend_core::persistence::PersistenceFailure,
+    error: &silverhand_backend_core::foundation::persistence::PersistenceFailure,
 ) -> &ConversationAgentRuntimeStoreError {
     std::error::Error::source(error)
         .and_then(|source| source.downcast_ref())

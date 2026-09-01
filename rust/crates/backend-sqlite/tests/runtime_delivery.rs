@@ -1,4 +1,5 @@
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeScope,
     },
@@ -10,7 +11,6 @@ use silverhand_backend_core::{
     },
     identity::{AgentId, ConversationId, DaemonInstanceId},
     messaging::{MessageContent, ReferencePositions},
-    persistence::PersistenceFailure,
     policy::agent_presence,
     runtime_delivery::{
         ClaimPendingInbox, DeliveryLeaseOwner, InboxSettlementDisposition,

@@ -30,12 +30,12 @@
 use std::future::Future;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
     host_runtime::scope_runtime_stop::{
         ScopeRuntimeStopPort, ScopeRuntimeStopRefusal, ScopeRuntimeStopTarget,
     },
     identity::{AgentId, HostId},
-    persistence::PersistenceFailure,
     teardown::facts::{AgentRuntimeSessionFacts, is_running_session},
 };
 

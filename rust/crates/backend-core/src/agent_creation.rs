@@ -50,6 +50,8 @@ use crate::{
         ReserveAgentInput, ReserveOutcome, find_idempotent_reservation, home_workspace_id_for,
         provision_and_activate, reopen_failed_materialization, reserve_agent,
     },
+    foundation::name_canonicalization::is_ecmascript_trim_whitespace,
+    foundation::persistence::PersistenceFailure,
     host_runtime::agent_materialize::{
         AgentMaterializePort, AgentMaterializeRefusal, AgentMaterializeTarget,
         AgentMaterializeTemplate,
@@ -73,8 +75,6 @@ use crate::{
         mint_agent_id, mint_conversation_id,
         post_commit::EffectFailure,
     },
-    name_canonicalization::is_ecmascript_trim_whitespace,
-    persistence::PersistenceFailure,
 };
 
 /// The already-admitted create request, in the core's own vocabulary.

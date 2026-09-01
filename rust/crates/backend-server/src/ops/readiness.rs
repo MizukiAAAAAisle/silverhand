@@ -12,7 +12,7 @@
 //!  - `db_writable` is the one thing a probe can ask NOW, and the only reason this
 //!    endpoint cannot be answered from cached state: a process can be fully booted and
 //!    still have lost its database. It comes from a real write probe
-//!    ([`silverhand_backend_core::persistence::WriteProbe`]), and both `db_writable`
+//!    ([`silverhand_backend_core::foundation::persistence::WriteProbe`]), and both `db_writable`
 //!    and the `error` string are derived from that ONE outcome, so they cannot
 //!    disagree.
 //!
@@ -52,7 +52,7 @@ use axum::{
     routing::get,
 };
 use serde::Serialize;
-use silverhand_backend_core::persistence::WriteProbe;
+use silverhand_backend_core::foundation::persistence::WriteProbe;
 
 use crate::{
     clock::ProcessClock,
@@ -296,7 +296,7 @@ mod tests {
         http::Request,
     };
     use serde_json::{Value, json};
-    use silverhand_backend_core::persistence::PersistenceFailure;
+    use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use tower::ServiceExt;
 
     use super::*;

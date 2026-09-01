@@ -1,6 +1,7 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::{
         claim::{
             ClaimLocalComputerUnitOfWork, LocalClaimAttempt, LocalClaimFacts, LocalClaimWrite,
@@ -17,7 +18,6 @@ use silverhand_backend_core::{
         revoke::{RevokeComputerAttempt, RevokeComputerUnitOfWork, RevokedComputer},
     },
     identity::{HostId, UserId},
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,

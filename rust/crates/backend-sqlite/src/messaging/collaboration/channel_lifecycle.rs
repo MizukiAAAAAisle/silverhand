@@ -4,6 +4,7 @@ mod mutation;
 pub use mutation::{ChannelLifecycleMutationStoreError, SqliteChannelLifecycleMutation};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     identity_access::access::WorkspaceRole,
     messaging::{
@@ -17,7 +18,6 @@ use silverhand_backend_core::{
         },
         conversation_title::CanonicalConversationTitle,
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};
 use thiserror::Error;

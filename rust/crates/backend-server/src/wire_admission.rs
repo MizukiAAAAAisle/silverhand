@@ -41,7 +41,7 @@
 //! FRAMEWORK glue, placed by its bounded context (wire admission), while the value
 //! rules it calls stay pure in the domain crate.
 //!
-//! [`within_utf16_max`]: silverhand_backend_core::wire_text::within_utf16_max
+//! [`within_utf16_max`]: silverhand_backend_core::foundation::wire_text::within_utf16_max
 
 use std::error::Error;
 use std::fmt;
@@ -57,7 +57,7 @@ use garde::Validate;
 use serde::de::{DeserializeOwned, MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Deserializer};
 use serde_json::json;
-use silverhand_backend_core::wire_text;
+use silverhand_backend_core::foundation::wire_text;
 
 use crate::{
     internal_agent::cli_invoke::{CliInvokeResponseMeta, attach_response_meta},
@@ -235,7 +235,7 @@ where
 /// primitive — it holds no length logic of its own. `Missing`/`Null` carry no value to
 /// bound and always pass; the arm-to-edit mapping is the route's `TryFrom`, not here.
 ///
-/// [`within_utf16_max`]: silverhand_backend_core::wire_text::within_utf16_max
+/// [`within_utf16_max`]: silverhand_backend_core::foundation::wire_text::within_utf16_max
 pub(crate) fn patch_within_utf16_max(
     max: usize,
 ) -> impl Fn(&PatchField<String>, &()) -> garde::Result {

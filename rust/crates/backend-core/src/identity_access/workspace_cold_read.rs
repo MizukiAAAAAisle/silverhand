@@ -19,9 +19,9 @@
 use std::future::Future;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{UserId, WorkspaceId},
     identity_access::workspace_face::{WorkspaceFace, WorkspaceFaceReadPort},
-    persistence::PersistenceFailure,
     viewer_read_model::viewer_workspace_sort::{ViewerSortState, ViewerWorkspaceSortReadPort},
 };
 

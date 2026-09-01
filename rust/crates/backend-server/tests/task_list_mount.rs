@@ -35,10 +35,10 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::RuntimeScope,
     identity::{AgentId, DaemonInstanceId},
     messaging::task::{TaskCandidateFetch, TaskCandidateQuery, TaskListCandidate},
-    persistence::PersistenceFailure,
 };
 use silverhand_backend_server::{
     clock::ProcessClock,

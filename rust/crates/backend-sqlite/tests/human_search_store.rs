@@ -86,7 +86,7 @@ async fn read(
         silverhand_backend_core::messaging::collaboration::human_search::HumanSearchPage,
         silverhand_backend_core::messaging::collaboration::human_search::HumanSearchRefusal,
     >,
-    silverhand_backend_core::persistence::PersistenceFailure,
+    silverhand_backend_core::foundation::persistence::PersistenceFailure,
 > {
     read_as(path, "viewer", query).await
 }
@@ -100,7 +100,7 @@ async fn read_as(
         silverhand_backend_core::messaging::collaboration::human_search::HumanSearchPage,
         silverhand_backend_core::messaging::collaboration::human_search::HumanSearchRefusal,
     >,
-    silverhand_backend_core::persistence::PersistenceFailure,
+    silverhand_backend_core::foundation::persistence::PersistenceFailure,
 > {
     MessagingStore::open(path)
         .await
@@ -128,7 +128,7 @@ async fn drop_table_triggers(db: &mut sqlx::SqliteConnection, table: &str) {
 }
 
 fn source(
-    error: &silverhand_backend_core::persistence::PersistenceFailure,
+    error: &silverhand_backend_core::foundation::persistence::PersistenceFailure,
 ) -> &HumanSearchStoreError {
     std::error::Error::source(error)
         .and_then(|source| source.downcast_ref())

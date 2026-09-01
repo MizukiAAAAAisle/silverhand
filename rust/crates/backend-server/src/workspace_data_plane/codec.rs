@@ -11,8 +11,8 @@
 use serde_json::{Map, Value, json};
 
 use silverhand_backend_core::{
+    foundation::wire_number::JsSafeInteger,
     identity::{AgentId, WorkspaceId},
-    wire_number::JsSafeInteger,
     workspace_data_plane::{
         WorkspaceFileRead, WorkspaceNodeKind, WorkspaceTree, WorkspaceTreeNode,
     },

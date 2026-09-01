@@ -32,7 +32,7 @@
 //! rebuilt under the wrong kind finds no bytes), never silent data corruption.
 
 use silverhand_backend_core::{
-    blob_store::{
+    foundation::blob_store::{
         BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore, StorageKind, StoredBlob,
     },
     identity::{AgentId, UserId},
@@ -273,7 +273,7 @@ mod tests {
         },
     };
 
-    use silverhand_backend_core::blob_store::{BlobDeleteOutcome, BlobRead};
+    use silverhand_backend_core::foundation::blob_store::{BlobDeleteOutcome, BlobRead};
 
     use super::*;
 

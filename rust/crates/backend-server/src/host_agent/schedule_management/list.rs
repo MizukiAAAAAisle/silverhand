@@ -166,12 +166,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         identity::AgentId,
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agents::runtime::RuntimeKind,
         messaging::schedule::{ScheduleSpec, ScheduleStatus, ScheduleView},
-        persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
 

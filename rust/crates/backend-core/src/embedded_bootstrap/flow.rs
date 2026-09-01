@@ -25,12 +25,12 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::UserId,
     identity_access::auth::{
         IssuedSessionSecret, SessionAudit, SessionIssue, SessionMintError, SessionTokenMint,
     },
     identity_access::user_identity::{UserChangedAnnounce, UserChangedSink, UserRecord},
-    persistence::PersistenceFailure,
 };
 
 // ===========================================================================

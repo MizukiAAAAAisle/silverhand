@@ -15,7 +15,9 @@
 
 use std::future::Future;
 
-use crate::{cold_read::presence::LastSeenAt, identity::UserId, persistence::PersistenceFailure};
+use crate::{
+    cold_read::presence::LastSeenAt, foundation::persistence::PersistenceFailure, identity::UserId,
+};
 
 /// Persists one viewer's sealed last-seen instant. The value is already
 /// range-checked at the single domain entry, so this port takes it verbatim;

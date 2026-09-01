@@ -11,6 +11,7 @@ use silverhand_backend_core::messaging::task::{
     TaskReadCapability,
 };
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
@@ -23,7 +24,6 @@ use silverhand_backend_core::{
             fold_name_key, is_space_separator, name_character_is_forbidden, name_is_nfc,
         },
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqliteConnection};
 use thiserror::Error;

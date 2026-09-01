@@ -177,8 +177,9 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         identity_access::workspace_detail_read::WorkspaceDetailForViewer,
-        identity_access::workspace_face::WorkspaceFace, persistence::PersistenceFailure,
+        identity_access::workspace_face::WorkspaceFace,
     };
     use tower::ServiceExt;
 

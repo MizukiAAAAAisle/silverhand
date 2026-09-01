@@ -24,11 +24,11 @@
 use std::future::Future;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, WorkspaceId},
     identity_access::agent_profile_read::{
         AgentProfileFact, AgentProfileReadModel, ProfileReadFault, bind_to_handle,
     },
-    persistence::PersistenceFailure,
 };
 
 /// Whether an agent is a member of a workspace — the authoritative

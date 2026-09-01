@@ -22,11 +22,11 @@ use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
     embedded_bootstrap::{BootstrapChoice, EmbeddedBootstrapUnitOfWork},
+    foundation::persistence::PersistenceFailure,
     host_runtime::environment::{EntropySource, OsEntropy},
     identity::UserId,
     identity_access::user_identity::UserRecord,
     messaging::AvatarRevision,
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, SqlitePool,

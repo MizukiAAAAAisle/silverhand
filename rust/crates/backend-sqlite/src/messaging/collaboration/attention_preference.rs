@@ -1,5 +1,6 @@
 use crate::messaging::{HostEnvironment, MessagingStore};
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{ConversationId, UserId, WorkspaceId},
     messaging::{
         SendClock,
@@ -10,7 +11,6 @@ use silverhand_backend_core::{
             WorkspaceAttentionWriteRefusal,
         },
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::SqlitePool;
 use thiserror::Error;

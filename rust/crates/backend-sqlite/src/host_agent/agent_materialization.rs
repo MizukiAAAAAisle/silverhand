@@ -25,6 +25,7 @@ use silverhand_backend_core::{
         ReserveRecord, ReservedAgentRow, STALE_MATERIALIZATION_FAILED_CODE,
         agent_home_workspace_description, home_workspace_id_for,
     },
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId},
     identity_access::agents::session_scope::AgentSessionScope,
     messaging::{
@@ -33,7 +34,6 @@ use silverhand_backend_core::{
         PrincipalIdentity,
         agent_onboarding::{ONBOARDING_DM_TITLE, ONBOARDING_DM_TITLE_KEY, OnboardingSystemMessage},
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqliteConnection, sqlite::SqliteRow};
 

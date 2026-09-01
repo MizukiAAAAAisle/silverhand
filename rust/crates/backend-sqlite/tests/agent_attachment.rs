@@ -1,7 +1,8 @@
 use std::{error::Error, time::Duration};
 
 use silverhand_backend_core::{
-    blob_store::{BlobStorageKey, StorageKind, StoredBlob},
+    foundation::blob_store::{BlobStorageKey, StorageKind, StoredBlob},
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
@@ -18,7 +19,6 @@ use silverhand_backend_core::{
             AgentAttachmentUploadAdmissionPort, AttachmentContentType, AttachmentFilename,
         },
     },
-    persistence::PersistenceFailure,
 };
 use silverhand_backend_sqlite::messaging::{
     MessagingStore, collaboration::attachment::AgentAttachmentStoreError,

@@ -4,9 +4,9 @@
 use std::error::Error;
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::UserId,
     identity_access::workspace_cold_read::WorkspaceColdReadUnitOfWork,
-    persistence::PersistenceFailure,
     viewer_read_model::viewer_workspace_sort::{SortMode, WorkspaceSortScope},
 };
 use silverhand_backend_sqlite::workspace_cold_read::{

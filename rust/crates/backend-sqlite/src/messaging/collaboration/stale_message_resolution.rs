@@ -11,12 +11,12 @@
 //! source type to translate.
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId},
     messaging::collaboration::stale_message_resolution::{
         StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
         StaleMessageResolutionAdmissionRefusal,
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::SqlitePool;
 

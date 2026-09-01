@@ -35,7 +35,7 @@
 
 use garde::Validate;
 use serde::Deserialize;
-use silverhand_backend_core::cli_invoke_audit::CliStaleResolutionReason;
+use silverhand_backend_core::foundation::cli_invoke_audit::CliStaleResolutionReason;
 use silverhand_backend_core::messaging::{
     AttachmentId, MessageContent, MessageId,
     attachments::{AttachmentLabel, AttachmentRef},

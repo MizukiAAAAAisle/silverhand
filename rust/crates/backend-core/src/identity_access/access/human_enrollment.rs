@@ -31,8 +31,8 @@ use super::clock::EnrollmentClock;
 use super::role::{WorkspaceRole, role_governs_workspace};
 use crate::identity::Principal;
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{UserId, WorkspaceId},
-    persistence::PersistenceFailure,
 };
 
 /// A person's display identity, resolved for the enrollment response. Read

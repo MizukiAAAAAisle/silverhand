@@ -5,11 +5,11 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{RuntimePrincipal, RuntimeScope},
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
     messaging::{AddressedPrincipals, FromKind, MessageContent, PrincipalKind, ReferencePositions},
-    persistence::PersistenceFailure,
 };
 
 pub const MAX_DELIVERIES_PER_BATCH: usize = 20;

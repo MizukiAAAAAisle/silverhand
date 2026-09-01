@@ -31,6 +31,7 @@
 
 use std::{path::Path, time::Duration};
 
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::identity_access::access::{
     AddHumanMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
@@ -40,7 +41,6 @@ use silverhand_backend_core::identity_access::access::{
     WorkspaceUserMembership, governance_ceiling, human_enrollment_authorized,
 };
 use silverhand_backend_core::identity_access::agent_peer_profile::PeerTargetMembership;
-use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},

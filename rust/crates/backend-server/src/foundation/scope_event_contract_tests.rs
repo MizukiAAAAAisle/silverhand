@@ -16,8 +16,10 @@ use silverhand_backend_core::messaging::collaboration::notification::{
     NotificationClearPort, NotificationClearSelector, clear_notifications,
 };
 use silverhand_backend_core::{
-    blob_store::{BlobStorageKey, StorageKind, StoredBlob},
     direct_pair_read::DirectPairReadModel,
+    foundation::blob_store::{BlobStorageKey, StorageKind, StoredBlob},
+    foundation::persistence::PersistenceFailure,
+    foundation::scope_event::{AuthorizeEventScope, EventScope},
     host_runtime::agent_availability_read::AgentAvailabilityReadModel,
     host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
     host_runtime::{aftermath::AgentAvailabilityAnnouncer, agent_roster::ComputerAgentsReadPort},
@@ -52,9 +54,7 @@ use silverhand_backend_core::{
         },
         unread::{UnreadAudience, UnreadReadModel, ViewerUnread},
     },
-    persistence::PersistenceFailure,
     policy::presence_grace::{GraceWindow, PresenceFact},
-    scope_event::{AuthorizeEventScope, EventScope},
 };
 use silverhand_backend_sqlite::{
     direct_pair_read::SqliteDirectPairReadModel,
@@ -3360,7 +3360,8 @@ impl WorkspaceHumanAudienceReadPort for StubHumanAudience {
     async fn human_member_ids(
         &self,
         _workspace_id: &WorkspaceId,
-    ) -> Result<Vec<UserId>, silverhand_backend_core::persistence::PersistenceFailure> {
+    ) -> Result<Vec<UserId>, silverhand_backend_core::foundation::persistence::PersistenceFailure>
+    {
         Ok(self.0.clone())
     }
 }

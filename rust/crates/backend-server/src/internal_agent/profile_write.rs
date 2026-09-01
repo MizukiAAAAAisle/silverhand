@@ -551,6 +551,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         host_runtime::runtime_credential::{
             RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
         },
@@ -568,7 +569,6 @@ mod tests {
         identity_access::agents::runtime::RuntimeKind,
         identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
         messaging::AvatarRevision,
-        persistence::PersistenceFailure,
     };
     use std::sync::{
         Arc, Mutex,

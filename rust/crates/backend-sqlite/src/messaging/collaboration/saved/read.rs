@@ -1,4 +1,5 @@
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         AttachmentId, FromKind, MessageId, MessageSeq, PrincipalIdentity, ThreadRootId,
@@ -10,7 +11,6 @@ use silverhand_backend_core::{
         },
         task::{TaskId, TaskNumber, TaskStatus, TaskTitle},
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{QueryBuilder, Row, Sqlite, sqlite::SqliteRow};
 

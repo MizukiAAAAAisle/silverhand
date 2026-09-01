@@ -6,6 +6,7 @@
 //! committed projection either all commit or all roll back.
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     identity_access::access::{WorkspaceRole, role_governs_workspace},
     messaging::{
@@ -19,7 +20,6 @@ use silverhand_backend_core::{
         environment::EnvironmentUnavailable,
         mint_conversation_id,
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};
 use thiserror::Error;

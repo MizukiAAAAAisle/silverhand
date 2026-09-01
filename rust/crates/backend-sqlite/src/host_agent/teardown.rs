@@ -12,7 +12,7 @@
 //! why the capture is taken first: the storage keys vanish with the rows.
 
 use silverhand_backend_core::{
-    persistence::PersistenceFailure,
+    foundation::persistence::PersistenceFailure,
     teardown::{
         cascade::CascadeConsent,
         contract::TeardownFailure,

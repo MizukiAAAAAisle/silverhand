@@ -24,6 +24,7 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::UserId,
     identity_access::auth::{
         IssuedSessionSecret, SessionAudit, SessionBearer, SessionIssue, SessionMintError,
@@ -36,7 +37,6 @@ use crate::{
         DisplayName, EmailAddress, ParticipantHandle, UserChangedAnnounce, UserChangedSink,
         UserEmailLookup, UserProfileRead, UserRecord,
     },
-    persistence::PersistenceFailure,
 };
 
 // ===========================================================================

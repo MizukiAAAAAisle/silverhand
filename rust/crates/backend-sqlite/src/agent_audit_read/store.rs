@@ -36,6 +36,7 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, Principal, WorkspaceId},
     identity_access::agent_audit_read::{
         AgentAuditReadModel, AuditAttachmentBundle, AuditChatSummary, AuditChatsBundle,
@@ -52,7 +53,6 @@ use silverhand_backend_core::{
             conversation_ref::ConversationRosterPolicy,
         },
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     QueryBuilder, Row, Sqlite, SqlitePool, Transaction,

@@ -322,6 +322,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         host_runtime::agent_bulk_stop::AgentBulkStopSnapshot,
         host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
         host_runtime::runtime_event::RuntimeObservedStatus,
@@ -330,7 +331,6 @@ mod tests {
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agents::runtime::RuntimeKind,
-        persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
 

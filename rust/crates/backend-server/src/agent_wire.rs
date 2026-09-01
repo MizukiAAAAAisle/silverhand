@@ -28,10 +28,10 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::name_canonicalization::is_ecmascript_trim_whitespace,
+    foundation::persistence::PersistenceFailure,
     identity::AgentId,
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
-    name_canonicalization::is_ecmascript_trim_whitespace,
-    persistence::PersistenceFailure,
 };
 
 /// The wire projection of one agent row. Field-for-field the TypeScript `AgentDto`:

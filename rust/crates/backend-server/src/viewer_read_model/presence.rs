@@ -4,9 +4,9 @@ use std::{sync::Arc, time::Duration};
 
 use axum::Router;
 use silverhand_backend_core::{
+    foundation::scope_event::EventScope,
     identity::UserId,
     policy::presence_grace::{GraceWindow, PresenceFact},
-    scope_event::EventScope,
     viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
     viewer_read_model::user_presence_last_seen::LastSeenSink,
 };

@@ -34,8 +34,8 @@ use super::{
     environment::{EntropyFailure, EntropySource, base64url, random_base64url},
 };
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{HostId, UserId},
-    persistence::PersistenceFailure,
 };
 
 const CREDENTIAL_ID_BYTES: usize = 12;

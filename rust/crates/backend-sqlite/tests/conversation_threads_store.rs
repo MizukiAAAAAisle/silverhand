@@ -71,7 +71,7 @@ async fn read(
         silverhand_backend_core::messaging::collaboration::conversation_threads::ConversationThreadsPage,
         silverhand_backend_core::messaging::collaboration::conversation_threads::ConversationThreadsRefusal,
     >,
-    silverhand_backend_core::persistence::PersistenceFailure,
+    silverhand_backend_core::foundation::persistence::PersistenceFailure,
 >{
     read_conversation(path, viewer, "c", query).await
 }
@@ -86,7 +86,7 @@ async fn read_conversation(
         silverhand_backend_core::messaging::collaboration::conversation_threads::ConversationThreadsPage,
         silverhand_backend_core::messaging::collaboration::conversation_threads::ConversationThreadsRefusal,
     >,
-    silverhand_backend_core::persistence::PersistenceFailure,
+    silverhand_backend_core::foundation::persistence::PersistenceFailure,
 >{
     MessagingStore::open(path)
         .await
@@ -101,7 +101,7 @@ async fn read_conversation(
 }
 
 fn source(
-    error: &silverhand_backend_core::persistence::PersistenceFailure,
+    error: &silverhand_backend_core::foundation::persistence::PersistenceFailure,
 ) -> &ConversationThreadsStoreError {
     std::error::Error::source(error)
         .and_then(|source| source.downcast_ref())

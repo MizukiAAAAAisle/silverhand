@@ -23,13 +23,13 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::identity::{AgentId, ConversationId};
 use silverhand_backend_core::messaging::schedule::{
     ClaimedSchedule, Clock, CronSpec, DeliveryMaterial, DueCandidate, FiredCount, IntervalSeconds,
     ScheduleCaps, ScheduleId, ScheduleMessage, ScheduleSpec, ScheduleStore, ScheduleTitle,
     SettlementAction,
 };
-use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},

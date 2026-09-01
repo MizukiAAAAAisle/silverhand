@@ -6,7 +6,9 @@
 //! so a malformed row cannot disappear behind a product predicate.
 
 use silverhand_backend_core::{
-    blob_store::{BlobStorageKey, StorageKind, StoredBlob},
+    foundation::blob_store::{BlobStorageKey, StorageKind, StoredBlob},
+    foundation::persistence::PersistenceFailure,
+    foundation::wire_number::JsSafeInteger,
     identity::{AgentId, ConversationId, UserId},
     messaging::{
         AttachmentId, FromKind, MessageId, MessageSeq, PrincipalIdentity, ThreadRootId,
@@ -23,8 +25,6 @@ use silverhand_backend_core::{
             channel_lifecycle::{ChannelLifecyclePlacement, ChannelLifecycleRow},
         },
     },
-    persistence::PersistenceFailure,
-    wire_number::JsSafeInteger,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};
 use thiserror::Error;

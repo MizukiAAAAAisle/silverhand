@@ -20,6 +20,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::{Value, json};
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::identity_access::access::{
     AddHumanMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
@@ -28,7 +29,6 @@ use silverhand_backend_core::identity_access::access::{
     ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceAccessPolicy, WorkspaceGovernance,
     WorkspaceRole, WorkspaceUserMembership,
 };
-use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_server::access::{
     router,
     wire::{AGENT_NOT_OWNED_CODE, AGENT_NOT_OWNED_MESSAGE},

@@ -156,8 +156,8 @@ mod tests {
     use serde_json::{Value, json};
     use silverhand_backend_core::{
         cold_read::presence::{LastSeenAt, OnlineViewers, UserPresenceFacts},
+        foundation::persistence::PersistenceFailure,
         identity::UserId,
-        persistence::PersistenceFailure,
         viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
     };
     use tower::ServiceExt;

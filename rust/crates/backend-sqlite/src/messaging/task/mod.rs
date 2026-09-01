@@ -27,7 +27,7 @@ mod row;
 
 use std::{path::Path, time::Duration};
 
-use silverhand_backend_core::persistence::PersistenceFailure;
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},

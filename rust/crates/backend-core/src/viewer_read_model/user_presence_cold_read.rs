@@ -16,7 +16,7 @@
 
 use std::future::Future;
 
-use crate::{cold_read::presence::UserPresenceFacts, persistence::PersistenceFailure};
+use crate::{cold_read::presence::UserPresenceFacts, foundation::persistence::PersistenceFailure};
 
 /// Loads the stored last-seen facts for the listed viewers. Its one
 /// implementation reads the viewer rows on a single snapshot; the boundary stays

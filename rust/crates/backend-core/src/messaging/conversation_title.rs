@@ -24,15 +24,15 @@
 
 use thiserror::Error;
 
-use crate::name_canonicalization::{NameCanonicalizationIssue, canonicalize_name};
+use crate::foundation::name_canonicalization::{NameCanonicalizationIssue, canonicalize_name};
 
 // The shared Unicode capability — NFC, the ECMAScript trim set, the forbidden
 // code-point domain, and the pinned case fold — lives in
-// [`crate::name_canonicalization`], the ONE table/normalizer/fold in the backend.
+// [`crate::foundation::name_canonicalization`], the ONE table/normalizer/fold in the backend.
 // These primitives are re-exported here so every sibling that has always resolved
 // them through `messaging::conversation_title` keeps working unchanged; the
 // implementation is not owned here, only surfaced under this historical path.
-pub use crate::name_canonicalization::{
+pub use crate::foundation::name_canonicalization::{
     fold_name_key, is_space_separator, name_character_is_forbidden, name_is_nfc,
 };
 

@@ -8,6 +8,7 @@ use crate::{
     },
 };
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{ConversationId, UserId, WorkspaceId},
     messaging::collaboration::{
         attention_preference::ChannelAttentionMode,
@@ -17,7 +18,6 @@ use silverhand_backend_core::{
             WorkspaceAttentionCount, WorkspaceAttentionModes,
         },
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;

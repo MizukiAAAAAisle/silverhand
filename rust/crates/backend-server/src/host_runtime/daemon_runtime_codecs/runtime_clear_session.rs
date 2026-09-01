@@ -4,8 +4,8 @@ use std::{error::Error, fmt};
 
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::wire_number::JsSafeInteger,
     host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
-    wire_number::JsSafeInteger,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

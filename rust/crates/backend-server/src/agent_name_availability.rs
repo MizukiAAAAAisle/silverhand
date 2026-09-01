@@ -137,7 +137,8 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        identity_access::user_identity::ParticipantHandle, persistence::PersistenceFailure,
+        foundation::persistence::PersistenceFailure,
+        identity_access::user_identity::ParticipantHandle,
     };
     use tower::ServiceExt;
 

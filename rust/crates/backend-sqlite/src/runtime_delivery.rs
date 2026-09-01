@@ -4,6 +4,7 @@ use std::{collections::HashSet, path::Path, time::Duration};
 
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     host_runtime::runtime_event::{
         CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
@@ -25,7 +26,6 @@ use silverhand_backend_core::{
         },
         environment::SendClock,
     },
-    persistence::PersistenceFailure,
     policy::agent_presence,
     runtime_delivery::{
         ClaimPendingInbox, ClaimedInboxBatch, ClaimedInboxDelivery, DeliveryInstruction,

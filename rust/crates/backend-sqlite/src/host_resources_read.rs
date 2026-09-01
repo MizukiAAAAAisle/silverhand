@@ -46,13 +46,13 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::host_resources_read::{
         HostAgentResourceFact, HostResourcesFacts, HostResourcesReadModel,
     },
     identity::{AgentId, HostId, UserId},
     identity_access::agents::runtime::RuntimeKind,
     identity_access::capability::computer_access::ComputerOwnershipFacts,
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, SqlitePool,

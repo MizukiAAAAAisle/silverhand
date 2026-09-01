@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::name_canonicalization::is_ecmascript_trim_whitespace;
+use crate::foundation::name_canonicalization::is_ecmascript_trim_whitespace;
 
 /// Server-name charset ceiling. The raw name is embedded into a runtime server
 /// name and, for Codex, into a TOML bare key, so it is bare-key safe:

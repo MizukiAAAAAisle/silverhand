@@ -9,10 +9,10 @@
 use std::future::Future;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{ConversationId, UserId},
     identity_access::agents::runtime::RuntimeKind,
     messaging::{ActiveAuthor, AvatarRevision, MessageAuthor, PrincipalIdentity},
-    persistence::PersistenceFailure,
 };
 
 /// The full list, already ordered oldest-first by the read authority.

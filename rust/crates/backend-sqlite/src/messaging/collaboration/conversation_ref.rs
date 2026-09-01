@@ -1,12 +1,12 @@
 //! One-snapshot SQLite projection for `GET /api/conversations/:id/ref`.
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{ConversationId, UserId, WorkspaceId},
     messaging::collaboration::conversation_ref::{
         ConversationRefReadPort, ConversationRefRefusal, ConversationRosterPolicy,
         WorkspaceConversationRef,
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use thiserror::Error;

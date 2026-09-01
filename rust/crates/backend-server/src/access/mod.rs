@@ -37,6 +37,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::identity_access::access::{
     AddAgentMemberError, AddHumanMemberError, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
@@ -44,7 +45,6 @@ use silverhand_backend_core::identity_access::access::{
     ViewerWorkspacesChangedSink, WorkspaceAccessPolicy, WorkspaceGovernance,
     add_workspace_agent_member, add_workspace_human_member,
 };
-use silverhand_backend_core::persistence::PersistenceFailure;
 
 use crate::error;
 use crate::wire_admission::ObjectOnly;

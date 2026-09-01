@@ -253,7 +253,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use silverhand_backend_core::persistence::PersistenceFailure;
+    use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use silverhand_backend_core::{
         identity::{AgentId, ConversationId},
         messaging::{

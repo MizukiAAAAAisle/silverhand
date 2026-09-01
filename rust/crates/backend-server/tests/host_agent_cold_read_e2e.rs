@@ -40,8 +40,8 @@ use axum::{
 use serde_json::{Value, json};
 use silverhand_backend_core::{
     cold_read::presence::{LastSeenAt, UserPresenceFacts},
+    foundation::persistence::PersistenceFailure,
     identity::UserId,
-    persistence::PersistenceFailure,
     policy::presence_grace::{GraceWindow, PresenceFact},
     viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
     viewer_read_model::user_presence_last_seen::LastSeenSink,

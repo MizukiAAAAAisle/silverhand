@@ -299,13 +299,13 @@ mod tests {
     };
     use silverhand_backend_core::{
         embedded_bootstrap::BootstrapChoice,
+        foundation::persistence::PersistenceFailure,
         host_runtime::environment::EntropySource,
         identity::UserId,
         identity_access::auth::{
             EntropySessionTokenMint, MintedSession, SessionMintError, SessionTokenHash,
         },
         identity_access::user_identity::{UserChangedAnnounceFailure, UserRecord},
-        persistence::PersistenceFailure,
     };
     use std::{
         net::{Ipv4Addr, Ipv6Addr},

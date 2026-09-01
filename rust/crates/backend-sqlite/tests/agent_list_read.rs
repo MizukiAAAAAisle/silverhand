@@ -22,12 +22,12 @@
 use std::collections::BTreeSet;
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::AgentDetailReadModel,
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::agent_list_read::AgentListReadModel,
     identity_access::capability::agent_view::{VisibleStages, can_view_agent},
-    persistence::PersistenceFailure,
 };
 use silverhand_backend_sqlite::{
     agent_detail_read::SqliteAgentDetailColdRead, agent_list_read::SqliteAgentListColdRead,

@@ -19,6 +19,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         AgentSlotPresentationFocusPort, ClaimRuntimeCustody, FinalizeRuntimeCustody,
         RuntimeCustodyPort, RuntimeCustodyReadPort, RuntimeEventTime, RuntimeFinalStatus,
@@ -28,7 +29,6 @@ use silverhand_backend_core::{
         CommitRuntimeExit, DaemonEventDurablePort, RuntimeExitCommitResult, RuntimeExitDisposition,
     },
     identity::{AgentId, ConversationId, DaemonInstanceId},
-    persistence::PersistenceFailure,
 };
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 

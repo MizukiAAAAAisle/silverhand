@@ -25,9 +25,9 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize};
 use silverhand_backend_core::{
+    foundation::scope_event::{AuthorizeEventScope, EventScope},
     identity::{ConversationId, UserId, WorkspaceId},
     identity_access::auth::{AuthenticateHumanSession, SessionBearer},
-    scope_event::{AuthorizeEventScope, EventScope},
 };
 
 use tokio::{

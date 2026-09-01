@@ -41,7 +41,7 @@ use axum::{
 };
 use futures_util::stream;
 use serde_json::Value;
-use silverhand_backend_core::persistence::PersistenceFailure;
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::{
     host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
     identity::{AgentId, ConversationId, DaemonInstanceId, UserId},

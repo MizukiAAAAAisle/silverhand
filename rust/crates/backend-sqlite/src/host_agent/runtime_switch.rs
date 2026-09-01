@@ -9,9 +9,9 @@
 //! as a read failure, never defaulted into a decision input.
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::agent_runtime_switch::{SwitchAgentSnapshot, SwitchAgentSnapshotRead},
     identity::AgentId,
-    persistence::PersistenceFailure,
 };
 use sqlx::{Row, sqlite::SqliteRow};
 

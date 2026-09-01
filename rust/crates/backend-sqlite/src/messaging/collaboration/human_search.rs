@@ -1,6 +1,7 @@
 //! One-snapshot SQLite producer for the public human collaboration search.
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         FromKind, MessageAuthor, MessageId, MessageSeq, PrincipalIdentity, ThreadRootId,
@@ -20,7 +21,6 @@ use silverhand_backend_core::{
             },
         },
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,

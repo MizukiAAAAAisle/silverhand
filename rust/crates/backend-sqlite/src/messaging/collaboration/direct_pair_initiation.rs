@@ -7,6 +7,7 @@
 use std::{error::Error, future::Future};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, UserId},
     identity_access::agents::session_scope::AgentSessionScope,
     messaging::{
@@ -18,7 +19,6 @@ use silverhand_backend_core::{
             OpenedDirectPairFirstMessage, open_and_send_direct_pair,
         },
     },
-    persistence::PersistenceFailure,
 };
 
 use super::super::authorities::{DirectPairInitiationTarget, direct_pair_initiation_candidate};

@@ -33,13 +33,13 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, UserId},
     identity_access::agent_detail_read::{
         AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
     },
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::agents::runtime::RuntimeKind,
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, SqlitePool,

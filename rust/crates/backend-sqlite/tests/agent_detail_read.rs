@@ -15,6 +15,7 @@
 //!    read error, not a silent default.
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, UserId},
     identity_access::agent_detail_read::{
         AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
@@ -22,7 +23,6 @@ use silverhand_backend_core::{
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::agents::runtime::RuntimeKind,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
-    persistence::PersistenceFailure,
 };
 use silverhand_backend_sqlite::agent_detail_read::SqliteAgentDetailColdRead;
 use sqlx::Connection;

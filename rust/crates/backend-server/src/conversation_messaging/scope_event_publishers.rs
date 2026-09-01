@@ -2,6 +2,7 @@
 
 use serde_json::json;
 use silverhand_backend_core::{
+    foundation::scope_event::EventScope,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         CommittedMessageView, DirectPairOpenedFact, DirectPairOpenedPort, PrincipalIdentity,
@@ -27,7 +28,6 @@ use silverhand_backend_core::{
         },
         unread::{LatestUnread as CoreLatestUnread, UnreadAudience, UnreadReadModel, ViewerUnread},
     },
-    scope_event::EventScope,
 };
 
 use crate::{

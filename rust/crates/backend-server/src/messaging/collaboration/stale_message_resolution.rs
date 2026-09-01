@@ -18,7 +18,7 @@ use garde::Validate;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    cli_invoke_audit::CliStaleResolutionReason,
+    foundation::cli_invoke_audit::CliStaleResolutionReason,
     host_runtime::runtime_credential::RuntimePrincipal,
     identity::{AgentId, ConversationId},
     messaging::{

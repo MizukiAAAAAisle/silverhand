@@ -6,12 +6,12 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         ClaimRuntimeCustody, ClaimedRuntime, FinalizeRuntimeCustody, RuntimeCustody,
         RuntimeCustodyPort, RuntimeFinalStatus, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
     identity::DaemonInstanceId,
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, SqliteConnection, SqlitePool,

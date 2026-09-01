@@ -3,6 +3,7 @@
 use std::{error::Error, fmt};
 
 use silverhand_backend_core::{
+    foundation::scope_event::EventScope,
     host_runtime::agent_availability_read::AgentAvailabilityReadModel,
     host_runtime::{
         aftermath::{AgentAvailabilityAnnouncer, CustodyEffectFailure},
@@ -10,7 +11,6 @@ use silverhand_backend_core::{
     },
     identity::{AgentId, ConversationId, HostId, UserId},
     identity_access::capability::agent_view::agent_viewer_user_ids,
-    scope_event::EventScope,
 };
 
 use crate::foundation::{

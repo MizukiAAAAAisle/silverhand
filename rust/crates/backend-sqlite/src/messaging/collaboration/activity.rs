@@ -18,6 +18,7 @@ use crate::{
     },
 };
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{ConversationId, UserId, WorkspaceId},
     messaging::{
         FromKind, MessageId, NotificationId, ThreadRootId,
@@ -26,7 +27,6 @@ use silverhand_backend_core::{
             ActivitySalience, ActivityUnreadCount,
         },
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use thiserror::Error;

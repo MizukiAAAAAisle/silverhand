@@ -16,8 +16,8 @@
 //! its post-commit work captured before its delete erases the rows that work reads.
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity_access::capability::computer_access::{ComputerAccess, can_access_computer},
-    persistence::PersistenceFailure,
     teardown::{
         cascade::{
             CascadeAdmission, CascadeConsent, ComputerLifecycle, admit_cascade,

@@ -30,11 +30,12 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    blob_store::{
+    direct_pair_read::DirectPairCounterpart,
+    foundation::blob_store::{
         BlobDeleteOutcome, BlobNamespace, BlobRead, BlobReadOutcome, BlobStorageKey, BlobStore,
         StorageKind, StoredBlob,
     },
-    direct_pair_read::DirectPairCounterpart,
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, Principal, UserId, WorkspaceId},
     identity_access::agent_audit_read::{
         AgentAuditEvent, AgentAuditReadModel, AgentAuditSink, AuditAttachmentBundle,
@@ -53,7 +54,6 @@ use silverhand_backend_core::{
             conversation_ref::ConversationRosterPolicy,
         },
     },
-    persistence::PersistenceFailure,
 };
 use tower::ServiceExt;
 

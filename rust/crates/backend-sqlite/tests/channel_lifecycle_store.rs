@@ -81,7 +81,7 @@ async fn detail(
         silverhand_backend_core::messaging::collaboration::channel_lifecycle::ChannelDetailFact,
         ChannelDetailRefusal,
     >,
-    silverhand_backend_core::persistence::PersistenceFailure,
+    silverhand_backend_core::foundation::persistence::PersistenceFailure,
 > {
     MessagingStore::open(path)
         .await
@@ -95,7 +95,7 @@ async fn detail(
 }
 
 fn storage_source(
-    error: &silverhand_backend_core::persistence::PersistenceFailure,
+    error: &silverhand_backend_core::foundation::persistence::PersistenceFailure,
 ) -> &ChannelLifecycleStoreError {
     std::error::Error::source(error)
         .and_then(|source| source.downcast_ref())

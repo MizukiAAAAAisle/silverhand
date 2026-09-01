@@ -42,9 +42,9 @@
 
 use std::future::Future;
 
+use crate::foundation::persistence::PersistenceFailure;
 use crate::host_runtime::runtime_credential::RuntimePrincipal;
 use crate::identity::{AgentId, ConversationId, WorkspaceId};
-use crate::persistence::PersistenceFailure;
 
 use super::read::{
     AgentBoardResolver, AgentReadableBoards, AuthorizedTaskBoards, BoardAuthorization,

@@ -11,9 +11,9 @@
 
 use silverhand_backend_core::{
     agent_creation::AgentGraphRead,
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId},
     messaging::{MessageId, agent_onboarding::ONBOARDING_DM_TITLE},
-    persistence::PersistenceFailure,
 };
 
 use super::store::SqliteHostAgentStore;

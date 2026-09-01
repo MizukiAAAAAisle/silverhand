@@ -56,7 +56,8 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    identity_access::workspace_name::CanonicalWorkspaceName, persistence::PersistenceFailure,
+    foundation::persistence::PersistenceFailure,
+    identity_access::workspace_name::CanonicalWorkspaceName,
 };
 
 /// The verdict, as ONE value with three arms.

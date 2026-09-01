@@ -14,6 +14,7 @@ use axum::{
 use futures_util::stream;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId},
     messaging::{
         AddressedPrincipals, AttachmentId, AttachmentRefusal, CreatedMessage, DirectLineAuthority,
@@ -29,7 +30,6 @@ use silverhand_backend_core::{
         },
         post_commit::{DeliveryPlan, MainDeliveryPlan, PostCommitPlan},
     },
-    persistence::PersistenceFailure,
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor};

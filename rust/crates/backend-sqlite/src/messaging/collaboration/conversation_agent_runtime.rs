@@ -2,6 +2,7 @@
 
 use serde_json::json;
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
     identity::{AgentId, ConversationId, UserId},
     identity_access::agents::session_scope::AgentSessionScope,
@@ -19,7 +20,6 @@ use silverhand_backend_core::{
             },
         },
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;

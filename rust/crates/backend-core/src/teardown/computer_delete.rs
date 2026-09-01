@@ -42,10 +42,10 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::aftermath::{CustodyEffectFailure, DaemonConnectionControl},
     identity::{AgentId, HostId, UserId},
     identity_access::capability::computer_access::{ComputerAccess, can_access_computer},
-    persistence::PersistenceFailure,
     teardown::{
         cascade::{CascadeConsent, CascadeRefused, ComputerLifecycle, hold_computer_lifecycle},
         contract::TeardownFailure,

@@ -15,9 +15,9 @@
 //! (`created_at >= ?`, in-flight rows INCLUDED, distinct ids ordered by id).
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::agent_runtime_switch::SwitchConversationCoordination,
     identity::{AgentId, ConversationId},
-    persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 

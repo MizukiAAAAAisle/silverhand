@@ -4,11 +4,11 @@ mod mutation;
 mod read;
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     messaging::{
         collaboration::saved::SavedEntry,
         environment::{SendClock, SendEntropy},
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::SqlitePool;
 use thiserror::Error;

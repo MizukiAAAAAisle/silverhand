@@ -13,8 +13,8 @@
 
 use std::future::Future;
 
+use crate::foundation::persistence::PersistenceFailure;
 use crate::identity::WorkspaceId;
-use crate::persistence::PersistenceFailure;
 
 use super::role::{WorkspaceRole, role_governs_workspace};
 use crate::identity::Principal;

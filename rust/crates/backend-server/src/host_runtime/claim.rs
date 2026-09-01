@@ -247,12 +247,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         host_runtime::{
             claim::{LocalClaimAttempt, LocalClaimWriteError},
             computer::{ComputerRecord, HostKind, ProvisioningSource},
             custody::{CredentialSweep, NewLongLivedCredential},
         },
-        persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
 

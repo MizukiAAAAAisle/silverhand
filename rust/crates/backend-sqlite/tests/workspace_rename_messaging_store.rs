@@ -7,6 +7,7 @@ use std::{
 };
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, WorkspaceId},
     messaging::{
         SendClock, SendEntropy,
@@ -17,7 +18,6 @@ use silverhand_backend_core::{
         },
         environment::EnvironmentUnavailable,
     },
-    persistence::PersistenceFailure,
 };
 use silverhand_backend_sqlite::messaging::{
     MessagingStore, collaboration::workspace_rename_messaging::WorkspaceRenameMessagingStoreError,

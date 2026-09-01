@@ -6,7 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use silverhand_backend_core::{
-    blob_store::BlobStore,
+    foundation::blob_store::BlobStore,
     identity::{AgentId, Principal, UserId},
     identity_access::agent_audit_read::{AgentAuditEvent, AgentAuditReadModel, AgentAuditSink},
 };

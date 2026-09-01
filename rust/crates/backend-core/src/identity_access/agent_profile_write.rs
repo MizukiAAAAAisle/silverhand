@@ -64,13 +64,13 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::AgentId,
     identity_access::agent_avatar::{AgentAvatarAssignment, AgentAvatarRow},
     identity_access::agents::{
         runtime::RuntimeKind,
         runtime_capability::{reasoning_effort_valid_for_runtime, runtime_supports_fast_mode},
     },
-    persistence::PersistenceFailure,
 };
 
 // ===========================================================================

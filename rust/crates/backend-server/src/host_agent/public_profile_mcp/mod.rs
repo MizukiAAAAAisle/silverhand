@@ -243,6 +243,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         identity::{AgentId, UserId},
         identity_access::agent_detail_read::{AgentDetailProjection, AgentDetailReadModel},
         identity_access::agent_lifecycle::MaterializationStatus,
@@ -251,7 +252,6 @@ mod tests {
             McpProbeCommand, McpProbeOutcome, McpProbePhase, McpProbeServerInfo, McpProbeTool,
         },
         identity_access::agents::runtime::RuntimeKind,
-        persistence::PersistenceFailure,
     };
     use std::sync::{
         Arc, Mutex,

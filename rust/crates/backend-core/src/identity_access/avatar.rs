@@ -10,7 +10,7 @@
 //! ## Two seams this leaf DEFINES but does not ship production adapters for
 //!
 //! * [`AvatarBlobStore`] — a NARROW blob capability, not the generic
-//!   [`crate::blob_store::BlobStore`]. Its pointer ([`AvatarBlobPointer`]) is the
+//!   [`crate::foundation::blob_store::BlobStore`]. Its pointer ([`AvatarBlobPointer`]) is the
 //!   single opaque key the `users` row persists and the read path hands back; the
 //!   storage KIND is the adapter's own (single-backend today, mirroring the
 //!   product's `ctx.blobStorage.kind`), so it never crosses the DB or the wire.
@@ -34,11 +34,11 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::UserId,
     identity_access::user_identity::{
         UserChangedAnnounce, UserChangedSink, UserProfileRead, UserRecord,
     },
-    persistence::PersistenceFailure,
 };
 
 // ===========================================================================

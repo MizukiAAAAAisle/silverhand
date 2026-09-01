@@ -29,9 +29,9 @@ use std::future::Future;
 
 use crate::{
     cold_read::availability::{AgentAvailabilityFacts, HostReachabilityFacts},
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, HostId},
     identity_access::capability::agent_view::AgentVisibility,
-    persistence::PersistenceFailure,
 };
 
 /// The agent-side half of an availability read: who may see the agent, and the

@@ -6,6 +6,8 @@
 //! request command is never reflected back as an authority witness.
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
+    foundation::wire_number::JsSafeInteger,
     identity::{AgentId, ConversationId, WorkspaceId},
     identity_access::access::Capability,
     messaging::{
@@ -26,8 +28,6 @@ use silverhand_backend_core::{
             channel_lifecycle::ChannelLifecyclePlacement,
         },
     },
-    persistence::PersistenceFailure,
-    wire_number::JsSafeInteger,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;

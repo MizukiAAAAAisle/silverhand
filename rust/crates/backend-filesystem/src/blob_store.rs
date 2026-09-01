@@ -26,7 +26,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use silverhand_backend_core::blob_store::{
+use silverhand_backend_core::foundation::blob_store::{
     BlobAliasId, BlobDeleteOutcome, BlobNamespace, BlobRead, BlobReadOutcome, BlobStorageKey,
     BlobStore, StorageKind, StoredBlob,
 };

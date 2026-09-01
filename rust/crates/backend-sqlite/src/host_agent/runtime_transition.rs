@@ -26,6 +26,7 @@
 //! insert/update triggers.
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::RuntimeScope,
     host_runtime::runtime_event::RuntimeObservedStatus,
     host_runtime::runtime_transition::{
@@ -38,7 +39,6 @@ use silverhand_backend_core::{
     },
     identity::{AgentId, ConversationId},
     identity_access::agents::runtime::RuntimeKind,
-    persistence::PersistenceFailure,
 };
 use sqlx::{Row, sqlite::SqliteRow};
 use thiserror::Error;

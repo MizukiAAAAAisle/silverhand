@@ -32,11 +32,11 @@
 use std::future::Future;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, UserId},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::agents::runtime::RuntimeKind,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
-    persistence::PersistenceFailure,
 };
 
 /// The wire-facing fields of one agent-detail read that the visibility gate does

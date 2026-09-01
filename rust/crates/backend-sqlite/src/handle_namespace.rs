@@ -12,8 +12,9 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity_access::human_auth_flows::HandleNamespaceRead,
-    identity_access::user_identity::ParticipantHandle, persistence::PersistenceFailure,
+    identity_access::user_identity::ParticipantHandle,
 };
 use sqlx::{
     SqlitePool,

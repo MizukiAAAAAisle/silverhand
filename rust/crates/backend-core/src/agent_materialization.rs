@@ -47,6 +47,7 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::AgentId,
     identity::ConversationId,
     identity::HostId,
@@ -63,7 +64,6 @@ use crate::{
         ONBOARDING_DM_TITLE, ONBOARDING_DM_TITLE_KEY, OnboardingSystemMessage,
         OnboardingWriteWitness, OnboardingWritten,
     },
-    persistence::PersistenceFailure,
 };
 
 /// The canonical `materialization_failed_code` the crash-recovery sweep stamps on a row a

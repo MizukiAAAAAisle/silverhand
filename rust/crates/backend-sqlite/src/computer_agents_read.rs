@@ -14,9 +14,9 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::agent_roster::ComputerAgentsReadPort,
     identity::{AgentId, HostId},
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, SqlitePool,

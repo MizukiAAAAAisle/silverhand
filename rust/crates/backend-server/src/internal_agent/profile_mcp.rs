@@ -204,6 +204,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         host_runtime::runtime_credential::{
             RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
         },
@@ -212,7 +213,6 @@ mod tests {
             McpBytesWritten, McpDataPlaneFault, McpDataPlaneFaultCode, McpProbeCommand,
             McpProbeOutcome, McpProbePhase, McpProbeServerInfo, McpProbeTool,
         },
-        persistence::PersistenceFailure,
     };
     use std::sync::{
         Arc, Mutex,

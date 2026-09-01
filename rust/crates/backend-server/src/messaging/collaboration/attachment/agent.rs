@@ -21,7 +21,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    blob_store::{BlobAliasId, BlobNamespace, BlobReadOutcome, BlobStore},
+    foundation::blob_store::{BlobAliasId, BlobNamespace, BlobReadOutcome, BlobStore},
     host_runtime::runtime_credential::RuntimePrincipal,
     identity::AgentId,
     messaging::{

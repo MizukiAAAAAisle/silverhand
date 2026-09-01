@@ -143,7 +143,7 @@ fn optional_string(object: &Map<String, Value>, key: &str) -> Option<Option<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::wire_number::JsSafeInteger;
+    use silverhand_backend_core::foundation::wire_number::JsSafeInteger;
 
     fn agent() -> AgentId {
         AgentId::parse("agent-a").unwrap()

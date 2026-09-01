@@ -8,7 +8,7 @@
 
 use std::{collections::HashSet, future::Future};
 
-use crate::persistence::PersistenceFailure;
+use crate::foundation::persistence::PersistenceFailure;
 
 use super::{
     ActorRefusal, AddressedPrincipals, AgentId, ConversationId, ConversationRefusal,

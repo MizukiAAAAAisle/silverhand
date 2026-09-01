@@ -284,12 +284,12 @@ mod tests {
         },
     };
 
+    use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use silverhand_backend_core::messaging::{
         AddressedPrincipals, ConversationRefusal, MessageContent, MessageId, SendMessage,
     };
-    use silverhand_backend_core::persistence::PersistenceFailure;
     use silverhand_backend_core::{
-        cli_invoke_audit::CliStaleResolutionReason,
+        foundation::cli_invoke_audit::CliStaleResolutionReason,
         host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration},
         identity::{AgentId, DaemonInstanceId},
         messaging::ThreadRootId,

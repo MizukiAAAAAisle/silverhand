@@ -21,11 +21,11 @@ use std::{path::Path, time::Duration};
 
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::UserId,
     identity_access::credential::{
         LoginCandidate, LoginCredentialLookup, PasswordHashParams, RUST_PRODUCER,
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, SqlitePool,

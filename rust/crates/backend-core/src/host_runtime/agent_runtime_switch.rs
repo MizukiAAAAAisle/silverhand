@@ -45,6 +45,7 @@ use std::future::Future;
 use futures_util::future::join_all;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         AgentSlotPresentationFocusPort, RuntimeCustodyReadPort, RuntimeScope,
     },
@@ -64,7 +65,6 @@ use crate::{
         session_scope::AgentSessionScope,
     },
     messaging::collaboration::{RuntimeControlPort, RuntimeSeatTarget, RuntimeStartTarget},
-    persistence::PersistenceFailure,
 };
 
 /// The validated runtime-switch request. Tuning legality (model/effort/fast-mode against the

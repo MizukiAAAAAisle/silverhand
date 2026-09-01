@@ -7,7 +7,7 @@
 
 use std::future::Future;
 
-use crate::persistence::PersistenceFailure;
+use crate::foundation::persistence::PersistenceFailure;
 
 use super::{AgentId, ConversationId, PrincipalIdentity, SendActor, SendMessageError, UserId};
 

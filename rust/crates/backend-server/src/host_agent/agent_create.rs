@@ -887,6 +887,7 @@ mod tests {
             IdempotentReservationRow, MaterializationFlipRow, RawProvisionOutcome,
             ReserveAgentInput, ReserveRecord,
         },
+        foundation::persistence::PersistenceFailure,
         host_runtime::agent_materialize::{
             AgentMaterializeReceipt, AgentMaterializeRefusal, AgentMaterializeTarget,
         },
@@ -906,7 +907,6 @@ mod tests {
             environment::{EnvironmentUnavailable, SendEntropy},
             post_commit::{EffectFailure, RuntimeStart},
         },
-        persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
 

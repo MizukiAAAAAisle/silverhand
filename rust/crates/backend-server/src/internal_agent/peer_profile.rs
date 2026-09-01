@@ -30,6 +30,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
+    foundation::name_canonicalization::is_ecmascript_trim_whitespace,
     host_runtime::runtime_credential::RuntimePrincipal,
     identity::WorkspaceId,
     identity_access::agent_peer_profile::{
@@ -38,7 +39,6 @@ use silverhand_backend_core::{
     },
     identity_access::agent_profile_read::{AgentProfileReadModel, ProfileReadFault},
     identity_access::user_identity::ParticipantHandle,
-    name_canonicalization::is_ecmascript_trim_whitespace,
 };
 
 use super::wire::{AgentProfileDto, agent_profile_dto};
@@ -262,12 +262,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimeScope},
         identity::{AgentId, ConversationId, DaemonInstanceId},
         identity_access::agent_peer_profile::WorkspacePlacement,
         identity_access::agent_profile_read::AgentProfileFact,
         messaging::AvatarRevision,
-        persistence::PersistenceFailure,
     };
     use std::{
         collections::{HashMap, HashSet},

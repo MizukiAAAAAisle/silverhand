@@ -28,7 +28,7 @@
 //! probe cannot outlive the store's usability — the gate for that lives beside the
 //! store, where the handle is private.
 
-use silverhand_backend_core::persistence::{PersistenceFailure, WriteProbe};
+use silverhand_backend_core::foundation::persistence::{PersistenceFailure, WriteProbe};
 use sqlx::SqlitePool;
 use thiserror::Error;
 

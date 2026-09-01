@@ -16,8 +16,8 @@
 use std::{collections::BTreeMap, future::Future};
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{UserId, WorkspaceId},
-    persistence::PersistenceFailure,
 };
 
 /// The persisted `list_key` for the workspace rail. The whole context is scoped

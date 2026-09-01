@@ -76,8 +76,8 @@ use std::{fmt, future::Future};
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, HostId},
-    persistence::PersistenceFailure,
 };
 
 /// The two-valued fact a client reads.
@@ -114,7 +114,7 @@ enum Unreachable {
 ///     HostReachabilityFacts,
 /// };
 /// use silverhand_backend_core::identity::{AgentId, HostId};
-/// use silverhand_backend_core::persistence::PersistenceFailure;
+/// use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 ///
 /// async fn demo() {
 ///     let id = AgentId::parse("a1").unwrap();
@@ -144,7 +144,7 @@ enum Unreachable {
 ///     HostAttachmentFacts, HostReachabilityFacts,
 /// };
 /// use silverhand_backend_core::identity::{AgentId, HostId};
-/// use silverhand_backend_core::persistence::PersistenceFailure;
+/// use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 ///
 /// async fn demo() {
 ///     let id = AgentId::parse("a1").unwrap();

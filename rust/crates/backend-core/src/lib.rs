@@ -8,23 +8,16 @@
 
 pub mod agent_creation;
 pub mod agent_materialization;
-pub mod blob_store;
-pub mod cli_invoke_audit;
-pub mod cli_preflight_audit;
 pub mod cold_read;
 pub mod direct_pair_read;
 pub mod embedded_bootstrap;
+pub mod foundation;
 pub mod host_runtime;
 pub mod identity;
 pub mod identity_access;
 pub mod messaging;
-pub mod name_canonicalization;
-pub mod persistence;
 pub mod policy;
 pub mod runtime_delivery;
-pub mod scope_event;
 pub mod teardown;
 pub mod viewer_read_model;
-pub mod wire_number;
-pub mod wire_text;
 pub mod workspace_data_plane;

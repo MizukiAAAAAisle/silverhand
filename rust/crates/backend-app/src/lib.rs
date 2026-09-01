@@ -13,7 +13,7 @@ use std::{
 
 use axum::Router;
 use silverhand_backend_core::{
-    blob_store::StorageKind,
+    foundation::blob_store::StorageKind,
     host_runtime::{
         claim::ClaimLocalComputer,
         environment::{OsEntropy, SystemClock},

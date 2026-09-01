@@ -16,13 +16,13 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::environment::{EntropySource, OsEntropy},
     identity::UserId,
     identity_access::auth::{
         SessionAudit, SessionIssue, SessionRevoke, SessionTokenHash, SessionValidation,
         SessionValidationPort,
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, SqlitePool,

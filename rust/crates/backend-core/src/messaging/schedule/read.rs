@@ -19,8 +19,8 @@
 
 use std::future::Future;
 
+use crate::foundation::persistence::PersistenceFailure;
 use crate::identity::AgentId;
-use crate::persistence::PersistenceFailure;
 
 use super::orchestrator::ScheduleId;
 use super::spec::{ScheduleSpec, ScheduleStatus};

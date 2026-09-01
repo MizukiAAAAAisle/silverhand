@@ -9,11 +9,11 @@
 //! be invisible.
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{HostId, UserId},
     identity_access::capability::computer_access::{
         ComputerAccess, ComputerAccessHeld, can_access_computer,
     },
-    persistence::PersistenceFailure,
 };
 
 use super::computer::ComputerRecord;

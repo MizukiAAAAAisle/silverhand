@@ -229,11 +229,11 @@ mod tests {
     use serde_json::{Value, json};
     use silverhand_backend_core::{
         cold_read::availability::{HostAttachmentFacts, HostReachabilityFacts},
+        foundation::persistence::PersistenceFailure,
         host_runtime::agent_availability_read::{AgentAvailabilityReadModel, AgentViewFacts},
         identity::{AgentId, HostId, UserId},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
-        persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
 

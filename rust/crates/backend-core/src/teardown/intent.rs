@@ -29,8 +29,8 @@
 use std::future::Future;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, HostId},
-    persistence::PersistenceFailure,
     teardown::{
         contract::{TeardownContractViolation, TeardownFailure, same_agent, same_computer},
         write::AgentTornDown,

@@ -12,6 +12,7 @@ use std::{
 };
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeCustodyPort, RuntimeFinalStatus, RuntimePrincipal, RuntimeScope,
     },
@@ -29,7 +30,6 @@ use silverhand_backend_core::{
         RuntimeControlSeatPort, RuntimePlacementRefusal, RuntimeSeatTarget, RuntimeStartTarget,
         StartRuntimeOutcome, StartRuntimeProviderRefusal, seal_clear_session_commit,
     },
-    persistence::PersistenceFailure,
     runtime_delivery::{RuntimeDispatchReadPort, RuntimeDispatchTarget},
 };
 use tokio::sync::Notify;

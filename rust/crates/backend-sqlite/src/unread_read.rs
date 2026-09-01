@@ -21,12 +21,12 @@
 use std::{collections::HashMap, path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{ConversationId, UserId, WorkspaceId},
     messaging::{
         MessageId, ThreadRootId,
         unread::{LatestUnread, UnreadAudience, UnreadReadModel, ViewerUnread},
     },
-    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,

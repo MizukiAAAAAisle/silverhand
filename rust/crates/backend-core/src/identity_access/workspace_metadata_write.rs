@@ -104,10 +104,10 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{Principal, WorkspaceId},
     identity_access::workspace_face::WorkspaceFace,
     identity_access::workspace_name::CanonicalWorkspaceName,
-    persistence::PersistenceFailure,
 };
 
 /// A metadata edit, modeled as the THREE shapes the write actually performs —

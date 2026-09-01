@@ -9,10 +9,10 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, HostId, UserId},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::agents::runtime::RuntimeKind,
-    persistence::PersistenceFailure,
 };
 
 use super::{

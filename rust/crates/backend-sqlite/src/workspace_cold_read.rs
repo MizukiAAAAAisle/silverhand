@@ -19,12 +19,12 @@
 use std::{collections::HashSet, path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
     identity_access::workspace_cold_read::{
         WorkspaceColdRead, WorkspaceColdReadUnitOfWork, compose_workspace_cold_read,
     },
     identity_access::workspace_face::{WorkspaceFace, WorkspaceFaceReadPort},
-    persistence::PersistenceFailure,
     viewer_read_model::viewer_workspace_sort::{
         SortMode, ViewerSortEntry, ViewerSortState, ViewerWorkspaceSortReadPort,
         WORKSPACE_SORT_LIST_KEY, WorkspaceSortScope,

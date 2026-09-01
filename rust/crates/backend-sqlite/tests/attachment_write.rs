@@ -1,7 +1,9 @@
 use std::{error::Error, time::Duration};
 
 use silverhand_backend_core::{
-    blob_store::{BlobAliasId, BlobStorageKey, StorageKind, StoredBlob},
+    foundation::blob_store::{BlobAliasId, BlobStorageKey, StorageKind, StoredBlob},
+    foundation::persistence::PersistenceFailure,
+    foundation::wire_number::JsSafeInteger,
     identity::{ConversationId, UserId},
     messaging::{
         AttachmentId,
@@ -13,8 +15,6 @@ use silverhand_backend_core::{
             maintain_committed_delete,
         },
     },
-    persistence::PersistenceFailure,
-    wire_number::JsSafeInteger,
 };
 use silverhand_backend_sqlite::messaging::{
     MessagingStore, collaboration::attachment::AttachmentWriteStoreError,

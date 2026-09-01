@@ -3,7 +3,7 @@
 //!
 //! # Where this sits
 //!
-//! The domain owns the record and the port ([`silverhand_backend_core::cli_preflight_audit`]);
+//! The domain owns the record and the port ([`silverhand_backend_core::foundation::cli_preflight_audit`]);
 //! this module is the ONE concrete implementation of that port — an OS adapter, because
 //! its entire job is touching the filesystem and the wall clock. The composition root
 //! constructs it, owns its lifecycle, and injects it as the port; a handler never sees
@@ -48,8 +48,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
-use silverhand_backend_core::cli_invoke_audit::{CliInvoke, CliInvokeAuditSink};
-use silverhand_backend_core::cli_preflight_audit::{CliPreflightAuditSink, CliPreflightFailure};
+use silverhand_backend_core::foundation::cli_invoke_audit::{CliInvoke, CliInvokeAuditSink};
+use silverhand_backend_core::foundation::cli_preflight_audit::{
+    CliPreflightAuditSink, CliPreflightFailure,
+};
 use silverhand_backend_core::identity_access::agent_audit_read::{AgentAuditEvent, AgentAuditSink};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -846,11 +848,11 @@ impl<C: AuditClock> AgentAuditSink for AgentAuditFileSink<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::cli_invoke_audit::{
+    use silverhand_backend_core::foundation::cli_invoke_audit::{
         CliInvoke, CliInvokeAuditSink, CliInvokeErrorCode, CliInvokeIssue, CliInvokeIssueCode,
         CliInvokeIssues, CliInvokeMethod, CliInvokeRoute,
     };
-    use silverhand_backend_core::cli_preflight_audit::NonNegativeFiniteF64;
+    use silverhand_backend_core::foundation::cli_preflight_audit::NonNegativeFiniteF64;
     use silverhand_backend_core::identity::AgentId;
     use std::future::Future;
     use std::io;

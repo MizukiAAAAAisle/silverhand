@@ -22,10 +22,10 @@
 //!
 //! Both gates turn a broken row into a safe-500 carrying the offending column.
 
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::messaging::task::{
     BoardKey, TaskAggregate, TaskDisplaySidecars, TaskRow, TaskRowCorruption,
 };
-use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{Row, sqlite::SqliteRow};
 
 use super::{corrupt, driver};

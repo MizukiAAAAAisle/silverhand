@@ -19,6 +19,7 @@ use std::{
 use std::collections::HashSet;
 
 use silverhand_backend_core::agent_creation::OnboardingInboxEnsure;
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 use silverhand_backend_core::identity_access::agents::session_scope::AgentSessionScope;
 use silverhand_backend_core::messaging::{
@@ -39,7 +40,6 @@ use silverhand_backend_core::messaging::{
         MentionedViewerRecord, PostCommitPlan, ReplyAudience,
     },
 };
-use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
     Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
     sqlite::{
@@ -3773,7 +3773,7 @@ mod tests {
     /// about, and it cannot be shown by reading the wiring.
     #[tokio::test]
     async fn the_probe_this_store_mints_dies_with_the_store() {
-        use silverhand_backend_core::persistence::WriteProbe;
+        use silverhand_backend_core::foundation::persistence::WriteProbe;
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("readiness-handle.db");

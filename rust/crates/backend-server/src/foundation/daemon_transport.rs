@@ -1912,6 +1912,7 @@ mod tests {
     use std::ops::Range;
 
     use silverhand_backend_core::{
+        foundation::persistence::PersistenceFailure,
         host_runtime::runtime_credential::{
             ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimePrincipal,
             RuntimeScope,
@@ -1922,7 +1923,6 @@ mod tests {
         },
         identity::{AgentId, ConversationId},
         messaging::{MessageContent, ReferencePositions},
-        persistence::PersistenceFailure,
         runtime_delivery::{
             ClaimPendingInbox, ClaimedInboxBatch, DeliveryInstruction, DeliveryLeaseOwner,
             InboxDeliveryId, RuntimeDispatchReadPort, RuntimeDispatchTarget,
@@ -2162,6 +2162,7 @@ mod tests {
         use std::{io, thread};
 
         use silverhand_backend_core::{
+            foundation::wire_number::JsSafeInteger,
             host_runtime::scope_runtime_stop::{
                 ScopeRuntimeStopOutcome, ScopeRuntimeStopPort, ScopeRuntimeStopRefusal,
                 ScopeRuntimeStopTarget,
@@ -2171,7 +2172,6 @@ mod tests {
                 read::ComputerReadModel,
             },
             identity::{AgentId, ConversationId, UserId},
-            wire_number::JsSafeInteger,
         };
 
         use crate::host_runtime::daemon_runtime_codecs::runtime_stop::RuntimeStopCommand;
@@ -3834,8 +3834,8 @@ mod tests {
     #[tokio::test]
     async fn profile_mcp_write_decoder_closes_every_unsafe_byte_count() {
         use silverhand_backend_core::{
+            foundation::wire_number::JsSafeInteger,
             identity_access::agent_profile_mcp::{AgentProfileMcpDataPlane, McpDataPlaneFaultCode},
-            wire_number::JsSafeInteger,
         };
 
         let registry = DaemonRegistry::with_process_epoch("profile-mcp-number".to_owned());

@@ -15,10 +15,11 @@ use axum::{
 use futures_util::stream;
 use serde_json::Value;
 use silverhand_backend_core::{
-    blob_store::{
+    foundation::blob_store::{
         BlobDeleteOutcome, BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore, StorageKind,
         StoredBlob,
     },
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
@@ -34,7 +35,6 @@ use silverhand_backend_core::{
         },
         environment::EnvironmentUnavailable,
     },
-    persistence::PersistenceFailure,
 };
 use silverhand_backend_filesystem::blob_store::{LocalBlobStore, LocalBlobStoreError};
 use silverhand_backend_sqlite::messaging::{

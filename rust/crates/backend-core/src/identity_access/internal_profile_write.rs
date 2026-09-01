@@ -390,13 +390,13 @@ where
 mod tests {
     use super::*;
     use crate::{
+        foundation::persistence::PersistenceFailure,
         identity_access::agent_avatar::AgentAvatarBlobRead,
         identity_access::agent_profile_write::{
             AgentChangedAnnounceFailure, AgentTuningContext, CommittedAgentRow,
         },
         identity_access::agents::runtime::RuntimeKind,
         identity_access::avatar::AvatarBlobReadOutcome,
-        persistence::PersistenceFailure,
     };
     use std::sync::{
         Arc, Mutex,

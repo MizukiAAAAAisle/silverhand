@@ -15,9 +15,9 @@
 use std::future::Future;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{AgentId, HostId},
     identity_access::capability::computer_access::ComputerOwnershipFacts,
-    persistence::PersistenceFailure,
     teardown::facts::{AgentRuntimeSessionFacts, AgentTeardownFacts, ComputerTeardownFacts},
 };
 

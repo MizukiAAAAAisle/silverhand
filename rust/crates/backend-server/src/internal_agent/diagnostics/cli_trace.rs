@@ -15,7 +15,7 @@
 //! (absent is fine — a half-formed CLI invocation still reports) but NON-NULL when present
 //! ([`RequiredPatchField`]: a present `null` is refused for every field). Named string
 //! bounds are UTF-16 code units delegated to the sole primitive
-//! [`within_utf16_max`](silverhand_backend_core::wire_text::within_utf16_max); `duration_ms`
+//! [`within_utf16_max`](silverhand_backend_core::foundation::wire_text::within_utf16_max); `duration_ms`
 //! is a nonnegative JS `number` (f64). The only effect is ONE
 //! [`CliPreflightAuditSink::record`] call carrying a typed [`CliPreflightFailure`]; nothing is
 //! persisted by this crate; the response is always `{ "ok": true }`.
@@ -55,9 +55,11 @@ use garde::Validate;
 use serde::Deserialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    cli_preflight_audit::{CliPreflightAuditSink, CliPreflightFailure, NonNegativeFiniteF64},
+    foundation::cli_preflight_audit::{
+        CliPreflightAuditSink, CliPreflightFailure, NonNegativeFiniteF64,
+    },
+    foundation::wire_text,
     host_runtime::runtime_credential::RuntimePrincipal,
-    wire_text,
 };
 
 use crate::wire_admission::ValidatedJson;
@@ -599,7 +601,7 @@ mod tests {
             route_agent: AgentId,
         ) -> Result<
             Option<RuntimePrincipal>,
-            silverhand_backend_core::persistence::PersistenceFailure,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
         > {
             if route_agent == self.enrolled {
                 Ok(Some(agent_principal(self.enrolled.as_str())))

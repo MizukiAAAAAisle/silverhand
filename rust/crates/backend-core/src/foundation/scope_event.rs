@@ -3,8 +3,8 @@
 use std::future::Future;
 
 use crate::{
+    foundation::persistence::PersistenceFailure,
     identity::{ConversationId, UserId, WorkspaceId},
-    persistence::PersistenceFailure,
 };
 
 /// A scope a human viewer asks the event transport to read.

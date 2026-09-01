@@ -67,7 +67,7 @@ async fn read(
         silverhand_backend_core::messaging::collaboration::conversation_message_window::ConversationMessageWindow,
         MessageWindowRefusal,
     >,
-    silverhand_backend_core::persistence::PersistenceFailure,
+    silverhand_backend_core::foundation::persistence::PersistenceFailure,
 >{
     MessagingStore::open(path)
         .await
@@ -91,7 +91,7 @@ async fn read_conversation(
         silverhand_backend_core::messaging::collaboration::conversation_message_window::ConversationMessageWindow,
         MessageWindowRefusal,
     >,
-    silverhand_backend_core::persistence::PersistenceFailure,
+    silverhand_backend_core::foundation::persistence::PersistenceFailure,
 >{
     MessagingStore::open(path)
         .await

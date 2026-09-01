@@ -21,7 +21,7 @@ use crate::identity::HostId;
 
 /// One post-commit attempt failed.
 ///
-/// Distinct from [`PersistenceFailure`](crate::persistence::PersistenceFailure) because
+/// Distinct from [`PersistenceFailure`](crate::foundation::persistence::PersistenceFailure) because
 /// the two are read differently by whoever is paged: a persistence failure means the
 /// operation may not have happened, and this means it did happen and someone was not
 /// told.

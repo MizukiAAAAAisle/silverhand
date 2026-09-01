@@ -23,7 +23,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use silverhand_backend_core::persistence::PersistenceFailure;
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::{
     identity::{AgentId, UserId},
     identity_access::agents::runtime::RuntimeKind,

@@ -1,6 +1,7 @@
 //! Typed scope-event publishers owned by identity and workspace capabilities.
 
 use silverhand_backend_core::{
+    foundation::scope_event::EventScope,
     identity::{AgentId, UserId, WorkspaceId},
     identity_access::access::{
         ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceHumanAudienceReadPort,
@@ -11,7 +12,6 @@ use silverhand_backend_core::{
     identity_access::workspace_metadata_write::{
         WorkspaceMetadataAnnounceFailure, WorkspaceMetadataChangedSink,
     },
-    scope_event::EventScope,
 };
 
 use crate::foundation::{

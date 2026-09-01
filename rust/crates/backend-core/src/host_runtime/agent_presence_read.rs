@@ -27,8 +27,9 @@
 use std::future::Future;
 
 use crate::{
-    identity::AgentId, identity_access::capability::agent_view::AgentVisibility,
-    persistence::PersistenceFailure, policy::agent_presence::ActivityInstant,
+    foundation::persistence::PersistenceFailure, identity::AgentId,
+    identity_access::capability::agent_view::AgentVisibility,
+    policy::agent_presence::ActivityInstant,
 };
 
 /// The stored facts one authenticated agent-presence read is decided and

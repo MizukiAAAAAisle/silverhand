@@ -14,6 +14,7 @@ use serde::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeEventTime, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
@@ -25,7 +26,6 @@ use silverhand_backend_core::{
         UpsertRuntimeTextActivity,
     },
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId},
-    persistence::PersistenceFailure,
 };
 
 use crate::{
