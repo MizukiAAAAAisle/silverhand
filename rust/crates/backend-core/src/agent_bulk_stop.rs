@@ -30,10 +30,12 @@
 use std::future::Future;
 
 use crate::{
+    host_runtime::scope_runtime_stop::{
+        ScopeRuntimeStopPort, ScopeRuntimeStopRefusal, ScopeRuntimeStopTarget,
+    },
     identity::{AgentId, HostId},
     persistence::PersistenceFailure,
     runtime_credential::{RuntimeGeneration, RuntimeScope},
-    scope_runtime_stop::{ScopeRuntimeStopPort, ScopeRuntimeStopRefusal, ScopeRuntimeStopTarget},
     teardown::facts::{AgentRuntimeSessionFacts, is_running_session},
 };
 
@@ -157,8 +159,8 @@ mod tests {
     };
 
     use crate::{
-        identity::ConversationId, runtime_event::RuntimeObservedStatus,
-        scope_runtime_stop::ScopeRuntimeStopOutcome,
+        host_runtime::scope_runtime_stop::ScopeRuntimeStopOutcome, identity::ConversationId,
+        runtime_event::RuntimeObservedStatus,
     };
 
     use super::*;

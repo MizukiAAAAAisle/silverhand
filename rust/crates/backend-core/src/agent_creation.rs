@@ -3,7 +3,7 @@
 //! This orchestrates the create saga end to end, over the durable primitives in
 //! [`crate::agent_materialization`] (reserve / activate-and-provision / fail / reopen /
 //! idempotent lookup), the host-side materialize command
-//! ([`crate::agent_materialize`]), the placement rule ([`crate::host_runtime`]), the
+//! ([`crate::host_runtime::agent_materialize`]), the placement rule ([`crate::host_runtime`]), the
 //! shared handle namespace ([`crate::identity_access::human_auth_flows::HandleNamespaceRead`]) and id
 //! minting (`crate::messaging::identity`). It owns the DECISION at each step; the row
 //! writes, the host command and the reads are ports.
@@ -50,7 +50,7 @@ use crate::{
         ReserveAgentInput, ReserveOutcome, find_idempotent_reservation, home_workspace_id_for,
         provision_and_activate, reopen_failed_materialization, reserve_agent,
     },
-    agent_materialize::{
+    host_runtime::agent_materialize::{
         AgentMaterializePort, AgentMaterializeRefusal, AgentMaterializeTarget,
         AgentMaterializeTemplate,
     },
@@ -892,7 +892,7 @@ mod tests {
         RawCreatorIdentity, RawHomeWorkspaceRow, RawOnboardingDmRow, RawProvisionOutcome,
         RawWorkspaceOwnerEdge, ReserveRecord, ReservedAgentRow, agent_home_workspace_description,
     };
-    use crate::agent_materialize::AgentMaterializeReceipt;
+    use crate::host_runtime::agent_materialize::AgentMaterializeReceipt;
     use crate::host_runtime::computer::{ComputerRecord, HostKind, ProvisioningSource};
     use crate::messaging::agent_onboarding::{
         ONBOARDING_DM_TITLE, ONBOARDING_DM_TITLE_KEY, OnboardingMetadataDigest,

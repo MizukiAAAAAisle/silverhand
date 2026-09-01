@@ -28,7 +28,9 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    host_resources_read::{HostAgentResourceFact, HostResourcesReadModel, visible_host_resources},
+    host_runtime::host_resources_read::{
+        HostAgentResourceFact, HostResourcesReadModel, visible_host_resources,
+    },
     identity::{HostId, UserId},
 };
 
@@ -183,7 +185,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        host_resources_read::{HostAgentResourceFact, HostResourcesFacts},
+        host_runtime::host_resources_read::{HostAgentResourceFact, HostResourcesFacts},
         identity::AgentId,
         identity_access::agents::runtime::RuntimeKind,
         identity_access::capability::computer_access::ComputerOwnershipFacts,

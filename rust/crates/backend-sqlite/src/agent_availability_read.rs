@@ -1,6 +1,6 @@
 //! SQLite adapter for the stored half of the availability cold read.
 //!
-//! It supplies the facts [`silverhand_backend_core::agent_availability_read`]
+//! It supplies the facts [`silverhand_backend_core::host_runtime::agent_availability_read`]
 //! declares, in the two reads that module separates: the agent view before the
 //! ACL gate, and the host row only after it passes.
 //!
@@ -37,8 +37,8 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agent_availability_read::{AgentAvailabilityReadModel, AgentViewFacts},
     cold_read::availability::HostReachabilityFacts,
+    host_runtime::agent_availability_read::{AgentAvailabilityReadModel, AgentViewFacts},
     identity::{AgentId, HostId, UserId},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},

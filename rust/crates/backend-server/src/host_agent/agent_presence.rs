@@ -43,7 +43,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
+    host_runtime::agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
     identity::{AgentId, Principal, UserId},
     identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
@@ -191,7 +191,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
+        host_runtime::agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
         identity::{AgentId, UserId},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},

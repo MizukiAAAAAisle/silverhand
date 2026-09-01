@@ -9234,7 +9234,7 @@ mod host_resources_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        host_resources_read::{HostResourcesFacts, HostResourcesReadModel},
+        host_runtime::host_resources_read::{HostResourcesFacts, HostResourcesReadModel},
         identity::HostId,
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         persistence::PersistenceFailure,

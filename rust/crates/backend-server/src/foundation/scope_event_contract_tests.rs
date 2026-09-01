@@ -16,9 +16,9 @@ use silverhand_backend_core::messaging::collaboration::notification::{
     NotificationClearPort, NotificationClearSelector, clear_notifications,
 };
 use silverhand_backend_core::{
-    agent_availability_read::AgentAvailabilityReadModel,
     blob_store::{BlobStorageKey, StorageKind, StoredBlob},
     direct_pair_read::DirectPairReadModel,
+    host_runtime::agent_availability_read::AgentAvailabilityReadModel,
     host_runtime::{aftermath::AgentAvailabilityAnnouncer, agent_roster::ComputerAgentsReadPort},
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId},
     identity_access::access::{WorkspaceHumanAudienceReadPort, WorkspaceRole},
@@ -3432,7 +3432,7 @@ impl ComputerAgentsReadPort for StubComputerAgents {
 struct StubAgentView(
     std::collections::HashMap<
         String,
-        silverhand_backend_core::agent_availability_read::AgentViewFacts,
+        silverhand_backend_core::host_runtime::agent_availability_read::AgentViewFacts,
     >,
 );
 
@@ -3441,7 +3441,7 @@ impl AgentAvailabilityReadModel for StubAgentView {
         &self,
         agent: &AgentId,
     ) -> Result<
-        Option<silverhand_backend_core::agent_availability_read::AgentViewFacts>,
+        Option<silverhand_backend_core::host_runtime::agent_availability_read::AgentViewFacts>,
         PersistenceFailure,
     > {
         Ok(self.0.get(agent.as_str()).cloned())
@@ -3466,11 +3466,11 @@ fn availability_view(
     direct_pairs: &[&str],
     workspaces: &[&str],
     status: silverhand_backend_core::identity_access::agent_lifecycle::MaterializationStatus,
-) -> silverhand_backend_core::agent_availability_read::AgentViewFacts {
+) -> silverhand_backend_core::host_runtime::agent_availability_read::AgentViewFacts {
     use silverhand_backend_core::identity_access::capability::agent_view::{
         AgentViewerArms, AgentVisibility,
     };
-    silverhand_backend_core::agent_availability_read::AgentViewFacts::from_source(
+    silverhand_backend_core::host_runtime::agent_availability_read::AgentViewFacts::from_source(
         AgentId::parse(source).unwrap(),
         AgentVisibility {
             viewers: AgentViewerArms::new(

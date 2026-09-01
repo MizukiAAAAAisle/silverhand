@@ -3,7 +3,7 @@
 use std::{error::Error, fmt};
 
 use silverhand_backend_core::{
-    agent_availability_read::AgentAvailabilityReadModel,
+    host_runtime::agent_availability_read::AgentAvailabilityReadModel,
     host_runtime::{
         aftermath::{AgentAvailabilityAnnouncer, CustodyEffectFailure},
         agent_roster::ComputerAgentsReadPort,

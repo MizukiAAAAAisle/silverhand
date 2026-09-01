@@ -2162,15 +2162,15 @@ mod tests {
         use std::{io, thread};
 
         use silverhand_backend_core::{
+            host_runtime::scope_runtime_stop::{
+                ScopeRuntimeStopOutcome, ScopeRuntimeStopPort, ScopeRuntimeStopRefusal,
+                ScopeRuntimeStopTarget,
+            },
             host_runtime::{
                 computer::{ComputerRecord, HostKind, ProvisioningSource},
                 read::ComputerReadModel,
             },
             identity::{AgentId, ConversationId, UserId},
-            scope_runtime_stop::{
-                ScopeRuntimeStopOutcome, ScopeRuntimeStopPort, ScopeRuntimeStopRefusal,
-                ScopeRuntimeStopTarget,
-            },
             wire_number::JsSafeInteger,
         };
 
@@ -3591,7 +3591,7 @@ mod tests {
     #[tokio::test]
     async fn materialize_command_stays_on_its_captured_host_and_connection_generation() {
         use silverhand_backend_core::{
-            agent_materialize::{
+            host_runtime::agent_materialize::{
                 AgentMaterializePort, AgentMaterializeTarget, AgentMaterializeTemplate,
             },
             identity::WorkspaceId,
@@ -3663,7 +3663,7 @@ mod tests {
             )
             .await
             .unwrap(),
-            Err(silverhand_backend_core::agent_materialize::AgentMaterializeRefusal::HostAttachPending)
+            Err(silverhand_backend_core::host_runtime::agent_materialize::AgentMaterializeRefusal::HostAttachPending)
         ));
         assert!(matches!(
             successor_receive.try_recv(),
@@ -3925,7 +3925,7 @@ mod tests {
     #[tokio::test]
     async fn materialize_refuses_a_target_that_names_a_different_host_than_the_capture() {
         use silverhand_backend_core::{
-            agent_materialize::{
+            host_runtime::agent_materialize::{
                 AgentMaterializePort, AgentMaterializeTarget, AgentMaterializeTemplate,
             },
             identity::WorkspaceId,

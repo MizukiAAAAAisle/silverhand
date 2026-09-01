@@ -12,6 +12,9 @@ use std::{
 };
 
 use silverhand_backend_core::{
+    host_runtime::scope_runtime_stop::{
+        ScopeRuntimeStopPort, ScopeRuntimeStopRefusal, ScopeRuntimeStopTarget,
+    },
     host_runtime::{
         lifecycle::{HostLifecycleStatus, lifecycle_status},
         read::ComputerReadModel,
@@ -28,7 +31,6 @@ use silverhand_backend_core::{
         RuntimeCustody, RuntimeCustodyPort, RuntimeFinalStatus, RuntimePrincipal, RuntimeScope,
     },
     runtime_delivery::{RuntimeDispatchReadPort, RuntimeDispatchTarget},
-    scope_runtime_stop::{ScopeRuntimeStopPort, ScopeRuntimeStopRefusal, ScopeRuntimeStopTarget},
 };
 use tokio::sync::Notify;
 

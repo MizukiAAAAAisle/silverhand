@@ -80,7 +80,7 @@ pub struct HostAgentResourceFact {
 /// ```compile_fail
 /// use silverhand_backend_core::{
 ///     identity_access::capability::computer_access::ComputerOwnershipFacts,
-///     host_resources_read::HostResourcesFacts,
+///     host_runtime::host_resources_read::HostResourcesFacts,
 ///     identity::HostId,
 /// };
 /// let facts = HostResourcesFacts::from_ownership(
@@ -98,7 +98,7 @@ pub struct HostAgentResourceFact {
 /// ```
 /// use silverhand_backend_core::{
 ///     identity_access::capability::computer_access::ComputerOwnershipFacts,
-///     host_resources_read::{HostResourcesFacts, visible_host_resources},
+///     host_runtime::host_resources_read::{HostResourcesFacts, visible_host_resources},
 ///     identity::{HostId, UserId},
 /// };
 /// let owner = UserId::parse("u1").unwrap();

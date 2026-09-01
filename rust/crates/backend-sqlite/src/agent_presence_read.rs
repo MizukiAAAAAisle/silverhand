@@ -1,6 +1,6 @@
 //! SQLite adapter for the agent-presence cold read.
 //!
-//! It supplies the facts [`silverhand_backend_core::agent_presence_read`] declares:
+//! It supplies the facts [`silverhand_backend_core::host_runtime::agent_presence_read`] declares:
 //! the agent's `last_activity_at` and the two set-shaped ACL arms, resolved together
 //! on ONE `BEGIN DEFERRED` snapshot so the visibility a caller is judged against and
 //! the activity stamp the away deadline is projected from come from one view of the
@@ -32,7 +32,7 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
+    host_runtime::agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
     identity::{AgentId, UserId},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},

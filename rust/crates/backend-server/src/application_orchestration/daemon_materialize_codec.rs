@@ -4,7 +4,7 @@ use std::{error::Error, fmt};
 
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    agent_materialize::{AgentMaterializeReceipt, AgentMaterializeTarget},
+    host_runtime::agent_materialize::{AgentMaterializeReceipt, AgentMaterializeTarget},
     wire_number::JsSafeInteger,
 };
 
@@ -60,7 +60,7 @@ pub(crate) fn decode_result(value: &Value) -> Option<AgentMaterializeReceipt> {
 mod tests {
     use super::*;
     use silverhand_backend_core::{
-        agent_materialize::AgentMaterializeTemplate,
+        host_runtime::agent_materialize::AgentMaterializeTemplate,
         identity::{AgentId, HostId, WorkspaceId},
         identity_access::agents::runtime::RuntimeKind,
     };

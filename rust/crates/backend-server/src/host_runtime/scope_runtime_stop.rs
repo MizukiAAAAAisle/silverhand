@@ -8,16 +8,16 @@
 use std::{error::Error, fmt, time::Duration};
 
 use silverhand_backend_core::{
+    host_runtime::scope_runtime_stop::{
+        ScopeRuntimeStopOutcome, ScopeRuntimeStopPort, ScopeRuntimeStopRefusal,
+        ScopeRuntimeStopTarget,
+    },
     host_runtime::{
         lifecycle::{HostLifecycleStatus, lifecycle_status},
         read::ComputerReadModel,
     },
     identity::HostId,
     persistence::PersistenceFailure,
-    scope_runtime_stop::{
-        ScopeRuntimeStopOutcome, ScopeRuntimeStopPort, ScopeRuntimeStopRefusal,
-        ScopeRuntimeStopTarget,
-    },
 };
 
 use crate::daemon_delivery::{

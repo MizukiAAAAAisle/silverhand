@@ -87,11 +87,13 @@ const CRATE_ROOTS: &[&str] = &[
 /// organization map/gate (docs/rust-backend-organization-map.json) is the sole authority
 /// for a leaf's owner, physical target and residual/landed status inside the namespace.
 const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
-    ("backend-core", "agent_availability_read"),
-    // #task:2229 — unmounted typed agent-materialize capability and its production
-    // exact-custody data-plane adapter. The later create vertical consumes this
-    // port; this ticket does not activate a route.
-    ("backend-core", "agent_materialize"),
+    // #task:2280 — the first host_runtime relocation wave moved five low-fanout backend-core
+    // leaves under the dual-role `host_runtime` context/namespace: `agent_availability_read`
+    // and `agent_presence_read` (read models), `agent_materialize` (transport-neutral target
+    // contract), `host_resources_read` (read model), and `scope_runtime_stop` (target
+    // contract). Their old flat crate-root seam entries are removed; the single owning-root
+    // `host_runtime` entry (in the inherited list below) covers them via the CP projection,
+    // and the organization map/gate owns each leaf's owner/target inside the namespace.
     // #task:2225 — the single-UoW create/provision-and-activate authority: the core
     // materialization writer plus the exhaustive `provision_and_activate` use case that
     // seals both the agent and conversation arms. Core capability, mounted at the app
@@ -104,7 +106,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // belong to the route face. Mounted at the app composition root by the #task:2234
     // integration (CP6 create route).
     ("backend-core", "agent_creation"),
-    ("backend-core", "agent_presence_read"),
     // #task:2225 — the public agent-lifecycle and avatar route family (Rust Wave 3).
     // All of this family's backend-core core leaves have relocated under the C1
     // `identity_access` namespace: the handle-availability probe (#task:2272), the
@@ -139,12 +140,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // #task:2275 (`agent_profile_read`), and #task:2278 (`agent_profile_mcp`); their
     // owner/target lives in the organization map, not as flat seam entries here.
     ("backend-core", "cold_read"),
-    ("backend-core", "host_resources_read"),
     ("backend-core", "policy"),
-    // #task:2227 — exact host + runtime-scope + generation stop capability and its
-    // production owning-host data-plane adapter. It is consumed by the later bulk
-    // stop vertical, not activated as a route in this ticket.
-    ("backend-core", "scope_runtime_stop"),
     // #task:2225 — the durable runtime-transition lock (begin/complete/abort) behind
     // the public runtime-switch route. A distinct write authority from the profile
     // row writer, keyed on the lock columns; its SQLite adapter rides the existing
@@ -555,19 +551,18 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// organization container (the agent-detail and agent-list read ports moved to
 /// `crate::identity_access::{agent_detail_read,agent_list_read}` in #task:2275, the
 /// `capability` decision namespace moved to `crate::identity_access::capability` in
-/// #task:2277, and the `user_presence_cold_read` read port moved to
-/// `crate::viewer_read_model::user_presence_cold_read` in #task:2279), it drops out of BOTH
-/// this table and the seam ledger: a container such as
+/// #task:2277, the `user_presence_cold_read` read port moved to
+/// `crate::viewer_read_model::user_presence_cold_read` in #task:2279, and the
+/// `agent_availability_read`, `agent_presence_read`, and `host_resources_read` read ports
+/// moved under the dual-role `crate::host_runtime` context/namespace in #task:2280), it
+/// drops out of BOTH this table and the seam ledger: a container such as
 /// `identity_access` holds both activated and unmounted leaves, so it is NOT added here as
 /// a whole. A nested leaf's real existence/relocation is the organization gate's authority,
 /// and its actual mount is the composition/route behavior tests' — this table is not the
 /// activation authority for nested leaves, and is deliberately not upgraded into a
 /// second full-path scanner for them.
 const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
-    ("backend-core", "agent_availability_read"),
-    ("backend-core", "agent_presence_read"),
     ("backend-core", "cold_read"),
-    ("backend-core", "host_resources_read"),
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
     ("backend-server", "host_agent"),

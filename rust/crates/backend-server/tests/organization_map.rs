@@ -1754,12 +1754,16 @@ fn falsifier_a_self_named_context_and_a_relocation_container_coexist_without_los
         "a non-leaf child of a pure container is unclassified (turns the scan red)"
     );
 
-    // (C) REAL TREE: at the anchor `host_runtime` already IS a self-named context directory
-    // in each crate that declares it — proof the dual model reads the real tree, not just a
-    // synthetic role. It has a self row and (pre-wave) no landed leaves yet; when its wave
-    // lands leaves, branch (A)'s logic keeps both. Its many internal submodules do NOT leak
-    // into the universe as unclassified today, which the green `scanned_crate_roots` relies
-    // on.
+    // (C) REAL TREE: `host_runtime` IS a self-named context directory in each crate that
+    // declares it — proof the dual model reads the real tree, not just a synthetic role. As of
+    // the first host_runtime relocation wave it now ALSO carries landed relocation leaves, so
+    // branch (A)'s dual-role logic holds on the real tree. This asserts only the STABLE SHAPE
+    // that must remain true across every host_runtime wave — a self row plus at least one
+    // nested landed leaf — and deliberately does NOT enumerate which leaves have landed: the
+    // map + real tree are the sole authority for the landed set (`resolve_settled_location` per
+    // row, and the workspace-wide root/target XOR + coverage gates), so no per-wave landed
+    // ledger is re-introduced here. Its many internal submodules do NOT leak into the universe
+    // as unclassified, which the green `scanned_crate_roots` relies on.
     let map = load_map();
     let root = rust_root();
     let hr_core = namespace_role(
@@ -1770,12 +1774,13 @@ fn falsifier_a_self_named_context_and_a_relocation_container_coexist_without_los
     );
     assert!(
         hr_core.has_self_row,
-        "backend-core::host_runtime is a self-named context at the anchor"
+        "backend-core::host_runtime is a self-named context"
     );
     assert!(
-        hr_core.landed_leaves.is_empty(),
-        "no host_runtime leaf has landed yet at the anchor (its wave is later): {:?}",
-        hr_core.landed_leaves
+        !hr_core.landed_leaves.is_empty(),
+        "host_runtime now carries at least one nested landed relocation leaf, proving the \
+         dual role on the real tree — the exact landed set is derived from the map + tree, \
+         not asserted here"
     );
 }
 

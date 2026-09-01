@@ -14,8 +14,8 @@
 //! AND that no other arm leaked a stranger in.
 
 use silverhand_backend_core::{
-    agent_availability_read::{AgentAvailabilityReadModel, AgentViewFacts},
     cold_read::availability::HostReachabilityFacts,
+    host_runtime::agent_availability_read::{AgentAvailabilityReadModel, AgentViewFacts},
     identity::{AgentId, HostId, UserId},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},

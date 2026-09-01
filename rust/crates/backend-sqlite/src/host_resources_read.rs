@@ -1,6 +1,6 @@
 //! SQLite adapter for the host-resources cold read.
 //!
-//! It supplies the facts [`silverhand_backend_core::host_resources_read`] declares:
+//! It supplies the facts [`silverhand_backend_core::host_runtime::host_resources_read`] declares:
 //! the computer's ownership row and the agents registered on it, resolved on ONE
 //! `BEGIN DEFERRED` snapshot so the ownership a requester is judged against and the
 //! rows listed to the wire come from one view of the database.
@@ -46,7 +46,9 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    host_resources_read::{HostAgentResourceFact, HostResourcesFacts, HostResourcesReadModel},
+    host_runtime::host_resources_read::{
+        HostAgentResourceFact, HostResourcesFacts, HostResourcesReadModel,
+    },
     identity::{AgentId, HostId, UserId},
     identity_access::agents::runtime::RuntimeKind,
     identity_access::capability::computer_access::ComputerOwnershipFacts,
@@ -215,7 +217,7 @@ impl HostResourcesReadModel for SqliteHostResourcesColdRead {
 
 #[cfg(test)]
 mod tests {
-    use silverhand_backend_core::host_resources_read::visible_host_resources;
+    use silverhand_backend_core::host_runtime::host_resources_read::visible_host_resources;
     use sqlx::{Connection, Executor};
 
     use super::*;

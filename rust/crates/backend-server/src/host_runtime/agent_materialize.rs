@@ -2,7 +2,7 @@
 
 use std::{error::Error, fmt, time::Duration};
 
-use silverhand_backend_core::agent_materialize::{
+use silverhand_backend_core::host_runtime::agent_materialize::{
     AgentMaterializePort, AgentMaterializeReceipt, AgentMaterializeRefusal, AgentMaterializeTarget,
 };
 

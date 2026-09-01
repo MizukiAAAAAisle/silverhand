@@ -25,6 +25,13 @@
 //!   has committed, and nothing else here may decide those effects are optional.
 //! - [`agent_roster`] enumerates the agents a computer carries, the set the
 //!   availability fan-out walks when custody moves them all at once.
+//!
+//! `host_runtime` is BOTH this self-named bounded context (the modules above) AND the
+//! C2 relocation namespace (`crate::host_runtime::*`). The `pub mod` entries below the
+//! context list are relocated business leaves whose owner/target the organization
+//! map/gate assigns to `host_runtime::<leaf>`; they are distinct capabilities that merely
+//! share this namespace, not internal submodules of the custody context and not merged
+//! into it (#task:2280 and later host_runtime waves).
 
 pub mod aftermath;
 pub mod agent_roster;
@@ -39,3 +46,13 @@ pub mod revoke;
 pub mod rotation;
 pub mod status;
 pub mod update;
+
+// Relocated C2 business leaves (organization namespace role) — availability/presence
+// read models, the transport-neutral agent-materialize target contract, the host-resources
+// read model, and the scope-stop target contract. Each is its own capability; the
+// organization map/gate owns their owner/target inside this namespace.
+pub mod agent_availability_read;
+pub mod agent_materialize;
+pub mod agent_presence_read;
+pub mod host_resources_read;
+pub mod scope_runtime_stop;

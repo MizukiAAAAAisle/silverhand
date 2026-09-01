@@ -49,6 +49,7 @@ use silverhand_backend_core::{
         AgentBulkStopOutcome, AgentBulkStopReadPort, BulkStopSeatFailure, BulkStopSeatFault,
         bulk_stop_agent_runtimes,
     },
+    host_runtime::scope_runtime_stop::{ScopeRuntimeStopPort, ScopeRuntimeStopRefusal},
     identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     identity_access::capability::{
@@ -56,7 +57,6 @@ use silverhand_backend_core::{
         agent_view::{VisibleStages, can_view_agent},
     },
     messaging::collaboration::RuntimePlacementRefusal,
-    scope_runtime_stop::{ScopeRuntimeStopPort, ScopeRuntimeStopRefusal},
 };
 
 use crate::error;
@@ -323,6 +323,7 @@ mod tests {
     use serde_json::{Value, json};
     use silverhand_backend_core::{
         agent_bulk_stop::AgentBulkStopSnapshot,
+        host_runtime::scope_runtime_stop::{ScopeRuntimeStopOutcome, ScopeRuntimeStopTarget},
         identity::{ConversationId, HostId},
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         identity_access::agent_lifecycle::MaterializationStatus,
@@ -330,7 +331,6 @@ mod tests {
         persistence::PersistenceFailure,
         runtime_credential::{RuntimeGeneration, RuntimeScope},
         runtime_event::RuntimeObservedStatus,
-        scope_runtime_stop::{ScopeRuntimeStopOutcome, ScopeRuntimeStopTarget},
     };
     use tower::ServiceExt;
 

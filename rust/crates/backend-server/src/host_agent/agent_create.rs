@@ -100,7 +100,7 @@ use silverhand_backend_core::{
         AgentArmProvisioningPort, AgentMaterializationLookup, AgentMaterializationWrite,
         IdempotencyKey,
     },
-    agent_materialize::AgentMaterializePort,
+    host_runtime::agent_materialize::AgentMaterializePort,
     host_runtime::read::ComputerReadModel,
     identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
     identity_access::agent_detail_read::AgentDetailReadModel,
@@ -887,7 +887,7 @@ mod tests {
             IdempotentReservationRow, MaterializationFlipRow, RawProvisionOutcome,
             ReserveAgentInput, ReserveRecord,
         },
-        agent_materialize::{
+        host_runtime::agent_materialize::{
             AgentMaterializeReceipt, AgentMaterializeRefusal, AgentMaterializeTarget,
         },
         host_runtime::{computer::ComputerRecord, read::ComputerReadModel},
