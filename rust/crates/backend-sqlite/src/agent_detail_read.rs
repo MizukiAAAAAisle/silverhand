@@ -1,6 +1,6 @@
 //! SQLite adapter for the agent-detail cold read.
 //!
-//! It supplies the facts [`silverhand_backend_core::agent_detail_read`] declares:
+//! It supplies the facts [`silverhand_backend_core::identity_access::agent_detail_read`] declares:
 //! the agent row, its host `LEFT JOIN`, and the two set-shaped ACL arms, resolved
 //! together on ONE `BEGIN DEFERRED` snapshot so the visibility a caller is judged
 //! against and the values projected to the wire come from one view of the database.
@@ -33,10 +33,12 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
     agent_lifecycle::MaterializationStatus,
     agents::runtime::RuntimeKind,
     identity::{AgentId, UserId},
+    identity_access::agent_detail_read::{
+        AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
+    },
     persistence::PersistenceFailure,
 };
 use sqlx::{

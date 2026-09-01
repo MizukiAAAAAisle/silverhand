@@ -2,7 +2,7 @@
 //! /internal/agents/{aid}/profile` (and the internal avatar `POST`/`DELETE`) — the
 //! #2226 orchestration bounded context that drives the blob store and the SINGLE
 //! canonical `agents`-row writer
-//! ([`crate::agent_profile_write::AgentProfileWriteUnitOfWork`]) to apply a combined
+//! ([`crate::identity_access::agent_profile_write::AgentProfileWriteUnitOfWork`]) to apply a combined
 //! `display_name` / `description` / avatar edit in ONE row unit-of-work, firing EXACTLY
 //! ONE `agent_changed` announce and cleaning up any replaced/removed blob.
 //!
@@ -35,17 +35,17 @@
 //! avatar blob even when one is present.
 
 use crate::{
-    agent_avatar::{
+    identity::AgentId,
+    identity_access::agent_avatar::{
         AgentAvatarAssignment, AgentAvatarBlobPointer, AgentAvatarBlobStore, AgentAvatarRow,
         OwnedAgentAvatarBlob,
     },
-    agent_profile_write::{
+    identity_access::agent_profile_write::{
         AdmittedAgentProfileEdit, AgentChangedAnnounce, AgentChangedSink, AgentProfileRowWrite,
         AgentProfileWriteError, AgentProfileWriteUnitOfWork, AgentRowBefore, FieldEdit,
         RequiredEdit, admit_internal_profile_edit, seal_agent_row,
     },
-    avatar::{AvatarContentType, AvatarStorageFailure, BlobCleanup},
-    identity::AgentId,
+    identity_access::avatar::{AvatarContentType, AvatarStorageFailure, BlobCleanup},
 };
 
 // ===========================================================================
@@ -390,10 +390,12 @@ where
 mod tests {
     use super::*;
     use crate::{
-        agent_avatar::AgentAvatarBlobRead,
-        agent_profile_write::{AgentChangedAnnounceFailure, AgentTuningContext, CommittedAgentRow},
         agents::runtime::RuntimeKind,
-        avatar::AvatarBlobReadOutcome,
+        identity_access::agent_avatar::AgentAvatarBlobRead,
+        identity_access::agent_profile_write::{
+            AgentChangedAnnounceFailure, AgentTuningContext, CommittedAgentRow,
+        },
+        identity_access::avatar::AvatarBlobReadOutcome,
         persistence::PersistenceFailure,
     };
     use std::sync::{

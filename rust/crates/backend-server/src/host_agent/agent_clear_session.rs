@@ -34,9 +34,9 @@ use axum::{
 use serde::Serialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     capability::agent_view::{VisibleStages, can_view_agent},
     identity::{AgentId, Principal, UserId},
+    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     messaging::collaboration::{
         ClearSessionProviderRefusal, ClearSessionRefusal, RuntimeControlAdmission,
         RuntimeControlAdmissionRefusal, RuntimeControlPort, clear_agent_session,
@@ -275,7 +275,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use silverhand_backend_core::agent_detail_read::AgentDetailProjection;
+    use silverhand_backend_core::identity_access::agent_detail_read::AgentDetailProjection;
 
     fn user(id: &str) -> UserId {
         UserId::parse(id).expect("user id")

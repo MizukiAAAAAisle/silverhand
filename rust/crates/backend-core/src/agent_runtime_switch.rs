@@ -45,12 +45,12 @@ use std::future::Future;
 use futures_util::future::join_all;
 
 use crate::{
-    agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
     agents::{
         runtime::RuntimeKind, runtime_catalog::SELECTABLE_RUNTIMES,
         session_scope::AgentSessionScope,
     },
     identity::{AgentId, ConversationId, HostId},
+    identity_access::agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
     messaging::collaboration::{RuntimeControlPort, RuntimeSeatTarget, RuntimeStartTarget},
     persistence::PersistenceFailure,
     runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustodyReadPort, RuntimeScope},
@@ -1394,11 +1394,12 @@ mod tests {
         async fn agent_changed(
             &self,
             agent: &AgentId,
-        ) -> Result<(), crate::agent_profile_write::AgentChangedAnnounceFailure> {
+        ) -> Result<(), crate::identity_access::agent_profile_write::AgentChangedAnnounceFailure>
+        {
             self.announced.lock().unwrap().push(agent.clone());
             if self.fail {
                 Err(
-                    crate::agent_profile_write::AgentChangedAnnounceFailure::from_source(
+                    crate::identity_access::agent_profile_write::AgentChangedAnnounceFailure::from_source(
                         NeverFails,
                     ),
                 )

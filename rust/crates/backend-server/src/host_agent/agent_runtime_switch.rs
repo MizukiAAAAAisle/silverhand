@@ -64,8 +64,6 @@ use axum::{
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    agent_detail_read::AgentDetailReadModel,
-    agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
     agent_runtime_switch::{
         RuntimeAvailabilityProbe, RuntimeAvailabilityProbeFault, SwitchAgentRuntimeConfig,
         SwitchAgentRuntimeError, SwitchAgentRuntimeRequest, SwitchAgentSnapshotRead,
@@ -80,6 +78,8 @@ use silverhand_backend_core::{
         agent_view::{VisibleStages, can_view_agent},
     },
     identity::{AgentId, Principal, UserId},
+    identity_access::agent_detail_read::AgentDetailReadModel,
+    identity_access::agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
     messaging::collaboration::RuntimeControlPort,
     name_canonicalization::is_ecmascript_trim_whitespace,
     runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustodyReadPort},
@@ -311,7 +311,7 @@ where
         &agent,
         detail
             .as_ref()
-            .map(silverhand_backend_core::agent_detail_read::AgentDetailFacts::visibility),
+            .map(silverhand_backend_core::identity_access::agent_detail_read::AgentDetailFacts::visibility),
         &VisibleStages::active_only(),
     );
     let Some(detail) = detail.filter(|_| decision.is_allowed()) else {
@@ -682,7 +682,6 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         agent_lifecycle::MaterializationStatus,
         agent_runtime_switch::{
             RuntimeAvailabilityProbeFault, RuntimeAvailabilityVerdict, SwitchAgentRuntimeError,
@@ -690,6 +689,7 @@ mod tests {
         },
         agents::session_scope::AgentSessionScope,
         identity::{ConversationId, HostId},
+        identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         messaging::collaboration::{
             ClearSessionOutcome, ClearSessionProviderRefusal, HardStopRuntimeOutcome,
             HardStopRuntimeProviderRefusal, RuntimeSeatTarget, RuntimeStartTarget,
@@ -950,7 +950,7 @@ mod tests {
         async fn agent_changed(
             &self,
             _agent: &AgentId,
-        ) -> Result<(), silverhand_backend_core::agent_profile_write::AgentChangedAnnounceFailure>
+        ) -> Result<(), silverhand_backend_core::identity_access::agent_profile_write::AgentChangedAnnounceFailure>
         {
             // Every test here stops at the ladder, admission, or the saga PREFLIGHT — none reaches
             // a commit, and the `agent_changed` hint fires ONLY after a commit. So a consulted sink

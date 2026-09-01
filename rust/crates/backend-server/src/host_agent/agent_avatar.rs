@@ -42,13 +42,13 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_avatar::{
-        AgentAvatarBlobRead, AgentAvatarFetchOutcome, AgentAvatarServeRefRead, fetch_agent_avatar,
-    },
-    agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
-    avatar::AvatarContentType,
     capability::agent_view::{VisibleStages, can_view_agent},
     identity::{AgentId, Principal, UserId},
+    identity_access::agent_avatar::{
+        AgentAvatarBlobRead, AgentAvatarFetchOutcome, AgentAvatarServeRefRead, fetch_agent_avatar,
+    },
+    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
+    identity_access::avatar::AvatarContentType,
 };
 
 use crate::error;
@@ -239,15 +239,15 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_avatar::{
+        agent_lifecycle::MaterializationStatus,
+        agents::runtime::RuntimeKind,
+        identity::{AgentId, UserId},
+        identity_access::agent_avatar::{
             AgentAvatarBlobPointer, AgentAvatarBlobRead, AgentAvatarRow, AgentAvatarServeRef,
             OwnedAgentAvatarBlob,
         },
-        agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
-        agent_lifecycle::MaterializationStatus,
-        agents::runtime::RuntimeKind,
-        avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
-        identity::{AgentId, UserId},
+        identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
+        identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
         persistence::PersistenceFailure,
     };
     use tower::ServiceExt;

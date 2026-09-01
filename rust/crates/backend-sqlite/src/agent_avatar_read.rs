@@ -14,14 +14,16 @@
 //! the visibility authority, so a row that vanished between the gate and this read is
 //! simply "no avatar", not an existence signal.
 //!
-//! [`AgentAvatarRow`]: silverhand_backend_core::agent_avatar::AgentAvatarRow
-//! [`AgentAvatarRowCorruption`]: silverhand_backend_core::agent_avatar::AgentAvatarRowCorruption
+//! [`AgentAvatarRow`]: silverhand_backend_core::identity_access::agent_avatar::AgentAvatarRow
+//! [`AgentAvatarRowCorruption`]: silverhand_backend_core::identity_access::agent_avatar::AgentAvatarRowCorruption
 
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agent_avatar::{AgentAvatarServeRef, AgentAvatarServeRefRead, decode_agent_avatar_row},
     identity::AgentId,
+    identity_access::agent_avatar::{
+        AgentAvatarServeRef, AgentAvatarServeRefRead, decode_agent_avatar_row,
+    },
     persistence::PersistenceFailure,
 };
 use sqlx::{
@@ -98,7 +100,9 @@ impl AgentAvatarServeRefRead for SqliteAgentAvatarRead {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::{agent_avatar::AgentAvatarRow, avatar::AvatarContentType};
+    use silverhand_backend_core::identity_access::{
+        agent_avatar::AgentAvatarRow, avatar::AvatarContentType,
+    };
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =

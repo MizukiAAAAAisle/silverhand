@@ -36,12 +36,12 @@ use axum::{
 use serde::Serialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     capability::{
         agent_authority::{AgentAuthority, can_view_agent_files},
         agent_view::{VisibleStages, can_view_agent},
     },
     identity::{AgentId, HostId, Principal, UserId, WorkspaceId},
+    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     workspace_data_plane::{
         AgentWorkspaceScopeRead, AgentWorkspaceScopeRefusal, AgentWorkspaceScopeResolution,
         WorkspaceDataPlane, WorkspaceFileRead, WorkspaceFsFault, WorkspaceFsFaultCode,
@@ -498,10 +498,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
         agent_lifecycle::MaterializationStatus,
         agents::runtime::RuntimeKind,
         identity::{AgentId, HostId, UserId, WorkspaceId},
+        identity_access::agent_detail_read::{
+            AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
+        },
         persistence::PersistenceFailure,
         wire_number::JsSafeInteger,
         workspace_data_plane::{

@@ -3206,7 +3206,7 @@ async fn agent_changed_rides_the_app_scope_with_the_id_only_payload() {
 /// second event.
 #[tokio::test]
 async fn hub_agent_changed_sink_lands_the_agent_changed_frame_on_a_real_subscription() {
-    use silverhand_backend_core::agent_profile_write::AgentChangedSink as _;
+    use silverhand_backend_core::identity_access::agent_profile_write::AgentChangedSink as _;
 
     let hub = ScopeEventHub::test("epoch-1");
     let mut app = hub.subscribe(EventScope::App).unwrap().receiver;

@@ -1,6 +1,6 @@
 //! SQLite adapter for the narrow internal agent-profile read.
 //!
-//! It supplies the facts [`silverhand_backend_core::agent_profile_read`]
+//! It supplies the facts [`silverhand_backend_core::identity_access::agent_profile_read`]
 //! declares — one agent's `{ id, name, display_name, description, avatar }` —
 //! and NOTHING wider. Unlike [`crate::agent_detail_read`] it takes no host
 //! `LEFT JOIN` and runs no `agent_view_acl`: the internal profile routes are
@@ -29,8 +29,8 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agent_profile_read::{AgentProfileFact, AgentProfileReadModel},
     identity::AgentId,
+    identity_access::agent_profile_read::{AgentProfileFact, AgentProfileReadModel},
     messaging::AvatarRevision,
     persistence::PersistenceFailure,
 };

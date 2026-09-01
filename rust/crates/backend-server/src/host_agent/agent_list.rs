@@ -29,9 +29,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
     agent_lifecycle::MaterializationStatus,
-    agent_list_read::{AgentListReadModel, ListScope, visible_agents},
     capability::agent_view::VisibleStages,
     identity::UserId,
+    identity_access::agent_list_read::{AgentListReadModel, ListScope, visible_agents},
 };
 
 use crate::error;
@@ -175,11 +175,11 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         agent_lifecycle::MaterializationStatus,
-        agent_list_read::AgentListReadModel,
         agents::runtime::RuntimeKind,
         identity::{AgentId, UserId},
+        identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
+        identity_access::agent_list_read::AgentListReadModel,
         persistence::PersistenceFailure,
     };
     use tower::ServiceExt;

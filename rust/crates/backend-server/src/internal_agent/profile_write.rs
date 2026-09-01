@@ -43,15 +43,17 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_avatar::{AgentAvatarBlobPointer, AgentAvatarBlobStore},
-    agent_detail_read::AgentDetailReadModel,
-    agent_profile_read::{AgentProfileReadModel, ProfileReadFault, read_self_profile},
-    agent_profile_write::{
+    identity::AgentId,
+    identity_access::agent_avatar::{AgentAvatarBlobPointer, AgentAvatarBlobStore},
+    identity_access::agent_detail_read::AgentDetailReadModel,
+    identity_access::agent_profile_read::{
+        AgentProfileReadModel, ProfileReadFault, read_self_profile,
+    },
+    identity_access::agent_profile_write::{
         AgentChangedAnnounce, AgentChangedSink, AgentProfileWriteError,
         AgentProfileWriteUnitOfWork, RequiredEdit,
     },
-    avatar::BlobCleanup,
-    identity::AgentId,
+    identity_access::avatar::BlobCleanup,
     identity_access::internal_profile_write::{
         InternalAvatarEdit, InternalProfileEdit, InternalProfileWriteOutcome,
         update_internal_profile,
@@ -549,17 +551,19 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_avatar::{AgentAvatarBlobRead, AgentAvatarRow, OwnedAgentAvatarBlob},
-        agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         agent_lifecycle::MaterializationStatus,
-        agent_profile_read::AgentProfileFact,
-        agent_profile_write::{
+        agents::runtime::RuntimeKind,
+        identity::{DaemonInstanceId, UserId},
+        identity_access::agent_avatar::{
+            AgentAvatarBlobRead, AgentAvatarRow, OwnedAgentAvatarBlob,
+        },
+        identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
+        identity_access::agent_profile_read::AgentProfileFact,
+        identity_access::agent_profile_write::{
             AdmittedAgentProfileEdit, AgentChangedAnnounceFailure, AgentProfileRowWrite,
             AgentRowBefore, AgentTuningContext, CommittedAgentRow,
         },
-        agents::runtime::RuntimeKind,
-        avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
-        identity::{DaemonInstanceId, UserId},
+        identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
         messaging::AvatarRevision,
         persistence::PersistenceFailure,
         runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},

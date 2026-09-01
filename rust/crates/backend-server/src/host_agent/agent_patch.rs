@@ -78,17 +78,17 @@ use axum::{
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    agent_detail_read::AgentDetailReadModel,
-    agent_profile_write::{
-        AgentChangedAnnounce, AgentChangedSink, AgentProfileUpdateOutcome, AgentProfileWriteError,
-        AgentProfileWriteUnitOfWork, AgentTuningEdit, FieldEdit, RequiredEdit, TuningRejection,
-        update_agent_profile_and_announce,
-    },
     capability::{
         agent_authority::{AgentAuthority, can_edit_agent},
         agent_view::{VisibleStages, can_view_agent},
     },
     identity::{AgentId, Principal, UserId},
+    identity_access::agent_detail_read::AgentDetailReadModel,
+    identity_access::agent_profile_write::{
+        AgentChangedAnnounce, AgentChangedSink, AgentProfileUpdateOutcome, AgentProfileWriteError,
+        AgentProfileWriteUnitOfWork, AgentTuningEdit, FieldEdit, RequiredEdit, TuningRejection,
+        update_agent_profile_and_announce,
+    },
     user_identity::DisplayName,
 };
 
@@ -209,7 +209,7 @@ where
         &agent,
         detail
             .as_ref()
-            .map(silverhand_backend_core::agent_detail_read::AgentDetailFacts::visibility),
+            .map(silverhand_backend_core::identity_access::agent_detail_read::AgentDetailFacts::visibility),
         &VisibleStages::active_only(),
     );
     let Some(detail) = detail.filter(|_| decision.is_allowed()) else {
@@ -497,15 +497,17 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_avatar::AgentAvatarRow,
-        agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
         agent_lifecycle::MaterializationStatus,
-        agent_profile_write::{
+        agents::runtime::RuntimeKind,
+        identity::{AgentId, UserId},
+        identity_access::agent_avatar::AgentAvatarRow,
+        identity_access::agent_detail_read::{
+            AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
+        },
+        identity_access::agent_profile_write::{
             AdmittedAgentProfileEdit, AgentProfileRowWrite, AgentProfileWriteUnitOfWork,
             AgentRowBefore, AgentTuningContext, CommittedAgentRow, FieldEdit, RequiredEdit,
         },
-        agents::runtime::RuntimeKind,
-        identity::{AgentId, UserId},
         persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
@@ -725,12 +727,12 @@ mod tests {
         async fn agent_changed(
             &self,
             _agent: &AgentId,
-        ) -> Result<(), silverhand_backend_core::agent_profile_write::AgentChangedAnnounceFailure>
+        ) -> Result<(), silverhand_backend_core::identity_access::agent_profile_write::AgentChangedAnnounceFailure>
         {
             self.calls.fetch_add(1, SeqCst);
             if self.fail {
                 Err(
-                    silverhand_backend_core::agent_profile_write::AgentChangedAnnounceFailure::from_source(
+                    silverhand_backend_core::identity_access::agent_profile_write::AgentChangedAnnounceFailure::from_source(
                         io::Error::other("bus down"),
                     ),
                 )
@@ -1278,7 +1280,7 @@ mod corpus {
     use garde::Validate;
     use serde::Serialize;
     use serde_json::{Value, json};
-    use silverhand_backend_core::agent_profile_write::{FieldEdit, RequiredEdit};
+    use silverhand_backend_core::identity_access::agent_profile_write::{FieldEdit, RequiredEdit};
 
     use super::{AgentPatchRaw, AgentTuningEdit, DESCRIPTION_MAX_UTF16, REASONING_TOKEN_MAX};
 

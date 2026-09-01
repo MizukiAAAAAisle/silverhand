@@ -49,12 +49,12 @@ use silverhand_backend_core::{
         AgentBulkStopOutcome, AgentBulkStopReadPort, BulkStopSeatFailure, BulkStopSeatFault,
         bulk_stop_agent_runtimes,
     },
-    agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     capability::{
         agent_authority::{AgentAuthority, can_edit_agent},
         agent_view::{VisibleStages, can_view_agent},
     },
     identity::{AgentId, Principal, UserId},
+    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     messaging::collaboration::RuntimePlacementRefusal,
     scope_runtime_stop::{ScopeRuntimeStopPort, ScopeRuntimeStopRefusal},
 };
@@ -323,10 +323,10 @@ mod tests {
     use serde_json::{Value, json};
     use silverhand_backend_core::{
         agent_bulk_stop::AgentBulkStopSnapshot,
-        agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         agent_lifecycle::MaterializationStatus,
         agents::runtime::RuntimeKind,
         identity::{ConversationId, HostId},
+        identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         persistence::PersistenceFailure,
         runtime_credential::{RuntimeGeneration, RuntimeScope},
         runtime_event::RuntimeObservedStatus,

@@ -26,7 +26,9 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_profile_read::{AgentProfileReadModel, ProfileReadFault, read_self_profile},
+    identity_access::agent_profile_read::{
+        AgentProfileReadModel, ProfileReadFault, read_self_profile,
+    },
     runtime_credential::RuntimePrincipal,
 };
 
@@ -115,8 +117,8 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_profile_read::AgentProfileFact,
         identity::{AgentId, DaemonInstanceId},
+        identity_access::agent_profile_read::AgentProfileFact,
         messaging::AvatarRevision,
         persistence::PersistenceFailure,
         runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},

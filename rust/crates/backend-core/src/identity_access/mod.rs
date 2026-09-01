@@ -5,8 +5,14 @@
 //! path (`crate::identity_access::*`). It declares its members and holds no
 //! domain logic itself.
 
+pub mod agent_avatar;
 pub mod agent_avatar_write;
+pub mod agent_detail_read;
+pub mod agent_list_read;
 pub mod agent_peer_profile;
+pub mod agent_profile_read;
+pub mod agent_profile_write;
+pub mod avatar;
 pub mod internal_profile_write;
 pub mod mcp_config;
 pub mod participant_handle_availability;

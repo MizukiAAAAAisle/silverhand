@@ -15,11 +15,13 @@
 //!    read error, not a silent default.
 
 use silverhand_backend_core::{
-    agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
     agent_lifecycle::MaterializationStatus,
     agents::runtime::RuntimeKind,
     capability::agent_view::{AgentViewerArms, AgentVisibility},
     identity::{AgentId, UserId},
+    identity_access::agent_detail_read::{
+        AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
+    },
     persistence::PersistenceFailure,
 };
 use silverhand_backend_sqlite::agent_detail_read::SqliteAgentDetailColdRead;

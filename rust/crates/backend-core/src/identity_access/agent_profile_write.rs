@@ -64,12 +64,12 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    agent_avatar::{AgentAvatarAssignment, AgentAvatarRow},
     agents::{
         runtime::RuntimeKind,
         runtime_capability::{reasoning_effort_valid_for_runtime, runtime_supports_fast_mode},
     },
     identity::AgentId,
+    identity_access::agent_avatar::{AgentAvatarAssignment, AgentAvatarRow},
     persistence::PersistenceFailure,
 };
 
@@ -248,7 +248,7 @@ fn leave_tuning_columns() -> AdmittedAgentProfileEdit {
 /// Admit an avatar UPLOAD: set the paired avatar column to a freshly-minted blob
 /// pointer + its validated content type, leaving every tuning column untouched. The
 /// avatar capability judges no runtime legality — the payload was already validated
-/// (empty/size/MIME) by [`crate::avatar::validate_avatar`] before the blob was put —
+/// (empty/size/MIME) by [`crate::identity_access::avatar::validate_avatar`] before the blob was put —
 /// so this admission is infallible and names ONLY the avatar column.
 pub fn admit_avatar_assignment(assignment: &AgentAvatarAssignment) -> AdmittedAgentProfileEdit {
     AdmittedAgentProfileEdit {

@@ -24,10 +24,10 @@
 use std::future::Future;
 
 use crate::{
-    agent_profile_read::{
+    identity::{AgentId, ConversationId, WorkspaceId},
+    identity_access::agent_profile_read::{
         AgentProfileFact, AgentProfileReadModel, ProfileReadFault, bind_to_handle,
     },
-    identity::{AgentId, ConversationId, WorkspaceId},
     persistence::PersistenceFailure,
 };
 
@@ -404,7 +404,7 @@ mod tests {
     /// be laundered into a membership answer about another agent.
     #[tokio::test]
     async fn a_by_handle_liar_is_a_source_violation_before_membership() {
-        use crate::agent_profile_read::ProfileSourceViolation;
+        use crate::identity_access::agent_profile_read::ProfileSourceViolation;
 
         let liar = LiarReader {
             row: fact("t1", "someone-else"),

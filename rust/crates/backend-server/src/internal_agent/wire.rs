@@ -9,7 +9,7 @@
 //! the internal-agent module, and never becomes public API.
 
 use serde::Serialize;
-use silverhand_backend_core::agent_profile_read::AgentProfileFact;
+use silverhand_backend_core::identity_access::agent_profile_read::AgentProfileFact;
 
 /// `{ id, name, display_name, description, avatar_url }` — the exact
 /// `AgentProfileDto` the CLI consumes. `description` and `avatar_url` serialize as

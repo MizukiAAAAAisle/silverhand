@@ -42,7 +42,9 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    avatar::{AVATAR_MAX_BYTES, AvatarContentType, AvatarRejection, validate_avatar},
+    identity_access::avatar::{
+        AVATAR_MAX_BYTES, AvatarContentType, AvatarRejection, validate_avatar,
+    },
     user_identity::DisplayName,
 };
 

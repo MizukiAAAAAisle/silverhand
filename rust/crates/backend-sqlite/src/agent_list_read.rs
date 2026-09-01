@@ -37,8 +37,8 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agent_detail_read::AgentDetailFacts, agent_list_read::AgentListReadModel, identity::UserId,
-    persistence::PersistenceFailure,
+    identity::UserId, identity_access::agent_detail_read::AgentDetailFacts,
+    identity_access::agent_list_read::AgentListReadModel, persistence::PersistenceFailure,
 };
 use sqlx::{
     SqlitePool,

@@ -15,8 +15,8 @@
 //!    row's own `updated_at` as the cache-buster and never the storage locator.
 
 use silverhand_backend_core::{
-    agent_profile_read::{AgentProfileFact, AgentProfileReadModel},
     identity::AgentId,
+    identity_access::agent_profile_read::{AgentProfileFact, AgentProfileReadModel},
     messaging::AvatarRevision,
     persistence::PersistenceFailure,
 };

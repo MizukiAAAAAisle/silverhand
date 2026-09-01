@@ -88,9 +88,7 @@ const CRATE_ROOTS: &[&str] = &[
 /// for a leaf's owner, physical target and residual/landed status inside the namespace.
 const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_availability_read"),
-    ("backend-core", "agent_detail_read"),
     ("backend-core", "agent_lifecycle"),
-    ("backend-core", "agent_list_read"),
     // #task:2229 — unmounted typed agent-materialize capability and its production
     // exact-custody data-plane adapter. The later create vertical consumes this
     // port; this ticket does not activate a route.
@@ -109,18 +107,14 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_creation"),
     ("backend-core", "agent_presence_read"),
     // #task:2225 — the public agent-lifecycle and avatar route family (Rust Wave 3).
-    // Core capability ports and orchestration for the handle-availability probe
-    // (route 1, now under the `identity_access` namespace — see below), the agent
-    // tuning/profile write
-    // (route 2, `agent_profile_write`), the agent avatar byte fetch (route 5,
-    // `agent_avatar`), and the agent avatar upload/clear lifecycle (routes 3/4,
-    // relocated under the `identity_access` namespace as
-    // `crate::identity_access::agent_avatar_write` per #task:2274, which reuses the
-    // single `agent_profile_write` row writer).
-    // Their SQLite adapters and server route surfaces are the sibling entries below;
-    // all mounted at the app composition root by the #task:2234 integration (CP2).
-    ("backend-core", "agent_avatar"),
-    ("backend-core", "agent_profile_write"),
+    // All of this family's backend-core core leaves have relocated under the C1
+    // `identity_access` namespace: the handle-availability probe (#task:2272), the
+    // avatar upload/clear lifecycle `agent_avatar_write` (#task:2274), and this wave's
+    // `agent_avatar` (byte fetch), `agent_profile_write` (tuning/profile write) plus the
+    // read-model faces (#task:2275). Their owner/target lives in the organization
+    // map/gate, not as flat seam entries here; the SQLite adapters and server route
+    // surfaces remain the sibling entries below, all mounted at the app composition root
+    // by the #task:2234 integration (CP2).
     // #task:2272 — the handle-availability probe's core module was relocated under the
     // C1 `identity_access` namespace (`crate::identity_access::participant_handle_availability`).
     // This ledger guards the current OWNING ROOT NAMESPACE only: the container is declared
@@ -141,12 +135,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // #task:2226 — internal profile/MCP consumer vocabulary and pure
     // orchestration. The production data-plane adapter is #task:2231 below; mounted at
     // the app composition root by the #task:2234 integration (CP7a peer-profile, CP7b MCP).
-    // Three of this family's core leaves relocated under the `identity_access` namespace
-    // per #task:2274 (`agent_peer_profile`, `internal_profile_write`, `mcp_config`); their
-    // owner/target lives in the organization map, not as flat seam entries here. The
-    // route-face vocabulary (`agent_profile_mcp`, `agent_profile_read`) stays flat below.
+    // This family's core leaves relocated under the `identity_access` namespace across
+    // #task:2274 (`agent_peer_profile`, `internal_profile_write`, `mcp_config`) and
+    // #task:2275 (`agent_profile_read`); their owner/target lives in the organization
+    // map, not as flat seam entries here. The route-face vocabulary `agent_profile_mcp`
+    // stays flat below.
     ("backend-core", "agent_profile_mcp"),
-    ("backend-core", "agent_profile_read"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
     ("backend-core", "host_resources_read"),
@@ -197,8 +191,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // avatar sub-capability of the `users` authority (ports + orchestration; it
     // reuses the CP2 identity above). Its server route surface is the sibling `users`
     // entry below and its production blob adapter the sibling `avatar_blob` entry —
-    // both wired by the #task:2223 integration over #task:2221's local blob store.
-    ("backend-core", "avatar"),
+    // both wired by the #task:2223 integration over #task:2221's local blob store. Its
+    // backend-core `avatar` domain leaf relocated under the C1 `identity_access` namespace
+    // per #task:2275 (a path-only move: the user and agent avatar lifecycles stay two
+    // distinct custodies, never merged); its owner/target lives in the organization map.
     // #task:2248 — residual-wave core capability/read ports a file-disjoint
     // implementation lane needs alongside the server route surface, pre-declared here
     // so four lanes never race the same `lib.rs`/ledger. The embedded-bootstrap UoW and
@@ -524,16 +520,12 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// the composition root is the mount this fence refuses in CP1. The
 /// /api/agents/:id/availability vertical adds one: the read port
 /// `agent_availability_read`; its route surface is a submodule of `host_agent`,
-/// already listed. The /api/agents/:id agent-detail vertical adds one the same
-/// way: the read port `agent_detail_read`, whose route surface is likewise a
-/// submodule of `host_agent`. The /api/agents/:id/presence vertical adds one the
+/// already listed. The /api/agents/:id/presence vertical adds one the
 /// same way again: the read port `agent_presence_read`, whose route surface is a
 /// submodule of `host_agent`. The /api/hosts/:id/resources vertical (#task:2198)
 /// adds two, because its route surface is a crate-root SIBLING rather than a
 /// `host_agent` leaf: the read port `host_resources_read` and the surface
-/// `host_resources`. The `/api/agents` list vertical adds one on the same
-/// grounds once more: the read port `agent_list_read`; its route surface and the DTO
-/// projector it shares with detail are both submodules of `host_agent`. The root
+/// `host_resources`. The root
 /// operational read cluster (#task:2195) adds exactly one, and it is the surface
 /// `ops`: none of its four faces reads a domain fact, so it declares no crate-root
 /// read port at all — the runtime catalogue's detector port is a leaf of the `agents`
@@ -541,10 +533,21 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// the INHERITED core namespace `persistence`, which this ledger never claimed —
 /// while its two adapters are excluded on the same grounds every other adapter here
 /// is. G0 keeps it a subset of the seam ledger.
+///
+/// SCOPE (#task:2275, narrowed honestly): this table only does the
+/// `ACTIVATION_NAMESPACES ⊆ SEAM_ROOT_MODULES` self-check — it never proved a route is
+/// actually mounted. It therefore covers only the legacy root namespaces still
+/// expressible at the owning-root layer. Once a read port relocates under an
+/// organization container (the agent-detail and agent-list read ports moved to
+/// `crate::identity_access::{agent_detail_read,agent_list_read}` in this wave), it drops
+/// out of BOTH this table and the seam ledger: a container such as `identity_access`
+/// holds both activated and unmounted leaves, so it is NOT added here as a whole. A
+/// nested leaf's real existence/relocation is the organization gate's authority, and
+/// its actual mount is the composition/route behavior tests' — this table is not the
+/// activation authority for nested leaves, and is deliberately not upgraded into a
+/// second full-path scanner for them.
 const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "agent_availability_read"),
-    ("backend-core", "agent_detail_read"),
-    ("backend-core", "agent_list_read"),
     ("backend-core", "agent_presence_read"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),

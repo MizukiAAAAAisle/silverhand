@@ -227,7 +227,7 @@ impl AvatarStorageFailure {
 /// The narrow READ half of the avatar blob capability: fetch the bytes a pointer
 /// resolves to. Split out from the full store so a read-only consumer — the public
 /// byte fetch, for BOTH the `users` face here and the agent avatar face
-/// ([`crate::agent_avatar`]) — depends only on the read, never on the id-keyed
+/// ([`crate::identity_access::agent_avatar`]) — depends only on the read, never on the id-keyed
 /// `put` or the `delete`. The production adapter is a #2221 residual.
 pub trait AvatarBlobRead: Clone + Send + Sync + 'static {
     fn read(

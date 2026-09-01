@@ -1,6 +1,6 @@
 //! The public agent-avatar byte fetch — `GET /api/agents/{id}/avatar`.
 //!
-//! This is the agent analog of the `users` avatar fetch ([`crate::avatar`]). It
+//! This is the agent analog of the `users` avatar fetch ([`crate::identity_access::avatar`]). It
 //! reuses the STORAGE-GENERIC avatar vocabulary — the content-type allowlist
 //! ([`AvatarContentType`]), the blob read outcome ([`AvatarBlobReadOutcome`]) and the
 //! storage-fault type ([`AvatarStorageFailure`]) — because none of those name a
@@ -58,14 +58,14 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
     identity::AgentId,
+    identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
     persistence::PersistenceFailure,
 };
 
 /// The opaque pointer to an AGENT avatar blob (`agents.avatar_storage_key`).
 ///
-/// A distinct custody from the user avatar pointer ([`crate::avatar::AvatarBlobPointer`]):
+/// A distinct custody from the user avatar pointer ([`crate::identity_access::avatar::AvatarBlobPointer`]):
 /// same underlying storage backend, different namespace and different lifecycle owner.
 /// This is the canonical agent-avatar pointer #2225 publishes for downstream consumers;
 /// it stays a domain newtype rather than a bare string so the two custodies can never
@@ -139,7 +139,7 @@ pub trait AgentAvatarBlobRead: Clone + Send + Sync + 'static {
 
 /// The full agent-avatar blob capability: the narrow [`AgentAvatarBlobRead`] plus the
 /// mutating `put`/`delete` the upload and clear routes own. Distinct from the user
-/// [`crate::avatar::AvatarBlobStore`]: the two custodies never share a domain type, and
+/// [`crate::identity_access::avatar::AvatarBlobStore`]: the two custodies never share a domain type, and
 /// the production adapter MUST mint agent keys under a DIFFERENT static namespace than
 /// user keys — so even if an [`AgentId`] and a [`crate::identity::UserId`] carry the
 /// same raw string, their blobs never collide. `put` mints a FRESH physical key on

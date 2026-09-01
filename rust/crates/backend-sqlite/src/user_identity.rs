@@ -17,11 +17,11 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    avatar::{
+    identity::UserId,
+    identity_access::avatar::{
         AvatarBlobPointer, AvatarContentType, AvatarPointerWrite, AvatarPointerWriteUnitOfWork,
         AvatarStorageRef, AvatarStorageRefRead,
     },
-    identity::UserId,
     messaging::AvatarRevision,
     persistence::PersistenceFailure,
     user_identity::{

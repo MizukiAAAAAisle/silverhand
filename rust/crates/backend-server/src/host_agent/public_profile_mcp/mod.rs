@@ -55,13 +55,13 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     agent_profile_mcp::AgentProfileMcpDataPlane,
     capability::{
         agent_authority::{AgentAuthority, can_edit_agent},
         agent_view::{VisibleStages, can_view_agent},
     },
     identity::{AgentId, Principal, UserId},
+    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
 };
 
 use crate::error;
@@ -243,7 +243,6 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_detail_read::{AgentDetailProjection, AgentDetailReadModel},
         agent_lifecycle::MaterializationStatus,
         agent_profile_mcp::{
             AgentProfileMcpDataPlane, McpBytesWritten, McpDataPlaneFault, McpDataPlaneFaultCode,
@@ -251,6 +250,7 @@ mod tests {
         },
         agents::runtime::RuntimeKind,
         identity::{AgentId, UserId},
+        identity_access::agent_detail_read::{AgentDetailProjection, AgentDetailReadModel},
         persistence::PersistenceFailure,
     };
     use std::sync::{

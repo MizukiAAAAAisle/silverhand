@@ -38,10 +38,10 @@
 use std::future::Future;
 
 use crate::{
-    agent_detail_read::AgentDetailFacts,
     capability::agent_view::{ViewRefused, VisibleStages, can_view_agent},
     capability::decision::Decision,
     identity::{AgentId, Principal, UserId},
+    identity_access::agent_detail_read::AgentDetailFacts,
     persistence::PersistenceFailure,
 };
 
@@ -138,8 +138,8 @@ pub fn visible_agents<'a>(
 mod tests {
     use super::*;
     use crate::{
-        agent_detail_read::AgentDetailProjection, agent_lifecycle::MaterializationStatus,
-        agents::runtime::RuntimeKind,
+        agent_lifecycle::MaterializationStatus, agents::runtime::RuntimeKind,
+        identity_access::agent_detail_read::AgentDetailProjection,
     };
 
     fn user(id: &str) -> UserId {

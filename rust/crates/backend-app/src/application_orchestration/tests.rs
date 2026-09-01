@@ -1467,7 +1467,7 @@ async fn composed_avatar_upload_separates_the_five_mib_cap_from_the_perimeter_ce
     // Tier 1 — exactly AVATAR_MAX_BYTES: admitted through the real perimeter (200),
     // and the row's cache-busted avatar_url is set (proving the bytes reached the blob
     // store, not truncated by the 128 MiB stream wrap).
-    let cap = silverhand_backend_core::avatar::AVATAR_MAX_BYTES as usize;
+    let cap = silverhand_backend_core::identity_access::avatar::AVATAR_MAX_BYTES as usize;
     let response = app
         .router
         .clone()

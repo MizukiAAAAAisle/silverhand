@@ -23,7 +23,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use silverhand_backend_core::{agent_list_read::AgentListReadModel, identity::UserId};
+use silverhand_backend_core::{
+    identity::UserId, identity_access::agent_list_read::AgentListReadModel,
+};
 use silverhand_backend_sqlite::agent_list_read::SqliteAgentListColdRead;
 use sqlx::Connection;
 use tracing::{

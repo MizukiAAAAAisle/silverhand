@@ -15,7 +15,7 @@
 //!
 //! The avatar leaf ships no blob backend of its own and depends only on the
 //! narrow [`AvatarBlobStore`] capability; the storage KIND is the adapter's,
-//! never crossing the DB or the wire (`crate::avatar` doc). This adapter therefore
+//! never crossing the DB or the wire (`silverhand_backend_core::identity_access::avatar` doc). This adapter therefore
 //! owns that single kind: every `put` stores the bytes under a fixed static scope
 //! (`avatars`), namespaced per user via [`BlobNamespace::for_semantic_id`] so an
 //! opaque user id carrying separators never becomes a path component, and returns
@@ -32,17 +32,17 @@
 //! rebuilt under the wrong kind finds no bytes), never silent data corruption.
 
 use silverhand_backend_core::{
-    agent_avatar::{
-        AgentAvatarBlobPointer, AgentAvatarBlobRead, AgentAvatarBlobStore, OwnedAgentAvatarBlob,
-    },
-    avatar::{
-        AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome, AvatarBlobStore,
-        AvatarContentType, AvatarStorageFailure,
-    },
     blob_store::{
         BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore, StorageKind, StoredBlob,
     },
     identity::{AgentId, UserId},
+    identity_access::agent_avatar::{
+        AgentAvatarBlobPointer, AgentAvatarBlobRead, AgentAvatarBlobStore, OwnedAgentAvatarBlob,
+    },
+    identity_access::avatar::{
+        AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome, AvatarBlobStore,
+        AvatarContentType, AvatarStorageFailure,
+    },
 };
 
 /// The fixed static scope every USER avatar blob is namespaced under. The per-user

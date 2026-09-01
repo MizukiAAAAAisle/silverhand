@@ -32,16 +32,16 @@ use silverhand_backend_core::{
         AuthenticateHumanSession, EntropySessionTokenMint, HumanSessionAuthenticator,
         SessionBearer, SessionClock, SessionTtl,
     },
-    avatar::{
-        AVATAR_MAX_BYTES, AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome,
-        AvatarBlobStore, AvatarContentType, AvatarStorageFailure,
-    },
     credential::{
         Argon2idCost, PasswordHashError, PasswordHashParams, PasswordHasher,
         PreparedPasswordCredential, RustCalibration,
     },
     host_runtime::environment::OsEntropy,
     identity::UserId,
+    identity_access::avatar::{
+        AVATAR_MAX_BYTES, AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome,
+        AvatarBlobStore, AvatarContentType, AvatarStorageFailure,
+    },
     persistence::PersistenceFailure,
     user_identity::{UserChangedAnnounceFailure, UserChangedSink},
 };

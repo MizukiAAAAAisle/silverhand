@@ -96,13 +96,11 @@ use silverhand_backend_core::{
         CreatedAgent, CreatedArm, CreatedCoordinates, EchoedAgent, MaterializeFailureCode,
         create_agent,
     },
-    agent_detail_read::AgentDetailReadModel,
     agent_materialization::{
         AgentArmProvisioningPort, AgentMaterializationLookup, AgentMaterializationWrite,
         IdempotencyKey,
     },
     agent_materialize::AgentMaterializePort,
-    agent_profile_write::AgentChangedSink,
     agents::{
         runtime::RuntimeKind,
         runtime_capability::{reasoning_effort_valid_for_runtime, runtime_supports_fast_mode},
@@ -110,6 +108,8 @@ use silverhand_backend_core::{
     },
     host_runtime::read::ComputerReadModel,
     identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
+    identity_access::agent_detail_read::AgentDetailReadModel,
+    identity_access::agent_profile_write::AgentChangedSink,
     messaging::{
         MessageId,
         environment::SendEntropy,
@@ -883,7 +883,6 @@ mod tests {
     use serde_json::{Value, json};
     use silverhand_backend_core::{
         agent_creation::MetadataField,
-        agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
         agent_lifecycle::MaterializationStatus,
         agent_materialization::{
             IdempotentReservationRow, MaterializationFlipRow, RawProvisionOutcome,
@@ -892,11 +891,14 @@ mod tests {
         agent_materialize::{
             AgentMaterializeReceipt, AgentMaterializeRefusal, AgentMaterializeTarget,
         },
-        agent_profile_write::{AgentChangedAnnounceFailure, AgentChangedSink},
         agents::runtime::RuntimeKind,
         host_runtime::{computer::ComputerRecord, read::ComputerReadModel},
         human_auth_flows::HandleNamespaceRead,
         identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
+        identity_access::agent_detail_read::{
+            AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
+        },
+        identity_access::agent_profile_write::{AgentChangedAnnounceFailure, AgentChangedSink},
         messaging::{
             MessageId,
             collaboration::RuntimePlacementRefusal,

@@ -9,7 +9,7 @@
 //! `reasoning_effort` into an identity-bound before-image and hands it to the
 //! caller-supplied DECISION closure, which decides WHETHER to write: the public tuning
 //! route injects
-//! [`silverhand_backend_core::agent_profile_write::admit_public_tuning_edit`] (the one
+//! [`silverhand_backend_core::identity_access::agent_profile_write::admit_public_tuning_edit`] (the one
 //! copy of the runtime tuning gate) against the locked before-context. The adapter does
 //! NOT mint the product verdict. A verdict is the domain's to derive: this adapter
 //! reports only DB-observable WITNESSES (the before-image it read, and the committed row
@@ -47,15 +47,15 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agent_avatar::{
+    agents::runtime::RuntimeKind,
+    identity::AgentId,
+    identity_access::agent_avatar::{
         AgentAvatarRow, AgentAvatarRowCorruption, AgentAvatarServeRef, decode_agent_avatar_row,
     },
-    agent_profile_write::{
+    identity_access::agent_profile_write::{
         AdmittedAgentProfileEdit, AgentProfileRowWrite, AgentProfileWriteUnitOfWork,
         AgentRowBefore, AgentTuningContext, CommittedAgentRow, FieldEdit, RequiredEdit,
     },
-    agents::runtime::RuntimeKind,
-    identity::AgentId,
     persistence::PersistenceFailure,
 };
 use sqlx::{
@@ -387,11 +387,13 @@ impl AgentProfileWriteUnitOfWork for SqliteAgentProfileWrite {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::agent_avatar::{AgentAvatarAssignment, AgentAvatarBlobPointer};
-    use silverhand_backend_core::agent_profile_write::{
+    use silverhand_backend_core::identity_access::agent_avatar::{
+        AgentAvatarAssignment, AgentAvatarBlobPointer,
+    };
+    use silverhand_backend_core::identity_access::agent_profile_write::{
         AgentTuningEdit, admit_avatar_assignment, admit_avatar_removal, admit_public_tuning_edit,
     };
-    use silverhand_backend_core::avatar::AvatarContentType;
+    use silverhand_backend_core::identity_access::avatar::AvatarContentType;
     use sqlx::{Connection, Executor, SqliteConnection};
 
     /// Drive the canonical writer exactly as the production PATCH route does: inject the

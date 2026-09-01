@@ -1,7 +1,7 @@
 //! The owner/visibility facts every audit face is decided against, read back off
 //! the ONE `agents.id` the adapter actually loaded.
 //!
-//! This is the audit analogue of [`crate::agent_detail_read`]'s creator-splice
+//! This is the audit analogue of [`crate::identity_access::agent_detail_read`]'s creator-splice
 //! guard. There is a single decoded `creator`, and [`AuditSubjectFacts::from_source`]
 //! is the sole constructor: it seeds the visibility ACL creator arm from that id
 //! AND is the sole origin of the [`AgentAuditSubject`] the owner gate reads, so the

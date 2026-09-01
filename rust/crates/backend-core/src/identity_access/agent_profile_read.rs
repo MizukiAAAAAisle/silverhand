@@ -4,7 +4,7 @@
 //!
 //! The internal profile routes (`GET /internal/agents/{aid}/profile` and the
 //! peer read) return only `{ id, name, display_name, description, avatar_url }`.
-//! Unlike [`crate::agent_detail_read`], that face needs NO host `LEFT JOIN` and
+//! Unlike [`crate::identity_access::agent_detail_read`], that face needs NO host `LEFT JOIN` and
 //! NO viewer ACL: an internal route is self-pinned (or, for a peer, gated by
 //! workspace membership in the route's own gate), never judged against the
 //! creator / direct-pair / workspace-member arms the detail read carries.
@@ -12,7 +12,7 @@
 //! So this module states ONLY the missing lookup capability — read one agent's
 //! narrow profile columns by id or by handle — and returns a minimal fact. It
 //! deliberately does not reuse the wider
-//! [`crate::agent_detail_read::AgentDetailProjection`] nor reproduce the detail
+//! [`crate::identity_access::agent_detail_read::AgentDetailProjection`] nor reproduce the detail
 //! ACL, so it cannot pull the visibility gate of a viewer-scoped read into a
 //! route that is capability-gated instead.
 //!

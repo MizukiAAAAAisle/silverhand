@@ -11,7 +11,7 @@
 //! `me` routes read the caller's own [`UserId`] from the extension, and the two
 //! reads are "public to any authenticated viewer" (there is no hidden-profile
 //! concept in V1). The handlers are thin transports over the application flows in
-//! [`silverhand_backend_core::avatar`] and the directory read; the domain owns
+//! [`silverhand_backend_core::identity_access::avatar`] and the directory read; the domain owns
 //! validation order, the committed-fact seal, the changed-only `user_changed`
 //! announce, and the fetch's found/not-found/storage-fault trichotomy.
 //!
@@ -52,12 +52,12 @@ use axum::{
 use serde::Serialize;
 use silverhand_backend_core::{
     auth::{AuthenticateHumanSession, SessionClock},
-    avatar::{
+    identity::UserId,
+    identity_access::avatar::{
         AVATAR_MAX_BYTES, AvatarBlobStore, AvatarContentType, AvatarFetchOutcome,
         AvatarPointerWriteUnitOfWork, AvatarRejection, AvatarStorageRefRead, AvatarUploadOutcome,
         BlobCleanup, CandidateAvatar, CommittedAvatar, clear_avatar, fetch_avatar, upload_avatar,
     },
-    identity::UserId,
     user_identity::{UserChangedSink, UserDirectoryRead, UserProfileRead},
 };
 

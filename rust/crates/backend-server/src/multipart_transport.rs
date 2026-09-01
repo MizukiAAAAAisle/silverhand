@@ -11,7 +11,7 @@
 //! allowlist itself; this layer only supplies the raw declared type (or the default) for
 //! it to judge, so there is never a second, drift-prone normalizer here.
 //!
-//! [`AvatarContentType::parse`]: silverhand_backend_core::avatar::AvatarContentType::parse
+//! [`AvatarContentType::parse`]: silverhand_backend_core::identity_access::avatar::AvatarContentType::parse
 
 use axum::extract::multipart::{Field, MultipartError};
 

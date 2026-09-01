@@ -16,10 +16,12 @@ use axum::{
 };
 use serde_json::Value;
 use silverhand_backend_core::{
-    agent_detail_read::{AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel},
     agent_lifecycle::MaterializationStatus,
     agents::runtime::RuntimeKind,
     identity::{AgentId, UserId},
+    identity_access::agent_detail_read::{
+        AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
+    },
     persistence::PersistenceFailure,
 };
 use silverhand_backend_server::host_agent::schedule_management::schedule_cancel_router;

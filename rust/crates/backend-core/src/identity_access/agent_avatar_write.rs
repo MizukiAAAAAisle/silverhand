@@ -1,17 +1,17 @@
 //! The agent avatar upload/clear use cases for `POST` and `DELETE
 //! /api/agents/{id}/avatar` — the orchestration bounded context that drives the blob
 //! store and the SINGLE canonical `agents`-row writer
-//! ([`crate::agent_profile_write::AgentProfileWriteUnitOfWork`]) to repoint (or clear)
+//! ([`crate::identity_access::agent_profile_write::AgentProfileWriteUnitOfWork`]) to repoint (or clear)
 //! the paired avatar columns, cleaning up orphaned/replaced blobs and firing the owed
 //! `agent_changed` announce.
 //!
 //! ## This module owns the LIFECYCLE, not a second row port or edit algebra
 //!
 //! It declares no row port, no edit type, and no persistence fact of its own: the
-//! canonical writer, the sealed [`crate::agent_profile_write::AdmittedAgentProfileEdit`]
+//! canonical writer, the sealed [`crate::identity_access::agent_profile_write::AdmittedAgentProfileEdit`]
 //! (minted only by `admit_avatar_assignment` / `admit_avatar_removal`), and the
 //! full-column seal all live in `agent_profile_write`. Payload validation is
-//! [`crate::avatar::validate_avatar`] — the ONE authority for the empty→size→MIME
+//! [`crate::identity_access::avatar::validate_avatar`] — the ONE authority for the empty→size→MIME
 //! refusal order, the 5 MiB cap, and every `code`/`message`; this module never restates
 //! a constant or a rejection table. The boundary lowercases the declared MIME before
 //! handing it here. What IS agent-specific and new lives here alone: the candidate/
@@ -36,18 +36,18 @@
 //! was Absent, is an untrustworthy fact (safe-`500`), never laundered into a success.
 
 use crate::{
-    agent_avatar::{
+    identity::AgentId,
+    identity_access::agent_avatar::{
         AgentAvatarAssignment, AgentAvatarBlobPointer, AgentAvatarBlobStore, AgentAvatarRow,
         OwnedAgentAvatarBlob,
     },
-    agent_profile_write::{
+    identity_access::agent_profile_write::{
         AgentChangedAnnounce, AgentChangedSink, AgentProfileRowWrite, AgentProfileWriteError,
         AgentProfileWriteUnitOfWork, admit_avatar_assignment, admit_avatar_removal, seal_agent_row,
     },
-    avatar::{
+    identity_access::avatar::{
         AvatarRejection, AvatarStorageFailure, BlobCleanup, CandidateAvatar, validate_avatar,
     },
-    identity::AgentId,
 };
 
 // ===========================================================================
@@ -365,13 +365,13 @@ where
 mod tests {
     use super::*;
     use crate::{
-        agent_avatar::{AgentAvatarBlobRead, OwnedAgentAvatarBlob},
-        agent_profile_write::{
+        agents::runtime::RuntimeKind,
+        identity_access::agent_avatar::{AgentAvatarBlobRead, OwnedAgentAvatarBlob},
+        identity_access::agent_profile_write::{
             AdmittedAgentProfileEdit, AgentChangedAnnounceFailure, AgentRowBefore,
             AgentTuningContext, CommittedAgentRow,
         },
-        agents::runtime::RuntimeKind,
-        avatar::{AvatarBlobReadOutcome, AvatarContentType},
+        identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType},
         persistence::PersistenceFailure,
     };
     use std::sync::{

@@ -44,8 +44,8 @@
 //! past `cap + 1`) so a malformed/truncated part ANYWHERE — even after a valid `file` —
 //! is the transport `400`, mirroring `await c.req.formData()` parsing the entire body
 //! before `form.get('file')`. The byte cap is single-sourced from
-//! [`silverhand_backend_core::avatar::AVATAR_MAX_BYTES`], and the MIME allowlist is owned
-//! solely by [`silverhand_backend_core::avatar::AvatarContentType::parse`] (which
+//! [`silverhand_backend_core::identity_access::avatar::AVATAR_MAX_BYTES`], and the MIME allowlist is owned
+//! solely by [`silverhand_backend_core::identity_access::avatar::AvatarContentType::parse`] (which
 //! lowercases and exact-matches), so this route adds no second normalizer.
 
 use axum::{
@@ -57,18 +57,20 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_avatar::AgentAvatarBlobStore,
-    agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
-    agent_profile_write::{AgentChangedAnnounce, AgentChangedSink, AgentProfileWriteUnitOfWork},
-    avatar::{AVATAR_MAX_BYTES, AvatarRejection, BlobCleanup, CandidateAvatar},
     capability::{
         agent_authority::{AgentAuthority, can_edit_agent},
         agent_view::{VisibleStages, can_view_agent},
     },
     identity::{AgentId, Principal, UserId},
+    identity_access::agent_avatar::AgentAvatarBlobStore,
     identity_access::agent_avatar_write::{
         AgentAvatarClearOutcome, AgentAvatarUploadOutcome, clear_agent_avatar, upload_agent_avatar,
     },
+    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
+    identity_access::agent_profile_write::{
+        AgentChangedAnnounce, AgentChangedSink, AgentProfileWriteUnitOfWork,
+    },
+    identity_access::avatar::{AVATAR_MAX_BYTES, AvatarRejection, BlobCleanup, CandidateAvatar},
 };
 
 use crate::clock::ProcessClock;
@@ -556,17 +558,17 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_avatar::{
+        agent_lifecycle::MaterializationStatus,
+        agents::runtime::RuntimeKind,
+        identity_access::agent_avatar::{
             AgentAvatarBlobPointer, AgentAvatarBlobRead, AgentAvatarRow, OwnedAgentAvatarBlob,
         },
-        agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
-        agent_lifecycle::MaterializationStatus,
-        agent_profile_write::{
+        identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
+        identity_access::agent_profile_write::{
             AdmittedAgentProfileEdit, AgentChangedAnnounceFailure, AgentProfileRowWrite,
             AgentRowBefore, AgentTuningContext, CommittedAgentRow,
         },
-        agents::runtime::RuntimeKind,
-        avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
+        identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
         persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
@@ -1302,7 +1304,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_payload_one_byte_over_the_cap_is_the_413() {
-        let over = vec![0u8; silverhand_backend_core::avatar::AVATAR_MAX_BYTES as usize + 1];
+        let over = vec![
+            0u8;
+            silverhand_backend_core::identity_access::avatar::AVATAR_MAX_BYTES as usize
+                + 1
+        ];
         let reply = post_with(
             FakeReads::new(present(creator_facts()), present(creator_facts())),
             FakeWrites::new(WriteFixture::Row(AgentProfileRowWrite::NoSuchAgent)),
