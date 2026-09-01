@@ -234,11 +234,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // settlement; its route verticals are mounted by #task:2234 (CP4 clear/switch, CP5 stop).
     ("backend-server", "runtime_control"),
     ("backend-server", "scope_runtime_stop"),
-    // #task:2220 — the workspace-rename fan-out production adapter, wiring the core
-    // rename orchestrator over the messaging store, daemon delivery, and scope-event
-    // hub. Assembled into the workspace-metadata-write mount by the #task:2223
-    // integration (best-effort after commit), not a standalone route.
-    ("backend-server", "workspace_rename_fanout"),
     // #task:2248 — the residual-wave route-family scaffold. Only two families are
     // genuinely NEW top-level bounded contexts and earn a crate root: the embedded
     // bootstrap (its own auth/token lifecycle) and the workspace data plane (a shared
@@ -437,6 +432,10 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
     // container in the transitional organization list; the CP projection folds
     // `foundation::request_perimeter` into this single owning-root entry.
     ("backend-app", "foundation"),
+    // #task:2305 relocated the final production leaf `workspace_rename_fanout` beneath
+    // this owning root, closing application orchestration at 3/3/0. The accepted flat
+    // `daemon_delivery` compatibility facade remains separately named and byte-frozen;
+    // this entry does not descend into either canonical child.
     ("backend-server", "application_orchestration"),
     // #task:2304 relocated the complete mapped `messaging` directory leaf beneath the
     // existing dual-role context, closing production at 3/3/0. The directory remains one

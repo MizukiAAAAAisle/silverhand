@@ -39,6 +39,7 @@ use silverhand_backend_filesystem::host_runtime::runtime_detection::MachineRunti
 #[cfg(test)]
 use silverhand_backend_server::internal_agent::cli_invoke::CLI_INVOKE_PRODUCTION_PERIMETER;
 use silverhand_backend_server::{
+    application_orchestration::workspace_rename_fanout::WorkspaceRenameFanoutAdapter,
     conversation_messaging::direct_pairs,
     conversation_messaging::messaging::{
         TargetAddressRefusalLog,
@@ -116,7 +117,6 @@ use silverhand_backend_server::{
         HubPresencePublisher, SystemDisconnectClock, compose_presence_vertical,
     },
     workspace_data_plane,
-    workspace_rename_fanout::WorkspaceRenameFanoutAdapter,
 };
 use silverhand_backend_sqlite::{
     conversation_messaging::direct_pair_read::SqliteDirectPairReadModel,

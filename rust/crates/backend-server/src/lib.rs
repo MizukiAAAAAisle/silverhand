@@ -4,7 +4,7 @@
 
 pub mod agent_materialize;
 pub mod agent_profile_mcp_data_plane;
-pub(crate) mod application_orchestration;
+pub mod application_orchestration;
 pub mod conversation_messaging;
 pub mod daemon_delivery;
 mod daemon_events;
@@ -23,7 +23,6 @@ pub mod runtime_credential;
 pub mod scope_runtime_stop;
 pub mod viewer_read_model;
 pub mod workspace_data_plane;
-pub mod workspace_rename_fanout;
 
 #[cfg(test)]
 #[path = "../../backend-sqlite/tests/support/current_schema_snapshot.rs"]
