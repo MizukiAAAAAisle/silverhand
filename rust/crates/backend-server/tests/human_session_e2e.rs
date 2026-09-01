@@ -18,7 +18,7 @@ use silverhand_backend_core::{
     identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
 };
 use silverhand_backend_server::auth::{PublicJsonUnauthorized, require_human_session};
-use silverhand_backend_sqlite::auth::SqliteSessionStore;
+use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
 use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
 use tempfile::TempDir;
 use tower::ServiceExt;

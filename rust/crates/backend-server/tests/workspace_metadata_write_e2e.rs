@@ -46,7 +46,8 @@ use silverhand_backend_server::workspace_metadata_write::{
     self, WorkspaceMetadataClock, WorkspaceRenameFanout, WorkspaceRenameFanoutFailure,
 };
 use silverhand_backend_sqlite::{
-    access::SqliteAccessStore, workspace_metadata_write::SqliteWorkspaceMetadataWrite,
+    identity_access::access::SqliteAccessStore,
+    identity_access::workspace_metadata_write::SqliteWorkspaceMetadataWrite,
 };
 use sqlx::{Connection, Executor, SqliteConnection};
 use tower::ServiceExt;

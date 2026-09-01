@@ -8230,7 +8230,7 @@ mod channel_directory_activation {
             channel_directory, channel_lifecycle, conversation_agent_directory,
         },
     };
-    use silverhand_backend_sqlite::auth::SqliteSessionStore;
+    use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
 
     use super::*;
 
@@ -8455,7 +8455,7 @@ mod runtime_activity_activation {
             conversation_agent_runtime,
         },
     };
-    use silverhand_backend_sqlite::auth::SqliteSessionStore;
+    use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
 
     use super::*;
 
@@ -8741,7 +8741,7 @@ mod message_nav_search_activation {
             conversation_unread, human_search,
         },
     };
-    use silverhand_backend_sqlite::auth::SqliteSessionStore;
+    use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
 
     use super::*;
 
@@ -9021,7 +9021,7 @@ mod unread_attention_activation {
         auth::{PublicJsonUnauthorized, require_human_session},
         messaging::collaboration::{attention_projection, message_unread},
     };
-    use silverhand_backend_sqlite::auth::SqliteSessionStore;
+    use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
 
     use super::*;
 
@@ -9243,7 +9243,7 @@ mod host_resources_activation {
         auth::{PublicJsonUnauthorized, require_human_session},
         host_resources,
     };
-    use silverhand_backend_sqlite::auth::SqliteSessionStore;
+    use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
 
     use super::*;
 

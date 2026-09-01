@@ -23,7 +23,7 @@ use silverhand_backend_core::identity_access::access::{
     ViewerAnnounce, ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceRole,
     add_workspace_human_member,
 };
-use silverhand_backend_sqlite::access::SqliteAccessStore;
+use silverhand_backend_sqlite::identity_access::access::SqliteAccessStore;
 use tempfile::TempDir;
 
 #[path = "support/current_schema_snapshot.rs"]

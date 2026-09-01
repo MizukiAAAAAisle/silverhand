@@ -4777,7 +4777,7 @@ async fn one_enrollment_leaves_a_durable_row_and_a_live_frame_through_the_authen
         db.close().await.unwrap();
     }
 
-    let store = silverhand_backend_sqlite::access::SqliteAccessStore::open(&path)
+    let store = silverhand_backend_sqlite::identity_access::access::SqliteAccessStore::open(&path)
         .await
         .unwrap();
 
@@ -5070,9 +5070,10 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
 
     // The real session authority, shared by every principal on this test: the two
     // HTTP surfaces AND the WS perimeter resolve their caller through it.
-    let session_store = silverhand_backend_sqlite::auth::SqliteSessionStore::open(&path)
-        .await
-        .unwrap();
+    let session_store =
+        silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore::open(&path)
+            .await
+            .unwrap();
     let ttl =
         silverhand_backend_core::identity_access::auth::SessionTtl::from_millis(1_000).unwrap();
     let authenticator = || {
@@ -5103,7 +5104,7 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
     // The two HTTP surfaces, each behind the REAL human-session perimeter over the
     // seeded sessions. The access route's sink is the shared hub; the workspaces
     // route reads the same database's cold authority.
-    let store = silverhand_backend_sqlite::access::SqliteAccessStore::open(&path)
+    let store = silverhand_backend_sqlite::identity_access::access::SqliteAccessStore::open(&path)
         .await
         .unwrap();
     let cold_read =

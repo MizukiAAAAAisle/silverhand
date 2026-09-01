@@ -17,7 +17,7 @@
 
 use silverhand_backend_core::foundation::identity::{AgentId, WorkspaceId};
 use silverhand_backend_core::identity_access::agent_peer_profile::PeerTargetMembership;
-use silverhand_backend_sqlite::access::SqliteAccessStore;
+use silverhand_backend_sqlite::identity_access::access::SqliteAccessStore;
 use sqlx::Connection;
 use tempfile::TempDir;
 

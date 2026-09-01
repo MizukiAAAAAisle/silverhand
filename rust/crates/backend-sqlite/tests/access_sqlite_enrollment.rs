@@ -18,7 +18,7 @@ use silverhand_backend_core::identity_access::access::{
     AddAgentMemberError, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentClock,
     add_workspace_agent_member,
 };
-use silverhand_backend_sqlite::access::SqliteAccessStore;
+use silverhand_backend_sqlite::identity_access::access::SqliteAccessStore;
 use tempfile::TempDir;
 
 #[path = "support/current_schema_snapshot.rs"]

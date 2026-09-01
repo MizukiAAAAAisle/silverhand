@@ -4,7 +4,7 @@ use silverhand_backend_core::{
     foundation::identity::UserId,
     identity_access::auth::{HumanSessionAuthenticator, SessionBearer, SessionClock, SessionTtl},
 };
-use silverhand_backend_sqlite::auth::SqliteSessionStore;
+use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
 use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
 use tempfile::TempDir;
 

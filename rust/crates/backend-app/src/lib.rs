@@ -114,9 +114,6 @@ use silverhand_backend_server::{
     workspaces,
 };
 use silverhand_backend_sqlite::{
-    access::SqliteAccessStore,
-    agent_profile_write::SqliteAgentProfileWrite,
-    auth::SqliteSessionStore,
     conversation_messaging::direct_pair_read::SqliteDirectPairReadModel,
     conversation_messaging::messaging::{
         HostEnvironment, MessagingStore,
@@ -134,24 +131,27 @@ use silverhand_backend_sqlite::{
     host_runtime::computer_agents_read::SqliteComputerAgentsRead,
     host_runtime::host_resources_read::SqliteHostResourcesColdRead,
     host_runtime::runtime_credential::SqliteRuntimeCustodyStore,
-    human_registration::SqliteHumanRegistration,
+    identity_access::access::SqliteAccessStore,
     identity_access::agent_audit_read::SqliteAgentAuditRead,
     identity_access::agent_avatar_read::SqliteAgentAvatarRead,
     identity_access::agent_detail_read::SqliteAgentDetailColdRead,
     identity_access::agent_list_read::SqliteAgentListColdRead,
     identity_access::agent_profile_read::SqliteAgentProfileRead,
+    identity_access::agent_profile_write::SqliteAgentProfileWrite,
+    identity_access::auth::SqliteSessionStore,
     identity_access::credential::SqliteCredentialStore,
     identity_access::handle_namespace::SqliteHandleNamespace,
+    identity_access::human_registration::SqliteHumanRegistration,
+    identity_access::user_identity::SqliteUserStore,
     identity_access::workspace_audience_read::SqliteWorkspaceAudienceRead,
     identity_access::workspace_cold_read::SqliteWorkspaceColdRead,
     identity_access::workspace_detail_read::SqliteWorkspaceDetailRead,
+    identity_access::workspace_metadata_write::SqliteWorkspaceMetadataWrite,
     identity_access::workspace_name_availability::SqliteRegularWorkspaceNamespace,
-    user_identity::SqliteUserStore,
     viewer_read_model::unread_read::SqliteUnreadReadModel,
     viewer_read_model::user_presence_cold_read::SqliteUserPresenceColdRead,
     viewer_read_model::user_presence_last_seen::SqliteLastSeenSink,
     workspace_data_plane::SqliteWorkspaceScopeStore,
-    workspace_metadata_write::SqliteWorkspaceMetadataWrite,
 };
 use sqlx::{Row, sqlite::SqlitePoolOptions};
 use thiserror::Error;

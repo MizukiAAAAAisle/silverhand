@@ -417,7 +417,7 @@ mod tests {
     }
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
 
     // A codex agent `agent-1` seeded with a full tuning state (model + reasoning +
     // fast_mode) so a Clear has something to erase; a claude agent `agent-2` whose

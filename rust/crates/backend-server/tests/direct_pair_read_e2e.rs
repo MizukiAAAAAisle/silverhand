@@ -23,7 +23,8 @@ use silverhand_backend_server::{
     direct_pairs::{self, DIRECT_PAIRS_PATH},
 };
 use silverhand_backend_sqlite::{
-    auth::SqliteSessionStore, conversation_messaging::direct_pair_read::SqliteDirectPairReadModel,
+    conversation_messaging::direct_pair_read::SqliteDirectPairReadModel,
+    identity_access::auth::SqliteSessionStore,
 };
 use sqlx::{Connection, SqliteConnection};
 use tempfile::TempDir;

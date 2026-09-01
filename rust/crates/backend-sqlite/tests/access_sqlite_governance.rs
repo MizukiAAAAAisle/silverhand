@@ -21,7 +21,7 @@ use silverhand_backend_core::foundation::identity::{AgentId, Principal, UserId, 
 use silverhand_backend_core::identity_access::access::{
     WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceRole,
 };
-use silverhand_backend_sqlite::access::SqliteAccessStore;
+use silverhand_backend_sqlite::identity_access::access::SqliteAccessStore;
 use tempfile::TempDir;
 
 #[path = "support/current_schema_snapshot.rs"]

@@ -72,19 +72,19 @@
         },
         {
           "function": "attempt",
-          "path": "rust/crates/backend-sqlite/src/human_registration.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/human_registration.rs"
         },
         {
           "function": "clear_avatar_pointer",
-          "path": "rust/crates/backend-sqlite/src/user_identity.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/user_identity.rs"
         },
         {
           "function": "write_avatar_pointer",
-          "path": "rust/crates/backend-sqlite/src/user_identity.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/user_identity.rs"
         },
         {
           "function": "write_display_name",
-          "path": "rust/crates/backend-sqlite/src/user_identity.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/user_identity.rs"
         },
         {
           "function": "write",
@@ -107,7 +107,7 @@
       "audited_rust_writers": [
         {
           "function": "write_row",
-          "path": "rust/crates/backend-sqlite/src/agent_profile_write.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/agent_profile_write.rs"
         },
         {
           "function": "fail",
@@ -191,11 +191,11 @@
         },
         {
           "function": "write_archived",
-          "path": "rust/crates/backend-sqlite/src/workspace_metadata_write.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/workspace_metadata_write.rs"
         },
         {
           "function": "write_metadata",
-          "path": "rust/crates/backend-sqlite/src/workspace_metadata_write.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/workspace_metadata_write.rs"
         }
       ],
       "audited_ts_writers": [
@@ -215,7 +215,7 @@
       "audited_rust_writers": [
         {
           "function": "enroll_human_transaction",
-          "path": "rust/crates/backend-sqlite/src/access/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/access/mod.rs"
         },
         {
           "function": "attempt",
@@ -242,7 +242,7 @@
       "audited_rust_writers": [
         {
           "function": "enroll_agent_transaction",
-          "path": "rust/crates/backend-sqlite/src/access/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/access/mod.rs"
         }
       ],
       "audited_ts_writers": [
@@ -261,7 +261,7 @@
       "audited_rust_writers": [
         {
           "function": "enroll_agent_transaction",
-          "path": "rust/crates/backend-sqlite/src/access/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/access/mod.rs"
         }
       ],
       "audited_ts_writers": [
@@ -280,15 +280,15 @@
       "audited_rust_writers": [
         {
           "function": "issue",
-          "path": "rust/crates/backend-sqlite/src/auth.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/auth.rs"
         },
         {
           "function": "revoke",
-          "path": "rust/crates/backend-sqlite/src/auth.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/auth.rs"
         },
         {
           "function": "verify_and_touch_transaction",
-          "path": "rust/crates/backend-sqlite/src/auth.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/auth.rs"
         }
       ],
       "audited_ts_writers": [
@@ -307,7 +307,7 @@
       "audited_rust_writers": [
         {
           "function": "attempt",
-          "path": "rust/crates/backend-sqlite/src/human_registration.rs"
+          "path": "rust/crates/backend-sqlite/src/identity_access/human_registration.rs"
         }
       ],
       "audited_ts_writers": [

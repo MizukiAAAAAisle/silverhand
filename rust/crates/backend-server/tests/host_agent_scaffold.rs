@@ -297,20 +297,16 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // #task:2296 established the backend-sqlite `identity_access` relocation namespace: a pure
     // directory container (`identity_access/mod.rs`) owning six relocated read/ACL leaves
     // (`agent_avatar_read`, `agent_detail_read`, `agent_list_read`, `agent_profile_read`,
-    // `agent_view_acl`, `handle_namespace`). #task:2297 then folded six more zero-writer leaves
-    // in (`agent_audit_read` directory, `credential`, `workspace_audience_read`,
-    // `workspace_cold_read`, `workspace_detail_read`, `workspace_name_availability`). Their old
-    // flat crate-root seam/inherited/directory entries are removed; the organization map/gate
-    // owns each leaf's owner/target inside the container and this seam entry does NOT descend
-    // into it. PARTIAL: 12/18/6 — the six remaining writer-bearing leaves (`access`,
+    // `agent_view_acl`, `handle_namespace`). #task:2297 folded six more zero-writer leaves in
+    // (`agent_audit_read` directory, `credential`, `workspace_audience_read`,
+    // `workspace_cold_read`, `workspace_detail_read`, `workspace_name_availability`). #task:2298
+    // relocated the final six writer-bearing leaves (the `access` directory +
     // `agent_profile_write`, `auth`, `human_registration`, `user_identity`,
-    // `workspace_metadata_write`) stay flat for the final closure wave; there is no backend-sqlite
-    // identity_access self-row. Closure is NOT claimed.
+    // `workspace_metadata_write`), CLOSING the namespace at 18/18/0. All eighteen leaves' old
+    // flat crate-root seam/inherited/directory entries are removed; this single owning-root
+    // entry covers all 18 via the CP projection and does NOT descend into them. There is no
+    // backend-sqlite identity_access self-row.
     ("backend-sqlite", "identity_access"),
-    // #task:2225 — the SQLite adapter for the agent tuning/profile row write (route 2).
-    ("backend-sqlite", "agent_profile_write"),
-    ("backend-sqlite", "human_registration"),
-    ("backend-sqlite", "user_identity"),
     ("backend-sqlite", "host_agent"),
     // #task:2290 — the `viewer_read_model` relocation namespace: a directory container
     // declared once at the backend-sqlite crate root (`viewer_read_model/mod.rs`), owning
@@ -322,7 +318,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // the container and this seam entry does NOT descend into it. The namespace closed at
     // 3/3/0; this single owning-root entry is retained for the CP projection.
     ("backend-sqlite", "viewer_read_model"),
-    ("backend-sqlite", "workspace_metadata_write"),
     // #task:2248 — the same-named SQLite adapters for the residual-wave core ports
     // above. Each is the sibling of its `backend-core` entry; directory-shaped
     // scaffolds with no adapter yet, UNMOUNTED.
@@ -444,8 +439,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-server", "messaging"),
     ("backend-server", "runtime_credential"),
     ("backend-server", "workspaces"),
-    ("backend-sqlite", "access"),
-    ("backend-sqlite", "auth"),
     ("backend-sqlite", "current_schema"),
     // #task:2294 relocated four low-fanout read adapters (`agent_availability_read`,
     // `agent_presence_read`, `computer_agents_read`, `host_resources_read`) under this
@@ -576,11 +569,11 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // descend into the `messaging` leaf's internal children.
     ("backend-sqlite", "conversation_messaging"),
     // #task:2296 — the backend-sqlite `identity_access` relocation namespace, a pure
-    // directory-shaped container (`identity_access/mod.rs`) owning the relocated read/ACL
-    // leaves (six from #task:2296, six more zero-writer leaves from #task:2297, including the
-    // `agent_audit_read` directory leaf). Same terms: one declaration at the crate root, leaf
-    // owners live in the organization map/gate. PARTIAL (12/18/6): the six writer-bearing
-    // leaves are not relocated into this container yet and stay flat crate-root modules.
+    // directory-shaped container (`identity_access/mod.rs`) owning all eighteen relocated
+    // leaves (six read/ACL from #task:2296; six zero-writer incl. the `agent_audit_read`
+    // directory from #task:2297; six writer-bearing incl. the `access` directory from
+    // #task:2298). Same terms: one declaration at the crate root, leaf owners live in the
+    // organization map/gate. CLOSED 18/18/0.
     ("backend-sqlite", "identity_access"),
 ];
 

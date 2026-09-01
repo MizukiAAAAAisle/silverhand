@@ -436,7 +436,7 @@ mod tests {
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
 
     // A regular workspace `ws-1` (owner user-1, admin user-2, member user-3), a
     // second regular workspace `ws-2` holding the fold key `taken` for the
