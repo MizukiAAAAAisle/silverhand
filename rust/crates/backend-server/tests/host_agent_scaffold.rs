@@ -294,18 +294,21 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // `internal_agent::diagnostics` (internal runtime-credentialed family).
     ("backend-server", "embedded_bootstrap"),
     ("backend-server", "workspace_data_plane"),
-    // #task:2296 — the backend-sqlite `identity_access` relocation namespace: a pure
-    // directory container (`identity_access/mod.rs`) owning the six relocated read/ACL leaves
-    // this wave lands (`agent_avatar_read`, `agent_detail_read`, `agent_list_read`,
-    // `agent_profile_read`, `agent_view_acl`, `handle_namespace`). Their old flat crate-root
-    // seam entries are removed; the organization map/gate owns each leaf's owner/target inside
-    // the container and this seam entry does NOT descend into it. PARTIAL: 6/18/12 — the other
-    // 12 backend-sqlite identity_access leaves stay flat in their inventories for later waves;
-    // there is no backend-sqlite identity_access self-row. Closure is NOT claimed.
+    // #task:2296 established the backend-sqlite `identity_access` relocation namespace: a pure
+    // directory container (`identity_access/mod.rs`) owning six relocated read/ACL leaves
+    // (`agent_avatar_read`, `agent_detail_read`, `agent_list_read`, `agent_profile_read`,
+    // `agent_view_acl`, `handle_namespace`). #task:2297 then folded six more zero-writer leaves
+    // in (`agent_audit_read` directory, `credential`, `workspace_audience_read`,
+    // `workspace_cold_read`, `workspace_detail_read`, `workspace_name_availability`). Their old
+    // flat crate-root seam/inherited/directory entries are removed; the organization map/gate
+    // owns each leaf's owner/target inside the container and this seam entry does NOT descend
+    // into it. PARTIAL: 12/18/6 — the six remaining writer-bearing leaves (`access`,
+    // `agent_profile_write`, `auth`, `human_registration`, `user_identity`,
+    // `workspace_metadata_write`) stay flat for the final closure wave; there is no backend-sqlite
+    // identity_access self-row. Closure is NOT claimed.
     ("backend-sqlite", "identity_access"),
     // #task:2225 — the SQLite adapter for the agent tuning/profile row write (route 2).
     ("backend-sqlite", "agent_profile_write"),
-    ("backend-sqlite", "credential"),
     ("backend-sqlite", "human_registration"),
     ("backend-sqlite", "user_identity"),
     ("backend-sqlite", "host_agent"),
@@ -319,20 +322,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // the container and this seam entry does NOT descend into it. The namespace closed at
     // 3/3/0; this single owning-root entry is retained for the CP projection.
     ("backend-sqlite", "viewer_read_model"),
-    ("backend-sqlite", "workspace_detail_read"),
     ("backend-sqlite", "workspace_metadata_write"),
-    ("backend-sqlite", "workspace_name_availability"),
-    // #task:2220 — the SQLite reads the rename fan-out and the workspace-metadata
-    // viewer hint consume: the conversation agent audience (folded into the rename
-    // messaging store) and the workspace human audience. Not yet mounted (the app
-    // composition root is out of this task's scope). (#task:2294 relocated the
-    // `computer_agents_read` host-runtime roster adapter under the `host_runtime`
-    // context; its flat entry is removed and covered by that owning-root entry.)
-    ("backend-sqlite", "workspace_audience_read"),
     // #task:2248 — the same-named SQLite adapters for the residual-wave core ports
     // above. Each is the sibling of its `backend-core` entry; directory-shaped
     // scaffolds with no adapter yet, UNMOUNTED.
-    ("backend-sqlite", "agent_audit_read"),
     ("backend-sqlite", "embedded_bootstrap"),
     ("backend-sqlite", "workspace_data_plane"),
     // #task:2291 — the backend-sqlite `foundation` relocation namespace: a directory
@@ -462,7 +455,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     // Their flat SEAM/DIRECTORY/inherited entries are removed; this single owning-root entry
     // covers them via the CP projection and does NOT descend into the context.
     ("backend-sqlite", "host_runtime"),
-    ("backend-sqlite", "workspace_cold_read"),
 ];
 
 /// TRANSITIONAL — the root modules the vocabulary-ownership lanes declare.
@@ -538,7 +530,6 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // so their flat directory entries are removed here; the backend-sqlite adapters stay flat.
     ("backend-core", "embedded_bootstrap"),
     ("backend-core", "workspace_data_plane"),
-    ("backend-sqlite", "agent_audit_read"),
     ("backend-sqlite", "embedded_bootstrap"),
     ("backend-sqlite", "workspace_data_plane"),
     ("backend-sqlite", "host_agent"),
@@ -585,10 +576,11 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // descend into the `messaging` leaf's internal children.
     ("backend-sqlite", "conversation_messaging"),
     // #task:2296 — the backend-sqlite `identity_access` relocation namespace, a pure
-    // directory-shaped container (`identity_access/mod.rs`) owning the six relocated
-    // read/ACL leaves. Same terms: one declaration at the crate root, leaf owners live in the
-    // organization map/gate. PARTIAL (6/18/12): the other 12 identity_access leaves are not
-    // relocated into this container yet and stay flat crate-root modules.
+    // directory-shaped container (`identity_access/mod.rs`) owning the relocated read/ACL
+    // leaves (six from #task:2296, six more zero-writer leaves from #task:2297, including the
+    // `agent_audit_read` directory leaf). Same terms: one declaration at the crate root, leaf
+    // owners live in the organization map/gate. PARTIAL (12/18/6): the six writer-bearing
+    // leaves are not relocated into this container yet and stay flat crate-root modules.
     ("backend-sqlite", "identity_access"),
 ];
 

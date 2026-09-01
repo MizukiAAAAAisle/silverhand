@@ -39,7 +39,7 @@ use silverhand_backend_server::{
     workspaces::{self, WORKSPACES_PATH},
 };
 use silverhand_backend_sqlite::{
-    auth::SqliteSessionStore, workspace_cold_read::SqliteWorkspaceColdRead,
+    auth::SqliteSessionStore, identity_access::workspace_cold_read::SqliteWorkspaceColdRead,
 };
 use sqlx::{Connection, Executor, SqliteConnection};
 use tempfile::TempDir;

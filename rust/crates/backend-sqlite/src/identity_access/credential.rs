@@ -190,7 +190,7 @@ mod tests {
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
 
     // A signup user with a credential, a profile-only user (no credential row), and
     // a stranger email that resolves to no row at all.
@@ -280,7 +280,7 @@ INSERT INTO user_password_credentials (user_id, password_hash, password_hash_par
                 floor_time_cost: 2,
             },
         };
-        let fixture = include_str!("../tests/fixtures/password-hash-params-rust.json");
+        let fixture = include_str!("../../tests/fixtures/password-hash-params-rust.json");
         assert_eq!(serialize_password_hash_params(&params), fixture.trim_end());
     }
 }

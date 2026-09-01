@@ -32,7 +32,7 @@ use sqlx::{
 };
 use thiserror::Error;
 
-use crate::credential::serialize_password_hash_params;
+use crate::identity_access::credential::serialize_password_hash_params;
 
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 const POOL_CONNECTIONS: u32 = 4;

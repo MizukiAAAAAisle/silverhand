@@ -24,7 +24,7 @@ use axum::{
 use serde_json::Value;
 use silverhand_backend_core::foundation::identity::UserId;
 use silverhand_backend_server::workspaces::{self, WORKSPACES_PATH};
-use silverhand_backend_sqlite::workspace_cold_read::SqliteWorkspaceColdRead;
+use silverhand_backend_sqlite::identity_access::workspace_cold_read::SqliteWorkspaceColdRead;
 use sqlx::{Connection, Executor};
 use tower::ServiceExt;
 

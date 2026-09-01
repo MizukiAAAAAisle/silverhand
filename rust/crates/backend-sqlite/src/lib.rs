@@ -8,12 +8,10 @@
 //! the wire.
 
 pub mod access;
-pub mod agent_audit_read;
 pub mod agent_profile_write;
 
 pub mod auth;
 pub mod conversation_messaging;
-pub mod credential;
 pub mod embedded_bootstrap;
 pub mod foundation;
 pub mod host_agent;
@@ -22,12 +20,8 @@ pub mod human_registration;
 pub mod identity_access;
 pub mod user_identity;
 pub mod viewer_read_model;
-pub mod workspace_audience_read;
-pub mod workspace_cold_read;
 pub mod workspace_data_plane;
-pub mod workspace_detail_read;
 pub mod workspace_metadata_write;
-pub mod workspace_name_availability;
 
 #[cfg(test)]
 #[path = "../tests/support/current_schema_snapshot.rs"]

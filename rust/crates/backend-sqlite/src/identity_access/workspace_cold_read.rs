@@ -346,9 +346,9 @@ mod snapshot_isolation_tests {
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
     const SEED_SQL: &str =
-        include_str!("../../../../packages/backend/tests/fixtures/workspace-cold-read/seed.sql");
+        include_str!("../../../../../packages/backend/tests/fixtures/workspace-cold-read/seed.sql");
 
     async fn create_seeded_db(path: &Path) {
         let options = sqlx::sqlite::SqliteConnectOptions::new()

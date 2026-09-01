@@ -49,7 +49,7 @@ use sqlx::{
 use thiserror::Error;
 
 // `pub(crate)`: the author-evidence decode + resolution authority is reused by the
-// agent-audit read adapter (`crate::agent_audit_read`), so the audit transcript and
+// agent-audit read adapter (`crate::identity_access::agent_audit_read`), so the audit transcript and
 // the authenticated window resolve a message row's author the same way.
 pub(crate) mod author;
 pub(crate) mod authorities;

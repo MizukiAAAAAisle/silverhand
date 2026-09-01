@@ -5107,7 +5107,7 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
         .await
         .unwrap();
     let cold_read =
-        silverhand_backend_sqlite::workspace_cold_read::SqliteWorkspaceColdRead::open(&path)
+        silverhand_backend_sqlite::identity_access::workspace_cold_read::SqliteWorkspaceColdRead::open(&path)
             .await
             .unwrap();
     let enroll_app = crate::auth::require_human_session(

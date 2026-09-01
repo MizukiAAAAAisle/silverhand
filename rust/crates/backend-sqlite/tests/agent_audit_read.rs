@@ -28,7 +28,7 @@ use silverhand_backend_core::{
     foundation::identity::{AgentId, ConversationId, Principal, UserId},
     identity_access::agent_audit_read::AgentAuditReadModel,
 };
-use silverhand_backend_sqlite::agent_audit_read::SqliteAgentAuditRead;
+use silverhand_backend_sqlite::identity_access::agent_audit_read::SqliteAgentAuditRead;
 use sqlx::Connection;
 
 #[path = "support/current_schema_snapshot.rs"]

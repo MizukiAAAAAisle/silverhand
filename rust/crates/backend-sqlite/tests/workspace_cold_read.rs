@@ -9,7 +9,7 @@ use silverhand_backend_core::{
     identity_access::workspace_cold_read::WorkspaceColdReadUnitOfWork,
     viewer_read_model::viewer_workspace_sort::{SortMode, WorkspaceSortScope},
 };
-use silverhand_backend_sqlite::workspace_cold_read::{
+use silverhand_backend_sqlite::identity_access::workspace_cold_read::{
     SqliteWorkspaceColdRead, WorkspaceColdReadError,
 };
 use sqlx::{Connection, Executor};

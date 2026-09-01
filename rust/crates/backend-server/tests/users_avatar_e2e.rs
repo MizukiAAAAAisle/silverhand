@@ -50,8 +50,8 @@ use silverhand_backend_server::{
     users::{self, UsersDeps},
 };
 use silverhand_backend_sqlite::{
-    auth::SqliteSessionStore, credential::SqliteCredentialStore,
-    human_registration::SqliteHumanRegistration,
+    auth::SqliteSessionStore, human_registration::SqliteHumanRegistration,
+    identity_access::credential::SqliteCredentialStore,
     identity_access::handle_namespace::SqliteHandleNamespace, user_identity::SqliteUserStore,
 };
 use sqlx::Connection as _;
