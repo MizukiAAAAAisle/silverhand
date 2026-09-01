@@ -157,12 +157,10 @@ use sqlx::{Row, sqlite::SqlitePoolOptions};
 use thiserror::Error;
 use tokio::{net::TcpListener, sync::oneshot};
 
-mod request_perimeter;
-
-mod create_aftermath;
-use create_aftermath::CreateAftermath;
+mod foundation;
 
 mod application_orchestration;
+use application_orchestration::create_aftermath::CreateAftermath;
 
 const DATABASE_PATH_ENV: &str = "SILVERHAND_DATABASE_PATH";
 /// The local blob-storage root. Required and launcher-provided, exactly like the

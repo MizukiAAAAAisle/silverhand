@@ -1111,7 +1111,7 @@ pub(super) async fn compose_after_audit(
             // they are already merged into this single router. Product routes keep their
             // tighter in-stream caps; this only bounds the outer envelope.
             .layer(axum::middleware::from_fn(
-                request_perimeter::enforce_request_body_ceiling,
+                crate::foundation::request_perimeter::enforce_request_body_ceiling,
             )),
         boot,
         event_controller,

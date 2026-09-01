@@ -1525,7 +1525,7 @@ async fn composed_avatar_upload_separates_the_five_mib_cap_from_the_perimeter_ce
     // Tier 3 — a request DECLARING more than 128 MiB: the perimeter's own 413,
     // returned from its declared-Content-Length short-circuit before any byte is read
     // or any route matched. A one-byte actual body proves the HEADER alone drives it.
-    let over_ceiling = request_perimeter::MAX_REQUEST_BODY_BYTES as u64 + 1;
+    let over_ceiling = crate::foundation::request_perimeter::MAX_REQUEST_BODY_BYTES as u64 + 1;
     let response = app
         .router
         .clone()

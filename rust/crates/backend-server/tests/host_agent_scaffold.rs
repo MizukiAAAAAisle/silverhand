@@ -374,19 +374,11 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
 /// other, and having to choose is the point.
 const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-app", "current_schema"),
-    // #task:2223 composition-root request-body perimeter: a non-seam production module
-    // the host-agent seam lane did not add. It owes no labeled seam line and is not
-    // fenced against composition (it is deliberately MOUNTED as the outermost layer),
-    // so it belongs in the non-seam baseline this list closes the tree over, not in
-    // `SEAM_ROOT_MODULES`.
-    ("backend-app", "request_perimeter"),
-    // #task:2234 CP6 composition-root create-aftermath boundary: the owned tracker the
-    // create route hands its two post-commit remote legs to, built in `prepare()` and
-    // closed at shutdown. Like `request_perimeter` it is a non-seam production module the
-    // host-agent seam lane did not add — it is deliberately MOUNTED (not fenced against
-    // composition) and owes no labeled seam line, so it closes into this non-seam baseline
-    // rather than `SEAM_ROOT_MODULES`.
-    ("backend-app", "create_aftermath"),
+    // #task:2288 — `request_perimeter` relocated under the new backend-app `foundation`
+    // container and `create_aftermath` under the existing `application_orchestration` context;
+    // their flat entries are removed here and covered by those owning-root entries via the CP
+    // projection. `current_schema` above stays a crate-root cfg-test/path-backed identity (not
+    // physically relocated).
     // #task:2284 — blob_store, cli_preflight_audit, cli_invoke_audit, persistence, and
     // scope_event relocated under the `foundation` namespace; their flat entries are removed
     // here and covered by the single `foundation` owning-root seam entry via the CP projection.
@@ -455,6 +447,11 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
 /// authority. Organization accounting stays separate from route/product ledgers.
 const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-app", "application_orchestration"),
+    // #task:2288 — the new backend-app private dependency-substrate container owning the
+    // relocated `request_perimeter`. Like `application_orchestration` it is a namespace
+    // container in the transitional organization list; the CP projection folds
+    // `foundation::request_perimeter` into this single owning-root entry.
+    ("backend-app", "foundation"),
     ("backend-server", "application_orchestration"),
     ("backend-server", "conversation_messaging"),
     ("backend-server", "foundation"),
