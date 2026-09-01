@@ -19,10 +19,7 @@ use std::{
 use std::collections::HashSet;
 
 use silverhand_backend_core::agent_creation::OnboardingInboxEnsure;
-use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId};
-use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-use silverhand_backend_core::identity_access::agents::session_scope::AgentSessionScope;
-use silverhand_backend_core::messaging::{
+use silverhand_backend_core::conversation_messaging::messaging::{
     self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationRefusal,
     CreatedMessage, DirectPairEndpoints, DirectPairMint, DirectPairMinted, DirectPairOpenedPort,
     DirectPairParticipants, EndpointPrincipalReads, EnvironmentUnavailable, FromKind, InvalidSeq,
@@ -40,6 +37,9 @@ use silverhand_backend_core::messaging::{
         MentionedViewerRecord, PostCommitPlan, ReplyAudience,
     },
 };
+use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId};
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
+use silverhand_backend_core::identity_access::agents::session_scope::AgentSessionScope;
 use sqlx::{
     Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
     sqlite::{
@@ -1320,16 +1320,19 @@ impl<E: SendClock + SendEntropy + Send + Sync> SendMessageUnitOfWork for Messagi
 struct TxScope<'connection, 'entropy, E> {
     tx: Transaction<'connection, Sqlite>,
     entropy: &'entropy E,
-    opened_direct_pairs: Vec<silverhand_backend_core::messaging::DirectPairOpenedFact>,
+    opened_direct_pairs:
+        Vec<silverhand_backend_core::conversation_messaging::messaging::DirectPairOpenedFact>,
 }
 
 #[derive(Default)]
 struct RecordedDirectPairOpens(
-    Mutex<Vec<silverhand_backend_core::messaging::DirectPairOpenedFact>>,
+    Mutex<Vec<silverhand_backend_core::conversation_messaging::messaging::DirectPairOpenedFact>>,
 );
 
 impl RecordedDirectPairOpens {
-    fn into_facts(self) -> Vec<silverhand_backend_core::messaging::DirectPairOpenedFact> {
+    fn into_facts(
+        self,
+    ) -> Vec<silverhand_backend_core::conversation_messaging::messaging::DirectPairOpenedFact> {
         self.0.into_inner().expect("direct-pair recorder poisoned")
     }
 }
@@ -1339,7 +1342,7 @@ impl DirectPairOpenedPort for RecordedDirectPairOpens {
 
     async fn direct_pair_opened(
         &self,
-        fact: &silverhand_backend_core::messaging::DirectPairOpenedFact,
+        fact: &silverhand_backend_core::conversation_messaging::messaging::DirectPairOpenedFact,
     ) -> Result<(), Self::Error> {
         self.0
             .lock()
@@ -3005,8 +3008,8 @@ mod tests {
     /// grammar for `(conversation, ordinal)` or for the stream head.
     #[tokio::test]
     async fn the_onboarding_writer_appends_one_complete_system_cluster() {
-        use silverhand_backend_core::messaging::ParticipantHandle;
-        use silverhand_backend_core::messaging::agent_onboarding::OnboardingSystemMessage;
+        use silverhand_backend_core::conversation_messaging::messaging::ParticipantHandle;
+        use silverhand_backend_core::conversation_messaging::messaging::agent_onboarding::OnboardingSystemMessage;
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("onboarding.sqlite");
@@ -3472,7 +3475,8 @@ mod tests {
     #[tokio::test]
     async fn a_mixed_page_resolves_every_arm_through_one_batch_authority() {
         use silverhand_backend_core::{
-            identity_access::agents::runtime::RuntimeKind, messaging::PrincipalIdentity,
+            conversation_messaging::messaging::PrincipalIdentity,
+            identity_access::agents::runtime::RuntimeKind,
         };
 
         let directory = tempfile::tempdir().unwrap();

@@ -2,9 +2,7 @@
 
 use serde_json::Value;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         PrincipalIdentity,
         collaboration::{
             channel_directory::{ChannelVisibility, DirectoryRoster},
@@ -16,6 +14,8 @@ use silverhand_backend_core::{
             },
         },
     },
+    foundation::identity::{AgentId, ConversationId, UserId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;

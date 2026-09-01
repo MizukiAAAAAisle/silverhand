@@ -5,7 +5,7 @@
 //! idempotent lookup), the host-side materialize command
 //! ([`crate::host_runtime::agent_materialize`]), the placement rule ([`crate::host_runtime`]), the
 //! shared handle namespace ([`crate::identity_access::human_auth_flows::HandleNamespaceRead`]) and id
-//! minting (`crate::messaging::identity`). It owns the DECISION at each step; the row
+//! minting (`crate::conversation_messaging::messaging::identity`). It owns the DECISION at each step; the row
 //! writes, the host command and the reads are ports.
 //!
 //! ## What this module is NOT
@@ -50,6 +50,13 @@ use crate::{
         ReserveAgentInput, ReserveOutcome, find_idempotent_reservation, home_workspace_id_for,
         provision_and_activate, reopen_failed_materialization, reserve_agent,
     },
+    conversation_messaging::messaging::{
+        MessageId,
+        collaboration::RuntimePlacementRefusal,
+        environment::{EnvironmentUnavailable, SendEntropy},
+        mint_agent_id, mint_conversation_id,
+        post_commit::EffectFailure,
+    },
     foundation::identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
     foundation::name_canonicalization::is_ecmascript_trim_whitespace,
     foundation::persistence::PersistenceFailure,
@@ -68,13 +75,6 @@ use crate::{
     },
     identity_access::human_auth_flows::HandleNamespaceRead,
     identity_access::user_identity::ParticipantHandle,
-    messaging::{
-        MessageId,
-        collaboration::RuntimePlacementRefusal,
-        environment::{EnvironmentUnavailable, SendEntropy},
-        mint_agent_id, mint_conversation_id,
-        post_commit::EffectFailure,
-    },
 };
 
 /// The already-admitted create request, in the core's own vocabulary.
@@ -892,15 +892,15 @@ mod tests {
         RawCreatorIdentity, RawHomeWorkspaceRow, RawOnboardingDmRow, RawProvisionOutcome,
         RawWorkspaceOwnerEdge, ReserveRecord, ReservedAgentRow, agent_home_workspace_description,
     };
-    use crate::host_runtime::agent_materialize::AgentMaterializeReceipt;
-    use crate::host_runtime::computer::{ComputerRecord, HostKind, ProvisioningSource};
-    use crate::messaging::agent_onboarding::{
+    use crate::conversation_messaging::messaging::agent_onboarding::{
         ONBOARDING_DM_TITLE, ONBOARDING_DM_TITLE_KEY, OnboardingMetadataDigest,
         OnboardingSystemMessage, OnboardingWriteWitness,
     };
-    use crate::messaging::{
+    use crate::conversation_messaging::messaging::{
         DirectPairParticipants, ParticipantHandle as MessageHandle, PrincipalIdentity,
     };
+    use crate::host_runtime::agent_materialize::AgentMaterializeReceipt;
+    use crate::host_runtime::computer::{ComputerRecord, HostKind, ProvisioningSource};
 
     const NOW: i64 = 1_000;
     const CREATOR: &str = "u1";

@@ -1,12 +1,12 @@
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::{
+    conversation_messaging::messaging::{
         MessageId, PrincipalIdentity,
         collaboration::human_search::{
             HumanSearchOrder, HumanSearchQuery, HumanSearchReadPort, HumanSearchResult,
             HumanSearchStream, HumanSearchText,
         },
     },
+    foundation::identity::{ConversationId, UserId},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use silverhand_backend_sqlite::messaging::collaboration::human_search::HumanSearchStoreError;
@@ -83,11 +83,11 @@ async fn read(
     query: HumanSearchQuery,
 ) -> Result<
     Result<
-        silverhand_backend_core::messaging::collaboration::human_search::HumanSearchPage,
-        silverhand_backend_core::messaging::collaboration::human_search::HumanSearchRefusal,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::human_search::HumanSearchPage,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::human_search::HumanSearchRefusal,
     >,
     silverhand_backend_core::foundation::persistence::PersistenceFailure,
-> {
+>{
     read_as(path, "viewer", query).await
 }
 
@@ -97,11 +97,11 @@ async fn read_as(
     query: HumanSearchQuery,
 ) -> Result<
     Result<
-        silverhand_backend_core::messaging::collaboration::human_search::HumanSearchPage,
-        silverhand_backend_core::messaging::collaboration::human_search::HumanSearchRefusal,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::human_search::HumanSearchPage,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::human_search::HumanSearchRefusal,
     >,
     silverhand_backend_core::foundation::persistence::PersistenceFailure,
-> {
+>{
     MessagingStore::open(path)
         .await
         .unwrap()
@@ -215,7 +215,7 @@ async fn actual_direct_pair_placement_corruption_is_not_washed_into_a_valid_ref(
     assert!(matches!(
         source(&failure),
         HumanSearchStoreError::Projection(
-            silverhand_backend_core::messaging::collaboration::human_search::HumanSearchCorruption::Conversation
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::human_search::HumanSearchCorruption::Conversation
         )
     ));
 
@@ -255,7 +255,7 @@ async fn loaded_thread_root_must_be_an_actual_root_and_repair_restores_search() 
     );
     assert!(matches!(
         read(&path, thread_query.clone()).await.unwrap(),
-        Err(silverhand_backend_core::messaging::collaboration::human_search::HumanSearchRefusal::ThreadRootNotFound)
+        Err(silverhand_backend_core::conversation_messaging::messaging::collaboration::human_search::HumanSearchRefusal::ThreadRootNotFound)
     ));
 
     let mut db = sqlx::SqliteConnection::connect(path.to_str().unwrap())

@@ -9,8 +9,8 @@
 //! [`decode_row`](super::row::decode_row) then the cross-row
 //! [`seal_board_against_conversation`](super::row::seal_board_against_conversation).
 
+use silverhand_backend_core::conversation_messaging::messaging::task::{TaskAggregate, TaskId};
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-use silverhand_backend_core::messaging::task::{TaskAggregate, TaskId};
 
 use super::row::{SELECT_TASK_ROW, decode_row, seal_board_against_conversation};
 use super::{SqliteTaskStore, driver};
@@ -51,9 +51,11 @@ mod tests {
     use super::super::TaskStoreError;
     use super::SqliteTaskStore;
     use crate::current_schema;
+    use silverhand_backend_core::conversation_messaging::messaging::task::{
+        BoardKey, TaskId, TaskStatus,
+    };
     use silverhand_backend_core::foundation::identity::WorkspaceId;
     use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-    use silverhand_backend_core::messaging::task::{BoardKey, TaskId, TaskStatus};
     use sqlx::{Connection, Row, SqliteConnection};
     use tempfile::TempDir;
 

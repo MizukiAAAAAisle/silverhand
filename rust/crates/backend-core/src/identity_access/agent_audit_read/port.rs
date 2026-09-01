@@ -12,11 +12,11 @@
 use std::future::Future;
 
 use crate::{
-    foundation::identity::{AgentId, ConversationId, Principal},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         AttachmentId, collaboration::conversation_message_window::ConversationMessageWindowRequest,
     },
+    foundation::identity::{AgentId, ConversationId, Principal},
+    foundation::persistence::PersistenceFailure,
 };
 
 use super::{AuditAttachmentBundle, AuditChatsBundle, AuditSubjectFacts, AuditTranscriptBundle};

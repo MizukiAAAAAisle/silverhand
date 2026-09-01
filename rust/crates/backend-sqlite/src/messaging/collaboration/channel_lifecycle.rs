@@ -4,10 +4,7 @@ mod mutation;
 pub use mutation::{ChannelLifecycleMutationStoreError, SqliteChannelLifecycleMutation};
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    identity_access::access::WorkspaceRole,
-    messaging::{
+    conversation_messaging::messaging::{
         DirectPairParticipants, PrincipalIdentity,
         collaboration::{
             channel_directory::{ChannelStatus, ChannelVisibility, DirectoryRoster},
@@ -18,6 +15,9 @@ use silverhand_backend_core::{
         },
         conversation_title::CanonicalConversationTitle,
     },
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
+    identity_access::access::WorkspaceRole,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};
 use thiserror::Error;

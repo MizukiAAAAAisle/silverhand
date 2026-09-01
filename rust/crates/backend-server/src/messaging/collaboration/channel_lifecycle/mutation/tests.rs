@@ -14,8 +14,7 @@ use futures_util::stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    messaging::{
+    conversation_messaging::messaging::{
         MessageId, MessageSeq, SendClock, SendEntropy,
         collaboration::{
             channel_directory::{ChannelStatus, ChannelVisibility, DirectoryRoster},
@@ -32,6 +31,7 @@ use silverhand_backend_core::{
         conversation_title::CanonicalConversationTitle,
         environment::EnvironmentUnavailable,
     },
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, Row, SqliteConnection, sqlite::SqliteConnectOptions};

@@ -15,16 +15,7 @@ use axum::{
 use futures_util::stream;
 use serde_json::Value;
 use silverhand_backend_core::{
-    foundation::blob_store::{
-        BlobDeleteOutcome, BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore, StorageKind,
-        StoredBlob,
-    },
-    foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
-    foundation::persistence::PersistenceFailure,
-    host_runtime::runtime_credential::{
-        RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
-    },
-    messaging::{
+    conversation_messaging::messaging::{
         AddressRefusal, DirectPairAllocation, ResolvedStream, SendClock, SendEntropy,
         TargetAddress,
         collaboration::attachment::{
@@ -34,6 +25,15 @@ use silverhand_backend_core::{
             AgentAttachmentUploadRefusal, AttachmentChangedFact, AttachmentChangedPublisher,
         },
         environment::EnvironmentUnavailable,
+    },
+    foundation::blob_store::{
+        BlobDeleteOutcome, BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore, StorageKind,
+        StoredBlob,
+    },
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
+    foundation::persistence::PersistenceFailure,
+    host_runtime::runtime_credential::{
+        RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
 };
 use silverhand_backend_filesystem::blob_store::{LocalBlobStore, LocalBlobStoreError};

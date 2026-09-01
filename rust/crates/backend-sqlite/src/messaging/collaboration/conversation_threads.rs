@@ -3,15 +3,15 @@
 use std::collections::HashMap;
 
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         FromKind, MessageAuthor, MessageId, MessageSeq, ThreadRootId,
         collaboration::conversation_threads::{
             ConversationThreadsPage, ConversationThreadsReadPort, ConversationThreadsRefusal,
             SelectedConversationThread, ThreadListFilter, ThreadListQuery, ThreadReadCorruption,
         },
     },
+    foundation::identity::{ConversationId, UserId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};
 use thiserror::Error;

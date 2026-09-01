@@ -260,7 +260,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messaging::AvatarRevision;
+    use crate::conversation_messaging::messaging::AvatarRevision;
     use std::{
         collections::{HashMap, HashSet},
         sync::atomic::{AtomicBool, Ordering},

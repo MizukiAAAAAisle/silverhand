@@ -11,12 +11,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::UserId,
-    messaging::collaboration::{
+    conversation_messaging::messaging::collaboration::{
         ClearSessionOutcome, ClearSessionProviderRefusal, CliSessionId, HardStopRuntimeOutcome,
         HardStopRuntimeProviderRefusal, RuntimeControlPort, RuntimePlacementRefusal,
         RuntimeSeatTarget, RuntimeStartTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal,
     },
+    foundation::identity::UserId,
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection};
@@ -455,7 +455,7 @@ async fn each_provider_refusal_family_has_its_exact_route_mapping() {
         store.runtime_control_admission(),
         provider(ProviderMode::StopRefusal(
             HardStopRuntimeProviderRefusal::Placement(
-                silverhand_backend_core::messaging::collaboration::RuntimePlacementRefusal::HostAttachPending,
+                silverhand_backend_core::conversation_messaging::messaging::collaboration::RuntimePlacementRefusal::HostAttachPending,
             ),
         )),
     );

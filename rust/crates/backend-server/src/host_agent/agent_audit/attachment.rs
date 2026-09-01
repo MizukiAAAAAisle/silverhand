@@ -6,10 +6,10 @@ use axum::{
     response::Response,
 };
 use silverhand_backend_core::{
+    conversation_messaging::messaging::AttachmentId,
     foundation::blob_store::{BlobReadOutcome, BlobStore},
     foundation::identity::{AgentId, ConversationId, Principal, UserId},
     identity_access::agent_audit_read::{AgentAuditEvent, AgentAuditReadModel, AgentAuditSink},
-    messaging::AttachmentId,
 };
 
 use super::{

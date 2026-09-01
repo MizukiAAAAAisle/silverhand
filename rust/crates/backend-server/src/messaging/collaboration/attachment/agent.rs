@@ -21,10 +21,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    foundation::blob_store::{BlobAliasId, BlobNamespace, BlobReadOutcome, BlobStore},
-    foundation::identity::AgentId,
-    host_runtime::runtime_credential::RuntimePrincipal,
-    messaging::{
+    conversation_messaging::messaging::{
         AddressRefusal, AttachmentId, SendClock, SendEntropy, TargetAddress,
         collaboration::attachment::{
             AgentAttachmentContentUpdateCommand, AgentAttachmentContentUpdateRefusal,
@@ -38,6 +35,9 @@ use silverhand_backend_core::{
             AttachmentPostCommitMaintenance,
         },
     },
+    foundation::blob_store::{BlobAliasId, BlobNamespace, BlobReadOutcome, BlobStore},
+    foundation::identity::AgentId,
+    host_runtime::runtime_credential::RuntimePrincipal,
 };
 use silverhand_backend_filesystem::blob_store::{LocalBlobAliasOutcome, LocalBlobAliasStore};
 

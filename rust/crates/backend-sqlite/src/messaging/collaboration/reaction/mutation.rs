@@ -1,8 +1,8 @@
 //! The reaction write UoW and its placement-aware authorization.
 
 use silverhand_backend_core::{
-    messaging::PrincipalIdentity,
-    messaging::collaboration::reaction::{
+    conversation_messaging::messaging::PrincipalIdentity,
+    conversation_messaging::messaging::collaboration::reaction::{
         CommittedReaction, ReactionActor, ReactionChangedFact, ReactionMutation,
         ReactionMutationPort, ReactionMutationRefusal,
     },
@@ -88,7 +88,7 @@ impl ReactionMutationPort for SqliteReactionStore {
 
         let reactor = mutation.actor().reactor();
         let changed = match mutation.change() {
-            silverhand_backend_core::messaging::collaboration::reaction::ReactionChange::Add => {
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionChange::Add => {
                 sqlx::query(
                     "INSERT INTO message_reactions \
                      (id, message_id, reactor_kind, reactor_id, emoji, created_at) \
@@ -105,7 +105,7 @@ impl ReactionMutationPort for SqliteReactionStore {
                 .rows_affected()
                     == 1
             }
-            silverhand_backend_core::messaging::collaboration::reaction::ReactionChange::Remove => {
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionChange::Remove => {
                 sqlx::query(
                     "DELETE FROM message_reactions WHERE message_id = ? \
                      AND reactor_kind = ? AND reactor_id = ? AND emoji = ?",
@@ -128,7 +128,7 @@ impl ReactionMutationPort for SqliteReactionStore {
         .fetch_one(&mut *tx)
         .await?;
         let count =
-            silverhand_backend_core::messaging::collaboration::reaction::ReactionCount::new(count)
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionCount::new(count)
                 .map_err(|_| ReactionStoreError::InvalidCount)?;
         let committed = if changed {
             CommittedReaction::committed_change(ReactionChangedFact::committed(

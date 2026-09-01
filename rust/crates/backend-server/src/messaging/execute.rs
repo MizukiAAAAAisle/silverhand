@@ -13,12 +13,12 @@
 //! for the two paths to drift.
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId},
-    messaging::{
+    conversation_messaging::messaging::{
         DirectLineAuthority, FromKind, MessageReference, PrincipalKind, ReferencePositions,
         SendActor, SendDestination, SendMessage, SendMessageDraft, SendMessageError,
         SendMessageOutcome, SendMessageUnitOfWork,
     },
+    foundation::identity::{AgentId, ConversationId, UserId},
 };
 
 use super::admission::ValidatedSendPayload;
@@ -190,12 +190,12 @@ mod tests {
 
     use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use silverhand_backend_core::{
-        foundation::identity::{AgentId, UserId},
-        messaging::{
+        conversation_messaging::messaging::{
             AddressedPrincipals, CreatedMessage, FromKind, MessageContent, MessageCreatedFact,
             MessageId, MessageSeq,
             post_commit::{DeliveryPlan, MainDeliveryPlan, PostCommitPlan},
         },
+        foundation::identity::{AgentId, UserId},
     };
 
     use super::*;
@@ -223,7 +223,7 @@ mod tests {
             self.actors.lock().unwrap().push(command.actor().clone());
             // The fact needs a committed transaction to exist, which a fake has not
             // got. Recording the attempt is the whole purpose here.
-            Err(silverhand_backend_core::messaging::ConversationRefusal::NotFound.into())
+            Err(silverhand_backend_core::conversation_messaging::messaging::ConversationRefusal::NotFound.into())
         }
     }
 

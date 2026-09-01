@@ -16,7 +16,7 @@
 use std::{future::Future, sync::Arc};
 
 use axum::Router;
-use silverhand_backend_core::messaging::{
+use silverhand_backend_core::conversation_messaging::messaging::{
     ChannelAccess, DirectLineAuthority, DirectPairOpenedFact, DirectPairOpenedPort, SendCapability,
     SendMessageOutcome, SendMessageUnitOfWork, TargetAddress,
     collaboration::direct_pair_initiation::DirectPairInitiationSource,
@@ -293,7 +293,10 @@ impl MentionSkipRecord for MentionSkipLog {
     async fn record_skip(
         &self,
         skipped: &SkippedMention<'_>,
-    ) -> Result<(), silverhand_backend_core::messaging::post_commit::EffectFailure> {
+    ) -> Result<
+        (),
+        silverhand_backend_core::conversation_messaging::messaging::post_commit::EffectFailure,
+    > {
         tracing::info!(
             event = "mention_cc.skip",
             reason = mention_skip_reason(skipped.reason),
@@ -336,8 +339,10 @@ mod tests {
     };
 
     use silverhand_backend_core::{
+        conversation_messaging::messaging::{
+            MessageId, ParticipantHandle, post_commit::EffectStep,
+        },
         foundation::identity::{AgentId, ConversationId},
-        messaging::{MessageId, ParticipantHandle, post_commit::EffectStep},
     };
     use tracing_subscriber::fmt::MakeWriter;
 
@@ -492,7 +497,7 @@ mod tests {
             failed: vec![(
                 message,
                 EffectStep::MessagePublished,
-                silverhand_backend_core::messaging::post_commit::EffectFailure::from_source(
+                silverhand_backend_core::conversation_messaging::messaging::post_commit::EffectFailure::from_source(
                     TransportFailure {
                         source: io::Error::other("socket closed"),
                     },

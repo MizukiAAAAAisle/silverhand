@@ -11,11 +11,11 @@ use axum::{
 };
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::collaboration::conversation_unread::{
+    conversation_messaging::messaging::collaboration::conversation_unread::{
         BoundConversationUnread, ConversationUnreadReadPort, ConversationUnreadRefusal,
         StreamUnread,
     },
+    foundation::identity::{ConversationId, UserId},
 };
 
 pub const CONVERSATION_UNREAD_PATH: &str = "/api/conversations/{id}/unread";
@@ -115,10 +115,10 @@ mod tests {
         http::Request,
     };
     use serde_json::Value;
-    use silverhand_backend_core::messaging::collaboration::conversation_unread::{
+    use silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_unread::{
         ConversationUnread, ThreadUnread, UnreadCount,
     };
-    use silverhand_backend_core::messaging::{MessageId, MessageSeq, ThreadRootId};
+    use silverhand_backend_core::conversation_messaging::messaging::{MessageId, MessageSeq, ThreadRootId};
     use silverhand_backend_sqlite::messaging::MessagingStore;
     use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
     use tower::ServiceExt;

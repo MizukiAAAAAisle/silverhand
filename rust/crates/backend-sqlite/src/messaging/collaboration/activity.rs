@@ -18,15 +18,15 @@ use crate::{
     },
 };
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         FromKind, MessageId, NotificationId, ThreadRootId,
         collaboration::activity::{
             ActivityItem, ActivityList, ActivityLocation, ActivityPreview, ActivityReadModel,
             ActivitySalience, ActivityUnreadCount,
         },
     },
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use thiserror::Error;
@@ -421,7 +421,7 @@ impl RawItem {
         self,
         viewer: &UserId,
         principals: &LivePrincipals,
-        author: Option<silverhand_backend_core::messaging::MessageAuthor>,
+        author: Option<silverhand_backend_core::conversation_messaging::messaging::MessageAuthor>,
     ) -> Result<ActivityItem, ActivityStoreError> {
         let location = match self.placement {
             RawPlacement::Workspace { workspace, title } => {

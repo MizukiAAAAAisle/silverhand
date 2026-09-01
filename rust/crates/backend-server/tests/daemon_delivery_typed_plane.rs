@@ -149,8 +149,7 @@ fn forbidden_foundation_owner_imports(file: &syn::File) -> Vec<String> {
                     // host_runtime namespace, so its canonical path gained the `host_runtime`
                     // segment. The prohibition follows the canonical path exactly (equally
                     // strong): foundation must not import the concrete credential
-                    // principal/scope vocabulary. `runtime_delivery` has not relocated and keeps
-                    // its flat path.
+                    // principal/scope vocabulary.
                     [core, namespace, module, name]
                         if core == "silverhand_backend_core"
                             && namespace == "host_runtime"
@@ -159,8 +158,13 @@ fn forbidden_foundation_owner_imports(file: &syn::File) -> Vec<String> {
                 )
                 || matches!(
                     path.as_slice(),
-                    [core, module, name]
+                    // #task:2286 — runtime_delivery relocated under the C3
+                    // conversation_messaging namespace; the prohibition follows the new
+                    // canonical path (equally strong): foundation must not import the concrete
+                    // runtime-delivery refusal vocabulary.
+                    [core, namespace, module, name]
                         if core == "silverhand_backend_core"
+                            && namespace == "conversation_messaging"
                             && module == "runtime_delivery"
                             && name == "RuntimeDeliveryFailureReason"
                 )
@@ -189,7 +193,7 @@ fn foundation_transport_does_not_import_concrete_context_owners() {
     );
 
     let core_mutation: syn::File = syn::parse_str(
-        "use silverhand_backend_core::{host_runtime::runtime_credential::{RuntimePrincipal, RuntimeScope}, runtime_delivery::RuntimeDeliveryFailureReason};",
+        "use silverhand_backend_core::{host_runtime::runtime_credential::{RuntimePrincipal, RuntimeScope}, conversation_messaging::runtime_delivery::RuntimeDeliveryFailureReason};",
     )
     .unwrap();
     assert_eq!(
@@ -197,7 +201,7 @@ fn foundation_transport_does_not_import_concrete_context_owners() {
         [
             "silverhand_backend_core::host_runtime::runtime_credential::RuntimePrincipal",
             "silverhand_backend_core::host_runtime::runtime_credential::RuntimeScope",
-            "silverhand_backend_core::runtime_delivery::RuntimeDeliveryFailureReason",
+            "silverhand_backend_core::conversation_messaging::runtime_delivery::RuntimeDeliveryFailureReason",
         ]
     );
 }

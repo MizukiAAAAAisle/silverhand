@@ -7,10 +7,7 @@
 use std::{error::Error, future::Future};
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, UserId},
-    foundation::persistence::PersistenceFailure,
-    identity_access::agents::session_scope::AgentSessionScope,
-    messaging::{
+    conversation_messaging::messaging::{
         DirectPairOpenedPort, SendClock, SendEntropy,
         collaboration::direct_pair_initiation::{
             AuthorizedDirectPairInitiation, DirectPairFirstSendError,
@@ -19,6 +16,9 @@ use silverhand_backend_core::{
             OpenedDirectPairFirstMessage, open_and_send_direct_pair,
         },
     },
+    foundation::identity::{AgentId, UserId},
+    foundation::persistence::PersistenceFailure,
+    identity_access::agents::session_scope::AgentSessionScope,
 };
 
 use super::super::authorities::{DirectPairInitiationTarget, direct_pair_initiation_candidate};
@@ -136,7 +136,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use silverhand_backend_core::messaging::{
+    use silverhand_backend_core::conversation_messaging::messaging::{
         DirectPairOpenedFact,
         collaboration::direct_pair_initiation::{
             DirectPairInitiationRefusal, authorize_direct_pair_initiation,

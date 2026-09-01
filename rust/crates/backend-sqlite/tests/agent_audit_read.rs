@@ -19,14 +19,14 @@
 //!    to `None` because the row's own `channel_id` is what seals it.
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, Principal, UserId},
-    identity_access::agent_audit_read::AgentAuditReadModel,
-    messaging::{
+    conversation_messaging::messaging::{
         AttachmentId,
         collaboration::conversation_message_window::{
             ConversationMessageWindowRequest, MessageWindowAnchor, MessageWindowStreamRequest,
         },
     },
+    foundation::identity::{AgentId, ConversationId, Principal, UserId},
+    identity_access::agent_audit_read::AgentAuditReadModel,
 };
 use silverhand_backend_sqlite::agent_audit_read::SqliteAgentAuditRead;
 use sqlx::Connection;

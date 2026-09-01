@@ -6,7 +6,7 @@
 //! decode are exercised over real rows rather than a fake. The store consumes
 //! that database; it creates no table and runs no migration.
 
-use silverhand_backend_core::messaging::schedule::{
+use silverhand_backend_core::conversation_messaging::messaging::schedule::{
     Clock, CronSpec, DueCandidate, FiredCount, ScheduleCaps, ScheduleId, ScheduleSpec,
     ScheduleStore, SettlementAction,
 };
@@ -231,7 +231,7 @@ async fn claim_projects_the_full_authoritative_occurrence() {
     assert_eq!(
         claimed.spec,
         ScheduleSpec::Interval {
-            every: silverhand_backend_core::messaging::schedule::IntervalSeconds::new(60).unwrap(),
+            every: silverhand_backend_core::conversation_messaging::messaging::schedule::IntervalSeconds::new(60).unwrap(),
             start_at: None,
         }
     );
@@ -268,7 +268,7 @@ async fn claim_decodes_each_spec_shape() {
             "unknown-field",
             SPEC_INTERVAL_UNKNOWN_FIELD,
             ScheduleSpec::Interval {
-                every: silverhand_backend_core::messaging::schedule::IntervalSeconds::new(60)
+                every: silverhand_backend_core::conversation_messaging::messaging::schedule::IntervalSeconds::new(60)
                     .unwrap(),
                 start_at: None,
             },
@@ -277,7 +277,7 @@ async fn claim_decodes_each_spec_shape() {
             "start-at",
             SPEC_INTERVAL_START,
             ScheduleSpec::Interval {
-                every: silverhand_backend_core::messaging::schedule::IntervalSeconds::new(60)
+                every: silverhand_backend_core::conversation_messaging::messaging::schedule::IntervalSeconds::new(60)
                     .unwrap(),
                 start_at: Some(50),
             },

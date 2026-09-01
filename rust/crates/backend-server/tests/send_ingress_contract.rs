@@ -34,14 +34,14 @@ use axum::{
 use serde_json::{Value, json};
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
-    host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
-    messaging::{
+    conversation_messaging::messaging::{
         AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
         ConversationRefusal, DirectLineAuthority, DirectPairAllocation, ResolvedStream,
         SendCapability, SendDestination, SendMessage, SendMessageError, SendMessageOutcome,
         SendMessageUnitOfWork, TargetAddress,
     },
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
+    host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
 use silverhand_backend_server::messaging::router::{SendState, send_router};
 use tower::ServiceExt;

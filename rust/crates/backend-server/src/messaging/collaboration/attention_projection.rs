@@ -9,11 +9,11 @@ use axum::{
 };
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{UserId, WorkspaceId},
-    messaging::collaboration::attention_projection::{
+    conversation_messaging::messaging::collaboration::attention_projection::{
         AttentionBadgeRollup, AttentionModesRefusal, AttentionProjectionPort,
         WorkspaceAttentionModes,
     },
+    foundation::identity::{UserId, WorkspaceId},
 };
 use std::sync::Arc;
 

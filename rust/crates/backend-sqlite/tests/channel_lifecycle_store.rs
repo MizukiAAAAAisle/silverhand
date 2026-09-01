@@ -1,11 +1,11 @@
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::collaboration::{
+    conversation_messaging::messaging::collaboration::{
         channel_directory::{ChannelVisibility, DirectoryRoster},
         channel_lifecycle::{
             ChannelDetailReadPort, ChannelDetailRefusal, ChannelLeaveBlockedReason,
         },
     },
+    foundation::identity::{ConversationId, UserId},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use silverhand_backend_sqlite::messaging::collaboration::channel_lifecycle::ChannelLifecycleStoreError;
@@ -78,11 +78,11 @@ async fn detail(
     conversation: &str,
 ) -> Result<
     Result<
-        silverhand_backend_core::messaging::collaboration::channel_lifecycle::ChannelDetailFact,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::channel_lifecycle::ChannelDetailFact,
         ChannelDetailRefusal,
     >,
     silverhand_backend_core::foundation::persistence::PersistenceFailure,
-> {
+>{
     MessagingStore::open(path)
         .await
         .unwrap()
@@ -258,7 +258,7 @@ async fn placement_and_latest_sequence_corruption_fail_before_projection() {
     assert!(matches!(
         storage_source(&sequence),
         ChannelLifecycleStoreError::Projection(
-            silverhand_backend_core::messaging::collaboration::channel_lifecycle::ChannelLifecycleProjectionError::NegativeLatestMessageSeq
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::channel_lifecycle::ChannelLifecycleProjectionError::NegativeLatestMessageSeq
         )
     ));
     db.execute("UPDATE conversations SET latest_message_seq=0 WHERE id='public'")

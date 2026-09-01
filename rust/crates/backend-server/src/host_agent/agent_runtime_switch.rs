@@ -64,6 +64,7 @@ use axum::{
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
+    conversation_messaging::messaging::collaboration::RuntimeControlPort,
     foundation::identity::{AgentId, Principal, UserId},
     foundation::name_canonicalization::is_ecmascript_trim_whitespace,
     host_runtime::agent_runtime_switch::{
@@ -85,7 +86,6 @@ use silverhand_backend_core::{
         agent_authority::{AgentAuthority, can_edit_agent},
         agent_view::{VisibleStages, can_view_agent},
     },
-    messaging::collaboration::RuntimeControlPort,
 };
 
 use crate::agent_wire::{AgentDto, reproject_committed_agent};
@@ -682,6 +682,11 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        conversation_messaging::messaging::collaboration::{
+            ClearSessionOutcome, ClearSessionProviderRefusal, HardStopRuntimeOutcome,
+            HardStopRuntimeProviderRefusal, RuntimeSeatTarget, RuntimeStartTarget,
+            StartRuntimeOutcome, StartRuntimeProviderRefusal,
+        },
         foundation::identity::{ConversationId, HostId},
         host_runtime::agent_runtime_switch::{
             RuntimeAvailabilityProbeFault, RuntimeAvailabilityVerdict, SwitchAgentRuntimeError,
@@ -696,11 +701,6 @@ mod tests {
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agents::session_scope::AgentSessionScope,
-        messaging::collaboration::{
-            ClearSessionOutcome, ClearSessionProviderRefusal, HardStopRuntimeOutcome,
-            HardStopRuntimeProviderRefusal, RuntimeSeatTarget, RuntimeStartTarget,
-            StartRuntimeOutcome, StartRuntimeProviderRefusal,
-        },
     };
     use tower::ServiceExt;
 

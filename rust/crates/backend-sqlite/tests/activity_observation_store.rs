@@ -1,6 +1,5 @@
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::{
+    conversation_messaging::messaging::{
         MessageSeq, NotificationId,
         collaboration::activity::observe::{
             CommittedObservation, ObservationAftermath, ObservationEffectFailure, ObserveBatch,
@@ -8,6 +7,7 @@ use silverhand_backend_core::{
             StreamPosition, observe,
         },
     },
+    foundation::identity::{ConversationId, UserId},
 };
 use silverhand_backend_sqlite::messaging::{
     MessagingStore, collaboration::activity::observe::ObservationStoreError,
@@ -191,7 +191,10 @@ async fn every_source_is_resolved_before_writes_and_refusal_order_is_stable() {
         ObserveBatch::new(vec![ObserveSource::Stream {
             conversation: ConversationId::parse("c").unwrap(),
             thread_root: Some(
-                silverhand_backend_core::messaging::ThreadRootId::parse("reply").unwrap(),
+                silverhand_backend_core::conversation_messaging::messaging::ThreadRootId::parse(
+                    "reply",
+                )
+                .unwrap(),
             ),
             position: StreamPosition::StreamHead,
         }])

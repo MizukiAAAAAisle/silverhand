@@ -15,7 +15,9 @@
 //! "is there something to say" has one answer per send.
 
 use serde_json::{Value, json};
-use silverhand_backend_core::messaging::{MessageReference, PrincipalKind, SendMessageOutcome};
+use silverhand_backend_core::conversation_messaging::messaging::{
+    MessageReference, PrincipalKind, SendMessageOutcome,
+};
 
 /// The member's name on both success contracts.
 pub(crate) const UNRESOLVED_REFERENCES: &str = "unresolved_references";

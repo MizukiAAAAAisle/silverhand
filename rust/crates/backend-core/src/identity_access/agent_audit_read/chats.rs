@@ -8,9 +8,9 @@
 //! counterpart, which the contract does not admit.
 
 use crate::{
-    direct_pair_read::DirectPairCounterpart,
+    conversation_messaging::direct_pair_read::DirectPairCounterpart,
+    conversation_messaging::messaging::collaboration::conversation_ref::ConversationRosterPolicy,
     foundation::identity::{ConversationId, WorkspaceId},
-    messaging::collaboration::conversation_ref::ConversationRosterPolicy,
 };
 
 use super::subject::AuditSubjectFacts;

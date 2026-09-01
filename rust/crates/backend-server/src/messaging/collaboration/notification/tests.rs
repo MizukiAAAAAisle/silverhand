@@ -371,7 +371,7 @@ impl NotificationReadPort for FixturePorts {
                 WorkspaceId::parse("workspace-1").unwrap(),
                 UnreadAnchor {
                     conversation: ConversationId::parse("conversation-1").unwrap(),
-                    message: silverhand_backend_core::messaging::MessageId::parse("message-1")
+                    message: silverhand_backend_core::conversation_messaging::messaging::MessageId::parse("message-1")
                         .unwrap(),
                     thread_root: None,
                 },

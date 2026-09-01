@@ -17,14 +17,14 @@ use axum::{
 };
 use serde_json::json;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, UserId},
-    messaging::{
+    conversation_messaging::messaging::{
         DirectLineAuthority, SendActor, SendDestination, SendMessageOutcome, SendMessageUnitOfWork,
         collaboration::direct_pair_initiation::{
             DirectPairFirstSendError, DirectPairInitiationPort, DirectPairInitiationRefusal,
             authorize_direct_pair_initiation,
         },
     },
+    foundation::identity::{AgentId, UserId},
 };
 
 use crate::messaging::{

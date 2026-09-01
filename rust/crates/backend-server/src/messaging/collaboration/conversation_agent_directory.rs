@@ -11,11 +11,11 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::collaboration::conversation_agent_directory::{
+    conversation_messaging::messaging::collaboration::conversation_agent_directory::{
         BoundConversationAgentDirectory, ConversationAgentDirectoryReadPort,
         ConversationAgentDirectoryRefusal,
     },
+    foundation::identity::{ConversationId, UserId},
 };
 
 pub const CONVERSATION_AGENT_DIRECTORY_PATH: &str = "/api/channels/{id}/agents";
@@ -113,11 +113,11 @@ mod tests {
     };
     use serde_json::Value;
     use silverhand_backend_core::{
-        foundation::identity::{AgentId, ConversationId, UserId},
-        messaging::collaboration::conversation_agent_directory::{
+        conversation_messaging::messaging::collaboration::conversation_agent_directory::{
             ConversationAgentDirectory, ConversationAgentDirectoryReadPort,
             ConversationAgentDirectoryRefusal, ConversationAgentMember, JoinedAt,
         },
+        foundation::identity::{AgentId, ConversationId, UserId},
     };
     use silverhand_backend_sqlite::messaging::MessagingStore;
     use sqlx::{

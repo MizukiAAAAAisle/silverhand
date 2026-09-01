@@ -11,26 +11,13 @@ use std::{
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use silverhand_backend_core::cold_read::presence::LastSeenAt;
-use silverhand_backend_core::messaging::collaboration::notification::{
+use silverhand_backend_core::conversation_messaging::messaging::collaboration::notification::{
     CommittedNotificationClear, NotificationAftermath, NotificationClearFailure,
     NotificationClearPort, NotificationClearSelector, clear_notifications,
 };
 use silverhand_backend_core::{
-    direct_pair_read::DirectPairReadModel,
-    foundation::blob_store::{BlobStorageKey, StorageKind, StoredBlob},
-    foundation::identity::{
-        AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId,
-    },
-    foundation::persistence::PersistenceFailure,
-    foundation::scope_event::{AuthorizeEventScope, EventScope},
-    host_runtime::agent_availability_read::AgentAvailabilityReadModel,
-    host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
-    host_runtime::{aftermath::AgentAvailabilityAnnouncer, agent_roster::ComputerAgentsReadPort},
-    identity_access::access::{WorkspaceHumanAudienceReadPort, WorkspaceRole},
-    identity_access::auth::{AuthenticateHumanSession, SessionBearer},
-    identity_access::user_identity::UserChangedSink,
-    identity_access::workspace_metadata_write::WorkspaceMetadataChangedSink,
-    messaging::{
+    conversation_messaging::direct_pair_read::DirectPairReadModel,
+    conversation_messaging::messaging::{
         AddressedPrincipals, AttachmentId, CapabilityDenied, CommittedMessageView, CreatedMessage,
         DirectLineAuthority, DirectPairOpenedFact, DirectPairOpenedPort, DirectPairParticipants,
         EnvironmentUnavailable, MessageContent, MessageId, NotificationId, OpenDirectPairError,
@@ -56,6 +43,19 @@ use silverhand_backend_core::{
         },
         unread::{UnreadAudience, UnreadReadModel, ViewerUnread},
     },
+    foundation::blob_store::{BlobStorageKey, StorageKind, StoredBlob},
+    foundation::identity::{
+        AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId,
+    },
+    foundation::persistence::PersistenceFailure,
+    foundation::scope_event::{AuthorizeEventScope, EventScope},
+    host_runtime::agent_availability_read::AgentAvailabilityReadModel,
+    host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
+    host_runtime::{aftermath::AgentAvailabilityAnnouncer, agent_roster::ComputerAgentsReadPort},
+    identity_access::access::{WorkspaceHumanAudienceReadPort, WorkspaceRole},
+    identity_access::auth::{AuthenticateHumanSession, SessionBearer},
+    identity_access::user_identity::UserChangedSink,
+    identity_access::workspace_metadata_write::WorkspaceMetadataChangedSink,
     policy::presence_grace::{GraceWindow, PresenceFact},
 };
 use silverhand_backend_sqlite::{
@@ -1334,7 +1334,7 @@ async fn a_committed_mention_copy_publishes_once_through_the_production_viewer_s
     let outcome = store.send_message(mention_command()).await.unwrap();
     assert!(matches!(
         outcome.committed().mention_copies(),
-        [silverhand_backend_core::messaging::mention_cc::MentionCopyOutcome::Copied { .. }]
+        [silverhand_backend_core::conversation_messaging::messaging::mention_cc::MentionCopyOutcome::Copied { .. }]
     ));
     let hub = ScopeEventHub::test("epoch-1");
     let effects = OtherEffects::default();
@@ -3288,8 +3288,8 @@ async fn workspace_metadata_changed_rides_the_viewer_scope_without_a_role() {
 /// module's own gate locks.
 #[tokio::test]
 async fn workspace_rename_publication_rides_the_conversation_message_frame() {
-    use silverhand_backend_core::messaging::MessageSeq;
-    use silverhand_backend_core::messaging::collaboration::workspace_rename_messaging::{
+    use silverhand_backend_core::conversation_messaging::messaging::MessageSeq;
+    use silverhand_backend_core::conversation_messaging::messaging::collaboration::workspace_rename_messaging::{
         CommittedWorkspaceRenameMessage, WorkspaceRenameMessageCreatedAt,
         WorkspaceRenameMessageDraft,
     };

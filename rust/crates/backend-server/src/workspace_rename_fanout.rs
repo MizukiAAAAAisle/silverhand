@@ -16,12 +16,12 @@
 //! step that fills the route contract's already-exposed requirement.
 
 use silverhand_backend_core::{
-    foundation::identity::WorkspaceId,
-    identity_access::workspace_metadata_write::WorkspaceNameChange,
-    messaging::collaboration::workspace_rename_messaging::{
+    conversation_messaging::messaging::collaboration::workspace_rename_messaging::{
         ConversationAgentsReadPort, WorkspaceRenameChannelsReadPort, WorkspaceRenameDeliveryPort,
         WorkspaceRenameMessageAuthorPort, WorkspaceRenamePublicationPort, fan_out_workspace_rename,
     },
+    foundation::identity::WorkspaceId,
+    identity_access::workspace_metadata_write::WorkspaceNameChange,
 };
 
 use crate::workspace_metadata_write::{WorkspaceRenameFanout, WorkspaceRenameFanoutFailure};
@@ -85,11 +85,13 @@ where
 #[cfg(test)]
 mod tests {
     use silverhand_backend_core::{
+        conversation_messaging::messaging::{SendClock, SendEntropy},
+        conversation_messaging::runtime_delivery::{
+            RuntimeDispatchReadPort, RuntimeInboxCustodyPort,
+        },
         host_runtime::custody::HostCredentialLookup,
         host_runtime::runtime_credential::RuntimeCustodyPort,
         host_runtime::runtime_event::DaemonEventDurablePort,
-        messaging::{SendClock, SendEntropy},
-        runtime_delivery::{RuntimeDispatchReadPort, RuntimeInboxCustodyPort},
     };
     use silverhand_backend_sqlite::messaging::collaboration::workspace_rename_messaging::SqliteWorkspaceRenameMessaging;
 

@@ -17,11 +17,11 @@ use std::{
 
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId},
-    messaging::{
+    conversation_messaging::messaging::{
         AddressedPrincipals, DirectLineAuthority, MessageContent, PrincipalKind, SendActor,
         SendDestination, SendMessage, SendMessageDraft,
     },
+    foundation::identity::{AgentId, ConversationId, UserId},
 };
 
 use super::references::MarkdownReferencePositions;

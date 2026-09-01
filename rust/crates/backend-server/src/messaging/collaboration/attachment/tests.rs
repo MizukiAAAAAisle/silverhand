@@ -14,18 +14,18 @@ use axum::{
 use futures_util::stream;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::blob_store::{
-        BlobAliasId, BlobDeleteOutcome, BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore,
-        StorageKind, StoredBlob,
-    },
-    foundation::identity::UserId,
-    messaging::{
+    conversation_messaging::messaging::{
         SendClock, SendEntropy,
         collaboration::attachment::{
             AttachmentChangedFact, AttachmentChangedPublisher, AttachmentPostCommitMaintenance,
         },
         environment::EnvironmentUnavailable,
     },
+    foundation::blob_store::{
+        BlobAliasId, BlobDeleteOutcome, BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore,
+        StorageKind, StoredBlob,
+    },
+    foundation::identity::UserId,
 };
 use silverhand_backend_filesystem::blob_store::{
     LocalBlobAliasDeleteOutcome, LocalBlobAliasOutcome, LocalBlobAliasStore, LocalBlobStore,

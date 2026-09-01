@@ -11,10 +11,10 @@
 
 use std::{path::Path, time::Duration};
 
-use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-use silverhand_backend_core::messaging::schedule::{
+use silverhand_backend_core::conversation_messaging::messaging::schedule::{
     ScheduleListQuery, ScheduleListReadModel, ScheduleView,
 };
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use sqlx::{
     QueryBuilder, Sqlite, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},

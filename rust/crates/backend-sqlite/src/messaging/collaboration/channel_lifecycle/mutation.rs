@@ -6,10 +6,7 @@
 //! whole committed image and only then returns an operation-specific fact.
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    identity_access::access::role_governs_workspace,
-    messaging::{
+    conversation_messaging::messaging::{
         MessageId, MessageSeq, SendClock, SendEntropy,
         collaboration::{
             channel_directory::{ChannelVisibility, DirectoryRoster},
@@ -24,6 +21,9 @@ use silverhand_backend_core::{
         conversation_title::CanonicalConversationTitle,
         environment::EnvironmentUnavailable,
     },
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
+    identity_access::access::role_governs_workspace,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;
@@ -74,7 +74,7 @@ fn corrupt(field: &'static str) -> ChannelLifecycleMutationStoreError {
 #[derive(Clone)]
 struct GovernedRow {
     workspace: WorkspaceId,
-    row: silverhand_backend_core::messaging::collaboration::channel_lifecycle::ChannelLifecycleRow,
+    row: silverhand_backend_core::conversation_messaging::messaging::collaboration::channel_lifecycle::ChannelLifecycleRow,
 }
 
 #[derive(Clone, Copy)]

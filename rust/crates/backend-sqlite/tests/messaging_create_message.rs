@@ -4,21 +4,18 @@
 //! artifact under the system temp root; no live database is opened, and the store
 //! under test provisions nothing.
 
-use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, UserId};
-use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-use silverhand_backend_core::identity_access::agents::runtime::RuntimeKind;
-use silverhand_backend_core::messaging::ParticipantHandle;
-use silverhand_backend_core::messaging::mention_cc::{
+use silverhand_backend_core::conversation_messaging::messaging::ParticipantHandle;
+use silverhand_backend_core::conversation_messaging::messaging::mention_cc::{
     CommittedMentionCopy, MentionCopyOutcome, MentionCopySource, render_copy_body,
 };
-use silverhand_backend_core::messaging::post_commit::{
+use silverhand_backend_core::conversation_messaging::messaging::post_commit::{
     CommittedMentionRow, CommittedMessagePublication, CopyNotification, DirectLineInvalidation,
     EffectFailure, EffectStep, IdleStart, MainDelivery, MainEffects, MentionSkipRecord,
     MessagePublication, ReplyDelivery, ReplyEffects, RuntimeDelivery, RuntimeStart, SendEffects,
     SkippedMention, UnreadPublication, ViewerNotification, announce_main_send, announce_reply_send,
     announce_send,
 };
-use silverhand_backend_core::messaging::{
+use silverhand_backend_core::conversation_messaging::messaging::{
     ActiveAuthor, ActorRefusal, AddressedPrincipals, AttachmentId, ConversationRefusal,
     DirectLineAuthority, EnvironmentUnavailable, FromKind, MAX_MESSAGE_CONTENT_BYTES,
     MessageAuthor, MessageContent, MessageId, MessageSeq, PrincipalKind, ReferencePositions,
@@ -27,6 +24,9 @@ use silverhand_backend_core::messaging::{
     ThreadListEntry, ThreadRootId, ThreadRootRefusal, attachments::AttachmentRef,
     thread_root_preview,
 };
+use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, UserId};
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
+use silverhand_backend_core::identity_access::agents::runtime::RuntimeKind;
 use silverhand_backend_sqlite::messaging::{HostEnvironment, MessagingStore};
 use sqlx::{Row, SqliteConnection};
 use std::{
@@ -2071,7 +2071,9 @@ async fn plant_follower(fixture: &mut Fixture, root: &str, conversation: &str, a
 }
 
 /// The cluster audience of a reply, read through the view that only a reply has.
-fn reply_audience(fact: &silverhand_backend_core::messaging::MessageCreatedFact) -> Vec<&str> {
+fn reply_audience(
+    fact: &silverhand_backend_core::conversation_messaging::messaging::MessageCreatedFact,
+) -> Vec<&str> {
     fact.reply_cluster()
         .expect("a reply carries a cluster plan")
         .audience()
@@ -2281,7 +2283,9 @@ impl Fixture {
     }
 }
 
-fn skip_reasons(fact: &silverhand_backend_core::messaging::MessageCreatedFact) -> Vec<String> {
+fn skip_reasons(
+    fact: &silverhand_backend_core::conversation_messaging::messaging::MessageCreatedFact,
+) -> Vec<String> {
     fact.mention_copies()
         .iter()
         .map(|outcome| match outcome {
@@ -2929,21 +2933,22 @@ async fn a_main_line_plan_answers_by_actor_and_destination() {
         .committed()
         .clone();
 
-    let names = |fact: &silverhand_backend_core::messaging::MessageCreatedFact| {
-        let view = fact.main_line().expect("a main-line send");
-        (
-            view.delivery()
-                .recipients()
-                .iter()
-                .map(|agent| agent.as_str().to_owned())
-                .collect::<Vec<_>>(),
-            view.delivery()
-                .start_eligible()
-                .iter()
-                .map(|agent| agent.as_str().to_owned())
-                .collect::<Vec<_>>(),
-        )
-    };
+    let names =
+        |fact: &silverhand_backend_core::conversation_messaging::messaging::MessageCreatedFact| {
+            let view = fact.main_line().expect("a main-line send");
+            (
+                view.delivery()
+                    .recipients()
+                    .iter()
+                    .map(|agent| agent.as_str().to_owned())
+                    .collect::<Vec<_>>(),
+                view.delivery()
+                    .start_eligible()
+                    .iter()
+                    .map(|agent| agent.as_str().to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
 
     // An agent in its own conversation: not delivered its own message, and starts
     // nobody — the runtime that would be started is the one writing.
@@ -3103,14 +3108,15 @@ async fn the_trigger_name_falls_back_through_what_the_sender_has() {
         .committed()
         .clone();
 
-    let trigger = |fact: &silverhand_backend_core::messaging::MessageCreatedFact| {
-        fact.main_line()
-            .unwrap()
-            .mentions()
-            .expect("the body named someone")
-            .trigger_name()
-            .to_owned()
-    };
+    let trigger =
+        |fact: &silverhand_backend_core::conversation_messaging::messaging::MessageCreatedFact| {
+            fact.main_line()
+                .unwrap()
+                .mentions()
+                .expect("the body named someone")
+                .trigger_name()
+                .to_owned()
+        };
     assert_eq!(trigger(&with_display), "Lio");
     assert_eq!(trigger(&with_name), "lio");
     // Whitespace says nothing either.
@@ -3211,7 +3217,9 @@ impl MainRecorder {
 impl CommittedMessagePublication for MainRecorder {
     async fn publish_message(
         &self,
-        committed: silverhand_backend_core::messaging::CommittedMessageView<'_>,
+        committed: silverhand_backend_core::conversation_messaging::messaging::CommittedMessageView<
+            '_,
+        >,
     ) -> Result<(), EffectFailure> {
         self.note(format!("published:{}", committed.message().id.as_str()));
         Ok(())
@@ -3237,7 +3245,7 @@ impl MainDelivery for MainRecorder {
     async fn deliver_to(
         &self,
         recipient: &AgentId,
-        _message: &silverhand_backend_core::messaging::CreatedMessage,
+        _message: &silverhand_backend_core::conversation_messaging::messaging::CreatedMessage,
     ) -> Result<(), EffectFailure> {
         self.note(format!("delivered:{}", recipient.as_str()));
         Ok(())
@@ -3248,7 +3256,7 @@ impl ReplyDelivery for MainRecorder {
     async fn deliver_to(
         &self,
         recipient: &AgentId,
-        _message: &silverhand_backend_core::messaging::CreatedMessage,
+        _message: &silverhand_backend_core::conversation_messaging::messaging::CreatedMessage,
     ) -> Result<(), EffectFailure> {
         self.note(format!("reply-delivered:{}", recipient.as_str()));
         Ok(())
@@ -3269,10 +3277,10 @@ impl IdleStart for MainRecorder {
 /// Runs a committed main-line send's aftermath with the real record adapter and
 /// recording everything else.
 async fn announce_with_real_record<E: SendClock + SendEntropy + Send + Sync>(
-    fact: &silverhand_backend_core::messaging::MessageCreatedFact,
+    fact: &silverhand_backend_core::conversation_messaging::messaging::MessageCreatedFact,
     store: &MessagingStore<E>,
     recorder: &MainRecorder,
-) -> silverhand_backend_core::messaging::post_commit::EffectReport {
+) -> silverhand_backend_core::conversation_messaging::messaging::post_commit::EffectReport {
     announce_main_send(
         fact.main_line()
             .expect("a main-line send carries a main-line plan"),
@@ -3292,10 +3300,10 @@ async fn announce_with_real_record<E: SendClock + SendEntropy + Send + Sync>(
 /// everything else. The delivery capability is [`ReplyDelivery`], not
 /// [`MainDelivery`]: the reply reaches the cluster's followers.
 async fn announce_reply_with_real_record<E: SendClock + SendEntropy + Send + Sync>(
-    fact: &silverhand_backend_core::messaging::MessageCreatedFact,
+    fact: &silverhand_backend_core::conversation_messaging::messaging::MessageCreatedFact,
     store: &MessagingStore<E>,
     recorder: &MainRecorder,
-) -> silverhand_backend_core::messaging::post_commit::EffectReport {
+) -> silverhand_backend_core::conversation_messaging::messaging::post_commit::EffectReport {
     announce_reply_send(
         fact.reply_cluster()
             .expect("a reply carries a cluster plan"),
@@ -3894,18 +3902,18 @@ struct ReplyEffectsRefused;
 impl CommittedMessagePublication for ReplyEffectsRefused {
     async fn publish_message(
         &self,
-        _committed: silverhand_backend_core::messaging::CommittedMessageView<'_>,
+        _committed: silverhand_backend_core::conversation_messaging::messaging::CommittedMessageView<'_>,
     ) -> Result<(), EffectFailure> {
         Err(EffectFailure::from_source(EffectRefused))
     }
 }
 
-impl silverhand_backend_core::messaging::post_commit::MentionedViewerRecord
+impl silverhand_backend_core::conversation_messaging::messaging::post_commit::MentionedViewerRecord
     for ReplyEffectsRefused
 {
     async fn record_mentioned_viewers(
         &self,
-        _intent: &silverhand_backend_core::messaging::post_commit::MentionIntent,
+        _intent: &silverhand_backend_core::conversation_messaging::messaging::post_commit::MentionIntent,
     ) -> Result<Vec<CommittedMentionRow>, EffectFailure> {
         Err(EffectFailure::from_source(EffectRefused))
     }
@@ -3927,7 +3935,7 @@ impl ReplyDelivery for ReplyEffectsRefused {
     async fn deliver_to(
         &self,
         _recipient: &AgentId,
-        _message: &silverhand_backend_core::messaging::CreatedMessage,
+        _message: &silverhand_backend_core::conversation_messaging::messaging::CreatedMessage,
     ) -> Result<(), EffectFailure> {
         Err(EffectFailure::from_source(EffectRefused))
     }
@@ -3966,7 +3974,9 @@ impl RecordingPublication {
 impl CommittedMessagePublication for RecordingPublication {
     async fn publish_message(
         &self,
-        committed: silverhand_backend_core::messaging::CommittedMessageView<'_>,
+        committed: silverhand_backend_core::conversation_messaging::messaging::CommittedMessageView<
+            '_,
+        >,
     ) -> Result<(), EffectFailure> {
         if let Some(fact) = committed.reply_projection() {
             let entry = fact.list_entry();
@@ -3985,12 +3995,12 @@ impl CommittedMessagePublication for RecordingPublication {
 /// and the recording publication above can be asserted.
 struct AcceptingReplyEffects;
 
-impl silverhand_backend_core::messaging::post_commit::MentionedViewerRecord
+impl silverhand_backend_core::conversation_messaging::messaging::post_commit::MentionedViewerRecord
     for AcceptingReplyEffects
 {
     async fn record_mentioned_viewers(
         &self,
-        _intent: &silverhand_backend_core::messaging::post_commit::MentionIntent,
+        _intent: &silverhand_backend_core::conversation_messaging::messaging::post_commit::MentionIntent,
     ) -> Result<Vec<CommittedMentionRow>, EffectFailure> {
         Ok(Vec::new())
     }
@@ -4012,7 +4022,7 @@ impl ReplyDelivery for AcceptingReplyEffects {
     async fn deliver_to(
         &self,
         _recipient: &AgentId,
-        _message: &silverhand_backend_core::messaging::CreatedMessage,
+        _message: &silverhand_backend_core::conversation_messaging::messaging::CreatedMessage,
     ) -> Result<(), EffectFailure> {
         Ok(())
     }

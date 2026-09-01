@@ -35,11 +35,11 @@
 
 use garde::Validate;
 use serde::Deserialize;
-use silverhand_backend_core::foundation::cli_invoke_audit::CliStaleResolutionReason;
-use silverhand_backend_core::messaging::{
+use silverhand_backend_core::conversation_messaging::messaging::{
     AttachmentId, MessageContent, MessageId,
     attachments::{AttachmentLabel, AttachmentRef},
 };
+use silverhand_backend_core::foundation::cli_invoke_audit::CliStaleResolutionReason;
 
 use crate::wire_patch::RequiredPatchField;
 
@@ -489,7 +489,7 @@ fn seal(unsealed: UnsealedSendPayload) -> Result<ValidatedSendPayload, PayloadRe
 
 #[cfg(test)]
 mod tests {
-    use silverhand_backend_core::messaging::MAX_MESSAGE_CONTENT_BYTES;
+    use silverhand_backend_core::conversation_messaging::messaging::MAX_MESSAGE_CONTENT_BYTES;
 
     use super::*;
 

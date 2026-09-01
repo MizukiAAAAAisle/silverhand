@@ -1,6 +1,8 @@
 use silverhand_backend_core::{
+    conversation_messaging::messaging::{
+        EnvironmentUnavailable, SendClock, collaboration::attention_preference::*,
+    },
     foundation::identity::{ConversationId, UserId, WorkspaceId},
-    messaging::{EnvironmentUnavailable, SendClock, collaboration::attention_preference::*},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::Connection;

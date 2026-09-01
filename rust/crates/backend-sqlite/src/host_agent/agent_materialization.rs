@@ -25,15 +25,15 @@ use silverhand_backend_core::{
         ReserveRecord, ReservedAgentRow, STALE_MATERIALIZATION_FAILED_CODE,
         agent_home_workspace_description, home_workspace_id_for,
     },
-    foundation::identity::{AgentId, ConversationId, UserId},
-    foundation::persistence::PersistenceFailure,
-    identity_access::agents::session_scope::AgentSessionScope,
-    messaging::{
+    conversation_messaging::messaging::{
         DirectPairMintIdentityMismatch, DirectPairOpenedFact, DirectPairOpenedPort,
         DirectPairParticipants, MessageId, OpenDirectPairError, ParticipantHandle,
         PrincipalIdentity,
         agent_onboarding::{ONBOARDING_DM_TITLE, ONBOARDING_DM_TITLE_KEY, OnboardingSystemMessage},
     },
+    foundation::identity::{AgentId, ConversationId, UserId},
+    foundation::persistence::PersistenceFailure,
+    identity_access::agents::session_scope::AgentSessionScope,
 };
 use sqlx::{Row, SqliteConnection, sqlite::SqliteRow};
 

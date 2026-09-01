@@ -6,9 +6,7 @@
 //! this adapter.
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         MessageId, MessageSeq, SendClock, SendEntropy,
         collaboration::workspace_rename_messaging::{
             CommittedWorkspaceRenameMessage, ConversationAgentsReadPort, WorkspaceRenameChannel,
@@ -18,6 +16,8 @@ use silverhand_backend_core::{
         },
         environment::EnvironmentUnavailable,
     },
+    foundation::identity::{AgentId, ConversationId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;

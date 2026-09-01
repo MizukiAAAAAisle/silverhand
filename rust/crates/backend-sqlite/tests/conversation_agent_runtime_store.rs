@@ -1,8 +1,8 @@
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::collaboration::conversation_agent_runtime::{
+    conversation_messaging::messaging::collaboration::conversation_agent_runtime::{
         ConversationAgentRuntimeReadPort, ConversationAgentRuntimeRefusal,
     },
+    foundation::identity::{ConversationId, UserId},
 };
 use silverhand_backend_sqlite::messaging::{
     MessagingStore, collaboration::conversation_agent_runtime::ConversationAgentRuntimeStoreError,
@@ -50,7 +50,7 @@ async fn read(
     conversation: &str,
 ) -> Result<
     Result<
-        silverhand_backend_core::messaging::collaboration::conversation_agent_runtime::ConversationAgentRuntimeProjection,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_agent_runtime::ConversationAgentRuntimeProjection,
         ConversationAgentRuntimeRefusal,
     >,
     silverhand_backend_core::foundation::persistence::PersistenceFailure,

@@ -4,7 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::{Map, Value, json};
-use silverhand_backend_core::messaging::{
+use silverhand_backend_core::conversation_messaging::messaging::{
     FromKind,
     attachments::AttachmentSnapshot,
     collaboration::saved::{
@@ -18,7 +18,7 @@ use crate::messaging::author_wire::author_dto;
 pub const SAVED_CHANGED_EVENT: &str = "saved_changed";
 
 pub fn changed_event(
-    fact: &silverhand_backend_core::messaging::collaboration::saved::SavedChangeFact,
+    fact: &silverhand_backend_core::conversation_messaging::messaging::collaboration::saved::SavedChangeFact,
 ) -> Value {
     json!({
         "message_id": fact.message().as_str(),
@@ -35,7 +35,7 @@ pub(super) fn list_success(entries: &[BoundSavedEntry]) -> Response {
 
 fn audit_publication_failure(
     failure: Option<
-        &silverhand_backend_core::messaging::collaboration::saved::SavedPublicationFailure,
+        &silverhand_backend_core::conversation_messaging::messaging::collaboration::saved::SavedPublicationFailure,
     >,
 ) {
     if let Some(failure) = failure {
@@ -141,7 +141,7 @@ fn attachment_list(attachments: &[AttachmentSnapshot]) -> Value {
 }
 
 fn linked_task(
-    task: &silverhand_backend_core::messaging::collaboration::saved::SavedLinkedTask,
+    task: &silverhand_backend_core::conversation_messaging::messaging::collaboration::saved::SavedLinkedTask,
 ) -> Value {
     json!({
         "task_id": task.id.as_str(),
@@ -150,8 +150,8 @@ fn linked_task(
         "status": task.status.as_str(),
         "assignee": task.assignee.as_ref().map(|assignee| json!({
             "type": match assignee.principal() {
-                silverhand_backend_core::messaging::PrincipalIdentity::Agent(_) => "agent",
-                silverhand_backend_core::messaging::PrincipalIdentity::Human(_) => "user",
+                silverhand_backend_core::conversation_messaging::messaging::PrincipalIdentity::Agent(_) => "agent",
+                silverhand_backend_core::conversation_messaging::messaging::PrincipalIdentity::Human(_) => "user",
             },
             "id": assignee.principal().as_str(),
             "name": assignee.name(),

@@ -12,9 +12,7 @@ use axum::{
 };
 use serde_json::{Number, Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    identity_access::access::WorkspaceRole,
-    messaging::{
+    conversation_messaging::messaging::{
         collaboration::{
             channel_directory::{ChannelStatus, ChannelVisibility, DirectoryRoster},
             channel_lifecycle::{
@@ -23,6 +21,8 @@ use silverhand_backend_core::{
         },
         conversation_title::CanonicalConversationTitle,
     },
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    identity_access::access::WorkspaceRole,
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};

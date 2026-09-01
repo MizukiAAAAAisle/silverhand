@@ -1,8 +1,8 @@
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId},
-    messaging::collaboration::stale_message_resolution::{
+    conversation_messaging::messaging::collaboration::stale_message_resolution::{
         StaleMessageResolutionAdmissionPort, StaleMessageResolutionAdmissionRefusal,
     },
+    foundation::identity::{AgentId, ConversationId},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection};

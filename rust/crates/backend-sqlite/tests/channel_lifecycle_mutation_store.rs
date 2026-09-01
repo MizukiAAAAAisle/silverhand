@@ -8,9 +8,7 @@ use std::{
 };
 
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         SendClock, SendEntropy,
         collaboration::{
             channel_directory::ChannelVisibility,
@@ -23,6 +21,8 @@ use silverhand_backend_core::{
         conversation_title::CanonicalConversationTitle,
         environment::EnvironmentUnavailable,
     },
+    foundation::identity::{ConversationId, UserId},
+    foundation::persistence::PersistenceFailure,
 };
 use silverhand_backend_sqlite::messaging::{
     MessagingStore, collaboration::channel_lifecycle::ChannelLifecycleMutationStoreError,

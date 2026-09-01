@@ -10,10 +10,12 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    conversation_messaging::runtime_delivery::{
+        DeliveryLeaseOwner, InboxDeliveryId, InboxSettlementDisposition,
+    },
     foundation::identity::{AgentId, ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{RuntimeEventTime, RuntimePrincipal},
-    runtime_delivery::{DeliveryLeaseOwner, InboxDeliveryId, InboxSettlementDisposition},
 };
 
 /// One daemon event admission fact: the authenticated host and its exact live

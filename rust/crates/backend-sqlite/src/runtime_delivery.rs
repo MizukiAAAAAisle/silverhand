@@ -4,6 +4,23 @@ use std::{collections::HashSet, path::Path, time::Duration};
 
 use serde::Serialize;
 use silverhand_backend_core::{
+    conversation_messaging::messaging::{
+        FromKind, MessageContent, MessageId, ReferencePositions,
+        collaboration::{
+            BoundRuntimeControlSeat, ClearSessionAuditWitness, ClearSessionCommitReceipt,
+            CliSessionId, RuntimeControlObservedStatus, RuntimeControlSeatPort,
+            RuntimeControlSeatSnapshot, RuntimeSeatTarget,
+        },
+        environment::SendClock,
+    },
+    conversation_messaging::runtime_delivery::{
+        ClaimPendingInbox, ClaimedInboxBatch, ClaimedInboxDelivery, DeliveryInstruction,
+        DeliveryLeaseOwner, InboxDeliveryId, InboxSettlementDisposition, MAX_DELIVERIES_PER_BATCH,
+        MAX_ENCODED_DELIVERY_BYTES, RuntimeAgentSpec, RuntimeDeliveryFailureReason,
+        RuntimeDispatchReadPort, RuntimeDispatchTarget, RuntimeInboxCustodyPort, RuntimeMember,
+        RuntimePlacement, RuntimeRoster, RuntimeSessionSpec, RuntimeSpawnPlan, RuntimeWorkspaceRef,
+        classify_delivery_instruction, runtime_scope_for,
+    },
     foundation::identity::{
         AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId,
     },
@@ -19,24 +36,7 @@ use silverhand_backend_core::{
         StampRuntimePresence, UpsertRuntimeTextActivity,
     },
     identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
-    messaging::{
-        FromKind, MessageContent, MessageId, ReferencePositions,
-        collaboration::{
-            BoundRuntimeControlSeat, ClearSessionAuditWitness, ClearSessionCommitReceipt,
-            CliSessionId, RuntimeControlObservedStatus, RuntimeControlSeatPort,
-            RuntimeControlSeatSnapshot, RuntimeSeatTarget,
-        },
-        environment::SendClock,
-    },
     policy::agent_presence,
-    runtime_delivery::{
-        ClaimPendingInbox, ClaimedInboxBatch, ClaimedInboxDelivery, DeliveryInstruction,
-        DeliveryLeaseOwner, InboxDeliveryId, InboxSettlementDisposition, MAX_DELIVERIES_PER_BATCH,
-        MAX_ENCODED_DELIVERY_BYTES, RuntimeAgentSpec, RuntimeDeliveryFailureReason,
-        RuntimeDispatchReadPort, RuntimeDispatchTarget, RuntimeInboxCustodyPort, RuntimeMember,
-        RuntimePlacement, RuntimeRoster, RuntimeSessionSpec, RuntimeSpawnPlan, RuntimeWorkspaceRef,
-        classify_delivery_instruction, runtime_scope_for,
-    },
 };
 use sqlx::{
     Row, Sqlite, SqliteConnection, SqlitePool, Transaction,
@@ -2684,8 +2684,10 @@ mod presentation_tests {
 #[cfg(test)]
 mod runtime_control_seat_tests {
     use silverhand_backend_core::{
+        conversation_messaging::messaging::collaboration::{
+            RuntimeControlSeatPort, seal_clear_session_commit,
+        },
         foundation::identity::UserId,
-        messaging::collaboration::{RuntimeControlSeatPort, seal_clear_session_commit},
     };
     use sqlx::{Connection, Executor};
 

@@ -1,19 +1,17 @@
 use std::collections::HashSet;
 use std::error::Error;
 
-use silverhand_backend_core::identity_access::agent_peer_profile::{
-    CallerConversationPlacement, CallerReadMessagesCapability, CallerWorkspaceHorizon,
-    WorkspacePlacement,
-};
-use silverhand_backend_core::messaging::task::{
+use silverhand_backend_core::conversation_messaging::messaging::task::{
     AgentBoardResolver, AgentReadableBoards, BoardKey, BoardResolution, BoardScopeRequest,
     BoardScopeSource, PairKey, ReadableBoard, ResolvedBoard, TaskParticipationReads,
     TaskReadCapability,
 };
+use silverhand_backend_core::identity_access::agent_peer_profile::{
+    CallerConversationPlacement, CallerReadMessagesCapability, CallerWorkspaceHorizon,
+    WorkspacePlacement,
+};
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
         DeliveryIntent, DirectLineAuthority, DirectPairAllocation, DirectPairOpenedPort,
         DirectPairParticipants, OpenDirectPairError, PrincipalIdentity, PrincipalKind,
@@ -24,6 +22,8 @@ use silverhand_backend_core::{
             fold_name_key, is_space_separator, name_character_is_forbidden, name_is_nfc,
         },
     },
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqliteConnection};
 use thiserror::Error;
@@ -113,7 +113,10 @@ where
     #[error("target lookup failed")]
     Persistence(#[source] PersistenceFailure),
     #[error("target allocation clock failed")]
-    Clock(#[source] silverhand_backend_core::messaging::EnvironmentUnavailable),
+    Clock(
+        #[source]
+        silverhand_backend_core::conversation_messaging::messaging::EnvironmentUnavailable,
+    ),
     #[error("direct-pair open failed")]
     Open(#[source] OpenDirectPairError<PersistenceFailure, O>),
     #[error("target refusal observation failed")]

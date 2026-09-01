@@ -12,8 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    messaging::{
+    conversation_messaging::messaging::{
         MessageId, PrincipalIdentity,
         collaboration::human_search::{
             BoundHumanSearchPage, HumanSearchConversationPlacement, HumanSearchMillis,
@@ -21,6 +20,7 @@ use silverhand_backend_core::{
             HumanSearchResult, HumanSearchStream, HumanSearchText, HumanSearchWorkspaceRef,
         },
     },
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
 };
 
 use super::{
@@ -366,7 +366,7 @@ fn result(
 
 fn workspace_wire(
     workspace: &HumanSearchWorkspaceRef,
-    selected: Option<&silverhand_backend_core::messaging::collaboration::human_search::SelectedHumanSearchWorkspace>,
+    selected: Option<&silverhand_backend_core::conversation_messaging::messaging::collaboration::human_search::SelectedHumanSearchWorkspace>,
 ) -> Value {
     let mut value = json!({
         "id": workspace.id().as_str(),
@@ -384,7 +384,7 @@ fn workspace_wire(
 }
 
 fn conversation_wire(
-    conversation: &silverhand_backend_core::messaging::collaboration::human_search::HumanSearchConversationRef,
+    conversation: &silverhand_backend_core::conversation_messaging::messaging::collaboration::human_search::HumanSearchConversationRef,
 ) -> Value {
     let mut value = json!({
         "id": conversation.id().as_str(),

@@ -11,8 +11,7 @@
 //! second definition cannot come back without breaking this build.
 
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId, WorkspaceId},
-    messaging::{
+    conversation_messaging::messaging::{
         EnvironmentUnavailable, MessageId, NotificationId, ParticipantHandle, SendEntropy,
         collaboration::{
             activity::observe::ObserveSource,
@@ -22,6 +21,7 @@ use silverhand_backend_core::{
         },
         post_commit::{CommittedMentionRow, MentionIntent},
     },
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
 };
 
 /// Entropy with no randomness in it, so the minted identity is a known value.

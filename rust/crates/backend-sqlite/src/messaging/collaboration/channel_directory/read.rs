@@ -1,9 +1,7 @@
 use std::collections::HashSet;
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    messaging::collaboration::channel_directory::{
+    conversation_messaging::messaging::collaboration::channel_directory::{
         ActiveChannelDirectoryPort, ActiveWorkspaceChannelDirectory, ArchivedChannelRow,
         ArchivedSince, ArchivedWorkspaceChannelDirectory, ArchivedWorkspaceChannelDirectoryPort,
         ChannelDirectoryProjectionError, ChannelDirectoryRow, ChannelSortEntry, ChannelSortMode,
@@ -11,6 +9,8 @@ use silverhand_backend_core::{
         DirectoryWorkspaceKind, GlobalArchivedChannelDirectory, GlobalArchivedChannelDirectoryPort,
         GlobalArchivedDirectoryRefusal, WorkspaceDirectoryRefusal,
     },
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};
 use thiserror::Error;

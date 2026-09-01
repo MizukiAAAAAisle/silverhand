@@ -1,8 +1,6 @@
 use crate::messaging::{HostEnvironment, MessagingStore};
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         SendClock,
         collaboration::attention_preference::{
             AttentionPreferencePort, ChannelAttentionAdmissionRefusal, ChannelAttentionCommit,
@@ -11,6 +9,8 @@ use silverhand_backend_core::{
             WorkspaceAttentionWriteRefusal,
         },
     },
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::SqlitePool;
 use thiserror::Error;
@@ -90,7 +90,10 @@ pub enum AttentionPreferenceStoreError {
     #[error("stored workspace mute flag is malformed")]
     MalformedMute,
     #[error("clock failed")]
-    Clock(#[source] silverhand_backend_core::messaging::EnvironmentUnavailable),
+    Clock(
+        #[source]
+        silverhand_backend_core::conversation_messaging::messaging::EnvironmentUnavailable,
+    ),
 }
 impl From<AttentionPreferenceStoreError> for PersistenceFailure {
     fn from(value: AttentionPreferenceStoreError) -> Self {

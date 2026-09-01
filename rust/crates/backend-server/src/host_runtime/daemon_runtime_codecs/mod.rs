@@ -2,9 +2,11 @@
 
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    conversation_messaging::runtime_delivery::{
+        RuntimeMember, RuntimePlacement, RuntimeRoster, RuntimeSpawnPlan,
+    },
     foundation::identity::AgentId,
     host_runtime::runtime_credential::RuntimeScope,
-    runtime_delivery::{RuntimeMember, RuntimePlacement, RuntimeRoster, RuntimeSpawnPlan},
 };
 
 pub(crate) mod runtime_clear_session;
@@ -54,12 +56,14 @@ pub(crate) fn scope_wire(scope: &RuntimeScope) -> Value {
 }
 
 pub(crate) fn workspace_wire(
-    workspace: &silverhand_backend_core::runtime_delivery::RuntimeWorkspaceRef,
+    workspace: &silverhand_backend_core::conversation_messaging::runtime_delivery::RuntimeWorkspaceRef,
 ) -> Value {
     json!({ "id": workspace.id().as_str(), "name": workspace.name() })
 }
 
-fn session_wire(session: &silverhand_backend_core::runtime_delivery::RuntimeSessionSpec) -> Value {
+fn session_wire(
+    session: &silverhand_backend_core::conversation_messaging::runtime_delivery::RuntimeSessionSpec,
+) -> Value {
     let members = session
         .members
         .iter()

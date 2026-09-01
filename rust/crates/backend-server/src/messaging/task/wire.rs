@@ -3,7 +3,7 @@
 //! shape, the parity of the TS `taskJoinedToSummary`.
 //!
 //! It reads BOTH halves of the one joined row together — the committed
-//! [`TaskAggregate`](silverhand_backend_core::messaging::task::TaskAggregate) for every
+//! [`TaskAggregate`](silverhand_backend_core::conversation_messaging::messaging::task::TaskAggregate) for every
 //! identity/coordinate/status axis, and the [`TaskDisplaySidecars`] the same select read
 //! for the joined display names — so a name never re-splits into an id map to rejoin. A
 //! missing actor join degrades the name to the id (a deleted/unlinked actor), exactly as
@@ -16,7 +16,7 @@
 //! never a fabricated place on the wire (the parity of the TS `placeFrom` `throw`).
 
 use serde::Serialize;
-use silverhand_backend_core::messaging::task::{
+use silverhand_backend_core::conversation_messaging::messaging::task::{
     Assignee, BoardKey, Creator, TaskDisplaySidecars, TaskSummarySource,
 };
 
@@ -185,7 +185,9 @@ fn name_or_id(name: Option<&str>, id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::messaging::task::{TaskAggregate, TaskRow};
+    use silverhand_backend_core::conversation_messaging::messaging::task::{
+        TaskAggregate, TaskRow,
+    };
 
     /// A minimal decodable workspace-board row; each test mutates one facet. A workspace
     /// board REQUIRES `board_key = "ws:" || workspace_id` (a row-local decode coupling).

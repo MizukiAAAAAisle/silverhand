@@ -1,6 +1,8 @@
 use silverhand_backend_core::{
+    conversation_messaging::messaging::collaboration::conversation_ref::{
+        ConversationRefReadPort, ConversationRefRefusal,
+    },
     foundation::identity::{ConversationId, UserId},
-    messaging::collaboration::conversation_ref::{ConversationRefReadPort, ConversationRefRefusal},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection};

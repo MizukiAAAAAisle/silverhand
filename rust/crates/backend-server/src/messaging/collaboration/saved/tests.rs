@@ -13,10 +13,10 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::UserId,
-    messaging::collaboration::saved::{
+    conversation_messaging::messaging::collaboration::saved::{
         SavedAftermath, SavedChangeFact, SavedListQuery, SavedPublicationFailure, SavedSender,
     },
+    foundation::identity::UserId,
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection};

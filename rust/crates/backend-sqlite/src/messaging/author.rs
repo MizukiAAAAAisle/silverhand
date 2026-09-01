@@ -25,9 +25,11 @@ use std::collections::{HashMap, HashSet};
 
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::{
+    conversation_messaging::messaging::{
+        AvatarRevision, FromKind, MessageAuthor, PrincipalIdentity, PrincipalKind,
+    },
     foundation::identity::{AgentId, UserId},
     identity_access::agents::runtime::RuntimeKind,
-    messaging::{AvatarRevision, FromKind, MessageAuthor, PrincipalIdentity, PrincipalKind},
 };
 use sqlx::{Row, SqliteConnection, sqlite::SqliteRow};
 
@@ -382,7 +384,7 @@ pub(crate) async fn resolve_authors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::messaging::ActiveAuthor;
+    use silverhand_backend_core::conversation_messaging::messaging::ActiveAuthor;
 
     const AGENT_FK: &str = "agent-1";
     const USER_FK: &str = "user-1";

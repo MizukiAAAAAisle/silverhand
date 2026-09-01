@@ -13,11 +13,11 @@
 //! cancel after a claim wins and the later settlement CAS no-ops, and a cancel
 //! before a claim makes the claim find nothing.
 
-use silverhand_backend_core::foundation::identity::AgentId;
-use silverhand_backend_core::messaging::schedule::{
+use silverhand_backend_core::conversation_messaging::messaging::schedule::{
     Clock, DueCandidate, FiredCount, ScheduleCancelOutcome, ScheduleCancelUnitOfWork, ScheduleId,
     ScheduleStatus, ScheduleStore, SettlementAction,
 };
+use silverhand_backend_core::foundation::identity::AgentId;
 use silverhand_backend_sqlite::messaging::schedule::{SqliteScheduleCancel, SqliteScheduleStore};
 use sqlx::{ConnectOptions, Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::path::{Path, PathBuf};

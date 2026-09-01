@@ -9,19 +9,19 @@ use std::{
     },
 };
 
-use silverhand_backend_core::messaging::task::{
+use silverhand_backend_core::conversation_messaging::messaging::task::{
     AgentBoardResolver, AgentReadableBoards, BoardKey, BoardResolution, BoardScopeRequest,
     BoardScopeSource, PairKey, ResolvedBoard, TaskParticipationReads, TaskReadCapability,
 };
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    messaging::{
+    conversation_messaging::messaging::{
         AddressRefusal, ChannelAccess, ChannelAccessRefusal, DeliveryIntent, DirectPairAllocation,
         DirectPairOpenedFact, DirectPairOpenedPort, EnvironmentUnavailable, MessageContent,
         ReferencePositions, SendActor, SendCapability, SendClock, SendDestination, SendEntropy,
         SendMessage, SendMessageDraft, SendMessageUnitOfWork, TargetAddress,
         TargetAddressOperatorReason, TargetAddressRefusalPort, TargetAddressRefusalReport,
     },
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::SqliteConnection;

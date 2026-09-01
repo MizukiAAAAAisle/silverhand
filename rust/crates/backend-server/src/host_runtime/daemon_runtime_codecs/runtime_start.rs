@@ -4,7 +4,8 @@ use std::{error::Error, fmt};
 
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::wire_number::JsSafeInteger, runtime_delivery::RuntimeDispatchTarget,
+    conversation_messaging::runtime_delivery::RuntimeDispatchTarget,
+    foundation::wire_number::JsSafeInteger,
 };
 
 use crate::runtime_credential::RuntimeStartHandoff;

@@ -8,7 +8,7 @@
 //! It lives in this crate's test tree because a JSON reader does: the projection it
 //! exercises is pure and belongs to `backend-core`.
 
-use silverhand_backend_core::messaging::{
+use silverhand_backend_core::conversation_messaging::messaging::{
     ParticipantHandle,
     mention_cc::{MentionCopySource, mention_excerpt, render_copy_body},
 };

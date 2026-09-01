@@ -69,6 +69,7 @@ use axum::{
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
+    conversation_messaging::messaging::PrincipalKind,
     foundation::identity::UserId,
     identity_access::auth::{
         AuthenticateHumanSession, IssuedSessionSecret, SessionAudit, SessionBearer, SessionClock,
@@ -84,7 +85,6 @@ use silverhand_backend_core::{
         UserEmailLookup, UserProfileRead, UserProfileUpdate, UserProfileWriteUnitOfWork,
         UserRecord, read_self_profile, update_self_display_name,
     },
-    messaging::PrincipalKind,
 };
 
 use crate::auth::{PublicJsonUnauthorized, require_human_session};

@@ -15,8 +15,7 @@ use axum::{
 };
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::{
+    conversation_messaging::messaging::{
         collaboration::{
             channel_directory::ChannelVisibility,
             channel_lifecycle::{
@@ -29,6 +28,7 @@ use silverhand_backend_core::{
         },
         conversation_title::{CanonicalConversationTitle, ConversationTitleIssue},
     },
+    foundation::identity::{ConversationId, UserId},
 };
 
 use crate::messaging::collaboration::json_body::{BodyRead, payload_too_large, read_body};
@@ -430,7 +430,7 @@ fn invalid(issues: Vec<Value>) -> Response {
 }
 
 fn channel_success(
-    row: &silverhand_backend_core::messaging::collaboration::channel_lifecycle::ChannelLifecycleRow,
+    row: &silverhand_backend_core::conversation_messaging::messaging::collaboration::channel_lifecycle::ChannelLifecycleRow,
 ) -> Response {
     Json(json!({"channel":channel(row)})).into_response()
 }
@@ -473,7 +473,7 @@ fn rename_refusal(refusal: ChannelRenameRefusal, title: &str) -> Response {
 }
 
 fn report_effect(
-    failure: Option<&silverhand_backend_core::messaging::collaboration::channel_lifecycle::ChannelMutationEffectFailure>,
+    failure: Option<&silverhand_backend_core::conversation_messaging::messaging::collaboration::channel_lifecycle::ChannelMutationEffectFailure>,
     operation: &'static str,
 ) {
     if let Some(failure) = failure {

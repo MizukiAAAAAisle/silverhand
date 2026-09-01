@@ -8,9 +8,9 @@
 //! for every row without a per-viewer read.
 
 use crate::{
+    conversation_messaging::messaging::collaboration::conversation_message_window::SelectedWindowMessage,
     foundation::identity::ConversationId,
     identity_access::capability::agent_audit::AuditedConversation,
-    messaging::collaboration::conversation_message_window::SelectedWindowMessage,
 };
 
 use super::subject::AuditSubjectFacts;

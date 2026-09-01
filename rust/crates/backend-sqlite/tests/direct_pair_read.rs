@@ -1,10 +1,10 @@
 use std::error::Error;
 
 use silverhand_backend_core::{
-    direct_pair_read::{DirectPairCounterpart, DirectPairReadModel},
+    conversation_messaging::direct_pair_read::{DirectPairCounterpart, DirectPairReadModel},
+    conversation_messaging::messaging::{ActiveAuthor, PrincipalIdentity},
     foundation::identity::UserId,
     identity_access::agents::runtime::RuntimeKind,
-    messaging::{ActiveAuthor, PrincipalIdentity},
 };
 use silverhand_backend_sqlite::direct_pair_read::{DirectPairReadError, SqliteDirectPairReadModel};
 use sqlx::Connection;

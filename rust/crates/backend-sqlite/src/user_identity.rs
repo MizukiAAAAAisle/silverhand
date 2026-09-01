@@ -17,6 +17,7 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    conversation_messaging::messaging::AvatarRevision,
     foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
     identity_access::avatar::{
@@ -27,7 +28,6 @@ use silverhand_backend_core::{
         DisplayName, UserDirectoryRead, UserEmailLookup, UserProfileRead, UserProfileWrite,
         UserProfileWriteUnitOfWork, UserRecord,
     },
-    messaging::AvatarRevision,
 };
 use sqlx::{
     Row, SqlitePool,

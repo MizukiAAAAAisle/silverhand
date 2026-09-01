@@ -639,8 +639,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conversation_messaging::messaging::AvatarRevision;
     use crate::identity_access::user_identity::UserChangedAnnounceFailure;
-    use crate::messaging::AvatarRevision;
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},

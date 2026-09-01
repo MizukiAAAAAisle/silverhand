@@ -8,9 +8,7 @@ use crate::{
     },
 };
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    messaging::collaboration::{
+    conversation_messaging::messaging::collaboration::{
         attention_preference::ChannelAttentionMode,
         attention_projection::{
             AttentionBadgeProjectionError, AttentionBadgeRollup, AttentionCount,
@@ -18,6 +16,8 @@ use silverhand_backend_core::{
             WorkspaceAttentionCount, WorkspaceAttentionModes,
         },
     },
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;

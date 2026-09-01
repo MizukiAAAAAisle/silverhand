@@ -7,12 +7,12 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::UserId,
-    messaging::collaboration::human_search::{
+    conversation_messaging::messaging::collaboration::human_search::{
         HumanSearchMessageCountFact, HumanSearchOrder, HumanSearchPage, HumanSearchQuery,
         HumanSearchReadPort, HumanSearchRefusal, HumanSearchStream, HumanSearchText,
         ResolvedHumanSearchQuery, SelectedHumanSearchThreadAnchor,
     },
+    foundation::identity::UserId,
 };
 use tower::ServiceExt;
 

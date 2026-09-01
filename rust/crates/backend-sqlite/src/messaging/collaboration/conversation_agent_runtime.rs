@@ -2,11 +2,7 @@
 
 use serde_json::json;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId},
-    foundation::persistence::PersistenceFailure,
-    host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
-    identity_access::agents::session_scope::AgentSessionScope,
-    messaging::{
+    conversation_messaging::messaging::{
         PrincipalIdentity,
         collaboration::{
             CliSessionId,
@@ -20,6 +16,10 @@ use silverhand_backend_core::{
             },
         },
     },
+    foundation::identity::{AgentId, ConversationId, UserId},
+    foundation::persistence::PersistenceFailure,
+    host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
+    identity_access::agents::session_scope::AgentSessionScope,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;

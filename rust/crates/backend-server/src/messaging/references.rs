@@ -17,7 +17,9 @@
 use std::ops::Range;
 
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
-use silverhand_backend_core::messaging::{MessageContent, ReferencePositions};
+use silverhand_backend_core::conversation_messaging::messaging::{
+    MessageContent, ReferencePositions,
+};
 
 /// The product position rule.
 pub struct MarkdownReferencePositions;

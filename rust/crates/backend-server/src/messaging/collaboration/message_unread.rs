@@ -11,13 +11,13 @@ use axum::{
 };
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId, WorkspaceId},
-    messaging::collaboration::message_unread::{
+    conversation_messaging::messaging::collaboration::message_unread::{
         BoundConversationMessageUnread, BoundViewerMessageUnreadSummary,
         BoundWorkspaceMessageUnread, ConversationMessageUnreadReadPort,
         ConversationMessageUnreadRefusal, LatestUnreadPointer, ViewerMessageUnreadSummaryReadPort,
         WorkspaceMessageUnreadReadPort, WorkspaceMessageUnreadRefusal,
     },
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
 };
 
 pub const WORKSPACE_MESSAGE_UNREAD_PATH: &str = "/api/workspaces/{id}/message-unread";

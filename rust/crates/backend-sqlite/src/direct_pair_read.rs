@@ -3,14 +3,14 @@
 use std::{collections::HashMap, path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    direct_pair_read::{
+    conversation_messaging::direct_pair_read::{
         DirectPairCounterpart, DirectPairList, DirectPairListItem, DirectPairReadModel,
         DirectPairUnreadCount,
     },
+    conversation_messaging::messaging::{AvatarRevision, PrincipalIdentity},
     foundation::identity::{AgentId, ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
     identity_access::agents::runtime::RuntimeKind,
-    messaging::{AvatarRevision, PrincipalIdentity},
 };
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,

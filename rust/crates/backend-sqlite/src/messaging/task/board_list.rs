@@ -1,7 +1,7 @@
 //! The board-list candidate fetch: the plural sibling of the point read.
 //!
 //! `fetch_list_candidates` returns the DECODED candidate SET a
-//! [`list_visible_tasks`](silverhand_backend_core::messaging::task::list_visible_tasks)
+//! [`list_visible_tasks`](silverhand_backend_core::conversation_messaging::messaging::task::list_visible_tasks)
 //! call trims — every `tasks` row that matches the request's COORDINATE filters,
 //! strict-decoded through the same two gates the point read uses ([`decode_row`] then
 //! [`seal_board_against_conversation`]) and paired with the display sidecars the SAME
@@ -32,10 +32,10 @@
 //! fallback to an ambient board, and never the invalid `IN ()` — matching the TS arm's
 //! early `return []`.
 
-use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-use silverhand_backend_core::messaging::task::{
+use silverhand_backend_core::conversation_messaging::messaging::task::{
     TaskCandidateFetch, TaskCandidateQuery, TaskListCandidate,
 };
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use sqlx::{QueryBuilder, Sqlite};
 
 use super::row::{
@@ -49,7 +49,7 @@ impl TaskCandidateFetch for SqliteTaskStore {
     /// request's coordinate filters, each strict-decoded through the row-local gate and
     /// the cross-row board seal and paired with the display sidecars its joined row read,
     /// in NO particular order. Feeds
-    /// [`list_visible_tasks`](silverhand_backend_core::messaging::task::list_visible_tasks),
+    /// [`list_visible_tasks`](silverhand_backend_core::conversation_messaging::messaging::task::list_visible_tasks),
     /// which sorts, participation-gates, and trims. A corrupt row is a safe-500 for the
     /// WHOLE fetch (never a silently-dropped candidate); an empty board set is zero rows
     /// without touching the database.
@@ -145,11 +145,11 @@ mod tests {
     use super::super::TaskStoreError;
     use super::*;
     use crate::current_schema;
-    use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, WorkspaceId};
-    use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-    use silverhand_backend_core::messaging::task::{
+    use silverhand_backend_core::conversation_messaging::messaging::task::{
         BoardKey, TaskCandidateFetch, TaskListCandidate, TaskNumber, TaskStatus,
     };
+    use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, WorkspaceId};
+    use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use sqlx::{Connection, Row};
     use tempfile::TempDir;
 
@@ -221,7 +221,10 @@ mod tests {
         db.close().await.unwrap();
         let store = SqliteTaskStore::open(&path).await.unwrap();
         let pair_board = BoardKey::Pair(
-            silverhand_backend_core::messaging::task::PairKey::parse(&pair_key).unwrap(),
+            silverhand_backend_core::conversation_messaging::messaging::task::PairKey::parse(
+                &pair_key,
+            )
+            .unwrap(),
         );
         (directory, store, pair_board)
     }

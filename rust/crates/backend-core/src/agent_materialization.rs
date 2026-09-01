@@ -47,6 +47,13 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    conversation_messaging::messaging::DirectPairParticipants,
+    conversation_messaging::messaging::MessageId,
+    conversation_messaging::messaging::PrincipalIdentity,
+    conversation_messaging::messaging::agent_onboarding::{
+        ONBOARDING_DM_TITLE, ONBOARDING_DM_TITLE_KEY, OnboardingSystemMessage,
+        OnboardingWriteWitness, OnboardingWritten,
+    },
     foundation::identity::AgentId,
     foundation::identity::ConversationId,
     foundation::identity::HostId,
@@ -57,13 +64,6 @@ use crate::{
     identity_access::agents::runtime::RuntimeKind,
     identity_access::agents::session_scope::AgentSessionScope,
     identity_access::user_identity::ParticipantHandle,
-    messaging::DirectPairParticipants,
-    messaging::MessageId,
-    messaging::PrincipalIdentity,
-    messaging::agent_onboarding::{
-        ONBOARDING_DM_TITLE, ONBOARDING_DM_TITLE_KEY, OnboardingSystemMessage,
-        OnboardingWriteWitness, OnboardingWritten,
-    },
 };
 
 /// The canonical `materialization_failed_code` the crash-recovery sweep stamps on a row a
@@ -1034,14 +1034,18 @@ fn seal_agent_arm(
             reason: "agent-arm creator identity names a different user than the activation creator",
         });
     }
-    let creator_handle = crate::messaging::ParticipantHandle::parse(graph.creator.name.as_str())
-        .map_err(|_| MaterializationFault::ProvisioningInvariant {
-            reason: "agent-arm creator handle read from the users row is unusable",
-        })?;
-    let agent_handle = crate::messaging::ParticipantHandle::parse(activated.name().as_str())
-        .map_err(|_| MaterializationFault::ProvisioningInvariant {
-            reason: "agent-arm agent handle is unusable as a messaging handle",
-        })?;
+    let creator_handle = crate::conversation_messaging::messaging::ParticipantHandle::parse(
+        graph.creator.name.as_str(),
+    )
+    .map_err(|_| MaterializationFault::ProvisioningInvariant {
+        reason: "agent-arm creator handle read from the users row is unusable",
+    })?;
+    let agent_handle = crate::conversation_messaging::messaging::ParticipantHandle::parse(
+        activated.name().as_str(),
+    )
+    .map_err(|_| MaterializationFault::ProvisioningInvariant {
+        reason: "agent-arm agent handle is unusable as a messaging handle",
+    })?;
     let expected = DirectPairParticipants::between(
         PrincipalIdentity::Human(activated.created_by_user_id().clone()),
         PrincipalIdentity::Agent(activated.agent_id().clone()),
@@ -1115,10 +1119,12 @@ fn seal_conversation_arm(
         &graph.creator_on_dm,
         now_ms,
     )?;
-    let agent_handle = crate::messaging::ParticipantHandle::parse(activated.name().as_str())
-        .map_err(|_| MaterializationFault::ProvisioningInvariant {
-            reason: "conversation-arm agent handle is unusable as a messaging handle",
-        })?;
+    let agent_handle = crate::conversation_messaging::messaging::ParticipantHandle::parse(
+        activated.name().as_str(),
+    )
+    .map_err(|_| MaterializationFault::ProvisioningInvariant {
+        reason: "conversation-arm agent handle is unusable as a messaging handle",
+    })?;
     let intent = OnboardingSystemMessage::conversation_dm(
         dm.clone(),
         onboarding_message_id,
@@ -1731,7 +1737,7 @@ pub async fn mark_stale_materializations_failed<W: AgentMaterializationWrite>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::messaging::agent_onboarding::OnboardingMetadataDigest;
+    use crate::conversation_messaging::messaging::agent_onboarding::OnboardingMetadataDigest;
 
     fn agent(id: &str) -> AgentId {
         AgentId::parse(id).expect("agent id")
@@ -2262,13 +2268,15 @@ mod tests {
     fn onboarding_written_on(
         line: &ConversationId,
         id: &str,
-    ) -> crate::messaging::agent_onboarding::OnboardingWritten {
-        use crate::messaging::agent_onboarding::{OnboardingSystemMessage, OnboardingWriteWitness};
+    ) -> crate::conversation_messaging::messaging::agent_onboarding::OnboardingWritten {
+        use crate::conversation_messaging::messaging::agent_onboarding::{
+            OnboardingSystemMessage, OnboardingWriteWitness,
+        };
         let intent = OnboardingSystemMessage::agent_direct_line(
             line.clone(),
-            crate::messaging::MessageId::parse(id).unwrap(),
-            &crate::messaging::ParticipantHandle::parse("a1").unwrap(),
-            &crate::messaging::ParticipantHandle::parse("u1").unwrap(),
+            crate::conversation_messaging::messaging::MessageId::parse(id).unwrap(),
+            &crate::conversation_messaging::messaging::ParticipantHandle::parse("a1").unwrap(),
+            &crate::conversation_messaging::messaging::ParticipantHandle::parse("u1").unwrap(),
             7,
         );
         intent
@@ -2309,7 +2317,7 @@ mod tests {
         assert_eq!(provisioned.direct_line(), &line);
         assert_eq!(
             provisioned.onboarding_message_id(),
-            &crate::messaging::MessageId::parse("msg-1").unwrap()
+            &crate::conversation_messaging::messaging::MessageId::parse("msg-1").unwrap()
         );
         assert!(provisioned.pair_created());
     }
@@ -2492,8 +2500,8 @@ mod tests {
         let intent = OnboardingSystemMessage::agent_direct_line(
             direct_line.clone(),
             MessageId::parse("msg-1").unwrap(),
-            &crate::messaging::ParticipantHandle::parse("a1").unwrap(),
-            &crate::messaging::ParticipantHandle::parse("u1").unwrap(),
+            &crate::conversation_messaging::messaging::ParticipantHandle::parse("a1").unwrap(),
+            &crate::conversation_messaging::messaging::ParticipantHandle::parse("u1").unwrap(),
             now_ms,
         );
         RawAgentArmGraph {
@@ -2519,7 +2527,7 @@ mod tests {
         let intent = OnboardingSystemMessage::conversation_dm(
             dm.clone(),
             MessageId::parse("msg-1").unwrap(),
-            &crate::messaging::ParticipantHandle::parse("a1").unwrap(),
+            &crate::conversation_messaging::messaging::ParticipantHandle::parse("a1").unwrap(),
             now_ms,
         );
         RawConversationArmGraph {
@@ -2706,8 +2714,8 @@ mod tests {
         let intent = OnboardingSystemMessage::agent_direct_line(
             ConversationId::parse("pair-existing").unwrap(),
             MessageId::parse("msg-1").unwrap(),
-            &crate::messaging::ParticipantHandle::parse("a1").unwrap(),
-            &crate::messaging::ParticipantHandle::parse("u1").unwrap(),
+            &crate::conversation_messaging::messaging::ParticipantHandle::parse("a1").unwrap(),
+            &crate::conversation_messaging::messaging::ParticipantHandle::parse("u1").unwrap(),
             99,
         );
         graph.onboarding = faithful_onboarding_witness(&intent);
@@ -2802,7 +2810,7 @@ mod tests {
         let intent = OnboardingSystemMessage::conversation_dm(
             ConversationId::parse("dm-elsewhere").unwrap(),
             MessageId::parse("msg-1").unwrap(),
-            &crate::messaging::ParticipantHandle::parse("a1").unwrap(),
+            &crate::conversation_messaging::messaging::ParticipantHandle::parse("a1").unwrap(),
             99,
         );
         graph.onboarding = faithful_onboarding_witness(&intent);

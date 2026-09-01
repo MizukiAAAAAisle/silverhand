@@ -12,8 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::{
+    conversation_messaging::messaging::{
         ThreadRootId,
         collaboration::thread_follow::{
             BoundHumanFollow, BoundHumanUnfollow, BoundThreadFollowerState, HumanFollowRefusal,
@@ -21,6 +20,7 @@ use silverhand_backend_core::{
             ThreadFollowerStateRefusal, follow_human, unfollow_human,
         },
     },
+    foundation::identity::{ConversationId, UserId},
 };
 
 pub const FOLLOWERS_PATH: &str = "/api/channels/{id}/threads/{root_message_id}/followers";
@@ -264,11 +264,11 @@ mod tests {
     };
     use serde_json::Value;
     use silverhand_backend_core::{
-        foundation::identity::AgentId,
-        messaging::collaboration::thread_follow::{
+        conversation_messaging::messaging::collaboration::thread_follow::{
             CommittedHumanFollow, CommittedHumanUnfollow, FollowedAt, ThreadFollowChangedFact,
             ThreadFollowPublicationFailure, ThreadFollowerAgent, ThreadFollowerState,
         },
+        foundation::identity::AgentId,
     };
     use silverhand_backend_sqlite::messaging::MessagingStore;
     use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};

@@ -1,12 +1,12 @@
 //! One-snapshot SQLite projection for `GET /api/channels/:id/agents`.
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId},
-    foundation::persistence::PersistenceFailure,
-    messaging::collaboration::conversation_agent_directory::{
+    conversation_messaging::messaging::collaboration::conversation_agent_directory::{
         ConversationAgentDirectory, ConversationAgentDirectoryReadPort,
         ConversationAgentDirectoryRefusal, ConversationAgentMember, JoinedAt,
     },
+    foundation::identity::{AgentId, ConversationId, UserId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqlitePool};
 use thiserror::Error;

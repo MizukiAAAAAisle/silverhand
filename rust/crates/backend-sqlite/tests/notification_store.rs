@@ -1,12 +1,12 @@
 use silverhand_backend_core::{
-    foundation::identity::UserId,
-    messaging::{
+    conversation_messaging::messaging::{
         NotificationId,
         collaboration::notification::{
             NotificationClearPort, NotificationClearSelector, NotificationListQuery,
             NotificationReadPort,
         },
     },
+    foundation::identity::UserId,
 };
 use silverhand_backend_sqlite::messaging::{MessagingStore, collaboration::NotificationStoreError};
 use sqlx::Connection;

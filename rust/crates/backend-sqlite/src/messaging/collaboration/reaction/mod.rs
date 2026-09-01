@@ -5,8 +5,8 @@ mod read;
 pub(super) use read::aggregate_facts_in_snapshot;
 
 use silverhand_backend_core::{
+    conversation_messaging::messaging::{MessageId, PrincipalIdentity},
     foundation::identity::{AgentId, ConversationId, UserId},
-    messaging::{MessageId, PrincipalIdentity},
 };
 use sqlx::{Row, SqlitePool, Transaction};
 use thiserror::Error;

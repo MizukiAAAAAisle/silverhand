@@ -14,7 +14,7 @@
 //!  - `row` — the committed-row decode and the cross-row board seal every read
 //!    shares (what a trustworthy `tasks` row IS), and the shared row projection;
 //!  - `point_read` — the single-task fact keyed by `tasks.id`;
-//!  - `board_list` — the [`TaskCandidateFetch`](silverhand_backend_core::messaging::task::TaskCandidateFetch)
+//!  - `board_list` — the [`TaskCandidateFetch`](silverhand_backend_core::conversation_messaging::messaging::task::TaskCandidateFetch)
 //!    adapter: the plural candidate fetch a board list trims (coordinate filters
 //!    only; participation, ordering, and limit are the core's).
 //!

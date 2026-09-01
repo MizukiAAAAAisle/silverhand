@@ -1,12 +1,12 @@
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::{
+    conversation_messaging::messaging::{
         PrincipalIdentity,
         collaboration::conversation_threads::{
             ConversationThreadsReadPort, ThreadListCursor, ThreadListFilter, ThreadListQuery,
             ThreadReadCorruption,
         },
     },
+    foundation::identity::{ConversationId, UserId},
 };
 use silverhand_backend_sqlite::messaging::{
     MessagingStore, collaboration::conversation_threads::ConversationThreadsStoreError,
@@ -68,8 +68,8 @@ async fn read(
     query: ThreadListQuery,
 ) -> Result<
     Result<
-        silverhand_backend_core::messaging::collaboration::conversation_threads::ConversationThreadsPage,
-        silverhand_backend_core::messaging::collaboration::conversation_threads::ConversationThreadsRefusal,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_threads::ConversationThreadsPage,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_threads::ConversationThreadsRefusal,
     >,
     silverhand_backend_core::foundation::persistence::PersistenceFailure,
 >{
@@ -83,8 +83,8 @@ async fn read_conversation(
     query: ThreadListQuery,
 ) -> Result<
     Result<
-        silverhand_backend_core::messaging::collaboration::conversation_threads::ConversationThreadsPage,
-        silverhand_backend_core::messaging::collaboration::conversation_threads::ConversationThreadsRefusal,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_threads::ConversationThreadsPage,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_threads::ConversationThreadsRefusal,
     >,
     silverhand_backend_core::foundation::persistence::PersistenceFailure,
 >{
@@ -181,7 +181,7 @@ async fn total_order_cursor_repliers_and_followed_unread_share_the_product_autho
         )
         .await
         .unwrap(),
-        Err(silverhand_backend_core::messaging::collaboration::conversation_threads::ConversationThreadsRefusal::Forbidden)
+        Err(silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_threads::ConversationThreadsRefusal::Forbidden)
     ));
 
     let empty_query = ThreadListQuery::new(30, None, ThreadListFilter::All).unwrap();
@@ -195,13 +195,13 @@ async fn total_order_cursor_repliers_and_followed_unread_share_the_product_autho
         read_conversation(&path, "outsider", "public", empty_query)
             .await
             .unwrap(),
-        Err(silverhand_backend_core::messaging::collaboration::conversation_threads::ConversationThreadsRefusal::Forbidden)
+        Err(silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_threads::ConversationThreadsRefusal::Forbidden)
     ));
     assert!(matches!(
         read_conversation(&path, "viewer", "missing", empty_query)
             .await
             .unwrap(),
-        Err(silverhand_backend_core::messaging::collaboration::conversation_threads::ConversationThreadsRefusal::NotFound)
+        Err(silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_threads::ConversationThreadsRefusal::NotFound)
     ));
 }
 

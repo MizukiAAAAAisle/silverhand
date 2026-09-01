@@ -46,13 +46,13 @@
 use std::future::Future;
 
 use crate::{
+    conversation_messaging::messaging::collaboration::conversation_ref::ConversationRosterPolicy,
     foundation::identity::{AgentId, ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::RuntimeGeneration,
     host_runtime::runtime_event::RuntimeObservedStatus,
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
-    messaging::collaboration::conversation_ref::ConversationRosterPolicy,
 };
 
 /// One conversation the agent is a party to, plus the two snapshot-time facts the

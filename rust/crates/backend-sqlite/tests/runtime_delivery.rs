@@ -1,4 +1,9 @@
 use silverhand_backend_core::{
+    conversation_messaging::messaging::{MessageContent, ReferencePositions},
+    conversation_messaging::runtime_delivery::{
+        ClaimPendingInbox, DeliveryLeaseOwner, InboxSettlementDisposition,
+        RuntimeDeliveryFailureReason, RuntimeDispatchReadPort, RuntimeInboxCustodyPort,
+    },
     foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
@@ -10,12 +15,7 @@ use silverhand_backend_core::{
         RuntimeActivityKind, RuntimeActivityPayload, RuntimeEventAdmission, RuntimeExitDisposition,
         RuntimeObservedStatus,
     },
-    messaging::{MessageContent, ReferencePositions},
     policy::agent_presence,
-    runtime_delivery::{
-        ClaimPendingInbox, DeliveryLeaseOwner, InboxSettlementDisposition,
-        RuntimeDeliveryFailureReason, RuntimeDispatchReadPort, RuntimeInboxCustodyPort,
-    },
 };
 use silverhand_backend_sqlite::{
     runtime_credential::SqliteRuntimeCustodyStore, runtime_delivery::SqliteRuntimeDeliveryStore,
@@ -388,7 +388,7 @@ async fn direct_pair_and_thread_coordinates_are_projected_from_persisted_placeme
     );
     assert_eq!(
         batch.deliveries()[1].instruction(),
-        silverhand_backend_core::runtime_delivery::DeliveryInstruction::NonSystemMention
+        silverhand_backend_core::conversation_messaging::runtime_delivery::DeliveryInstruction::NonSystemMention
     );
     assert!(
         batch.deliveries()[2]
@@ -1364,7 +1364,9 @@ fn unsupported_runtime(error: &PersistenceFailure) -> bool {
 async fn resolve_target(
     fixture: &Fixture,
 ) -> Result<
-    Option<silverhand_backend_core::runtime_delivery::RuntimeDispatchTarget>,
+    Option<
+        silverhand_backend_core::conversation_messaging::runtime_delivery::RuntimeDispatchTarget,
+    >,
     PersistenceFailure,
 > {
     fixture

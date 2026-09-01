@@ -45,6 +45,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
+    conversation_messaging::messaging::collaboration::RuntimePlacementRefusal,
     foundation::identity::{AgentId, Principal, UserId},
     host_runtime::agent_bulk_stop::{
         AgentBulkStopOutcome, AgentBulkStopReadPort, BulkStopSeatFailure, BulkStopSeatFault,
@@ -56,7 +57,6 @@ use silverhand_backend_core::{
         agent_authority::{AgentAuthority, can_edit_agent},
         agent_view::{VisibleStages, can_view_agent},
     },
-    messaging::collaboration::RuntimePlacementRefusal,
 };
 
 use crate::error;

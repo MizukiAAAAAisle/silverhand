@@ -6,10 +6,7 @@
 //! committed projection either all commit or all roll back.
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    identity_access::access::{WorkspaceRole, role_governs_workspace},
-    messaging::{
+    conversation_messaging::messaging::{
         SendClock, SendEntropy,
         collaboration::channel_directory::{
             ChannelCreationProjectionError, ChannelDirectoryProjectionError, ChannelDirectoryRow,
@@ -20,6 +17,9 @@ use silverhand_backend_core::{
         environment::EnvironmentUnavailable,
         mint_conversation_id,
     },
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
+    identity_access::access::{WorkspaceRole, role_governs_workspace},
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};
 use thiserror::Error;

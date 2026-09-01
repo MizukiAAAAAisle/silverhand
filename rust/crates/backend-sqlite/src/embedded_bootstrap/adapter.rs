@@ -21,12 +21,12 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    conversation_messaging::messaging::AvatarRevision,
     embedded_bootstrap::{BootstrapChoice, EmbeddedBootstrapUnitOfWork},
     foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
     host_runtime::environment::{EntropySource, OsEntropy},
     identity_access::user_identity::UserRecord,
-    messaging::AvatarRevision,
 };
 use sqlx::{
     Row, SqlitePool,

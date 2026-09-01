@@ -9,14 +9,12 @@
 pub mod agent_creation;
 pub mod agent_materialization;
 pub mod cold_read;
-pub mod direct_pair_read;
+pub mod conversation_messaging;
 pub mod embedded_bootstrap;
 pub mod foundation;
 pub mod host_runtime;
 pub mod identity_access;
-pub mod messaging;
 pub mod policy;
-pub mod runtime_delivery;
 pub mod teardown;
 pub mod viewer_read_model;
 pub mod workspace_data_plane;

@@ -12,12 +12,12 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId},
-    messaging::collaboration::conversation_agent_activity::{
+    conversation_messaging::messaging::collaboration::conversation_agent_activity::{
         ActivityBefore, ActivityEventId, ActivityPageRequest, ActivityPayload,
         BoundConversationAgentActivityPage, ConversationActivityEvent,
         ConversationAgentActivityReadPort, ConversationAgentActivityRefusal,
     },
+    foundation::identity::{AgentId, ConversationId, UserId},
 };
 
 use super::query_number::{CoercedInteger, coerce_integer};

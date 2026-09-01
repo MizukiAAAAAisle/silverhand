@@ -4,10 +4,10 @@ use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use axum::Router;
 use silverhand_backend_core::{
+    conversation_messaging::runtime_delivery::{RuntimeDispatchReadPort, RuntimeInboxCustodyPort},
     foundation::identity::{ConversationId, HostId, UserId},
     host_runtime::custody::{HostCredentialLookup, VerifyHostTokenFact, verify_host_token},
     host_runtime::runtime_event::DaemonEventDurablePort,
-    runtime_delivery::{RuntimeDispatchReadPort, RuntimeInboxCustodyPort},
 };
 
 use crate::{

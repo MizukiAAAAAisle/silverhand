@@ -1,6 +1,5 @@
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::{
+    conversation_messaging::messaging::{
         MessageId,
         collaboration::conversation_message_window::{
             ConversationMessageWindowReadPort, ConversationMessageWindowRequest,
@@ -8,6 +7,7 @@ use silverhand_backend_core::{
             MessageWindowStreamRequest,
         },
     },
+    foundation::identity::{ConversationId, UserId},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use silverhand_backend_sqlite::messaging::collaboration::conversation_message_window::ConversationMessageWindowStoreError;
@@ -64,7 +64,7 @@ async fn read(
     request: ConversationMessageWindowRequest,
 ) -> Result<
     Result<
-        silverhand_backend_core::messaging::collaboration::conversation_message_window::ConversationMessageWindow,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_message_window::ConversationMessageWindow,
         MessageWindowRefusal,
     >,
     silverhand_backend_core::foundation::persistence::PersistenceFailure,
@@ -88,7 +88,7 @@ async fn read_conversation(
     request: ConversationMessageWindowRequest,
 ) -> Result<
     Result<
-        silverhand_backend_core::messaging::collaboration::conversation_message_window::ConversationMessageWindow,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_message_window::ConversationMessageWindow,
         MessageWindowRefusal,
     >,
     silverhand_backend_core::foundation::persistence::PersistenceFailure,
@@ -194,7 +194,8 @@ async fn mainline_thread_public_neutralization_and_sidecars_share_one_snapshot()
         MessageWindowStreamRequest::Mainline,
         1,
         MessageWindowAnchor::Before(
-            silverhand_backend_core::messaging::MessageSeq::try_from(2).unwrap(),
+            silverhand_backend_core::conversation_messaging::messaging::MessageSeq::try_from(2)
+                .unwrap(),
         ),
     )
     .unwrap();
@@ -212,7 +213,8 @@ async fn mainline_thread_public_neutralization_and_sidecars_share_one_snapshot()
         MessageWindowStreamRequest::Mainline,
         1,
         MessageWindowAnchor::After(
-            silverhand_backend_core::messaging::MessageSeq::try_from(1).unwrap(),
+            silverhand_backend_core::conversation_messaging::messaging::MessageSeq::try_from(1)
+                .unwrap(),
         ),
     )
     .unwrap();
@@ -338,7 +340,7 @@ async fn linked_task_uses_its_actual_conversation_and_rejects_cross_conversation
     assert!(matches!(
         source,
         ConversationMessageWindowStoreError::Projection(
-            silverhand_backend_core::messaging::collaboration::conversation_message_window::MessageWindowCorruption::LinkedTask
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_message_window::MessageWindowCorruption::LinkedTask
         )
     ));
 

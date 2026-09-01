@@ -13,14 +13,14 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::{
+    conversation_messaging::messaging::{
         MessageSeq,
         collaboration::conversation_threads::{
             BoundConversationThreadsPage, ConversationThreadsReadPort, ConversationThreadsRefusal,
             ThreadListCursor, ThreadListFilter, ThreadListQuery,
         },
     },
+    foundation::identity::{ConversationId, UserId},
 };
 
 use crate::messaging::author_wire::author_dto;

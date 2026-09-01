@@ -8208,9 +8208,7 @@ mod channel_directory_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        foundation::identity::{ConversationId, UserId, WorkspaceId},
-        identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
-        messaging::collaboration::{
+        conversation_messaging::messaging::collaboration::{
             channel_directory::{
                 ActiveChannelDirectoryPort, ActiveWorkspaceChannelDirectory, ArchivedSince,
                 ArchivedWorkspaceChannelDirectory, ArchivedWorkspaceChannelDirectoryPort,
@@ -8223,6 +8221,8 @@ mod channel_directory_activation {
                 ConversationAgentDirectoryRefusal,
             },
         },
+        foundation::identity::{ConversationId, UserId, WorkspaceId},
+        identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
         auth::{PublicJsonUnauthorized, require_human_session},
@@ -8430,9 +8430,7 @@ mod runtime_activity_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-        identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
-        messaging::collaboration::{
+        conversation_messaging::messaging::collaboration::{
             activity::{ActivityList, ActivityReadModel},
             channel_lifecycle::{ChannelDetailFact, ChannelDetailReadPort, ChannelDetailRefusal},
             conversation_agent_activity::{
@@ -8444,6 +8442,8 @@ mod runtime_activity_activation {
                 ConversationAgentRuntimeRefusal,
             },
         },
+        foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
+        identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
         auth::{PublicJsonUnauthorized, require_human_session},
@@ -8712,9 +8712,7 @@ mod message_nav_search_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        foundation::identity::{ConversationId, UserId},
-        identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
-        messaging::collaboration::{
+        conversation_messaging::messaging::collaboration::{
             conversation_message_window::{
                 ConversationMessageWindow, ConversationMessageWindowReadPort,
                 ConversationMessageWindowRequest, MessageWindowRefusal,
@@ -8733,6 +8731,8 @@ mod message_nav_search_activation {
                 HumanSearchPage, HumanSearchQuery, HumanSearchReadPort, HumanSearchRefusal,
             },
         },
+        foundation::identity::{ConversationId, UserId},
+        identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
         auth::{PublicJsonUnauthorized, require_human_session},
@@ -9002,9 +9002,7 @@ mod unread_attention_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        foundation::identity::{ConversationId, UserId, WorkspaceId},
-        identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
-        messaging::collaboration::{
+        conversation_messaging::messaging::collaboration::{
             attention_projection::{
                 AttentionBadgeRollup, AttentionModesRefusal, AttentionProjectionPort,
                 WorkspaceAttentionModes,
@@ -9016,6 +9014,8 @@ mod unread_attention_activation {
                 WorkspaceMessageUnreadReadPort, WorkspaceMessageUnreadRefusal,
             },
         },
+        foundation::identity::{ConversationId, UserId, WorkspaceId},
+        identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
         auth::{PublicJsonUnauthorized, require_human_session},

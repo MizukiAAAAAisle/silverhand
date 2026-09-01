@@ -121,9 +121,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // once at the crate root and owns no accidental second declaration. The organization
     // map/gate (docs/rust-backend-organization-map.json) is the authority for each leaf's
     // owner, physical target and residual/landed status inside the namespace — this seam
-    // entry does NOT descend into the container to re-inventory its leaves. As further C1
-    // leaves relocate, their old crate-root entries are removed and `identity_access` stays
-    // a single entry here.
+    // entry does NOT descend into the container to re-inventory its leaves. The namespace closed
+    // at 27/27 (#task:2278); this single owning-root entry is retained for the CP projection /
+    // namespace declaration.
     ("backend-core", "identity_access"),
     // #task:2226 — internal profile/MCP consumer vocabulary and pure
     // orchestration. The production data-plane adapter is #task:2231 below; mounted at
@@ -144,16 +144,25 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // (`user_presence_cold_read` read model, `user_presence_last_seen` LastSeenSink port,
     // `viewer_workspace_sort` read model). Their old flat crate-root entries are removed; the
     // organization map/gate is the authority for each leaf's owner/target inside the container
-    // and this seam entry does NOT descend into it. Kept a single entry as further leaves land.
+    // and this seam entry does NOT descend into it. The namespace closed at 3/3/0 (#task:2279);
+    // this single owning-root entry is retained for the CP projection / namespace declaration.
     ("backend-core", "viewer_read_model"),
     // #task:2284 — the `foundation` relocation namespace: a directory container declared once
     // at the crate root, owning the relocated shared-vocabulary leaves (blob store, CLI
     // invoke/preflight audit, name canonicalization, persistence error/port vocabulary, the
     // scope-event transport port, and the number/text primitives). Their old flat crate-root
     // entries are removed; the organization map/gate owns each leaf's owner/target inside the
-    // container and this seam entry does NOT descend into it. Kept a single entry as the
-    // remaining `identity` leaf lands in a later wave.
+    // container and this seam entry does NOT descend into it. The namespace closed at 9/9/0
+    // (#task:2285, `identity` landed); this single owning-root entry is retained for the CP
+    // projection / namespace declaration.
     ("backend-core", "foundation"),
+    // #task:2286 — the C3 `conversation_messaging` relocation namespace: a directory container
+    // declared once at the crate root, owning the relocated `direct_pair_read` read model, the
+    // `messaging` domain directory leaf (internal children stay internal), and the
+    // `runtime_delivery` delivery vocabulary. Their old flat crate-root entries are removed; the
+    // organization map/gate owns each leaf's owner/target inside the container and this seam
+    // entry does NOT descend into it.
+    ("backend-core", "conversation_messaging"),
     // #task:2193 — the workspace metadata/read vertical. Core primitives and ports;
     // their SQLite adapters and server routes are the sibling entries below. Mounted at
     // the app composition root by the #task:2223 integration. This vertical's core leaves
@@ -380,10 +389,10 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     // here and covered by the single `foundation` owning-root seam entry via the CP projection.
     // #task:2285 relocated the final `identity` kernel vocabulary under `foundation` on the
     // same terms, closing the namespace (9/9/0).
-    ("backend-core", "direct_pair_read"),
+    // #task:2286 relocated `direct_pair_read`, `messaging`, and `runtime_delivery` under the
+    // C3 `conversation_messaging` namespace (its flat entries removed here, covered by the
+    // single `conversation_messaging` owning-root seam entry via the CP projection).
     ("backend-core", "host_runtime"),
-    ("backend-core", "messaging"),
-    ("backend-core", "runtime_delivery"),
     // #task:2256 categorized-file audit sink: the OS adapter that owns the CLI
     // preflight-failure log file and its writer lifecycle, home of the reusable
     // `CategorizedJsonlWriter` primitive. A non-seam production module the host-agent seam
@@ -498,6 +507,11 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // container (`foundation/mod.rs`) owning the relocated shared-vocabulary leaves. Same
     // terms: one declaration at the crate root, leaf owners live in the organization map/gate.
     ("backend-core", "foundation"),
+    // #task:2286 — the C3 `conversation_messaging` relocation namespace, likewise a
+    // directory-shaped container (`conversation_messaging/mod.rs`) owning the relocated
+    // direct-pair-read / messaging / runtime-delivery units. Same terms: one declaration at
+    // the crate root, leaf owners live in the organization map/gate.
+    ("backend-core", "conversation_messaging"),
 ];
 
 /// The modules a composition must name to ACTIVATE this lane: rules that decide, a

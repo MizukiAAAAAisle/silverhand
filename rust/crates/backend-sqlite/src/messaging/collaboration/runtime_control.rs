@@ -1,9 +1,11 @@
 //! One-snapshot SQLite admission for conversation runtime control.
 
 use silverhand_backend_core::{
+    conversation_messaging::messaging::collaboration::{
+        RuntimeControlAdmission, RuntimeControlAdmissionScope,
+    },
     foundation::identity::{AgentId, ConversationId, UserId},
     identity_access::agents::session_scope::AgentSessionScope,
-    messaging::collaboration::{RuntimeControlAdmission, RuntimeControlAdmissionScope},
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;
@@ -248,13 +250,13 @@ mod tests {
     };
 
     use silverhand_backend_core::{
-        foundation::identity::{AgentId, ConversationId, UserId},
-        messaging::collaboration::{
+        conversation_messaging::messaging::collaboration::{
             ClearSessionOutcome, ClearSessionProviderRefusal, HardStopRuntimeOutcome,
             HardStopRuntimeProviderRefusal, RuntimeControlAdmissionRefusal,
             RuntimeControlAdmissionScope, RuntimeControlPort, RuntimeSeatTarget,
             RuntimeStartTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal, start_runtime,
         },
+        foundation::identity::{AgentId, ConversationId, UserId},
     };
     use sqlx::{
         Connection, Executor, SqliteConnection,
@@ -407,11 +409,11 @@ mod tests {
             _target: &RuntimeSeatTarget,
         ) -> Result<
             Result<
-                silverhand_backend_core::messaging::collaboration::HardStopRuntimeOutcome,
-                silverhand_backend_core::messaging::collaboration::HardStopRuntimeProviderRefusal,
+                silverhand_backend_core::conversation_messaging::messaging::collaboration::HardStopRuntimeOutcome,
+                silverhand_backend_core::conversation_messaging::messaging::collaboration::HardStopRuntimeProviderRefusal,
             >,
             Self::Error,
-        > {
+        >{
             unreachable!()
         }
 
@@ -420,11 +422,11 @@ mod tests {
             _target: &RuntimeSeatTarget,
         ) -> Result<
             Result<
-                silverhand_backend_core::messaging::collaboration::ClearSessionOutcome,
-                silverhand_backend_core::messaging::collaboration::ClearSessionProviderRefusal,
+                silverhand_backend_core::conversation_messaging::messaging::collaboration::ClearSessionOutcome,
+                silverhand_backend_core::conversation_messaging::messaging::collaboration::ClearSessionProviderRefusal,
             >,
             Self::Error,
-        > {
+        >{
             unreachable!()
         }
     }
@@ -523,7 +525,7 @@ mod tests {
             .await
             .unwrap(),
             Err(
-                silverhand_backend_core::messaging::collaboration::StartRuntimeRefusal::Admission(
+                silverhand_backend_core::conversation_messaging::messaging::collaboration::StartRuntimeRefusal::Admission(
                     RuntimeControlAdmissionRefusal::AgentNotMember,
                 )
             )

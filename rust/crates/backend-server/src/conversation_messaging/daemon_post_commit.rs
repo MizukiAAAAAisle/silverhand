@@ -2,10 +2,7 @@
 
 use silverhand_backend_core::{
     agent_creation::OnboardingInboxEnsure,
-    foundation::identity::{AgentId, ConversationId},
-    host_runtime::custody::HostCredentialLookup,
-    host_runtime::runtime_event::DaemonEventDurablePort,
-    messaging::{
+    conversation_messaging::messaging::{
         CreatedMessage, MessageId,
         collaboration::workspace_rename_messaging::{
             BoundWorkspaceRenameMessage, WorkspaceRenameDeliveryPort,
@@ -15,7 +12,10 @@ use silverhand_backend_core::{
             EffectFailure, IdleStart, MainDelivery, ReplyDelivery, RuntimeDelivery, RuntimeStart,
         },
     },
-    runtime_delivery::{RuntimeDispatchReadPort, RuntimeInboxCustodyPort},
+    conversation_messaging::runtime_delivery::{RuntimeDispatchReadPort, RuntimeInboxCustodyPort},
+    foundation::identity::{AgentId, ConversationId},
+    host_runtime::custody::HostCredentialLookup,
+    host_runtime::runtime_event::DaemonEventDurablePort,
 };
 
 use crate::application_orchestration::daemon_delivery::DaemonDeliveryRuntime;

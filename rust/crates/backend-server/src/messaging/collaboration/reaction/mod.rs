@@ -20,13 +20,13 @@ use axum::{
 };
 use serde::Deserialize;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, UserId},
-    host_runtime::runtime_credential::RuntimePrincipal,
-    messaging::MessageId,
-    messaging::collaboration::reaction::{
+    conversation_messaging::messaging::MessageId,
+    conversation_messaging::messaging::collaboration::reaction::{
         ReactionAftermath, ReactionChange, ReactionEmoji, ReactionMutation, ReactionMutationPort,
         ReactionReadPort, change_reaction,
     },
+    foundation::identity::{AgentId, UserId},
+    host_runtime::runtime_credential::RuntimePrincipal,
 };
 
 use crate::wire_admission::{ValidatedJson, ValidatedJsonRejection, invalid_input};

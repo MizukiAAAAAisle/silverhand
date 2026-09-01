@@ -17,11 +17,11 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    foundation::identity::UserId,
-    identity_access::agent_detail_read::AgentDetailReadModel,
-    messaging::schedule::{
+    conversation_messaging::messaging::schedule::{
         ScheduleListLimit, ScheduleListQuery, ScheduleListReadModel, ScheduleStatusFilter,
     },
+    foundation::identity::UserId,
+    identity_access::agent_detail_read::AgentDetailReadModel,
 };
 
 use super::{gate_agent_edit, wire::ScheduleDto};
@@ -166,12 +166,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        conversation_messaging::messaging::schedule::{ScheduleSpec, ScheduleStatus, ScheduleView},
         foundation::identity::AgentId,
         foundation::persistence::PersistenceFailure,
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agents::runtime::RuntimeKind,
-        messaging::schedule::{ScheduleSpec, ScheduleStatus, ScheduleView},
     };
     use tower::ServiceExt;
 
@@ -221,7 +221,7 @@ mod tests {
 
     fn view(id: &str, status: ScheduleStatus) -> ScheduleView {
         ScheduleView {
-            id: silverhand_backend_core::messaging::schedule::ScheduleId::parse(id)
+            id: silverhand_backend_core::conversation_messaging::messaging::schedule::ScheduleId::parse(id)
                 .expect("schedule id"),
             owner_agent_id: agent("a1"),
             target_conversation_id: "c1".to_owned(),

@@ -6,11 +6,7 @@
 //! so a malformed row cannot disappear behind a product predicate.
 
 use silverhand_backend_core::{
-    foundation::blob_store::{BlobStorageKey, StorageKind, StoredBlob},
-    foundation::identity::{AgentId, ConversationId, UserId},
-    foundation::persistence::PersistenceFailure,
-    foundation::wire_number::JsSafeInteger,
-    messaging::{
+    conversation_messaging::messaging::{
         AttachmentId, FromKind, MessageId, MessageSeq, PrincipalIdentity, ThreadRootId,
         collaboration::{
             attachment::{
@@ -25,6 +21,10 @@ use silverhand_backend_core::{
             channel_lifecycle::{ChannelLifecyclePlacement, ChannelLifecycleRow},
         },
     },
+    foundation::blob_store::{BlobStorageKey, StorageKind, StoredBlob},
+    foundation::identity::{AgentId, ConversationId, UserId},
+    foundation::persistence::PersistenceFailure,
+    foundation::wire_number::JsSafeInteger,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};
 use thiserror::Error;
@@ -439,7 +439,7 @@ struct DecodedListRow {
 impl DecodedListRow {
     fn project(
         self,
-        author: Option<silverhand_backend_core::messaging::MessageAuthor>,
+        author: Option<silverhand_backend_core::conversation_messaging::messaging::MessageAuthor>,
         requested: &ConversationId,
     ) -> Result<AttachmentListItem, AttachmentReadStoreError> {
         let source = AttachmentListSource::projected_safe(

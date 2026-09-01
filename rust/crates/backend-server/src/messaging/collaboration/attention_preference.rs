@@ -13,14 +13,14 @@ use axum::{
 };
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId, WorkspaceId},
-    messaging::collaboration::attention_preference::{
+    conversation_messaging::messaging::collaboration::attention_preference::{
         AttentionPreferenceAftermath, AttentionPreferencePort, ChannelAttentionAdmissionRefusal,
         ChannelAttentionCommit, ChannelAttentionMode, ChannelAttentionWriteRefusal,
         WorkspaceAttentionAdmissionRefusal, WorkspaceAttentionCommit,
         WorkspaceAttentionReadRefusal, WorkspaceAttentionWriteRefusal,
         commit_channel_attention_preference, commit_workspace_attention_preference,
     },
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
 };
 use std::sync::Arc;
 
@@ -273,7 +273,7 @@ fn workspace_success(value: &impl WorkspaceAttentionCommit) -> Response {
     Json(json!({"workspace_id":value.workspace().as_str(),"muted":value.muted()})).into_response()
 }
 fn report_effect(
-    error:Option<&silverhand_backend_core::messaging::collaboration::attention_preference::AttentionPreferenceEffectFailure>,
+    error:Option<&silverhand_backend_core::conversation_messaging::messaging::collaboration::attention_preference::AttentionPreferenceEffectFailure>,
 ) {
     if let Some(error) = error {
         tracing::error!(error_chain=%crate::error::describe(error),"attention preference effect failed");

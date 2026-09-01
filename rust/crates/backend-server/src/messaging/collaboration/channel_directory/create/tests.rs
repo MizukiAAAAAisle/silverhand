@@ -15,8 +15,7 @@ use axum::{
 use futures_util::stream;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId, WorkspaceId},
-    messaging::{
+    conversation_messaging::messaging::{
         SendClock, SendEntropy,
         collaboration::channel_directory::{
             ChannelCreationPublicationFailure, ChannelDirectoryRow, ChannelStatus,
@@ -27,6 +26,7 @@ use silverhand_backend_core::{
         conversation_title::CanonicalConversationTitle,
         environment::EnvironmentUnavailable,
     },
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor};
@@ -110,7 +110,7 @@ struct PublishDriver;
 impl HumanChannelCreateAftermath for Effects {
     async fn workspace_channels_changed(
         &self,
-        _: &silverhand_backend_core::messaging::collaboration::channel_directory::BoundHumanChannelCreation,
+        _: &silverhand_backend_core::conversation_messaging::messaging::collaboration::channel_directory::BoundHumanChannelCreation,
     ) -> Result<(), ChannelCreationPublicationFailure> {
         self.events.lock().unwrap().push("publish");
         if self.fail {
@@ -124,7 +124,7 @@ impl HumanChannelCreateAftermath for Effects {
 
     fn title_address_taken(
         &self,
-        _: &silverhand_backend_core::messaging::collaboration::channel_directory::BoundHumanChannelCreation,
+        _: &silverhand_backend_core::conversation_messaging::messaging::collaboration::channel_directory::BoundHumanChannelCreation,
     ) {
         self.events.lock().unwrap().push("audit");
     }

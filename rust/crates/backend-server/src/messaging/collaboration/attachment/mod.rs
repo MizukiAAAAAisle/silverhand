@@ -36,11 +36,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
-    foundation::identity::{AgentId, ConversationId, UserId},
-    foundation::wire_number::JsSafeInteger,
-    foundation::wire_text,
-    messaging::{
+    conversation_messaging::messaging::{
         AttachmentId, SendClock, SendEntropy,
         collaboration::attachment::{
             AttachmentChangedFact, AttachmentChangedPublisher, AttachmentContentType,
@@ -57,6 +53,10 @@ use silverhand_backend_core::{
         },
         environment::EnvironmentUnavailable,
     },
+    foundation::blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
+    foundation::identity::{AgentId, ConversationId, UserId},
+    foundation::wire_number::JsSafeInteger,
+    foundation::wire_text,
 };
 use silverhand_backend_filesystem::blob_store::{LocalBlobAliasOutcome, LocalBlobAliasStore};
 
@@ -1035,7 +1035,7 @@ fn list_success(page: &BoundAttachmentListPage) -> Response {
 }
 
 fn list_item_json(
-    item: &silverhand_backend_core::messaging::collaboration::attachment::AttachmentListItem,
+    item: &silverhand_backend_core::conversation_messaging::messaging::collaboration::attachment::AttachmentListItem,
 ) -> Value {
     let source = item.source();
     let (from_kind, from_user_id, from_agent_id) = actor_wire(source.actor());

@@ -3,16 +3,16 @@
 use std::collections::BTreeMap;
 
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    messaging::collaboration::message_unread::{
+    conversation_messaging::messaging::collaboration::message_unread::{
         ConversationMessageUnread, ConversationMessageUnreadReadPort,
         ConversationMessageUnreadRefusal, LatestUnreadPointer, NonZeroUnreadCount, UnreadCount,
         UnreadRollup, ViewerMessageUnreadSummary, ViewerMessageUnreadSummaryReadPort,
         WorkspaceConversationUnread, WorkspaceMessageUnread, WorkspaceMessageUnreadReadPort,
         WorkspaceMessageUnreadRefusal, WorkspaceUnreadTotal,
     },
-    messaging::{MessageId, MessageSeq, ThreadRootId},
+    conversation_messaging::messaging::{MessageId, MessageSeq, ThreadRootId},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use thiserror::Error;

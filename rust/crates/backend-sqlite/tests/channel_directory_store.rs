@@ -1,10 +1,10 @@
 use silverhand_backend_core::{
-    foundation::identity::{UserId, WorkspaceId},
-    messaging::collaboration::channel_directory::{
+    conversation_messaging::messaging::collaboration::channel_directory::{
         ActiveChannelDirectoryPort, ArchivedSince, ArchivedWorkspaceChannelDirectoryPort,
         GlobalArchivedChannelDirectoryPort, GlobalArchivedDirectoryRefusal,
         WorkspaceDirectoryRefusal,
     },
+    foundation::identity::{UserId, WorkspaceId},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection};
@@ -52,7 +52,7 @@ async fn seed(path: &std::path::Path) {
 }
 
 fn ids(
-    rows: &[silverhand_backend_core::messaging::collaboration::channel_directory::ChannelDirectoryRow],
+    rows: &[silverhand_backend_core::conversation_messaging::messaging::collaboration::channel_directory::ChannelDirectoryRow],
 ) -> Vec<&str> {
     rows.iter().map(|row| row.conversation().as_str()).collect()
 }

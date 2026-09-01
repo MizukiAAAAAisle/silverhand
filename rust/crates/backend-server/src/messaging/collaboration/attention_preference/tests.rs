@@ -4,7 +4,7 @@ use axum::{
     http::{Method, Request},
 };
 use futures_util::stream;
-use silverhand_backend_core::messaging::collaboration::attention_preference::{
+use silverhand_backend_core::conversation_messaging::messaging::collaboration::attention_preference::{
     AttentionPreferenceEffectFailure, WorkspaceAttentionPreference,
 };
 use std::{

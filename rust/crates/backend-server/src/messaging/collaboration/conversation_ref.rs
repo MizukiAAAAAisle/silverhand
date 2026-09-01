@@ -11,10 +11,10 @@ use axum::{
 };
 use serde_json::json;
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::collaboration::conversation_ref::{
+    conversation_messaging::messaging::collaboration::conversation_ref::{
         BoundWorkspaceConversationRef, ConversationRefReadPort, ConversationRefRefusal,
     },
+    foundation::identity::{ConversationId, UserId},
 };
 
 pub const CONVERSATION_REF_PATH: &str = "/api/conversations/{id}/ref";
@@ -101,11 +101,11 @@ mod tests {
     };
     use serde_json::Value;
     use silverhand_backend_core::{
-        foundation::identity::{ConversationId, UserId, WorkspaceId},
-        messaging::collaboration::conversation_ref::{
+        conversation_messaging::messaging::collaboration::conversation_ref::{
             ConversationRefReadPort, ConversationRefRefusal, ConversationRosterPolicy,
             WorkspaceConversationRef,
         },
+        foundation::identity::{ConversationId, UserId, WorkspaceId},
     };
     use silverhand_backend_sqlite::messaging::MessagingStore;
     use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};

@@ -10,11 +10,11 @@ use axum::{
 use serde::Serialize;
 use serde_json::Value;
 use silverhand_backend_core::{
-    direct_pair_read::{
+    conversation_messaging::direct_pair_read::{
         DirectPairCounterpart, DirectPairList, DirectPairListItem, DirectPairReadModel,
     },
+    conversation_messaging::messaging::{ActiveAuthor, PrincipalIdentity, PrincipalKind},
     foundation::identity::UserId,
-    messaging::{ActiveAuthor, PrincipalIdentity, PrincipalKind},
 };
 
 use crate::{error, messaging::author_wire::principal_avatar_url};
@@ -161,12 +161,12 @@ fn principal_kind(identity: &PrincipalIdentity) -> &'static str {
 mod tests {
     use serde_json::Value;
     use silverhand_backend_core::{
-        direct_pair_read::{
+        conversation_messaging::direct_pair_read::{
             DirectPairCounterpart, DirectPairList, DirectPairListItem, DirectPairUnreadCount,
         },
+        conversation_messaging::messaging::PrincipalIdentity,
         foundation::identity::{AgentId, ConversationId, UserId},
         identity_access::agents::runtime::RuntimeKind,
-        messaging::PrincipalIdentity,
     };
 
     use super::DirectPairListResponse;

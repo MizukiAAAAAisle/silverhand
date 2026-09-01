@@ -9,14 +9,14 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::{
+    conversation_messaging::messaging::{
         MessageAuthor, MessageId, MessageSeq, ThreadRootId,
         collaboration::conversation_threads::{
             ConversationThreadsPage, ConversationThreadsReadPort, ConversationThreadsRefusal,
             SelectedConversationThread, ThreadListQuery,
         },
     },
+    foundation::identity::{ConversationId, UserId},
 };
 use tower::ServiceExt;
 

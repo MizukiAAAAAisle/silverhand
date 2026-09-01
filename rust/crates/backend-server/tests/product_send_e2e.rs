@@ -48,15 +48,15 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
-    host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
-    messaging::{
+    conversation_messaging::messaging::{
         ActiveAuthor, AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess,
         ChannelAccessRefusal, DirectLineAuthority, DirectPairAllocation, DirectPairOpenedFact,
         DirectPairOpenedPort, MessageAuthor, PrincipalKind, ResolvedStream, SendCapability,
         SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, TargetAddress,
         TargetAddressRefusalPort, TargetAddressRefusalReport, ThreadRootId,
     },
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
+    host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
 use silverhand_backend_server::messaging::{
     TargetAddressRefusalLog,

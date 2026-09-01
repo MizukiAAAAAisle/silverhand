@@ -34,13 +34,13 @@ use axum::{
 use serde::Serialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, Principal, UserId},
-    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
-    identity_access::capability::agent_view::{VisibleStages, can_view_agent},
-    messaging::collaboration::{
+    conversation_messaging::messaging::collaboration::{
         ClearSessionProviderRefusal, ClearSessionRefusal, RuntimeControlAdmission,
         RuntimeControlAdmissionRefusal, RuntimeControlPort, clear_agent_session,
     },
+    foundation::identity::{AgentId, Principal, UserId},
+    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
+    identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 
 use crate::error;
@@ -261,16 +261,16 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        foundation::identity::{AgentId, UserId},
-        foundation::persistence::PersistenceFailure,
-        identity_access::agent_lifecycle::MaterializationStatus,
-        identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
-        messaging::collaboration::{
+        conversation_messaging::messaging::collaboration::{
             ClearSessionOutcome, ClearSessionProviderRefusal, CliSessionId, HardStopRuntimeOutcome,
             HardStopRuntimeProviderRefusal, RuntimeControlAdmission, RuntimeControlAdmissionScope,
             RuntimePlacementRefusal, RuntimeSeatTarget, RuntimeStartTarget, StartRuntimeOutcome,
             StartRuntimeProviderRefusal,
         },
+        foundation::identity::{AgentId, UserId},
+        foundation::persistence::PersistenceFailure,
+        identity_access::agent_lifecycle::MaterializationStatus,
+        identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
     };
     use tower::ServiceExt;
 

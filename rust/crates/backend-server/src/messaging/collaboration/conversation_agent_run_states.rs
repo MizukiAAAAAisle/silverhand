@@ -16,8 +16,10 @@ use axum::{
 };
 use serde_json::json;
 use silverhand_backend_core::{
+    conversation_messaging::messaging::collaboration::channel_lifecycle::{
+        ChannelDetailReadPort, ChannelDetailRefusal,
+    },
     foundation::identity::{AgentId, ConversationId, UserId},
-    messaging::collaboration::channel_lifecycle::{ChannelDetailReadPort, ChannelDetailRefusal},
 };
 
 use crate::{
@@ -31,8 +33,8 @@ use crate::{
 impl<C, D, H> DaemonDeliveryRuntime<C, D, H>
 where
     C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
-    D: silverhand_backend_core::runtime_delivery::RuntimeDispatchReadPort
-        + silverhand_backend_core::runtime_delivery::RuntimeInboxCustodyPort
+    D: silverhand_backend_core::conversation_messaging::runtime_delivery::RuntimeDispatchReadPort
+        + silverhand_backend_core::conversation_messaging::runtime_delivery::RuntimeInboxCustodyPort
         + silverhand_backend_core::host_runtime::runtime_event::DaemonEventDurablePort,
     H: silverhand_backend_core::host_runtime::custody::HostCredentialLookup,
 {

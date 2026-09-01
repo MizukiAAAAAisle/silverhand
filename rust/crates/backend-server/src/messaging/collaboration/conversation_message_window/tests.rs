@@ -11,7 +11,7 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
-use silverhand_backend_core::messaging::collaboration::conversation_message_window::{
+use silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_message_window::{
     ConversationMessageWindow, MessageWindowAudienceFact, MessageWindowHead,
     ResolvedMessageWindowStream, WindowBoundaryDirection, WindowBoundaryFact,
 };

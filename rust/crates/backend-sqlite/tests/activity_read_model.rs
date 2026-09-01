@@ -1,8 +1,8 @@
 use silverhand_backend_core::{
-    foundation::identity::{UserId, WorkspaceId},
-    messaging::collaboration::activity::{
+    conversation_messaging::messaging::collaboration::activity::{
         ActivityLocation, ActivityReadModel, ActivitySalience, ActivitySource,
     },
+    foundation::identity::{UserId, WorkspaceId},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::Connection;

@@ -2,9 +2,7 @@
 
 use serde_json::json;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    foundation::scope_event::EventScope,
-    messaging::{
+    conversation_messaging::messaging::{
         CommittedMessageView, DirectPairOpenedFact, DirectPairOpenedPort, PrincipalIdentity,
         collaboration::{
             attachment::{AttachmentChangedFact, AttachmentChangedPublisher},
@@ -28,6 +26,8 @@ use silverhand_backend_core::{
         },
         unread::{LatestUnread as CoreLatestUnread, UnreadAudience, UnreadReadModel, ViewerUnread},
     },
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::scope_event::EventScope,
 };
 
 use crate::{

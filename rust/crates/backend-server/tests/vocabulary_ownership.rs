@@ -384,7 +384,7 @@ fn the_notification_identity_has_exactly_one_declaration() {
     assert_eq!(
         declarations_of("NotificationId"),
         vec![(
-            "crates/backend-core/src/messaging/identity.rs".to_owned(),
+            "crates/backend-core/src/conversation_messaging/messaging/identity.rs".to_owned(),
             "struct"
         )],
         "the notification identity must be declared once, where it is minted"
@@ -400,7 +400,7 @@ fn the_stale_resolution_refusal_has_exactly_one_declaration() {
     assert_eq!(
         declarations_of("StaleMessageResolutionAdmissionRefusal"),
         vec![(
-            "crates/backend-core/src/messaging/collaboration/stale_message_resolution.rs"
+            "crates/backend-core/src/conversation_messaging/messaging/collaboration/stale_message_resolution.rs"
                 .to_owned(),
             "enum"
         )],
@@ -438,7 +438,10 @@ fn no_public_use_opens_a_second_path_to_a_watched_name() {
     // public path while every entry below stayed exactly as it is.
     assert_eq!(
         (
-            declares_public_module("crates/backend-core/src/messaging/mod.rs", "identity"),
+            declares_public_module(
+                "crates/backend-core/src/conversation_messaging/messaging/mod.rs",
+                "identity"
+            ),
             declares_public_module(
                 "crates/backend-core/src/identity_access/agents/mod.rs",
                 "runtime"
@@ -462,9 +465,10 @@ fn no_public_use_opens_a_second_path_to_a_watched_name() {
         }
     }
 
-    let attachment = "crates/backend-core/src/messaging/collaboration/attachment/mod.rs";
-    let directory = "crates/backend-core/src/messaging/collaboration/channel_directory/mod.rs";
-    let lifecycle = "crates/backend-core/src/messaging/collaboration/channel_lifecycle.rs";
+    let attachment =
+        "crates/backend-core/src/conversation_messaging/messaging/collaboration/attachment/mod.rs";
+    let directory = "crates/backend-core/src/conversation_messaging/messaging/collaboration/channel_directory/mod.rs";
+    let lifecycle = "crates/backend-core/src/conversation_messaging/messaging/collaboration/channel_lifecycle.rs";
     assert_eq!(
         second_paths,
         vec![
@@ -486,7 +490,7 @@ fn no_public_use_opens_a_second_path_to_a_watched_name() {
                 PublicPath::Glob("mutation::*".to_owned())
             ),
             (
-                "crates/backend-core/src/messaging/mod.rs".to_owned(),
+                "crates/backend-core/src/conversation_messaging/messaging/mod.rs".to_owned(),
                 PublicPath::Name("NotificationId".to_owned())
             ),
         ],
@@ -744,8 +748,8 @@ fn the_only_sources_that_are_not_modules_are_named() {
     assert_eq!(
         fragments,
         vec![
-            "crates/backend-core/src/messaging/schedule/recurrence_ts_fixture.rs".to_owned(),
-            "crates/backend-core/src/messaging/schedule/settlement_ts_fixture.rs".to_owned(),
+            "crates/backend-core/src/conversation_messaging/messaging/schedule/recurrence_ts_fixture.rs".to_owned(),
+            "crates/backend-core/src/conversation_messaging/messaging/schedule/settlement_ts_fixture.rs".to_owned(),
         ],
         "these sources are read by identifier rather than by declaration, so the set \
          has to stay the two TS-signed expression fixtures"

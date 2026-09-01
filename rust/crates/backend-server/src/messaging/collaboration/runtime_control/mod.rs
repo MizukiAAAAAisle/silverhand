@@ -25,12 +25,12 @@ use axum::{
 use serde::Deserialize;
 use serde_json::Value;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId},
-    messaging::collaboration::{
+    conversation_messaging::messaging::collaboration::{
         ClearSessionRefusal, HardStopRuntimeRefusal, RuntimeControlAdmission, RuntimeControlPort,
         RuntimeStartTarget, StartRuntimeRefusal, check_runtime_control_admission,
         clear_conversation_session, hard_stop_runtime, start_runtime,
     },
+    foundation::identity::{AgentId, ConversationId, UserId},
 };
 
 use wire::{

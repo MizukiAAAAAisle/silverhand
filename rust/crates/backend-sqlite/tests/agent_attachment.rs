@@ -1,13 +1,7 @@
 use std::{error::Error, time::Duration};
 
 use silverhand_backend_core::{
-    foundation::blob_store::{BlobStorageKey, StorageKind, StoredBlob},
-    foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
-    foundation::persistence::PersistenceFailure,
-    host_runtime::runtime_credential::{
-        RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
-    },
-    messaging::{
+    conversation_messaging::messaging::{
         AttachmentId, ResolvedStream,
         collaboration::attachment::{
             AgentAttachmentContentUpdateCommand, AgentAttachmentContentUpdateRefusal,
@@ -18,6 +12,12 @@ use silverhand_backend_core::{
             AgentAttachmentUpdateAdmissionPort, AgentAttachmentUpdateAdmissionRefusal,
             AgentAttachmentUploadAdmissionPort, AttachmentContentType, AttachmentFilename,
         },
+    },
+    foundation::blob_store::{BlobStorageKey, StorageKind, StoredBlob},
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
+    foundation::persistence::PersistenceFailure,
+    host_runtime::runtime_credential::{
+        RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
 };
 use silverhand_backend_sqlite::messaging::{
@@ -432,13 +432,13 @@ async fn agent_home_and_direct_pair_use_their_placement_authorities_without_work
             .admit_upload(&agent("a"), &conversation("pair"))
             .await
             .unwrap(),
-        Err(silverhand_backend_core::messaging::collaboration::attachment::AgentAttachmentUploadRefusal::NotFound)
+        Err(silverhand_backend_core::conversation_messaging::messaging::collaboration::attachment::AgentAttachmentUploadRefusal::NotFound)
     );
     assert_eq!(
         store
             .admit_upload(&agent("b"), &conversation("home-channel"))
             .await
             .unwrap(),
-        Err(silverhand_backend_core::messaging::collaboration::attachment::AgentAttachmentUploadRefusal::NotFound)
+        Err(silverhand_backend_core::conversation_messaging::messaging::collaboration::attachment::AgentAttachmentUploadRefusal::NotFound)
     );
 }

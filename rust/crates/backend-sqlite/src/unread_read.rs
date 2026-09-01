@@ -1,5 +1,5 @@
 //! SQLite adapter for the unread read model — the query
-//! [`UnreadPublication`](silverhand_backend_core::messaging::post_commit::UnreadPublication)
+//! [`UnreadPublication`](silverhand_backend_core::conversation_messaging::messaging::post_commit::UnreadPublication)
 //! runs before it emits a single frame.
 //!
 //! This store CONSUMES the product database. It creates no table, runs no migrator,
@@ -21,12 +21,12 @@
 use std::{collections::HashMap, path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         MessageId, ThreadRootId,
         unread::{LatestUnread, UnreadAudience, UnreadReadModel, ViewerUnread},
     },
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,

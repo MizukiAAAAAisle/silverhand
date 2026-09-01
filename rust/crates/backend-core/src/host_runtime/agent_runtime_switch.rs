@@ -45,6 +45,9 @@ use std::future::Future;
 use futures_util::future::join_all;
 
 use crate::{
+    conversation_messaging::messaging::collaboration::{
+        RuntimeControlPort, RuntimeSeatTarget, RuntimeStartTarget,
+    },
     foundation::identity::{AgentId, ConversationId, HostId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
@@ -64,7 +67,6 @@ use crate::{
         runtime::RuntimeKind, runtime_catalog::SELECTABLE_RUNTIMES,
         session_scope::AgentSessionScope,
     },
-    messaging::collaboration::{RuntimeControlPort, RuntimeSeatTarget, RuntimeStartTarget},
 };
 
 /// The validated runtime-switch request. Tuning legality (model/effort/fast-mode against the
@@ -830,6 +832,10 @@ mod tests {
     };
 
     use crate::{
+        conversation_messaging::messaging::collaboration::{
+            ClearSessionOutcome, ClearSessionProviderRefusal, RuntimePlacementRefusal,
+            RuntimeSeatTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal,
+        },
         foundation::identity::{DaemonInstanceId, UserId},
         host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
         host_runtime::runtime_transition::{
@@ -837,10 +843,6 @@ mod tests {
             RuntimeTransitionInboxReclaimRecord, RuntimeTransitionInboxReclaimRow,
             RuntimeTransitionLockRow, RuntimeTransitionSeatRow,
             RuntimeTransitionSeatSnapshotRecord, RuntimeTransitionSeatSnapshotRow,
-        },
-        messaging::collaboration::{
-            ClearSessionOutcome, ClearSessionProviderRefusal, RuntimePlacementRefusal,
-            RuntimeSeatTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal,
         },
     };
 
@@ -1338,11 +1340,11 @@ mod tests {
             _target: &RuntimeSeatTarget,
         ) -> Result<
             Result<
-                crate::messaging::collaboration::HardStopRuntimeOutcome,
-                crate::messaging::collaboration::HardStopRuntimeProviderRefusal,
+                crate::conversation_messaging::messaging::collaboration::HardStopRuntimeOutcome,
+                crate::conversation_messaging::messaging::collaboration::HardStopRuntimeProviderRefusal,
             >,
             Self::Error,
-        > {
+        >{
             unreachable!("switch saga never hard-stops")
         }
         async fn clear_session(
@@ -1473,11 +1475,11 @@ mod tests {
             _target: &RuntimeSeatTarget,
         ) -> Result<
             Result<
-                crate::messaging::collaboration::HardStopRuntimeOutcome,
-                crate::messaging::collaboration::HardStopRuntimeProviderRefusal,
+                crate::conversation_messaging::messaging::collaboration::HardStopRuntimeOutcome,
+                crate::conversation_messaging::messaging::collaboration::HardStopRuntimeProviderRefusal,
             >,
             Self::Error,
-        > {
+        >{
             unreachable!("switch saga never hard-stops")
         }
         async fn clear_session(
@@ -2301,11 +2303,11 @@ mod tests {
                 _target: &RuntimeSeatTarget,
             ) -> Result<
                 Result<
-                    crate::messaging::collaboration::HardStopRuntimeOutcome,
-                    crate::messaging::collaboration::HardStopRuntimeProviderRefusal,
+                    crate::conversation_messaging::messaging::collaboration::HardStopRuntimeOutcome,
+                    crate::conversation_messaging::messaging::collaboration::HardStopRuntimeProviderRefusal,
                 >,
                 Self::Error,
-            > {
+            >{
                 unreachable!()
             }
             async fn clear_session(

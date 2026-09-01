@@ -1269,8 +1269,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_agent_audit_facade_projects_each_variant_addressably_and_persists() {
+        use silverhand_backend_core::conversation_messaging::messaging::AttachmentId;
         use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, UserId};
-        use silverhand_backend_core::messaging::AttachmentId;
 
         let dir = tempfile::tempdir().unwrap();
         let sink = AgentAuditFileSink::open(

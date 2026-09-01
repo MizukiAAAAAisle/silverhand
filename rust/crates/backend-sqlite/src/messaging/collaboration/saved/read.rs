@@ -1,7 +1,5 @@
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         AttachmentId, FromKind, MessageId, MessageSeq, PrincipalIdentity, ThreadRootId,
         attachments::AttachmentSnapshot,
         collaboration::saved::{
@@ -11,6 +9,8 @@ use silverhand_backend_core::{
         },
         task::{TaskId, TaskNumber, TaskStatus, TaskTitle},
     },
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{QueryBuilder, Row, Sqlite, sqlite::SqliteRow};
 
@@ -140,7 +140,7 @@ fn author_evidence(row: &SqliteRow) -> Result<AuthorEvidence, PersistenceFailure
 
 fn decode_entry(
     row: &SqliteRow,
-    author: Option<silverhand_backend_core::messaging::MessageAuthor>,
+    author: Option<silverhand_backend_core::conversation_messaging::messaging::MessageAuthor>,
 ) -> Result<SavedEntry, PersistenceFailure> {
     let source_viewer = UserId::parse(
         row.try_get::<String, _>("saved_user_id")

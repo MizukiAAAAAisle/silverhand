@@ -16,8 +16,7 @@ use axum::{
 };
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{UserId, WorkspaceId},
-    messaging::{
+    conversation_messaging::messaging::{
         collaboration::channel_directory::{
             BoundHumanChannelCreation, ChannelVisibility, HumanChannelCreateAftermath,
             HumanChannelCreatePort, HumanChannelCreateRefusal, HumanChannelCreateRequest,
@@ -25,6 +24,7 @@ use silverhand_backend_core::{
         },
         conversation_title::{CanonicalConversationTitle, ConversationTitleIssue},
     },
+    foundation::identity::{UserId, WorkspaceId},
 };
 
 use super::{ACTIVE_PATH, error, identity_channel, internal};

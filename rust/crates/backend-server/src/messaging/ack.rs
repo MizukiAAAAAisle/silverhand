@@ -23,7 +23,7 @@
 //! appends its sender-only diagnostic on top of it.
 
 use serde_json::Value;
-use silverhand_backend_core::messaging::SendMessageOutcome;
+use silverhand_backend_core::conversation_messaging::messaging::SendMessageOutcome;
 
 use super::{
     message_wire::message_event_payload,

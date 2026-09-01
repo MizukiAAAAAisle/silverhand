@@ -12,6 +12,10 @@ use std::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    conversation_messaging::runtime_delivery::{
+        DeliveryLeaseOwner, InboxDeliveryId, RuntimeDeliveryFailureReason, RuntimeDispatchReadPort,
+        RuntimeDispatchTarget, RuntimeInboxCustodyPort,
+    },
     foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
@@ -20,10 +24,6 @@ use silverhand_backend_core::{
     },
     host_runtime::runtime_event::{
         CommitRuntimeConsumed, DaemonEventDurablePort, RuntimeEventAdmission,
-    },
-    runtime_delivery::{
-        DeliveryLeaseOwner, InboxDeliveryId, RuntimeDeliveryFailureReason, RuntimeDispatchReadPort,
-        RuntimeDispatchTarget, RuntimeInboxCustodyPort,
     },
 };
 
@@ -725,7 +725,7 @@ where
         match result {
             Ok(result)
                 if result.disposition()
-                    == silverhand_backend_core::runtime_delivery::InboxSettlementDisposition::Applied =>
+                    == silverhand_backend_core::conversation_messaging::runtime_delivery::InboxSettlementDisposition::Applied =>
             {
                 if let Some(activity_id) = result.activity_id()
                     && let Err(cause) = self.events.complete_consumed(

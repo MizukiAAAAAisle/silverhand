@@ -10,14 +10,14 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{DaemonInstanceId, UserId},
-    host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
-    messaging::{
+    conversation_messaging::messaging::{
         MessageId,
         collaboration::reaction::{
             ReactionAftermath, ReactionChangedFact, ReactionReadPort, Reactor,
         },
     },
+    foundation::identity::{DaemonInstanceId, UserId},
+    host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection};
@@ -68,8 +68,8 @@ impl ReactionAftermath for Events {
         fact: &ReactionChangedFact,
     ) -> Result<
         (),
-        silverhand_backend_core::messaging::collaboration::reaction::ReactionPublicationFailure,
-    > {
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionPublicationFailure,
+    >{
         self.0.lock().unwrap().push(fact.clone());
         Ok(())
     }
@@ -84,10 +84,10 @@ impl ReactionAftermath for FailingEvents {
         _fact: &ReactionChangedFact,
     ) -> Result<
         (),
-        silverhand_backend_core::messaging::collaboration::reaction::ReactionPublicationFailure,
-    > {
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionPublicationFailure,
+    >{
         Err(
-            silverhand_backend_core::messaging::collaboration::reaction::ReactionPublicationFailure::from_source(
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionPublicationFailure::from_source(
                 io::Error::other("scope event hub failed"),
             ),
         )
@@ -731,7 +731,7 @@ async fn production_routes_consume_the_shared_fixture_cases_and_every_case_is_ac
         .find(|fact| {
             fact.reactor().kind() == "agent"
                 && fact.change()
-                    == silverhand_backend_core::messaging::collaboration::reaction::ReactionChange::Remove
+                    == silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionChange::Remove
         })
         .unwrap()
         .clone();
@@ -1081,17 +1081,17 @@ async fn publication_failure_is_audited_once_without_compensating_the_committed_
 #[derive(Clone, Copy)]
 struct NeverReached;
 
-impl silverhand_backend_core::messaging::collaboration::reaction::ReactionMutationPort
+impl silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionMutationPort
     for NeverReached
 {
     type Error = std::io::Error;
     async fn mutate(
         &self,
-        _mutation: silverhand_backend_core::messaging::collaboration::reaction::ReactionMutation,
+        _mutation: silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionMutation,
     ) -> Result<
         Result<
-            silverhand_backend_core::messaging::collaboration::reaction::CommittedReaction,
-            silverhand_backend_core::messaging::collaboration::reaction::ReactionMutationRefusal,
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::CommittedReaction,
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionMutationRefusal,
         >,
         Self::Error,
     > {
@@ -1099,7 +1099,7 @@ impl silverhand_backend_core::messaging::collaboration::reaction::ReactionMutati
     }
 }
 
-impl silverhand_backend_core::messaging::collaboration::reaction::ReactionReadPort
+impl silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionReadPort
     for NeverReached
 {
     type Error = std::io::Error;
@@ -1109,8 +1109,8 @@ impl silverhand_backend_core::messaging::collaboration::reaction::ReactionReadPo
         _message: &MessageId,
     ) -> Result<
         Result<
-            Vec<silverhand_backend_core::messaging::collaboration::reaction::ReactionDetail>,
-            silverhand_backend_core::messaging::collaboration::reaction::ReactionReadRefusal,
+            Vec<silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionDetail>,
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionReadRefusal,
         >,
         Self::Error,
     > {
@@ -1123,7 +1123,7 @@ impl silverhand_backend_core::messaging::collaboration::reaction::ReactionReadPo
     ) -> Result<
         Vec<(
             MessageId,
-            Vec<silverhand_backend_core::messaging::collaboration::reaction::ReactionAggregate>,
+            Vec<silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionAggregate>,
         )>,
         Self::Error,
     > {
@@ -1141,8 +1141,8 @@ impl ReactionAftermath for NeverAnnounced {
         _fact: &ReactionChangedFact,
     ) -> Result<
         (),
-        silverhand_backend_core::messaging::collaboration::reaction::ReactionPublicationFailure,
-    > {
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionPublicationFailure,
+    >{
         panic!("a rejected admission body published a reaction-changed event");
     }
 }

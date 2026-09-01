@@ -11,11 +11,11 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::collaboration::conversation_agent_runtime::{
+    conversation_messaging::messaging::collaboration::conversation_agent_runtime::{
         BoundConversationAgentRuntimeProjection, ConversationAgentRuntimeReadPort,
         ConversationAgentRuntimeRefusal,
     },
+    foundation::identity::{ConversationId, UserId},
 };
 
 pub const CONVERSATION_AGENT_RUNTIME_PATH: &str = "/api/channels/{id}/agent-runtime";
@@ -115,9 +115,7 @@ mod tests {
         http::Request,
     };
     use silverhand_backend_core::{
-        foundation::identity::{AgentId, ConversationId, UserId},
-        host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
-        messaging::collaboration::{
+        conversation_messaging::messaging::collaboration::{
             CliSessionId,
             conversation_agent_runtime::{
                 ConversationAgentRuntimeProjection, ConversationAgentRuntimeReadPort,
@@ -125,6 +123,8 @@ mod tests {
                 RuntimeProjectionStatus,
             },
         },
+        foundation::identity::{AgentId, ConversationId, UserId},
+        host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
     };
     use silverhand_backend_sqlite::messaging::MessagingStore;
     use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};

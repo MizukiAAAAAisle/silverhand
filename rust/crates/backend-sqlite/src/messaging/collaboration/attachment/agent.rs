@@ -6,11 +6,7 @@
 //! request command is never reflected back as an authority witness.
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    foundation::wire_number::JsSafeInteger,
-    identity_access::access::Capability,
-    messaging::{
+    conversation_messaging::messaging::{
         AttachmentId, PrincipalIdentity,
         collaboration::{
             attachment::{
@@ -28,6 +24,10 @@ use silverhand_backend_core::{
             channel_lifecycle::ChannelLifecyclePlacement,
         },
     },
+    foundation::identity::{AgentId, ConversationId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
+    foundation::wire_number::JsSafeInteger,
+    identity_access::access::Capability,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;

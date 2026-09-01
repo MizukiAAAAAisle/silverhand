@@ -4,11 +4,11 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::{Value, json};
-use silverhand_backend_core::foundation::identity::{AgentId, ConversationId};
-use silverhand_backend_core::messaging::collaboration::{
+use silverhand_backend_core::conversation_messaging::messaging::collaboration::{
     ClearSessionOutcome, ClearSessionProviderRefusal, HardStopRuntimeProviderRefusal,
     RuntimeControlAdmissionRefusal, RuntimePlacementRefusal, StartRuntimeProviderRefusal,
 };
+use silverhand_backend_core::foundation::identity::{AgentId, ConversationId};
 
 const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
 

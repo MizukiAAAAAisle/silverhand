@@ -13,7 +13,7 @@
 //! storage key was never an avatar — so this layer only turns a revision into a URL.
 
 use serde_json::{Value, json};
-use silverhand_backend_core::messaging::{
+use silverhand_backend_core::conversation_messaging::messaging::{
     ActiveAuthor, AvatarRevision, MessageAuthor, PrincipalKind,
 };
 
@@ -99,9 +99,9 @@ pub(crate) fn author_dto(author: &MessageAuthor) -> Value {
 #[cfg(test)]
 mod tests {
     use silverhand_backend_core::{
+        conversation_messaging::messaging::{AvatarRevision, MessageAuthor, PrincipalIdentity},
         foundation::identity::{AgentId, UserId},
         identity_access::agents::runtime::RuntimeKind,
-        messaging::{AvatarRevision, MessageAuthor, PrincipalIdentity},
     };
 
     use super::*;

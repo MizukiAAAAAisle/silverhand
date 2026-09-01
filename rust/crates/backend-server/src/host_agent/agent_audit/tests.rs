@@ -30,7 +30,17 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    direct_pair_read::DirectPairCounterpart,
+    conversation_messaging::direct_pair_read::DirectPairCounterpart,
+    conversation_messaging::messaging::{
+        AttachmentId,
+        collaboration::{
+            attachment::{
+                AttachmentContentType, AttachmentCreator, AttachmentFilename, AttachmentRecord,
+            },
+            conversation_message_window::ConversationMessageWindowRequest,
+            conversation_ref::ConversationRosterPolicy,
+        },
+    },
     foundation::blob_store::{
         BlobDeleteOutcome, BlobNamespace, BlobRead, BlobReadOutcome, BlobStorageKey, BlobStore,
         StorageKind, StoredBlob,
@@ -44,16 +54,6 @@ use silverhand_backend_core::{
     },
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_audit::AuditedConversation,
-    messaging::{
-        AttachmentId,
-        collaboration::{
-            attachment::{
-                AttachmentContentType, AttachmentCreator, AttachmentFilename, AttachmentRecord,
-            },
-            conversation_message_window::ConversationMessageWindowRequest,
-            conversation_ref::ConversationRosterPolicy,
-        },
-    },
 };
 use tower::ServiceExt;
 

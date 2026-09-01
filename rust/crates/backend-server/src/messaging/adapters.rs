@@ -16,14 +16,14 @@
 //! test rather than the happy paths.
 
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    host_runtime::runtime_credential::RuntimePrincipal,
-    messaging::{
+    conversation_messaging::messaging::{
         AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, DirectLineAuthority,
         DirectPairAllocation, ReferencePositions, ResolvedStream, SendActor, SendCapability,
         SendDestination, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
         TargetAddress,
     },
+    foundation::identity::{ConversationId, UserId},
+    host_runtime::runtime_credential::RuntimePrincipal,
 };
 
 use super::{
@@ -284,15 +284,15 @@ mod tests {
         },
     };
 
-    use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-    use silverhand_backend_core::messaging::{
+    use silverhand_backend_core::conversation_messaging::messaging::{
         AddressedPrincipals, ConversationRefusal, MessageContent, MessageId, SendMessage,
     };
+    use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use silverhand_backend_core::{
+        conversation_messaging::messaging::ThreadRootId,
         foundation::cli_invoke_audit::CliStaleResolutionReason,
         foundation::identity::{AgentId, DaemonInstanceId},
         host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration},
-        messaging::ThreadRootId,
     };
 
     use super::*;

@@ -1,10 +1,10 @@
 use crate::messaging::{HostEnvironment, MessagingStore};
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         MessageId, NotificationId, SendClock, ThreadRootId, collaboration::notification::*,
     },
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 use std::num::NonZeroU64;
@@ -37,7 +37,10 @@ pub enum NotificationStoreError {
     #[error("stored notification payload is not a JSON object")]
     MalformedPayload,
     #[error("clock failed")]
-    Clock(#[source] silverhand_backend_core::messaging::EnvironmentUnavailable),
+    Clock(
+        #[source]
+        silverhand_backend_core::conversation_messaging::messaging::EnvironmentUnavailable,
+    ),
 }
 impl From<NotificationStoreError> for PersistenceFailure {
     fn from(value: NotificationStoreError) -> Self {

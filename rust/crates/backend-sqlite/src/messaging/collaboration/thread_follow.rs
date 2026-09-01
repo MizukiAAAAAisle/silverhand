@@ -6,9 +6,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         PrincipalIdentity, ThreadRootId,
         collaboration::thread_follow::{
             CommittedHumanFollow, CommittedHumanUnfollow, FollowedAt, HumanFollowRefusal,
@@ -17,6 +15,8 @@ use silverhand_backend_core::{
         },
         environment::{EnvironmentUnavailable, SendClock},
     },
+    foundation::identity::{AgentId, ConversationId, UserId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};
 use thiserror::Error;

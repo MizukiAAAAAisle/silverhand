@@ -1,7 +1,7 @@
 use std::{convert::Infallible, fmt::Write};
 
 use sha2::{Digest, Sha256};
-use silverhand_backend_core::messaging::{
+use silverhand_backend_core::conversation_messaging::messaging::{
     AddressRefusal, TargetAddressRefusalPort, TargetAddressRefusalReport,
 };
 
@@ -31,9 +31,13 @@ impl TargetAddressRefusalPort for TargetAddressRefusalLog {
     }
 }
 
-fn intent_name(intent: silverhand_backend_core::messaging::DeliveryIntent) -> &'static str {
+fn intent_name(
+    intent: silverhand_backend_core::conversation_messaging::messaging::DeliveryIntent,
+) -> &'static str {
     match intent {
-        silverhand_backend_core::messaging::DeliveryIntent::Write => "write",
+        silverhand_backend_core::conversation_messaging::messaging::DeliveryIntent::Write => {
+            "write"
+        }
     }
 }
 

@@ -1,8 +1,8 @@
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId},
-    messaging::collaboration::conversation_agent_activity::{
+    conversation_messaging::messaging::collaboration::conversation_agent_activity::{
         ActivityPageRequest, ConversationAgentActivityReadPort, ConversationAgentActivityRefusal,
     },
+    foundation::identity::{AgentId, ConversationId, UserId},
 };
 use silverhand_backend_sqlite::messaging::{
     MessagingStore, collaboration::conversation_agent_activity::ConversationAgentActivityStoreError,
@@ -54,14 +54,14 @@ async fn read(
     before: Option<i64>,
 ) -> Result<
     Result<
-        silverhand_backend_core::messaging::collaboration::conversation_agent_activity::ConversationAgentActivityPage,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_agent_activity::ConversationAgentActivityPage,
         ConversationAgentActivityRefusal,
     >,
     silverhand_backend_core::foundation::persistence::PersistenceFailure,
 >{
     let before = before.map(|value| {
-        silverhand_backend_core::messaging::collaboration::conversation_agent_activity::ActivityBefore::Persisted(
-            silverhand_backend_core::messaging::collaboration::conversation_agent_activity::ActivityEventId::new(value)
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_agent_activity::ActivityBefore::Persisted(
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_agent_activity::ActivityEventId::new(value)
                 .unwrap(),
         )
     });

@@ -14,11 +14,11 @@ use axum::{
 };
 use serde_json::json;
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::collaboration::channel_lifecycle::{
+    conversation_messaging::messaging::collaboration::channel_lifecycle::{
         BoundChannelDetail, ChannelDetailReadPort, ChannelDetailRefusal, ChannelLifecyclePlacement,
         ChannelLifecycleRow,
     },
+    foundation::identity::{ConversationId, UserId},
 };
 
 pub const CHANNEL_DETAIL_PATH: &str = "/api/channels/{id}";
@@ -135,9 +135,7 @@ mod tests {
     };
     use serde_json::Value;
     use silverhand_backend_core::{
-        foundation::identity::{ConversationId, UserId, WorkspaceId},
-        identity_access::access::WorkspaceRole,
-        messaging::{
+        conversation_messaging::messaging::{
             collaboration::{
                 channel_directory::{ChannelStatus, ChannelVisibility, DirectoryRoster},
                 channel_lifecycle::{
@@ -147,6 +145,8 @@ mod tests {
             },
             conversation_title::CanonicalConversationTitle,
         },
+        foundation::identity::{ConversationId, UserId, WorkspaceId},
+        identity_access::access::WorkspaceRole,
     };
     use silverhand_backend_sqlite::messaging::MessagingStore;
     use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};

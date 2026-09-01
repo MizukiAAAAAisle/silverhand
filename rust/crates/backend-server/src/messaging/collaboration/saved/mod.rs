@@ -17,14 +17,14 @@ use axum::{
 };
 use serde::Deserialize;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, UserId, WorkspaceId},
-    messaging::{
+    conversation_messaging::messaging::{
         MessageId,
         collaboration::saved::{
             SavedAftermath, SavedListQuery, SavedMutationPort, SavedReadPort, SavedSender,
             SavedSince, list_saved, save_message, unsave_message,
         },
     },
+    foundation::identity::{AgentId, UserId, WorkspaceId},
 };
 
 use super::query_number::{CoercedInteger, NumberIssue, coerce_integer};

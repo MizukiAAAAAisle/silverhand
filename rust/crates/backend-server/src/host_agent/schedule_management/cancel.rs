@@ -21,9 +21,11 @@ use axum::{
 use serde::Serialize;
 use serde_json::json;
 use silverhand_backend_core::{
+    conversation_messaging::messaging::schedule::{
+        ScheduleCancelOutcome, ScheduleCancelUnitOfWork, ScheduleId,
+    },
     foundation::identity::UserId,
     identity_access::agent_detail_read::AgentDetailReadModel,
-    messaging::schedule::{ScheduleCancelOutcome, ScheduleCancelUnitOfWork, ScheduleId},
 };
 
 use super::{gate_agent_edit, wire::ScheduleDto};
@@ -186,12 +188,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        conversation_messaging::messaging::schedule::{ScheduleSpec, ScheduleStatus, ScheduleView},
         foundation::identity::{AgentId, WorkspaceId},
         foundation::persistence::PersistenceFailure,
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agents::runtime::RuntimeKind,
-        messaging::schedule::{ScheduleSpec, ScheduleStatus, ScheduleView},
     };
     use tower::ServiceExt;
 

@@ -43,14 +43,14 @@ use futures_util::stream;
 use serde_json::Value;
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
-    host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
-    messaging::{
+    conversation_messaging::messaging::{
         AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
         ConversationRefusal, DirectLineAuthority, DirectPairAllocation, PrincipalKind,
         ResolvedStream, SendCapability, SendMessage, SendMessageError, SendMessageOutcome,
         SendMessageUnitOfWork, TargetAddress,
     },
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
+    host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
 use silverhand_backend_server::messaging::{
     MESSAGE_SEND_MAX_BODY_BYTES,

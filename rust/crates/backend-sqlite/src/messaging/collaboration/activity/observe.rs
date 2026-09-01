@@ -3,8 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId, WorkspaceId},
-    messaging::{
+    conversation_messaging::messaging::{
         MessageSeq, NotificationId, ThreadRootId,
         collaboration::{
             activity::observe::{
@@ -15,6 +14,7 @@ use silverhand_backend_core::{
         },
         environment::SendClock,
     },
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;
@@ -42,7 +42,10 @@ pub enum ObservationStoreError {
     #[error("database operation failed")]
     Sql(#[from] sqlx::Error),
     #[error("the observation clock could not answer")]
-    Environment(#[source] silverhand_backend_core::messaging::EnvironmentUnavailable),
+    Environment(
+        #[source]
+        silverhand_backend_core::conversation_messaging::messaging::EnvironmentUnavailable,
+    ),
     #[error("stored observation coordinate {0} is malformed")]
     MalformedIdentity(&'static str),
     #[error("stored observation ordinal is outside its domain")]

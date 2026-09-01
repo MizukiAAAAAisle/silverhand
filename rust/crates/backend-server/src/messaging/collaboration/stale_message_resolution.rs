@@ -18,16 +18,16 @@ use garde::Validate;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::cli_invoke_audit::CliStaleResolutionReason,
-    foundation::identity::{AgentId, ConversationId},
-    host_runtime::runtime_credential::RuntimePrincipal,
-    messaging::{
+    conversation_messaging::messaging::{
         CapabilityDenied, SendCapability,
         collaboration::stale_message_resolution::{
             BoundStaleMessageResolutionAdmission, StaleMessageResolutionAdmissionPort,
             StaleMessageResolutionAdmissionRefusal,
         },
     },
+    foundation::cli_invoke_audit::CliStaleResolutionReason,
+    foundation::identity::{AgentId, ConversationId},
+    host_runtime::runtime_credential::RuntimePrincipal,
 };
 
 use crate::internal_agent::cli_invoke::CliInvokeRequestContext;

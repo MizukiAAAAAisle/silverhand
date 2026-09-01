@@ -6,7 +6,7 @@
 //! authority would be one too many.
 //!
 //! It implements the two writes a fire performs
-//! ([`ScheduleStore`](silverhand_backend_core::messaging::schedule::ScheduleStore))
+//! ([`ScheduleStore`](silverhand_backend_core::conversation_messaging::messaging::schedule::ScheduleStore))
 //! plus the boot-recovery reset that closes the at-least-once loop. Everything
 //! engine-specific stays here — SQL text, PRAGMAs, driver errors, and the strict
 //! per-column decode that turns a row the create contract could not have written
@@ -23,13 +23,13 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use silverhand_backend_core::foundation::identity::{AgentId, ConversationId};
-use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-use silverhand_backend_core::messaging::schedule::{
+use silverhand_backend_core::conversation_messaging::messaging::schedule::{
     ClaimedSchedule, Clock, CronSpec, DeliveryMaterial, DueCandidate, FiredCount, IntervalSeconds,
     ScheduleCaps, ScheduleId, ScheduleMessage, ScheduleSpec, ScheduleStore, ScheduleTitle,
     SettlementAction,
 };
+use silverhand_backend_core::foundation::identity::{AgentId, ConversationId};
+use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},

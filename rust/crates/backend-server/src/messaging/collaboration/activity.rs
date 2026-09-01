@@ -9,11 +9,11 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{UserId, WorkspaceId},
-    messaging::collaboration::activity::{
+    conversation_messaging::messaging::collaboration::activity::{
         ActivityItem, ActivityList, ActivityLocation, ActivityReadModel, ActivitySalience,
         ActivitySource,
     },
+    foundation::identity::{UserId, WorkspaceId},
 };
 use std::sync::Arc;
 
@@ -155,13 +155,13 @@ mod tests {
         http::Request,
     };
     use silverhand_backend_core::{
-        foundation::identity::{ConversationId, WorkspaceId},
-        messaging::{
+        conversation_messaging::messaging::{
             NotificationId,
             collaboration::activity::{
                 ActivityItem, ActivityList, ActivityLocation, ActivityReadModel,
             },
         },
+        foundation::identity::{ConversationId, WorkspaceId},
     };
     use silverhand_backend_sqlite::messaging::MessagingStore;
     use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};

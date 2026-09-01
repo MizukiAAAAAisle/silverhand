@@ -36,15 +36,7 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, Principal, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    identity_access::agent_audit_read::{
-        AgentAuditReadModel, AuditAttachmentBundle, AuditChatSummary, AuditChatsBundle,
-        AuditSubjectFacts, AuditTranscriptBundle, AuditTranscriptWindow, audit_chats_floor,
-        audit_conversation_floor,
-    },
-    identity_access::capability::agent_audit::AuditedConversation,
-    messaging::{
+    conversation_messaging::messaging::{
         AttachmentId, MessageSeq,
         collaboration::{
             conversation_message_window::{
@@ -53,6 +45,14 @@ use silverhand_backend_core::{
             conversation_ref::ConversationRosterPolicy,
         },
     },
+    foundation::identity::{AgentId, ConversationId, Principal, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
+    identity_access::agent_audit_read::{
+        AgentAuditReadModel, AuditAttachmentBundle, AuditChatSummary, AuditChatsBundle,
+        AuditSubjectFacts, AuditTranscriptBundle, AuditTranscriptWindow, audit_chats_floor,
+        audit_conversation_floor,
+    },
+    identity_access::capability::agent_audit::AuditedConversation,
 };
 use sqlx::{
     QueryBuilder, Row, Sqlite, SqlitePool, Transaction,

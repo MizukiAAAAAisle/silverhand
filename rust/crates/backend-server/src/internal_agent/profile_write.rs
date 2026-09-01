@@ -551,6 +551,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        conversation_messaging::messaging::AvatarRevision,
         foundation::identity::{DaemonInstanceId, UserId},
         foundation::persistence::PersistenceFailure,
         host_runtime::runtime_credential::{
@@ -568,7 +569,6 @@ mod tests {
         },
         identity_access::agents::runtime::RuntimeKind,
         identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
-        messaging::AvatarRevision,
     };
     use std::sync::{
         Arc, Mutex,

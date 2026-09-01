@@ -4,7 +4,7 @@
 //! WHY THIS IS ITS OWN MODULE, not a pair of private helpers in [`super::ack`]: the
 //! person's acknowledgement ([`super::ack::send_ack`]) and the conversation-scope
 //! `message` broadcast frame (the post-commit
-//! [`silverhand_backend_core::messaging::post_commit::CommittedMessagePublication`]
+//! [`silverhand_backend_core::conversation_messaging::messaging::post_commit::CommittedMessagePublication`]
 //! projector) are the SAME row seen by two audiences. The renderer runs one idempotent
 //! apply seam over both, so a second projection here would make the sender's own view
 //! converge differently from everyone else's — the exact hazard the ACK door's contract
@@ -29,7 +29,7 @@
 //! structural null on a row inserted this instant.
 
 use serde_json::{Map, Value, json};
-use silverhand_backend_core::messaging::{
+use silverhand_backend_core::conversation_messaging::messaging::{
     CreatedMessage, FromKind, ThreadReplyFact, attachments::AttachmentSnapshot,
     collaboration::workspace_rename_messaging::BoundWorkspaceRenameMessage,
     mention_cc::CommittedMentionCopy,
@@ -267,8 +267,7 @@ fn snapshots(attachments: &[AttachmentSnapshot]) -> Value {
 #[cfg(test)]
 mod tests {
     use silverhand_backend_core::{
-        foundation::identity::{ConversationId, WorkspaceId},
-        messaging::{
+        conversation_messaging::messaging::{
             AttachmentId, MessageId, MessageSeq,
             attachments::{AttachmentLabel, AttachmentSnapshot},
             collaboration::workspace_rename_messaging::{
@@ -276,6 +275,7 @@ mod tests {
                 WorkspaceRenameMessageDraft,
             },
         },
+        foundation::identity::{ConversationId, WorkspaceId},
     };
 
     use super::*;
@@ -342,7 +342,7 @@ mod tests {
         );
     }
 
-    fn bound_rename() -> silverhand_backend_core::messaging::collaboration::workspace_rename_messaging::BoundWorkspaceRenameMessage{
+    fn bound_rename() -> silverhand_backend_core::conversation_messaging::messaging::collaboration::workspace_rename_messaging::BoundWorkspaceRenameMessage{
         let draft = WorkspaceRenameMessageDraft::for_names(
             WorkspaceId::parse("w").unwrap(),
             ConversationId::parse("active-a").unwrap(),

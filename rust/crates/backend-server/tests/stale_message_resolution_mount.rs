@@ -35,16 +35,16 @@ use axum::{
 };
 use serde_json::Value;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
-    foundation::persistence::PersistenceFailure,
-    host_runtime::runtime_credential::RuntimeScope,
-    messaging::{
+    conversation_messaging::messaging::{
         CapabilityDenied, SendCapability,
         collaboration::stale_message_resolution::{
             StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
             StaleMessageResolutionAdmissionRefusal,
         },
     },
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
+    foundation::persistence::PersistenceFailure,
+    host_runtime::runtime_credential::RuntimeScope,
 };
 use silverhand_backend_server::{
     clock::ProcessClock,

@@ -1,12 +1,12 @@
 //! Reaction detail and message-window aggregate read models.
 
 use silverhand_backend_core::{
-    foundation::identity::UserId,
-    messaging::collaboration::reaction::{
+    conversation_messaging::messaging::collaboration::reaction::{
         ReactionAggregate, ReactionDetail, ReactionEmoji, ReactionReactor, ReactionReadPort,
         ReactionReadRefusal, Reactor,
     },
-    messaging::{MessageId, PrincipalIdentity},
+    conversation_messaging::messaging::{MessageId, PrincipalIdentity},
+    foundation::identity::UserId,
 };
 use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection, Transaction};
 
@@ -125,7 +125,7 @@ pub(in crate::messaging::collaboration) async fn aggregate_facts_in_snapshot(
         let emoji = ReactionEmoji::parse(&row.try_get::<String, _>("emoji")?)
             .map_err(|_| ReactionStoreError::MalformedEmoji)?;
         let count =
-            silverhand_backend_core::messaging::collaboration::reaction::ReactionCount::new(
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionCount::new(
                 row.try_get("count")?,
             )
             .map_err(|_| ReactionStoreError::InvalidCount)?;

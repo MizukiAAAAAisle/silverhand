@@ -25,7 +25,7 @@
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 
-use silverhand_backend_core::messaging::MAX_MESSAGE_CONTENT_BYTES;
+use silverhand_backend_core::conversation_messaging::messaging::MAX_MESSAGE_CONTENT_BYTES;
 
 /// The content cap as a reader sees it named. The bytes are the authority; this is
 /// the label the two refusals quote.

@@ -7,7 +7,7 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
-use silverhand_backend_core::messaging::collaboration::conversation_agent_activity::{
+use silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_agent_activity::{
     ActivityCreatedAt, ConversationActivityEvent, ConversationActivityKind,
     ConversationAgentActivityPage,
 };

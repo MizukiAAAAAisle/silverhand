@@ -1,9 +1,7 @@
 //! One-snapshot SQLite producer for the public human collaboration search.
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         FromKind, MessageAuthor, MessageId, MessageSeq, PrincipalIdentity, ThreadRootId,
         collaboration::{
             conversation_message_window::{
@@ -21,6 +19,8 @@ use silverhand_backend_core::{
             },
         },
     },
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,
@@ -608,7 +608,7 @@ fn sender(sender: Option<&PrincipalIdentity>) -> (&str, &str) {
 
 fn millis(
     value: Option<
-        silverhand_backend_core::messaging::collaboration::human_search::HumanSearchMillis,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::human_search::HumanSearchMillis,
     >,
 ) -> (i64, i64) {
     match value {

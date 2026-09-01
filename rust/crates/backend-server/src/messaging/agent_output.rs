@@ -15,7 +15,7 @@
 //! joined, and an absent member would read as "this payload forgot".
 
 use serde_json::{Map, Value, json};
-use silverhand_backend_core::messaging::SendMessageOutcome;
+use silverhand_backend_core::conversation_messaging::messaging::SendMessageOutcome;
 
 use super::unresolved_wire::{UNRESOLVED_REFERENCES, unresolved_member};
 

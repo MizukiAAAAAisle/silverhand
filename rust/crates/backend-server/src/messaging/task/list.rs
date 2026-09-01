@@ -32,13 +32,13 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use silverhand_backend_core::foundation::identity::WorkspaceId;
-use silverhand_backend_core::host_runtime::runtime_credential::RuntimePrincipal;
-use silverhand_backend_core::messaging::task::{
+use silverhand_backend_core::conversation_messaging::messaging::task::{
     AgentBoardResolver, AgentReadableBoards, TaskCandidateFetch, TaskCandidateQuery,
     TaskListAccess, TaskListForbidden, TaskParticipationReads, TaskReadCapability,
     list_visible_tasks, resolve_task_list_boards,
 };
+use silverhand_backend_core::foundation::identity::WorkspaceId;
+use silverhand_backend_core::host_runtime::runtime_credential::RuntimePrincipal;
 
 use super::query::{InvalidQuery, parse_list_query};
 use super::wire::{ProjectionCorruption, TaskListDto, project_summary};

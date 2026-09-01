@@ -12,8 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::{
+    conversation_messaging::messaging::{
         MessageId, MessageSeq, PrincipalIdentity,
         collaboration::conversation_message_window::{
             BoundConversationMessageWindow, ConversationMessageWindowReadPort,
@@ -21,6 +20,7 @@ use silverhand_backend_core::{
             MessageWindowRefusal, MessageWindowStreamRequest, WindowLinkedTask, WindowTaskAssignee,
         },
     },
+    foundation::identity::{ConversationId, UserId},
 };
 
 use crate::messaging::{
@@ -278,7 +278,7 @@ fn success(window: &BoundConversationMessageWindow) -> Result<Response, MessageW
 /// Projects one sealed message row to the wire `MessageDto`. `pub(crate)`: the
 /// agent-audit transcript reuses this exact projector so the two faces cannot drift.
 pub(crate) fn message(
-    projection: &silverhand_backend_core::messaging::collaboration::conversation_message_window::WindowMessageProjection,
+    projection: &silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_message_window::WindowMessageProjection,
 ) -> Result<Value, MessageWindowWireError> {
     let metadata = match projection.metadata.json() {
         None => Value::Null,
@@ -349,7 +349,7 @@ fn task_assignee(assignee: &WindowTaskAssignee) -> Value {
 }
 
 fn reply_preview(
-    preview: &silverhand_backend_core::messaging::collaboration::conversation_message_window::WindowReplyPreview,
+    preview: &silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_message_window::WindowReplyPreview,
 ) -> Value {
     json!({
         "message_id": preview.message().as_str(),

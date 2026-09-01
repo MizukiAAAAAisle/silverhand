@@ -4,15 +4,15 @@ use axum::{
 };
 use serde_json::Value;
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId, WorkspaceId},
-    messaging::collaboration::message_unread::{
+    conversation_messaging::messaging::collaboration::message_unread::{
         ConversationMessageUnread, ConversationMessageUnreadReadPort,
         ConversationMessageUnreadRefusal, LatestUnreadPointer, NonZeroUnreadCount, UnreadCount,
         UnreadRollup, ViewerMessageUnreadSummary, ViewerMessageUnreadSummaryReadPort,
         WorkspaceConversationUnread, WorkspaceMessageUnread, WorkspaceMessageUnreadReadPort,
         WorkspaceMessageUnreadRefusal, WorkspaceUnreadTotal,
     },
-    messaging::{MessageId, MessageSeq},
+    conversation_messaging::messaging::{MessageId, MessageSeq},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
 };
 use silverhand_backend_server::messaging::collaboration::message_unread::router;
 use silverhand_backend_sqlite::messaging::MessagingStore;

@@ -10,14 +10,14 @@ use axum::{
 };
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    messaging::{
+    conversation_messaging::messaging::{
         MessageSeq, NotificationId, ThreadRootId,
         collaboration::activity::observe::{
             ObservationAftermath, ObservationPort, ObserveBatch, ObserveRefusal, ObserveSource,
             ObservedSeq, StreamPosition, observe,
         },
     },
+    foundation::identity::{ConversationId, UserId},
 };
 use std::sync::Arc;
 
@@ -340,7 +340,7 @@ mod tests {
         body::{Body, to_bytes},
         http::Request,
     };
-    use silverhand_backend_core::messaging::collaboration::activity::observe::{
+    use silverhand_backend_core::conversation_messaging::messaging::collaboration::activity::observe::{
         CommittedObservation, ObservationEffectFailure, ObservedConversation,
     };
     use silverhand_backend_sqlite::messaging::MessagingStore;

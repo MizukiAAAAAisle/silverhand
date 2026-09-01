@@ -7,13 +7,13 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{UserId, WorkspaceId},
-    messaging::collaboration::channel_directory::{
+    conversation_messaging::messaging::collaboration::channel_directory::{
         ActiveChannelDirectoryPort, ActiveWorkspaceChannelDirectory, ArchivedSince,
         ArchivedWorkspaceChannelDirectory, ArchivedWorkspaceChannelDirectoryPort, ChannelSortState,
         DirectoryWorkspaceKind, GlobalArchivedChannelDirectory, GlobalArchivedChannelDirectoryPort,
         GlobalArchivedDirectoryRefusal, WorkspaceDirectoryRefusal,
     },
+    foundation::identity::{UserId, WorkspaceId},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor};

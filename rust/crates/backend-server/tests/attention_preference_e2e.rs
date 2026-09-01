@@ -4,8 +4,10 @@ use axum::{
     http::{Method, Request},
 };
 use silverhand_backend_core::{
+    conversation_messaging::messaging::{
+        EnvironmentUnavailable, SendClock, collaboration::attention_preference::*,
+    },
     foundation::identity::UserId,
-    messaging::{EnvironmentUnavailable, SendClock, collaboration::attention_preference::*},
 };
 use silverhand_backend_server::messaging::collaboration::attention_preference;
 use silverhand_backend_sqlite::messaging::MessagingStore;

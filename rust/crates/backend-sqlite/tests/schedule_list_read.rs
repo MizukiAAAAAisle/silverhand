@@ -6,10 +6,10 @@
 //! empty-family short-circuit, and the `target_label` LEFT JOIN (resolved board
 //! vs deleted target) over real rows.
 
-use silverhand_backend_core::foundation::identity::AgentId;
-use silverhand_backend_core::messaging::schedule::{
+use silverhand_backend_core::conversation_messaging::messaging::schedule::{
     ScheduleListLimit, ScheduleListQuery, ScheduleListReadModel, ScheduleStatus, ScheduleView,
 };
+use silverhand_backend_core::foundation::identity::AgentId;
 use silverhand_backend_sqlite::messaging::schedule::SqliteScheduleListRead;
 use sqlx::{Connection, SqliteConnection};
 use std::path::PathBuf;

@@ -1912,6 +1912,12 @@ mod tests {
     use std::ops::Range;
 
     use silverhand_backend_core::{
+        conversation_messaging::messaging::{MessageContent, ReferencePositions},
+        conversation_messaging::runtime_delivery::{
+            ClaimPendingInbox, ClaimedInboxBatch, DeliveryInstruction, DeliveryLeaseOwner,
+            InboxDeliveryId, RuntimeDispatchReadPort, RuntimeDispatchTarget,
+            RuntimeInboxCustodyPort,
+        },
         foundation::identity::{AgentId, ConversationId},
         foundation::persistence::PersistenceFailure,
         host_runtime::runtime_credential::{
@@ -1921,12 +1927,6 @@ mod tests {
         host_runtime::{
             aftermath::DaemonConnectionControl, read::ComputerReadModel,
             rotation::DaemonRotationAck,
-        },
-        messaging::{MessageContent, ReferencePositions},
-        runtime_delivery::{
-            ClaimPendingInbox, ClaimedInboxBatch, DeliveryInstruction, DeliveryLeaseOwner,
-            InboxDeliveryId, RuntimeDispatchReadPort, RuntimeDispatchTarget,
-            RuntimeInboxCustodyPort,
         },
     };
     use silverhand_backend_sqlite::{
@@ -2846,14 +2846,7 @@ mod tests {
         };
         use serde_json::{Number, Value};
         use silverhand_backend_core::{
-            foundation::identity::{
-                AgentId, ConversationId, DaemonInstanceId, UserId, WorkspaceId,
-            },
-            host_runtime::runtime_credential::{
-                RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
-            },
-            identity_access::access::WorkspaceRole,
-            messaging::{
+            conversation_messaging::messaging::{
                 collaboration::{
                     channel_directory::{ChannelStatus, ChannelVisibility, DirectoryRoster},
                     channel_lifecycle::{
@@ -2863,6 +2856,13 @@ mod tests {
                 },
                 conversation_title::CanonicalConversationTitle,
             },
+            foundation::identity::{
+                AgentId, ConversationId, DaemonInstanceId, UserId, WorkspaceId,
+            },
+            host_runtime::runtime_credential::{
+                RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
+            },
+            identity_access::access::WorkspaceRole,
         };
         use silverhand_backend_sqlite::{
             host_runtime::SqliteHostRuntimeStore, runtime_credential::SqliteRuntimeCustodyStore,
@@ -4061,7 +4061,7 @@ mod tests {
 
     #[derive(Clone)]
     struct ClearSeat {
-        snapshot: silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot,
+        snapshot: silverhand_backend_core::conversation_messaging::messaging::collaboration::RuntimeControlSeatSnapshot,
         settles: Arc<std::sync::atomic::AtomicUsize>,
     }
 
@@ -4090,14 +4090,14 @@ mod tests {
         }
     }
 
-    impl silverhand_backend_core::messaging::collaboration::RuntimeControlSeatPort for ClearSeat {
+    impl silverhand_backend_core::conversation_messaging::messaging::collaboration::RuntimeControlSeatPort for ClearSeat {
         type Error = std::io::Error;
 
         async fn snapshot(
             &self,
             _scope: &silverhand_backend_core::host_runtime::runtime_credential::RuntimeScope,
         ) -> Result<
-            Option<silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot>,
+            Option<silverhand_backend_core::conversation_messaging::messaging::collaboration::RuntimeControlSeatSnapshot>,
             Self::Error,
         > {
             Ok(Some(self.snapshot.clone()))
@@ -4105,22 +4105,22 @@ mod tests {
 
         async fn settle_clear(
             &self,
-            _target: &silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
-            before: &silverhand_backend_core::messaging::collaboration::BoundRuntimeControlSeat,
+            _target: &silverhand_backend_core::conversation_messaging::messaging::collaboration::RuntimeSeatTarget,
+            before: &silverhand_backend_core::conversation_messaging::messaging::collaboration::BoundRuntimeControlSeat,
         ) -> Result<
-            Option<silverhand_backend_core::messaging::collaboration::ClearSessionCommitReceipt>,
+            Option<silverhand_backend_core::conversation_messaging::messaging::collaboration::ClearSessionCommitReceipt>,
             Self::Error,
         > {
             self.settles
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(Some(
-                silverhand_backend_core::messaging::collaboration::ClearSessionCommitReceipt::decoded(
+                silverhand_backend_core::conversation_messaging::messaging::collaboration::ClearSessionCommitReceipt::decoded(
                     before.scope().clone(),
                     before.generation(),
                     before.previous_cli_session().cloned(),
                     before.was_running(),
                     None,
-                    silverhand_backend_core::messaging::collaboration::ClearSessionAuditWitness::Agent(
+                    silverhand_backend_core::conversation_messaging::messaging::collaboration::ClearSessionAuditWitness::Agent(
                         before.agent().clone(),
                     ),
                 ),
@@ -4199,7 +4199,7 @@ mod tests {
         agent: AgentId,
     }
 
-    impl silverhand_backend_core::messaging::collaboration::RuntimeControlAdmissionScope
+    impl silverhand_backend_core::conversation_messaging::messaging::collaboration::RuntimeControlAdmissionScope
         for AgentSeatAdmissionScope
     {
         type Error = std::io::Error;
@@ -4258,7 +4258,7 @@ mod tests {
         }
     }
 
-    impl silverhand_backend_core::messaging::collaboration::RuntimeControlAdmission
+    impl silverhand_backend_core::conversation_messaging::messaging::collaboration::RuntimeControlAdmission
         for AgentSeatAdmission
     {
         type Error = std::io::Error;
@@ -4272,7 +4272,7 @@ mod tests {
     }
 
     fn production_clear_fixture() -> ProductionClearFixture {
-        use silverhand_backend_core::messaging::collaboration::{
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::{
             CliSessionId, RuntimeControlObservedStatus, RuntimeControlSeatSnapshot,
         };
         let registry = DaemonRegistry::with_process_epoch("clear-production".to_owned());
@@ -4338,7 +4338,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn clear_ack_alone_times_out_without_settlement_and_finally_releases_single_flight() {
-        use silverhand_backend_core::messaging::collaboration::{
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::{
             ClearSessionProviderRefusal, ClearSessionRefusal, clear_agent_session,
         };
         let ProductionClearFixture {
@@ -4412,7 +4412,7 @@ mod tests {
 
     #[tokio::test]
     async fn exact_exit_before_clear_response_is_latched_then_settled() {
-        use silverhand_backend_core::messaging::collaboration::clear_agent_session;
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::clear_agent_session;
         let ProductionClearFixture {
             control,
             mut receive,
@@ -4518,14 +4518,14 @@ mod tests {
         }
     }
 
-    impl silverhand_backend_core::messaging::collaboration::RuntimeControlSeatPort for StartSeat {
+    impl silverhand_backend_core::conversation_messaging::messaging::collaboration::RuntimeControlSeatPort for StartSeat {
         type Error = std::io::Error;
 
         async fn snapshot(
             &self,
             _scope: &silverhand_backend_core::host_runtime::runtime_credential::RuntimeScope,
         ) -> Result<
-            Option<silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot>,
+            Option<silverhand_backend_core::conversation_messaging::messaging::collaboration::RuntimeControlSeatSnapshot>,
             Self::Error,
         > {
             unreachable!("start resolves the spawn plan")
@@ -4533,10 +4533,10 @@ mod tests {
 
         async fn settle_clear(
             &self,
-            _target: &silverhand_backend_core::messaging::collaboration::RuntimeSeatTarget,
-            _before: &silverhand_backend_core::messaging::collaboration::BoundRuntimeControlSeat,
+            _target: &silverhand_backend_core::conversation_messaging::messaging::collaboration::RuntimeSeatTarget,
+            _before: &silverhand_backend_core::conversation_messaging::messaging::collaboration::BoundRuntimeControlSeat,
         ) -> Result<
-            Option<silverhand_backend_core::messaging::collaboration::ClearSessionCommitReceipt>,
+            Option<silverhand_backend_core::conversation_messaging::messaging::collaboration::ClearSessionCommitReceipt>,
             Self::Error,
         > {
             unreachable!("start never settles clear")
@@ -4546,10 +4546,12 @@ mod tests {
     #[tokio::test]
     async fn runtime_control_start_traverses_typed_codec_and_production_fifo() {
         use silverhand_backend_core::{
+            conversation_messaging::messaging::collaboration::{
+                RuntimeControlPort, RuntimeStartTarget,
+            },
+            conversation_messaging::runtime_delivery::{RuntimeAgentSpec, RuntimeSpawnPlan},
             host_runtime::runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustody},
             identity_access::agents::runtime::RuntimeKind,
-            messaging::collaboration::{RuntimeControlPort, RuntimeStartTarget},
-            runtime_delivery::{RuntimeAgentSpec, RuntimeSpawnPlan},
         };
         let registry = DaemonRegistry::with_process_epoch("start-production".to_owned());
         let host = HostId::parse("host-a").unwrap();
@@ -5145,7 +5147,7 @@ mod tests {
                     "other" => DeliveryInstruction::Other,
                     other => panic!("unexpected fixture instruction {other}"),
                 };
-                silverhand_backend_core::runtime_delivery::ClaimedInboxDelivery::decoded(
+                silverhand_backend_core::conversation_messaging::runtime_delivery::ClaimedInboxDelivery::decoded(
                     InboxDeliveryId::parse(i64::try_from(index + 1).unwrap()).unwrap(),
                     i64::try_from(index).unwrap(),
                     case["expectedBody"].as_str().unwrap().to_owned(),

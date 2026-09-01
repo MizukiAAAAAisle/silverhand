@@ -33,7 +33,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
-use silverhand_backend_core::messaging::{
+use silverhand_backend_core::conversation_messaging::messaging::{
     ActorRefusal, AttachmentRefusal, ConversationRefusal, SendMessageError, freshness::StaleRefusal,
 };
 
@@ -255,12 +255,12 @@ mod tests {
 
     use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use silverhand_backend_core::{
-        foundation::identity::{AgentId, ConversationId},
-        messaging::{
+        conversation_messaging::messaging::{
             AttachmentId, EnvironmentUnavailable, ReplyTargetRefusal, SendEntropy,
             ThreadRootRefusal,
             freshness::{FreshnessGuardInvariant, StaleEventId},
         },
+        foundation::identity::{AgentId, ConversationId},
     };
     use tracing_subscriber::fmt::MakeWriter;
 

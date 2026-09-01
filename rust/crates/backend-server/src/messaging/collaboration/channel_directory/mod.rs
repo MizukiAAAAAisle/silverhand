@@ -15,14 +15,14 @@ use axum::{
 };
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{UserId, WorkspaceId},
-    messaging::collaboration::channel_directory::{
+    conversation_messaging::messaging::collaboration::channel_directory::{
         ActiveChannelDirectoryPort, ArchivedSince, ArchivedWorkspaceChannelDirectoryPort,
         BoundActiveWorkspaceChannelDirectory, BoundArchivedWorkspaceChannelDirectory,
         BoundGlobalArchivedChannelDirectory, ChannelDirectoryRow, ChannelSortMode,
         GlobalArchivedChannelDirectoryPort, GlobalArchivedDirectoryRefusal,
         WorkspaceDirectoryRefusal,
     },
+    foundation::identity::{UserId, WorkspaceId},
 };
 
 use super::query_number::{CoercedInteger, coerce_integer};

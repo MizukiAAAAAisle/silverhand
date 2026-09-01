@@ -8,8 +8,7 @@ use std::{
 };
 
 use silverhand_backend_core::{
-    foundation::identity::{UserId, WorkspaceId},
-    messaging::{
+    conversation_messaging::messaging::{
         SendClock, SendEntropy,
         collaboration::channel_directory::{
             ChannelVisibility, HumanChannelCreatePort, HumanChannelCreateRefusal,
@@ -18,6 +17,7 @@ use silverhand_backend_core::{
         conversation_title::CanonicalConversationTitle,
         environment::EnvironmentUnavailable,
     },
+    foundation::identity::{UserId, WorkspaceId},
 };
 use silverhand_backend_sqlite::messaging::{
     MessagingStore, collaboration::channel_directory::ChannelDirectoryCreateStoreError,

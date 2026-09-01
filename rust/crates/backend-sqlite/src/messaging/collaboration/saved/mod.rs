@@ -4,11 +4,11 @@ mod mutation;
 mod read;
 
 use silverhand_backend_core::{
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         collaboration::saved::SavedEntry,
         environment::{SendClock, SendEntropy},
     },
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::SqlitePool;
 use thiserror::Error;
@@ -51,7 +51,10 @@ pub enum SavedStoreError {
     #[error("stored linked-task projection field {field} is malformed")]
     MalformedLinkedTask { field: &'static str },
     #[error("environment could not mint the saved-message fact")]
-    Environment(#[source] silverhand_backend_core::messaging::EnvironmentUnavailable),
+    Environment(
+        #[source]
+        silverhand_backend_core::conversation_messaging::messaging::EnvironmentUnavailable,
+    ),
 }
 
 impl From<SavedStoreError> for PersistenceFailure {
@@ -67,10 +70,10 @@ where
     fn new_entry_id(
         &self,
     ) -> Result<
-        silverhand_backend_core::messaging::collaboration::saved::SavedEntryId,
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::saved::SavedEntryId,
         PersistenceFailure,
-    > {
-        silverhand_backend_core::messaging::collaboration::saved::SavedEntryId::mint(
+    >{
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::saved::SavedEntryId::mint(
             &self.environment,
         )
         .map_err(|error| SavedStoreError::Environment(error).into())
@@ -78,13 +81,15 @@ where
 
     fn now(
         &self,
-    ) -> Result<silverhand_backend_core::messaging::collaboration::saved::SavedAt, PersistenceFailure>
-    {
+    ) -> Result<
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::saved::SavedAt,
+        PersistenceFailure,
+    > {
         let value = self
             .environment
             .now_unix_ms()
             .map_err(SavedStoreError::Environment)?;
-        silverhand_backend_core::messaging::collaboration::saved::SavedAt::new(value)
+        silverhand_backend_core::conversation_messaging::messaging::collaboration::saved::SavedAt::new(value)
             .map_err(|_| SavedStoreError::MalformedOrdinal.into())
     }
 }

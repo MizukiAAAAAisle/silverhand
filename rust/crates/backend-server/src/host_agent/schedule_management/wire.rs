@@ -10,7 +10,9 @@
 //! nullable).
 
 use serde::Serialize;
-use silverhand_backend_core::messaging::schedule::{ScheduleSpec, ScheduleView};
+use silverhand_backend_core::conversation_messaging::messaging::schedule::{
+    ScheduleSpec, ScheduleView,
+};
 
 /// The `spec` union, tagged by `kind`. Field names and tag values mirror
 /// `ScheduleSpecSchema`; `every_seconds`/`start_at` are the interval wire names,

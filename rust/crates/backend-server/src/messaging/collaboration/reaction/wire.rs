@@ -5,7 +5,7 @@ use axum::{
 };
 use garde::Validate;
 use serde::{Deserialize, Serialize};
-use silverhand_backend_core::messaging::collaboration::reaction::{
+use silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::{
     InvalidReactionEmoji, ReactionChange, ReactionChangedFact, ReactionDetail,
     ReactionMutationOutcome, ReactionMutationRefusal,
 };
@@ -17,7 +17,7 @@ pub const MESSAGE_REACTION_CHANGED_EVENT: &str = "message_reaction_changed";
 /// key is a native decode fault, an array-shaped body is rejected by the shared
 /// [`ObjectOnly`](crate::wire_admission::ObjectOnly) floor inside [`ValidatedJson`], and a
 /// non-string `emoji` keeps axum's native typed rejection. There is NO garde rule — emoji
-/// grammar is a domain verdict resolved by [`ReactionEmoji`](silverhand_backend_core::messaging::collaboration::reaction::ReactionEmoji)
+/// grammar is a domain verdict resolved by [`ReactionEmoji`](silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionEmoji)
 /// under the write lock, never an admission-stage refusal.
 ///
 /// [`ValidatedJson`]: crate::wire_admission::ValidatedJson
@@ -31,7 +31,7 @@ pub(super) struct HumanReactRaw {
 /// Agent mutation body (`POST`/`DELETE /internal/agents/{aid}/react-message`). The agent
 /// route is conversation-scoped, so the target message id rides the body. Both fields are
 /// plain strings at admission: `message_id`'s domain shape is decided by
-/// [`MessageId::parse`](silverhand_backend_core::messaging::MessageId::parse) and the emoji
+/// [`MessageId::parse`](silverhand_backend_core::conversation_messaging::messaging::MessageId::parse) and the emoji
 /// grammar by the domain path under the write lock — deferring both is what lets an invalid
 /// emoji paired with a hidden/unauthorized target refuse as 404/403, not 422 (proved by the
 /// `agent_invalid_emoji_*` cases). Closed object, no garde rule, same structural guarantees

@@ -100,6 +100,11 @@ use silverhand_backend_core::{
         AgentArmProvisioningPort, AgentMaterializationLookup, AgentMaterializationWrite,
         IdempotencyKey,
     },
+    conversation_messaging::messaging::{
+        MessageId,
+        environment::SendEntropy,
+        post_commit::{EffectFailure, RuntimeStart},
+    },
     foundation::identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
     host_runtime::agent_materialize::AgentMaterializePort,
     host_runtime::read::ComputerReadModel,
@@ -111,11 +116,6 @@ use silverhand_backend_core::{
         session_scope::AgentSessionScope,
     },
     identity_access::user_identity::ParticipantHandle,
-    messaging::{
-        MessageId,
-        environment::SendEntropy,
-        post_commit::{EffectFailure, RuntimeStart},
-    },
 };
 
 use crate::agent_wire::{AgentDto, reproject_committed_agent};
@@ -887,6 +887,12 @@ mod tests {
             IdempotentReservationRow, MaterializationFlipRow, RawProvisionOutcome,
             ReserveAgentInput, ReserveRecord,
         },
+        conversation_messaging::messaging::{
+            MessageId,
+            collaboration::RuntimePlacementRefusal,
+            environment::{EnvironmentUnavailable, SendEntropy},
+            post_commit::{EffectFailure, RuntimeStart},
+        },
         foundation::identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
         foundation::persistence::PersistenceFailure,
         host_runtime::agent_materialize::{
@@ -901,12 +907,6 @@ mod tests {
         identity_access::agents::runtime::RuntimeKind,
         identity_access::human_auth_flows::HandleNamespaceRead,
         identity_access::user_identity::ParticipantHandle,
-        messaging::{
-            MessageId,
-            collaboration::RuntimePlacementRefusal,
-            environment::{EnvironmentUnavailable, SendEntropy},
-            post_commit::{EffectFailure, RuntimeStart},
-        },
     };
     use tower::ServiceExt;
 

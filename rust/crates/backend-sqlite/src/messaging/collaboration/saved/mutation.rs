@@ -1,12 +1,12 @@
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId},
-    foundation::persistence::PersistenceFailure,
-    messaging::{
+    conversation_messaging::messaging::{
         MessageId,
         collaboration::saved::{
             CommittedSave, CommittedUnsave, SavedMutationPort, SavedMutationRefusal,
         },
     },
+    foundation::identity::{ConversationId, UserId},
+    foundation::persistence::PersistenceFailure,
 };
 use sqlx::{QueryBuilder, Row, Sqlite};
 
@@ -24,8 +24,8 @@ struct AuthorizedMessage<'a> {
 
 impl<E> SavedMutationPort for SqliteSavedStore<E>
 where
-    E: silverhand_backend_core::messaging::environment::SendClock
-        + silverhand_backend_core::messaging::environment::SendEntropy
+    E: silverhand_backend_core::conversation_messaging::messaging::environment::SendClock
+        + silverhand_backend_core::conversation_messaging::messaging::environment::SendEntropy
         + Clone
         + Send
         + Sync
@@ -144,8 +144,8 @@ where
 
 impl<E> SqliteSavedStore<E>
 where
-    E: silverhand_backend_core::messaging::environment::SendClock
-        + silverhand_backend_core::messaging::environment::SendEntropy
+    E: silverhand_backend_core::conversation_messaging::messaging::environment::SendClock
+        + silverhand_backend_core::conversation_messaging::messaging::environment::SendEntropy
         + Clone
         + Send
         + Sync

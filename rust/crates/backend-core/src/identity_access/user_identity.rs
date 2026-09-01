@@ -315,7 +315,7 @@ pub struct UserRecord {
     /// The avatar revision (from `users.avatar_storage_key` + `updated_at`), or
     /// `None` when no avatar is stored. The boundary projects the cache-busted
     /// URL from it; a freshly signed-up user has none.
-    pub avatar: Option<crate::messaging::AvatarRevision>,
+    pub avatar: Option<crate::conversation_messaging::messaging::AvatarRevision>,
     pub created_at: i64,
     pub updated_at: i64,
 }
