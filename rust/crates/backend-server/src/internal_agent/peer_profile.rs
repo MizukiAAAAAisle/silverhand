@@ -30,12 +30,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    agent_peer_profile::{
+    agent_profile_read::{AgentProfileReadModel, ProfileReadFault},
+    identity::WorkspaceId,
+    identity_access::agent_peer_profile::{
         CallerConversationPlacement, CallerReadMessagesCapability, CallerWorkspaceHorizon,
         PeerProfileOutcome, PeerTargetMembership, admit_peer_profile,
     },
-    agent_profile_read::{AgentProfileReadModel, ProfileReadFault},
-    identity::WorkspaceId,
     name_canonicalization::is_ecmascript_trim_whitespace,
     runtime_credential::RuntimePrincipal,
     user_identity::ParticipantHandle,
@@ -262,9 +262,9 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_peer_profile::WorkspacePlacement,
         agent_profile_read::AgentProfileFact,
         identity::{AgentId, ConversationId, DaemonInstanceId},
+        identity_access::agent_peer_profile::WorkspacePlacement,
         messaging::AvatarRevision,
         persistence::PersistenceFailure,
         runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimeScope},

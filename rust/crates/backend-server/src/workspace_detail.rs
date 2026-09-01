@@ -10,9 +10,9 @@
 //! ## The `200` path is identity-sealed at the wire
 //!
 //! The wire projector accepts NOTHING but an
-//! [`AuthorizedWorkspaceFace`](silverhand_backend_core::workspace_detail_read::AuthorizedWorkspaceFace),
+//! [`AuthorizedWorkspaceFace`](silverhand_backend_core::identity_access::workspace_detail_read::AuthorizedWorkspaceFace),
 //! whose sole minter is
-//! [`classify_workspace_view`](silverhand_backend_core::workspace_detail_read::classify_workspace_view).
+//! [`classify_workspace_view`](silverhand_backend_core::identity_access::workspace_detail_read::classify_workspace_view).
 //! The handler cannot fabricate a `200` from a raw read fact: it hands the read
 //! fact to the classifier with the request's OWN `(viewer, workspace_id)`, and only
 //! a [`WorkspaceView::Visible`] yields the sealed face the response constructor
@@ -31,7 +31,7 @@ use axum::{
 use serde::Serialize;
 use silverhand_backend_core::{
     identity::{UserId, WorkspaceId},
-    workspace_detail_read::{
+    identity_access::workspace_detail_read::{
         AuthorizedWorkspaceFace, WorkspaceDetailReadUnitOfWork, WorkspaceView,
         classify_workspace_view,
     },
@@ -177,8 +177,8 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        persistence::PersistenceFailure, workspace_detail_read::WorkspaceDetailForViewer,
-        workspace_face::WorkspaceFace,
+        identity_access::workspace_detail_read::WorkspaceDetailForViewer,
+        persistence::PersistenceFailure, workspace_face::WorkspaceFace,
     };
     use tower::ServiceExt;
 
@@ -352,10 +352,10 @@ mod tests {
         use crate::workspace_name_availability::{
             self as name_availability, WORKSPACE_NAME_AVAILABILITY_PATH,
         };
-        use silverhand_backend_core::workspace_name::CanonicalWorkspaceName;
-        use silverhand_backend_core::workspace_name_availability::{
+        use silverhand_backend_core::identity_access::workspace_name_availability::{
             HeldName, RegularWorkspaceNamespace,
         };
+        use silverhand_backend_core::workspace_name::CanonicalWorkspaceName;
 
         #[derive(Clone)]
         struct EmptyNamespace;

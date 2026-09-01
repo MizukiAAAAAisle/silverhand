@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::error::Error;
 
-use silverhand_backend_core::agent_peer_profile::{
+use silverhand_backend_core::identity_access::agent_peer_profile::{
     CallerConversationPlacement, CallerReadMessagesCapability, CallerWorkspaceHorizon,
     WorkspacePlacement,
 };

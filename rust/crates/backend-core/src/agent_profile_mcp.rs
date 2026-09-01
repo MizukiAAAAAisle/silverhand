@@ -229,7 +229,7 @@ pub trait AgentProfileMcpDataPlane {
     /// Atomically replace the agent's raw config with `raw`, returning the byte
     /// count written. `raw` is the caller's verbatim text; the daemon
     /// re-validates, but this lane's handler is the primary validator via
-    /// [`crate::mcp_config::parse_mcp_config`]. The count is a
+    /// [`crate::identity_access::mcp_config::parse_mcp_config`]. The count is a
     /// [`McpBytesWritten`], so a value a JavaScript consumer cannot represent
     /// exactly is rejected at this port boundary, never serialized.
     fn write_config(

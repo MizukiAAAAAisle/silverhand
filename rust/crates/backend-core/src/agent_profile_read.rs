@@ -22,7 +22,7 @@
 //! double can construct one, so a fact carrying `id == aid` proves nothing on
 //! its own: it is a source WITNESS, not a type-sealed guarantee. The real
 //! anti-cross-wire guard is [`read_self_profile`] (and, for the peer flow,
-//! `agent_peer_profile::resolve_peer_target`): they read, then BIND the returned
+//! `crate::identity_access::agent_peer_profile::resolve_peer_target`): they read, then BIND the returned
 //! row's witness to the requested coordinate, and a mismatch is a safe `500`
 //! that short-circuits before any membership / capability / projection runs.
 

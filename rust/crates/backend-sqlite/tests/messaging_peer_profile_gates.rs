@@ -15,11 +15,11 @@
 use std::error::Error;
 use std::path::PathBuf;
 
-use silverhand_backend_core::agent_peer_profile::{
+use silverhand_backend_core::identity::{AgentId, ConversationId, WorkspaceId};
+use silverhand_backend_core::identity_access::agent_peer_profile::{
     CallerConversationPlacement, CallerReadMessagesCapability, CallerWorkspaceHorizon,
     WorkspacePlacement,
 };
-use silverhand_backend_core::identity::{AgentId, ConversationId, WorkspaceId};
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::SqliteConnection;
 use tempfile::TempDir;

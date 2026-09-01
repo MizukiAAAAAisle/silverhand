@@ -44,7 +44,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_profile_mcp::AgentProfileMcpDataPlane, mcp_config::parse_mcp_config,
+    agent_profile_mcp::AgentProfileMcpDataPlane, identity_access::mcp_config::parse_mcp_config,
     runtime_credential::RuntimePrincipal,
 };
 

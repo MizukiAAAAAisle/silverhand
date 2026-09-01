@@ -8,7 +8,7 @@
 //!
 //! ## Why a combined lifecycle, distinct from `agent_avatar_write`
 //!
-//! The public avatar routes ([`crate::agent_avatar_write`]) own an avatar-ONLY lifecycle.
+//! The public avatar routes ([`crate::identity_access::agent_avatar_write`]) own an avatar-ONLY lifecycle.
 //! This internal capability edits text AND avatar in the SAME request, and the product
 //! contract (ratified) is a SINGLE atomic row write with a SINGLE announce — never the
 //! avatar-then-text two-write / two-announce sequence with a partial-commit window. That

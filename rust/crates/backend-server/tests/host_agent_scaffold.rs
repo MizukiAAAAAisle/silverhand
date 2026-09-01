@@ -114,11 +114,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // tuning/profile write
     // (route 2, `agent_profile_write`), the agent avatar byte fetch (route 5,
     // `agent_avatar`), and the agent avatar upload/clear lifecycle (routes 3/4,
-    // `agent_avatar_write`, which reuses the single `agent_profile_write` row writer).
+    // relocated under the `identity_access` namespace as
+    // `crate::identity_access::agent_avatar_write` per #task:2274, which reuses the
+    // single `agent_profile_write` row writer).
     // Their SQLite adapters and server route surfaces are the sibling entries below;
     // all mounted at the app composition root by the #task:2234 integration (CP2).
     ("backend-core", "agent_avatar"),
-    ("backend-core", "agent_avatar_write"),
     ("backend-core", "agent_profile_write"),
     // #task:2272 — the handle-availability probe's core module was relocated under the
     // C1 `identity_access` namespace (`crate::identity_access::participant_handle_availability`).
@@ -140,11 +141,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // #task:2226 — internal profile/MCP consumer vocabulary and pure
     // orchestration. The production data-plane adapter is #task:2231 below; mounted at
     // the app composition root by the #task:2234 integration (CP7a peer-profile, CP7b MCP).
-    ("backend-core", "agent_peer_profile"),
+    // Three of this family's core leaves relocated under the `identity_access` namespace
+    // per #task:2274 (`agent_peer_profile`, `internal_profile_write`, `mcp_config`); their
+    // owner/target lives in the organization map, not as flat seam entries here. The
+    // route-face vocabulary (`agent_profile_mcp`, `agent_profile_read`) stays flat below.
     ("backend-core", "agent_profile_mcp"),
     ("backend-core", "agent_profile_read"),
-    ("backend-core", "internal_profile_write"),
-    ("backend-core", "mcp_config"),
     ("backend-core", "capability"),
     ("backend-core", "cold_read"),
     ("backend-core", "host_resources_read"),
@@ -169,12 +171,13 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "user_presence_last_seen"),
     // #task:2193 — the workspace metadata/read vertical. Core primitives and ports;
     // their SQLite adapters and server routes are the sibling entries below. Mounted at
-    // the app composition root by the #task:2223 integration.
+    // the app composition root by the #task:2223 integration. Two of this vertical's core
+    // leaves relocated under the `identity_access` namespace per #task:2274
+    // (`workspace_detail_read`, `workspace_name_availability`); their owner/target lives in
+    // the organization map, not as flat seam entries here.
     ("backend-core", "name_canonicalization"),
-    ("backend-core", "workspace_detail_read"),
     ("backend-core", "workspace_metadata_write"),
     ("backend-core", "workspace_name"),
-    ("backend-core", "workspace_name_availability"),
     // Shared binary64-exact integer primitive. #task:2227's runtime-stop codec is
     // the first migration consumer; domain positivity remains outside this module.
     ("backend-core", "wire_number"),

@@ -9,15 +9,15 @@
 //! the create path stores and the partial unique index
 //! `idx_workspaces_name_key ... WHERE owner_agent_id IS NULL` enforces. The
 //! adapter returns the row's OWN stored key rather than a boolean, so the
-//! driver-free [`probe_workspace_name`](silverhand_backend_core::workspace_name_availability::probe_workspace_name)
+//! driver-free [`probe_workspace_name`](silverhand_backend_core::identity_access::workspace_name_availability::probe_workspace_name)
 //! can bind a positive answer against the key it asked about.
 
 use std::path::Path;
 
 use silverhand_backend_core::{
+    identity_access::workspace_name_availability::{HeldName, RegularWorkspaceNamespace},
     persistence::PersistenceFailure,
     workspace_name::CanonicalWorkspaceName,
-    workspace_name_availability::{HeldName, RegularWorkspaceNamespace},
 };
 use sqlx::{
     Row, SqlitePool,
@@ -101,7 +101,7 @@ impl RegularWorkspaceNamespace for SqliteRegularWorkspaceNamespace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::workspace_name_availability::{
+    use silverhand_backend_core::identity_access::workspace_name_availability::{
         WorkspaceNameAvailability, probe_workspace_name,
     };
     use sqlx::{Connection, Executor, SqliteConnection};

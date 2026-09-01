@@ -38,8 +38,8 @@ use silverhand_backend_core::access::{
     WorkspaceGovernance, WorkspaceGovernanceFacts, WorkspaceGovernanceFactsRead, WorkspaceRole,
     WorkspaceUserMembership, governance_ceiling, human_enrollment_authorized,
 };
-use silverhand_backend_core::agent_peer_profile::PeerTargetMembership;
 use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
+use silverhand_backend_core::identity_access::agent_peer_profile::PeerTargetMembership;
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{
     SqlitePool,

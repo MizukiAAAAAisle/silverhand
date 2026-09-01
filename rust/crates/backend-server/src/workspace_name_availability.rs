@@ -34,7 +34,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
     identity::UserId,
-    workspace_name_availability::{
+    identity_access::workspace_name_availability::{
         RegularWorkspaceNamespace, WorkspaceNameAvailability, probe_workspace_name,
     },
 };
@@ -136,8 +136,8 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        persistence::PersistenceFailure, workspace_name::CanonicalWorkspaceName,
-        workspace_name_availability::HeldName,
+        identity_access::workspace_name_availability::HeldName, persistence::PersistenceFailure,
+        workspace_name::CanonicalWorkspaceName,
     };
     use tower::ServiceExt;
 

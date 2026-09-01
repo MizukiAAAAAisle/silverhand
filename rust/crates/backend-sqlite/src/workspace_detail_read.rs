@@ -5,7 +5,7 @@
 //! published face plus the `workspace_users.user_id` the viewer's membership row
 //! matched (or `None`) — and never a verdict. Existence, visibility, and the
 //! identity bind are the job of
-//! [`classify_workspace_view`](silverhand_backend_core::workspace_detail_read::classify_workspace_view)
+//! [`classify_workspace_view`](silverhand_backend_core::identity_access::workspace_detail_read::classify_workspace_view)
 //! at the authenticated boundary. The face and the membership subject are read on
 //! ONE statement, so the two facts cannot sample different instants.
 //!
@@ -20,8 +20,10 @@ use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    identity_access::workspace_detail_read::{
+        WorkspaceDetailForViewer, WorkspaceDetailReadUnitOfWork,
+    },
     persistence::PersistenceFailure,
-    workspace_detail_read::{WorkspaceDetailForViewer, WorkspaceDetailReadUnitOfWork},
     workspace_face::WorkspaceFace,
 };
 use sqlx::{

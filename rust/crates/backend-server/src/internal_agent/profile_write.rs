@@ -52,7 +52,7 @@ use silverhand_backend_core::{
     },
     avatar::BlobCleanup,
     identity::AgentId,
-    internal_profile_write::{
+    identity_access::internal_profile_write::{
         InternalAvatarEdit, InternalProfileEdit, InternalProfileWriteOutcome,
         update_internal_profile,
     },

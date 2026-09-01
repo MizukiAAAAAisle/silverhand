@@ -9,7 +9,7 @@
 //! paired avatar pointer `avatar_storage_key` / `avatar_content_type`, whose SET/CLEAR
 //! admissions ([`admit_avatar_assignment`] / [`admit_avatar_removal`]) live here even
 //! though the avatar upload/clear ORCHESTRATION (blob put, orphan cleanup, announce)
-//! lives in the sibling `agent_avatar_write` bounded context, which reuses THIS single
+//! lives in the sibling `crate::identity_access::agent_avatar_write` bounded context, which reuses THIS single
 //! canonical row writer. Columns owned by OTHER capabilities are not written here: a
 //! `runtime` transition, the deletion/materialization lifecycle's status columns, and
 //! agent creation each have their own writers. The point is that a value legal for the
