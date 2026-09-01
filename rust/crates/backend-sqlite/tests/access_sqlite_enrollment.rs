@@ -13,11 +13,11 @@ use sqlx::{
 };
 use std::path::Path;
 
-use silverhand_backend_core::access::{
+use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
+use silverhand_backend_core::identity_access::access::{
     AddAgentMemberError, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentClock,
     add_workspace_agent_member,
 };
-use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_sqlite::access::SqliteAccessStore;
 use tempfile::TempDir;
 

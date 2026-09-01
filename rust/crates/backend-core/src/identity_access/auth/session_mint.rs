@@ -3,7 +3,9 @@ use std::{fmt, sync::Arc};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use thiserror::Error;
 
-use crate::{auth::session::SessionTokenHash, host_runtime::environment::EntropySource};
+use crate::{
+    host_runtime::environment::EntropySource, identity_access::auth::session::SessionTokenHash,
+};
 
 /// Number of CSPRNG bytes behind one session bearer, matching the TS
 /// `randomBytes(32)` issue precedent.
@@ -16,7 +18,7 @@ const SESSION_SECRET_BYTES: usize = 32;
 /// live surface of the plaintext; it is not a global unrepresentability claim.
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::auth::IssuedSessionSecret;
+/// use silverhand_backend_core::identity_access::auth::IssuedSessionSecret;
 /// fn duplicate(secret: &IssuedSessionSecret) -> IssuedSessionSecret {
 ///     secret.clone()
 /// }

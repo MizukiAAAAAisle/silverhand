@@ -37,9 +37,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
     agent_lifecycle::MaterializationStatus,
-    capability::agent_view::{VisibleStages, can_view_agent},
     identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
+    identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 
 use crate::error;

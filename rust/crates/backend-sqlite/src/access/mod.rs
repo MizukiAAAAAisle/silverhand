@@ -23,7 +23,7 @@
 //! candidate is *not* sampled here — the application samples its clock after
 //! authorization and hands the candidate in, so a re-enrollment keeps the stored
 //! value and the time source stays in the application. This crate owns no clock
-//! at all: the [`EnrollmentClock`](silverhand_backend_core::access::EnrollmentClock)
+//! at all: the [`EnrollmentClock`](silverhand_backend_core::identity_access::access::EnrollmentClock)
 //! port and its `Date.now()`-parity semantics live in the domain, and the concrete
 //! host-wall-clock adapter is assembled in the application layer, because reading
 //! the host wall clock is not persistence. Every driver error is handed to the
@@ -31,14 +31,14 @@
 
 use std::{path::Path, time::Duration};
 
-use silverhand_backend_core::access::{
+use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
+use silverhand_backend_core::identity_access::access::{
     AddHumanMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
     AgentWorkspaceMembership, Capability, EnrollmentKey, HumanEnrollmentCommit, HumanEnrollmentKey,
     HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, HumanUser, WorkspaceAccessPolicy,
     WorkspaceGovernance, WorkspaceGovernanceFacts, WorkspaceGovernanceFactsRead, WorkspaceRole,
     WorkspaceUserMembership, governance_ceiling, human_enrollment_authorized,
 };
-use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::identity_access::agent_peer_profile::PeerTargetMembership;
 use silverhand_backend_core::persistence::PersistenceFailure;
 use sqlx::{

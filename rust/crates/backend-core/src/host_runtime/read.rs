@@ -9,8 +9,10 @@
 //! be invisible.
 
 use crate::{
-    capability::computer_access::{ComputerAccess, ComputerAccessHeld, can_access_computer},
     identity::{HostId, UserId},
+    identity_access::capability::computer_access::{
+        ComputerAccess, ComputerAccessHeld, can_access_computer,
+    },
     persistence::PersistenceFailure,
 };
 

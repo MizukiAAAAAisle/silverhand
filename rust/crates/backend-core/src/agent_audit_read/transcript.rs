@@ -8,7 +8,7 @@
 //! for every row without a per-viewer read.
 
 use crate::{
-    capability::agent_audit::AuditedConversation, identity::ConversationId,
+    identity::ConversationId, identity_access::capability::agent_audit::AuditedConversation,
     messaging::collaboration::conversation_message_window::SelectedWindowMessage,
 };
 

@@ -94,7 +94,7 @@ pub struct AgentTeardownCapture {
 /// lifecycle a user request's to end".
 ///
 /// Whose computer it is is deliberately absent. Ownership is authorization and is
-/// read as its own narrow projection by [`crate::capability::computer_access`], so
+/// read as its own narrow projection by [`crate::identity_access::capability::computer_access`], so
 /// neither rule can answer the other's question from a field it happens to hold.
 ///
 /// Both halves here are projected RAW rather than pre-combined into one deletable

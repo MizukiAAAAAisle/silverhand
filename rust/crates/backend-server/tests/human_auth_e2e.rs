@@ -29,13 +29,15 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    auth::{EntropySessionTokenMint, HumanSessionAuthenticator, SessionClock, SessionTtl},
-    credential::{
+    host_runtime::environment::OsEntropy,
+    identity::UserId,
+    identity_access::auth::{
+        EntropySessionTokenMint, HumanSessionAuthenticator, SessionClock, SessionTtl,
+    },
+    identity_access::credential::{
         Argon2idCost, PasswordHashError, PasswordHashParams, PasswordHasher,
         PreparedPasswordCredential, RustCalibration,
     },
-    host_runtime::environment::OsEntropy,
-    identity::UserId,
     identity_access::user_identity::{UserChangedAnnounceFailure, UserChangedSink},
 };
 use silverhand_backend_server::human_auth::{self, HumanAuthDeps};

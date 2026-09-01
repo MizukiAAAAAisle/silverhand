@@ -4,8 +4,8 @@
 //! @-handle (`users.name`), the login email, the mutable `display_name`, and the
 //! projected profile a reader sees (`GET /api/me`). This context owns the
 //! `users` row and the `user_changed` app-scope announce; it does NOT own the
-//! password credential (`user_password_credentials`, [`crate::credential`]) nor
-//! the session (`auth_sessions`, [`crate::auth`]). Signup COMPOSES this context
+//! password credential (`user_password_credentials`, [`crate::identity_access::credential`]) nor
+//! the session (`auth_sessions`, [`crate::identity_access::auth`]). Signup COMPOSES this context
 //! with those two; PATCH `/api/me` drives the `display_name` write here.
 //!
 //! ## The self-profile update: derive the change gate, skip the write on a no-op

@@ -16,13 +16,13 @@ use silverhand_backend_core::messaging::collaboration::notification::{
     NotificationClearPort, NotificationClearSelector, clear_notifications,
 };
 use silverhand_backend_core::{
-    access::{WorkspaceHumanAudienceReadPort, WorkspaceRole},
     agent_availability_read::AgentAvailabilityReadModel,
-    auth::{AuthenticateHumanSession, SessionBearer},
     blob_store::{BlobStorageKey, StorageKind, StoredBlob},
     direct_pair_read::DirectPairReadModel,
     host_runtime::{aftermath::AgentAvailabilityAnnouncer, agent_roster::ComputerAgentsReadPort},
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId},
+    identity_access::access::{WorkspaceHumanAudienceReadPort, WorkspaceRole},
+    identity_access::auth::{AuthenticateHumanSession, SessionBearer},
     identity_access::user_identity::UserChangedSink,
     identity_access::workspace_metadata_write::WorkspaceMetadataChangedSink,
     messaging::{
@@ -3467,7 +3467,9 @@ fn availability_view(
     workspaces: &[&str],
     status: silverhand_backend_core::agent_lifecycle::MaterializationStatus,
 ) -> silverhand_backend_core::agent_availability_read::AgentViewFacts {
-    use silverhand_backend_core::capability::agent_view::{AgentViewerArms, AgentVisibility};
+    use silverhand_backend_core::identity_access::capability::agent_view::{
+        AgentViewerArms, AgentVisibility,
+    };
     silverhand_backend_core::agent_availability_read::AgentViewFacts::from_source(
         AgentId::parse(source).unwrap(),
         AgentVisibility {
@@ -4742,7 +4744,7 @@ async fn one_enrollment_leaves_a_durable_row_and_a_live_frame_through_the_authen
  {
     #[derive(Clone, Copy)]
     struct FixedClock(i64);
-    impl silverhand_backend_core::access::EnrollmentClock for FixedClock {
+    impl silverhand_backend_core::identity_access::access::EnrollmentClock for FixedClock {
         fn now_unix_millis(&self) -> i64 {
             self.0
         }
@@ -4794,23 +4796,24 @@ async fn one_enrollment_leaves_a_durable_row_and_a_live_frame_through_the_authen
 
     // The production use case, driven through the REAL store and the REAL hub as
     // its sink — the same path the mounted surface will call.
-    let (_membership, announce) = silverhand_backend_core::access::add_workspace_human_member(
-        &store,
-        &hub.workspace_membership_publisher(),
-        &FixedClock(JOIN_MS),
-        &silverhand_backend_core::identity::Principal::Human {
-            user_id: UserId::parse("admin-1").unwrap(),
-        },
-        WorkspaceId::parse("workspace-1").unwrap(),
-        user(),
-    )
-    .await
-    .unwrap()
-    .into_parts();
+    let (_membership, announce) =
+        silverhand_backend_core::identity_access::access::add_workspace_human_member(
+            &store,
+            &hub.workspace_membership_publisher(),
+            &FixedClock(JOIN_MS),
+            &silverhand_backend_core::identity::Principal::Human {
+                user_id: UserId::parse("admin-1").unwrap(),
+            },
+            WorkspaceId::parse("workspace-1").unwrap(),
+            user(),
+        )
+        .await
+        .unwrap()
+        .into_parts();
     assert!(
         matches!(
             announce,
-            silverhand_backend_core::access::ViewerAnnounce::Delivered
+            silverhand_backend_core::identity_access::access::ViewerAnnounce::Delivered
         ),
         "the hub accepted the announce"
     );
@@ -4951,12 +4954,12 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
 
     #[derive(Clone, Copy)]
     struct AtClock(i64);
-    impl silverhand_backend_core::auth::SessionClock for AtClock {
+    impl silverhand_backend_core::identity_access::auth::SessionClock for AtClock {
         fn now_unix_millis(&self) -> i64 {
             self.0
         }
     }
-    impl silverhand_backend_core::access::EnrollmentClock for AtClock {
+    impl silverhand_backend_core::identity_access::access::EnrollmentClock for AtClock {
         fn now_unix_millis(&self) -> i64 {
             self.0
         }
@@ -5066,9 +5069,10 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
     let session_store = silverhand_backend_sqlite::auth::SqliteSessionStore::open(&path)
         .await
         .unwrap();
-    let ttl = silverhand_backend_core::auth::SessionTtl::from_millis(1_000).unwrap();
+    let ttl =
+        silverhand_backend_core::identity_access::auth::SessionTtl::from_millis(1_000).unwrap();
     let authenticator = || {
-        silverhand_backend_core::auth::HumanSessionAuthenticator::new(
+        silverhand_backend_core::identity_access::auth::HumanSessionAuthenticator::new(
             session_store.clone(),
             AtClock(NOW_MS),
             ttl,

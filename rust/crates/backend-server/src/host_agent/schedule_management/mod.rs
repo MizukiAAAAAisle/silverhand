@@ -32,12 +32,12 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    capability::{
+    identity::{AgentId, Principal, UserId},
+    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
+    identity_access::capability::{
         agent_authority::{AgentAuthority, can_edit_agent},
         agent_view::{VisibleStages, can_view_agent},
     },
-    identity::{AgentId, Principal, UserId},
-    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
 };
 
 use crate::error;

@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use silverhand_backend_core::access::{
+use silverhand_backend_core::identity_access::access::{
     AgentWorkspaceMembership, HumanUser, WorkspaceUserMembership,
 };
 

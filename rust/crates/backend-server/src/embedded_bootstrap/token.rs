@@ -23,7 +23,7 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use silverhand_backend_core::auth::SessionTokenHash;
+use silverhand_backend_core::identity_access::auth::SessionTokenHash;
 use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
 

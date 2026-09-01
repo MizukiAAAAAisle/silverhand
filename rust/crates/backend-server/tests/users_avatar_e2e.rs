@@ -28,19 +28,19 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    auth::{
+    host_runtime::environment::OsEntropy,
+    identity::UserId,
+    identity_access::auth::{
         AuthenticateHumanSession, EntropySessionTokenMint, HumanSessionAuthenticator,
         SessionBearer, SessionClock, SessionTtl,
     },
-    credential::{
-        Argon2idCost, PasswordHashError, PasswordHashParams, PasswordHasher,
-        PreparedPasswordCredential, RustCalibration,
-    },
-    host_runtime::environment::OsEntropy,
-    identity::UserId,
     identity_access::avatar::{
         AVATAR_MAX_BYTES, AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome,
         AvatarBlobStore, AvatarContentType, AvatarStorageFailure,
+    },
+    identity_access::credential::{
+        Argon2idCost, PasswordHashError, PasswordHashParams, PasswordHasher,
+        PreparedPasswordCredential, RustCalibration,
     },
     identity_access::user_identity::{UserChangedAnnounceFailure, UserChangedSink},
     persistence::PersistenceFailure,

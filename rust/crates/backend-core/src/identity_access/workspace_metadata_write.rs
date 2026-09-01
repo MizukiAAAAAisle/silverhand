@@ -6,7 +6,7 @@
 //! display name (and the uniqueness key that name folds to), its description, and
 //! whether it is archived. That is a DISTINCT authority from
 //! [`crate::identity_access::workspace_face`] (which only PROJECTS a workspace's published face for
-//! a reader) and from [`crate::access`] enrollment (which writes roster edges).
+//! a reader) and from [`crate::identity_access::access`] enrollment (which writes roster edges).
 //! This context owns the mutation and the fact it yields, nothing more.
 //!
 //! ## Only regular workspaces have metadata to edit
@@ -282,7 +282,7 @@ pub enum WorkspaceArchiveWrite {
 /// The unit re-reads the authoritative row and the caller's role under the lock,
 /// applies the pure governance floor (`Admin` for `update_metadata`, `Owner` for
 /// `set_archived`) via the shared
-/// [`governance_floor_verdict`](crate::access::governance_floor_verdict), decides
+/// [`governance_floor_verdict`](crate::identity_access::access::governance_floor_verdict), decides
 /// name collision against the regular namespace, writes, and returns the fact its
 /// own write produced. The `actor` is passed in so the adapter re-derives authority
 /// under the same lock a pre-lock boundary verdict cannot guarantee is still
@@ -622,7 +622,7 @@ where
 /// readers". That is why it can safely fire post-commit off the sealed
 /// [`WorkspaceNameChange`] gate without re-reading anything.
 ///
-/// This is a SEPARATE port from [`crate::access::ViewerWorkspacesChangedSink`],
+/// This is a SEPARATE port from [`crate::identity_access::access::ViewerWorkspacesChangedSink`],
 /// not a second method on it. That sink announces the `added` change on the
 /// enrollment write's commit and carries the new `role`; this one announces
 /// `metadata_changed` on the rename write's commit and has no role. They share a
@@ -645,7 +645,7 @@ pub trait WorkspaceMetadataChangedSink: Clone + Send + Sync + 'static {
 }
 
 /// An outward `metadata_changed` announce could not be delivered. Opaque like
-/// [`PersistenceFailure`] and [`crate::access::ViewerAnnounceFailure`], and for
+/// [`PersistenceFailure`] and [`crate::identity_access::access::ViewerAnnounceFailure`], and for
 /// the same reason — the transport's concrete error stays available as the
 /// `source` for the boundary that records it, while no transport type leaks into
 /// this context.
@@ -675,7 +675,7 @@ impl WorkspaceMetadataAnnounceFailure {
 /// What became of the post-commit `metadata_changed` announce — a value the write
 /// hands back rather than a `Result` its caller may quietly drop. The rename is
 /// committed either way and nothing here can unhappen it; mirroring
-/// [`crate::access::ViewerAnnounce`], the three arms are the three distinct facts a
+/// [`crate::identity_access::access::ViewerAnnounce`], the three arms are the three distinct facts a
 /// boundary may need to record.
 #[derive(Debug)]
 pub enum WorkspaceMetadataAnnounce {
@@ -709,7 +709,7 @@ pub enum WorkspaceMetadataAnnounce {
 /// [`into_parts`](Self::into_parts), which yields all three at once — so a boundary
 /// cannot take the face to serve the wire while letting the announce fate fall on
 /// the floor unrecorded or the rename fan-out go undone, the same discipline as
-/// [`crate::access::HumanEnrollmentOutcome`].
+/// [`crate::identity_access::access::HumanEnrollmentOutcome`].
 #[derive(Debug)]
 #[must_use = "a committed metadata update carries an announce outcome and a rename gate that must be handled"]
 pub struct AnnouncedWorkspaceMetadata {

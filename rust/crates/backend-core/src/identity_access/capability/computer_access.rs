@@ -58,7 +58,7 @@ pub enum ComputerAccessRefused {
 /// coordinate — which is closed here, structurally.
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::capability::computer_access::ComputerAccessHeld;
+/// use silverhand_backend_core::identity_access::capability::computer_access::ComputerAccessHeld;
 /// // Assembled from parts, this would authorize a requester no rule matched.
 /// let _: ComputerAccessHeld = ComputerAccessHeld {
 ///     computer: unimplemented!(),
@@ -72,7 +72,7 @@ pub enum ComputerAccessRefused {
 ///
 /// ```
 /// use silverhand_backend_core::{
-///     capability::computer_access::{
+///     identity_access::capability::computer_access::{
 ///         ComputerAccess, ComputerAccessHeld, ComputerOwnershipFacts, can_access_computer,
 ///     },
 ///     identity::{HostId, UserId},
@@ -109,7 +109,7 @@ impl ComputerAccessHeld {
     }
 }
 
-/// This rule's verdict. Not [`crate::capability::decision::Decision`]: this one
+/// This rule's verdict. Not [`crate::identity_access::capability::decision::Decision`]: this one
 /// gates a write, so the module rule applies.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ComputerAccess {

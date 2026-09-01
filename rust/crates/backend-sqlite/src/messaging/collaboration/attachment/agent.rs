@@ -6,8 +6,8 @@
 //! request command is never reflected back as an authority witness.
 
 use silverhand_backend_core::{
-    access::Capability,
     identity::{AgentId, ConversationId, WorkspaceId},
+    identity_access::access::Capability,
     messaging::{
         AttachmentId, PrincipalIdentity,
         collaboration::{

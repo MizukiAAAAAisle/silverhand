@@ -14,13 +14,13 @@ pub const DEFAULT_SESSION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
 /// comparison, string-view, or serialization surface.
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::auth::SessionBearer;
+/// use silverhand_backend_core::identity_access::auth::SessionBearer;
 /// let token = SessionBearer::parse("secret").unwrap();
 /// let _ = token.clone();
 /// ```
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::auth::SessionBearer;
+/// use silverhand_backend_core::identity_access::auth::SessionBearer;
 /// let left = SessionBearer::parse("secret").unwrap();
 /// let right = SessionBearer::parse("secret").unwrap();
 /// let _ = left == right;
@@ -28,13 +28,13 @@ pub const DEFAULT_SESSION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
 ///
 /// ```compile_fail
 /// use std::ops::Deref;
-/// use silverhand_backend_core::auth::SessionBearer;
+/// use silverhand_backend_core::identity_access::auth::SessionBearer;
 /// let token = SessionBearer::parse("secret").unwrap();
 /// let _: &str = Deref::deref(&token);
 /// ```
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::auth::SessionBearer;
+/// use silverhand_backend_core::identity_access::auth::SessionBearer;
 /// let token = SessionBearer::parse("secret").unwrap();
 /// let _: &str = token.as_ref();
 /// ```

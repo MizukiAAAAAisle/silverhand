@@ -20,14 +20,14 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::{Value, json};
-use silverhand_backend_core::access::{
+use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
+use silverhand_backend_core::identity_access::access::{
     AddHumanMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
     AgentWorkspaceMembership, Capability, EnrollmentClock, EnrollmentKey, HumanEnrollmentCommit,
     HumanEnrollmentKey, HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, HumanUser,
     ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceAccessPolicy, WorkspaceGovernance,
     WorkspaceRole, WorkspaceUserMembership,
 };
-use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_server::access::{
     router,

@@ -1,7 +1,7 @@
 //! The stored facts one `GET /api/agents/{id}` read needs.
 //!
 //! Detail composes the SAME visibility ACL as availability
-//! ([`crate::capability::agent_view`]) with a projection of the agent's own row.
+//! ([`crate::identity_access::capability::agent_view`]) with a projection of the agent's own row.
 //! It holds no rule of its own: facts in, application structs out, so the route
 //! and its tests share one authority without a driver.
 //!
@@ -34,8 +34,8 @@ use std::future::Future;
 use crate::{
     agent_lifecycle::MaterializationStatus,
     agents::runtime::RuntimeKind,
-    capability::agent_view::{AgentViewerArms, AgentVisibility},
     identity::{AgentId, UserId},
+    identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
     persistence::PersistenceFailure,
 };
 
@@ -174,8 +174,8 @@ pub trait AgentDetailReadModel {
 mod tests {
     use super::*;
     use crate::{
-        capability::agent_view::{VisibleStages, can_view_agent},
         identity::Principal,
+        identity_access::capability::agent_view::{VisibleStages, can_view_agent},
     };
 
     fn user(id: &str) -> UserId {

@@ -16,7 +16,7 @@
 use std::future::Future;
 
 use crate::{
-    auth::session::SessionTokenHash, identity::UserId, name_canonicalization,
+    identity::UserId, identity_access::auth::session::SessionTokenHash, name_canonicalization,
     persistence::PersistenceFailure,
 };
 

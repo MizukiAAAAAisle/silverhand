@@ -78,16 +78,16 @@ use axum::{
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    capability::{
-        agent_authority::{AgentAuthority, can_edit_agent},
-        agent_view::{VisibleStages, can_view_agent},
-    },
     identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::AgentDetailReadModel,
     identity_access::agent_profile_write::{
         AgentChangedAnnounce, AgentChangedSink, AgentProfileUpdateOutcome, AgentProfileWriteError,
         AgentProfileWriteUnitOfWork, AgentTuningEdit, FieldEdit, RequiredEdit, TuningRejection,
         update_agent_profile_and_announce,
+    },
+    identity_access::capability::{
+        agent_authority::{AgentAuthority, can_edit_agent},
+        agent_view::{VisibleStages, can_view_agent},
     },
     identity_access::user_identity::DisplayName,
 };

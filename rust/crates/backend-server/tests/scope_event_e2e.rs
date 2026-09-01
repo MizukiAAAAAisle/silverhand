@@ -7,8 +7,10 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
 use log_capture::LogBuffer;
 use sha2::{Digest, Sha256};
-use silverhand_backend_core::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl};
 use silverhand_backend_core::identity::UserId;
+use silverhand_backend_core::identity_access::auth::{
+    HumanSessionAuthenticator, SessionClock, SessionTtl,
+};
 use silverhand_backend_server::foundation::scope_event_transport::{
     AllowedOrigin, ConnectionLifecycle, DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH,
     EVENT_WS_SESSION_COOKIE, EventWebSocketConfig, ScopeEventHub, router,

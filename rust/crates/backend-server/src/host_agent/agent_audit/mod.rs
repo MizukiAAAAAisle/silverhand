@@ -42,8 +42,8 @@ use silverhand_backend_core::{
         audit_chats_floor, audit_conversation_floor,
     },
     blob_store::BlobStore,
-    capability::agent_audit::AuditedConversation,
     identity::{AgentId, Principal},
+    identity_access::capability::agent_audit::AuditedConversation,
 };
 
 mod attachment;

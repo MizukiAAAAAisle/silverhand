@@ -34,10 +34,10 @@ use axum::{
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    auth::{SessionAudit, SessionClock, SessionIssue, SessionTokenMint},
     embedded_bootstrap::{
         BootstrapPorts, EmbeddedBootstrap, EmbeddedBootstrapUnitOfWork, bootstrap_session,
     },
+    identity_access::auth::{SessionAudit, SessionClock, SessionIssue, SessionTokenMint},
     identity_access::user_identity::UserChangedSink,
 };
 
@@ -298,10 +298,12 @@ mod tests {
         http::Request,
     };
     use silverhand_backend_core::{
-        auth::{EntropySessionTokenMint, MintedSession, SessionMintError, SessionTokenHash},
         embedded_bootstrap::BootstrapChoice,
         host_runtime::environment::EntropySource,
         identity::UserId,
+        identity_access::auth::{
+            EntropySessionTokenMint, MintedSession, SessionMintError, SessionTokenHash,
+        },
         identity_access::user_identity::{UserChangedAnnounceFailure, UserRecord},
         persistence::PersistenceFailure,
     };

@@ -12,8 +12,8 @@
 //! would hold that rule where no test of the rule can see it.
 
 use crate::{
-    capability::computer_access::ComputerOwnershipFacts,
     identity::{HostId, UserId},
+    identity_access::capability::computer_access::ComputerOwnershipFacts,
 };
 
 use super::{custody::HostCredentialEligibilityFacts, lifecycle::HostLifecycleStamps};
@@ -42,7 +42,7 @@ pub enum HostKind {
 /// Wide on purpose, and the one place that is: this is the record itself, the thing
 /// a read surface renders and a lifecycle operation reports back. Every rule that
 /// DECIDES something takes its own narrow projection instead — ownership goes to
-/// [`crate::capability::computer_access`], the lifecycle stamps to
+/// [`crate::identity_access::capability::computer_access`], the lifecycle stamps to
 /// [`super::lifecycle`], teardown's two halves to
 /// [`crate::teardown::facts::ComputerTeardownFacts`] — so no decision can quietly
 /// widen to a field that happens to be here.
@@ -78,7 +78,7 @@ impl ComputerRecord {
     }
 
     /// Who the computer belongs to, projected for
-    /// [`crate::capability::computer_access::can_access_computer`].
+    /// [`crate::identity_access::capability::computer_access::can_access_computer`].
     pub fn ownership(&self) -> ComputerOwnershipFacts {
         ComputerOwnershipFacts {
             id: self.id.clone(),

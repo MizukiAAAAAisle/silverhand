@@ -235,7 +235,7 @@ pub enum AgentTeardownCommit {
 ///
 /// ```
 /// use silverhand_backend_core::{
-///     capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
+///     identity_access::capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
 ///     host_runtime::computer::{HostKind, ProvisioningSource},
 ///     identity::{HostId, UserId},
 ///     teardown::{
@@ -416,10 +416,10 @@ mod tests {
     use super::*;
     use crate::{
         agent_lifecycle::MaterializationStatus,
-        capability::computer_access::{
+        host_runtime::computer::{HostKind, ProvisioningSource},
+        identity_access::capability::computer_access::{
             ComputerAccess, ComputerOwnershipFacts, can_access_computer,
         },
-        host_runtime::computer::{HostKind, ProvisioningSource},
         runtime_credential::{RuntimeGeneration, RuntimeScope},
         runtime_event::RuntimeObservedStatus,
         teardown::{

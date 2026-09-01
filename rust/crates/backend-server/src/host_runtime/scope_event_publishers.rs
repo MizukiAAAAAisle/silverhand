@@ -4,12 +4,12 @@ use std::{error::Error, fmt};
 
 use silverhand_backend_core::{
     agent_availability_read::AgentAvailabilityReadModel,
-    capability::agent_view::agent_viewer_user_ids,
     host_runtime::{
         aftermath::{AgentAvailabilityAnnouncer, CustodyEffectFailure},
         agent_roster::ComputerAgentsReadPort,
     },
     identity::{AgentId, ConversationId, HostId, UserId},
+    identity_access::capability::agent_view::agent_viewer_user_ids,
     scope_event::EventScope,
 };
 

@@ -11,11 +11,11 @@
 
 use crate::{
     agent_lifecycle::MaterializationStatus,
-    capability::{
+    identity::{AgentId, UserId},
+    identity_access::capability::{
         agent_audit::AgentAuditSubject,
         agent_view::{AgentViewerArms, AgentVisibility},
     },
-    identity::{AgentId, UserId},
 };
 
 /// The stored subject facts one audit request is gated with.

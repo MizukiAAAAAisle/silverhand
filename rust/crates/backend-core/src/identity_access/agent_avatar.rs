@@ -33,7 +33,7 @@
 //!
 //! ## Every row fact is source-bound before the blob is touched
 //!
-//! The visibility gate ([`crate::capability::agent_view`]) binds the DETAIL facts to
+//! The visibility gate ([`crate::identity_access::capability::agent_view`]) binds the DETAIL facts to
 //! the requested id. This serve-ref read is a SEPARATE port, so it carries its OWN
 //! read-back source id ([`AgentAvatarServeRef::Row`]'s `source`), and
 //! [`fetch_agent_avatar`] binds `source == requested` BEFORE any blob read. A

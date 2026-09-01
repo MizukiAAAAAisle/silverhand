@@ -3,7 +3,7 @@
 //!
 //! This is the composition seam where the embedded-bootstrap context meets the
 //! user-identity authority ([`crate::identity_access::user_identity`]) and the session authority
-//! ([`crate::auth`]). It mirrors the TS `routes.ts` embedded-bootstrap handler +
+//! ([`crate::identity_access::auth`]). It mirrors the TS `routes.ts` embedded-bootstrap handler +
 //! `UserAuthService.register`: decide 0/1/>1 viewers under ONE write lock, create
 //! the profile-only local viewer on an empty DB (and backfill its owner
 //! membership), select the sole viewer on a single-viewer DB, or refuse an
@@ -25,8 +25,10 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    auth::{IssuedSessionSecret, SessionAudit, SessionIssue, SessionMintError, SessionTokenMint},
     identity::UserId,
+    identity_access::auth::{
+        IssuedSessionSecret, SessionAudit, SessionIssue, SessionMintError, SessionTokenMint,
+    },
     identity_access::user_identity::{UserChangedAnnounce, UserChangedSink, UserRecord},
     persistence::PersistenceFailure,
 };
@@ -178,7 +180,7 @@ where
 }
 
 /// Mint one bearer and persist its coordinate, yielding the one-time plaintext.
-/// The plaintext survives only because [`crate::auth::MintedSession::into_parts`]
+/// The plaintext survives only because [`crate::identity_access::auth::MintedSession::into_parts`]
 /// hands it back here after the coordinate is committed.
 async fn issue_session<Mint, Iss>(
     mint: &Mint,
@@ -200,8 +202,8 @@ where
 mod tests {
     use super::*;
     use crate::{
-        auth::{EntropySessionTokenMint, MintedSession, SessionTokenHash},
         host_runtime::environment::EntropySource,
+        identity_access::auth::{EntropySessionTokenMint, MintedSession, SessionTokenHash},
         identity_access::user_identity::UserChangedAnnounceFailure,
     };
     use std::sync::{

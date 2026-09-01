@@ -16,9 +16,9 @@
 use silverhand_backend_core::{
     agent_availability_read::{AgentAvailabilityReadModel, AgentViewFacts},
     agent_lifecycle::MaterializationStatus,
-    capability::agent_view::{AgentViewerArms, AgentVisibility},
     cold_read::availability::HostReachabilityFacts,
     identity::{AgentId, HostId, UserId},
+    identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
     persistence::PersistenceFailure,
 };
 use silverhand_backend_sqlite::agent_availability_read::SqliteAgentAvailabilityColdRead;

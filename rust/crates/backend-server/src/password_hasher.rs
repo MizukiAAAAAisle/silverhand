@@ -17,7 +17,7 @@
 //! [`PasswordHashError::offload_join_failed`] so the flow takes the lane's
 //! safe-500, never a product answer.
 
-use silverhand_backend_core::credential::{
+use silverhand_backend_core::identity_access::credential::{
     PasswordHashError, PasswordHasher, PasswordKdf, PreparedPasswordCredential,
 };
 
@@ -73,11 +73,11 @@ where
 mod tests {
     use super::*;
     use silverhand_backend_core::{
-        credential::{
+        host_runtime::environment::OsEntropy,
+        identity_access::credential::{
             Argon2idCost, Argon2idPasswordHasher, CostMeasurer, FLOOR_MEMORY_COST_KIB,
             FLOOR_TIME_COST, OUTPUT_LEN, TARGET_HASH_MILLIS,
         },
-        host_runtime::environment::OsEntropy,
     };
     use std::sync::{
         Arc, Mutex,

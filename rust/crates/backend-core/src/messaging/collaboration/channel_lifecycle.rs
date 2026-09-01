@@ -8,8 +8,8 @@
 use std::{error::Error, future::Future};
 
 use crate::{
-    access::{WorkspaceRole, role_governs_workspace},
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    identity_access::access::{WorkspaceRole, role_governs_workspace},
     messaging::{
         DirectPairParticipants,
         collaboration::channel_directory::{ChannelStatus, ChannelVisibility, DirectoryRoster},

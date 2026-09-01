@@ -13,8 +13,8 @@ use std::collections::{BTreeSet, HashSet};
 
 use crate::{
     agent_lifecycle::MaterializationStatus,
-    capability::decision::Decision,
     identity::{AgentId, Principal, UserId},
+    identity_access::capability::decision::Decision,
 };
 
 /// The humans admitted by the visibility ACL.

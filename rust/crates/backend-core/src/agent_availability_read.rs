@@ -1,7 +1,7 @@
 //! The stored facts one `GET /api/agents/:id/availability` read needs.
 //!
 //! Availability composes TWO capabilities that were landed separately — the
-//! visibility ACL ([`crate::capability::agent_view`]) and the reachability rule
+//! visibility ACL ([`crate::identity_access::capability::agent_view`]) and the reachability rule
 //! ([`crate::cold_read::availability`]) — and this port supplies the facts each
 //! reads. It holds no rule of its own: facts in, application structs out, so the
 //! route and its tests share one authority without a driver.
@@ -28,9 +28,9 @@
 use std::future::Future;
 
 use crate::{
-    capability::agent_view::AgentVisibility,
     cold_read::availability::{AgentAvailabilityFacts, HostReachabilityFacts},
     identity::{AgentId, HostId},
+    identity_access::capability::agent_view::AgentVisibility,
     persistence::PersistenceFailure,
 };
 

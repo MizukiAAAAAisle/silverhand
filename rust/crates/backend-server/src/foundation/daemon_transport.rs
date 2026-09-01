@@ -2841,8 +2841,8 @@ mod tests {
         };
         use serde_json::{Number, Value};
         use silverhand_backend_core::{
-            access::WorkspaceRole,
             identity::{AgentId, ConversationId, DaemonInstanceId, UserId, WorkspaceId},
+            identity_access::access::WorkspaceRole,
             messaging::{
                 collaboration::{
                     channel_directory::{ChannelStatus, ChannelVisibility, DirectoryRoster},

@@ -51,8 +51,8 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    auth::{AuthenticateHumanSession, SessionClock},
     identity::UserId,
+    identity_access::auth::{AuthenticateHumanSession, SessionClock},
     identity_access::avatar::{
         AVATAR_MAX_BYTES, AvatarBlobStore, AvatarContentType, AvatarFetchOutcome,
         AvatarPointerWriteUnitOfWork, AvatarRejection, AvatarStorageRefRead, AvatarUploadOutcome,

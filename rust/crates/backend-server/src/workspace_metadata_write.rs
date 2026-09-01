@@ -110,11 +110,13 @@ use axum::{
 use std::future::Future;
 
 use serde::{Deserialize, Serialize};
-use silverhand_backend_core::access::WorkspaceGovernanceFloor;
+use silverhand_backend_core::identity_access::access::WorkspaceGovernanceFloor;
 use silverhand_backend_core::identity_access::workspace_name::CanonicalWorkspaceName;
 use silverhand_backend_core::{
-    access::{WorkspaceGovernanceFactsRead, WorkspaceRole, governance_floor_verdict},
     identity::{Principal, UserId, WorkspaceId},
+    identity_access::access::{
+        WorkspaceGovernanceFactsRead, WorkspaceRole, governance_floor_verdict,
+    },
     identity_access::workspace_face::WorkspaceFace,
     identity_access::workspace_metadata_write::{
         WorkspaceArchiveUpdate, WorkspaceMetadataAnnounce, WorkspaceMetadataChangedSink,

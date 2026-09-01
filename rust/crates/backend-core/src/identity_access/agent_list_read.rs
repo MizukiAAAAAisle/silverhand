@@ -1,7 +1,7 @@
 //! The stored facts one `GET /api/agents` read needs.
 //!
 //! The list face asks the SAME "who may see this agent" question as
-//! [`crate::capability::agent_view`] — once per row instead of once. This module is
+//! [`crate::identity_access::capability::agent_view`] — once per row instead of once. This module is
 //! the port for that: facts in, application structs out, no rule of its own and no
 //! driver.
 //!
@@ -38,10 +38,10 @@
 use std::future::Future;
 
 use crate::{
-    capability::agent_view::{ViewRefused, VisibleStages, can_view_agent},
-    capability::decision::Decision,
     identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::AgentDetailFacts,
+    identity_access::capability::agent_view::{ViewRefused, VisibleStages, can_view_agent},
+    identity_access::capability::decision::Decision,
     persistence::PersistenceFailure,
 };
 

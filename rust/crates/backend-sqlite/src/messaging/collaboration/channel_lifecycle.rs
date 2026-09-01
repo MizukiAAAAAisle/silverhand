@@ -4,8 +4,8 @@ mod mutation;
 pub use mutation::{ChannelLifecycleMutationStoreError, SqliteChannelLifecycleMutation};
 
 use silverhand_backend_core::{
-    access::WorkspaceRole,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    identity_access::access::WorkspaceRole,
     messaging::{
         DirectPairParticipants, PrincipalIdentity,
         collaboration::{

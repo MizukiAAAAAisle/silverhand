@@ -4,7 +4,7 @@
 //! `canViewWorkspace` for a human principal reduces to `isWorkspaceMember`, so a
 //! plain member may read a workspace's published face. The governance role that
 //! decides who may rename, archive or delete a workspace is a SEPARATE authority
-//! ([`crate::access::WorkspaceGovernance`]) that deliberately never gates this
+//! ([`crate::identity_access::access::WorkspaceGovernance`]) that deliberately never gates this
 //! read — a member with no admin standing still sees the face. Conflating the two
 //! would smuggle a governance floor into data visibility.
 //!

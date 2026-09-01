@@ -2,7 +2,7 @@
 //!
 //! Two authorization doors stay separate and ordered here, exactly as in the
 //! TypeScript route. The **request-boundary door**
-//! ([`WorkspaceAccessPolicy`](silverhand_backend_core::access::WorkspaceAccessPolicy))
+//! ([`WorkspaceAccessPolicy`](silverhand_backend_core::identity_access::access::WorkspaceAccessPolicy))
 //! runs FIRST, before the body is decoded: it resolves the workspace and the
 //! caller's role floor and answers a non-member (`403`) or an unknown workspace
 //! (`404`) without the body being buffered, so a caller without standing cannot
@@ -37,13 +37,13 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use silverhand_backend_core::access::{
+use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
+use silverhand_backend_core::identity_access::access::{
     AddAgentMemberError, AddHumanMemberError, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
     EnrollmentClock, HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, ViewerAnnounce,
     ViewerWorkspacesChangedSink, WorkspaceAccessPolicy, WorkspaceGovernance,
     add_workspace_agent_member, add_workspace_human_member,
 };
-use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 
 use crate::error;

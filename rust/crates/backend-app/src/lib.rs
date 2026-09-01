@@ -13,10 +13,7 @@ use std::{
 
 use axum::Router;
 use silverhand_backend_core::{
-    access::{EnrollmentClock, unix_millis},
-    auth::{EntropySessionTokenMint, HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     blob_store::StorageKind,
-    credential::Argon2idPasswordHasher,
     host_runtime::{
         claim::ClaimLocalComputer,
         environment::{OsEntropy, SystemClock},
@@ -24,6 +21,11 @@ use silverhand_backend_core::{
         revoke::RevokeComputer,
         rotation::{RotateConnectToken, RotateHostToken, RotateHostTokenThroughDaemon},
     },
+    identity_access::access::{EnrollmentClock, unix_millis},
+    identity_access::auth::{
+        EntropySessionTokenMint, HumanSessionAuthenticator, SessionTtl, SystemSessionClock,
+    },
+    identity_access::credential::Argon2idPasswordHasher,
     policy::presence_grace::GraceWindow,
     teardown::computer_delete::DeleteComputer,
 };

@@ -16,12 +16,12 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    auth::{
+    host_runtime::environment::{EntropySource, OsEntropy},
+    identity::UserId,
+    identity_access::auth::{
         SessionAudit, SessionIssue, SessionRevoke, SessionTokenHash, SessionValidation,
         SessionValidationPort,
     },
-    host_runtime::environment::{EntropySource, OsEntropy},
-    identity::UserId,
     persistence::PersistenceFailure,
 };
 use sqlx::{
@@ -263,7 +263,7 @@ struct DanglingSessionUser;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::auth::{SessionTokenHash, SessionTtl};
+    use silverhand_backend_core::identity_access::auth::{SessionTokenHash, SessionTtl};
     use sqlx::{Connection, Executor, SqliteConnection};
     use std::sync::Mutex;
 

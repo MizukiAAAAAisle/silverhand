@@ -17,12 +17,12 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use silverhand_backend_core::access::{
+use silverhand_backend_core::identity::{Principal, UserId, WorkspaceId};
+use silverhand_backend_core::identity_access::access::{
     AddHumanMemberError, EnrollmentClock, HumanEnrollmentOutcome, HumanEnrollmentReadPort,
     ViewerAnnounce, ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceRole,
     add_workspace_human_member,
 };
-use silverhand_backend_core::identity::{Principal, UserId, WorkspaceId};
 use silverhand_backend_sqlite::access::SqliteAccessStore;
 use tempfile::TempDir;
 

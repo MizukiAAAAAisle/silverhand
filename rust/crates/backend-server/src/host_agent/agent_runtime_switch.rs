@@ -73,13 +73,13 @@ use silverhand_backend_core::{
         runtime::RuntimeKind,
         runtime_capability::{reasoning_effort_valid_for_runtime, runtime_supports_fast_mode},
     },
-    capability::{
-        agent_authority::{AgentAuthority, can_edit_agent},
-        agent_view::{VisibleStages, can_view_agent},
-    },
     identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::AgentDetailReadModel,
     identity_access::agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
+    identity_access::capability::{
+        agent_authority::{AgentAuthority, can_edit_agent},
+        agent_view::{VisibleStages, can_view_agent},
+    },
     messaging::collaboration::RuntimeControlPort,
     name_canonicalization::is_ecmascript_trim_whitespace,
     runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustodyReadPort},

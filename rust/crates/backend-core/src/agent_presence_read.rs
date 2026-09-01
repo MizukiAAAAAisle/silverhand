@@ -1,7 +1,7 @@
 //! The stored facts one `GET /api/agents/{id}/presence` read needs.
 //!
 //! Presence composes the SAME visibility ACL as availability and detail
-//! ([`crate::capability::agent_view`]) with ONE projected fact — the agent's
+//! ([`crate::identity_access::capability::agent_view`]) with ONE projected fact — the agent's
 //! `last_activity_at`, decoded into a validated
 //! [`crate::policy::agent_presence::ActivityInstant`] whose
 //! [`away_at`](crate::policy::agent_presence::ActivityInstant::away_at) is the
@@ -27,8 +27,8 @@
 use std::future::Future;
 
 use crate::{
-    capability::agent_view::AgentVisibility, identity::AgentId, persistence::PersistenceFailure,
-    policy::agent_presence::ActivityInstant,
+    identity::AgentId, identity_access::capability::agent_view::AgentVisibility,
+    persistence::PersistenceFailure, policy::agent_presence::ActivityInstant,
 };
 
 /// The stored facts one authenticated agent-presence read is decided and
@@ -102,8 +102,8 @@ mod tests {
     use super::*;
     use crate::{
         agent_lifecycle::MaterializationStatus,
-        capability::agent_view::{AgentViewerArms, AgentVisibility},
         identity::AgentId,
+        identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
         policy::agent_presence,
     };
 

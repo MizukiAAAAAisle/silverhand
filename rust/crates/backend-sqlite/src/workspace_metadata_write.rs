@@ -5,7 +5,7 @@
 //! Like the enrollment store, this is a **pure consumer** of an existing product
 //! database: it opens a pool against a schema that already exists and migrates or
 //! seeds nothing. It decides nothing on its own either — the governance floor is
-//! [`governance_floor_verdict`](silverhand_backend_core::access::governance_floor_verdict)
+//! [`governance_floor_verdict`](silverhand_backend_core::identity_access::access::governance_floor_verdict)
 //! over the facts it re-reads UNDER the write lock, and the name-change gate and
 //! collision are decided against the domain's own `CanonicalWorkspaceName` fold,
 //! so this crate never re-implements the role axis or the name canonicalizer.
@@ -28,10 +28,10 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    access::{
+    identity::{AgentId, Principal, UserId, WorkspaceId},
+    identity_access::access::{
         WorkspaceGovernanceFacts, WorkspaceGovernanceFloor, WorkspaceRole, governance_floor_verdict,
     },
-    identity::{AgentId, Principal, UserId, WorkspaceId},
     identity_access::workspace_face::WorkspaceFace,
     identity_access::workspace_metadata_write::{
         PriorWorkspaceAddress, WorkspaceArchiveWrite, WorkspaceMetadataEdit,

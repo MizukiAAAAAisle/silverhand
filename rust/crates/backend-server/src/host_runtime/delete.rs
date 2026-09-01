@@ -394,14 +394,14 @@ mod tests {
     use serde_json::{Value, json};
     use silverhand_backend_core::{
         agent_lifecycle::MaterializationStatus,
-        capability::computer_access::{
-            ComputerAccess, ComputerOwnershipFacts, can_access_computer,
-        },
         host_runtime::{
             aftermath::CustodyEffectFailure,
             computer::{HostKind, ProvisioningSource},
         },
         identity::AgentId,
+        identity_access::capability::computer_access::{
+            ComputerAccess, ComputerOwnershipFacts, can_access_computer,
+        },
         persistence::PersistenceFailure,
         teardown::{
             cascade::{

@@ -141,7 +141,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // map, not as flat seam entries here. The route-face vocabulary `agent_profile_mcp`
     // stays flat below.
     ("backend-core", "agent_profile_mcp"),
-    ("backend-core", "capability"),
     ("backend-core", "cold_read"),
     ("backend-core", "host_resources_read"),
     ("backend-core", "policy"),
@@ -182,12 +181,11 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // #task:2193 CP2 — the human credentialed-session vertical (signup/login/
     // logout + self profile). Core bounded contexts and their ports; the SQLite
     // adapters and the server route surface are the sibling entries below. Mounted at
-    // the app composition root by the #task:2223 integration. This vertical's
-    // `human_auth_flows` and `user_identity` core leaves relocated under the
-    // `identity_access` namespace per #task:2276; their owner/target lives in the
-    // organization map, not as flat seam entries here. The directory-shaped `credential`
-    // context stays flat.
-    ("backend-core", "credential"),
+    // the app composition root by the #task:2223 integration. This vertical's core leaves
+    // relocated under the `identity_access` namespace: `human_auth_flows` and
+    // `user_identity` per #task:2276, and the directory-shaped `credential` context per
+    // #task:2277; their owner/target lives in the organization map, not as flat seam
+    // entries here.
     // #task:2222 — the human-directory and avatar route family (Rust Wave 2). The
     // avatar sub-capability of the `users` authority (ports + orchestration; it
     // reuses the CP2 identity above). Its server route surface is the sibling `users`
@@ -360,7 +358,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
 /// removing their flat entries here; they are now covered by the single `identity_access`
 /// container seam entry via the owning-root CP projection, and the organization map/gate is
 /// the authority for their owner/target inside the container. This is a physical relocation
-/// of pre-existing modules, not a lane addition.
+/// of pre-existing modules, not a lane addition. #task:2277 then likewise relocated two more
+/// inherited backend-core directory modules (`access`, `auth`) under `identity_access`, on
+/// the same terms — directory-preserving moves of pre-existing modules, folded into the same
+/// container seam entry.
 ///
 /// CP1-temporary, with G3's accounting: it guards "every lane module is registered
 /// where it is guarded", it is deleted when the seam is extracted into the
@@ -382,8 +383,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     // composition) and owes no labeled seam line, so it closes into this non-seam baseline
     // rather than `SEAM_ROOT_MODULES`.
     ("backend-app", "create_aftermath"),
-    ("backend-core", "access"),
-    ("backend-core", "auth"),
     ("backend-core", "blob_store"),
     // #task:2256 CLI preflight-failure audit domain: the typed record + the narrow sink
     // port `#2250`'s handler depends on. A non-seam production module the host-agent seam
@@ -476,9 +475,7 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
 /// missing path instead of on a violation. G0 holds this list to exactly the
 /// directory-shaped entries above, so neither shape can drift out of its gate.
 const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
-    ("backend-core", "capability"),
     ("backend-core", "cold_read"),
-    ("backend-core", "credential"),
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
     ("backend-filesystem", "runtime_detection"),
@@ -543,19 +540,19 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// SCOPE (#task:2275, narrowed honestly): this table only does the
 /// `ACTIVATION_NAMESPACES ⊆ SEAM_ROOT_MODULES` self-check — it never proved a route is
 /// actually mounted. It therefore covers only the legacy root namespaces still
-/// expressible at the owning-root layer. Once a read port relocates under an
+/// expressible at the owning-root layer. Once a lane module relocates under an
 /// organization container (the agent-detail and agent-list read ports moved to
-/// `crate::identity_access::{agent_detail_read,agent_list_read}` in this wave), it drops
-/// out of BOTH this table and the seam ledger: a container such as `identity_access`
-/// holds both activated and unmounted leaves, so it is NOT added here as a whole. A
-/// nested leaf's real existence/relocation is the organization gate's authority, and
-/// its actual mount is the composition/route behavior tests' — this table is not the
+/// `crate::identity_access::{agent_detail_read,agent_list_read}` in #task:2275, and the
+/// `capability` decision namespace moved to `crate::identity_access::capability` in
+/// #task:2277), it drops out of BOTH this table and the seam ledger: a container such as
+/// `identity_access` holds both activated and unmounted leaves, so it is NOT added here as
+/// a whole. A nested leaf's real existence/relocation is the organization gate's authority,
+/// and its actual mount is the composition/route behavior tests' — this table is not the
 /// activation authority for nested leaves, and is deliberately not upgraded into a
 /// second full-path scanner for them.
 const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "agent_availability_read"),
     ("backend-core", "agent_presence_read"),
-    ("backend-core", "capability"),
     ("backend-core", "cold_read"),
     ("backend-core", "host_resources_read"),
     ("backend-core", "policy"),
@@ -1410,7 +1407,10 @@ fn g5_namespaces_declare_and_never_carry_business() {
 /// one), and it is owned by this lane.
 #[test]
 fn g6_capability_decides_over_facts_and_declares_no_port() {
-    let paths = lane_source_paths("backend-core", "capability");
+    // The `capability` decision namespace relocated under the C1 `identity_access` container
+    // (#task:2277); this behavioral fence follows it to its new path. The invariant is
+    // unchanged — a capability decides over facts it was handed and declares no port.
+    let paths = lane_source_paths("backend-core", "identity_access/capability");
     assert!(
         paths.len() >= 4,
         "expected the capability namespace to carry its leaves, found {paths:?}"

@@ -42,13 +42,13 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    capability::agent_view::{VisibleStages, can_view_agent},
     identity::{AgentId, Principal, UserId},
     identity_access::agent_avatar::{
         AgentAvatarBlobRead, AgentAvatarFetchOutcome, AgentAvatarServeRefRead, fetch_agent_avatar,
     },
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     identity_access::avatar::AvatarContentType,
+    identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 
 use crate::error;

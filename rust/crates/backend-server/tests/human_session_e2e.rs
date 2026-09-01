@@ -14,8 +14,8 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
     identity::UserId,
+    identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
 };
 use silverhand_backend_server::auth::{PublicJsonUnauthorized, require_human_session};
 use silverhand_backend_sqlite::auth::SqliteSessionStore;

@@ -13,11 +13,11 @@
 //! capability functions.
 
 use crate::{
-    capability::{
+    identity::{AgentId, Principal},
+    identity_access::capability::{
         agent_audit::{AuditedConversation, can_audit_agent_chats, can_audit_agent_conversation},
         agent_view::{VisibleStages, can_view_agent},
     },
-    identity::{AgentId, Principal},
 };
 
 use super::AuditSubjectFacts;

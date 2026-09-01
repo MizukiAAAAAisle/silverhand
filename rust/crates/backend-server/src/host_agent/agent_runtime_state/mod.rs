@@ -59,8 +59,8 @@ use silverhand_backend_core::{
         AgentRuntimeStateReadModel, AgentRuntimeStateView, PresentationFocus, RuntimeFocusView,
         RuntimeParticipationView, RuntimeSeatScopeView, RuntimeSeatView,
     },
-    capability::agent_view::{VisibleStages, can_view_agent},
     identity::{AgentId, Principal, UserId},
+    identity_access::capability::agent_view::{VisibleStages, can_view_agent},
     runtime_credential::{
         AgentSlotPresentationFocusPort, RuntimeCustodyReadPort, RuntimeGeneration, RuntimeScope,
     },

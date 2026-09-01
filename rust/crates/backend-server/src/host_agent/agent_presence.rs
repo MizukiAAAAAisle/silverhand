@@ -44,8 +44,8 @@ use axum::{
 use serde::Serialize;
 use silverhand_backend_core::{
     agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
-    capability::agent_view::{VisibleStages, can_view_agent},
     identity::{AgentId, Principal, UserId},
+    identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 
 use crate::{clock::ProcessClock, error};
@@ -193,8 +193,8 @@ mod tests {
     use silverhand_backend_core::{
         agent_lifecycle::MaterializationStatus,
         agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
-        capability::agent_view::{AgentViewerArms, AgentVisibility},
         identity::{AgentId, UserId},
+        identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
         persistence::PersistenceFailure,
         policy::agent_presence,
     };

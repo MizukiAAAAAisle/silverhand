@@ -21,7 +21,7 @@
 //! they name one aggregate, in [`contract`]'s vocabulary.
 //!
 //! WHOSE computer it is is not decided here at all: that is authorization and lives
-//! in [`crate::capability::computer_access`]. This namespace consumes its witness.
+//! in [`crate::identity_access::capability::computer_access`]. This namespace consumes its witness.
 
 pub mod agent_delete_resume;
 pub mod cascade;

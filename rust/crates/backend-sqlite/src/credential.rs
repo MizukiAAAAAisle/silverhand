@@ -21,8 +21,10 @@ use std::{path::Path, time::Duration};
 
 use serde::Serialize;
 use silverhand_backend_core::{
-    credential::{LoginCandidate, LoginCredentialLookup, PasswordHashParams, RUST_PRODUCER},
     identity::UserId,
+    identity_access::credential::{
+        LoginCandidate, LoginCredentialLookup, PasswordHashParams, RUST_PRODUCER,
+    },
     persistence::PersistenceFailure,
 };
 use sqlx::{
@@ -184,7 +186,7 @@ pub fn serialize_password_hash_params(params: &PasswordHashParams) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::credential::{Argon2idCost, RustCalibration};
+    use silverhand_backend_core::identity_access::credential::{Argon2idCost, RustCalibration};
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =

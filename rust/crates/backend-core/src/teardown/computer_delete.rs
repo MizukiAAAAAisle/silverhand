@@ -34,7 +34,7 @@
 //! from the database: the rows that could name those bytes are the rows just
 //! deleted.
 //!
-//! [`can_access_computer`]: crate::capability::computer_access::can_access_computer
+//! [`can_access_computer`]: crate::identity_access::capability::computer_access::can_access_computer
 //! [`hold_computer_lifecycle`]: super::cascade::hold_computer_lifecycle
 
 use std::future::Future;
@@ -42,9 +42,9 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    capability::computer_access::{ComputerAccess, can_access_computer},
     host_runtime::aftermath::{CustodyEffectFailure, DaemonConnectionControl},
     identity::{AgentId, HostId, UserId},
+    identity_access::capability::computer_access::{ComputerAccess, can_access_computer},
     persistence::PersistenceFailure,
     teardown::{
         cascade::{CascadeConsent, CascadeRefused, ComputerLifecycle, hold_computer_lifecycle},
@@ -336,9 +336,9 @@ mod tests {
     use super::*;
     use crate::{
         agent_lifecycle::MaterializationStatus,
-        capability::computer_access::ComputerOwnershipFacts,
         host_runtime::computer::{HostKind, ProvisioningSource},
         identity::ConversationId,
+        identity_access::capability::computer_access::ComputerOwnershipFacts,
         runtime_credential::{RuntimeGeneration, RuntimeScope},
         runtime_event::RuntimeObservedStatus,
         teardown::{
@@ -422,13 +422,15 @@ mod tests {
     }
 
     fn committed(dependents: Vec<AgentTeardownFacts>, torn: Vec<AgentTornDown>) -> ComputerCascade {
-        let ComputerAccess::Held(access) = crate::capability::computer_access::can_access_computer(
-            &user(OWNER),
-            Some(&ComputerOwnershipFacts {
-                id: host(COMPUTER),
-                owner: Some(user(OWNER)),
-            }),
-        ) else {
+        let ComputerAccess::Held(access) =
+            crate::identity_access::capability::computer_access::can_access_computer(
+                &user(OWNER),
+                Some(&ComputerOwnershipFacts {
+                    id: host(COMPUTER),
+                    owner: Some(user(OWNER)),
+                }),
+            )
+        else {
             panic!("expected the owner to be admitted");
         };
         let ComputerLifecycle::Held(lifecycle) =

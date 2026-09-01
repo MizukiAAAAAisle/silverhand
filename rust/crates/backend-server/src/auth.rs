@@ -5,7 +5,7 @@ use axum::{
     middleware::{self, Next},
     response::{IntoResponse, Response},
 };
-use silverhand_backend_core::auth::{AuthenticateHumanSession, SessionBearer};
+use silverhand_backend_core::identity_access::auth::{AuthenticateHumanSession, SessionBearer};
 
 use crate::{bearer::strict_bearer_credential, error};
 

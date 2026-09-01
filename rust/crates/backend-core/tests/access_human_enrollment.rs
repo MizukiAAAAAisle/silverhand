@@ -13,13 +13,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use silverhand_backend_core::access::{
+use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
+use silverhand_backend_core::identity_access::access::{
     AddHumanMemberError, EnrollmentClock, HumanEnrollmentCommit, HumanEnrollmentKey,
     HumanEnrollmentOutcome, HumanEnrollmentUnitOfWork, ViewerAnnounce, ViewerAnnounceFailure,
     ViewerWorkspacesChangedSink, WorkspaceRole, WorkspaceUserMembership,
     add_workspace_human_member, human_enrollment_authorized,
 };
-use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::persistence::PersistenceFailure;
 
 const JOINED_AT_MS: i64 = 1_700_000_000_000;

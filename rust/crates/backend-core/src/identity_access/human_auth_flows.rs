@@ -2,8 +2,8 @@
 //!
 //! These are the composition seam where three bounded contexts meet — the
 //! user-identity authority ([`crate::identity_access::user_identity`]), the password-credential
-//! authority ([`crate::credential`]), and the session authority
-//! ([`crate::auth`]). Each context owns its own tables and invariants; this
+//! authority ([`crate::identity_access::credential`]), and the session authority
+//! ([`crate::identity_access::auth`]). Each context owns its own tables and invariants; this
 //! module orchestrates them into the three public flows, exactly as the TS
 //! `UserAuthService` + `PasswordCredentialService` + `AuthSessionService` compose,
 //! but without any one context reaching into another's model.
@@ -24,14 +24,14 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    auth::{
+    identity::UserId,
+    identity_access::auth::{
         IssuedSessionSecret, SessionAudit, SessionBearer, SessionIssue, SessionMintError,
         SessionRevoke, SessionTokenMint,
     },
-    credential::{
+    identity_access::credential::{
         LoginCredentialLookup, PasswordHashError, PasswordHasher, PreparedPasswordCredential,
     },
-    identity::UserId,
     identity_access::user_identity::{
         DisplayName, EmailAddress, ParticipantHandle, UserChangedAnnounce, UserChangedSink,
         UserEmailLookup, UserProfileRead, UserRecord,
@@ -367,9 +367,9 @@ where
 mod tests {
     use super::*;
     use crate::{
-        auth::{MintedSession, SessionTokenHash},
-        credential::LoginCandidate,
         host_runtime::environment::EntropySource,
+        identity_access::auth::{MintedSession, SessionTokenHash},
+        identity_access::credential::LoginCandidate,
         identity_access::user_identity::UserChangedAnnounceFailure,
     };
     use std::sync::{
@@ -448,14 +448,14 @@ mod tests {
         ) -> Result<PreparedPasswordCredential, PasswordHashError> {
             Ok(PreparedPasswordCredential {
                 phc: "$argon2id$fake".to_owned(),
-                params: crate::credential::PasswordHashParams {
-                    cost: crate::credential::Argon2idCost {
+                params: crate::identity_access::credential::PasswordHashParams {
+                    cost: crate::identity_access::credential::Argon2idCost {
                         memory_cost_kib: 19 * 1024,
                         time_cost: 2,
                         parallelism: 1,
                         output_len: 32,
                     },
-                    calibration: crate::credential::RustCalibration {
+                    calibration: crate::identity_access::credential::RustCalibration {
                         target_millis: 250,
                         measured_millis: 250,
                         candidate_count: 1,
@@ -517,8 +517,10 @@ mod tests {
     impl SessionTokenMint for FakeMint {
         fn mint(&self) -> Result<MintedSession, SessionMintError> {
             // Reuse the real entropy mint so MintedSession is constructed properly.
-            crate::auth::EntropySessionTokenMint::new(CountingEntropy(Arc::new(Mutex::new(1))))
-                .mint()
+            crate::identity_access::auth::EntropySessionTokenMint::new(CountingEntropy(Arc::new(
+                Mutex::new(1),
+            )))
+            .mint()
         }
     }
 

@@ -49,12 +49,12 @@ use silverhand_backend_core::{
         AgentBulkStopOutcome, AgentBulkStopReadPort, BulkStopSeatFailure, BulkStopSeatFault,
         bulk_stop_agent_runtimes,
     },
-    capability::{
+    identity::{AgentId, Principal, UserId},
+    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
+    identity_access::capability::{
         agent_authority::{AgentAuthority, can_edit_agent},
         agent_view::{VisibleStages, can_view_agent},
     },
-    identity::{AgentId, Principal, UserId},
-    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     messaging::collaboration::RuntimePlacementRefusal,
     scope_runtime_stop::{ScopeRuntimeStopPort, ScopeRuntimeStopRefusal},
 };

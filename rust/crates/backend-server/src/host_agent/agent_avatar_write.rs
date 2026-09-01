@@ -57,10 +57,6 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    capability::{
-        agent_authority::{AgentAuthority, can_edit_agent},
-        agent_view::{VisibleStages, can_view_agent},
-    },
     identity::{AgentId, Principal, UserId},
     identity_access::agent_avatar::AgentAvatarBlobStore,
     identity_access::agent_avatar_write::{
@@ -71,6 +67,10 @@ use silverhand_backend_core::{
         AgentChangedAnnounce, AgentChangedSink, AgentProfileWriteUnitOfWork,
     },
     identity_access::avatar::{AVATAR_MAX_BYTES, AvatarRejection, BlobCleanup, CandidateAvatar},
+    identity_access::capability::{
+        agent_authority::{AgentAuthority, can_edit_agent},
+        agent_view::{VisibleStages, can_view_agent},
+    },
 };
 
 use crate::clock::ProcessClock;

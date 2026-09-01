@@ -670,7 +670,7 @@ mod tests {
     /// same floor cost (m=19456, t=2, p=1, outputLen=32) over the password below.
     /// Checked-in fixture proves the shared persisted contract: an old Node row
     /// verifies under the Rust Argon2id verifier byte-for-byte.
-    const NODE_ARGON2ID_PHC: &str = include_str!("../../tests/fixtures/node-argon2id-phc.txt");
+    const NODE_ARGON2ID_PHC: &str = include_str!("../../../tests/fixtures/node-argon2id-phc.txt");
     const NODE_FIXTURE_PASSWORD: &str = "correct-horse-battery-staple";
 
     #[test]

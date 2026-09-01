@@ -16,10 +16,10 @@ use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
     agent_profile_mcp::{AgentProfileMcpDataPlane, McpDataPlaneFaultCode, McpProbeCommand},
     agents::runtime::RuntimeKind,
-    auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
     blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
     host_runtime::aftermath::{CustodyEffectFailure, DaemonConnectionControl},
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
+    identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
     messaging::{
         AddressedPrincipals, CreatedMessage, DirectLineAuthority, FromKind, MessageContent,
         MessageId, MessageSeq, PrincipalKind, ReferencePositions, SendActor, SendDestination,

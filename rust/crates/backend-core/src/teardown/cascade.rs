@@ -14,7 +14,7 @@
 //!    stops, the host-local purge, the blob sweep) runs after it.
 //!
 //! WHOSE computer it is belongs to neither: that is authorization over a computer
-//! and lives in [`crate::capability::computer_access`]. This module consumes its
+//! and lives in [`crate::identity_access::capability::computer_access`]. This module consumes its
 //! witness, so the order — is it theirs, then may its lifecycle be ended, then does
 //! its dependency set admit the cascade — is carried by the types rather than by an
 //! implementation remembering to ask in that order. Order is not enough on its own:
@@ -27,9 +27,9 @@
 //! as deleting those agents individually.
 
 use crate::{
-    capability::computer_access::ComputerAccessHeld,
     host_runtime::computer::is_user_managed,
     identity::UserId,
+    identity_access::capability::computer_access::ComputerAccessHeld,
     teardown::{
         contract::{TeardownContractViolation, same_computer},
         eligibility::{TeardownBranch, teardown_branch},
@@ -75,7 +75,7 @@ pub enum CascadeConsent {
 ///
 /// ```
 /// use silverhand_backend_core::{
-///     capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
+///     identity_access::capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
 ///     host_runtime::computer::{HostKind, ProvisioningSource},
 ///     identity::{HostId, UserId},
 ///     teardown::{
@@ -202,7 +202,7 @@ pub enum CascadeRefused {
 ///
 /// ```
 /// use silverhand_backend_core::{
-///     capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
+///     identity_access::capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
 ///     host_runtime::computer::{HostKind, ProvisioningSource},
 ///     identity::{HostId, UserId},
 ///     teardown::{
@@ -359,11 +359,11 @@ mod tests {
     use super::*;
     use crate::{
         agent_lifecycle::MaterializationStatus,
-        capability::computer_access::{
-            ComputerAccess, ComputerOwnershipFacts, can_access_computer,
-        },
         host_runtime::computer::{HostKind, ProvisioningSource},
         identity::{AgentId, HostId},
+        identity_access::capability::computer_access::{
+            ComputerAccess, ComputerOwnershipFacts, can_access_computer,
+        },
     };
 
     fn user(id: &str) -> UserId {

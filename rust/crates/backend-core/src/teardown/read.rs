@@ -15,8 +15,8 @@
 use std::future::Future;
 
 use crate::{
-    capability::computer_access::ComputerOwnershipFacts,
     identity::{AgentId, HostId},
+    identity_access::capability::computer_access::ComputerOwnershipFacts,
     persistence::PersistenceFailure,
     teardown::facts::{AgentRuntimeSessionFacts, AgentTeardownFacts, ComputerTeardownFacts},
 };

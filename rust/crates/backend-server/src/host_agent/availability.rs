@@ -34,9 +34,9 @@ use axum::{
 use serde::Serialize;
 use silverhand_backend_core::{
     agent_availability_read::{AgentAvailabilityReadModel, AgentViewFacts},
-    capability::agent_view::{VisibleStages, can_view_agent},
     cold_read::availability::{AgentAvailability, AvailabilityReadError, read_agent_availability},
     identity::{AgentId, Principal, UserId},
+    identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 
 use crate::{error, host_agent::host_attachment::HostAttachment};
@@ -230,9 +230,9 @@ mod tests {
     use silverhand_backend_core::{
         agent_availability_read::{AgentAvailabilityReadModel, AgentViewFacts},
         agent_lifecycle::MaterializationStatus,
-        capability::agent_view::{AgentViewerArms, AgentVisibility},
         cold_read::availability::{HostAttachmentFacts, HostReachabilityFacts},
         identity::{AgentId, HostId, UserId},
+        identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
         persistence::PersistenceFailure,
     };
     use tower::ServiceExt;

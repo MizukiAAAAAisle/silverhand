@@ -8204,8 +8204,8 @@ mod channel_directory_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         identity::{ConversationId, UserId, WorkspaceId},
+        identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         messaging::collaboration::{
             channel_directory::{
                 ActiveChannelDirectoryPort, ActiveWorkspaceChannelDirectory, ArchivedSince,
@@ -8426,8 +8426,8 @@ mod runtime_activity_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         identity::{AgentId, ConversationId, UserId, WorkspaceId},
+        identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         messaging::collaboration::{
             activity::{ActivityList, ActivityReadModel},
             channel_lifecycle::{ChannelDetailFact, ChannelDetailReadPort, ChannelDetailRefusal},
@@ -8708,8 +8708,8 @@ mod message_nav_search_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         identity::{ConversationId, UserId},
+        identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         messaging::collaboration::{
             conversation_message_window::{
                 ConversationMessageWindow, ConversationMessageWindowReadPort,
@@ -8998,8 +8998,8 @@ mod unread_attention_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         identity::{ConversationId, UserId, WorkspaceId},
+        identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         messaging::collaboration::{
             attention_projection::{
                 AttentionBadgeRollup, AttentionModesRefusal, AttentionProjectionPort,
@@ -9230,9 +9230,9 @@ mod host_resources_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         host_resources_read::{HostResourcesFacts, HostResourcesReadModel},
         identity::HostId,
+        identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         persistence::PersistenceFailure,
     };
     use silverhand_backend_server::{

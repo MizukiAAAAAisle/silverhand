@@ -14,8 +14,8 @@
 use silverhand_backend_core::{
     agent_bulk_stop::{AgentBulkStopReadPort, AgentBulkStopSnapshot},
     agent_profile_mcp::{AgentProfileMcpPlacement, AgentProfileMcpPlacementRead},
-    capability::computer_access::ComputerOwnershipFacts,
     identity::{AgentId, HostId},
+    identity_access::capability::computer_access::ComputerOwnershipFacts,
     persistence::PersistenceFailure,
     runtime_credential::RuntimeScope,
     teardown::{

@@ -40,9 +40,9 @@ use silverhand_backend_core::{
         BlobDeleteOutcome, BlobNamespace, BlobRead, BlobReadOutcome, BlobStorageKey, BlobStore,
         StorageKind, StoredBlob,
     },
-    capability::agent_audit::AuditedConversation,
     direct_pair_read::DirectPairCounterpart,
     identity::{AgentId, ConversationId, Principal, UserId, WorkspaceId},
+    identity_access::capability::agent_audit::AuditedConversation,
     messaging::{
         AttachmentId,
         collaboration::{

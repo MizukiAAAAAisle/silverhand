@@ -41,8 +41,8 @@ use silverhand_backend_core::{
         AuditSubjectFacts, AuditTranscriptBundle, AuditTranscriptWindow, audit_chats_floor,
         audit_conversation_floor,
     },
-    capability::agent_audit::AuditedConversation,
     identity::{AgentId, ConversationId, Principal, WorkspaceId},
+    identity_access::capability::agent_audit::AuditedConversation,
     messaging::{
         AttachmentId, MessageSeq,
         collaboration::{

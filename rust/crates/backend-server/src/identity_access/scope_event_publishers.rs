@@ -1,11 +1,11 @@
 //! Typed scope-event publishers owned by identity and workspace capabilities.
 
 use silverhand_backend_core::{
-    access::{
+    identity::{AgentId, UserId, WorkspaceId},
+    identity_access::access::{
         ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceHumanAudienceReadPort,
         WorkspaceRole,
     },
-    identity::{AgentId, UserId, WorkspaceId},
     identity_access::agent_profile_write::{AgentChangedAnnounceFailure, AgentChangedSink},
     identity_access::user_identity::{UserChangedAnnounceFailure, UserChangedSink},
     identity_access::workspace_metadata_write::{

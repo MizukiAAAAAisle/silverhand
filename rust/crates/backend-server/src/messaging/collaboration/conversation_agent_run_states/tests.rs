@@ -12,8 +12,8 @@ use axum::{
 };
 use serde_json::{Number, Value, json};
 use silverhand_backend_core::{
-    access::WorkspaceRole,
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    identity_access::access::WorkspaceRole,
     messaging::{
         collaboration::{
             channel_directory::{ChannelStatus, ChannelVisibility, DirectoryRoster},

@@ -19,9 +19,9 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    credential::PreparedPasswordCredential,
     host_runtime::environment::{EntropySource, OsEntropy},
     identity::UserId,
+    identity_access::credential::PreparedPasswordCredential,
     identity_access::human_auth_flows::{HumanRegistration, HumanRegistrationUnitOfWork},
     identity_access::user_identity::{DisplayName, EmailAddress, ParticipantHandle, UserRecord},
     persistence::PersistenceFailure,
@@ -296,7 +296,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::credential::{Argon2idCost, PasswordHashParams, RustCalibration};
+    use silverhand_backend_core::identity_access::credential::{
+        Argon2idCost, PasswordHashParams, RustCalibration,
+    };
     use sqlx::{Connection, Executor, SqliteConnection};
     use std::sync::Mutex;
 

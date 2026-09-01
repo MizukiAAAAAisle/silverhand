@@ -21,8 +21,8 @@ use super::{
     read::OwnedComputer,
 };
 use crate::{
-    capability::computer_access::ComputerAccessHeld,
     identity::{HostId, UserId},
+    identity_access::capability::computer_access::ComputerAccessHeld,
     persistence::PersistenceFailure,
 };
 

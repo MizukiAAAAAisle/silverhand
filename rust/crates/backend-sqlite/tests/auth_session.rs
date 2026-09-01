@@ -1,8 +1,8 @@
 use std::{error::Error, time::Duration};
 
 use silverhand_backend_core::{
-    auth::{HumanSessionAuthenticator, SessionBearer, SessionClock, SessionTtl},
     identity::UserId,
+    identity_access::auth::{HumanSessionAuthenticator, SessionBearer, SessionClock, SessionTtl},
 };
 use silverhand_backend_sqlite::auth::SqliteSessionStore;
 use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};

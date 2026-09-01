@@ -4,7 +4,7 @@
 //! ## The ownership rule is not restated here
 //!
 //! "Is this computer this requester's?" already has an authority —
-//! [`crate::capability::computer_access`] — and this face consults it rather than
+//! [`crate::identity_access::capability::computer_access`] — and this face consults it rather than
 //! comparing an owner column of its own. That is what keeps the read face and the
 //! teardown face from drifting on who a computer answers to, and it is why an
 //! absent computer needs no arm here: the rule takes the absent row itself, and
@@ -40,10 +40,10 @@ use thiserror::Error;
 
 use crate::{
     agents::runtime::RuntimeKind,
-    capability::computer_access::{
+    identity::{AgentId, HostId, UserId},
+    identity_access::capability::computer_access::{
         ComputerAccess, ComputerAccessRefused, ComputerOwnershipFacts, can_access_computer,
     },
-    identity::{AgentId, HostId, UserId},
     persistence::PersistenceFailure,
 };
 
@@ -79,7 +79,7 @@ pub struct HostAgentResourceFact {
 ///
 /// ```compile_fail
 /// use silverhand_backend_core::{
-///     capability::computer_access::ComputerOwnershipFacts,
+///     identity_access::capability::computer_access::ComputerOwnershipFacts,
 ///     host_resources_read::HostResourcesFacts,
 ///     identity::HostId,
 /// };
@@ -97,7 +97,7 @@ pub struct HostAgentResourceFact {
 ///
 /// ```
 /// use silverhand_backend_core::{
-///     capability::computer_access::ComputerOwnershipFacts,
+///     identity_access::capability::computer_access::ComputerOwnershipFacts,
 ///     host_resources_read::{HostResourcesFacts, visible_host_resources},
 ///     identity::{HostId, UserId},
 /// };

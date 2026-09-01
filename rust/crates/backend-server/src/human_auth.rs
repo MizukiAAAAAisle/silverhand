@@ -69,12 +69,12 @@ use axum::{
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    auth::{
+    identity::UserId,
+    identity_access::auth::{
         AuthenticateHumanSession, IssuedSessionSecret, SessionAudit, SessionBearer, SessionClock,
         SessionIssue, SessionRevoke, SessionTokenMint,
     },
-    credential::{LoginCredentialLookup, PasswordHasher},
-    identity::UserId,
+    identity_access::credential::{LoginCredentialLookup, PasswordHasher},
     identity_access::human_auth_flows::{
         HandleNamespaceRead, HumanRegistrationUnitOfWork, Login, LoginCommand, LoginPorts, Signup,
         SignupCommand, SignupPorts, log_in, log_out, sign_up,

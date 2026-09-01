@@ -34,8 +34,8 @@ use std::{path::Path, time::Duration};
 use silverhand_backend_core::{
     agent_lifecycle::MaterializationStatus,
     agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
-    capability::agent_view::{AgentViewerArms, AgentVisibility},
     identity::{AgentId, UserId},
+    identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
     persistence::PersistenceFailure,
     policy::agent_presence::ActivityInstant,
 };

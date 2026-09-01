@@ -4,7 +4,7 @@
 //! This is the READ dual of the runtime-switch write saga: it mints no write
 //! authority, holds no lifecycle state, and answers the route from ONE snapshot.
 //! It composes the SAME visibility ACL as availability/detail
-//! ([`crate::capability::agent_view`]) with a projection of the agent's
+//! ([`crate::identity_access::capability::agent_view`]) with a projection of the agent's
 //! participations and durable seats, so the route and its tests share one
 //! authority without a driver.
 //!

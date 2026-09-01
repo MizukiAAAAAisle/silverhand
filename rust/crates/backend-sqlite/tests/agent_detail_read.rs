@@ -17,11 +17,11 @@
 use silverhand_backend_core::{
     agent_lifecycle::MaterializationStatus,
     agents::runtime::RuntimeKind,
-    capability::agent_view::{AgentViewerArms, AgentVisibility},
     identity::{AgentId, UserId},
     identity_access::agent_detail_read::{
         AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
     },
+    identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
     persistence::PersistenceFailure,
 };
 use silverhand_backend_sqlite::agent_detail_read::SqliteAgentDetailColdRead;

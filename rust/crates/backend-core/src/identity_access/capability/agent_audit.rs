@@ -8,8 +8,8 @@
 //! does not audit it, and a peer agent never does.
 
 use crate::{
-    capability::decision::Decision,
     identity::{Principal, UserId},
+    identity_access::capability::decision::Decision,
 };
 
 /// The facts the list face reads.

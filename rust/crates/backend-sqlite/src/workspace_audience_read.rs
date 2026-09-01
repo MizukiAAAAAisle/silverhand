@@ -1,5 +1,5 @@
 //! SQLite adapter for
-//! [`WorkspaceHumanAudienceReadPort`](silverhand_backend_core::access::WorkspaceHumanAudienceReadPort):
+//! [`WorkspaceHumanAudienceReadPort`](silverhand_backend_core::identity_access::access::WorkspaceHumanAudienceReadPort):
 //! the human members of a workspace, read for the post-commit
 //! `metadata_changed` fan-out.
 //!
@@ -14,8 +14,8 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    access::WorkspaceHumanAudienceReadPort,
     identity::{UserId, WorkspaceId},
+    identity_access::access::WorkspaceHumanAudienceReadPort,
     persistence::PersistenceFailure,
 };
 use sqlx::{

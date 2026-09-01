@@ -1,7 +1,7 @@
 use crate::{AppConfig, StartupError, remove_stale_bootstrap_token, write_bootstrap_token_file};
 use silverhand_backend_core::{
-    auth::{EntropySessionTokenMint, SessionTokenMint},
     host_runtime::environment::OsEntropy,
+    identity_access::auth::{EntropySessionTokenMint, SessionTokenMint},
 };
 use silverhand_backend_server::{embedded_bootstrap, ops::deployment::DeploymentProfile};
 

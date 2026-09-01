@@ -34,9 +34,9 @@ use axum::{
 use serde::Serialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    capability::agent_view::{VisibleStages, can_view_agent},
     identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
+    identity_access::capability::agent_view::{VisibleStages, can_view_agent},
     messaging::collaboration::{
         ClearSessionProviderRefusal, ClearSessionRefusal, RuntimeControlAdmission,
         RuntimeControlAdmissionRefusal, RuntimeControlPort, clear_agent_session,

@@ -28,9 +28,9 @@
 
 use silverhand_backend_core::{
     agent_lifecycle::MaterializationStatus,
-    capability::agent_view::VisibleStages,
     identity::UserId,
     identity_access::agent_list_read::{AgentListReadModel, ListScope, visible_agents},
+    identity_access::capability::agent_view::VisibleStages,
 };
 use silverhand_backend_sqlite::agent_list_read::SqliteAgentListColdRead;
 use sqlx::{AssertSqlSafe, Connection, Executor};
