@@ -18,7 +18,7 @@ pub(super) enum CoercedInteger {
 }
 
 pub(super) fn coerce_integer(raw: &str) -> Result<CoercedInteger, NumberIssue> {
-    let trimmed = crate::messaging::admission::ecmascript_trim(raw);
+    let trimmed = crate::conversation_messaging::messaging::admission::ecmascript_trim(raw);
     let number = if trimmed.is_empty() {
         0.0
     } else if matches!(trimmed, "Infinity" | "+Infinity" | "-Infinity") {

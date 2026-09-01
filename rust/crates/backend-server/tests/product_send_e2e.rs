@@ -58,7 +58,7 @@ use silverhand_backend_core::{
     foundation::identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
     host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
-use silverhand_backend_server::messaging::{
+use silverhand_backend_server::conversation_messaging::messaging::{
     TargetAddressRefusalLog,
     router::{SendState, send_router},
 };

@@ -27,7 +27,7 @@ use silverhand_backend_core::{
     foundation::identity::{AgentId, UserId},
 };
 
-use crate::messaging::{
+use crate::conversation_messaging::messaging::{
     ack::send_ack,
     admission::{PayloadRefusal, validate_human_payload},
     aftermath::SendAftermath,

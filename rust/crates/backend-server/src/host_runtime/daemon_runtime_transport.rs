@@ -18,13 +18,13 @@ use silverhand_backend_core::{
 };
 
 use crate::{
+    conversation_messaging::messaging::references::MarkdownReferencePositions,
     foundation::daemon_transport::{AttachedHostDataPlane, CommandDispatchError},
     host_runtime::daemon_runtime_codecs::{
         runtime_start,
         runtime_stop::{self, RuntimeStopCodecError, RuntimeStopCommand},
         spawn_options, workspace_wire,
     },
-    messaging::references::MarkdownReferencePositions,
     runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport, RuntimeStopTransport,
     },

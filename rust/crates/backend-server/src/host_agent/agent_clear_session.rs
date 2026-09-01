@@ -43,8 +43,10 @@ use silverhand_backend_core::{
     identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 
+use crate::conversation_messaging::messaging::collaboration::runtime_control::{
+    clear_session_success, placement_refusal,
+};
 use crate::foundation::error;
-use crate::messaging::collaboration::runtime_control::{clear_session_success, placement_refusal};
 
 /// The product route template, in axum's `{id}` capture syntax.
 pub const AGENT_CLEAR_SESSION_PATH: &str = "/api/agents/{id}/clear-session";

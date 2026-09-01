@@ -62,7 +62,7 @@ use silverhand_backend_filesystem::foundation::blob_store::{
     LocalBlobAliasOutcome, LocalBlobAliasStore,
 };
 
-use crate::messaging::author_wire::author_dto;
+use crate::conversation_messaging::messaging::author_wire::author_dto;
 
 pub const CHANNEL_ATTACHMENTS_PATH: &str = "/api/channels/{id}/attachments";
 pub const CHANNEL_ATTACHMENT_SENDERS_PATH: &str = "/api/channels/{id}/attachments/senders";
@@ -919,7 +919,8 @@ fn parse_list_query(raw: ListQueryWire) -> Result<AttachmentListQuery, Box<Respo
             )));
         }
         (Some("user"), Some(id))
-            if !crate::messaging::admission::ecmascript_trim(&id).is_empty() =>
+            if !crate::conversation_messaging::messaging::admission::ecmascript_trim(&id)
+                .is_empty() =>
         {
             Some(AttachmentSenderFilter::Human(UserId::parse(id).map_err(
                 |_| {
@@ -930,7 +931,8 @@ fn parse_list_query(raw: ListQueryWire) -> Result<AttachmentListQuery, Box<Respo
             )?))
         }
         (Some("agent"), Some(id))
-            if !crate::messaging::admission::ecmascript_trim(&id).is_empty() =>
+            if !crate::conversation_messaging::messaging::admission::ecmascript_trim(&id)
+                .is_empty() =>
         {
             Some(AttachmentSenderFilter::Agent(AgentId::parse(id).map_err(
                 |_| {
@@ -966,7 +968,7 @@ fn parse_limit(raw: Option<&str>) -> u16 {
     let Some(raw) = raw else {
         return DEFAULT_LIST_LIMIT;
     };
-    let raw = crate::messaging::admission::ecmascript_trim(raw);
+    let raw = crate::conversation_messaging::messaging::admission::ecmascript_trim(raw);
     if raw.starts_with('-') {
         return DEFAULT_LIST_LIMIT;
     }
@@ -1136,7 +1138,7 @@ pub(crate) fn download_success(record: &AttachmentRecord, bytes: Vec<u8>) -> Res
 }
 
 fn content_disposition(filename: &str) -> String {
-    let name = crate::messaging::admission::ecmascript_trim(filename);
+    let name = crate::conversation_messaging::messaging::admission::ecmascript_trim(filename);
     let name = if name.is_empty() {
         "download.bin"
     } else {
@@ -1176,7 +1178,7 @@ fn sanitize_filename(raw: &str) -> Option<String> {
         })
         .filter(|character| !matches!(character, '\0'..='\u{1f}'))
         .collect();
-    let cleaned = crate::messaging::admission::ecmascript_trim(&cleaned);
+    let cleaned = crate::conversation_messaging::messaging::admission::ecmascript_trim(&cleaned);
     if cleaned.is_empty() {
         return None;
     }
@@ -1203,7 +1205,7 @@ fn detect_content_type(
 ) -> Option<AttachmentContentType> {
     let normalized = explicit
         .and_then(|value| value.split(';').next())
-        .map(crate::messaging::admission::ecmascript_trim)
+        .map(crate::conversation_messaging::messaging::admission::ecmascript_trim)
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     let generic = matches!(

@@ -245,7 +245,7 @@ fn admitted_query(wire: &HumanSearchQueryWire) -> Result<HumanSearchQuery, Vec<Q
 }
 
 fn optional_string(raw: Option<&str>) -> Option<String> {
-    raw.map(crate::messaging::admission::ecmascript_trim)
+    raw.map(crate::conversation_messaging::messaging::admission::ecmascript_trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
 }

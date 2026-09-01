@@ -199,7 +199,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::messaging::admission::validate_human_payload;
+    use crate::conversation_messaging::messaging::admission::validate_human_payload;
 
     /// The one write unit both doors reach. It records the actor of every command it
     /// was asked to commit, which is how a test can tell "one use-case, two

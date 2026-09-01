@@ -31,7 +31,7 @@ interface RuntimeControlWireCase {
 const fixture = JSON.parse(
   readFileSync(
     new URL(
-      '../../../../rust/crates/backend-server/src/messaging/collaboration/runtime_control/fixtures/runtime_control_wire.json',
+      '../../../../rust/crates/backend-server/src/conversation_messaging/messaging/collaboration/runtime_control/fixtures/runtime_control_wire.json',
       import.meta.url,
     ),
     'utf8',

@@ -47,11 +47,11 @@ use silverhand_backend_core::{
     host_runtime::runtime_credential::RuntimeScope,
 };
 use silverhand_backend_server::{
-    foundation::clock::ProcessClock,
-    messaging::collaboration::stale_message_resolution::{
+    conversation_messaging::messaging::collaboration::stale_message_resolution::{
         StaleMessageResolutionObservation, StaleMessageResolutionObserver,
         TracingStaleMessageResolutionObserver, router as stale_message_resolution_router,
     },
+    foundation::clock::ProcessClock,
     runtime_credential::{
         RuntimeCredentialAuthority, RuntimeDispatchFailure, RuntimeEntropy, RuntimeStartHandoff,
         RuntimeStartTransport, require_runtime_credential,

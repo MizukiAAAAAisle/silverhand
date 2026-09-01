@@ -118,12 +118,12 @@ use silverhand_backend_core::{
     identity_access::user_identity::ParticipantHandle,
 };
 
+use crate::conversation_messaging::messaging::collaboration::runtime_control::placement_refusal;
 use crate::foundation::clock::ProcessClock;
 use crate::foundation::error;
 use crate::foundation::wire_admission::{self, ValidatedJson};
 use crate::foundation::wire_patch::RequiredPatchField;
 use crate::identity_access::agent_wire::{AgentDto, reproject_committed_agent};
-use crate::messaging::collaboration::runtime_control::placement_refusal;
 
 /// The product route template. `POST` on the collection; the composition root mounts it
 /// alongside the `GET` list on the same path at mount time.

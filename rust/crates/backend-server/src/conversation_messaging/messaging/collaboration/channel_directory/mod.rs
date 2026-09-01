@@ -168,7 +168,9 @@ fn parse_archived_query(
     let workspace = pairs
         .iter()
         .find_map(|(key, value)| (key == "workspace_id").then(|| value.clone()))
-        .filter(|value| !crate::messaging::admission::ecmascript_trim(value).is_empty())
+        .filter(|value| {
+            !crate::conversation_messaging::messaging::admission::ecmascript_trim(value).is_empty()
+        })
         .map(WorkspaceId::parse)
         .transpose()
         .map_err(|_| ())?;

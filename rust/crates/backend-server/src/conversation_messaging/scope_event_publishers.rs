@@ -31,14 +31,7 @@ use silverhand_backend_core::{
 };
 
 use crate::{
-    foundation::{
-        scope_event_transport::{ScopeEventHub, ScopeEventHubError},
-        scope_event_wire::{
-            AttentionBadge, LatestUnread, NotificationEvent, NotificationKind, ProductEvent,
-            UnreadUpdated,
-        },
-    },
-    messaging::{
+    conversation_messaging::messaging::{
         aftermath::MessagingAftermath,
         collaboration::{
             attachment::changed_event as attachment_changed_payload,
@@ -46,6 +39,13 @@ use crate::{
             saved::changed_event as saved_changed_payload,
         },
         message_wire::{copy_dto, message_event_payload, rename_dto},
+    },
+    foundation::{
+        scope_event_transport::{ScopeEventHub, ScopeEventHubError},
+        scope_event_wire::{
+            AttentionBadge, LatestUnread, NotificationEvent, NotificationKind, ProductEvent,
+            UnreadUpdated,
+        },
     },
 };
 

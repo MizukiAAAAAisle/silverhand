@@ -10,13 +10,13 @@ use silverhand_backend_core::{
     foundation::identity::AgentId,
 };
 use silverhand_backend_server::{
+    conversation_messaging::messaging::MESSAGE_SEND_MAX_BODY_BYTES,
     daemon_delivery::{HOST_WEBSOCKET_PATH, OUTBOUND_PROTOCOL_VERSION},
     foundation::scope_event_transport::{
         DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH, EVENT_WS_SESSION_COOKIE,
         MINIMUM_CLIENT_API_EPOCH,
     },
     host_agent_background::agent_deletion_resumer::DeletionRunOutcome,
-    messaging::MESSAGE_SEND_MAX_BODY_BYTES,
 };
 use sqlx::{Connection, Executor};
 use tempfile::TempDir;
@@ -8225,10 +8225,10 @@ mod channel_directory_activation {
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
-        identity_access::auth::{PublicJsonUnauthorized, require_human_session},
-        messaging::collaboration::{
+        conversation_messaging::messaging::collaboration::{
             channel_directory, channel_lifecycle, conversation_agent_directory,
         },
+        identity_access::auth::{PublicJsonUnauthorized, require_human_session},
     };
     use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
 
@@ -8446,14 +8446,14 @@ mod runtime_activity_activation {
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
-        identity_access::auth::{PublicJsonUnauthorized, require_human_session},
-        messaging::collaboration::{
+        conversation_messaging::messaging::collaboration::{
             activity, conversation_agent_activity, conversation_agent_run_states,
             conversation_agent_run_states::{
                 AgentRunStateProjection, ConversationAgentRunStateSource,
             },
             conversation_agent_runtime,
         },
+        identity_access::auth::{PublicJsonUnauthorized, require_human_session},
     };
     use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
 
@@ -8735,11 +8735,11 @@ mod message_nav_search_activation {
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
-        identity_access::auth::{PublicJsonUnauthorized, require_human_session},
-        messaging::collaboration::{
+        conversation_messaging::messaging::collaboration::{
             conversation_message_window, conversation_ref, conversation_threads,
             conversation_unread, human_search,
         },
+        identity_access::auth::{PublicJsonUnauthorized, require_human_session},
     };
     use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
 
@@ -9018,8 +9018,8 @@ mod unread_attention_activation {
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
+        conversation_messaging::messaging::collaboration::{attention_projection, message_unread},
         identity_access::auth::{PublicJsonUnauthorized, require_human_session},
-        messaging::collaboration::{attention_projection, message_unread},
     };
     use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
 

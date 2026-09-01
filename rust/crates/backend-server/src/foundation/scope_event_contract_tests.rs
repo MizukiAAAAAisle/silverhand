@@ -525,7 +525,7 @@ impl SendCapability for DenySend {
 
 struct NoAftermath;
 
-impl crate::messaging::aftermath::SendAftermath for NoAftermath {
+impl crate::conversation_messaging::messaging::aftermath::SendAftermath for NoAftermath {
     async fn announce(&self, _outcome: &SendMessageOutcome) {}
 }
 
@@ -549,20 +549,22 @@ fn direct_pair_router(
     hub: ScopeEventHub,
     calls: Arc<AtomicUsize>,
 ) -> axum::Router {
-    crate::messaging::router::send_router(crate::messaging::router::SendState {
-        channel_access: store.clone(),
-        target_address: store.target_address(
-            hub.messaging_events(),
-            crate::messaging::TargetAddressRefusalLog,
-        ),
-        capability: DenySend,
-        authority: store.clone(),
-        unit_of_work: CountedStore {
-            inner: store,
-            calls,
+    crate::conversation_messaging::messaging::router::send_router(
+        crate::conversation_messaging::messaging::router::SendState {
+            channel_access: store.clone(),
+            target_address: store.target_address(
+                hub.messaging_events(),
+                crate::conversation_messaging::messaging::TargetAddressRefusalLog,
+            ),
+            capability: DenySend,
+            authority: store.clone(),
+            unit_of_work: CountedStore {
+                inner: store,
+                calls,
+            },
+            aftermath: NoAftermath,
         },
-        aftermath: NoAftermath,
-    })
+    )
     .layer(axum::Extension(RuntimePrincipal::AgentSlot {
         agent: agent(),
         custody: RuntimeCustody::new(
@@ -2305,7 +2307,7 @@ fn assert_ack_is_frame_plus_unresolved(
         frame.get("unresolved_references").is_none(),
         "the broadcast frame must never carry the sender-only diagnostic: {frame}"
     );
-    let mut ack = crate::messaging::ack::send_ack(outcome);
+    let mut ack = crate::conversation_messaging::messaging::ack::send_ack(outcome);
     let removed = ack
         .as_object_mut()
         .expect("the ACK is an object")
@@ -2540,7 +2542,10 @@ async fn a_workspace_send_fans_out_across_ports_without_duplicate_or_widening() 
     // copy layer and exactly one path layer (main here), so the assertions below
     // would expose either a missing layer or a second invocation as missing/duplicate
     // frames and durable mention rows.
-    crate::messaging::aftermath::SendAftermath::announce(&aftermath, &outcome).await;
+    crate::conversation_messaging::messaging::aftermath::SendAftermath::announce(
+        &aftermath, &outcome,
+    )
+    .await;
 
     // The channel carries EXACTLY ONE message frame: the copy did not widen onto it,
     // and no path published the message twice.

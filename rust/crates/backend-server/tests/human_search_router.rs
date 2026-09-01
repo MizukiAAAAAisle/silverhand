@@ -5,7 +5,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::Value;
 use silverhand_backend_core::foundation::identity::UserId;
-use silverhand_backend_server::messaging::collaboration::human_search;
+use silverhand_backend_server::conversation_messaging::messaging::collaboration::human_search;
 use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
 use tower::ServiceExt;

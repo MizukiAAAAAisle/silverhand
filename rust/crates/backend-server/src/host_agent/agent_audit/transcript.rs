@@ -17,10 +17,10 @@ use silverhand_backend_core::{
 use super::{
     AgentAuditState, bad_request, conversation_floor, internal_error, not_found, owner_floor, wire,
 };
-use crate::foundation::error;
-use crate::messaging::collaboration::conversation_message_window::{
+use crate::conversation_messaging::messaging::collaboration::conversation_message_window::{
     MessageWindowQueryWire, query_refusal_wire, request,
 };
+use crate::foundation::error;
 
 pub(super) async fn read<P, B, S>(
     State(state): State<AgentAuditState<P, B, S>>,

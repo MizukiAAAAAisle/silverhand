@@ -16,8 +16,8 @@ use super::{
     AgentAuditState, attachment_not_found, bad_request, conversation_floor, internal_error,
     not_found, owner_floor,
 };
+use crate::conversation_messaging::messaging::collaboration::attachment::download_success;
 use crate::foundation::error;
-use crate::messaging::collaboration::attachment::download_success;
 
 pub(super) async fn download<P, B, S>(
     State(state): State<AgentAuditState<P, B, S>>,

@@ -23,7 +23,7 @@ use silverhand_backend_core::{
     foundation::identity::{ConversationId, UserId},
 };
 
-use crate::messaging::{
+use crate::conversation_messaging::messaging::{
     author_wire::author_dto,
     message_wire::{attachment_list, from_kind_word},
 };

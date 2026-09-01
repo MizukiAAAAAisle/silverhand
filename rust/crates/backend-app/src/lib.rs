@@ -40,6 +40,26 @@ use silverhand_backend_filesystem::host_runtime::runtime_detection::MachineRunti
 use silverhand_backend_server::internal_agent::cli_invoke::CLI_INVOKE_PRODUCTION_PERIMETER;
 use silverhand_backend_server::{
     conversation_messaging::direct_pairs,
+    conversation_messaging::messaging::{
+        TargetAddressRefusalLog,
+        collaboration::{
+            activity,
+            attachment::{
+                self, HostAttachmentEnvironment, agent_attachment_download_router,
+                agent_attachment_locate_router, agent_attachment_update_router,
+                agent_attachment_upload_router,
+            },
+            attention_projection, channel_directory, channel_lifecycle,
+            conversation_agent_activity, conversation_agent_directory, conversation_agent_runtime,
+            conversation_message_window, conversation_ref, conversation_threads,
+            conversation_unread, human_search, message_unread, notification, reaction, saved,
+            stale_message_resolution::{
+                TracingStaleMessageResolutionObserver, router as stale_message_resolution_router,
+            },
+            thread_follow,
+        },
+        task::{TaskListState, task_list_router},
+    },
     daemon_delivery::{
         DaemonDeliveryController, DaemonDeliveryRuntime, DaemonHostConnections,
         OnboardingDeliveryAdapter,
@@ -82,26 +102,6 @@ use silverhand_backend_server::{
             InternalAvatarWriteState, InternalProfileWriteState, internal_avatar_write_router,
             internal_profile_write_router,
         },
-    },
-    messaging::{
-        TargetAddressRefusalLog,
-        collaboration::{
-            activity,
-            attachment::{
-                self, HostAttachmentEnvironment, agent_attachment_download_router,
-                agent_attachment_locate_router, agent_attachment_update_router,
-                agent_attachment_upload_router,
-            },
-            attention_projection, channel_directory, channel_lifecycle,
-            conversation_agent_activity, conversation_agent_directory, conversation_agent_runtime,
-            conversation_message_window, conversation_ref, conversation_threads,
-            conversation_unread, human_search, message_unread, notification, reaction, saved,
-            stale_message_resolution::{
-                TracingStaleMessageResolutionObserver, router as stale_message_resolution_router,
-            },
-            thread_follow,
-        },
-        task::{TaskListState, task_list_router},
     },
     ops::{
         bind_address::classify_bind_address_scope,

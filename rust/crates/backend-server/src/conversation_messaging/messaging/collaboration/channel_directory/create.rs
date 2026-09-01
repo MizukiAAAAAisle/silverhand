@@ -28,7 +28,9 @@ use silverhand_backend_core::{
 };
 
 use super::{ACTIVE_PATH, error, identity_channel, internal};
-use crate::messaging::collaboration::json_body::{BodyRead, payload_too_large, read_body};
+use crate::conversation_messaging::messaging::collaboration::json_body::{
+    BodyRead, payload_too_large, read_body,
+};
 
 struct Inner<P, A> {
     port: P,

@@ -191,7 +191,7 @@ impl ConversationLogDebugControlFact {
 /// A bare status cannot cross the route's wire boundary.
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::messaging::collaboration::conversation_log_debug::{
+/// use silverhand_backend_server::conversation_messaging::messaging::collaboration::conversation_log_debug::{
 ///     BoundConversationLogDebugControlFact, ConversationLogDebugStatus,
 /// };
 /// fn wire(_: &BoundConversationLogDebugControlFact) {}

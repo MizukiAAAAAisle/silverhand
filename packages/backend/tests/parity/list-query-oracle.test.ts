@@ -37,7 +37,7 @@ import { ListTasksQuerySchema } from '@silverhand/shared';
  */
 
 const FIXTURE_URL = new URL(
-  '../../../../rust/crates/backend-server/src/messaging/task/fixtures/list_query_parity.json',
+  '../../../../rust/crates/backend-server/src/conversation_messaging/messaging/task/fixtures/list_query_parity.json',
   import.meta.url,
 );
 

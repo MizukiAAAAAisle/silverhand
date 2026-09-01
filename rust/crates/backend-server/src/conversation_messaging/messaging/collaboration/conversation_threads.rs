@@ -23,7 +23,7 @@ use silverhand_backend_core::{
     foundation::identity::{ConversationId, UserId},
 };
 
-use crate::messaging::author_wire::author_dto;
+use crate::conversation_messaging::messaging::author_wire::author_dto;
 
 use super::query_number::{CoercedInteger, coerce_integer};
 

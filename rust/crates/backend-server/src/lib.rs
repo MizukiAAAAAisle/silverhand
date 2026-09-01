@@ -17,7 +17,6 @@ pub mod host_resources;
 pub mod host_runtime;
 pub mod identity_access;
 pub mod internal_agent;
-pub mod messaging;
 pub mod ops;
 pub mod runtime_control;
 pub mod runtime_credential;

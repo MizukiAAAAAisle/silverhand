@@ -36,7 +36,9 @@ use sqlx::{Connection, Executor};
 use tower::ServiceExt;
 
 use super::{DIRECT_PAIR_INITIATION_PATH, router};
-use crate::messaging::{MESSAGE_SEND_MAX_BODY_BYTES, aftermath::SendAftermath};
+use crate::conversation_messaging::messaging::{
+    MESSAGE_SEND_MAX_BODY_BYTES, aftermath::SendAftermath,
+};
 
 fn user(raw: &str) -> UserId {
     UserId::parse(raw).unwrap()

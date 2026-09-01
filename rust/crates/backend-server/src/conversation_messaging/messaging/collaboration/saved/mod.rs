@@ -195,12 +195,14 @@ fn json_issue(
 }
 
 fn blank_to_none(raw: Option<String>) -> Option<String> {
-    raw.filter(|value| !crate::messaging::admission::ecmascript_trim(value).is_empty())
+    raw.filter(|value| {
+        !crate::conversation_messaging::messaging::admission::ecmascript_trim(value).is_empty()
+    })
 }
 
 fn search_optional(raw: Option<String>) -> Option<String> {
     raw.and_then(|value| {
-        let trimmed = crate::messaging::admission::ecmascript_trim(&value);
+        let trimmed = crate::conversation_messaging::messaging::admission::ecmascript_trim(&value);
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     })
 }

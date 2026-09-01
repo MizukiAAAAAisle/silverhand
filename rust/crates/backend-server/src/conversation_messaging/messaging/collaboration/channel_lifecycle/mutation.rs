@@ -31,7 +31,9 @@ use silverhand_backend_core::{
     foundation::identity::{ConversationId, UserId},
 };
 
-use crate::messaging::collaboration::json_body::{BodyRead, payload_too_large, read_body};
+use crate::conversation_messaging::messaging::collaboration::json_body::{
+    BodyRead, payload_too_large, read_body,
+};
 
 use super::{channel, error, internal};
 

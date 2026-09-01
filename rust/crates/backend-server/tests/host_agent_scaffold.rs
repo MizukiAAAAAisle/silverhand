@@ -392,7 +392,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-server", "daemon_delivery"),
     ("backend-server", "daemon_events"),
     ("backend-server", "host_runtime"),
-    ("backend-server", "messaging"),
     ("backend-server", "runtime_credential"),
     ("backend-sqlite", "current_schema"),
     // #task:2294 relocated four low-fanout read adapters (`agent_availability_read`,
@@ -439,9 +438,9 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
     // `foundation::request_perimeter` into this single owning-root entry.
     ("backend-app", "foundation"),
     ("backend-server", "application_orchestration"),
-    // #task:2303 relocated the settled `direct_pairs` leaf beneath the existing dual-role
-    // context. Map + real tree derive partial 2/3/1; the large `messaging` directory remains
-    // the sole flat residual for its own closure wave. This entry does not descend.
+    // #task:2304 relocated the complete mapped `messaging` directory leaf beneath the
+    // existing dual-role context, closing production at 3/3/0. The directory remains one
+    // business unit; this single owning-root entry does not descend into its children.
     ("backend-server", "conversation_messaging"),
     // #task:2300 completed the production-settled foundation relocation: the self-row plus
     // six independent technical/framework leaves derive 7/7/0. The cfg-test/path-backed

@@ -87,12 +87,12 @@ use silverhand_backend_core::{
     },
 };
 
+use crate::conversation_messaging::messaging::author_wire::principal_avatar_url;
 use crate::foundation::bearer::strict_bearer_credential;
 use crate::foundation::error;
 use crate::foundation::wire_admission::{self, ValidatedJson, ValidatedJsonRejection};
 use crate::foundation::wire_patch::RequiredPatchField;
 use crate::identity_access::auth::{PublicJsonUnauthorized, require_human_session};
-use crate::messaging::author_wire::principal_avatar_url;
 
 /// `authPaths.signup`.
 pub const SIGNUP_PATH: &str = "/auth/signup";

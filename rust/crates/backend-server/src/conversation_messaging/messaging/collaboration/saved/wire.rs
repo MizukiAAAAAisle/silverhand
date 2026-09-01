@@ -13,7 +13,7 @@ use silverhand_backend_core::conversation_messaging::messaging::{
     },
 };
 
-use crate::messaging::author_wire::author_dto;
+use crate::conversation_messaging::messaging::author_wire::author_dto;
 
 pub const SAVED_CHANGED_EVENT: &str = "saved_changed";
 

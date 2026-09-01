@@ -9,7 +9,7 @@ use silverhand_backend_core::{
     },
     foundation::identity::UserId,
 };
-use silverhand_backend_server::messaging::collaboration::attention_preference;
+use silverhand_backend_server::conversation_messaging::messaging::collaboration::attention_preference;
 use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
 use sqlx::Connection;
 use std::{

@@ -21,7 +21,7 @@
 //!     every failure is logged in input order (residue accounting, never swallowed);
 //!   - ALL failed → the representative is the FIRST failure in that SAME ordered
 //!     list: a typed placement refusal maps through the CANONICAL
-//!     [`placement_refusal`](crate::messaging::collaboration::runtime_control::placement_refusal)
+//!     [`placement_refusal`](crate::conversation_messaging::messaging::collaboration::runtime_control::placement_refusal)
 //!     mapper (this route re-mints no refusal vocabulary), a hard fault takes the
 //!     product's `500 {"stopped":0,"error":<message>}`.
 //!
@@ -59,8 +59,8 @@ use silverhand_backend_core::{
     },
 };
 
+use crate::conversation_messaging::messaging::collaboration::runtime_control::placement_refusal;
 use crate::foundation::error;
-use crate::messaging::collaboration::runtime_control::placement_refusal;
 
 /// The product route template, in axum's `{id}` capture syntax.
 pub const AGENT_STOP_PATH: &str = "/api/agents/{id}/stop";

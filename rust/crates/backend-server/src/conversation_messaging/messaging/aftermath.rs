@@ -72,7 +72,7 @@ pub trait SendAftermath {
 /// review-visible assembly rather than a swapped argument:
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::messaging::aftermath::MessagingAftermath;
+/// use silverhand_backend_server::conversation_messaging::messaging::aftermath::MessagingAftermath;
 ///
 /// // Crate-private: a composition root cannot assemble a fan-out component by component.
 /// let _ = MessagingAftermath::new((), (), (), ());
@@ -84,7 +84,7 @@ pub trait SendAftermath {
 /// `#[derive(Clone)]` reddens here:
 ///
 /// ```
-/// use silverhand_backend_server::messaging::aftermath::MessagingAftermath;
+/// use silverhand_backend_server::conversation_messaging::messaging::aftermath::MessagingAftermath;
 ///
 /// // Deliberately not `Clone`: a `Mutex` cannot be duplicated.
 /// struct ByValue(std::sync::Mutex<u8>);
