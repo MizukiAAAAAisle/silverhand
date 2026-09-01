@@ -90,10 +90,10 @@ use silverhand_backend_server::{
     runtime_credential::RuntimeCredentialAuthority,
 };
 use silverhand_backend_sqlite::{
-    auth::SqliteSessionStore, host_agent::SqliteHostAgentStore,
-    host_runtime::SqliteHostRuntimeStore, messaging::MessagingStore,
-    runtime_credential::SqliteRuntimeCustodyStore, runtime_delivery::SqliteRuntimeDeliveryStore,
-    scope_event::SqliteEventScopeAuthority,
+    auth::SqliteSessionStore, foundation::scope_event::SqliteEventScopeAuthority,
+    host_agent::SqliteHostAgentStore, host_runtime::SqliteHostRuntimeStore,
+    messaging::MessagingStore, runtime_credential::SqliteRuntimeCustodyStore,
+    runtime_delivery::SqliteRuntimeDeliveryStore,
 };
 use sqlx::{Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::sync::{

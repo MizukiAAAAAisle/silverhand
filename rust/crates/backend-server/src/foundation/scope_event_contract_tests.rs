@@ -5086,7 +5086,7 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
     // The WS perimeter on a real listener: real scope authority, and its principal
     // comes from the SAME real session authority via the seeded cookie bearer.
     let scope_authority =
-        silverhand_backend_sqlite::scope_event::SqliteEventScopeAuthority::open(&path)
+        silverhand_backend_sqlite::foundation::scope_event::SqliteEventScopeAuthority::open(&path)
             .await
             .unwrap();
     let (ws_app, controller) = router(

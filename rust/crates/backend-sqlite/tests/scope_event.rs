@@ -5,7 +5,7 @@ use silverhand_backend_core::{
     foundation::identity::{ConversationId, UserId, WorkspaceId},
     foundation::scope_event::{AuthorizeEventScope, EventScope},
 };
-use silverhand_backend_sqlite::scope_event::SqliteEventScopeAuthority;
+use silverhand_backend_sqlite::foundation::scope_event::SqliteEventScopeAuthority;
 use sqlx::Connection;
 use std::error::Error;
 

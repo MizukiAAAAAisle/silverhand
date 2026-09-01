@@ -339,7 +339,16 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-sqlite", "agent_runtime_state_read"),
     ("backend-sqlite", "embedded_bootstrap"),
     ("backend-sqlite", "workspace_data_plane"),
-    ("backend-sqlite", "write_probe"),
+    // #task:2291 — the backend-sqlite `foundation` relocation namespace: a directory
+    // container declared once at the crate root (`foundation/mod.rs`), owning the two
+    // relocated production leaves — the `write_probe` write-readiness transport (this
+    // lane's seam entry) and the `scope_event` scope-authority adapter folded in from
+    // `ROOT_MODULES_WE_DID_NOT_ADD`. Their old flat crate-root entries are removed; the
+    // organization map/gate is the authority for each leaf's owner/target inside the
+    // container and this seam entry does NOT descend into it. The cfg-test/path-backed
+    // `current_schema` root (also owner `foundation` in the map) is a separate axis and
+    // stays a crate-root declaration — it is not folded here.
+    ("backend-sqlite", "foundation"),
 ];
 
 /// The declarations this lane did NOT add, across EVERY root in `CRATE_ROOTS`.
@@ -383,6 +392,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
 /// backend-sqlite `unread_read` projection under the new backend-sqlite `viewer_read_model`
 /// container on the same terms (its flat entry removed here, covered by that container's seam
 /// entry via the CP projection, alongside the two presence leaves folded from the seam ledger).
+/// #task:2291 relocated the inherited backend-sqlite `scope_event` scope-authority adapter under
+/// the new backend-sqlite `foundation` container on the same terms (its flat entry removed here,
+/// covered by that container's seam entry via the CP projection, alongside the `write_probe`
+/// transport folded from the seam ledger).
 ///
 /// CP1-temporary, with G3's accounting: it guards "every lane module is registered
 /// where it is guarded", it is deleted when the seam is extracted into the
@@ -433,7 +446,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-sqlite", "messaging"),
     ("backend-sqlite", "runtime_credential"),
     ("backend-sqlite", "runtime_delivery"),
-    ("backend-sqlite", "scope_event"),
     ("backend-sqlite", "workspace_cold_read"),
 ];
 
@@ -544,6 +556,12 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // unread / presence-cold-read / last-seen leaves. Same terms: one declaration at the
     // crate root, leaf owners live in the organization map/gate.
     ("backend-sqlite", "viewer_read_model"),
+    // #task:2291 — the backend-sqlite `foundation` relocation namespace, likewise a
+    // directory-shaped container (`foundation/mod.rs`) owning the relocated production
+    // `scope_event` / `write_probe` leaves. Same terms: one declaration at the crate root,
+    // leaf owners live in the organization map/gate. The cfg-test `current_schema` root is a
+    // separate crate-root declaration and is not part of this directory container.
+    ("backend-sqlite", "foundation"),
 ];
 
 /// The modules a composition must name to ACTIVATE this lane: rules that decide, a

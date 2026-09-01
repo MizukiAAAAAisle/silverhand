@@ -15,7 +15,9 @@ use silverhand_backend_server::foundation::scope_event_transport::{
     AllowedOrigin, ConnectionLifecycle, DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH,
     EVENT_WS_SESSION_COOKIE, EventWebSocketConfig, ScopeEventHub, router,
 };
-use silverhand_backend_sqlite::{auth::SqliteSessionStore, scope_event::SqliteEventScopeAuthority};
+use silverhand_backend_sqlite::{
+    auth::SqliteSessionStore, foundation::scope_event::SqliteEventScopeAuthority,
+};
 use sqlx::{Connection, SqliteConnection};
 use tokio_tungstenite::{
     connect_async,

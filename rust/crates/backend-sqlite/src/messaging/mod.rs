@@ -616,8 +616,8 @@ impl<E> MessagingStore<E> {
     /// configuration: readiness has to answer for the writer the process actually
     /// uses, and a probe holding a handle of its own would report a writable database
     /// through a connection nothing else writes on.
-    pub fn write_probe(&self) -> crate::write_probe::SqliteWriteProbe {
-        crate::write_probe::SqliteWriteProbe::sharing(self.pool.clone())
+    pub fn write_probe(&self) -> crate::foundation::write_probe::SqliteWriteProbe {
+        crate::foundation::write_probe::SqliteWriteProbe::sharing(self.pool.clone())
     }
 
     /// The post-commit onboarding inbox-ensure authority for the database THIS store
