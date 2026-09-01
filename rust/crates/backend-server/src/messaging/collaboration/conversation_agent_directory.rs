@@ -119,7 +119,7 @@ mod tests {
         },
         foundation::identity::{AgentId, ConversationId, UserId},
     };
-    use silverhand_backend_sqlite::messaging::MessagingStore;
+    use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
     use sqlx::{
         Connection, Executor, SqliteConnection, SqlitePool,
         sqlite::{SqliteConnectOptions, SqlitePoolOptions},

@@ -1,5 +1,5 @@
 use silverhand_backend_core::foundation::identity::{ConversationId, UserId};
-use silverhand_backend_sqlite::messaging::{
+use silverhand_backend_sqlite::conversation_messaging::messaging::{
     MessagingStore, collaboration::conversation_participation::ConversationParticipationRefusal,
 };
 use sqlx::{Connection, Executor, SqliteConnection};

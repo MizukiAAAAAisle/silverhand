@@ -19,7 +19,7 @@ use silverhand_backend_core::{
     },
     foundation::identity::{UserId, WorkspaceId},
 };
-use silverhand_backend_sqlite::messaging::{
+use silverhand_backend_sqlite::conversation_messaging::messaging::{
     MessagingStore, collaboration::channel_directory::ChannelDirectoryCreateStoreError,
 };
 use sqlx::{Connection, Executor, Row, SqliteConnection};

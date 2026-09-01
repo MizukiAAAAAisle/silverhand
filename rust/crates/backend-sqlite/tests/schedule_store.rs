@@ -10,7 +10,7 @@ use silverhand_backend_core::conversation_messaging::messaging::schedule::{
     Clock, CronSpec, DueCandidate, FiredCount, ScheduleCaps, ScheduleId, ScheduleSpec,
     ScheduleStore, SettlementAction,
 };
-use silverhand_backend_sqlite::messaging::schedule::SqliteScheduleStore;
+use silverhand_backend_sqlite::conversation_messaging::messaging::schedule::SqliteScheduleStore;
 use sqlx::{ConnectOptions, Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;

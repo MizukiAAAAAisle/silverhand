@@ -30,7 +30,7 @@ use silverhand_backend_core::{
 use silverhand_backend_filesystem::foundation::blob_store::{
     LocalBlobAliasDeleteOutcome, LocalBlobAliasOutcome, LocalBlobAliasStore, LocalBlobStore,
 };
-use silverhand_backend_sqlite::messaging::MessagingStore;
+use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection};
 use tower::ServiceExt;
 

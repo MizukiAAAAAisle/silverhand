@@ -148,7 +148,7 @@ mod tests {
         foundation::identity::{ConversationId, UserId, WorkspaceId},
         identity_access::access::WorkspaceRole,
     };
-    use silverhand_backend_sqlite::messaging::MessagingStore;
+    use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
     use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
     use tower::ServiceExt;
 

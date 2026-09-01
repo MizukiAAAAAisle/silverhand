@@ -127,6 +127,11 @@ use silverhand_backend_sqlite::{
     auth::SqliteSessionStore,
     computer_agents_read::SqliteComputerAgentsRead,
     conversation_messaging::direct_pair_read::SqliteDirectPairReadModel,
+    conversation_messaging::messaging::{
+        HostEnvironment, MessagingStore,
+        schedule::{SqliteScheduleCancel, SqliteScheduleListRead},
+        task::SqliteTaskStore,
+    },
     conversation_messaging::runtime_delivery::SqliteRuntimeDeliveryStore,
     credential::SqliteCredentialStore,
     embedded_bootstrap::SqliteEmbeddedBootstrap,
@@ -136,11 +141,6 @@ use silverhand_backend_sqlite::{
     host_resources_read::SqliteHostResourcesColdRead,
     host_runtime::SqliteHostRuntimeStore,
     human_registration::SqliteHumanRegistration,
-    messaging::{
-        HostEnvironment, MessagingStore,
-        schedule::{SqliteScheduleCancel, SqliteScheduleListRead},
-        task::SqliteTaskStore,
-    },
     runtime_credential::SqliteRuntimeCustodyStore,
     user_identity::SqliteUserStore,
     viewer_read_model::unread_read::SqliteUnreadReadModel,

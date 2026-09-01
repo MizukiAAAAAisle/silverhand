@@ -343,7 +343,7 @@ mod tests {
     use silverhand_backend_core::conversation_messaging::messaging::collaboration::activity::observe::{
         CommittedObservation, ObservationEffectFailure, ObservedConversation,
     };
-    use silverhand_backend_sqlite::messaging::MessagingStore;
+    use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
     use sqlx::{Connection, Executor, Row, SqliteConnection, sqlite::SqliteConnectOptions};
     use std::{
         io::{self, Write},

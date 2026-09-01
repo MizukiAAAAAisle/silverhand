@@ -7,8 +7,6 @@
 //! facts and `PersistenceFailure`, so no driver type reaches the application or
 //! the wire.
 
-pub mod messaging;
-
 pub mod access;
 pub mod agent_audit_read;
 pub mod agent_availability_read;

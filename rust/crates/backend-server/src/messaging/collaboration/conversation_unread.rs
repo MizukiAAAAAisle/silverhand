@@ -119,7 +119,7 @@ mod tests {
         ConversationUnread, ThreadUnread, UnreadCount,
     };
     use silverhand_backend_core::conversation_messaging::messaging::{MessageId, MessageSeq, ThreadRootId};
-    use silverhand_backend_sqlite::messaging::MessagingStore;
+    use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
     use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
     use tower::ServiceExt;
 

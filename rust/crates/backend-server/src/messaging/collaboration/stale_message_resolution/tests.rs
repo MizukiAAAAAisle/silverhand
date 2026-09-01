@@ -19,7 +19,7 @@ use silverhand_backend_core::{
     foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
     host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
-use silverhand_backend_sqlite::messaging::MessagingStore;
+use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
 use tower::ServiceExt;
 

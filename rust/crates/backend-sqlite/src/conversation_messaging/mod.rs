@@ -7,12 +7,12 @@
 //! policy, orchestration, transaction, or lifecycle logic.
 //!
 //! Colocation does NOT merge the members: the direct-pair read adapter
-//! (`direct_pair_read`) and the runtime-delivery custody/settlement adapter
-//! (`runtime_delivery`) remain independent responsibilities with their own SQL,
-//! transactions, and error taxonomies. The large `messaging/` directory (owner C3 in the
-//! map) is NOT yet relocated here — it stays a crate-root module as the sole named
-//! residual for a separate closure wave; there is no compatibility bridge between it and
-//! this container.
+//! (`direct_pair_read`), the runtime-delivery custody/settlement adapter
+//! (`runtime_delivery`), and the messaging store directory (`messaging`) remain
+//! independent responsibilities with their own SQL, transactions, and error taxonomies.
+//! `messaging` is one mapped directory leaf: its `mod.rs`, `collaboration/`, `schedule/`,
+//! and `task/` children stay internal to it and are not separate business units.
 
 pub mod direct_pair_read;
+pub mod messaging;
 pub mod runtime_delivery;

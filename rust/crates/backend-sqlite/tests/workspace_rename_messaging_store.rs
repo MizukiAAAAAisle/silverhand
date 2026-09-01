@@ -19,7 +19,7 @@ use silverhand_backend_core::{
     foundation::identity::{AgentId, ConversationId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
 };
-use silverhand_backend_sqlite::messaging::{
+use silverhand_backend_sqlite::conversation_messaging::messaging::{
     MessagingStore, collaboration::workspace_rename_messaging::WorkspaceRenameMessagingStoreError,
 };
 use sqlx::{Connection, Executor, Row};

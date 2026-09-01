@@ -286,7 +286,7 @@ async fn production_router_reads_the_current_schema_snapshot() {
     }
     db.close().await.unwrap();
 
-    let store = silverhand_backend_sqlite::messaging::MessagingStore::open(&path)
+    let store = silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore::open(&path)
         .await
         .unwrap();
     let mut request = Request::builder()

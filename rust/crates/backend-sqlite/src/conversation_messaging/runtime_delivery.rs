@@ -594,7 +594,7 @@ impl SqliteRuntimeDeliveryStore {
         before: &BoundRuntimeControlSeat,
     ) -> Result<Option<ClearSessionCommitReceipt>, PersistenceFailure> {
         let should_audit = before.was_running() || before.previous_cli_session().is_some();
-        let environment = crate::messaging::HostEnvironment;
+        let environment = crate::conversation_messaging::messaging::HostEnvironment;
         let occurred_at = environment
             .now_unix_ms()
             .map_err(PersistenceFailure::from_source)?;
@@ -837,15 +837,16 @@ impl RuntimeDispatchReadPort for SqliteRuntimeDeliveryStore {
         // read, so participation cannot be revoked in an interleaving window between
         // reads. A non-participant matches no row → None → zero wire.
         let mut tx = self.pool.begin().await.map_err(persistence)?;
-        let Some(agent_row) = sqlx::query(crate::messaging::SELECT_START_DISPATCH_SPEC)
-            .bind(candidate_origin.as_str())
-            .bind(agent.as_str())
-            .bind(agent.as_str())
-            .bind(agent.as_str())
-            .bind(agent.as_str())
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(persistence)?
+        let Some(agent_row) =
+            sqlx::query(crate::conversation_messaging::messaging::SELECT_START_DISPATCH_SPEC)
+                .bind(candidate_origin.as_str())
+                .bind(agent.as_str())
+                .bind(agent.as_str())
+                .bind(agent.as_str())
+                .bind(agent.as_str())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(persistence)?
         else {
             return Ok(None);
         };
@@ -2006,7 +2007,7 @@ fn delivery_timestamp(row: &sqlx::sqlite::SqliteRow) -> Result<String, Persisten
 }
 
 fn delivery_target(row: &sqlx::sqlite::SqliteRow) -> Result<String, PersistenceFailure> {
-    use crate::messaging::authorities::{address_id, encode_name_segment};
+    use crate::conversation_messaging::messaging::authorities::{address_id, encode_name_segment};
 
     let conversation: String = row
         .try_get("message_conversation_id")

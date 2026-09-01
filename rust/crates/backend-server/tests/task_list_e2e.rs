@@ -33,7 +33,9 @@ use silverhand_backend_core::host_runtime::runtime_credential::{
     RuntimeCustody, RuntimeGeneration, RuntimePrincipal,
 };
 use silverhand_backend_server::messaging::task::{TaskListState, task_list_router};
-use silverhand_backend_sqlite::messaging::{MessagingStore, task::SqliteTaskStore};
+use silverhand_backend_sqlite::conversation_messaging::messaging::{
+    MessagingStore, task::SqliteTaskStore,
+};
 use sqlx::Connection;
 use tempfile::TempDir;
 use tower::ServiceExt;

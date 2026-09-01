@@ -4,7 +4,7 @@ use silverhand_backend_core::{
     },
     foundation::identity::{AgentId, ConversationId},
 };
-use silverhand_backend_sqlite::messaging::MessagingStore;
+use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection};
 
 #[path = "support/current_schema_snapshot.rs"]

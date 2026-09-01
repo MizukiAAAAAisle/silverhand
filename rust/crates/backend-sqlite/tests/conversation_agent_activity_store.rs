@@ -4,7 +4,7 @@ use silverhand_backend_core::{
     },
     foundation::identity::{AgentId, ConversationId, UserId},
 };
-use silverhand_backend_sqlite::messaging::{
+use silverhand_backend_sqlite::conversation_messaging::messaging::{
     MessagingStore, collaboration::conversation_agent_activity::ConversationAgentActivityStoreError,
 };
 use sqlx::{Connection, Executor};

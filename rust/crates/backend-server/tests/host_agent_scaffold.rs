@@ -349,16 +349,16 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // `current_schema` root (also owner `foundation` in the map) is a separate axis and
     // stays a crate-root declaration — it is not folded here.
     ("backend-sqlite", "foundation"),
-    // #task:2292 — the backend-sqlite `conversation_messaging` relocation namespace: a
+    // #task:2292 established the backend-sqlite `conversation_messaging` relocation namespace: a
     // directory container declared once at the crate root (`conversation_messaging/mod.rs`),
-    // owning the two relocated production file leaves this wave lands — `direct_pair_read`
-    // (read adapter) and `runtime_delivery` (custody/settlement adapter), both folded in from
-    // `ROOT_MODULES_WE_DID_NOT_ADD`. Their old flat crate-root entries are removed; the
-    // organization map/gate owns each leaf's owner/target inside the container and this seam
-    // entry does NOT descend into it. TRANSITIONAL / PARTIAL: the large `messaging/` directory
-    // (owner C3 in the map) is NOT relocated here yet — it stays a flat crate-root entry in the
-    // inherited list below as the sole named residual for a separate closure wave, with no
-    // compatibility bridge between it and this container. Namespace closure is NOT claimed.
+    // owning the relocated `direct_pair_read` (read adapter) and `runtime_delivery`
+    // (custody/settlement adapter) file leaves, both folded in from `ROOT_MODULES_WE_DID_NOT_ADD`.
+    // #task:2293 then relocated the whole `messaging/` directory leaf into
+    // `conversation_messaging/messaging/`, closing the namespace at 3/3/0; its stale flat
+    // `("backend-sqlite", "messaging")` inherited entry is removed and now covered by this same
+    // owning-root entry. Their old flat crate-root entries are removed; the organization map/gate
+    // owns each leaf's owner/target inside the container and this seam entry does NOT descend into
+    // it (the `messaging` directory's 48-file child set stays internal to that one leaf).
     ("backend-sqlite", "conversation_messaging"),
 ];
 
@@ -410,8 +410,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
 /// #task:2292 relocated the inherited backend-sqlite `direct_pair_read` and `runtime_delivery`
 /// file leaves under the new backend-sqlite `conversation_messaging` container on the same terms
 /// (their flat entries removed here, covered by that container's seam entry via the CP
-/// projection). This is a PARTIAL wave (2/3): the `messaging` directory remains a flat crate-root
-/// entry below as the sole named residual for a separate closure wave.
+/// projection). #task:2293 then relocated the whole `messaging/` directory leaf into the same
+/// container, closing `conversation_messaging` at 3/3/0 and removing the stale flat `messaging`
+/// entry here; it is now covered by that container's seam entry via the CP projection.
 ///
 /// CP1-temporary, with G3's accounting: it guards "every lane module is registered
 /// where it is guarded", it is deleted when the seam is extracted into the
@@ -458,7 +459,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-sqlite", "auth"),
     ("backend-sqlite", "current_schema"),
     ("backend-sqlite", "host_runtime"),
-    ("backend-sqlite", "messaging"),
     ("backend-sqlite", "runtime_credential"),
     ("backend-sqlite", "workspace_cold_read"),
 ];
@@ -577,10 +577,11 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // separate crate-root declaration and is not part of this directory container.
     ("backend-sqlite", "foundation"),
     // #task:2292 — the backend-sqlite `conversation_messaging` relocation namespace, likewise a
-    // directory-shaped container (`conversation_messaging/mod.rs`) owning the two relocated
-    // `direct_pair_read` / `runtime_delivery` file leaves. Same terms: one declaration at the
-    // crate root, leaf owners live in the organization map/gate. PARTIAL (2/3): the `messaging`
-    // directory is not relocated into this container yet and stays a flat crate-root module.
+    // directory-shaped container (`conversation_messaging/mod.rs`) owning the relocated
+    // `direct_pair_read` / `runtime_delivery` file leaves and, since #task:2293, the whole
+    // `messaging/` directory leaf (namespace closed 3/3/0). Same terms: one declaration at the
+    // crate root, leaf owners live in the organization map/gate; this directory entry does not
+    // descend into the `messaging` leaf's internal children.
     ("backend-sqlite", "conversation_messaging"),
 ];
 

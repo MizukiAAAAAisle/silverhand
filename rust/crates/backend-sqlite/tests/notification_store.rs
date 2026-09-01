@@ -8,7 +8,9 @@ use silverhand_backend_core::{
     },
     foundation::identity::UserId,
 };
-use silverhand_backend_sqlite::messaging::{MessagingStore, collaboration::NotificationStoreError};
+use silverhand_backend_sqlite::conversation_messaging::messaging::{
+    MessagingStore, collaboration::NotificationStoreError,
+};
 use sqlx::Connection;
 #[path = "support/current_schema_snapshot.rs"]
 mod current_schema;

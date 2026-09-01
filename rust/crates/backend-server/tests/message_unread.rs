@@ -15,7 +15,7 @@ use silverhand_backend_core::{
     foundation::identity::{ConversationId, UserId, WorkspaceId},
 };
 use silverhand_backend_server::messaging::collaboration::message_unread::router;
-use silverhand_backend_sqlite::messaging::MessagingStore;
+use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
 use tower::ServiceExt;
 

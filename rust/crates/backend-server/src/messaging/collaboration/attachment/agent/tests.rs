@@ -37,7 +37,7 @@ use silverhand_backend_core::{
     },
 };
 use silverhand_backend_filesystem::foundation::blob_store::{LocalBlobStore, LocalBlobStoreError};
-use silverhand_backend_sqlite::messaging::{
+use silverhand_backend_sqlite::conversation_messaging::messaging::{
     MessagingStore, collaboration::attachment::SqliteAgentAttachment,
 };
 use sqlx::{Connection, Executor, Row, SqliteConnection};

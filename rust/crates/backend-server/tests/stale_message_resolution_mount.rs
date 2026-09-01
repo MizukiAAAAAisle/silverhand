@@ -58,7 +58,7 @@ use silverhand_backend_server::{
     },
 };
 use silverhand_backend_sqlite::{
-    messaging::{
+    conversation_messaging::messaging::{
         MessagingStore,
         collaboration::stale_message_resolution::SqliteStaleMessageResolutionAdmission,
     },

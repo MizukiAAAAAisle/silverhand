@@ -24,7 +24,7 @@ use silverhand_backend_core::{
     foundation::identity::{ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
 };
-use silverhand_backend_sqlite::messaging::{
+use silverhand_backend_sqlite::conversation_messaging::messaging::{
     MessagingStore, collaboration::channel_lifecycle::ChannelLifecycleMutationStoreError,
 };
 use sqlx::{Connection, Executor, Row, SqliteConnection};

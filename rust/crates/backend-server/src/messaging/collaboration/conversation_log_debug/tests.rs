@@ -16,7 +16,7 @@ use silverhand_backend_core::{
     foundation::identity::{ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
 };
-use silverhand_backend_sqlite::messaging::{
+use silverhand_backend_sqlite::conversation_messaging::messaging::{
     MessagingStore,
     collaboration::conversation_participation::{
         ConversationParticipationRefusal, SqliteConversationParticipationRead,

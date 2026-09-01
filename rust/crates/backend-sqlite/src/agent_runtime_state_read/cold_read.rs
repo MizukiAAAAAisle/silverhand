@@ -55,8 +55,8 @@ use thiserror::Error;
 
 use crate::{
     agent_view_acl::{AgentViewAclError, read_agent_audience},
-    messaging::agent_participation_predicate,
-    messaging::collaboration::conversation_participation::human_participation_source,
+    conversation_messaging::messaging::agent_participation_predicate,
+    conversation_messaging::messaging::collaboration::conversation_participation::human_participation_source,
 };
 
 const POOL_CONNECTIONS: u32 = 4;

@@ -9,8 +9,8 @@ use silverhand_backend_core::{
     },
     foundation::identity::{ConversationId, UserId},
 };
-use silverhand_backend_sqlite::messaging::MessagingStore;
-use silverhand_backend_sqlite::messaging::collaboration::conversation_message_window::ConversationMessageWindowStoreError;
+use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
+use silverhand_backend_sqlite::conversation_messaging::messaging::collaboration::conversation_message_window::ConversationMessageWindowStoreError;
 use sqlx::{Connection, Executor};
 
 #[path = "support/current_schema_snapshot.rs"]

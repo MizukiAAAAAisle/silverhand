@@ -7,8 +7,8 @@ use silverhand_backend_core::{
     conversation_messaging::messaging::collaboration::saved::{SavedListQuery, SavedReadPort},
     foundation::identity::UserId,
 };
-use silverhand_backend_sqlite::messaging::MessagingStore;
-use silverhand_backend_sqlite::messaging::collaboration::SavedStoreError;
+use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
+use silverhand_backend_sqlite::conversation_messaging::messaging::collaboration::SavedStoreError;
 use sqlx::{Connection, Executor};
 
 #[path = "support/current_schema_snapshot.rs"]

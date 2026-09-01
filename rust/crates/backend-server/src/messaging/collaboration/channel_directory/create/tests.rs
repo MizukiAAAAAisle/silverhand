@@ -28,7 +28,7 @@ use silverhand_backend_core::{
     },
     foundation::identity::{ConversationId, UserId, WorkspaceId},
 };
-use silverhand_backend_sqlite::messaging::MessagingStore;
+use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
 use sqlx::{Connection, Executor};
 use tower::ServiceExt;
 use tracing_subscriber::fmt::MakeWriter;

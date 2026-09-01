@@ -10,7 +10,7 @@ use silverhand_backend_core::conversation_messaging::messaging::schedule::{
     ScheduleListLimit, ScheduleListQuery, ScheduleListReadModel, ScheduleStatus, ScheduleView,
 };
 use silverhand_backend_core::foundation::identity::AgentId;
-use silverhand_backend_sqlite::messaging::schedule::SqliteScheduleListRead;
+use silverhand_backend_sqlite::conversation_messaging::messaging::schedule::SqliteScheduleListRead;
 use sqlx::{Connection, SqliteConnection};
 use std::path::PathBuf;
 use tempfile::TempDir;

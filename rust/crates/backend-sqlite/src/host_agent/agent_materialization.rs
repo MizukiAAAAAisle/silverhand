@@ -600,7 +600,7 @@ async fn write_agent_graph_on(
     })?;
 
     let recorder = RecordingDirectPairOpened::default();
-    let direct_line = crate::messaging::open_direct_pair_on(
+    let direct_line = crate::conversation_messaging::messaging::open_direct_pair_on(
         conn,
         candidate_direct_line,
         &recorder,
@@ -625,7 +625,10 @@ async fn write_agent_graph_on(
         &creator_handle,
         now_ms,
     );
-    let onboarding = crate::messaging::append_onboarding_system_message_on(conn, &intent).await?;
+    let onboarding = crate::conversation_messaging::messaging::append_onboarding_system_message_on(
+        conn, &intent,
+    )
+    .await?;
 
     Ok(RawAgentArmGraph {
         flip,
@@ -713,7 +716,10 @@ async fn write_conversation_graph_on(
         &agent_handle,
         now_ms,
     );
-    let onboarding = crate::messaging::append_onboarding_system_message_on(conn, &intent).await?;
+    let onboarding = crate::conversation_messaging::messaging::append_onboarding_system_message_on(
+        conn, &intent,
+    )
+    .await?;
 
     let home_row = raw_home_workspace_row(
         &sqlx::query(READ_HOME_WORKSPACE_BACK)

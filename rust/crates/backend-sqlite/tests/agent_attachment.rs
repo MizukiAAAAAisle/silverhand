@@ -20,7 +20,7 @@ use silverhand_backend_core::{
         RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
 };
-use silverhand_backend_sqlite::messaging::{
+use silverhand_backend_sqlite::conversation_messaging::messaging::{
     MessagingStore, collaboration::attachment::AgentAttachmentStoreError,
 };
 use sqlx::{Connection, Executor, Row, SqliteConnection};
@@ -110,7 +110,7 @@ fn store_source(error: &PersistenceFailure) -> &AgentAttachmentStoreError {
 }
 
 async fn update_command(
-    store: &silverhand_backend_sqlite::messaging::collaboration::attachment::SqliteAgentAttachment,
+    store: &silverhand_backend_sqlite::conversation_messaging::messaging::collaboration::attachment::SqliteAgentAttachment,
     runtime: &AgentAttachmentRuntime,
     key: &str,
 ) -> AgentAttachmentContentUpdateCommand {
@@ -125,7 +125,7 @@ async fn update_command(
 }
 
 async fn create_command(
-    store: &silverhand_backend_sqlite::messaging::collaboration::attachment::SqliteAgentAttachment,
+    store: &silverhand_backend_sqlite::conversation_messaging::messaging::collaboration::attachment::SqliteAgentAttachment,
     id: &str,
     key: &str,
 ) -> AgentAttachmentCreateCommand {

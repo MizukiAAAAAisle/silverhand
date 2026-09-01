@@ -60,8 +60,8 @@ use silverhand_backend_core::{
 };
 use silverhand_backend_sqlite::{
     conversation_messaging::direct_pair_read::SqliteDirectPairReadModel,
+    conversation_messaging::messaging::MessagingStore,
     conversation_messaging::runtime_delivery::SqliteRuntimeDeliveryStore,
-    messaging::MessagingStore,
     viewer_read_model::unread_read::{SqliteUnreadReadModel, UnreadReadModelError},
     viewer_read_model::user_presence_cold_read::SqliteUserPresenceColdRead,
     viewer_read_model::user_presence_last_seen::SqliteLastSeenSink,

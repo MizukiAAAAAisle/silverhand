@@ -20,7 +20,7 @@ use silverhand_backend_core::identity_access::agent_peer_profile::{
     CallerConversationPlacement, CallerReadMessagesCapability, CallerWorkspaceHorizon,
     WorkspacePlacement,
 };
-use silverhand_backend_sqlite::messaging::MessagingStore;
+use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
 use sqlx::SqliteConnection;
 use tempfile::TempDir;
 

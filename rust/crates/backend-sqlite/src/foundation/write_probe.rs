@@ -23,7 +23,7 @@
 //! So there is no path constructor. [`SqliteWriteProbe::sharing`] takes a pool and is
 //! `pub(crate)`, which leaves exactly one way to obtain a probe from outside this
 //! crate: ask a store for one
-//! ([`MessagingStore::write_probe`](crate::messaging::MessagingStore::write_probe)),
+//! ([`MessagingStore::write_probe`](crate::conversation_messaging::messaging::MessagingStore::write_probe)),
 //! which hands over the handle it writes with. `SqlitePool` is a shared handle, so a
 //! probe cannot outlive the store's usability — the gate for that lives beside the
 //! store, where the handle is private.
@@ -83,7 +83,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::messaging::{HostEnvironment, MessagingStore};
+    use crate::conversation_messaging::messaging::{HostEnvironment, MessagingStore};
 
     /// A product database plus the store the process writes through. Every probe under
     /// test is minted from that store, so these are tests of the production shape and

@@ -23,13 +23,13 @@
 //! its audience through [`crate::agent_view_acl::read_agent_audience`] — the SAME facts
 //! the agent-detail and availability faces are gated against, so the audit owner floor
 //! cannot drift from them. The transcript decodes and seals rows through
-//! [`crate::messaging::collaboration::conversation_message_window::RawMessage`] and
-//! resolves authors through [`crate::messaging::author::resolve_authors`], so an audit
+//! [`crate::conversation_messaging::messaging::collaboration::conversation_message_window::RawMessage`] and
+//! resolves authors through [`crate::conversation_messaging::messaging::author::resolve_authors`], so an audit
 //! message means exactly what the authenticated channel window means — but it selects
 //! its OWN `mode=all` rows (no mainline/thread filter). The direct-pair counterpart is
 //! resolved through [`crate::conversation_messaging::direct_pair_read`]'s `PairEvidence`/`LivePrincipals`, so
 //! the audit list and the DM list agree on deleted-vs-active and read-only. The
-//! attachment row is loaded through [`crate::messaging::collaboration::attachment::load_attachment`]
+//! attachment row is loaded through [`crate::conversation_messaging::messaging::collaboration::attachment::load_attachment`]
 //! and bound here by `channel == conversation`; the blob store is NEVER touched in the
 //! read model.
 
@@ -66,7 +66,7 @@ use crate::{
     agent_detail_read::{AgentDetailColdReadError, agent_detail_select_from, decode_agent_row},
     agent_view_acl::read_agent_audience,
     conversation_messaging::direct_pair_read::{DirectPairReadError, LivePrincipals, PairEvidence},
-    messaging::{
+    conversation_messaging::messaging::{
         author::resolve_authors,
         collaboration::{
             attachment::AttachmentReadStoreError,
@@ -253,14 +253,17 @@ impl SqliteAgentAuditRead {
         // bound HERE to the audited conversation by its owning channel: "absent" and
         // "belongs to another conversation" are one `None`, so a guessed id is not an
         // existence oracle.
-        let attachment =
-            if audit_conversation_floor(principal, agent, &subject, audited).is_allowed() {
-                crate::messaging::collaboration::attachment::load_attachment(&mut tx, attachment)
-                    .await?
-                    .filter(|record| record.channel() == conversation)
-            } else {
-                None
-            };
+        let attachment = if audit_conversation_floor(principal, agent, &subject, audited)
+            .is_allowed()
+        {
+            crate::conversation_messaging::messaging::collaboration::attachment::load_attachment(
+                &mut tx, attachment,
+            )
+            .await?
+            .filter(|record| record.channel() == conversation)
+        } else {
+            None
+        };
         tx.commit().await?;
         Ok(Some(AuditAttachmentBundle::from_source(
             subject,

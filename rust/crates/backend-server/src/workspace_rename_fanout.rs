@@ -93,7 +93,7 @@ mod tests {
         host_runtime::runtime_credential::RuntimeCustodyPort,
         host_runtime::runtime_event::DaemonEventDurablePort,
     };
-    use silverhand_backend_sqlite::messaging::collaboration::workspace_rename_messaging::SqliteWorkspaceRenameMessaging;
+    use silverhand_backend_sqlite::conversation_messaging::messaging::collaboration::workspace_rename_messaging::SqliteWorkspaceRenameMessaging;
 
     use super::*;
     use crate::conversation_messaging::scope_event_publishers::HubWorkspaceRenamePublisher;

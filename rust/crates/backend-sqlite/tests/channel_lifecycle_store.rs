@@ -7,8 +7,8 @@ use silverhand_backend_core::{
     },
     foundation::identity::{ConversationId, UserId},
 };
-use silverhand_backend_sqlite::messaging::MessagingStore;
-use silverhand_backend_sqlite::messaging::collaboration::channel_lifecycle::ChannelLifecycleStoreError;
+use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
+use silverhand_backend_sqlite::conversation_messaging::messaging::collaboration::channel_lifecycle::ChannelLifecycleStoreError;
 use sqlx::{Connection, Executor, SqliteConnection};
 
 #[path = "support/current_schema_snapshot.rs"]

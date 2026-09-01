@@ -477,31 +477,31 @@
         },
         {
           "function": "create_inner",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_directory/create.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_directory/create.rs"
         },
         {
           "function": "archive_inner",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_lifecycle/mutation.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_lifecycle/mutation.rs"
         },
         {
           "function": "rename_inner",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_lifecycle/mutation.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_lifecycle/mutation.rs"
         },
         {
           "function": "visibility_inner",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_lifecycle/mutation.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_lifecycle/mutation.rs"
         },
         {
           "function": "author_inner",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/workspace_rename_messaging.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/workspace_rename_messaging.rs"
         },
         {
           "function": "mint_direct_pair_on",
-          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/mod.rs"
         },
         {
           "function": "reserve_next_seq_on",
-          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/mod.rs"
         },
         {
           "function": "settle_clear_bound",
@@ -525,23 +525,23 @@
       "audited_rust_writers": [
         {
           "function": "rename_inner",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_lifecycle/mutation.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_lifecycle/mutation.rs"
         },
         {
           "function": "author_inner",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/workspace_rename_messaging.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/workspace_rename_messaging.rs"
         },
         {
           "function": "append_onboarding_system_message_on",
-          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/mod.rs"
         },
         {
           "function": "insert_message",
-          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/mod.rs"
         },
         {
           "function": "write_mention_copy",
-          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/mod.rs"
         },
         {
           "function": "settle_clear_bound",
@@ -565,7 +565,7 @@
       "audited_rust_writers": [
         {
           "function": "mutate",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/reaction/mutation.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/reaction/mutation.rs"
         }
       ],
       "audited_ts_writers": [
@@ -584,11 +584,11 @@
       "audited_rust_writers": [
         {
           "function": "save",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/saved/mutation.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/saved/mutation.rs"
         },
         {
           "function": "unsave",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/saved/mutation.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/saved/mutation.rs"
         }
       ],
       "audited_ts_writers": [
@@ -607,15 +607,15 @@
       "audited_rust_writers": [
         {
           "function": "delete_inner",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/attachment/write.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/attachment/write.rs"
         },
         {
           "function": "insert_attachment_row",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/attachment/write.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/attachment/write.rs"
         },
         {
           "function": "swap_attachment_content_row",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/attachment/write.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/attachment/write.rs"
         }
       ],
       "audited_ts_writers": [
@@ -634,15 +634,15 @@
       "audited_rust_writers": [
         {
           "function": "follow_inner",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/thread_follow.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/thread_follow.rs"
         },
         {
           "function": "unfollow_inner",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/thread_follow.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/thread_follow.rs"
         },
         {
           "function": "follow_actor",
-          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/mod.rs"
         }
       ],
       "audited_ts_writers": [
@@ -661,7 +661,7 @@
       "audited_rust_writers": [
         {
           "function": "bump_stream_head_on",
-          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/mod.rs"
         },
         {
           "function": "settle_clear_bound",
@@ -688,11 +688,11 @@
         },
         {
           "function": "ensure_delivery",
-          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/mod.rs"
         },
         {
           "function": "ensure_inner",
-          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/mod.rs"
         },
         {
           "function": "claim",
@@ -723,23 +723,23 @@
       "audited_rust_writers": [
         {
           "function": "clear_notification",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/activity/observe.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/activity/observe.rs"
         },
         {
           "function": "clear_stream_mentions",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/activity/observe.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/activity/observe.rs"
         },
         {
           "function": "clear",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/notification/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/notification/mod.rs"
         },
         {
           "function": "notify_author_of_copy",
-          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/mod.rs"
         },
         {
           "function": "record_mentions_transaction",
-          "path": "rust/crates/backend-sqlite/src/messaging/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/mod.rs"
         }
       ],
       "audited_ts_writers": [
@@ -766,7 +766,7 @@
         },
         {
           "function": "insert_user_raw",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_directory/create.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_directory/create.rs"
         }
       ],
       "audited_ts_writers": [
@@ -789,7 +789,7 @@
         },
         {
           "function": "create_inner",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/channel_directory/create.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_directory/create.rs"
         }
       ],
       "audited_ts_writers": [
@@ -849,19 +849,19 @@
       "audited_rust_writers": [
         {
           "function": "cancel_owned_schedule",
-          "path": "rust/crates/backend-sqlite/src/messaging/schedule/cancel.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/schedule/cancel.rs"
         },
         {
           "function": "apply_settlement",
-          "path": "rust/crates/backend-sqlite/src/messaging/schedule/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/schedule/mod.rs"
         },
         {
           "function": "claim",
-          "path": "rust/crates/backend-sqlite/src/messaging/schedule/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/schedule/mod.rs"
         },
         {
           "function": "reset_stale_firing",
-          "path": "rust/crates/backend-sqlite/src/messaging/schedule/mod.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/schedule/mod.rs"
         }
       ],
       "audited_ts_writers": [
@@ -880,7 +880,7 @@
       "audited_rust_writers": [
         {
           "function": "advance_cursor",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/activity/observe.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/activity/observe.rs"
         }
       ],
       "audited_ts_writers": [
@@ -899,7 +899,7 @@
       "audited_rust_writers": [
         {
           "function": "commit_channel",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/attention_preference.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/attention_preference.rs"
         }
       ],
       "audited_ts_writers": [
@@ -918,7 +918,7 @@
       "audited_rust_writers": [
         {
           "function": "commit_workspace",
-          "path": "rust/crates/backend-sqlite/src/messaging/collaboration/attention_preference.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/attention_preference.rs"
         }
       ],
       "audited_ts_writers": [

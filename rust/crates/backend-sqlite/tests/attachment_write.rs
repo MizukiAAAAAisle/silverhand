@@ -16,7 +16,7 @@ use silverhand_backend_core::{
     foundation::persistence::PersistenceFailure,
     foundation::wire_number::JsSafeInteger,
 };
-use silverhand_backend_sqlite::messaging::{
+use silverhand_backend_sqlite::conversation_messaging::messaging::{
     MessagingStore, collaboration::attachment::AttachmentWriteStoreError,
 };
 use sqlx::{Connection, Executor, Row, SqliteConnection};

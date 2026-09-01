@@ -51,7 +51,7 @@ use silverhand_backend_server::{
     },
 };
 use silverhand_backend_sqlite::{
-    messaging::{MessagingStore, task::SqliteTaskStore},
+    conversation_messaging::messaging::{MessagingStore, task::SqliteTaskStore},
     runtime_credential::SqliteRuntimeCustodyStore,
 };
 use sqlx::Connection;

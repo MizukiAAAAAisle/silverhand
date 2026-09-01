@@ -27,7 +27,9 @@ use silverhand_backend_core::conversation_messaging::messaging::{
 use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, UserId};
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::identity_access::agents::runtime::RuntimeKind;
-use silverhand_backend_sqlite::messaging::{HostEnvironment, MessagingStore};
+use silverhand_backend_sqlite::conversation_messaging::messaging::{
+    HostEnvironment, MessagingStore,
+};
 use sqlx::{Row, SqliteConnection};
 use std::{
     error::Error,
