@@ -7,7 +7,7 @@
 //!
 //! ## The ACL arms are the SHARED authority
 //!
-//! The direct-pair and workspace arms run [`crate::agent_view_acl`], the SAME SQL
+//! The direct-pair and workspace arms run [`crate::identity_access::agent_view_acl`], the SAME SQL
 //! `GET /api/agents/{id}/availability` decides against, so the two faces cannot
 //! drift on who may see an agent. The creator arm is the agent row's
 //! `created_by_user_id`, decoded ONCE and used both as the ACL creator and as the
@@ -49,7 +49,7 @@ use sqlx::{
 };
 use thiserror::Error;
 
-use crate::agent_view_acl::{AgentViewAclError, read_agent_audience};
+use crate::identity_access::agent_view_acl::{AgentViewAclError, read_agent_audience};
 
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);

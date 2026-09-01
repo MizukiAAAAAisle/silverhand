@@ -43,8 +43,8 @@ use silverhand_backend_core::{
 use silverhand_backend_server::human_auth::{self, HumanAuthDeps};
 use silverhand_backend_sqlite::{
     auth::SqliteSessionStore, credential::SqliteCredentialStore,
-    handle_namespace::SqliteHandleNamespace, human_registration::SqliteHumanRegistration,
-    user_identity::SqliteUserStore,
+    human_registration::SqliteHumanRegistration,
+    identity_access::handle_namespace::SqliteHandleNamespace, user_identity::SqliteUserStore,
 };
 use sqlx::Connection;
 use tempfile::TempDir;

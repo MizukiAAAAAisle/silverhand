@@ -41,7 +41,7 @@ use silverhand_backend_server::{
     host_agent::agent_list::{AGENTS_PATH, router},
 };
 use silverhand_backend_sqlite::{
-    agent_list_read::SqliteAgentListColdRead, auth::SqliteSessionStore,
+    auth::SqliteSessionStore, identity_access::agent_list_read::SqliteAgentListColdRead,
 };
 use sqlx::Connection;
 use tower::ServiceExt;

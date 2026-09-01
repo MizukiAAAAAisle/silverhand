@@ -9,22 +9,17 @@
 
 pub mod access;
 pub mod agent_audit_read;
-pub mod agent_avatar_read;
-pub mod agent_detail_read;
-pub mod agent_list_read;
-pub mod agent_profile_read;
 pub mod agent_profile_write;
-pub mod agent_view_acl;
 
 pub mod auth;
 pub mod conversation_messaging;
 pub mod credential;
 pub mod embedded_bootstrap;
 pub mod foundation;
-pub mod handle_namespace;
 pub mod host_agent;
 pub mod host_runtime;
 pub mod human_registration;
+pub mod identity_access;
 pub mod user_identity;
 pub mod viewer_read_model;
 pub mod workspace_audience_read;

@@ -24,7 +24,7 @@ use silverhand_backend_core::{
     identity_access::agents::runtime::RuntimeKind,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
 };
-use silverhand_backend_sqlite::agent_detail_read::SqliteAgentDetailColdRead;
+use silverhand_backend_sqlite::identity_access::agent_detail_read::SqliteAgentDetailColdRead;
 use sqlx::Connection;
 
 #[path = "support/current_schema_snapshot.rs"]

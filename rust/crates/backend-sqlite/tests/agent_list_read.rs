@@ -30,7 +30,8 @@ use silverhand_backend_core::{
     identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 use silverhand_backend_sqlite::{
-    agent_detail_read::SqliteAgentDetailColdRead, agent_list_read::SqliteAgentListColdRead,
+    identity_access::agent_detail_read::SqliteAgentDetailColdRead,
+    identity_access::agent_list_read::SqliteAgentListColdRead,
 };
 use sqlx::Connection;
 

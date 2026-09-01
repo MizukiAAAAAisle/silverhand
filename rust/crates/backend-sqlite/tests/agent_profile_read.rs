@@ -20,7 +20,7 @@ use silverhand_backend_core::{
     foundation::persistence::PersistenceFailure,
     identity_access::agent_profile_read::{AgentProfileFact, AgentProfileReadModel},
 };
-use silverhand_backend_sqlite::agent_profile_read::SqliteAgentProfileRead;
+use silverhand_backend_sqlite::identity_access::agent_profile_read::SqliteAgentProfileRead;
 use sqlx::Connection;
 
 #[path = "support/current_schema_snapshot.rs"]

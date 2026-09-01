@@ -2,7 +2,7 @@
 //!
 //! It supplies the facts [`silverhand_backend_core::identity_access::agent_profile_read`]
 //! declares — one agent's `{ id, name, display_name, description, avatar }` —
-//! and NOTHING wider. Unlike [`crate::agent_detail_read`] it takes no host
+//! and NOTHING wider. Unlike [`crate::identity_access::agent_detail_read`] it takes no host
 //! `LEFT JOIN` and runs no `agent_view_acl`: the internal profile routes are
 //! self-pinned or peer-gated in the route's own gate, never judged against a
 //! viewer's arms, so this read carries no visibility authority to leak into

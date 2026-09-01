@@ -105,7 +105,7 @@ mod tests {
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =
-        include_str!("../../../../packages/backend/tests/migration-baseline/schema-current.sql");
+        include_str!("../../../../../packages/backend/tests/migration-baseline/schema-current.sql");
 
     // A user holding `alice`, a host + agent holding `bender`. `charlie` is free.
     const SEED_SQL: &str = "\

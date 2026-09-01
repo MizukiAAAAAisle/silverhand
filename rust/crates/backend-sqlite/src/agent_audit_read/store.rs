@@ -19,8 +19,8 @@
 //!
 //! ## Every reused authority is the ONE authority
 //!
-//! The subject is decoded through [`crate::agent_detail_read::decode_agent_row`] and
-//! its audience through [`crate::agent_view_acl::read_agent_audience`] — the SAME facts
+//! The subject is decoded through [`crate::identity_access::agent_detail_read::decode_agent_row`] and
+//! its audience through [`crate::identity_access::agent_view_acl::read_agent_audience`] — the SAME facts
 //! the agent-detail and availability faces are gated against, so the audit owner floor
 //! cannot drift from them. The transcript decodes and seals rows through
 //! [`crate::conversation_messaging::messaging::collaboration::conversation_message_window::RawMessage`] and
@@ -63,8 +63,6 @@ use sqlx::{
 use thiserror::Error;
 
 use crate::{
-    agent_detail_read::{AgentDetailColdReadError, agent_detail_select_from, decode_agent_row},
-    agent_view_acl::read_agent_audience,
     conversation_messaging::direct_pair_read::{DirectPairReadError, LivePrincipals, PairEvidence},
     conversation_messaging::messaging::{
         author::resolve_authors,
@@ -75,6 +73,10 @@ use crate::{
             },
         },
     },
+    identity_access::agent_detail_read::{
+        AgentDetailColdReadError, agent_detail_select_from, decode_agent_row,
+    },
+    identity_access::agent_view_acl::read_agent_audience,
 };
 
 const POOL_CONNECTIONS: u32 = 4;

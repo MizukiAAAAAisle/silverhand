@@ -32,7 +32,7 @@ use silverhand_backend_core::{
     identity_access::agent_list_read::{AgentListReadModel, ListScope, visible_agents},
     identity_access::capability::agent_view::VisibleStages,
 };
-use silverhand_backend_sqlite::agent_list_read::SqliteAgentListColdRead;
+use silverhand_backend_sqlite::identity_access::agent_list_read::SqliteAgentListColdRead;
 use sqlx::{AssertSqlSafe, Connection, Executor};
 
 #[path = "support/current_schema_snapshot.rs"]

@@ -294,18 +294,18 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // `internal_agent::diagnostics` (internal runtime-credentialed family).
     ("backend-server", "embedded_bootstrap"),
     ("backend-server", "workspace_data_plane"),
-    ("backend-sqlite", "agent_detail_read"),
-    ("backend-sqlite", "agent_list_read"),
-    // #task:2225 — the SQLite adapters for the Wave 3 verticals: the agent avatar
-    // serve-ref read (route 5) and the agent tuning/profile row write (route 2). The
-    // handle-availability probe (route 1) reuses the existing `handle_namespace`
-    // adapter listed below.
-    ("backend-sqlite", "agent_avatar_read"),
+    // #task:2296 — the backend-sqlite `identity_access` relocation namespace: a pure
+    // directory container (`identity_access/mod.rs`) owning the six relocated read/ACL leaves
+    // this wave lands (`agent_avatar_read`, `agent_detail_read`, `agent_list_read`,
+    // `agent_profile_read`, `agent_view_acl`, `handle_namespace`). Their old flat crate-root
+    // seam entries are removed; the organization map/gate owns each leaf's owner/target inside
+    // the container and this seam entry does NOT descend into it. PARTIAL: 6/18/12 — the other
+    // 12 backend-sqlite identity_access leaves stay flat in their inventories for later waves;
+    // there is no backend-sqlite identity_access self-row. Closure is NOT claimed.
+    ("backend-sqlite", "identity_access"),
+    // #task:2225 — the SQLite adapter for the agent tuning/profile row write (route 2).
     ("backend-sqlite", "agent_profile_write"),
-    ("backend-sqlite", "agent_profile_read"),
-    ("backend-sqlite", "agent_view_acl"),
     ("backend-sqlite", "credential"),
-    ("backend-sqlite", "handle_namespace"),
     ("backend-sqlite", "human_registration"),
     ("backend-sqlite", "user_identity"),
     ("backend-sqlite", "host_agent"),
@@ -584,6 +584,12 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // crate root, leaf owners live in the organization map/gate; this directory entry does not
     // descend into the `messaging` leaf's internal children.
     ("backend-sqlite", "conversation_messaging"),
+    // #task:2296 — the backend-sqlite `identity_access` relocation namespace, a pure
+    // directory-shaped container (`identity_access/mod.rs`) owning the six relocated
+    // read/ACL leaves. Same terms: one declaration at the crate root, leaf owners live in the
+    // organization map/gate. PARTIAL (6/18/12): the other 12 identity_access leaves are not
+    // relocated into this container yet and stay flat crate-root modules.
+    ("backend-sqlite", "identity_access"),
 ];
 
 /// The modules a composition must name to ACTIVATE this lane: rules that decide, a

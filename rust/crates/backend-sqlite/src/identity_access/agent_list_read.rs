@@ -2,7 +2,7 @@
 //!
 //! Availability and detail each ask that relation about ONE agent; the list face
 //! asks it about ONE VIEWER. Both directions read the same rows, so they belong to
-//! one authority in [`crate::agent_view_acl`] rather than to two SQL texts that can
+//! one authority in [`crate::identity_access::agent_view_acl`] rather than to two SQL texts that can
 //! drift — a drift in an ACL is a security bug, not a style nit.
 //!
 //! ## One relation, two directions, arms still separate
@@ -47,8 +47,10 @@ use sqlx::{
 };
 
 use crate::{
-    agent_detail_read::{AgentDetailColdReadError, agent_detail_select_from, decode_agent_row},
-    agent_view_acl::{read_candidate_audiences, viewer_candidate_predicate},
+    identity_access::agent_detail_read::{
+        AgentDetailColdReadError, agent_detail_select_from, decode_agent_row,
+    },
+    identity_access::agent_view_acl::{read_candidate_audiences, viewer_candidate_predicate},
 };
 
 const POOL_CONNECTIONS: u32 = 4;

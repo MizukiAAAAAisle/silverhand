@@ -18,8 +18,8 @@
 //!
 //! The creator arm is the agent row's `created_by_user_id`, read once off the
 //! agent row. The two set-shaped arms are read by
-//! [`read_agent_audience`](crate::agent_view_acl::read_agent_audience), the single
-//! authority in [`crate::agent_view_acl`] that both this availability read and the
+//! [`read_agent_audience`](crate::identity_access::agent_view_acl::read_agent_audience), the single
+//! authority in [`crate::identity_access::agent_view_acl`] that both this availability read and the
 //! agent-list read share so the ACL cannot drift between them: the direct-pair arm
 //! gates the OTHER endpoint on `= 'human'` in both slot orders so an agent↔agent
 //! pair contributes nobody, and the workspace arm unions the members of every
@@ -50,7 +50,7 @@ use sqlx::{
 };
 use thiserror::Error;
 
-use crate::agent_view_acl::{AgentViewAclError, read_agent_audience};
+use crate::identity_access::agent_view_acl::{AgentViewAclError, read_agent_audience};
 
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);

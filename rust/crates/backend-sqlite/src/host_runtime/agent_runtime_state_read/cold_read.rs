@@ -10,7 +10,7 @@
 //!
 //! ## The ACL and redaction authorities are the SHARED ones
 //!
-//! The visibility arms come from [`crate::agent_view_acl::read_agent_audience`] — the
+//! The visibility arms come from [`crate::identity_access::agent_view_acl::read_agent_audience`] — the
 //! SAME relation `GET /api/agents/{id}/availability` and `GET /api/agents/{id}` decide
 //! against — so this face cannot drift on who may see an agent. Per-conversation
 //! redaction rides [`human_participation_source!`], the SAME strict human-participation
@@ -54,9 +54,9 @@ use sqlx::{
 use thiserror::Error;
 
 use crate::{
-    agent_view_acl::{AgentViewAclError, read_agent_audience},
     conversation_messaging::messaging::agent_participation_predicate,
     conversation_messaging::messaging::collaboration::conversation_participation::human_participation_source,
+    identity_access::agent_view_acl::{AgentViewAclError, read_agent_audience},
 };
 
 const POOL_CONNECTIONS: u32 = 4;

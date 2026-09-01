@@ -51,8 +51,8 @@ use silverhand_backend_server::{
 };
 use silverhand_backend_sqlite::{
     auth::SqliteSessionStore, credential::SqliteCredentialStore,
-    handle_namespace::SqliteHandleNamespace, human_registration::SqliteHumanRegistration,
-    user_identity::SqliteUserStore,
+    human_registration::SqliteHumanRegistration,
+    identity_access::handle_namespace::SqliteHandleNamespace, user_identity::SqliteUserStore,
 };
 use sqlx::Connection as _;
 use tempfile::TempDir;

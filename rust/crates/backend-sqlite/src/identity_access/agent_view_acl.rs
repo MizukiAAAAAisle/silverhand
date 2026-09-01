@@ -72,7 +72,7 @@ macro_rules! agent_viewer_relation {
     () => {
         concat!(
             "SELECT endpoint_a_id AS agent_id, endpoint_b_id AS user_id, '",
-            $crate::agent_view_acl::direct_pair_arm_tag!(),
+            $crate::identity_access::agent_view_acl::direct_pair_arm_tag!(),
             "' AS arm \
                FROM conversations \
               WHERE placement_kind = 'direct_pair' \
@@ -80,7 +80,7 @@ macro_rules! agent_viewer_relation {
                 AND endpoint_b_kind = 'human' \
              UNION \
             SELECT endpoint_b_id AS agent_id, endpoint_a_id AS user_id, '",
-            $crate::agent_view_acl::direct_pair_arm_tag!(),
+            $crate::identity_access::agent_view_acl::direct_pair_arm_tag!(),
             "' AS arm \
                FROM conversations \
               WHERE placement_kind = 'direct_pair' \
@@ -88,7 +88,7 @@ macro_rules! agent_viewer_relation {
                 AND endpoint_a_kind = 'human' \
              UNION \
             SELECT reach.agent_id AS agent_id, wu.user_id AS user_id, '",
-            $crate::agent_view_acl::workspace_arm_tag!(),
+            $crate::identity_access::agent_view_acl::workspace_arm_tag!(),
             "' AS arm \
                FROM ( \
                       SELECT wm.agent_id AS agent_id, w.id AS workspace_id \
@@ -129,7 +129,7 @@ macro_rules! select_viewer_candidate_ids {
     () => {
         concat!(
             "SELECT DISTINCT rel.agent_id AS agent_id FROM (",
-            $crate::agent_view_acl::agent_viewer_relation!(),
+            $crate::identity_access::agent_view_acl::agent_viewer_relation!(),
             ") rel WHERE rel.user_id = ?"
         )
     };
@@ -146,7 +146,7 @@ macro_rules! viewer_candidate_predicate {
     () => {
         concat!(
             "a.created_by_user_id = ? OR a.id IN (",
-            $crate::agent_view_acl::select_viewer_candidate_ids!(),
+            $crate::identity_access::agent_view_acl::select_viewer_candidate_ids!(),
             ")"
         )
     };

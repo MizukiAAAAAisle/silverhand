@@ -204,7 +204,7 @@ impl AgentMaterializationWrite for SqliteHostAgentStore {
         // The shared-handle check reuses the one canonical namespace predicate, so it also
         // catches the cross-namespace user/agent collision the trigger would otherwise
         // raise as an opaque constraint error. A hit rolls back as the transaction drops.
-        if crate::handle_namespace::handle_taken(&mut *tx, input.name.as_str())
+        if crate::identity_access::handle_namespace::handle_taken(&mut *tx, input.name.as_str())
             .await
             .map_err(PersistenceFailure::from_source)?
         {
