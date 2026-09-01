@@ -25,6 +25,7 @@ use silverhand_backend_core::{
         AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId,
     },
     foundation::persistence::PersistenceFailure,
+    host_runtime::agent_presence,
     host_runtime::runtime_credential::{RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     host_runtime::runtime_event::{
         CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
@@ -36,7 +37,6 @@ use silverhand_backend_core::{
         StampRuntimePresence, UpsertRuntimeTextActivity,
     },
     identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
-    policy::agent_presence,
 };
 use sqlx::{
     Row, Sqlite, SqliteConnection, SqlitePool, Transaction,

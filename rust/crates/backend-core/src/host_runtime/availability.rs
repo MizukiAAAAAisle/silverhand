@@ -109,7 +109,7 @@ enum Unreachable {
 /// face" is a property of the type rather than a sentence in this file:
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::cold_read::availability::{
+/// use silverhand_backend_core::host_runtime::availability::{
 ///     read_agent_availability, AgentAvailabilityFacts, HostAttachmentFacts,
 ///     HostReachabilityFacts,
 /// };
@@ -139,7 +139,7 @@ enum Unreachable {
 /// reason it claims and not because its setup went stale:
 ///
 /// ```
-/// use silverhand_backend_core::cold_read::availability::{
+/// use silverhand_backend_core::host_runtime::availability::{
 ///     read_agent_availability, AgentAvailability, AgentAvailabilityFacts,
 ///     HostAttachmentFacts, HostReachabilityFacts,
 /// };

@@ -5,7 +5,7 @@
 //! TypeScript `UserRepo.touchLastSeen` exactly — `UPDATE users SET last_seen_at =
 //! ? WHERE id = ?` — so the two implementations write the same column with the
 //! same single statement. The value is a sealed
-//! [`silverhand_backend_core::cold_read::presence::LastSeenAt`] whose range was
+//! [`silverhand_backend_core::viewer_read_model::presence::LastSeenAt`] whose range was
 //! enforced once, where the disconnect clock entered the domain, so this adapter
 //! binds it verbatim and never re-validates.
 //!
@@ -20,8 +20,8 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    cold_read::presence::LastSeenAt, foundation::identity::UserId,
-    foundation::persistence::PersistenceFailure,
+    foundation::identity::UserId, foundation::persistence::PersistenceFailure,
+    viewer_read_model::presence::LastSeenAt,
     viewer_read_model::user_presence_last_seen::LastSeenSink,
 };
 use sqlx::{
@@ -100,7 +100,7 @@ impl LastSeenSink for SqliteLastSeenSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::cold_read::presence::MAX_SAFE_INTEGER;
+    use silverhand_backend_core::viewer_read_model::presence::MAX_SAFE_INTEGER;
     use sqlx::{Connection, Executor, Row, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =

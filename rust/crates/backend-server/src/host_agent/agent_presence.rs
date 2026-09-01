@@ -22,7 +22,7 @@
 //! ## Two clocks that never touch
 //!
 //! `away_at` is CLOCK-FREE: the stored `last_activity_at` run through the shared
-//! [`silverhand_backend_core::policy::agent_presence`] policy the runtime-delivery
+//! [`silverhand_backend_core::host_runtime::agent_presence`] policy the runtime-delivery
 //! writer also uses, so a write that calls an agent present and this read that reports
 //! it away agree by construction. `server_now` is a SEPARATE emit-only stamp the route
 //! reads from its injected [`ProcessClock`] so the renderer can calibrate client↔server
@@ -193,10 +193,10 @@ mod tests {
     use silverhand_backend_core::{
         foundation::identity::{AgentId, UserId},
         foundation::persistence::PersistenceFailure,
+        host_runtime::agent_presence,
         host_runtime::agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
-        policy::agent_presence,
     };
     use tower::ServiceExt;
 

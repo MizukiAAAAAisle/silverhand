@@ -17,7 +17,7 @@
 //! Owner/role semantics are the map's; this file proves the map's SHAPE and COVERAGE.
 
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -698,6 +698,47 @@ fn crate_roots_are_covered_exactly_once() {
 }
 
 #[test]
+fn accounting_is_derived_from_the_scanned_tree() {
+    let map = load_map();
+    let scanned = scanned_crate_roots();
+    let production = scanned.values().filter(|cfg_test| !**cfg_test).count();
+    let test_support = scanned.values().filter(|cfg_test| **cfg_test).count();
+    let mut per_crate: BTreeMap<String, usize> = BTreeMap::new();
+    for (krate, _module) in scanned.keys() {
+        *per_crate.entry(krate.replace('-', "_")).or_default() += 1;
+    }
+    let accounting = &map["accounting"];
+    assert_eq!(
+        accounting["production_roots"].as_u64(),
+        Some(production as u64),
+        "accounting.production_roots drifted from the scanned tree"
+    );
+    assert_eq!(
+        accounting["test_support_roots"].as_u64(),
+        Some(test_support as u64),
+        "accounting.test_support_roots drifted from the scanned tree"
+    );
+    assert_eq!(
+        accounting["total_scanned"].as_u64(),
+        Some(scanned.len() as u64),
+        "accounting.total_scanned drifted from the scanned tree"
+    );
+    let recorded = accounting["per_crate"]
+        .as_object()
+        .expect("accounting.per_crate object");
+    let actual: BTreeMap<String, usize> = recorded
+        .iter()
+        .map(|(krate, count)| {
+            (
+                krate.clone(),
+                count.as_u64().expect("per-crate count") as usize,
+            )
+        })
+        .collect();
+    assert_eq!(actual, per_crate, "accounting.per_crate drifted");
+}
+
+#[test]
 fn every_row_is_a_strict_target_xor_split_union() {
     let map = load_map();
     let axes = load_axes(&map);
@@ -1348,6 +1389,165 @@ fn landed_is_tree_derived_self_named_contexts_are_landed_and_nested_leaves_exist
     );
 }
 
+fn assert_declared_physical_target(target: &str, context: &str) {
+    let segments: Vec<&str> = target.split("::").collect();
+    assert!(
+        segments.len() >= 3,
+        "{context}: resolved target must be crate::namespace::leaf"
+    );
+    let crate_src = rust_root().join("crates").join(segments[0]).join("src");
+    let mut declaring_file = crate_src.join("lib.rs");
+    let mut module_prefix = crate_src;
+    for segment in &segments[1..] {
+        let declarations: BTreeSet<String> = module_declarations(&read(&declaring_file))
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert!(
+            declarations.contains(*segment),
+            "{context}: `{segment}` is not declared by {}",
+            declaring_file.display()
+        );
+        module_prefix = module_prefix.join(segment);
+        let flat = module_prefix.with_extension("rs");
+        let directory = module_prefix.join("mod.rs");
+        declaring_file = if flat.exists() {
+            flat
+        } else if directory.exists() {
+            directory
+        } else {
+            panic!("{context}: declared leaf `{segment}` has no source file")
+        };
+    }
+}
+
+#[test]
+fn every_resolved_split_closes_source_ruling_target_and_accounting_kind() {
+    let map = load_map();
+    let axes = load_axes(&map);
+    let ns_by_owner = validated_namespaces(&map, &axes);
+    let scanned = scanned_roots();
+    let rows = map["resolved_splits"]
+        .as_array()
+        .expect("resolved_splits array");
+    let open: BTreeSet<&str> = map["open_rulings"]
+        .as_array()
+        .expect("open_rulings array")
+        .iter()
+        .map(|value| value.as_str().expect("open ruling string"))
+        .collect();
+    let crate_rows = map["crate_roots"].as_array().expect("crate_roots array");
+    let mut source_responsibilities = BTreeSet::new();
+    let mut targets = BTreeSet::new();
+
+    for row in rows {
+        let source = as_str(row, "source");
+        let responsibility = as_str(row, "responsibility");
+        let context = format!("resolved {source}::{responsibility}");
+        let source_segments: Vec<&str> = source.split("::").collect();
+        assert_eq!(
+            source_segments.len(),
+            2,
+            "{context}: source must name one removed crate root"
+        );
+        assert!(
+            !scanned.contains(&(source_segments[0].to_owned(), source_segments[1].to_owned())),
+            "{context}: resolved source root still exists in the scanned tree"
+        );
+        assert!(
+            source_responsibilities.insert((source.to_owned(), responsibility.to_owned())),
+            "{context}: duplicate (source, responsibility) evidence"
+        );
+
+        let owner = as_str(row, "business_owner");
+        let role = as_str(row, "structural_role");
+        assert_axis(&axes, owner, role, &context);
+        let target = as_str(row, "physical_target");
+        assert!(
+            targets.insert(target.to_owned()),
+            "{context}: resolved physical_target `{target}` is claimed more than once"
+        );
+        assert_full_target(target, source_segments[0], owner, &ns_by_owner, &context);
+        assert_declared_physical_target(target, &context);
+
+        let settled: Vec<&Value> = crate_rows
+            .iter()
+            .filter(|candidate| {
+                candidate.get("target").is_some()
+                    && candidate["migration"]
+                        .get("physical_target")
+                        .and_then(Value::as_str)
+                        == Some(target)
+            })
+            .collect();
+        match as_str(row, "kind") {
+            "settled_crate_root" => {
+                assert_eq!(
+                    settled.len(),
+                    1,
+                    "{context}: settled_crate_root must have exactly one matching settled row"
+                );
+                let settled = settled[0];
+                assert_eq!(as_str(settled, "crate"), source_segments[0], "{context}");
+                assert_eq!(
+                    as_str(settled, "module"),
+                    target.rsplit("::").next().unwrap(),
+                    "{context}: settled module must match the target leaf"
+                );
+                assert_eq!(
+                    as_str(&settled["target"], "business_owner"),
+                    owner,
+                    "{context}: settled owner drifted from resolved evidence"
+                );
+                assert_eq!(
+                    as_str(&settled["target"], "structural_role"),
+                    role,
+                    "{context}: settled role drifted from resolved evidence"
+                );
+            }
+            "context_internal_leaf" => {
+                assert!(
+                    settled.is_empty(),
+                    "{context}: context_internal_leaf must not gain a settled leaf row"
+                );
+                let target_segments: Vec<&str> = target.split("::").collect();
+                let parent_target = format!("{}::{}", target_segments[0], target_segments[1]);
+                let contexts: Vec<&Value> = crate_rows
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.get("target").is_some()
+                            && candidate.get("crate").and_then(Value::as_str)
+                                == Some(target_segments[0])
+                            && candidate.get("module").and_then(Value::as_str)
+                                == Some(target_segments[1])
+                            && candidate["migration"]
+                                .get("physical_target")
+                                .and_then(Value::as_str)
+                                == Some(parent_target.as_str())
+                    })
+                    .collect();
+                assert_eq!(
+                    contexts.len(),
+                    1,
+                    "{context}: context_internal_leaf must have one accounted self-context row"
+                );
+                assert_eq!(
+                    as_str(&contexts[0]["target"], "business_owner"),
+                    owner,
+                    "{context}: parent context owner drifted from resolved evidence"
+                );
+            }
+            other => panic!("{context}: unknown resolved split kind `{other}`"),
+        }
+
+        let ruling = format!("{source} split group '{responsibility}' final leaf module name");
+        assert!(
+            !open.contains(ruling.as_str()),
+            "{context}: final leaf is still listed as an open ruling"
+        );
+    }
+}
+
 #[test]
 fn resolved_scope_event_split_is_exact_and_every_leaf_is_declared() {
     let map = load_map();
@@ -1410,31 +1610,7 @@ fn resolved_scope_event_split_is_exact_and_every_leaf_is_declared() {
 
         let target = as_str(row, "physical_target");
         assert_full_target(target, "backend-server", owner, &ns_by_owner, &context);
-        let segments: Vec<&str> = target.split("::").collect();
-        let crate_src = rust_root().join("crates/backend-server/src");
-        let mut declaring_file = crate_src.join("lib.rs");
-        let mut module_prefix = crate_src;
-        for segment in &segments[1..] {
-            let declarations: BTreeSet<String> = module_declarations(&read(&declaring_file))
-                .into_iter()
-                .map(|(name, _)| name)
-                .collect();
-            assert!(
-                declarations.contains(*segment),
-                "{context}: `{segment}` is not declared by {}",
-                declaring_file.display()
-            );
-            module_prefix = module_prefix.join(segment);
-            let flat = module_prefix.with_extension("rs");
-            let directory = module_prefix.join("mod.rs");
-            declaring_file = if flat.exists() {
-                flat
-            } else if directory.exists() {
-                directory
-            } else {
-                panic!("{context}: declared leaf `{segment}` has no source file")
-            };
-        }
+        assert_declared_physical_target(target, &context);
     }
 }
 

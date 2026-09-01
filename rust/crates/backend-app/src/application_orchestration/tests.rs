@@ -9456,7 +9456,9 @@ async fn the_composition_serves_agent_presence_behind_the_perimeter() {
     let presence = serde_json::from_str::<serde_json::Value>(&body).unwrap();
     assert_eq!(
         presence["away_at"],
-        serde_json::json!(1_000 + silverhand_backend_core::policy::agent_presence::AWAY_TTL_MS)
+        serde_json::json!(
+            1_000 + silverhand_backend_core::host_runtime::agent_presence::AWAY_TTL_MS
+        )
     );
     let server_now = presence["server_now"]
         .as_i64()
@@ -9510,10 +9512,10 @@ where
 /// `next_socket_json`) without touching its import surface.
 mod presence_composition {
     use silverhand_backend_core::{
-        cold_read::presence::{LastSeenAt, UserPresenceFacts},
         foundation::identity::UserId,
         foundation::persistence::PersistenceFailure,
-        policy::presence_grace::PresenceFact,
+        viewer_read_model::presence::{LastSeenAt, UserPresenceFacts},
+        viewer_read_model::presence_grace::PresenceFact,
         viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
         viewer_read_model::user_presence_last_seen::LastSeenSink,
     };

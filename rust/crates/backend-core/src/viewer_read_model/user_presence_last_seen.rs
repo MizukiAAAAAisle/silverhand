@@ -3,7 +3,7 @@
 //! This is the write counterpart of [`crate::viewer_read_model::user_presence_cold_read`]. When a
 //! viewer's grace window expires into an offline fact, that fact carries a
 //! [`LastSeenAt`] whose range was already enforced once, where the disconnect
-//! clock entered the domain (`policy::presence_grace::on_disconnect`). This port
+//! clock entered the domain (`viewer_read_model::presence_grace::on_disconnect`). This port
 //! persists that SEALED value: it never re-validates it and never reads state
 //! back, so persist and wire carry the identical instant.
 //!
@@ -16,8 +16,8 @@
 use std::future::Future;
 
 use crate::{
-    cold_read::presence::LastSeenAt, foundation::identity::UserId,
-    foundation::persistence::PersistenceFailure,
+    foundation::identity::UserId, foundation::persistence::PersistenceFailure,
+    viewer_read_model::presence::LastSeenAt,
 };
 
 /// Persists one viewer's sealed last-seen instant. The value is already

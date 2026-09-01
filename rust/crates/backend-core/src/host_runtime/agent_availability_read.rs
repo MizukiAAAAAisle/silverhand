@@ -2,7 +2,7 @@
 //!
 //! Availability composes TWO capabilities that were landed separately — the
 //! visibility ACL ([`crate::identity_access::capability::agent_view`]) and the reachability rule
-//! ([`crate::cold_read::availability`]) — and this port supplies the facts each
+//! ([`crate::host_runtime::availability`]) — and this port supplies the facts each
 //! reads. It holds no rule of its own: facts in, application structs out, so the
 //! route and its tests share one authority without a driver.
 //!
@@ -28,9 +28,9 @@
 use std::future::Future;
 
 use crate::{
-    cold_read::availability::{AgentAvailabilityFacts, HostReachabilityFacts},
     foundation::identity::{AgentId, HostId},
     foundation::persistence::PersistenceFailure,
+    host_runtime::availability::{AgentAvailabilityFacts, HostReachabilityFacts},
     identity_access::capability::agent_view::AgentVisibility,
 };
 

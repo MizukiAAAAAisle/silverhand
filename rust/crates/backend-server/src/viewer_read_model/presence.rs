@@ -6,7 +6,7 @@ use axum::Router;
 use silverhand_backend_core::{
     foundation::identity::UserId,
     foundation::scope_event::EventScope,
-    policy::presence_grace::{GraceWindow, PresenceFact},
+    viewer_read_model::presence_grace::{GraceWindow, PresenceFact},
     viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
     viewer_read_model::user_presence_last_seen::LastSeenSink,
 };

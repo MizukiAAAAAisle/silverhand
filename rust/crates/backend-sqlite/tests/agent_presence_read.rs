@@ -19,8 +19,8 @@
 use silverhand_backend_core::{
     foundation::identity::AgentId,
     foundation::persistence::PersistenceFailure,
+    host_runtime::agent_presence::{self, ActivityInstant},
     host_runtime::agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
-    policy::agent_presence::{self, ActivityInstant},
 };
 use silverhand_backend_sqlite::host_runtime::agent_presence_read::SqliteAgentPresenceColdRead;
 use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};

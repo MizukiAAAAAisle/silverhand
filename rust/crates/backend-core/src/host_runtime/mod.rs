@@ -47,13 +47,16 @@ pub mod rotation;
 pub mod status;
 pub mod update;
 
-// Relocated C2 business leaves (organization namespace role) — availability/presence
-// read models, the transport-neutral agent-materialize target contract, the host-resources
-// read model, and the scope-stop target contract. Each is its own capability; the
-// organization map/gate owns their owner/target inside this namespace.
+// Relocated C2 business leaves (organization namespace role). `availability`,
+// `agent_availability_read`, `agent_presence_read`, and `host_resources_read` are
+// independent read models; `agent_presence` is pure domain policy; and
+// `agent_materialize` / `scope_runtime_stop` are application contracts. Each is its own
+// capability; the organization map/gate owns its exact role and target here.
 pub mod agent_availability_read;
 pub mod agent_materialize;
+pub mod agent_presence;
 pub mod agent_presence_read;
+pub mod availability;
 pub mod host_resources_read;
 pub mod scope_runtime_stop;
 
@@ -72,7 +75,7 @@ pub mod runtime_transition;
 pub mod agent_bulk_stop;
 pub mod agent_runtime_state_read;
 
-// Relocated C2 leaf (#task:2283) — closes the host_runtime namespace at 11/11/0. The
+// Relocated C2 leaf (#task:2283) — closed the settled host_runtime namespace at 11/11/0. The
 // agent runtime-switch saga (`PUT /api/agents/{id}/runtime`): a distinct orchestration unit
 // that reuses the runtime-transition lock, kept separate from the credential/event/transition,
 // stop, and state-read units also colocated here; namespace closure is not a conceptual merger.

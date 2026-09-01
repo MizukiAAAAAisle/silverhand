@@ -100,8 +100,8 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // settled-row relocation ledger (residual=0). Their old flat crate-root seam entries are
     // removed; the single `application_orchestration` owning-root entry (below) covers them via
     // the CP projection, and the organization map/gate owns each leaf's owner/target inside the
-    // namespace. (`cold_read`/`policy` remain explicit split_required roots — NOT part of this
-    // closure.)
+    // namespace. #task:2309 later resolved the former `cold_read` / `policy` split roots
+    // into the existing host_runtime and viewer_read_model owning roots below.
     // #task:2225 — the public agent-lifecycle and avatar route family (Rust Wave 3).
     // All of this family's backend-core core leaves have relocated under the C1
     // `identity_access` namespace: the handle-availability probe (#task:2272), the
@@ -128,8 +128,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // #task:2274 (`agent_peer_profile`, `internal_profile_write`, `mcp_config`),
     // #task:2275 (`agent_profile_read`), and #task:2278 (`agent_profile_mcp`); their
     // owner/target lives in the organization map, not as flat seam entries here.
-    ("backend-core", "cold_read"),
-    ("backend-core", "policy"),
     // #task:2283 — the agent runtime-switch saga relocated under the dual-role `host_runtime`
     // namespace, closing it at 11/11/0. Its flat crate-root seam entry is removed; the single
     // `host_runtime` owning-root entry covers all landed leaves via the CP projection, and the
@@ -139,16 +137,18 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // `agent_materialization` writer/use case, and `teardown` deletion/cascade directory leaf.
     // Their old flat crate-root entries are removed; the organization map/gate owns each leaf's
     // owner/target inside the container and this seam entry does NOT descend into it. This closed
-    // the backend-core settled-row relocation ledger (residual=0); `cold_read`/`policy` remain
-    // explicit split_required roots, out of scope.
+    // the backend-core settled-row relocation ledger (residual=0). #task:2309 subsequently
+    // resolved the former `cold_read` / `policy` split roots into existing containers.
     ("backend-core", "application_orchestration"),
     // #task:2279 — the C1-adjacent `viewer_read_model` relocation namespace: a directory
     // container declared once at the crate root, owning the relocated presence/sort leaves
     // (`user_presence_cold_read` read model, `user_presence_last_seen` LastSeenSink port,
     // `viewer_workspace_sort` read model). Their old flat crate-root entries are removed; the
     // organization map/gate is the authority for each leaf's owner/target inside the container
-    // and this seam entry does NOT descend into it. The namespace closed at 3/3/0 (#task:2279);
-    // this single owning-root entry is retained for the CP projection / namespace declaration.
+    // and this seam entry does NOT descend into it. Its original settled relocation closed at
+    // 3/3/0 (#task:2279); #task:2309 then added the resolved `presence` read model and
+    // `presence_grace` policy leaves. This single owning-root entry is retained for the CP
+    // projection / namespace declaration.
     ("backend-core", "viewer_read_model"),
     // #task:2284 — the `foundation` relocation namespace: a directory container declared once
     // at the crate root, owning the relocated shared-vocabulary leaves (blob store, CLI
@@ -458,8 +458,6 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
 /// missing path instead of on a violation. G0 holds this list to exactly the
 /// directory-shaped entries above, so neither shape can drift out of its gate.
 const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
-    ("backend-core", "cold_read"),
-    ("backend-core", "policy"),
     // #task:2289 — the backend-filesystem `host_runtime` container is directory-shaped
     // (declared once at the crate root with a `mod.rs`), owning the relocated
     // `runtime_detection` directory leaf; its flat `runtime_detection` directory entry is
@@ -584,12 +582,8 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// and its actual mount is the composition/route behavior tests' — this table is not the
 /// activation authority for nested leaves, and is deliberately not upgraded into a
 /// second full-path scanner for them.
-const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
-    ("backend-core", "cold_read"),
-    ("backend-core", "policy"),
-    ("backend-server", "host_agent"),
-    ("backend-server", "ops"),
-];
+const ACTIVATION_NAMESPACES: &[(&str, &str)] =
+    &[("backend-server", "host_agent"), ("backend-server", "ops")];
 
 fn rust_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1242,7 +1236,11 @@ fn g2_background_policy_names_no_timer_or_driver() {
     // validated stamp, not a clock — so those are matched as whole identifiers.
     const FORBIDDEN_PATHS: &[&str] = &["tokio", "std::time", "axum", "sqlx"];
     const FORBIDDEN_NAMES: &[&str] = &["Instant", "SystemTime", "sleep", "spawn"];
-    for path in lane_source_paths("backend-core", "policy") {
+    let policy_paths = [
+        rust_root().join("crates/backend-core/src/host_runtime/agent_presence.rs"),
+        rust_root().join("crates/backend-core/src/viewer_read_model/presence_grace.rs"),
+    ];
+    for path in policy_paths {
         let source = strip_comments(&read(&path));
         for forbidden in FORBIDDEN_PATHS {
             assert!(

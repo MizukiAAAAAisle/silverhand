@@ -1,7 +1,10 @@
 //! How one human disconnect becomes an offline fact, and when it does not.
+//!
+//! This is pure background policy: it decides transitions and values but owns no
+//! timer, task, sleep, or other driver mechanics.
 
-use crate::cold_read::presence::{LastSeenAt, LastSeenOutOfRange};
 use crate::foundation::identity::UserId;
+use crate::viewer_read_model::presence::{LastSeenAt, LastSeenOutOfRange};
 
 const DEFAULT_OFFLINE_GRACE_MS: i64 = 20_000;
 
@@ -132,7 +135,7 @@ pub fn on_disconnect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cold_read::presence::MAX_SAFE_INTEGER;
+    use crate::viewer_read_model::presence::MAX_SAFE_INTEGER;
 
     fn user() -> UserId {
         UserId::parse("user-1").unwrap()

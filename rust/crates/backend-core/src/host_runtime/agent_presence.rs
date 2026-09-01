@@ -1,5 +1,8 @@
 //! When an agent's last activity ages into "away".
 //!
+//! This is pure background policy: it owns the validated instant and away
+//! boundary, but no timer, task, sleep, or other driver mechanics.
+//!
 //! ONE authority for the agent-presence away boundary, shared by the two faces
 //! that reason about it and must never disagree:
 //!

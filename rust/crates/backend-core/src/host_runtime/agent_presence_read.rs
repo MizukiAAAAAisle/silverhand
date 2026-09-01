@@ -3,8 +3,8 @@
 //! Presence composes the SAME visibility ACL as availability and detail
 //! ([`crate::identity_access::capability::agent_view`]) with ONE projected fact — the agent's
 //! `last_activity_at`, decoded into a validated
-//! [`crate::policy::agent_presence::ActivityInstant`] whose
-//! [`away_at`](crate::policy::agent_presence::ActivityInstant::away_at) is the
+//! [`crate::host_runtime::agent_presence::ActivityInstant`] whose
+//! [`away_at`](crate::host_runtime::agent_presence::ActivityInstant::away_at) is the
 //! wire `away_at`. It holds no rule of its own: facts in, the away deadline out,
 //! so the route and its tests share one authority without a driver.
 //!
@@ -22,14 +22,14 @@
 //! it away agree by construction. The response's `server_now` is a separate
 //! emit-only value the route stamps from its own clock; it is not a stored fact
 //! and never reaches this layer, mirroring how CP1's
-//! [`crate::policy::presence_grace`] decides without owning a clock.
+//! [`crate::viewer_read_model::presence_grace`] decides without owning a clock.
 
 use std::future::Future;
 
 use crate::{
     foundation::identity::AgentId, foundation::persistence::PersistenceFailure,
+    host_runtime::agent_presence::ActivityInstant,
     identity_access::capability::agent_view::AgentVisibility,
-    policy::agent_presence::ActivityInstant,
 };
 
 /// The stored facts one authenticated agent-presence read is decided and
@@ -103,9 +103,9 @@ mod tests {
     use super::*;
     use crate::{
         foundation::identity::AgentId,
+        host_runtime::agent_presence,
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
-        policy::agent_presence,
     };
 
     fn facts(last_activity_at: Option<i64>) -> AgentPresenceFacts {

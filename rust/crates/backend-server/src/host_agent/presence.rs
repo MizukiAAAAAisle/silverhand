@@ -30,11 +30,11 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    cold_read::presence::{
+    foundation::identity::UserId,
+    viewer_read_model::presence::{
         LastSeenAt, OnlineViewers, PresenceSnapshot, UserPresence, UserPresenceRow,
         read_user_presence,
     },
-    foundation::identity::UserId,
     viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
 };
 
@@ -155,9 +155,9 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        cold_read::presence::{LastSeenAt, OnlineViewers, UserPresenceFacts},
         foundation::identity::UserId,
         foundation::persistence::PersistenceFailure,
+        viewer_read_model::presence::{LastSeenAt, OnlineViewers, UserPresenceFacts},
         viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
     };
     use tower::ServiceExt;

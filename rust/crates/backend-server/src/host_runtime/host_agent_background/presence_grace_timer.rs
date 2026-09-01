@@ -9,7 +9,9 @@ use std::{
 
 use silverhand_backend_core::{
     foundation::identity::UserId,
-    policy::presence_grace::{GraceWindow, PresenceFact, is_online, on_connect, on_disconnect},
+    viewer_read_model::presence_grace::{
+        GraceWindow, PresenceFact, is_online, on_connect, on_disconnect,
+    },
     viewer_read_model::user_presence_last_seen::LastSeenSink,
 };
 use tokio::task::JoinHandle;
@@ -249,8 +251,8 @@ mod tests {
         io::{self, Write},
     };
 
-    use silverhand_backend_core::cold_read::presence::LastSeenAt;
     use silverhand_backend_core::foundation::persistence::PersistenceFailure;
+    use silverhand_backend_core::viewer_read_model::presence::LastSeenAt;
     use thiserror::Error;
     use tokio::sync::{
         Semaphore,
@@ -584,7 +586,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn an_invalid_disconnect_clock_clears_the_connection_and_never_ghosts_online() {
-        use silverhand_backend_core::cold_read::presence::MAX_SAFE_INTEGER;
+        use silverhand_backend_core::viewer_read_model::presence::MAX_SAFE_INTEGER;
 
         let mut h = harness();
         // Both wire-unsafe boundaries: below range and above MAX_SAFE_INTEGER.

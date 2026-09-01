@@ -10,11 +10,11 @@ use std::{
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use silverhand_backend_core::cold_read::presence::LastSeenAt;
 use silverhand_backend_core::conversation_messaging::messaging::collaboration::notification::{
     CommittedNotificationClear, NotificationAftermath, NotificationClearFailure,
     NotificationClearPort, NotificationClearSelector, clear_notifications,
 };
+use silverhand_backend_core::viewer_read_model::presence::LastSeenAt;
 use silverhand_backend_core::{
     conversation_messaging::direct_pair_read::DirectPairReadModel,
     conversation_messaging::messaging::{
@@ -56,7 +56,7 @@ use silverhand_backend_core::{
     identity_access::auth::{AuthenticateHumanSession, SessionBearer},
     identity_access::user_identity::UserChangedSink,
     identity_access::workspace_metadata_write::WorkspaceMetadataChangedSink,
-    policy::presence_grace::{GraceWindow, PresenceFact},
+    viewer_read_model::presence_grace::{GraceWindow, PresenceFact},
 };
 use silverhand_backend_sqlite::{
     conversation_messaging::direct_pair_read::SqliteDirectPairReadModel,
@@ -3462,7 +3462,7 @@ impl AgentAvailabilityReadModel for StubAgentView {
         &self,
         _host: &HostId,
     ) -> Result<
-        Option<silverhand_backend_core::cold_read::availability::HostReachabilityFacts>,
+        Option<silverhand_backend_core::host_runtime::availability::HostReachabilityFacts>,
         PersistenceFailure,
     > {
         Ok(None)

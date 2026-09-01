@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Rust backend module organization map (#task:2265). Machine-readable classification authority consumed by the organization gates. Two axes: business_owner + structural_role. Every crate-root scanned is a row with independently-derived source_shape (file|directory|hybrid) and a STRICT tagged union: exactly one of target:{business_owner,structural_role} (settled) or split_required (residual). split_required is a kind-tagged object: directory_members (groups with members[] closed against the directory mod decls), file_responsibilities (logical grouping of a single large file, no child modules), or hybrid (a <m>.rs main body plus <m>/ production children — both child_groups closed against codec decls AND a non-empty file_responsibilities). This JSON is the ONLY classification authority the gates read; do not copy target allowlists elsewhere. `resolved_splits` records completed large-file responsibilities at their real final leaves and is closed against the source tree by the gate. The 33-table half is closed against the replayed final schema; the non-table half is an OPEN presence ledger. impl_status (rust_writer_known | ts_only | no_known_writer) reflects AUDITED KNOWN writers — human-audited (path,function) evidence, not an exhaustive static proof; the gate does not run a SQL analyzer (see writers_note). Consumes the frozen #2267 (scope_events) and #2268 (daemon_delivery/daemon_events) owner splits. See docs/rust-backend-ddd-context-map-v1.md for the DDD rationale (that document links here for ownership; this JSON is authoritative).",
+  "note": "Rust backend module organization map (#task:2265). Machine-readable classification authority consumed by the organization gates. Two axes: business_owner + structural_role. Every crate-root scanned is a row with independently-derived source_shape (file|directory|hybrid) and a STRICT tagged union: exactly one of target:{business_owner,structural_role} (settled) or split_required (residual). split_required is a kind-tagged object: directory_members (groups with members[] closed against the directory mod decls), file_responsibilities (logical grouping of a single large file, no child modules), or hybrid (a <m>.rs main body plus <m>/ production children — both child_groups closed against codec decls AND a non-empty file_responsibilities). This JSON is the ONLY classification authority the gates read; do not copy target allowlists elsewhere. `resolved_splits` records completed split responsibilities at their real final leaves and is closed against the source tree by the gate. The 33-table half is closed against the replayed final schema; the non-table half is an OPEN presence ledger. impl_status (rust_writer_known | ts_only | no_known_writer) reflects AUDITED KNOWN writers — human-audited (path,function) evidence, not an exhaustive static proof; the gate does not run a SQL analyzer (see writers_note). Consumes the frozen #2267 (scope_events) and #2268 (daemon_delivery/daemon_events) owner splits. See docs/rust-backend-ddd-context-map-v1.md for the DDD rationale (that document links here for ownership; this JSON is authoritative).",
   "axes": {
     "business_owner": [
       "C1",
@@ -42,12 +42,12 @@
     "embedded_bootstrap": "self-declared top-level bounded context: choose/create bootstrap UoW + own auth/token lifecycle (incl token-file custody)"
   },
   "accounting": {
-    "production_roots": 144,
+    "production_roots": 147,
     "test_support_roots": 3,
-    "total_scanned": 147,
+    "total_scanned": 150,
     "per_crate": {
-      "backend_app": 3,
-      "backend_core": 61,
+      "backend_app": 4,
+      "backend_core": 63,
       "backend_filesystem": 3,
       "backend_server": 43,
       "backend_sqlite": 37
@@ -1139,6 +1139,19 @@
     },
     {
       "crate": "backend-core",
+      "module": "agent_presence",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime::agent_presence"
+      }
+    },
+    {
+      "crate": "backend-core",
       "module": "agent_presence_read",
       "source_shape": "file",
       "needs_ruling": false,
@@ -1257,6 +1270,19 @@
     },
     {
       "crate": "backend-core",
+      "module": "availability",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C2",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::host_runtime::availability"
+      }
+    },
+    {
+      "crate": "backend-core",
       "module": "blob_store",
       "source_shape": "file",
       "needs_ruling": false,
@@ -1305,44 +1331,6 @@
       },
       "migration": {
         "physical_target": "backend-core::foundation::cli_preflight_audit"
-      }
-    },
-    {
-      "crate": "backend-core",
-      "module": "cold_read",
-      "source_shape": "directory",
-      "needs_ruling": false,
-      "split_required": {
-        "kind": "directory_members",
-        "current_container": {
-          "structural_role": "read_model"
-        },
-        "groups": [
-          {
-            "group": "availability",
-            "business_owner": "C2",
-            "structural_role": "read_model",
-            "members": [
-              "availability"
-            ],
-            "target_parent_namespace": "backend-core::host_runtime",
-            "needs_ruling": true
-          },
-          {
-            "group": "presence",
-            "business_owner": "viewer_read_model",
-            "structural_role": "read_model",
-            "members": [
-              "presence"
-            ],
-            "target_parent_namespace": "backend-core::viewer_read_model",
-            "needs_ruling": true
-          }
-        ]
-      },
-      "note": "only availability+presence live here; workspace/conversation/viewer cold-reads are their OWN crate-roots, not members",
-      "migration": {
-        "split": true
       }
     },
     {
@@ -1518,39 +1506,28 @@
     },
     {
       "crate": "backend-core",
-      "module": "policy",
-      "source_shape": "directory",
+      "module": "presence",
+      "source_shape": "file",
       "needs_ruling": false,
-      "split_required": {
-        "kind": "directory_members",
-        "current_container": {
-          "structural_role": "domain"
-        },
-        "groups": [
-          {
-            "group": "agent_presence",
-            "business_owner": "C2",
-            "structural_role": "domain",
-            "members": [
-              "agent_presence"
-            ],
-            "target_parent_namespace": "backend-core::host_runtime",
-            "needs_ruling": true
-          },
-          {
-            "group": "human_presence_grace",
-            "business_owner": "viewer_read_model",
-            "structural_role": "domain",
-            "members": [
-              "presence_grace"
-            ],
-            "target_parent_namespace": "backend-core::viewer_read_model",
-            "needs_ruling": true
-          }
-        ]
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "read_model"
       },
       "migration": {
-        "split": true
+        "physical_target": "backend-core::viewer_read_model::presence"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "presence_grace",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::viewer_read_model::presence_grace"
       }
     },
     {
@@ -3253,10 +3230,6 @@
     }
   ],
   "open_rulings": [
-    "backend-core::cold_read split group 'availability' final leaf module name",
-    "backend-core::cold_read split group 'presence' final leaf module name",
-    "backend-core::policy split group 'agent_presence' final leaf module name",
-    "backend-core::policy split group 'human_presence_grace' final leaf module name",
     "backend-server::daemon_events split group 'runtime_settlement_state_codecs' final leaf module name",
     "backend-server::daemon_events split group 'conversation_activity_projection_publisher' final leaf module name",
     "backend-server::daemon_events split group 'user_presence_publication' final leaf module name",
@@ -3284,8 +3257,41 @@
   "base_commit": "3a819c889d296ffddb9b762e5d44f3de540137fe",
   "resolved_splits": [
     {
+      "source": "backend-core::cold_read",
+      "responsibility": "availability",
+      "kind": "settled_crate_root",
+      "business_owner": "C2",
+      "structural_role": "read_model",
+      "physical_target": "backend-core::host_runtime::availability"
+    },
+    {
+      "source": "backend-core::cold_read",
+      "responsibility": "presence",
+      "kind": "settled_crate_root",
+      "business_owner": "viewer_read_model",
+      "structural_role": "read_model",
+      "physical_target": "backend-core::viewer_read_model::presence"
+    },
+    {
+      "source": "backend-core::policy",
+      "responsibility": "agent_presence",
+      "kind": "settled_crate_root",
+      "business_owner": "C2",
+      "structural_role": "domain",
+      "physical_target": "backend-core::host_runtime::agent_presence"
+    },
+    {
+      "source": "backend-core::policy",
+      "responsibility": "human_presence_grace",
+      "kind": "settled_crate_root",
+      "business_owner": "viewer_read_model",
+      "structural_role": "domain",
+      "physical_target": "backend-core::viewer_read_model::presence_grace"
+    },
+    {
       "source": "backend-server::scope_events",
       "responsibility": "transport_substrate",
+      "kind": "context_internal_leaf",
       "business_owner": "foundation",
       "structural_role": "transport",
       "physical_target": "backend-server::foundation::scope_event_transport"
@@ -3293,6 +3299,7 @@
     {
       "source": "backend-server::scope_events",
       "responsibility": "product_envelope",
+      "kind": "context_internal_leaf",
       "business_owner": "foundation",
       "structural_role": "wire",
       "physical_target": "backend-server::foundation::scope_event_wire"
@@ -3300,6 +3307,7 @@
     {
       "source": "backend-server::scope_events",
       "responsibility": "user_presence_policy_effect",
+      "kind": "context_internal_leaf",
       "business_owner": "viewer_read_model",
       "structural_role": "application",
       "physical_target": "backend-server::viewer_read_model::presence"
@@ -3307,6 +3315,7 @@
     {
       "source": "backend-server::scope_events",
       "responsibility": "agent_presence_availability_adapters",
+      "kind": "context_internal_leaf",
       "business_owner": "C2",
       "structural_role": "adapter",
       "physical_target": "backend-server::host_runtime::scope_event_publishers"
@@ -3314,6 +3323,7 @@
     {
       "source": "backend-server::scope_events",
       "responsibility": "identity_workspace_adapters",
+      "kind": "context_internal_leaf",
       "business_owner": "C1",
       "structural_role": "adapter",
       "physical_target": "backend-server::identity_access::scope_event_publishers"
@@ -3321,13 +3331,14 @@
     {
       "source": "backend-server::scope_events",
       "responsibility": "messaging_notification_saved_reaction_attachment_direct_pair_adapters",
+      "kind": "context_internal_leaf",
       "business_owner": "C3",
       "structural_role": "adapter",
       "physical_target": "backend-server::conversation_messaging::scope_event_publishers"
     }
   ],
   "migration_ledger": {
-    "note": "Organization residual/landed is derived, NOT stored. A settled crate_root carries a full physical_target Rust module path: a normal row targets crate::namespace::leaf, while a self-named top-level context root targets its own path crate::module (already at its target). Beside embedded_bootstrap / workspace_data_plane / host_runtime, the landed backend-server roots now include application_orchestration (#2269), conversation_messaging, foundation, identity_access and viewer_read_model (#2270). A split row is residual by construction and its GROUPS carry only target_parent_namespace (crate::owner-ns) + needs_ruling. Completed large-file splits leave the crate-root universe and move to resolved_splits, whose final leaf paths are checked against real declared modules. A root is LANDED iff its current full path equals its physical_target; residual = scanned roots - landed (from the map + real tree only). The CP root inventories in host_agent_scaffold.rs keep their original G4/G5 seam semantics and are used only as a root-coverage compatibility check, never as a landed/residual authority. Route/product ledgers stay separate."
+    "note": "Organization residual/landed is derived, NOT stored. A settled crate_root carries a full physical_target Rust module path: a normal row targets crate::namespace::leaf, while a self-named top-level context root targets its own path crate::module (already at its target). Beside embedded_bootstrap / workspace_data_plane / host_runtime, the landed backend-server roots now include application_orchestration (#2269), conversation_messaging, foundation, identity_access and viewer_read_model (#2270). A split row is residual by construction and its GROUPS carry only target_parent_namespace (crate::owner-ns) + needs_ruling. Completed splits leave their source root and move to resolved_splits: `settled_crate_root` results are independently accounted by a matching settled row, while `context_internal_leaf` results remain internal to one already-accounted self/dual-role context and must not gain a second crate-root identity. Both kinds are checked against real declared modules. A root is LANDED iff its current full path equals its physical_target; residual = scanned roots - landed (from the map + real tree only). The CP root inventories in host_agent_scaffold.rs keep their original G4/G5 seam semantics and are used only as a root-coverage compatibility check, never as a landed/residual authority. Route/product ledgers stay separate."
   },
   "target_namespaces": {
     "note": "The real Rust module namespace each business_owner relocates into. physical_target is a full path crate::namespace::leaf. landed is derived mechanically (current full path == physical_target); no row is landed until it actually resides at its full target path. Namespaces must be legal Rust idents, unique, and cover exactly the business_owner axis.",

@@ -30,9 +30,9 @@ use axum::{
 };
 use serde_json::Value;
 use silverhand_backend_core::{
-    cold_read::availability::HostAttachmentFacts,
     foundation::identity::{HostId, UserId},
     foundation::persistence::PersistenceFailure,
+    host_runtime::availability::HostAttachmentFacts,
 };
 use silverhand_backend_server::host_agent::{
     availability::router, host_attachment::HostAttachment,

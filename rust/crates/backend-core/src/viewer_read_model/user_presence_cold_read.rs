@@ -4,19 +4,21 @@
 //! Presence has TWO authorities and only one of them is durable. The stored
 //! last-seen stamp lives in the viewer rows this port reads; whether a viewer is
 //! present RIGHT NOW comes from the process-local registry behind
-//! [`crate::cold_read::presence::OnlineViewers`] — the same registry the
+//! [`crate::viewer_read_model::presence::OnlineViewers`] — the same registry the
 //! `user_presence` event publishes from. The boundary composes the two through
-//! [`crate::cold_read::presence::read_user_presence`], so this port returns the
+//! [`crate::viewer_read_model::presence::read_user_presence`], so this port returns the
 //! raw stored facts ONLY, never a presence answer: it cannot become a second
 //! liveness authority whose value no event announces.
 //!
 //! The facts are returned in the order the list must be presented (viewer
-//! creation order); [`crate::cold_read::presence::read_user_presence`] preserves
+//! creation order); [`crate::viewer_read_model::presence::read_user_presence`] preserves
 //! that order, so the ordering authority is the one SQL the adapter runs.
 
 use std::future::Future;
 
-use crate::{cold_read::presence::UserPresenceFacts, foundation::persistence::PersistenceFailure};
+use crate::{
+    foundation::persistence::PersistenceFailure, viewer_read_model::presence::UserPresenceFacts,
+};
 
 /// Loads the stored last-seen facts for the listed viewers. Its one
 /// implementation reads the viewer rows on a single snapshot; the boundary stays

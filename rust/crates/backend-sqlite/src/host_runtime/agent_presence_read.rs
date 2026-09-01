@@ -16,7 +16,7 @@
 //! ## The away deadline is not read here
 //!
 //! This adapter reads only the STORED `last_activity_at`; the wire `away_at` is the
-//! clock-free [`silverhand_backend_core::policy::agent_presence`] policy the core
+//! clock-free [`silverhand_backend_core::host_runtime::agent_presence`] policy the core
 //! bundle applies, the SAME boundary the runtime-delivery writer uses. No TTL
 //! arithmetic lives in this adapter.
 //!
@@ -34,10 +34,10 @@ use std::{path::Path, time::Duration};
 use silverhand_backend_core::{
     foundation::identity::{AgentId, UserId},
     foundation::persistence::PersistenceFailure,
+    host_runtime::agent_presence::ActivityInstant,
     host_runtime::agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
-    policy::agent_presence::ActivityInstant,
 };
 use sqlx::{
     Row, SqlitePool,

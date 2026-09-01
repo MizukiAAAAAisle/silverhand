@@ -27,7 +27,7 @@ use silverhand_backend_core::{
         EntropySessionTokenMint, HumanSessionAuthenticator, SessionTtl, SystemSessionClock,
     },
     identity_access::credential::Argon2idPasswordHasher,
-    policy::presence_grace::GraceWindow,
+    viewer_read_model::presence_grace::GraceWindow,
 };
 #[cfg(test)]
 use silverhand_backend_filesystem::foundation::audit_sink::CliPreflightFileSink;

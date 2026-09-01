@@ -2,7 +2,7 @@
 //!
 //! One reason to change: how a stored last-seen row and a live presence answer
 //! become one listed value. WHEN a viewer becomes absent is not decided here — it
-//! is [`crate::policy::presence_grace`], the same authority the `user_presence`
+//! is [`crate::viewer_read_model::presence_grace`], the same authority the `user_presence`
 //! event publishes from, so this read and that event observe one fact.
 //!
 //! ## No time arithmetic
@@ -154,7 +154,7 @@ impl PresenceSnapshot {
 /// The live half: whether a viewer is present RIGHT NOW.
 ///
 /// An implementation answers from the connection set and the pending grace
-/// windows through [`crate::policy::presence_grace::is_online`], and from nothing
+/// windows through [`crate::viewer_read_model::presence_grace::is_online`], and from nothing
 /// else. Two obligations on whoever implements it, neither checkable here:
 /// it must be the same registry the `user_presence` event publishes from, and it
 /// must not re-derive presence from a timestamp.
@@ -192,7 +192,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::policy::presence_grace;
+    use crate::viewer_read_model::presence_grace;
 
     fn user_id(id: &str) -> UserId {
         UserId::parse(id).expect("user id")

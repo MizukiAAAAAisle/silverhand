@@ -6,6 +6,7 @@ use silverhand_backend_core::{
     },
     foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
     foundation::persistence::PersistenceFailure,
+    host_runtime::agent_presence,
     host_runtime::runtime_credential::{
         ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeScope,
     },
@@ -15,7 +16,6 @@ use silverhand_backend_core::{
         RuntimeActivityKind, RuntimeActivityPayload, RuntimeEventAdmission, RuntimeExitDisposition,
         RuntimeObservedStatus,
     },
-    policy::agent_presence,
 };
 use silverhand_backend_sqlite::{
     conversation_messaging::runtime_delivery::SqliteRuntimeDeliveryStore,

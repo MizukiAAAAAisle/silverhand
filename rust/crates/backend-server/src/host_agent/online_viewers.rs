@@ -1,6 +1,6 @@
 //! Production adapter: the process presence registry answers [`OnlineViewers`].
 //!
-//! [`crate::cold_read::presence`] (in backend-core) states the obligation this
+//! [`silverhand_backend_core::viewer_read_model::presence`] states the obligation this
 //! impl discharges: the live half of the presence answer must come from the SAME
 //! registry the `user_presence` event publishes from, and must not be re-derived
 //! from a timestamp. [`PresenceGraceTimers`] is exactly that registry — its
@@ -9,7 +9,7 @@
 //! composed over the real liveness authority rather than a second projection.
 
 use silverhand_backend_core::{
-    cold_read::presence::OnlineViewers, foundation::identity::UserId,
+    foundation::identity::UserId, viewer_read_model::presence::OnlineViewers,
     viewer_read_model::user_presence_last_seen::LastSeenSink,
 };
 

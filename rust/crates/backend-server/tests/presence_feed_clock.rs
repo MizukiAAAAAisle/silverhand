@@ -16,10 +16,10 @@ use std::{
 
 use log_capture::LogBuffer;
 use silverhand_backend_core::{
-    cold_read::presence::LastSeenAt,
     foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
-    policy::presence_grace::{GraceWindow, PresenceFact},
+    viewer_read_model::presence::LastSeenAt,
+    viewer_read_model::presence_grace::{GraceWindow, PresenceFact},
     viewer_read_model::user_presence_last_seen::LastSeenSink,
 };
 use silverhand_backend_server::{
