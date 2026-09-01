@@ -19,8 +19,8 @@
 
 use std::future::Future;
 
+use crate::foundation::identity::AgentId;
 use crate::foundation::persistence::PersistenceFailure;
-use crate::identity::AgentId;
 
 use super::orchestrator::ScheduleId;
 use super::spec::{ScheduleSpec, ScheduleStatus};
@@ -48,7 +48,7 @@ pub struct ScheduleView {
     pub owner_agent_id: AgentId,
     /// Raw target id. Echoed verbatim: the schema back-fills this to `""` and the
     /// create path may store an unresolved target, both of which
-    /// [`crate::identity::ConversationId`] would reject — so this is NOT parsed.
+    /// [`crate::foundation::identity::ConversationId`] would reject — so this is NOT parsed.
     pub target_conversation_id: String,
     /// The pre-computed [`target_label`]; the read carries the label, never the
     /// target conversation's own metadata beyond it.

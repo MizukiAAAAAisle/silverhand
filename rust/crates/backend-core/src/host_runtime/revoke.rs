@@ -21,8 +21,8 @@ use super::{
     read::OwnedComputer,
 };
 use crate::{
+    foundation::identity::{HostId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{HostId, UserId},
     identity_access::capability::computer_access::ComputerAccessHeld,
 };
 
@@ -115,7 +115,7 @@ impl AdmittedRevoke {
 ///         read::find_owned_computer,
 ///         revoke::AdmittedRevoke,
 ///     },
-///     identity::{HostId, UserId},
+///     foundation::identity::{HostId, UserId},
 /// };
 /// let owner = UserId::parse("u1").unwrap();
 /// let record = ComputerRecord {

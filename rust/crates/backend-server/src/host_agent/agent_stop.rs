@@ -45,12 +45,12 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, Principal, UserId},
     host_runtime::agent_bulk_stop::{
         AgentBulkStopOutcome, AgentBulkStopReadPort, BulkStopSeatFailure, BulkStopSeatFault,
         bulk_stop_agent_runtimes,
     },
     host_runtime::scope_runtime_stop::{ScopeRuntimeStopPort, ScopeRuntimeStopRefusal},
-    identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     identity_access::capability::{
         agent_authority::{AgentAuthority, can_edit_agent},
@@ -201,7 +201,7 @@ fn stop_response(agent: &AgentId, stopped: u32, failures: Vec<BulkStopSeatFailur
         let conversation = failure
             .scope
             .source()
-            .map(silverhand_backend_core::identity::ConversationId::as_str)
+            .map(silverhand_backend_core::foundation::identity::ConversationId::as_str)
             .unwrap_or("<agent-slot>");
         tracing::error!(
             agent_id = agent.as_str(),
@@ -322,12 +322,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::identity::{ConversationId, HostId},
         foundation::persistence::PersistenceFailure,
         host_runtime::agent_bulk_stop::AgentBulkStopSnapshot,
         host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
         host_runtime::runtime_event::RuntimeObservedStatus,
         host_runtime::scope_runtime_stop::{ScopeRuntimeStopOutcome, ScopeRuntimeStopTarget},
-        identity::{ConversationId, HostId},
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agents::runtime::RuntimeKind,

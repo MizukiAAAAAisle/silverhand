@@ -1,6 +1,6 @@
 use silverhand_backend_core::{
+    foundation::identity::{ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{ConversationId, UserId},
     messaging::{
         MessageId,
         collaboration::saved::{

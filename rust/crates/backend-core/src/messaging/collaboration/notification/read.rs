@@ -1,6 +1,6 @@
 use super::Notification;
 use crate::{
-    identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     messaging::{MessageId, ThreadRootId},
 };
 use std::{error::Error, future::Future};

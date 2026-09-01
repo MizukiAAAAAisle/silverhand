@@ -27,8 +27,8 @@
 //! as deleting those agents individually.
 
 use crate::{
+    foundation::identity::UserId,
     host_runtime::computer::is_user_managed,
-    identity::UserId,
     identity_access::capability::computer_access::ComputerAccessHeld,
     teardown::{
         contract::{TeardownContractViolation, same_computer},
@@ -77,7 +77,7 @@ pub enum CascadeConsent {
 /// use silverhand_backend_core::{
 ///     identity_access::capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
 ///     host_runtime::computer::{HostKind, ProvisioningSource},
-///     identity::{HostId, UserId},
+///     foundation::identity::{HostId, UserId},
 ///     teardown::{
 ///         cascade::{ComputerLifecycle, ComputerLifecycleHeld, hold_computer_lifecycle},
 ///         facts::ComputerTeardownFacts,
@@ -204,7 +204,7 @@ pub enum CascadeRefused {
 /// use silverhand_backend_core::{
 ///     identity_access::capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
 ///     host_runtime::computer::{HostKind, ProvisioningSource},
-///     identity::{HostId, UserId},
+///     foundation::identity::{HostId, UserId},
 ///     teardown::{
 ///         cascade::{
 ///             CascadeAdmission, CascadeAdmitted, CascadeConsent, ComputerLifecycle, admit_cascade,
@@ -358,8 +358,8 @@ pub fn admit_cascade(
 mod tests {
     use super::*;
     use crate::{
+        foundation::identity::{AgentId, HostId},
         host_runtime::computer::{HostKind, ProvisioningSource},
-        identity::{AgentId, HostId},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::computer_access::{
             ComputerAccess, ComputerOwnershipFacts, can_access_computer,

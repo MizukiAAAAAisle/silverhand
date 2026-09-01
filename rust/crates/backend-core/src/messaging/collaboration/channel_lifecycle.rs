@@ -8,7 +8,7 @@
 use std::{error::Error, future::Future};
 
 use crate::{
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     identity_access::access::{WorkspaceRole, role_governs_workspace},
     messaging::{
         DirectPairParticipants,
@@ -68,7 +68,7 @@ enum LifecycleTitle {
 ///
 /// ```compile_fail
 /// use silverhand_backend_core::{
-///     identity::ConversationId,
+///     foundation::identity::ConversationId,
 ///     messaging::collaboration::channel_lifecycle::ChannelLifecycleRow,
 /// };
 /// fn relabel(mut row: ChannelLifecycleRow) {
@@ -429,7 +429,7 @@ pub trait ChannelDetailReadPort {
 #[cfg(test)]
 mod tests {
     use crate::{
-        identity::{AgentId, UserId},
+        foundation::identity::{AgentId, UserId},
         messaging::PrincipalIdentity,
     };
 

@@ -8,7 +8,7 @@ use std::{
 };
 
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     policy::presence_grace::{GraceWindow, PresenceFact, is_online, on_connect, on_disconnect},
     viewer_read_model::user_presence_last_seen::LastSeenSink,
 };

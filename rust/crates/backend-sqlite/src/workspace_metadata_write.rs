@@ -28,8 +28,8 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, Principal, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, Principal, UserId, WorkspaceId},
     identity_access::access::{
         WorkspaceGovernanceFacts, WorkspaceGovernanceFloor, WorkspaceRole, governance_floor_verdict,
     },

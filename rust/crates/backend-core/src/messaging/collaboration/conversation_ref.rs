@@ -6,7 +6,7 @@
 
 use std::{error::Error, future::Future};
 
-use crate::identity::{ConversationId, UserId, WorkspaceId};
+use crate::foundation::identity::{ConversationId, UserId, WorkspaceId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConversationRosterPolicy {

@@ -4,7 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::{Value, json};
-use silverhand_backend_core::identity::{AgentId, ConversationId};
+use silverhand_backend_core::foundation::identity::{AgentId, ConversationId};
 use silverhand_backend_core::messaging::collaboration::{
     ClearSessionOutcome, ClearSessionProviderRefusal, HardStopRuntimeProviderRefusal,
     RuntimeControlAdmissionRefusal, RuntimePlacementRefusal, StartRuntimeProviderRefusal,
@@ -191,7 +191,7 @@ fn json_response(status: StatusCode, body: Value) -> Response {
 #[cfg(test)]
 mod tests {
     use axum::body::to_bytes;
-    use silverhand_backend_core::identity::{AgentId, ConversationId};
+    use silverhand_backend_core::foundation::identity::{AgentId, ConversationId};
 
     use super::*;
 

@@ -12,7 +12,7 @@ use axum::{
 };
 use serde_json::{Number, Value, json};
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     identity_access::access::WorkspaceRole,
     messaging::{
         collaboration::{

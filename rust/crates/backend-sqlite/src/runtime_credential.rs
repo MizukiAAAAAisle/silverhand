@@ -6,12 +6,12 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::DaemonInstanceId,
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         ClaimRuntimeCustody, ClaimedRuntime, FinalizeRuntimeCustody, RuntimeCustody,
         RuntimeCustodyPort, RuntimeFinalStatus, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
-    identity::DaemonInstanceId,
 };
 use sqlx::{
     Row, SqliteConnection, SqlitePool,
@@ -232,7 +232,7 @@ impl SqliteRuntimeCustodyStore {
 
 async fn agent_transition_is_clear(
     connection: &mut SqliteConnection,
-    agent: &silverhand_backend_core::identity::AgentId,
+    agent: &silverhand_backend_core::foundation::identity::AgentId,
 ) -> Result<bool, PersistenceFailure> {
     let row = sqlx::query(
         "SELECT runtime_transition_target, runtime_transition_started_at \
@@ -396,7 +396,7 @@ struct InvalidPersistedGeneration(
 #[derive(Debug, Error)]
 #[error("persisted daemon instance id is invalid")]
 struct InvalidPersistedDaemonInstance(
-    #[source] silverhand_backend_core::identity::EmptyDaemonInstanceId,
+    #[source] silverhand_backend_core::foundation::identity::EmptyDaemonInstanceId,
 );
 
 #[derive(Debug, Error)]

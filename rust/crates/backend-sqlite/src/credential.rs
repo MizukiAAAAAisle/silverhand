@@ -21,8 +21,8 @@ use std::{path::Path, time::Duration};
 
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
-    identity::UserId,
     identity_access::credential::{
         LoginCandidate, LoginCredentialLookup, PasswordHashParams, RUST_PRODUCER,
     },

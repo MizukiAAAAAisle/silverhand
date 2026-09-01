@@ -1,5 +1,5 @@
 use silverhand_backend_core::{
-    identity::{UserId, WorkspaceId},
+    foundation::identity::{UserId, WorkspaceId},
     messaging::collaboration::activity::{
         ActivityLocation, ActivityReadModel, ActivitySalience, ActivitySource,
     },

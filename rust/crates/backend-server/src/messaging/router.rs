@@ -29,8 +29,8 @@ use axum::{
     routing::post,
 };
 use silverhand_backend_core::{
+    foundation::identity::{ConversationId, UserId},
     host_runtime::runtime_credential::RuntimePrincipal,
-    identity::{ConversationId, UserId},
     messaging::{
         AddressRefusal, ChannelAccess, ChannelAccessRefusal, DirectLineAuthority, SendCapability,
         SendMessageOutcome, SendMessageUnitOfWork, TargetAddress,

@@ -29,8 +29,8 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::AgentId,
     foundation::persistence::PersistenceFailure,
-    identity::AgentId,
     identity_access::agent_profile_read::{AgentProfileFact, AgentProfileReadModel},
     messaging::AvatarRevision,
 };

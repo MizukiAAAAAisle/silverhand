@@ -34,8 +34,8 @@ use axum::{
 use serde_json::{Value, json};
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
     host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
-    identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
     messaging::{
         AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
         ConversationRefusal, DirectLineAuthority, DirectPairAllocation, ResolvedStream,

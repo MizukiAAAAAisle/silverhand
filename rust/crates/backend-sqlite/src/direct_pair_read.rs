@@ -7,8 +7,8 @@ use silverhand_backend_core::{
         DirectPairCounterpart, DirectPairList, DirectPairListItem, DirectPairReadModel,
         DirectPairUnreadCount,
     },
+    foundation::identity::{AgentId, ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, UserId},
     identity_access::agents::runtime::RuntimeKind,
     messaging::{AvatarRevision, PrincipalIdentity},
 };

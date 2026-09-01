@@ -37,9 +37,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
     foundation::blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
+    foundation::identity::{AgentId, ConversationId, UserId},
     foundation::wire_number::JsSafeInteger,
     foundation::wire_text,
-    identity::{AgentId, ConversationId, UserId},
     messaging::{
         AttachmentId, SendClock, SendEntropy,
         collaboration::attachment::{

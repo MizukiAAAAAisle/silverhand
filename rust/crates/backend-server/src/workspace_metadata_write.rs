@@ -113,7 +113,7 @@ use serde::{Deserialize, Serialize};
 use silverhand_backend_core::identity_access::access::WorkspaceGovernanceFloor;
 use silverhand_backend_core::identity_access::workspace_name::CanonicalWorkspaceName;
 use silverhand_backend_core::{
-    identity::{Principal, UserId, WorkspaceId},
+    foundation::identity::{Principal, UserId, WorkspaceId},
     identity_access::access::{
         WorkspaceGovernanceFactsRead, WorkspaceRole, governance_floor_verdict,
     },

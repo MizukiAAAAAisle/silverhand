@@ -6,13 +6,13 @@
 use sqlx::{Connection, Executor};
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId},
     host_runtime::agent_runtime_state_read::{
         AgentRuntimeStateReadModel, AgentRuntimeStateView, PresentationFocus, RuntimeFocusView,
         RuntimeSeatScopeView,
     },
     host_runtime::runtime_credential::RuntimeGeneration,
     host_runtime::runtime_event::RuntimeObservedStatus,
-    identity::{AgentId, ConversationId, UserId},
 };
 
 use super::SqliteAgentRuntimeStateColdRead;

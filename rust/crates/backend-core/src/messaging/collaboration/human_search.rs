@@ -13,7 +13,7 @@
 use std::{collections::HashSet, error::Error, future::Future};
 
 use crate::{
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         MessageId, PrincipalIdentity,
         collaboration::{

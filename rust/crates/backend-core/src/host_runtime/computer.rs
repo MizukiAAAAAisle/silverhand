@@ -12,7 +12,7 @@
 //! would hold that rule where no test of the rule can see it.
 
 use crate::{
-    identity::{HostId, UserId},
+    foundation::identity::{HostId, UserId},
     identity_access::capability::computer_access::ComputerOwnershipFacts,
 };
 

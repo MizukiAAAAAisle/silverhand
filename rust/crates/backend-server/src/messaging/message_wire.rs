@@ -267,7 +267,7 @@ fn snapshots(attachments: &[AttachmentSnapshot]) -> Value {
 #[cfg(test)]
 mod tests {
     use silverhand_backend_core::{
-        identity::{ConversationId, WorkspaceId},
+        foundation::identity::{ConversationId, WorkspaceId},
         messaging::{
             AttachmentId, MessageId, MessageSeq,
             attachments::{AttachmentLabel, AttachmentSnapshot},

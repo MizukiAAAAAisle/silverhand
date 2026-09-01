@@ -6,9 +6,9 @@
 //! request command is never reflected back as an authority witness.
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
     foundation::wire_number::JsSafeInteger,
-    identity::{AgentId, ConversationId, WorkspaceId},
     identity_access::access::Capability,
     messaging::{
         AttachmentId, PrincipalIdentity,

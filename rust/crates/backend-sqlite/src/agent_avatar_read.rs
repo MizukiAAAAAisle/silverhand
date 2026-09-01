@@ -20,8 +20,8 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::AgentId,
     foundation::persistence::PersistenceFailure,
-    identity::AgentId,
     identity_access::agent_avatar::{
         AgentAvatarServeRef, AgentAvatarServeRefRead, decode_agent_avatar_row,
     },

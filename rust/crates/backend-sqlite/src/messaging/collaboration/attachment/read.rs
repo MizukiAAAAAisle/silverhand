@@ -7,9 +7,9 @@
 
 use silverhand_backend_core::{
     foundation::blob_store::{BlobStorageKey, StorageKind, StoredBlob},
+    foundation::identity::{AgentId, ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
     foundation::wire_number::JsSafeInteger,
-    identity::{AgentId, ConversationId, UserId},
     messaging::{
         AttachmentId, FromKind, MessageId, MessageSeq, PrincipalIdentity, ThreadRootId,
         collaboration::{

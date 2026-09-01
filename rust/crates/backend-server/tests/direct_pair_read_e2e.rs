@@ -14,8 +14,8 @@ use axum::{
 use serde_json::{Value, json};
 use silverhand_backend_core::{
     direct_pair_read::{DirectPairList, DirectPairReadModel},
+    foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
-    identity::UserId,
     identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
 };
 use silverhand_backend_server::{

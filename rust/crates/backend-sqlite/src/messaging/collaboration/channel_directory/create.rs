@@ -6,8 +6,8 @@
 //! committed projection either all commit or all roll back.
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
     identity_access::access::{WorkspaceRole, role_governs_workspace},
     messaging::{
         SendClock, SendEntropy,

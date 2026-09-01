@@ -58,7 +58,7 @@
 //! place coordinate) — this decoder is stricter by design, asserting what TS
 //! leaves to the database.
 
-use crate::identity::{AgentId, ConversationId, UserId, WorkspaceId};
+use crate::foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 
 use super::spec::{Assignee, Creator, TaskContent, TaskId, TaskNumber, TaskStatus, TaskTitle};
 
@@ -265,7 +265,7 @@ pub struct TaskRow {
 /// use silverhand_backend_core::messaging::task::{
 ///     Assignee, BoardKey, Creator, TaskAggregate, TaskContent, TaskStatus, TaskTitle,
 /// };
-/// use silverhand_backend_core::identity::{ConversationId, WorkspaceId};
+/// use silverhand_backend_core::foundation::identity::{ConversationId, WorkspaceId};
 /// use silverhand_backend_core::messaging::task::{TaskId, TaskNumber};
 ///
 /// let forged = TaskAggregate {

@@ -25,7 +25,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use silverhand_backend_core::identity::HostId;
+use silverhand_backend_core::foundation::identity::HostId;
 
 /// One socket that reserved a host's slot. Minted from the transport's own
 /// connection identity and nowhere else, so a recorded refusal and the current

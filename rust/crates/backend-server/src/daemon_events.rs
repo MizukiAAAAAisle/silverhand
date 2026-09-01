@@ -14,6 +14,7 @@ use serde::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId, HostId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeEventTime, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
@@ -25,7 +26,6 @@ use silverhand_backend_core::{
         RuntimeExitDisposition, RuntimeObservedStatus, RuntimeStatusTarget, StampRuntimePresence,
         UpsertRuntimeTextActivity,
     },
-    identity::{AgentId, ConversationId, DaemonInstanceId, HostId},
 };
 
 use crate::{
@@ -85,7 +85,7 @@ impl<P> DaemonRuntimeEventOwner<P> {
 
     pub(crate) fn publish_host_connection_changed(
         &self,
-        owner: &silverhand_backend_core::identity::UserId,
+        owner: &silverhand_backend_core::foundation::identity::UserId,
         host: &HostId,
     ) -> Result<(), DaemonRuntimeEventError> {
         self.hub
@@ -663,7 +663,7 @@ where
         &self,
         conversation: &ConversationId,
         agent: &AgentId,
-        presence_viewers: &[silverhand_backend_core::identity::UserId],
+        presence_viewers: &[silverhand_backend_core::foundation::identity::UserId],
         observed_at: i64,
         count: usize,
         activity_id: i64,
@@ -1172,7 +1172,7 @@ where
 
     fn publish_presence(
         &self,
-        viewers: &[silverhand_backend_core::identity::UserId],
+        viewers: &[silverhand_backend_core::foundation::identity::UserId],
         agent: &AgentId,
     ) -> Result<(), DaemonRuntimeEventError> {
         let mut first_failure = None;
@@ -1887,11 +1887,11 @@ mod tests {
 
     use serde_json::Number;
     use silverhand_backend_core::{
+        foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
         host_runtime::runtime_credential::{
             RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
         },
         host_runtime::runtime_event::{RuntimeEventAdmission, RuntimeObservedStatus},
-        identity::{AgentId, ConversationId, DaemonInstanceId},
     };
 
     use super::{

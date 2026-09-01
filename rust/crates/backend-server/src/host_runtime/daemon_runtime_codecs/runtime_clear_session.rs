@@ -44,7 +44,7 @@ pub(crate) fn decode_result(value: &Value) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::identity::{AgentId, ConversationId};
+    use silverhand_backend_core::foundation::identity::{AgentId, ConversationId};
 
     #[test]
     fn both_exact_scope_arms_and_result_are_closed() {

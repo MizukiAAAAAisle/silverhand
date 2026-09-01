@@ -13,8 +13,8 @@ use axum::{
 use futures_util::stream;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::identity::{ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{ConversationId, UserId},
 };
 use silverhand_backend_sqlite::messaging::{
     MessagingStore,

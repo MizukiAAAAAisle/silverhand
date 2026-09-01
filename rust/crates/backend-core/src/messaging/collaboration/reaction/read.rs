@@ -1,6 +1,6 @@
 use std::{error::Error, future::Future};
 
-use crate::{identity::UserId, messaging::MessageId};
+use crate::{foundation::identity::UserId, messaging::MessageId};
 
 use super::{ReactionCount, ReactionEmoji, Reactor};
 

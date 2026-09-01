@@ -29,8 +29,8 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
-    identity::UserId,
     identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
     identity_access::workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
 };

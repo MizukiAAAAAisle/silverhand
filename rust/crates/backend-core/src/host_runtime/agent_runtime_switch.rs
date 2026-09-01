@@ -45,6 +45,7 @@ use std::future::Future;
 use futures_util::future::join_all;
 
 use crate::{
+    foundation::identity::{AgentId, ConversationId, HostId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         AgentSlotPresentationFocusPort, RuntimeCustodyReadPort, RuntimeScope,
@@ -58,7 +59,6 @@ use crate::{
         abort_runtime_transition, begin_runtime_transition, complete_runtime_transition,
         read_runtime_transition_seats, reclaim_runtime_transition_inboxes,
     },
-    identity::{AgentId, ConversationId, HostId},
     identity_access::agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
     identity_access::agents::{
         runtime::RuntimeKind, runtime_catalog::SELECTABLE_RUNTIMES,
@@ -93,7 +93,7 @@ impl SwitchAgentRuntimeConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SwitchAgentRuntimeRequest {
     pub agent: AgentId,
-    pub actor: crate::identity::UserId,
+    pub actor: crate::foundation::identity::UserId,
     pub config: SwitchAgentRuntimeConfig,
 }
 
@@ -830,6 +830,7 @@ mod tests {
     };
 
     use crate::{
+        foundation::identity::{DaemonInstanceId, UserId},
         host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
         host_runtime::runtime_transition::{
             BeginTransitionRecord, CompleteTransitionRecord, RuntimeTransitionAfterImage,
@@ -837,7 +838,6 @@ mod tests {
             RuntimeTransitionLockRow, RuntimeTransitionSeatRow,
             RuntimeTransitionSeatSnapshotRecord, RuntimeTransitionSeatSnapshotRow,
         },
-        identity::{DaemonInstanceId, UserId},
         messaging::collaboration::{
             ClearSessionOutcome, ClearSessionProviderRefusal, RuntimePlacementRefusal,
             RuntimeSeatTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal,

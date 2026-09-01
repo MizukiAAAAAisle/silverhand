@@ -34,8 +34,8 @@ use axum::{
 use serde::Serialize;
 use silverhand_backend_core::{
     cold_read::availability::{AgentAvailability, AvailabilityReadError, read_agent_availability},
+    foundation::identity::{AgentId, Principal, UserId},
     host_runtime::agent_availability_read::{AgentAvailabilityReadModel, AgentViewFacts},
-    identity::{AgentId, Principal, UserId},
     identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 
@@ -229,9 +229,9 @@ mod tests {
     use serde_json::{Value, json};
     use silverhand_backend_core::{
         cold_read::availability::{HostAttachmentFacts, HostReachabilityFacts},
+        foundation::identity::{AgentId, HostId, UserId},
         foundation::persistence::PersistenceFailure,
         host_runtime::agent_availability_read::{AgentAvailabilityReadModel, AgentViewFacts},
-        identity::{AgentId, HostId, UserId},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
     };

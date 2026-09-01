@@ -25,8 +25,8 @@ use silverhand_backend_core::{
         ReserveRecord, ReservedAgentRow, STALE_MATERIALIZATION_FAILED_CODE,
         agent_home_workspace_description, home_workspace_id_for,
     },
+    foundation::identity::{AgentId, ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, UserId},
     identity_access::agents::session_scope::AgentSessionScope,
     messaging::{
         DirectPairMintIdentityMismatch, DirectPairOpenedFact, DirectPairOpenedPort,
@@ -903,7 +903,7 @@ mod tests {
             find_idempotent_reservation, mark_stale_materializations_failed,
             provision_and_activate, reopen_failed_materialization, reserve_agent,
         },
-        identity::HostId,
+        foundation::identity::HostId,
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agents::runtime::RuntimeKind,
         identity_access::agents::session_scope::AgentSessionScope,

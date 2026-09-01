@@ -17,7 +17,7 @@ use std::error::Error;
 
 use thiserror::Error as ThisError;
 
-use crate::identity::HostId;
+use crate::foundation::identity::HostId;
 
 /// One post-commit attempt failed.
 ///

@@ -31,7 +31,7 @@ use std::{collections::HashSet, time::Duration};
 
 use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
-use silverhand_backend_core::identity::{AgentId, DaemonInstanceId, HostId};
+use silverhand_backend_core::foundation::identity::{AgentId, DaemonInstanceId, HostId};
 
 #[cfg(test)]
 use crate::daemon_delivery::{CommandRefusal, DaemonRefusalCode};
@@ -99,7 +99,7 @@ impl UnreachableReason {
 /// ```compile_fail
 /// use std::collections::HashSet;
 ///
-/// use silverhand_backend_core::identity::{DaemonInstanceId, HostId};
+/// use silverhand_backend_core::foundation::identity::{DaemonInstanceId, HostId};
 /// use silverhand_backend_server::host_control::status_snapshot::StatusSnapshot;
 ///
 /// fn forge() -> StatusSnapshot {
@@ -118,7 +118,7 @@ impl UnreachableReason {
 /// ```
 ///
 /// ```
-/// use silverhand_backend_core::identity::{DaemonInstanceId, HostId};
+/// use silverhand_backend_core::foundation::identity::{DaemonInstanceId, HostId};
 /// use silverhand_backend_server::host_control::status_snapshot::{
 ///     SnapshotCoordinateMismatch, SnapshotView, StatusSnapshot,
 /// };

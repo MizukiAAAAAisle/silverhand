@@ -255,7 +255,7 @@ mod tests {
 
     use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use silverhand_backend_core::{
-        identity::{AgentId, ConversationId},
+        foundation::identity::{AgentId, ConversationId},
         messaging::{
             AttachmentId, EnvironmentUnavailable, ReplyTargetRefusal, SendEntropy,
             ThreadRootRefusal,

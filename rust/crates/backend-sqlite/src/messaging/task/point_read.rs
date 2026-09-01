@@ -51,8 +51,8 @@ mod tests {
     use super::super::TaskStoreError;
     use super::SqliteTaskStore;
     use crate::current_schema;
+    use silverhand_backend_core::foundation::identity::WorkspaceId;
     use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-    use silverhand_backend_core::identity::WorkspaceId;
     use silverhand_backend_core::messaging::task::{BoardKey, TaskId, TaskStatus};
     use sqlx::{Connection, Row, SqliteConnection};
     use tempfile::TempDir;

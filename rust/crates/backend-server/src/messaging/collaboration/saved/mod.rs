@@ -17,7 +17,7 @@ use axum::{
 };
 use serde::Deserialize;
 use silverhand_backend_core::{
-    identity::{AgentId, UserId, WorkspaceId},
+    foundation::identity::{AgentId, UserId, WorkspaceId},
     messaging::{
         MessageId,
         collaboration::saved::{

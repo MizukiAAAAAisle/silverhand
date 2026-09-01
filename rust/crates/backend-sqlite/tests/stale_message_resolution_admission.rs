@@ -1,5 +1,5 @@
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId},
+    foundation::identity::{AgentId, ConversationId},
     messaging::collaboration::stale_message_resolution::{
         StaleMessageResolutionAdmissionPort, StaleMessageResolutionAdmissionRefusal,
     },

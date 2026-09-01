@@ -35,7 +35,7 @@ struct HumanSessionState<A, R> {
 
 /// Adds human-session authentication to an already constructed product router.
 /// Successful requests carry the sole core-wide
-/// [`UserId`](silverhand_backend_core::identity::UserId) in their extensions;
+/// [`UserId`](silverhand_backend_core::foundation::identity::UserId) in their extensions;
 /// handlers never receive a bearer or a storage row.
 pub fn require_human_session<A, R>(router: Router, authority: A, rejection: R) -> Router
 where

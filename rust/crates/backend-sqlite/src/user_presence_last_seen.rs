@@ -20,7 +20,8 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    cold_read::presence::LastSeenAt, foundation::persistence::PersistenceFailure, identity::UserId,
+    cold_read::presence::LastSeenAt, foundation::identity::UserId,
+    foundation::persistence::PersistenceFailure,
     viewer_read_model::user_presence_last_seen::LastSeenSink,
 };
 use sqlx::{

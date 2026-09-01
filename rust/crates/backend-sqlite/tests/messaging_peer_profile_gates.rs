@@ -15,7 +15,7 @@
 use std::error::Error;
 use std::path::PathBuf;
 
-use silverhand_backend_core::identity::{AgentId, ConversationId, WorkspaceId};
+use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, WorkspaceId};
 use silverhand_backend_core::identity_access::agent_peer_profile::{
     CallerConversationPlacement, CallerReadMessagesCapability, CallerWorkspaceHorizon,
     WorkspacePlacement,

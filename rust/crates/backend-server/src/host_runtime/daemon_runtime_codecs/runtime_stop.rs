@@ -85,7 +85,7 @@ pub(crate) fn valid_result(result: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::identity::{AgentId, ConversationId};
+    use silverhand_backend_core::foundation::identity::{AgentId, ConversationId};
 
     #[test]
     fn generation_admission_is_positive_and_javascript_exact() {

@@ -119,7 +119,7 @@ fn status_wire(status: HostLifecycleStatus) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use silverhand_backend_core::identity::{HostId, UserId};
+    use silverhand_backend_core::foundation::identity::{HostId, UserId};
 
     use super::*;
 

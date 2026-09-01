@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, UserId},
+    foundation::identity::{AgentId, ConversationId, UserId},
     messaging::collaboration::conversation_agent_activity::{
         ActivityBefore, ActivityEventId, ActivityPageRequest, ActivityPayload,
         BoundConversationAgentActivityPage, ConversationActivityEvent,

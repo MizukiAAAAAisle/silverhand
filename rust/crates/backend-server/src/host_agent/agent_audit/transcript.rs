@@ -10,7 +10,7 @@ use axum::{
 use serde_json::json;
 use silverhand_backend_core::{
     foundation::blob_store::BlobStore,
-    identity::{AgentId, ConversationId, Principal, UserId},
+    foundation::identity::{AgentId, ConversationId, Principal, UserId},
     identity_access::agent_audit_read::{AgentAuditEvent, AgentAuditReadModel, AgentAuditSink},
 };
 

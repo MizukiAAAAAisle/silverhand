@@ -31,8 +31,8 @@ use super::{
     },
 };
 use crate::{
+    foundation::identity::{HostId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{HostId, UserId},
 };
 
 /// The name an unclaimed placeholder carries, pinned to `LOCAL_HOST_NAME`

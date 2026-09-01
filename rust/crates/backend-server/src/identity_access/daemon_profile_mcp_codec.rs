@@ -6,7 +6,7 @@
 
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    identity::AgentId,
+    foundation::identity::AgentId,
     identity_access::agent_profile_mcp::{
         McpBytesWritten, McpProbeCommand, McpProbeOutcome, McpProbePhase, McpProbeServerInfo,
         McpProbeTool,

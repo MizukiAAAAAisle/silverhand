@@ -8,8 +8,8 @@
 use std::{error::Error, fmt, future::Future};
 
 use crate::{
+    foundation::identity::{HostId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{HostId, UserId},
 };
 
 use super::{

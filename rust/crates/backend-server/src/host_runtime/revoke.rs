@@ -32,13 +32,13 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::identity::{HostId, UserId},
     host_runtime::{
         aftermath::{AgentAvailabilityAnnouncer, DaemonConnectionControl},
         environment::Clock,
         read::{ComputerReadModel, find_owned_computer},
         revoke::{RevokeComputer, RevokeComputerError, RevokeComputerUnitOfWork},
     },
-    identity::{HostId, UserId},
 };
 
 use crate::error;

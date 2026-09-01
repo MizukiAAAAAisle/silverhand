@@ -28,8 +28,8 @@ use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
     cold_read::presence::{LastSeenAt, LastSeenOutOfRange, UserPresenceFacts},
+    foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
-    identity::UserId,
     viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
 };
 use sqlx::{

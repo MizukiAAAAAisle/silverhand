@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use silverhand_backend_core::{
+    foundation::identity::{ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{ConversationId, UserId},
     messaging::{
         FromKind, MessageAuthor, MessageId, MessageSeq, ThreadRootId,
         collaboration::conversation_threads::{

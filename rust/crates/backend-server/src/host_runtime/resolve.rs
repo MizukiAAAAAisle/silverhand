@@ -30,6 +30,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::identity::HostId,
     host_runtime::{
         custody::{
             HostCredentialLookup, VerifyHostTokenFact, admit_connect_token_resolution,
@@ -37,7 +38,6 @@ use silverhand_backend_core::{
         },
         read::ComputerReadModel,
     },
-    identity::HostId,
 };
 
 use crate::{bearer::strict_bearer_credential, clock::ProcessClock, error};
@@ -180,12 +180,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::identity::UserId,
         foundation::persistence::PersistenceFailure,
         host_runtime::{
             computer::{ComputerRecord, HostKind, ProvisioningSource},
             custody::{CredentialAuthState, CredentialKind},
         },
-        identity::UserId,
     };
     use tower::ServiceExt;
 

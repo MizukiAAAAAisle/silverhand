@@ -127,7 +127,7 @@ mod tests {
     use std::{path::PathBuf, time::Duration};
 
     use silverhand_backend_core::{
-        identity::{HostId, UserId},
+        foundation::identity::{HostId, UserId},
         teardown::cascade::CascadeRefused,
     };
     use sqlx::Connection;

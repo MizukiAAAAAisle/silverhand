@@ -9,7 +9,7 @@
 use std::{collections::HashSet, error::Error, future::Future};
 
 use crate::{
-    identity::{ConversationId, UserId},
+    foundation::identity::{ConversationId, UserId},
     messaging::{
         MessageAuthor, MessageId, MessageSeq, PrincipalIdentity, ThreadListEntry, ThreadRootId,
     },

@@ -1,7 +1,7 @@
 //! Reaction detail and message-window aggregate read models.
 
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     messaging::collaboration::reaction::{
         ReactionAggregate, ReactionDetail, ReactionEmoji, ReactionReactor, ReactionReadPort,
         ReactionReadRefusal, Reactor,
@@ -149,7 +149,7 @@ pub(in crate::messaging::collaboration) async fn aggregate_facts_in_snapshot(
 async fn may_view_human(
     tx: &mut Transaction<'_, Sqlite>,
     viewer: &UserId,
-    conversation: &silverhand_backend_core::identity::ConversationId,
+    conversation: &silverhand_backend_core::foundation::identity::ConversationId,
     facts: &ConversationFacts,
 ) -> Result<bool, ReactionStoreError> {
     match facts.placement.as_str() {
@@ -183,7 +183,7 @@ fn decode_reactor(kind: String, id: String) -> Result<Reactor, ReactionStoreErro
             UserId::parse(id).map_err(|_| ReactionStoreError::MalformedIdentity)?,
         )),
         "agent" => Ok(Reactor::Agent(
-            silverhand_backend_core::identity::AgentId::parse(id)
+            silverhand_backend_core::foundation::identity::AgentId::parse(id)
                 .map_err(|_| ReactionStoreError::MalformedIdentity)?,
         )),
         _ => Err(ReactionStoreError::MalformedIdentity),

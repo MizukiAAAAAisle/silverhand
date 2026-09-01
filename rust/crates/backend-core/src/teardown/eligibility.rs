@@ -9,7 +9,7 @@
 //! that makes having taken them safe.
 
 use crate::{
-    identity::HostId, identity_access::agent_lifecycle::MaterializationStatus,
+    foundation::identity::HostId, identity_access::agent_lifecycle::MaterializationStatus,
     teardown::facts::AgentTeardownFacts,
 };
 
@@ -136,7 +136,7 @@ pub enum EligibilityMoved {
 /// ```
 /// use silverhand_backend_core::{
 ///     identity_access::agent_lifecycle::MaterializationStatus,
-///     identity::{AgentId, HostId},
+///     foundation::identity::{AgentId, HostId},
 ///     teardown::{
 ///         eligibility::{
 ///             AgentTeardownEligibility, EligibilityHeld, EligibilityVerdict, hold_eligibility,
@@ -215,7 +215,7 @@ pub fn hold_eligibility(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::AgentId;
+    use crate::foundation::identity::AgentId;
 
     fn host(id: &str) -> HostId {
         HostId::parse(id).expect("host id")

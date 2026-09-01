@@ -378,9 +378,10 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     // #task:2284 — blob_store, cli_preflight_audit, cli_invoke_audit, persistence, and
     // scope_event relocated under the `foundation` namespace; their flat entries are removed
     // here and covered by the single `foundation` owning-root seam entry via the CP projection.
+    // #task:2285 relocated the final `identity` kernel vocabulary under `foundation` on the
+    // same terms, closing the namespace (9/9/0).
     ("backend-core", "direct_pair_read"),
     ("backend-core", "host_runtime"),
-    ("backend-core", "identity"),
     ("backend-core", "messaging"),
     ("backend-core", "runtime_delivery"),
     // #task:2256 categorized-file audit sink: the OS adapter that owns the CLI

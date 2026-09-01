@@ -64,8 +64,8 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::identity::AgentId,
     foundation::persistence::PersistenceFailure,
-    identity::AgentId,
     identity_access::agent_avatar::{AgentAvatarAssignment, AgentAvatarRow},
     identity_access::agents::{
         runtime::RuntimeKind,

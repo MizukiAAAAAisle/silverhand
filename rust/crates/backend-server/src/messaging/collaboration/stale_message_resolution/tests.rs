@@ -12,8 +12,8 @@ use axum::{
 };
 use futures_util::stream;
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
     host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
-    identity::{AgentId, ConversationId, DaemonInstanceId},
     messaging::{
         CapabilityDenied, SendCapability,
         collaboration::stale_message_resolution::StaleMessageResolutionAdmissionFact,

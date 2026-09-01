@@ -9,7 +9,7 @@
 use std::{error::Error, future::Future};
 
 use crate::{
-    identity::{AgentId, HostId, WorkspaceId},
+    foundation::identity::{AgentId, HostId, WorkspaceId},
     identity_access::agents::runtime::RuntimeKind,
 };
 

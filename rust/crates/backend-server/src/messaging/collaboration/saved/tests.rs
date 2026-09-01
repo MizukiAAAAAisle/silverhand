@@ -13,7 +13,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     messaging::collaboration::saved::{
         SavedAftermath, SavedChangeFact, SavedListQuery, SavedPublicationFailure, SavedSender,
     },

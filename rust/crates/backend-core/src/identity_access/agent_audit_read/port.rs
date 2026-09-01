@@ -12,8 +12,8 @@
 use std::future::Future;
 
 use crate::{
+    foundation::identity::{AgentId, ConversationId, Principal},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, Principal},
     messaging::{
         AttachmentId, collaboration::conversation_message_window::ConversationMessageWindowRequest,
     },

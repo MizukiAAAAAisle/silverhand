@@ -33,7 +33,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::{Value, json};
-use silverhand_backend_core::{identity::UserId, policy::agent_presence};
+use silverhand_backend_core::{foundation::identity::UserId, policy::agent_presence};
 use silverhand_backend_server::{clock::SystemProcessClock, host_agent::agent_presence::router};
 use silverhand_backend_sqlite::agent_presence_read::SqliteAgentPresenceColdRead;
 use sqlx::{Connection, Executor};

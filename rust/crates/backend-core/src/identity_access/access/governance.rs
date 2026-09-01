@@ -13,11 +13,11 @@
 
 use std::future::Future;
 
+use crate::foundation::identity::WorkspaceId;
 use crate::foundation::persistence::PersistenceFailure;
-use crate::identity::WorkspaceId;
 
 use super::role::{WorkspaceRole, role_governs_workspace};
-use crate::identity::Principal;
+use crate::foundation::identity::Principal;
 
 /// The request-boundary door: the caller's standing to add members to a
 /// workspace. It resolves the workspace and the caller's role CEILING together —
@@ -177,7 +177,7 @@ pub trait WorkspaceGovernanceFactsRead: Clone + Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::{AgentId, UserId};
+    use crate::foundation::identity::{AgentId, UserId};
 
     fn human() -> Principal {
         Principal::Human {

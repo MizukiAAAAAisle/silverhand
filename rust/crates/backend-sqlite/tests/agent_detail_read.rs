@@ -15,8 +15,8 @@
 //!    read error, not a silent default.
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, UserId},
     identity_access::agent_detail_read::{
         AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
     },

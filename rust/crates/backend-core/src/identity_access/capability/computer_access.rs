@@ -12,9 +12,9 @@
 //! system-initiated face appears it adds an arm HERE rather than deciding it in a
 //! route.
 //!
-//! [`Principal`]: crate::identity::Principal
+//! [`Principal`]: crate::foundation::identity::Principal
 
-use crate::identity::{HostId, UserId};
+use crate::foundation::identity::{HostId, UserId};
 
 /// The facts this rule reads: WHICH computer, and whose it is. A narrow projection
 /// on purpose — a computer row that grows a lifecycle, a fleet or a billing column
@@ -75,7 +75,7 @@ pub enum ComputerAccessRefused {
 ///     identity_access::capability::computer_access::{
 ///         ComputerAccess, ComputerAccessHeld, ComputerOwnershipFacts, can_access_computer,
 ///     },
-///     identity::{HostId, UserId},
+///     foundation::identity::{HostId, UserId},
 /// };
 /// let owner = UserId::parse("u1").unwrap();
 /// let ComputerAccess::Held(held) = can_access_computer(

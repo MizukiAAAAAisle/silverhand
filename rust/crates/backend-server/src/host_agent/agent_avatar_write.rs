@@ -57,7 +57,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    identity::{AgentId, Principal, UserId},
+    foundation::identity::{AgentId, Principal, UserId},
     identity_access::agent_avatar::AgentAvatarBlobStore,
     identity_access::agent_avatar_write::{
         AgentAvatarClearOutcome, AgentAvatarUploadOutcome, clear_agent_avatar, upload_agent_avatar,

@@ -17,7 +17,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     identity_access::agent_detail_read::AgentDetailReadModel,
     messaging::schedule::{
         ScheduleListLimit, ScheduleListQuery, ScheduleListReadModel, ScheduleStatusFilter,
@@ -166,8 +166,8 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::identity::AgentId,
         foundation::persistence::PersistenceFailure,
-        identity::AgentId,
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agents::runtime::RuntimeKind,
@@ -177,8 +177,8 @@ mod tests {
 
     use super::*;
 
-    fn user(id: &str) -> silverhand_backend_core::identity::UserId {
-        silverhand_backend_core::identity::UserId::parse(id).expect("user id")
+    fn user(id: &str) -> silverhand_backend_core::foundation::identity::UserId {
+        silverhand_backend_core::foundation::identity::UserId::parse(id).expect("user id")
     }
 
     fn agent(id: &str) -> AgentId {

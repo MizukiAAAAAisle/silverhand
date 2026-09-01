@@ -1,7 +1,7 @@
 //! How one human disconnect becomes an offline fact, and when it does not.
 
 use crate::cold_read::presence::{LastSeenAt, LastSeenOutOfRange};
-use crate::identity::UserId;
+use crate::foundation::identity::UserId;
 
 const DEFAULT_OFFLINE_GRACE_MS: i64 = 20_000;
 

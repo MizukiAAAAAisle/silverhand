@@ -34,6 +34,7 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
     host_runtime::agent_runtime_state_read::{
         AgentRuntimeStateFacts, AgentRuntimeStateReadModel, RuntimeParticipationFact,
@@ -41,7 +42,6 @@ use silverhand_backend_core::{
     },
     host_runtime::runtime_credential::RuntimeGeneration,
     host_runtime::runtime_event::RuntimeObservedStatus,
-    identity::{AgentId, ConversationId, UserId},
     identity_access::agent_lifecycle::MaterializationStatus,
     messaging::collaboration::conversation_ref::ConversationRosterPolicy,
 };

@@ -17,8 +17,8 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
-    identity::UserId,
     identity_access::avatar::{
         AvatarBlobPointer, AvatarContentType, AvatarPointerWrite, AvatarPointerWriteUnitOfWork,
         AvatarStorageRef, AvatarStorageRefRead,

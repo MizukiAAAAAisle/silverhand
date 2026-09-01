@@ -12,10 +12,10 @@
 //! identical statement without a second code path.
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, HostId},
     foundation::persistence::PersistenceFailure,
     host_runtime::agent_bulk_stop::{AgentBulkStopReadPort, AgentBulkStopSnapshot},
     host_runtime::runtime_credential::RuntimeScope,
-    identity::{AgentId, HostId},
     identity_access::agent_profile_mcp::{AgentProfileMcpPlacement, AgentProfileMcpPlacementRead},
     identity_access::capability::computer_access::ComputerOwnershipFacts,
     teardown::{
@@ -154,7 +154,7 @@ pub(super) async fn select_agent_facts(
 
 pub(super) async fn select_agents_on_host(
     conn: &mut SqliteConnection,
-    host_id: &silverhand_backend_core::identity::HostId,
+    host_id: &silverhand_backend_core::foundation::identity::HostId,
 ) -> Result<Vec<AgentTeardownFacts>, sqlx::Error> {
     let rows = sqlx::query(SELECT_AGENTS_ON_HOST)
         .bind(host_id.as_str())
@@ -210,7 +210,7 @@ pub(super) async fn select_is_deletion_pending(
 
 pub(super) async fn select_computer_ownership(
     conn: &mut SqliteConnection,
-    id: &silverhand_backend_core::identity::HostId,
+    id: &silverhand_backend_core::foundation::identity::HostId,
 ) -> Result<Option<ComputerOwnershipFacts>, sqlx::Error> {
     let row = sqlx::query(SELECT_COMPUTER_OWNERSHIP)
         .bind(id.as_str())
@@ -221,7 +221,7 @@ pub(super) async fn select_computer_ownership(
 
 pub(super) async fn select_computer_lifecycle(
     conn: &mut SqliteConnection,
-    id: &silverhand_backend_core::identity::HostId,
+    id: &silverhand_backend_core::foundation::identity::HostId,
 ) -> Result<Option<ComputerTeardownFacts>, sqlx::Error> {
     let row = sqlx::query(SELECT_COMPUTER_LIFECYCLE)
         .bind(id.as_str())
@@ -333,7 +333,7 @@ impl AgentTeardownReadPort for SqliteHostAgentStore {
 
     async fn read_computer_ownership(
         &self,
-        host_id: &silverhand_backend_core::identity::HostId,
+        host_id: &silverhand_backend_core::foundation::identity::HostId,
     ) -> Result<Option<ComputerOwnershipFacts>, PersistenceFailure> {
         let mut conn = self
             .pool()
@@ -347,7 +347,7 @@ impl AgentTeardownReadPort for SqliteHostAgentStore {
 
     async fn read_computer_lifecycle(
         &self,
-        host_id: &silverhand_backend_core::identity::HostId,
+        host_id: &silverhand_backend_core::foundation::identity::HostId,
     ) -> Result<Option<ComputerTeardownFacts>, PersistenceFailure> {
         let mut conn = self
             .pool()
@@ -401,8 +401,8 @@ mod tests {
     use std::path::PathBuf;
 
     use silverhand_backend_core::{
+        foundation::identity::HostId,
         host_runtime::computer::{HostKind, ProvisioningSource},
-        identity::HostId,
         identity_access::agent_lifecycle::MaterializationStatus,
     };
     use sqlx::Connection;

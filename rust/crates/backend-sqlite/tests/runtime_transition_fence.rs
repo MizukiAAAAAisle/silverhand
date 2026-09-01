@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
     host_runtime::runtime_credential::{
         ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeScope,
     },
@@ -11,7 +12,6 @@ use silverhand_backend_core::{
         begin_runtime_transition, read_runtime_transition_seats,
         reclaim_runtime_transition_inboxes,
     },
-    identity::{AgentId, ConversationId, DaemonInstanceId},
     identity_access::agents::runtime::RuntimeKind,
     messaging::{MessageContent, ReferencePositions},
     runtime_delivery::{ClaimPendingInbox, DeliveryLeaseOwner, RuntimeInboxCustodyPort},

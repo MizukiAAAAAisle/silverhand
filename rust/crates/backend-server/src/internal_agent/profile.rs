@@ -117,11 +117,11 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::identity::{AgentId, DaemonInstanceId},
         foundation::persistence::PersistenceFailure,
         host_runtime::runtime_credential::{
             RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
         },
-        identity::{AgentId, DaemonInstanceId},
         identity_access::agent_profile_read::AgentProfileFact,
         messaging::AvatarRevision,
     };

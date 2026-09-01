@@ -14,7 +14,7 @@ use silverhand_backend_core::messaging::task::{
     BoardScopeSource, PairKey, ResolvedBoard, TaskParticipationReads, TaskReadCapability,
 };
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         AddressRefusal, ChannelAccess, ChannelAccessRefusal, DeliveryIntent, DirectPairAllocation,
         DirectPairOpenedFact, DirectPairOpenedPort, EnvironmentUnavailable, MessageContent,

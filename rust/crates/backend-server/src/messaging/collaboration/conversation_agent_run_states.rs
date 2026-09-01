@@ -16,7 +16,7 @@ use axum::{
 };
 use serde_json::json;
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, UserId},
+    foundation::identity::{AgentId, ConversationId, UserId},
     messaging::collaboration::channel_lifecycle::{ChannelDetailReadPort, ChannelDetailRefusal},
 };
 

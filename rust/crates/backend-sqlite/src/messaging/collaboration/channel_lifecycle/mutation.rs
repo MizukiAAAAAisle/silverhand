@@ -6,8 +6,8 @@
 //! whole committed image and only then returns an operation-specific fact.
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
     identity_access::access::role_governs_workspace,
     messaging::{
         MessageId, MessageSeq, SendClock, SendEntropy,

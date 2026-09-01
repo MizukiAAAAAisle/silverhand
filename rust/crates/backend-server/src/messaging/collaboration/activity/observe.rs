@@ -10,7 +10,7 @@ use axum::{
 };
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId},
+    foundation::identity::{ConversationId, UserId},
     messaging::{
         MessageSeq, NotificationId, ThreadRootId,
         collaboration::activity::observe::{
@@ -373,7 +373,7 @@ mod tests {
         async fn badge_changed(
             &self,
             _: &CommittedObservation,
-            _: &silverhand_backend_core::identity::WorkspaceId,
+            _: &silverhand_backend_core::foundation::identity::WorkspaceId,
         ) -> Result<(), ObservationEffectFailure> {
             self.0.lock().unwrap().push("badge");
             Ok(())
@@ -411,7 +411,7 @@ mod tests {
         async fn badge_changed(
             &self,
             _: &CommittedObservation,
-            _: &silverhand_backend_core::identity::WorkspaceId,
+            _: &silverhand_backend_core::foundation::identity::WorkspaceId,
         ) -> Result<(), ObservationEffectFailure> {
             self.0.lock().unwrap().push("badge");
             Err(ObservationEffectFailure::from_source(LaterAftermathCause))

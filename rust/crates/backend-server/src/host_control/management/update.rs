@@ -10,6 +10,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
+    foundation::identity::{HostId, UserId},
     host_runtime::{
         agent_roster::ComputerAgentsReadPort,
         computer::{ComputerDisplayLabel, DisplayLabelRefusal},
@@ -18,7 +19,6 @@ use silverhand_backend_core::{
             UpdateComputerRefusal, UpdateComputerUnitOfWork,
         },
     },
-    identity::{HostId, UserId},
 };
 
 use crate::{

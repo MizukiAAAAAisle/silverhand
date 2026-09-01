@@ -11,8 +11,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use silverhand_backend_core::foundation::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::identity_access::access::{
     AddAgentMemberError, AgentAuthorityFacts, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
     AgentWorkspaceMembership, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentClock,

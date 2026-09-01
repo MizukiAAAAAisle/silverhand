@@ -16,7 +16,7 @@
 //! step that fills the route contract's already-exposed requirement.
 
 use silverhand_backend_core::{
-    identity::WorkspaceId,
+    foundation::identity::WorkspaceId,
     identity_access::workspace_metadata_write::WorkspaceNameChange,
     messaging::collaboration::workspace_rename_messaging::{
         ConversationAgentsReadPort, WorkspaceRenameChannelsReadPort, WorkspaceRenameDeliveryPort,

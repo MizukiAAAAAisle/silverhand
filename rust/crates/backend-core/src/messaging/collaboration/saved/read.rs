@@ -1,6 +1,6 @@
 use std::{error::Error, future::Future};
 
-use crate::identity::{AgentId, UserId, WorkspaceId};
+use crate::foundation::identity::{AgentId, UserId, WorkspaceId};
 
 use super::{BoundSavedEntry, SavedAt, SavedEntry, SavedIdentityMismatch};
 
@@ -107,7 +107,7 @@ mod tests {
     use std::convert::Infallible;
 
     use crate::{
-        identity::{ConversationId, UserId},
+        foundation::identity::{ConversationId, UserId},
         messaging::{FromKind, MessageId, MessageSeq, collaboration::saved::*},
     };
 

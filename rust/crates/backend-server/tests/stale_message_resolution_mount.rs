@@ -35,9 +35,9 @@ use axum::{
 };
 use serde_json::Value;
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::RuntimeScope,
-    identity::{AgentId, ConversationId, DaemonInstanceId},
     messaging::{
         CapabilityDenied, SendCapability,
         collaboration::stale_message_resolution::{

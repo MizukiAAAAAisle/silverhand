@@ -64,6 +64,7 @@ use axum::{
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, Principal, UserId},
     foundation::name_canonicalization::is_ecmascript_trim_whitespace,
     host_runtime::agent_runtime_switch::{
         RuntimeAvailabilityProbe, RuntimeAvailabilityProbeFault, SwitchAgentRuntimeConfig,
@@ -74,7 +75,6 @@ use silverhand_backend_core::{
     host_runtime::runtime_transition::{
         RuntimeTransitionInboxWrite, RuntimeTransitionSeatRead, RuntimeTransitionWrite,
     },
-    identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::AgentDetailReadModel,
     identity_access::agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
     identity_access::agents::{
@@ -682,6 +682,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::identity::{ConversationId, HostId},
         host_runtime::agent_runtime_switch::{
             RuntimeAvailabilityProbeFault, RuntimeAvailabilityVerdict, SwitchAgentRuntimeError,
             SwitchAgentRuntimeFault, SwitchAgentSnapshot,
@@ -692,7 +693,6 @@ mod tests {
             RuntimeTransitionCommit, RuntimeTransitionInboxReclaimRecord, RuntimeTransitionLock,
             RuntimeTransitionSeatSnapshotRecord,
         },
-        identity::{ConversationId, HostId},
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agents::session_scope::AgentSessionScope,

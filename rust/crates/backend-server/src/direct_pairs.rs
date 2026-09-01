@@ -13,7 +13,7 @@ use silverhand_backend_core::{
     direct_pair_read::{
         DirectPairCounterpart, DirectPairList, DirectPairListItem, DirectPairReadModel,
     },
-    identity::UserId,
+    foundation::identity::UserId,
     messaging::{ActiveAuthor, PrincipalIdentity, PrincipalKind},
 };
 
@@ -164,7 +164,7 @@ mod tests {
         direct_pair_read::{
             DirectPairCounterpart, DirectPairList, DirectPairListItem, DirectPairUnreadCount,
         },
-        identity::{AgentId, ConversationId, UserId},
+        foundation::identity::{AgentId, ConversationId, UserId},
         identity_access::agents::runtime::RuntimeKind,
         messaging::PrincipalIdentity,
     };

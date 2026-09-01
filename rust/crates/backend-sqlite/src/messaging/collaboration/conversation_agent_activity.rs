@@ -2,8 +2,8 @@
 
 use serde_json::Value;
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, UserId},
     messaging::{
         PrincipalIdentity,
         collaboration::{

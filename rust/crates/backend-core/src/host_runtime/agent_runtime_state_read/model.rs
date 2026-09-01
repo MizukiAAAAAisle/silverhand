@@ -46,10 +46,10 @@
 use std::future::Future;
 
 use crate::{
+    foundation::identity::{AgentId, ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::RuntimeGeneration,
     host_runtime::runtime_event::RuntimeObservedStatus,
-    identity::{AgentId, ConversationId, UserId},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
     messaging::collaboration::conversation_ref::ConversationRosterPolicy,
@@ -64,7 +64,7 @@ use crate::{
 pub struct RuntimeParticipationFact {
     pub conversation: ConversationId,
     /// The workspace the conversation is placed in, echoed to the wire verbatim.
-    /// `None` for a `direct_pair`. Not decoded to a [`crate::identity::WorkspaceId`]:
+    /// `None` for a `direct_pair`. Not decoded to a [`crate::foundation::identity::WorkspaceId`]:
     /// it is a wire echo that drives no decision here, like the detail face's
     /// `host_id`.
     pub workspace_id: Option<String>,
@@ -401,7 +401,7 @@ pub trait AgentRuntimeStateReadModel {
 mod tests {
     use super::*;
     use crate::{
-        identity::Principal,
+        foundation::identity::Principal,
         identity_access::capability::agent_view::{VisibleStages, can_view_agent},
     };
 

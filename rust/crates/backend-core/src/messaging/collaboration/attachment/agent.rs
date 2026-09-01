@@ -11,9 +11,9 @@ use std::{error::Error, future::Future};
 
 use crate::{
     foundation::blob_store::{BlobAliasId, StoredBlob},
+    foundation::identity::{AgentId, ConversationId},
     foundation::wire_number::JsSafeInteger,
     host_runtime::runtime_credential::RuntimePrincipal,
-    identity::{AgentId, ConversationId},
     messaging::{AttachmentId, DirectPairAllocation, ResolvedStream},
 };
 
@@ -870,8 +870,8 @@ mod tests {
     use super::*;
     use crate::{
         foundation::blob_store::{BlobStorageKey, StorageKind},
+        foundation::identity::DaemonInstanceId,
         host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimeScope},
-        identity::DaemonInstanceId,
     };
 
     fn agent(raw: &str) -> AgentId {

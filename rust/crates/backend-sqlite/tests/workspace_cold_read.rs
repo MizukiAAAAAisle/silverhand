@@ -4,8 +4,8 @@
 use std::error::Error;
 
 use silverhand_backend_core::{
+    foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
-    identity::UserId,
     identity_access::workspace_cold_read::WorkspaceColdReadUnitOfWork,
     viewer_read_model::viewer_workspace_sort::{SortMode, WorkspaceSortScope},
 };

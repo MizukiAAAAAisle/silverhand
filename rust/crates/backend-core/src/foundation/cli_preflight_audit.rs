@@ -61,7 +61,7 @@ impl NonNegativeFiniteF64OutOfRange {
     }
 }
 
-use crate::identity::{AgentId, ConversationId};
+use crate::foundation::identity::{AgentId, ConversationId};
 
 /// One `cli.preflight_failure` fact, exactly the queryable field set the product's log
 /// line carries. `category` and `status` are not fields: they are invariants of *being*

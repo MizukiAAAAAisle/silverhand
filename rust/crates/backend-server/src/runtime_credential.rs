@@ -19,6 +19,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         AgentSlotPresentationFocusPort, ClaimRuntimeCustody, FinalizeRuntimeCustody,
@@ -28,7 +29,6 @@ use silverhand_backend_core::{
     host_runtime::runtime_event::{
         CommitRuntimeExit, DaemonEventDurablePort, RuntimeExitCommitResult, RuntimeExitDisposition,
     },
-    identity::{AgentId, ConversationId, DaemonInstanceId},
 };
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
@@ -847,8 +847,8 @@ mod tests {
     };
 
     use silverhand_backend_core::{
+        foundation::identity::ConversationId,
         host_runtime::runtime_credential::{ClaimedRuntime, RuntimeCustody, RuntimeGeneration},
-        identity::ConversationId,
     };
 
     use super::*;

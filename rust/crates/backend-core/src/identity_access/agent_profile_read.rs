@@ -31,7 +31,8 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    foundation::persistence::PersistenceFailure, identity::AgentId, messaging::AvatarRevision,
+    foundation::identity::AgentId, foundation::persistence::PersistenceFailure,
+    messaging::AvatarRevision,
 };
 
 /// The narrow profile face of one agent row.

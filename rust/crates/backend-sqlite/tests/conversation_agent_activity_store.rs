@@ -1,5 +1,5 @@
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, UserId},
+    foundation::identity::{AgentId, ConversationId, UserId},
     messaging::collaboration::conversation_agent_activity::{
         ActivityPageRequest, ConversationAgentActivityReadPort, ConversationAgentActivityRefusal,
     },

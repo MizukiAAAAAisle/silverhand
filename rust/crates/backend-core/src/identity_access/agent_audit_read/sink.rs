@@ -10,7 +10,7 @@
 //! retains only the event and port contract; counting fakes remain available to prove the
 //! route effect without importing filesystem policy.
 
-use crate::identity::{AgentId, ConversationId, UserId};
+use crate::foundation::identity::{AgentId, ConversationId, UserId};
 use crate::messaging::AttachmentId;
 
 /// One audit-evidence record, emitted after a face succeeds.

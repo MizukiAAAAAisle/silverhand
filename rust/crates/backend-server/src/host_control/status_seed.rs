@@ -50,7 +50,7 @@ use std::{
     time::Duration,
 };
 
-use silverhand_backend_core::identity::{AgentId, DaemonInstanceId, HostId};
+use silverhand_backend_core::foundation::identity::{AgentId, DaemonInstanceId, HostId};
 use tokio::time::Instant;
 
 use crate::{
@@ -421,7 +421,7 @@ enum Admission {
 /// because either one alone would make the other look load-bearing when it is not.
 ///
 /// ```
-/// use silverhand_backend_core::identity::HostId;
+/// use silverhand_backend_core::foundation::identity::HostId;
 /// use silverhand_backend_server::{
 ///     daemon_delivery::DaemonDeliveryController,
 ///     host_control::status_seed::{HostStatusSeeds, SeedFailure, SeedRead},

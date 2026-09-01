@@ -13,7 +13,7 @@ use axum::{
 };
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     messaging::collaboration::attention_preference::{
         AttentionPreferenceAftermath, AttentionPreferencePort, ChannelAttentionAdmissionRefusal,
         ChannelAttentionCommit, ChannelAttentionMode, ChannelAttentionWriteRefusal,

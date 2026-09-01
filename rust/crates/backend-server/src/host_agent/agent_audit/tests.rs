@@ -35,8 +35,8 @@ use silverhand_backend_core::{
         BlobDeleteOutcome, BlobNamespace, BlobRead, BlobReadOutcome, BlobStorageKey, BlobStore,
         StorageKind, StoredBlob,
     },
+    foundation::identity::{AgentId, ConversationId, Principal, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, Principal, UserId, WorkspaceId},
     identity_access::agent_audit_read::{
         AgentAuditEvent, AgentAuditReadModel, AgentAuditSink, AuditAttachmentBundle,
         AuditChatSummary, AuditChatsBundle, AuditSubjectFacts, AuditTranscriptBundle,

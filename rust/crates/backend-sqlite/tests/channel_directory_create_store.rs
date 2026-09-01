@@ -8,7 +8,7 @@ use std::{
 };
 
 use silverhand_backend_core::{
-    identity::{UserId, WorkspaceId},
+    foundation::identity::{UserId, WorkspaceId},
     messaging::{
         SendClock, SendEntropy,
         collaboration::channel_directory::{

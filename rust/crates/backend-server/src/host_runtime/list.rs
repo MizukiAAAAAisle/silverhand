@@ -24,8 +24,8 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::identity::UserId,
     host_runtime::read::{ComputerReadModel, owned_computers},
-    identity::UserId,
 };
 
 use crate::error;
@@ -114,9 +114,9 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::identity::HostId,
         foundation::persistence::PersistenceFailure,
         host_runtime::computer::{ComputerRecord, HostKind, ProvisioningSource},
-        identity::HostId,
     };
     use tower::ServiceExt;
 

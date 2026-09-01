@@ -35,7 +35,7 @@ use silverhand_backend_core::{
     foundation::blob_store::{
         BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore, StorageKind, StoredBlob,
     },
-    identity::{AgentId, UserId},
+    foundation::identity::{AgentId, UserId},
     identity_access::agent_avatar::{
         AgentAvatarBlobPointer, AgentAvatarBlobRead, AgentAvatarBlobStore, OwnedAgentAvatarBlob,
     },

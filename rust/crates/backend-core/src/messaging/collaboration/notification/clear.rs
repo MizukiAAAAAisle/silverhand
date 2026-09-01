@@ -1,4 +1,4 @@
-use crate::identity::{ConversationId, UserId, WorkspaceId};
+use crate::foundation::identity::{ConversationId, UserId, WorkspaceId};
 use crate::messaging::NotificationId;
 use std::{error::Error, future::Future, num::NonZeroU64};
 

@@ -11,7 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     messaging::collaboration::{
         ClearSessionOutcome, ClearSessionProviderRefusal, CliSessionId, HardStopRuntimeOutcome,
         HardStopRuntimeProviderRefusal, RuntimeControlPort, RuntimePlacementRefusal,

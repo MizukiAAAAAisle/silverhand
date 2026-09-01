@@ -13,7 +13,7 @@
 //! for the two paths to drift.
 
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, UserId},
+    foundation::identity::{AgentId, ConversationId, UserId},
     messaging::{
         DirectLineAuthority, FromKind, MessageReference, PrincipalKind, ReferencePositions,
         SendActor, SendDestination, SendMessage, SendMessageDraft, SendMessageError,
@@ -190,7 +190,7 @@ mod tests {
 
     use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use silverhand_backend_core::{
-        identity::{AgentId, UserId},
+        foundation::identity::{AgentId, UserId},
         messaging::{
             AddressedPrincipals, CreatedMessage, FromKind, MessageContent, MessageCreatedFact,
             MessageId, MessageSeq,

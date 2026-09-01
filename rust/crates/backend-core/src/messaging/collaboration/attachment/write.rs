@@ -10,8 +10,8 @@ use std::{error::Error, future::Future};
 
 use crate::{
     foundation::blob_store::{BlobAliasId, StoredBlob},
+    foundation::identity::{ConversationId, UserId},
     foundation::wire_number::JsSafeInteger,
-    identity::{ConversationId, UserId},
     messaging::AttachmentId,
 };
 

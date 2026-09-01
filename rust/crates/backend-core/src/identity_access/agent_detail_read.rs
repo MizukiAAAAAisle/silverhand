@@ -32,8 +32,8 @@
 use std::future::Future;
 
 use crate::{
+    foundation::identity::{AgentId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, UserId},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::agents::runtime::RuntimeKind,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
@@ -174,7 +174,7 @@ pub trait AgentDetailReadModel {
 mod tests {
     use super::*;
     use crate::{
-        identity::Principal,
+        foundation::identity::Principal,
         identity_access::capability::agent_view::{VisibleStages, can_view_agent},
     };
 

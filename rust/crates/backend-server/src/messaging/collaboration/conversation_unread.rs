@@ -11,7 +11,7 @@ use axum::{
 };
 use serde_json::{Map, Value, json};
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId},
+    foundation::identity::{ConversationId, UserId},
     messaging::collaboration::conversation_unread::{
         BoundConversationUnread, ConversationUnreadReadPort, ConversationUnreadRefusal,
         StreamUnread,

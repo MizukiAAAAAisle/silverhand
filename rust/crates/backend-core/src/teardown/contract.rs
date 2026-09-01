@@ -17,8 +17,8 @@
 use thiserror::Error;
 
 use crate::{
+    foundation::identity::{AgentId, HostId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, HostId, UserId},
 };
 
 /// Facts that do not describe one aggregate were composed.

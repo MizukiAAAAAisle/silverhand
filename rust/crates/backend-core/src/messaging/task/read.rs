@@ -127,9 +127,9 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::future::Future;
 
+use crate::foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 use crate::foundation::persistence::PersistenceFailure;
 use crate::host_runtime::runtime_credential::RuntimePrincipal;
-use crate::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 
 use super::aggregate::{BoardKey, TaskAggregate};
 use super::spec::{TaskId, TaskNumber};
@@ -216,7 +216,7 @@ pub trait AgentBoardResolver {
 ///
 /// ```compile_fail
 /// use silverhand_backend_core::messaging::task::{AuthorizedAgentBoard, BoardKey};
-/// use silverhand_backend_core::identity::{AgentId, WorkspaceId};
+/// use silverhand_backend_core::foundation::identity::{AgentId, WorkspaceId};
 ///
 /// // Both fields are private — no external crate can pair an agent with a board to
 /// // fabricate an "authorized" one; it can only come from `authorize_agent_board`.
@@ -429,7 +429,7 @@ struct AddressProvenanceViolation;
 ///
 /// ```compile_fail
 /// use silverhand_backend_core::messaging::task::{GlobalAgentRead, TaskId};
-/// use silverhand_backend_core::identity::AgentId;
+/// use silverhand_backend_core::foundation::identity::AgentId;
 ///
 /// // The fields are private — no caller can assert "coordinate-less for this id"
 /// // from bare parts; it can only come from `authorize_global_by_id`'s bind.
@@ -1150,8 +1150,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::foundation::identity::DaemonInstanceId;
     use crate::host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration};
-    use crate::identity::DaemonInstanceId;
     use crate::messaging::task::TaskRow;
 
     /// A `todo` task on `ws:workspace_1` in `conv_1`.

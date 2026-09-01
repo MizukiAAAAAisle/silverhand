@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
     foundation::blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
     foundation::persistence::PersistenceFailure,
     host_runtime::aftermath::{CustodyEffectFailure, DaemonConnectionControl},
     host_runtime::runtime_credential::{
@@ -29,7 +30,6 @@ use silverhand_backend_core::{
         RuntimeStatusCommitResult, RuntimeToolCallInputCommitResult, StampRuntimePresence,
         UpsertRuntimeTextActivity,
     },
-    identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
     identity_access::agent_profile_mcp::{
         AgentProfileMcpDataPlane, McpDataPlaneFaultCode, McpProbeCommand,
     },

@@ -13,7 +13,6 @@ pub mod direct_pair_read;
 pub mod embedded_bootstrap;
 pub mod foundation;
 pub mod host_runtime;
-pub mod identity;
 pub mod identity_access;
 pub mod messaging;
 pub mod policy;

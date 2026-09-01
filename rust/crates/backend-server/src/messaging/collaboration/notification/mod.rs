@@ -13,7 +13,7 @@ use garde::Validate;
 use serde::Deserialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     messaging::{NotificationId, collaboration::notification::*},
 };
 use std::{collections::HashMap, sync::Arc};

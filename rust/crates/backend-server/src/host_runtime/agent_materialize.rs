@@ -105,7 +105,7 @@ impl AgentMaterializePort for ProductionAgentMaterialize {
 
     async fn capture(
         &self,
-        host: &silverhand_backend_core::identity::HostId,
+        host: &silverhand_backend_core::foundation::identity::HostId,
     ) -> Result<Option<Self::Captured>, Self::Error> {
         // The single attachment truth: `resolve` answers `Some` custody exactly when a daemon
         // owns the host right now. The saga holds this custody across its reserve write and

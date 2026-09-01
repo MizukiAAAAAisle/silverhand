@@ -15,7 +15,7 @@ use axum::{
 use futures_util::stream;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     messaging::{
         SendClock, SendEntropy,
         collaboration::channel_directory::{

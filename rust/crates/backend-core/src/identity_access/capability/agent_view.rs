@@ -12,7 +12,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use crate::{
-    identity::{AgentId, Principal, UserId},
+    foundation::identity::{AgentId, Principal, UserId},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::decision::Decision,
 };

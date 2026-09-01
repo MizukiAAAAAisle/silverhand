@@ -48,8 +48,8 @@
 
 use std::future::Future;
 
+use crate::foundation::identity::{AgentId, ConversationId};
 use crate::foundation::persistence::PersistenceFailure;
-use crate::identity::{AgentId, ConversationId};
 
 use super::recurrence::{
     AdvanceError, Advancement, CronNextOccurrence, FailureRearmError, plan_advancement,

@@ -104,8 +104,8 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::identity::{Principal, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{Principal, WorkspaceId},
     identity_access::workspace_face::WorkspaceFace,
     identity_access::workspace_name::CanonicalWorkspaceName,
 };
@@ -817,7 +817,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::{AgentId, UserId};
+    use crate::foundation::identity::{AgentId, UserId};
 
     /// The write instant every committed-path test samples: a committed face's
     /// `updated_at` (and an archived face's `archived_at`) must equal it, or the seal

@@ -7,8 +7,8 @@
 //! comes only from its committed endpoints.
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::PrincipalIdentity,
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteRow};

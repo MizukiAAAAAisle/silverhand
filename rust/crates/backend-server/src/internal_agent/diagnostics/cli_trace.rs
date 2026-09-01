@@ -263,10 +263,10 @@ mod tests {
     use axum::http::{Request as HttpRequest, StatusCode, header::CONTENT_TYPE};
     use serde_json::Value;
     use silverhand_backend_core::{
+        foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
         host_runtime::runtime_credential::{
             RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
         },
-        identity::{AgentId, ConversationId, DaemonInstanceId},
     };
     use silverhand_backend_filesystem::audit_sink::{AppTag, AuditClock, CliAuditFile};
     use std::sync::{Arc, Mutex};

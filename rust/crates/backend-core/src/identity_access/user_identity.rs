@@ -30,7 +30,7 @@ use std::future::Future;
 
 use thiserror::Error;
 
-use crate::{foundation::persistence::PersistenceFailure, identity::UserId};
+use crate::{foundation::identity::UserId, foundation::persistence::PersistenceFailure};
 
 // ===========================================================================
 // Value objects — the admission vocabulary of a human identity.

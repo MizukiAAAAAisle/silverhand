@@ -24,8 +24,8 @@
 use std::future::Future;
 
 use crate::{
+    foundation::identity::{AgentId, ConversationId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, WorkspaceId},
     identity_access::agent_profile_read::{
         AgentProfileFact, AgentProfileReadModel, ProfileReadFault, bind_to_handle,
     },

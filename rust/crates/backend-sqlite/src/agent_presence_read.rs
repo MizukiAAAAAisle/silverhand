@@ -32,9 +32,9 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, UserId},
     foundation::persistence::PersistenceFailure,
     host_runtime::agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
-    identity::{AgentId, UserId},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
     policy::agent_presence::ActivityInstant,

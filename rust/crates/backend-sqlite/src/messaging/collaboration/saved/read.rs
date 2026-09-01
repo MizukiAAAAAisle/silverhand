@@ -1,6 +1,6 @@
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         AttachmentId, FromKind, MessageId, MessageSeq, PrincipalIdentity, ThreadRootId,
         attachments::AttachmentSnapshot,

@@ -4,7 +4,7 @@ use axum::{
 };
 use serde_json::Value;
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     messaging::collaboration::message_unread::{
         ConversationMessageUnread, ConversationMessageUnreadReadPort,
         ConversationMessageUnreadRefusal, LatestUnreadPointer, NonZeroUnreadCount, UnreadCount,

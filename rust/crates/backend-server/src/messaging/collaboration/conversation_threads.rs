@@ -13,7 +13,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId},
+    foundation::identity::{ConversationId, UserId},
     messaging::{
         MessageSeq,
         collaboration::conversation_threads::{

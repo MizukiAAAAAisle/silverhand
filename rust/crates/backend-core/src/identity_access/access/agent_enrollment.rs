@@ -21,8 +21,8 @@ use thiserror::Error;
 
 use super::clock::EnrollmentClock;
 use crate::{
+    foundation::identity::{AgentId, Principal, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, Principal, UserId, WorkspaceId},
 };
 
 /// The immutable authorization facts of an agent: enough to decide who may

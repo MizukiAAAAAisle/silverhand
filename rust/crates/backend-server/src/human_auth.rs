@@ -69,7 +69,7 @@ use axum::{
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     identity_access::auth::{
         AuthenticateHumanSession, IssuedSessionSecret, SessionAudit, SessionBearer, SessionClock,
         SessionIssue, SessionRevoke, SessionTokenMint,

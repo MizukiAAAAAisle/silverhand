@@ -9,7 +9,7 @@
 
 use crate::{
     direct_pair_read::DirectPairCounterpart,
-    identity::{ConversationId, WorkspaceId},
+    foundation::identity::{ConversationId, WorkspaceId},
     messaging::collaboration::conversation_ref::ConversationRosterPolicy,
 };
 

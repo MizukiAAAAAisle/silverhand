@@ -39,8 +39,8 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::identity::{AgentId, HostId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, HostId, UserId},
     identity_access::agents::runtime::RuntimeKind,
     identity_access::capability::computer_access::{
         ComputerAccess, ComputerAccessRefused, ComputerOwnershipFacts, can_access_computer,
@@ -81,7 +81,7 @@ pub struct HostAgentResourceFact {
 /// use silverhand_backend_core::{
 ///     identity_access::capability::computer_access::ComputerOwnershipFacts,
 ///     host_runtime::host_resources_read::HostResourcesFacts,
-///     identity::HostId,
+///     foundation::identity::HostId,
 /// };
 /// let facts = HostResourcesFacts::from_ownership(
 ///     ComputerOwnershipFacts { id: HostId::parse("h1").unwrap(), owner: None },
@@ -99,7 +99,7 @@ pub struct HostAgentResourceFact {
 /// use silverhand_backend_core::{
 ///     identity_access::capability::computer_access::ComputerOwnershipFacts,
 ///     host_runtime::host_resources_read::{HostResourcesFacts, visible_host_resources},
-///     identity::{HostId, UserId},
+///     foundation::identity::{HostId, UserId},
 /// };
 /// let owner = UserId::parse("u1").unwrap();
 /// let computer = HostId::parse("h1").unwrap();

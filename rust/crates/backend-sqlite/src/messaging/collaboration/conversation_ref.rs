@@ -1,8 +1,8 @@
 //! One-snapshot SQLite projection for `GET /api/conversations/:id/ref`.
 
 use silverhand_backend_core::{
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{ConversationId, UserId, WorkspaceId},
     messaging::collaboration::conversation_ref::{
         ConversationRefReadPort, ConversationRefRefusal, ConversationRosterPolicy,
         WorkspaceConversationRef,

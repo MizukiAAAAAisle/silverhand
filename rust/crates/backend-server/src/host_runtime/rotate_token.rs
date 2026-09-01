@@ -43,6 +43,7 @@ use axum::{
 use serde::Serialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::identity::{HostId, UserId},
     host_runtime::{
         custody::{CredentialIssueRefusal, CredentialIssueUnitOfWork},
         environment::{Clock, EntropySource},
@@ -53,7 +54,6 @@ use silverhand_backend_core::{
             RotateHostTokenThroughDaemon, RotatedTokenDelivery, admit_host_token_rotation,
         },
     },
-    identity::{HostId, UserId},
 };
 
 use crate::{

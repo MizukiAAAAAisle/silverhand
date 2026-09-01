@@ -16,8 +16,8 @@
 use std::future::Future;
 
 use crate::{
-    foundation::name_canonicalization, foundation::persistence::PersistenceFailure,
-    identity::UserId, identity_access::auth::session::SessionTokenHash,
+    foundation::identity::UserId, foundation::name_canonicalization,
+    foundation::persistence::PersistenceFailure, identity_access::auth::session::SessionTokenHash,
 };
 
 /// The maximum length, in UTF-16 code units, of a stored audit field — the

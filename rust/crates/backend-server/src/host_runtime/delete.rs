@@ -46,8 +46,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
+    foundation::identity::{HostId, UserId},
     host_runtime::aftermath::DaemonConnectionControl,
-    identity::{HostId, UserId},
     teardown::{
         cascade::{CascadeConsent, CascadeRefused},
         computer_delete::{
@@ -393,12 +393,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::identity::AgentId,
         foundation::persistence::PersistenceFailure,
         host_runtime::{
             aftermath::CustodyEffectFailure,
             computer::{HostKind, ProvisioningSource},
         },
-        identity::AgentId,
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::computer_access::{
             ComputerAccess, ComputerOwnershipFacts, can_access_computer,

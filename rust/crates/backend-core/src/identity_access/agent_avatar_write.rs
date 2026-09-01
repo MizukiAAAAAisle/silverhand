@@ -36,7 +36,7 @@
 //! was Absent, is an untrustworthy fact (safe-`500`), never laundered into a success.
 
 use crate::{
-    identity::AgentId,
+    foundation::identity::AgentId,
     identity_access::agent_avatar::{
         AgentAvatarAssignment, AgentAvatarBlobPointer, AgentAvatarBlobStore, AgentAvatarRow,
         OwnedAgentAvatarBlob,

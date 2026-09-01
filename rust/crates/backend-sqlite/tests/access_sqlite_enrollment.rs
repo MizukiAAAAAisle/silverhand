@@ -13,7 +13,7 @@ use sqlx::{
 };
 use std::path::Path;
 
-use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
+use silverhand_backend_core::foundation::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::identity_access::access::{
     AddAgentMemberError, Capability, DEFAULT_AGENT_CAPABILITIES, EnrollmentClock,
     add_workspace_agent_member,

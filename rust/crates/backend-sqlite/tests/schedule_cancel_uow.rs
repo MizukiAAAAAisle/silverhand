@@ -13,7 +13,7 @@
 //! cancel after a claim wins and the later settlement CAS no-ops, and a cancel
 //! before a claim makes the claim find nothing.
 
-use silverhand_backend_core::identity::AgentId;
+use silverhand_backend_core::foundation::identity::AgentId;
 use silverhand_backend_core::messaging::schedule::{
     Clock, DueCandidate, FiredCount, ScheduleCancelOutcome, ScheduleCancelUnitOfWork, ScheduleId,
     ScheduleStatus, ScheduleStore, SettlementAction,

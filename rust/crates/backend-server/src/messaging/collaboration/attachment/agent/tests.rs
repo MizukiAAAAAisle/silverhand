@@ -19,11 +19,11 @@ use silverhand_backend_core::{
         BlobDeleteOutcome, BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore, StorageKind,
         StoredBlob,
     },
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
-    identity::{AgentId, ConversationId, DaemonInstanceId},
     messaging::{
         AddressRefusal, DirectPairAllocation, ResolvedStream, SendClock, SendEntropy,
         TargetAddress,

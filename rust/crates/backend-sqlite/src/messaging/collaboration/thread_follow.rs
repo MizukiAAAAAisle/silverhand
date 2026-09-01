@@ -6,8 +6,8 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, UserId},
     messaging::{
         PrincipalIdentity, ThreadRootId,
         collaboration::thread_follow::{
@@ -551,7 +551,7 @@ async fn direct_pair_live_agent_rows(
 
 #[cfg(test)]
 mod tests {
-    use silverhand_backend_core::identity::WorkspaceId;
+    use silverhand_backend_core::foundation::identity::WorkspaceId;
     use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
 
     use super::*;

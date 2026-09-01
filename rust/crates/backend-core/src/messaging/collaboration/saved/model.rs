@@ -1,5 +1,5 @@
 use crate::{
-    identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     messaging::{
         FromKind, MessageAuthor, MessageId, MessageSeq, PrincipalIdentity, ThreadRootId,
         attachments::AttachmentSnapshot,
@@ -113,8 +113,8 @@ pub struct SavedMessageProjection {
     pub id: MessageId,
     pub conversation: ConversationId,
     pub from_kind: FromKind,
-    pub from_agent: Option<crate::identity::AgentId>,
-    pub from_user: Option<crate::identity::UserId>,
+    pub from_agent: Option<crate::foundation::identity::AgentId>,
+    pub from_user: Option<crate::foundation::identity::UserId>,
     pub author: Option<MessageAuthor>,
     pub content: String,
     pub metadata_json: Option<String>,

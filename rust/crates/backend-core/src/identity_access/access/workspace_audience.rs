@@ -21,8 +21,8 @@
 use std::future::Future;
 
 use crate::{
+    foundation::identity::{UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{UserId, WorkspaceId},
 };
 
 /// Enumerates the human members of a workspace for a post-commit fan-out.

@@ -5,7 +5,7 @@
 //! tiered-attention authority, while Activity remains a separate projection.
 
 use super::attention_preference::ChannelAttentionMode;
-use crate::identity::{ConversationId, UserId, WorkspaceId};
+use crate::foundation::identity::{ConversationId, UserId, WorkspaceId};
 use std::{error::Error, future::Future};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

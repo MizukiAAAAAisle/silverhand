@@ -165,7 +165,7 @@ enum ReactionAccess {
 async fn reaction_access(
     tx: &mut Transaction<'_, Sqlite>,
     actor: &ReactionActor,
-    conversation: &silverhand_backend_core::identity::ConversationId,
+    conversation: &silverhand_backend_core::foundation::identity::ConversationId,
     facts: &ConversationFacts,
 ) -> Result<ReactionAccess, ReactionStoreError> {
     match facts.placement.as_str() {

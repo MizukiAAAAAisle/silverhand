@@ -21,7 +21,7 @@ use axum::{
 use serde::Serialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     identity_access::agent_detail_read::AgentDetailReadModel,
     messaging::schedule::{ScheduleCancelOutcome, ScheduleCancelUnitOfWork, ScheduleId},
 };
@@ -186,8 +186,8 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::identity::{AgentId, WorkspaceId},
         foundation::persistence::PersistenceFailure,
-        identity::{AgentId, WorkspaceId},
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agents::runtime::RuntimeKind,

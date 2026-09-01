@@ -14,7 +14,7 @@ use futures_util::stream;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         MessageId, MessageSeq, SendClock, SendEntropy,
         collaboration::{

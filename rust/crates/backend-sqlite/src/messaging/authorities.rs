@@ -11,8 +11,8 @@ use silverhand_backend_core::messaging::task::{
     TaskReadCapability,
 };
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
         DeliveryIntent, DirectLineAuthority, DirectPairAllocation, DirectPairOpenedPort,

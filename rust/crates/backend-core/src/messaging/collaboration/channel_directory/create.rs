@@ -26,7 +26,7 @@
 use std::{collections::HashSet, error::Error, future::Future};
 
 use crate::{
-    identity::{UserId, WorkspaceId},
+    foundation::identity::{UserId, WorkspaceId},
     messaging::conversation_title::CanonicalConversationTitle,
 };
 
@@ -347,7 +347,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use crate::identity::ConversationId;
+    use crate::foundation::identity::ConversationId;
 
     use super::*;
 

@@ -7,7 +7,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
 use log_capture::LogBuffer;
 use sha2::{Digest, Sha256};
-use silverhand_backend_core::identity::UserId;
+use silverhand_backend_core::foundation::identity::UserId;
 use silverhand_backend_core::identity_access::auth::{
     HumanSessionAuthenticator, SessionClock, SessionTtl,
 };

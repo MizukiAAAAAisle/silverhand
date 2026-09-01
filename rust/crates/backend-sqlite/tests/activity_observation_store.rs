@@ -1,5 +1,5 @@
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId},
+    foundation::identity::{ConversationId, UserId},
     messaging::{
         MessageSeq, NotificationId,
         collaboration::activity::observe::{
@@ -31,7 +31,7 @@ impl ObservationAftermath for NoEffects {
     async fn badge_changed(
         &self,
         _: &CommittedObservation,
-        _: &silverhand_backend_core::identity::WorkspaceId,
+        _: &silverhand_backend_core::foundation::identity::WorkspaceId,
     ) -> Result<(), ObservationEffectFailure> {
         Ok(())
     }

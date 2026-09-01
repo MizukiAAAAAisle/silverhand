@@ -99,7 +99,7 @@ pub(crate) fn author_dto(author: &MessageAuthor) -> Value {
 #[cfg(test)]
 mod tests {
     use silverhand_backend_core::{
-        identity::{AgentId, UserId},
+        foundation::identity::{AgentId, UserId},
         identity_access::agents::runtime::RuntimeKind,
         messaging::{AvatarRevision, MessageAuthor, PrincipalIdentity},
     };

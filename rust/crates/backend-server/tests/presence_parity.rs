@@ -27,7 +27,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::Value;
-use silverhand_backend_core::{cold_read::presence::OnlineViewers, identity::UserId};
+use silverhand_backend_core::{cold_read::presence::OnlineViewers, foundation::identity::UserId};
 use silverhand_backend_server::host_agent::presence::{PRESENCE_PATH, router};
 use silverhand_backend_sqlite::user_presence_cold_read::SqliteUserPresenceColdRead;
 use sqlx::{Connection, Executor};

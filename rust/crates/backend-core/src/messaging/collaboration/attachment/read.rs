@@ -10,9 +10,9 @@ use std::{error::Error, future::Future};
 
 use crate::{
     foundation::blob_store::StoredBlob,
+    foundation::identity::{AgentId, ConversationId, UserId},
     foundation::wire_number::JsSafeInteger,
     foundation::wire_text,
-    identity::{AgentId, ConversationId, UserId},
     messaging::{AttachmentId, MessageAuthor, MessageId, MessageSeq, ThreadRootId},
 };
 

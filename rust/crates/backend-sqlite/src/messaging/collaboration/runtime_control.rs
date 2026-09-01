@@ -1,7 +1,7 @@
 //! One-snapshot SQLite admission for conversation runtime control.
 
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, UserId},
+    foundation::identity::{AgentId, ConversationId, UserId},
     identity_access::agents::session_scope::AgentSessionScope,
     messaging::collaboration::{RuntimeControlAdmission, RuntimeControlAdmissionScope},
 };
@@ -248,7 +248,7 @@ mod tests {
     };
 
     use silverhand_backend_core::{
-        identity::{AgentId, ConversationId, UserId},
+        foundation::identity::{AgentId, ConversationId, UserId},
         messaging::collaboration::{
             ClearSessionOutcome, ClearSessionProviderRefusal, HardStopRuntimeOutcome,
             HardStopRuntimeProviderRefusal, RuntimeControlAdmissionRefusal,

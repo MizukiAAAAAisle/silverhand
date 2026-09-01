@@ -12,11 +12,11 @@ use axum::{
 };
 use serde_json::Value;
 use silverhand_backend_core::{
+    foundation::identity::UserId,
     host_runtime::{
         environment::{EntropySource, SystemClock},
         invite::CreateHostInvite,
     },
-    identity::UserId,
 };
 use silverhand_backend_server::host_runtime::{self, HOSTS_PATH};
 use silverhand_backend_sqlite::host_runtime::SqliteHostRuntimeStore;

@@ -28,9 +28,9 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::identity::AgentId,
     foundation::name_canonicalization::is_ecmascript_trim_whitespace,
     foundation::persistence::PersistenceFailure,
-    identity::AgentId,
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
 };
 
@@ -211,7 +211,7 @@ mod tests {
     use axum::body::to_bytes;
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        identity::UserId, identity_access::agent_detail_read::AgentDetailProjection,
+        foundation::identity::UserId, identity_access::agent_detail_read::AgentDetailProjection,
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agents::runtime::RuntimeKind,
     };

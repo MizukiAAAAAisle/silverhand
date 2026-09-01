@@ -16,8 +16,8 @@
 //! test rather than the happy paths.
 
 use silverhand_backend_core::{
+    foundation::identity::{ConversationId, UserId},
     host_runtime::runtime_credential::RuntimePrincipal,
-    identity::{ConversationId, UserId},
     messaging::{
         AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, DirectLineAuthority,
         DirectPairAllocation, ReferencePositions, ResolvedStream, SendActor, SendCapability,
@@ -290,8 +290,8 @@ mod tests {
     };
     use silverhand_backend_core::{
         foundation::cli_invoke_audit::CliStaleResolutionReason,
+        foundation::identity::{AgentId, DaemonInstanceId},
         host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration},
-        identity::{AgentId, DaemonInstanceId},
         messaging::ThreadRootId,
     };
 

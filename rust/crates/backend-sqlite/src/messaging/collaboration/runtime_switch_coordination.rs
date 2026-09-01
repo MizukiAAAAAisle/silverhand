@@ -15,9 +15,9 @@
 //! (`created_at >= ?`, in-flight rows INCLUDED, distinct ids ordered by id).
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId},
     foundation::persistence::PersistenceFailure,
     host_runtime::agent_runtime_switch::SwitchConversationCoordination,
-    identity::{AgentId, ConversationId},
 };
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
@@ -116,7 +116,7 @@ impl SwitchConversationCoordination for SqliteSwitchConversationCoordination {
 
 #[cfg(test)]
 mod tests {
-    use silverhand_backend_core::identity::{AgentId, ConversationId};
+    use silverhand_backend_core::foundation::identity::{AgentId, ConversationId};
     use sqlx::{Connection, Executor, SqliteConnection};
 
     use super::*;

@@ -12,6 +12,7 @@ use std::{
 };
 
 use silverhand_backend_core::{
+    foundation::identity::HostId,
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeCustodyPort, RuntimeFinalStatus, RuntimePrincipal, RuntimeScope,
@@ -23,7 +24,6 @@ use silverhand_backend_core::{
         lifecycle::{HostLifecycleStatus, lifecycle_status},
         read::ComputerReadModel,
     },
-    identity::HostId,
     messaging::collaboration::{
         BoundRuntimeControlSeat, ClearSessionOutcome, ClearSessionProviderRefusal,
         HardStopRuntimeOutcome, HardStopRuntimeProviderRefusal, RuntimeControlPort,
@@ -706,7 +706,9 @@ pub(crate) enum ClearDispatchOutcome {
 
 #[cfg(test)]
 mod tests {
-    use silverhand_backend_core::identity::{AgentId, ConversationId, DaemonInstanceId};
+    use silverhand_backend_core::foundation::identity::{
+        AgentId, ConversationId, DaemonInstanceId,
+    };
 
     use super::*;
 

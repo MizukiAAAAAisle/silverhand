@@ -2,7 +2,7 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
-use silverhand_backend_core::identity::UserId;
+use silverhand_backend_core::foundation::identity::UserId;
 use silverhand_backend_server::messaging::collaboration::attention_projection;
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::Connection;

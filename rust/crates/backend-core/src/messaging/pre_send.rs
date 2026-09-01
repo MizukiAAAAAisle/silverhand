@@ -5,7 +5,7 @@
 
 use std::{error::Error, future::Future};
 
-use crate::identity::{AgentId, ConversationId, UserId};
+use crate::foundation::identity::{AgentId, ConversationId, UserId};
 
 use super::ThreadRootId;
 

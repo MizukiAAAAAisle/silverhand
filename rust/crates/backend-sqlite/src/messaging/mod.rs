@@ -19,8 +19,8 @@ use std::{
 use std::collections::HashSet;
 
 use silverhand_backend_core::agent_creation::OnboardingInboxEnsure;
+use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-use silverhand_backend_core::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 use silverhand_backend_core::identity_access::agents::session_scope::AgentSessionScope;
 use silverhand_backend_core::messaging::{
     self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationRefusal,

@@ -3,8 +3,8 @@
 use std::collections::{HashMap, HashSet};
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, UserId},
     messaging::{
         AttachmentId, FromKind, MessageAuthor, MessageId, MessageSeq, PrincipalIdentity,
         ThreadRootId,

@@ -8,7 +8,7 @@
 //! does not audit it, and a peer agent never does.
 
 use crate::{
-    identity::{Principal, UserId},
+    foundation::identity::{Principal, UserId},
     identity_access::capability::decision::Decision,
 };
 
@@ -92,7 +92,7 @@ pub fn can_audit_agent_conversation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::AgentId;
+    use crate::foundation::identity::AgentId;
 
     fn user(id: &str) -> UserId {
         UserId::parse(id).expect("user id")

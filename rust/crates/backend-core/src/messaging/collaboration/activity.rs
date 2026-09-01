@@ -10,7 +10,7 @@ use std::{cmp::Ordering, error::Error, future::Future};
 
 use crate::{
     direct_pair_read::DirectPairCounterpart,
-    identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     messaging::{MessageAuthor, MessageId, NotificationId, ThreadRootId},
 };
 

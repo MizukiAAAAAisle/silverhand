@@ -17,7 +17,7 @@ use axum::{
 };
 use serde_json::json;
 use silverhand_backend_core::{
-    identity::{AgentId, UserId},
+    foundation::identity::{AgentId, UserId},
     messaging::{
         DirectLineAuthority, SendActor, SendDestination, SendMessageOutcome, SendMessageUnitOfWork,
         collaboration::direct_pair_initiation::{

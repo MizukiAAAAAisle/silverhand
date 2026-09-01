@@ -34,8 +34,8 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
-    identity::UserId,
     identity_access::user_identity::{
         UserChangedAnnounce, UserChangedSink, UserProfileRead, UserRecord,
     },

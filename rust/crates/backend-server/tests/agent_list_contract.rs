@@ -24,7 +24,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::{Value, json};
-use silverhand_backend_core::identity::UserId;
+use silverhand_backend_core::foundation::identity::UserId;
 use silverhand_backend_server::host_agent::agent_list::router;
 use silverhand_backend_sqlite::agent_list_read::SqliteAgentListColdRead;
 use sqlx::{Connection, Executor};

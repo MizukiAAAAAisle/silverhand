@@ -32,7 +32,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    identity::{AgentId, Principal, UserId},
+    foundation::identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     identity_access::capability::{
         agent_authority::{AgentAuthority, can_edit_agent},

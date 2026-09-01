@@ -8,8 +8,8 @@
 use std::{error::Error, future::Future};
 
 use crate::{
+    foundation::identity::HostId,
     host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
-    identity::HostId,
 };
 
 /// The exact runtime seat an already-admitted caller wants stopped.
@@ -73,7 +73,7 @@ pub trait ScopeRuntimeStopPort: Clone + Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::{AgentId, ConversationId};
+    use crate::foundation::identity::{AgentId, ConversationId};
 
     #[test]
     fn target_preserves_an_agent_slot_without_an_ambient_conversation() {

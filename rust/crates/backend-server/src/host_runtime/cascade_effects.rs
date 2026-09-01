@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 
 use silverhand_backend_core::{
     foundation::blob_store::{BlobStorageKey, BlobStore, StorageKind, StoredBlob},
+    foundation::identity::{AgentId, HostId},
     host_runtime::aftermath::CustodyEffectFailure,
-    identity::{AgentId, HostId},
     teardown::{
         agent_delete_resume::{AgentDeletionFence, AgentDeletionResidue, QuiescePurgeFailure},
         computer_delete::ComputerCascadeEffects,

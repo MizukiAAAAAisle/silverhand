@@ -6,7 +6,7 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use silverhand_backend_core::{
-    identity::AgentId,
+    foundation::identity::AgentId,
     teardown::intent::{BeginDeletion, begin_agent_deletion},
 };
 use silverhand_backend_server::{
@@ -652,8 +652,8 @@ async fn prepared_residual_faces_share_one_drained_cli_audit_owner() {
     };
 
     use silverhand_backend_core::{
+        foundation::identity::{ConversationId, DaemonInstanceId},
         host_runtime::runtime_credential::RuntimeScope,
-        identity::{ConversationId, DaemonInstanceId},
     };
     use silverhand_backend_server::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
@@ -1132,7 +1132,7 @@ async fn post_bind_startup_failure_closes_writers_and_leaves_no_token() {
 /// owned and tested by the filesystem sink; this proves the composition WIRING.
 #[tokio::test]
 async fn prepare_wires_a_recording_agent_audit_sink_that_persists_a_line() {
-    use silverhand_backend_core::identity::UserId;
+    use silverhand_backend_core::foundation::identity::UserId;
     use silverhand_backend_core::identity_access::agent_audit_read::{
         AgentAuditEvent, AgentAuditSink,
     };
@@ -1231,7 +1231,7 @@ async fn the_two_audit_sinks_write_disjoint_prefixed_streams() {
     use silverhand_backend_core::foundation::cli_preflight_audit::{
         CliPreflightAuditSink, CliPreflightFailure,
     };
-    use silverhand_backend_core::identity::UserId;
+    use silverhand_backend_core::foundation::identity::UserId;
     use silverhand_backend_core::identity_access::agent_audit_read::{
         AgentAuditEvent, AgentAuditSink,
     };
@@ -3848,8 +3848,8 @@ async fn the_eighteen_convergence_keys_dispatch_after_real_authentication() {
     };
 
     use silverhand_backend_core::{
+        foundation::identity::{ConversationId, DaemonInstanceId},
         host_runtime::runtime_credential::RuntimeScope,
-        identity::{ConversationId, DaemonInstanceId},
     };
     use silverhand_backend_server::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
@@ -4774,8 +4774,8 @@ async fn the_composition_internal_self_scope_family_reaches_and_effects_over_one
     };
 
     use silverhand_backend_core::{
+        foundation::identity::{ConversationId, DaemonInstanceId},
         host_runtime::runtime_credential::RuntimeScope,
-        identity::{ConversationId, DaemonInstanceId},
     };
     use silverhand_backend_server::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
@@ -5216,8 +5216,8 @@ async fn the_composition_internal_profile_mcp_family_reaches_the_daemon_wire() {
     };
 
     use silverhand_backend_core::{
+        foundation::identity::{ConversationId, DaemonInstanceId},
         host_runtime::runtime_credential::RuntimeScope,
-        identity::{ConversationId, DaemonInstanceId},
     };
     use silverhand_backend_server::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
@@ -8208,7 +8208,7 @@ mod channel_directory_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        identity::{ConversationId, UserId, WorkspaceId},
+        foundation::identity::{ConversationId, UserId, WorkspaceId},
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         messaging::collaboration::{
             channel_directory::{
@@ -8430,7 +8430,7 @@ mod runtime_activity_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        identity::{AgentId, ConversationId, UserId, WorkspaceId},
+        foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         messaging::collaboration::{
             activity::{ActivityList, ActivityReadModel},
@@ -8712,7 +8712,7 @@ mod message_nav_search_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        identity::{ConversationId, UserId},
+        foundation::identity::{ConversationId, UserId},
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         messaging::collaboration::{
             conversation_message_window::{
@@ -9002,7 +9002,7 @@ mod unread_attention_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
-        identity::{ConversationId, UserId, WorkspaceId},
+        foundation::identity::{ConversationId, UserId, WorkspaceId},
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
         messaging::collaboration::{
             attention_projection::{
@@ -9234,9 +9234,9 @@ mod host_resources_activation {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use silverhand_backend_core::{
+        foundation::identity::HostId,
         foundation::persistence::PersistenceFailure,
         host_runtime::host_resources_read::{HostResourcesFacts, HostResourcesReadModel},
-        identity::HostId,
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
@@ -9511,8 +9511,8 @@ where
 mod presence_composition {
     use silverhand_backend_core::{
         cold_read::presence::{LastSeenAt, UserPresenceFacts},
+        foundation::identity::UserId,
         foundation::persistence::PersistenceFailure,
-        identity::UserId,
         policy::presence_grace::PresenceFact,
         viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
         viewer_read_model::user_presence_last_seen::LastSeenSink,

@@ -16,7 +16,7 @@
 //!
 //! ```compile_fail
 //! use silverhand_backend_core::{
-//!     identity::{AgentId, ConversationId},
+//!     foundation::identity::{AgentId, ConversationId},
 //!     messaging::collaboration::stale_message_resolution::{
 //!         BoundStaleMessageResolutionAdmission, StaleMessageResolutionAdmissionFact,
 //!     },
@@ -32,7 +32,7 @@
 //!
 //! ```
 //! use silverhand_backend_core::{
-//!     identity::{AgentId, ConversationId},
+//!     foundation::identity::{AgentId, ConversationId},
 //!     messaging::collaboration::stale_message_resolution::StaleMessageResolutionAdmissionFact,
 //! };
 //! let agent = AgentId::parse("agent-1").unwrap();
@@ -45,7 +45,7 @@
 
 use std::{error::Error, future::Future};
 
-use crate::identity::{AgentId, ConversationId};
+use crate::foundation::identity::{AgentId, ConversationId};
 
 /// Consumer port for the one admission question this operation asks.
 ///

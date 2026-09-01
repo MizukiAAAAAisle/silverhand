@@ -24,8 +24,8 @@ use std::future::Future;
 
 use crate::foundation::wire_number::JsSafeInteger;
 use crate::{
+    foundation::identity::{AgentId, HostId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, HostId},
 };
 
 /// The persisted routing and deletion fact for one profile-MCP operation.

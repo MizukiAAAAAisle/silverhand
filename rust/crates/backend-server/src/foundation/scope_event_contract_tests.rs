@@ -18,12 +18,14 @@ use silverhand_backend_core::messaging::collaboration::notification::{
 use silverhand_backend_core::{
     direct_pair_read::DirectPairReadModel,
     foundation::blob_store::{BlobStorageKey, StorageKind, StoredBlob},
+    foundation::identity::{
+        AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId,
+    },
     foundation::persistence::PersistenceFailure,
     foundation::scope_event::{AuthorizeEventScope, EventScope},
     host_runtime::agent_availability_read::AgentAvailabilityReadModel,
     host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
     host_runtime::{aftermath::AgentAvailabilityAnnouncer, agent_roster::ComputerAgentsReadPort},
-    identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId},
     identity_access::access::{WorkspaceHumanAudienceReadPort, WorkspaceRole},
     identity_access::auth::{AuthenticateHumanSession, SessionBearer},
     identity_access::user_identity::UserChangedSink,
@@ -565,7 +567,8 @@ fn direct_pair_router(
         agent: agent(),
         custody: RuntimeCustody::new(
             RuntimeGeneration::new(1).unwrap(),
-            silverhand_backend_core::identity::DaemonInstanceId::parse("daemon-1").unwrap(),
+            silverhand_backend_core::foundation::identity::DaemonInstanceId::parse("daemon-1")
+                .unwrap(),
         ),
     }))
 }
@@ -4802,7 +4805,7 @@ async fn one_enrollment_leaves_a_durable_row_and_a_live_frame_through_the_authen
             &store,
             &hub.workspace_membership_publisher(),
             &FixedClock(JOIN_MS),
-            &silverhand_backend_core::identity::Principal::Human {
+            &silverhand_backend_core::foundation::identity::Principal::Human {
                 user_id: UserId::parse("admin-1").unwrap(),
             },
             WorkspaceId::parse("workspace-1").unwrap(),

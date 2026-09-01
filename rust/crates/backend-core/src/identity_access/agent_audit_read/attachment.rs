@@ -14,7 +14,8 @@
 //! store never touched.
 
 use crate::{
-    identity::ConversationId, identity_access::capability::agent_audit::AuditedConversation,
+    foundation::identity::ConversationId,
+    identity_access::capability::agent_audit::AuditedConversation,
     messaging::collaboration::attachment::AttachmentRecord,
 };
 

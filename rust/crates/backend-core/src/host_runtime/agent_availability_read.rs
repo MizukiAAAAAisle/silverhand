@@ -29,8 +29,8 @@ use std::future::Future;
 
 use crate::{
     cold_read::availability::{AgentAvailabilityFacts, HostReachabilityFacts},
+    foundation::identity::{AgentId, HostId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, HostId},
     identity_access::capability::agent_view::AgentVisibility,
 };
 

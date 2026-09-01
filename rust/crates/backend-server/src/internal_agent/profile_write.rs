@@ -43,8 +43,8 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::identity::AgentId,
     host_runtime::runtime_credential::RuntimePrincipal,
-    identity::AgentId,
     identity_access::agent_avatar::{AgentAvatarBlobPointer, AgentAvatarBlobStore},
     identity_access::agent_detail_read::AgentDetailReadModel,
     identity_access::agent_profile_read::{
@@ -551,11 +551,11 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::identity::{DaemonInstanceId, UserId},
         foundation::persistence::PersistenceFailure,
         host_runtime::runtime_credential::{
             RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
         },
-        identity::{DaemonInstanceId, UserId},
         identity_access::agent_avatar::{
             AgentAvatarBlobRead, AgentAvatarRow, OwnedAgentAvatarBlob,
         },

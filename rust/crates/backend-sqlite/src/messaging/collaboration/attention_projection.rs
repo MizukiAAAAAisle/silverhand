@@ -8,8 +8,8 @@ use crate::{
     },
 };
 use silverhand_backend_core::{
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{ConversationId, UserId, WorkspaceId},
     messaging::collaboration::{
         attention_preference::ChannelAttentionMode,
         attention_projection::{

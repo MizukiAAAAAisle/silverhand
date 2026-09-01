@@ -1,8 +1,8 @@
 //! One-snapshot SQLite projection for `GET /api/conversations/:id/unread`.
 
 use silverhand_backend_core::{
+    foundation::identity::{ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{ConversationId, UserId},
     messaging::collaboration::conversation_unread::{
         ConversationUnread, ConversationUnreadReadPort, ConversationUnreadRefusal, StreamUnread,
         ThreadUnread, UnreadCount,

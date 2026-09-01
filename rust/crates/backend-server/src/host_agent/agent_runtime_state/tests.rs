@@ -21,6 +21,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
     foundation::persistence::PersistenceFailure,
     host_runtime::agent_runtime_state_read::{
         AgentRuntimeStateFacts, AgentRuntimeStateReadModel, RuntimeParticipationFact,
@@ -31,7 +32,6 @@ use silverhand_backend_core::{
         RuntimePrincipal, RuntimeScope,
     },
     host_runtime::runtime_event::RuntimeObservedStatus,
-    identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
     identity_access::agent_lifecycle::MaterializationStatus,
     messaging::collaboration::conversation_ref::ConversationRosterPolicy,
 };

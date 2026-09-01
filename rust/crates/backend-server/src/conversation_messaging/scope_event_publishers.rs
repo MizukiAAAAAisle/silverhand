@@ -2,8 +2,8 @@
 
 use serde_json::json;
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::scope_event::EventScope,
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{
         CommittedMessageView, DirectPairOpenedFact, DirectPairOpenedPort, PrincipalIdentity,
         collaboration::{

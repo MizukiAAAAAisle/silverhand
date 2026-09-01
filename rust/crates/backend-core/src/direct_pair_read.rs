@@ -9,8 +9,8 @@
 use std::future::Future;
 
 use crate::{
+    foundation::identity::{ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{ConversationId, UserId},
     identity_access::agents::runtime::RuntimeKind,
     messaging::{ActiveAuthor, AvatarRevision, MessageAuthor, PrincipalIdentity},
 };
@@ -90,7 +90,7 @@ pub enum DirectPairCounterpart {
 
 impl DirectPairCounterpart {
     pub fn active_agent(
-        id: crate::identity::AgentId,
+        id: crate::foundation::identity::AgentId,
         name: String,
         display_name: String,
         avatar: Option<AvatarRevision>,

@@ -1,5 +1,5 @@
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     messaging::{
         NotificationId,
         collaboration::notification::{
@@ -67,7 +67,7 @@ async fn viewer_read_and_atomic_clear_return_the_marked_count() {
         .clear(
             viewer.clone(),
             NotificationClearSelector::Workspace(
-                silverhand_backend_core::identity::WorkspaceId::parse("w1").unwrap(),
+                silverhand_backend_core::foundation::identity::WorkspaceId::parse("w1").unwrap(),
             ),
         )
         .await
@@ -77,7 +77,7 @@ async fn viewer_read_and_atomic_clear_return_the_marked_count() {
         .clear(
             viewer.clone(),
             NotificationClearSelector::Conversation(
-                silverhand_backend_core::identity::ConversationId::parse("c2").unwrap(),
+                silverhand_backend_core::foundation::identity::ConversationId::parse("c2").unwrap(),
             ),
         )
         .await

@@ -18,7 +18,7 @@
 //! this function chooses between them, so the role/ownership rule lives here and
 //! is never copied into a query.
 
-use crate::identity::{AgentId, UserId, WorkspaceId};
+use crate::foundation::identity::{AgentId, UserId, WorkspaceId};
 
 /// Facts about one named workspace, read under a single transaction and bound to
 /// the FULL triple they were read for — the workspace id, the viewing human, and

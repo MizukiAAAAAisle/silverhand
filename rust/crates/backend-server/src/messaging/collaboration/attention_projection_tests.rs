@@ -1,7 +1,7 @@
 use super::*;
 use axum::{body::{Body, to_bytes}, http::Request};
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     messaging::collaboration::{
         attention_preference::ChannelAttentionMode,
         attention_projection::{

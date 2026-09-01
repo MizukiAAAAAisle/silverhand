@@ -23,7 +23,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::Value;
-use silverhand_backend_core::identity::UserId;
+use silverhand_backend_core::foundation::identity::UserId;
 use silverhand_backend_server::workspace_name_availability::{
     self, WORKSPACE_NAME_AVAILABILITY_PATH,
 };

@@ -145,8 +145,8 @@ mod tests {
     use super::super::TaskStoreError;
     use super::*;
     use crate::current_schema;
+    use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, WorkspaceId};
     use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-    use silverhand_backend_core::identity::{AgentId, ConversationId, WorkspaceId};
     use silverhand_backend_core::messaging::task::{
         BoardKey, TaskCandidateFetch, TaskListCandidate, TaskNumber, TaskStatus,
     };

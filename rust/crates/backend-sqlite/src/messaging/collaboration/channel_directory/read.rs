@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::collaboration::channel_directory::{
         ActiveChannelDirectoryPort, ActiveWorkspaceChannelDirectory, ArchivedChannelRow,
         ArchivedSince, ArchivedWorkspaceChannelDirectory, ArchivedWorkspaceChannelDirectoryPort,

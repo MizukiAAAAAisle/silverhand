@@ -4,7 +4,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::Value;
-use silverhand_backend_core::identity::UserId;
+use silverhand_backend_core::foundation::identity::UserId;
 use silverhand_backend_server::messaging::collaboration::conversation_threads;
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};

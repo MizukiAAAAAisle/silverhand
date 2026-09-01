@@ -29,8 +29,8 @@
 use std::future::Future;
 
 use crate::{
+    foundation::identity::{AgentId, HostId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, HostId},
     teardown::{
         contract::{TeardownContractViolation, TeardownFailure, same_agent, same_computer},
         write::AgentTornDown,
@@ -60,7 +60,7 @@ use crate::{
 ///
 /// ```
 /// use silverhand_backend_core::{
-///     identity::{AgentId, HostId},
+///     foundation::identity::{AgentId, HostId},
 ///     teardown::intent::AgentDeletionAttempt,
 /// };
 /// fn parts(attempt: &AgentDeletionAttempt) -> (&AgentId, &HostId, i64) {

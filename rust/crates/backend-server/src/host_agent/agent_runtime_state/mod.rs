@@ -55,6 +55,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, Principal, UserId},
     host_runtime::agent_runtime_state_read::{
         AgentRuntimeStateReadModel, AgentRuntimeStateView, PresentationFocus, RuntimeFocusView,
         RuntimeParticipationView, RuntimeSeatScopeView, RuntimeSeatView,
@@ -62,7 +63,6 @@ use silverhand_backend_core::{
     host_runtime::runtime_credential::{
         AgentSlotPresentationFocusPort, RuntimeCustodyReadPort, RuntimeGeneration, RuntimeScope,
     },
-    identity::{AgentId, Principal, UserId},
     identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 

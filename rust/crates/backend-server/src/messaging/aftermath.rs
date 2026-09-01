@@ -336,7 +336,7 @@ mod tests {
     };
 
     use silverhand_backend_core::{
-        identity::{AgentId, ConversationId},
+        foundation::identity::{AgentId, ConversationId},
         messaging::{MessageId, ParticipantHandle, post_commit::EffectStep},
     };
     use tracing_subscriber::fmt::MakeWriter;

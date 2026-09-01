@@ -36,7 +36,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    identity::{AgentId, Principal, UserId},
+    foundation::identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_view::{VisibleStages, can_view_agent},
@@ -218,8 +218,8 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::identity::{AgentId, UserId},
         foundation::persistence::PersistenceFailure,
-        identity::{AgentId, UserId},
         identity_access::agent_detail_read::{
             AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
         },

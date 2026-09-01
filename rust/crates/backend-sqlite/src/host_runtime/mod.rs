@@ -1,6 +1,7 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::{HostId, UserId},
     foundation::persistence::PersistenceFailure,
     host_runtime::{
         claim::{
@@ -17,7 +18,6 @@ use silverhand_backend_core::{
         read::ComputerReadModel,
         revoke::{RevokeComputerAttempt, RevokeComputerUnitOfWork, RevokedComputer},
     },
-    identity::{HostId, UserId},
 };
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,
@@ -599,6 +599,7 @@ impl ClaimLocalComputerUnitOfWork for SqliteHostRuntimeStore {
 
 #[cfg(test)]
 mod tests {
+    use silverhand_backend_core::foundation::identity::UserId;
     use silverhand_backend_core::host_runtime::{
         claim::{ClaimLocalComputer, LocalClaimRequest},
         computer::ComputerDisplayLabel,
@@ -608,7 +609,6 @@ mod tests {
         read::find_owned_computer,
         revoke::AdmittedRevoke,
     };
-    use silverhand_backend_core::identity::UserId;
     use sqlx::Connection;
     use std::{collections::VecDeque, convert::Infallible, sync::Mutex};
     use tempfile::TempDir;

@@ -29,7 +29,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     identity_access::workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
     identity_access::workspace_face::WorkspaceFace,
     viewer_read_model::viewer_workspace_sort::{ViewerSortState, WORKSPACE_SORT_LIST_KEY},
@@ -205,8 +205,8 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::identity::{UserId, WorkspaceId},
         foundation::persistence::PersistenceFailure,
-        identity::{UserId, WorkspaceId},
         identity_access::workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
         identity_access::workspace_face::WorkspaceFace,
         viewer_read_model::viewer_workspace_sort::{
@@ -283,14 +283,17 @@ mod tests {
                 name: "Agent Home".to_owned(),
                 description: Some("home".to_owned()),
                 owner_agent_id: Some(
-                    silverhand_backend_core::identity::AgentId::parse("agent-1").unwrap(),
+                    silverhand_backend_core::foundation::identity::AgentId::parse("agent-1")
+                        .unwrap(),
                 ),
                 owner_user_id: None,
                 dm_channel_id: Some(
-                    silverhand_backend_core::identity::ConversationId::parse("conv-1").unwrap(),
+                    silverhand_backend_core::foundation::identity::ConversationId::parse("conv-1")
+                        .unwrap(),
                 ),
                 dm_channel_ids: vec![
-                    silverhand_backend_core::identity::ConversationId::parse("conv-1").unwrap(),
+                    silverhand_backend_core::foundation::identity::ConversationId::parse("conv-1")
+                        .unwrap(),
                 ],
                 archived_at: Some(999),
                 created_at: 1,

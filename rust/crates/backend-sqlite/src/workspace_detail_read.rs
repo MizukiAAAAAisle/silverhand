@@ -19,8 +19,8 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
     identity_access::workspace_detail_read::{
         WorkspaceDetailForViewer, WorkspaceDetailReadUnitOfWork,
     },

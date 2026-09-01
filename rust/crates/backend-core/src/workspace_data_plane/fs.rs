@@ -24,8 +24,8 @@
 
 use std::future::Future;
 
+use crate::foundation::identity::{AgentId, HostId, WorkspaceId};
 use crate::foundation::wire_number::JsSafeInteger;
-use crate::identity::{AgentId, HostId, WorkspaceId};
 
 /// Whether a tree node is a file or a directory. The wire spells these
 /// `"file"` / `"directory"`; the codec owns that spelling.

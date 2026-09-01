@@ -6,9 +6,9 @@
 
 use serde_json::Value;
 use silverhand_backend_core::{
+    foundation::identity::{ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
     foundation::wire_number::JsSafeInteger,
-    identity::{ConversationId, UserId},
     messaging::{
         AttachmentId, PrincipalIdentity,
         collaboration::{

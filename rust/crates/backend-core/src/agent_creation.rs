@@ -50,6 +50,7 @@ use crate::{
         ReserveAgentInput, ReserveOutcome, find_idempotent_reservation, home_workspace_id_for,
         provision_and_activate, reopen_failed_materialization, reserve_agent,
     },
+    foundation::identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
     foundation::name_canonicalization::is_ecmascript_trim_whitespace,
     foundation::persistence::PersistenceFailure,
     host_runtime::agent_materialize::{
@@ -60,7 +61,6 @@ use crate::{
         lifecycle::{HostLifecycleStatus, lifecycle_status},
         read::ComputerReadModel,
     },
-    identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::agents::{
         runtime::RuntimeKind, runtime_capability::runtime_default_model,

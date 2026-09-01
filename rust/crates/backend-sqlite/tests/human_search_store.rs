@@ -1,5 +1,5 @@
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId},
+    foundation::identity::{ConversationId, UserId},
     messaging::{
         MessageId, PrincipalIdentity,
         collaboration::human_search::{

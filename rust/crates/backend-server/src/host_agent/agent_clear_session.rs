@@ -34,7 +34,7 @@ use axum::{
 use serde::Serialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    identity::{AgentId, Principal, UserId},
+    foundation::identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     identity_access::capability::agent_view::{VisibleStages, can_view_agent},
     messaging::collaboration::{
@@ -261,8 +261,8 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::identity::{AgentId, UserId},
         foundation::persistence::PersistenceFailure,
-        identity::{AgentId, UserId},
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
         messaging::collaboration::{
@@ -358,7 +358,7 @@ mod tests {
 
         async fn conversation_exists(
             &mut self,
-            _conversation: &silverhand_backend_core::identity::ConversationId,
+            _conversation: &silverhand_backend_core::foundation::identity::ConversationId,
         ) -> Result<bool, Self::Error> {
             unreachable!("the agent ladder performs zero conversation reads")
         }
@@ -369,7 +369,7 @@ mod tests {
 
         async fn agent_is_member(
             &mut self,
-            _conversation: &silverhand_backend_core::identity::ConversationId,
+            _conversation: &silverhand_backend_core::foundation::identity::ConversationId,
             _agent: &AgentId,
         ) -> Result<bool, Self::Error> {
             unreachable!("the agent ladder performs zero conversation reads")
@@ -377,7 +377,7 @@ mod tests {
 
         async fn actor_may_post(
             &mut self,
-            _conversation: &silverhand_backend_core::identity::ConversationId,
+            _conversation: &silverhand_backend_core::foundation::identity::ConversationId,
             _actor: &UserId,
         ) -> Result<bool, Self::Error> {
             unreachable!("the agent ladder performs zero conversation reads")

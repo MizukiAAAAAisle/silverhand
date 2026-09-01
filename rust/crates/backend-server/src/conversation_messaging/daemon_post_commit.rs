@@ -2,9 +2,9 @@
 
 use silverhand_backend_core::{
     agent_creation::OnboardingInboxEnsure,
+    foundation::identity::{AgentId, ConversationId},
     host_runtime::custody::HostCredentialLookup,
     host_runtime::runtime_event::DaemonEventDurablePort,
-    identity::{AgentId, ConversationId},
     messaging::{
         CreatedMessage, MessageId,
         collaboration::workspace_rename_messaging::{

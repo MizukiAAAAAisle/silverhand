@@ -9,7 +9,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId},
+    foundation::identity::{ConversationId, UserId},
     messaging::{
         MessageAuthor, MessageId, MessageSeq, ThreadRootId,
         collaboration::conversation_threads::{

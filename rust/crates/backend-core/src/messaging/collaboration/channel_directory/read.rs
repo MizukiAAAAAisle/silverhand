@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::HashSet, error::Error, future::Future};
 
-use crate::identity::{AgentId, ConversationId, UserId, WorkspaceId};
+use crate::foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChannelVisibility {
@@ -113,7 +113,7 @@ impl DirectoryWorkspaceKind {
 /// `DirectoryWorkspaceKind::agent_home` through the public enum arm.
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::{identity::AgentId, messaging::collaboration::channel_directory::{AgentHomeWorkspace, DirectoryWorkspaceKind}};
+/// use silverhand_backend_core::{foundation::identity::AgentId, messaging::collaboration::channel_directory::{AgentHomeWorkspace, DirectoryWorkspaceKind}};
 /// let forged = DirectoryWorkspaceKind::AgentHome(AgentHomeWorkspace {
 ///     owner: AgentId::parse("a").unwrap(), owner_name: String::new()
 /// });

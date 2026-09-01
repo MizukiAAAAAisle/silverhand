@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     messaging::{
         MessageSeq, NotificationId, ThreadRootId,
         collaboration::{

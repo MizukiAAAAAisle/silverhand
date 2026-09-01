@@ -4,6 +4,9 @@ use std::{collections::HashSet, path::Path, time::Duration};
 
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::identity::{
+        AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId,
+    },
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     host_runtime::runtime_event::{
@@ -15,7 +18,6 @@ use silverhand_backend_core::{
         RuntimeStatusCommitResult, RuntimeStatusTarget, RuntimeToolCallInputCommitResult,
         StampRuntimePresence, UpsertRuntimeTextActivity,
     },
-    identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId},
     identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
     messaging::{
         FromKind, MessageContent, MessageId, ReferencePositions,
@@ -1868,7 +1870,7 @@ async fn principal_is_current(
         .try_get("claimed_by_daemon_instance_id")
         .map_err(persistence)?;
     let daemon = daemon
-        .map(silverhand_backend_core::identity::DaemonInstanceId::parse)
+        .map(silverhand_backend_core::foundation::identity::DaemonInstanceId::parse)
         .transpose()
         .map_err(PersistenceFailure::from_source)?;
     Ok(generation == principal.custody().generation()
@@ -2682,7 +2684,7 @@ mod presentation_tests {
 #[cfg(test)]
 mod runtime_control_seat_tests {
     use silverhand_backend_core::{
-        identity::UserId,
+        foundation::identity::UserId,
         messaging::collaboration::{RuntimeControlSeatPort, seal_clear_session_commit},
     };
     use sqlx::{Connection, Executor};

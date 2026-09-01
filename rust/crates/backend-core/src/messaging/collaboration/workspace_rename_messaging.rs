@@ -8,7 +8,7 @@
 use std::{error::Error, future::Future};
 
 use crate::{
-    identity::{AgentId, ConversationId, WorkspaceId},
+    foundation::identity::{AgentId, ConversationId, WorkspaceId},
     messaging::{MessageId, MessageSeq, markdown::inline_code},
 };
 

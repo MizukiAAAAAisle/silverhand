@@ -7,7 +7,7 @@ use axum::{
 };
 use silverhand_backend_core::{
     foundation::blob_store::BlobStore,
-    identity::{AgentId, Principal, UserId},
+    foundation::identity::{AgentId, Principal, UserId},
     identity_access::agent_audit_read::{AgentAuditEvent, AgentAuditReadModel, AgentAuditSink},
 };
 

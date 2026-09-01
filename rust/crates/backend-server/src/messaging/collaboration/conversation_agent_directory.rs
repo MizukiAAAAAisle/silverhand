@@ -11,7 +11,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId},
+    foundation::identity::{ConversationId, UserId},
     messaging::collaboration::conversation_agent_directory::{
         BoundConversationAgentDirectory, ConversationAgentDirectoryReadPort,
         ConversationAgentDirectoryRefusal,
@@ -113,7 +113,7 @@ mod tests {
     };
     use serde_json::Value;
     use silverhand_backend_core::{
-        identity::{AgentId, ConversationId, UserId},
+        foundation::identity::{AgentId, ConversationId, UserId},
         messaging::collaboration::conversation_agent_directory::{
             ConversationAgentDirectory, ConversationAgentDirectoryReadPort,
             ConversationAgentDirectoryRefusal, ConversationAgentMember, JoinedAt,

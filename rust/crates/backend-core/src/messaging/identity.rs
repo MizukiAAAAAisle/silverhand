@@ -9,7 +9,7 @@
 //! identity format those ports are spent on.
 
 use super::environment::{self, EnvironmentUnavailable, SendEntropy};
-use crate::identity::{AgentId, ConversationId};
+use crate::foundation::identity::{AgentId, ConversationId};
 
 /// A message identity as the application handles it: opaque, and never parsed for
 /// meaning once minted.

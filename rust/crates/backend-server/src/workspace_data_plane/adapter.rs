@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use silverhand_backend_core::{
-    identity::{AgentId, HostId, WorkspaceId},
+    foundation::identity::{AgentId, HostId, WorkspaceId},
     workspace_data_plane::{
         WorkspaceDataPlane, WorkspaceFileRead, WorkspaceFsFault, WorkspaceFsFaultCode,
         WorkspaceTree,

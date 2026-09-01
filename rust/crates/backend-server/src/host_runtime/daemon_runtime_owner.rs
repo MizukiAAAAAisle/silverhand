@@ -12,6 +12,7 @@ use std::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeEventTime, RuntimeFinalStatus, RuntimeGeneration, RuntimePrincipal,
@@ -20,7 +21,6 @@ use silverhand_backend_core::{
     host_runtime::runtime_event::{
         CommitRuntimeConsumed, DaemonEventDurablePort, RuntimeEventAdmission,
     },
-    identity::{AgentId, ConversationId, DaemonInstanceId},
     runtime_delivery::{
         DeliveryLeaseOwner, InboxDeliveryId, RuntimeDeliveryFailureReason, RuntimeDispatchReadPort,
         RuntimeDispatchTarget, RuntimeInboxCustodyPort,
@@ -396,8 +396,8 @@ impl<C, D> DaemonRuntimeOwner<C, D> {
 
     pub(crate) fn publish_host_connection_changed(
         &self,
-        owner: &silverhand_backend_core::identity::UserId,
-        host: &silverhand_backend_core::identity::HostId,
+        owner: &silverhand_backend_core::foundation::identity::UserId,
+        host: &silverhand_backend_core::foundation::identity::HostId,
     ) -> Result<(), DaemonRuntimeEventError> {
         self.events.publish_host_connection_changed(owner, host)
     }

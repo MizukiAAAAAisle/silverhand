@@ -19,7 +19,7 @@
 //!    to `None` because the row's own `channel_id` is what seals it.
 
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, Principal, UserId},
+    foundation::identity::{AgentId, ConversationId, Principal, UserId},
     identity_access::agent_audit_read::AgentAuditReadModel,
     messaging::{
         AttachmentId,

@@ -11,8 +11,8 @@
 //! source type to translate.
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId},
     messaging::collaboration::stale_message_resolution::{
         StaleMessageResolutionAdmissionFact, StaleMessageResolutionAdmissionPort,
         StaleMessageResolutionAdmissionRefusal,

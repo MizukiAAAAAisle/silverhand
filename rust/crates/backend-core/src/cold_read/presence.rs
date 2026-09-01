@@ -34,7 +34,7 @@
 
 use thiserror::Error;
 
-use crate::identity::UserId;
+use crate::foundation::identity::UserId;
 
 /// The largest integer an IEEE-754 double — the JavaScript `number` the wire
 /// contract carries — represents exactly: `2^53 - 1`. A stored stamp beyond it

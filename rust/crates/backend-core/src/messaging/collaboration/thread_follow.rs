@@ -8,7 +8,7 @@
 use std::{collections::HashSet, error::Error, future::Future};
 
 use crate::{
-    identity::{AgentId, ConversationId, UserId},
+    foundation::identity::{AgentId, ConversationId, UserId},
     messaging::ThreadRootId,
 };
 

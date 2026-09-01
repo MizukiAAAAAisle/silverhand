@@ -32,7 +32,7 @@
 
 use std::num::IntErrorKind;
 
-use silverhand_backend_core::identity::{AgentId, ConversationId, WorkspaceId};
+use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, WorkspaceId};
 use silverhand_backend_core::messaging::task::{TaskNumber, TaskStatus};
 
 /// The largest page a caller may ask for — the parity of the TS `LimitSchema`'s `.max(500)`.

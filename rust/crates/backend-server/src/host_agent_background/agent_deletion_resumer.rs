@@ -59,8 +59,8 @@ use std::{
 };
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, HostId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, HostId},
     teardown::{
         agent_delete_resume::{
             AgentDeletionFence, AgentDeletionResidue, ResidueFault, ResumeOutcome, RetryReason,

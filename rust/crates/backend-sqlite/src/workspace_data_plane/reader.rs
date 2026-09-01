@@ -31,8 +31,8 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, UserId, WorkspaceId},
     workspace_data_plane::{AgentWorkspaceScopeFacts, AgentWorkspaceScopeRead},
 };
 use sqlx::{

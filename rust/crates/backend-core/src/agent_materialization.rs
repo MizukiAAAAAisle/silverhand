@@ -47,12 +47,12 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::identity::AgentId,
+    foundation::identity::ConversationId,
+    foundation::identity::HostId,
+    foundation::identity::UserId,
+    foundation::identity::WorkspaceId,
     foundation::persistence::PersistenceFailure,
-    identity::AgentId,
-    identity::ConversationId,
-    identity::HostId,
-    identity::UserId,
-    identity::WorkspaceId,
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::agents::runtime::RuntimeKind,
     identity_access::agents::session_scope::AgentSessionScope,

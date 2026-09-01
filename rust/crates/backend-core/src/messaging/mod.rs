@@ -67,7 +67,7 @@ mod identity;
 mod pre_send;
 mod principal;
 
-pub(crate) use crate::identity::{AgentId, ConversationId, UserId, WorkspaceId};
+pub(crate) use crate::foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 
 pub mod agent_onboarding;
 pub mod attachments;

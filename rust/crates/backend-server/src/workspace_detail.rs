@@ -30,7 +30,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    identity::{UserId, WorkspaceId},
+    foundation::identity::{UserId, WorkspaceId},
     identity_access::workspace_detail_read::{
         AuthorizedWorkspaceFace, WorkspaceDetailReadUnitOfWork, WorkspaceView,
         classify_workspace_view,

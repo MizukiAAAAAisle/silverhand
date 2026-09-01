@@ -16,7 +16,7 @@ use axum::{
     routing::get,
 };
 use serde_json::{Map, Value, json};
-use silverhand_backend_core::identity::{ConversationId, UserId};
+use silverhand_backend_core::foundation::identity::{ConversationId, UserId};
 
 use super::json_body::{BodyRead, payload_too_large, read_body};
 

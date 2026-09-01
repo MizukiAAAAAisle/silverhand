@@ -17,7 +17,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use silverhand_backend_core::identity::{Principal, UserId, WorkspaceId};
+use silverhand_backend_core::foundation::identity::{Principal, UserId, WorkspaceId};
 use silverhand_backend_core::identity_access::access::{
     AddHumanMemberError, EnrollmentClock, HumanEnrollmentOutcome, HumanEnrollmentReadPort,
     ViewerAnnounce, ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceRole,
@@ -336,7 +336,7 @@ async fn an_agent_actor_is_refused_in_the_lock_and_writes_nothing() {
     let sink = CountingSink::default();
 
     let actor = Principal::Agent {
-        agent_id: silverhand_backend_core::identity::AgentId::parse("agent-x").unwrap(),
+        agent_id: silverhand_backend_core::foundation::identity::AgentId::parse("agent-x").unwrap(),
     };
     let error = enroll(&store, &sink, actor, TARGET).await.unwrap_err();
 

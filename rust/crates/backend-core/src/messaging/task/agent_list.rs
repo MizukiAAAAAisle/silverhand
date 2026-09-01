@@ -42,9 +42,9 @@
 
 use std::future::Future;
 
+use crate::foundation::identity::{AgentId, ConversationId, WorkspaceId};
 use crate::foundation::persistence::PersistenceFailure;
 use crate::host_runtime::runtime_credential::RuntimePrincipal;
-use crate::identity::{AgentId, ConversationId, WorkspaceId};
 
 use super::read::{
     AgentBoardResolver, AgentReadableBoards, AuthorizedTaskBoards, BoardAuthorization,
@@ -199,8 +199,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::foundation::identity::DaemonInstanceId;
     use crate::host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration};
-    use crate::identity::DaemonInstanceId;
     use crate::messaging::task::{BoardResolution, PairKey, ReadableBoard, ResolvedBoard};
 
     /// A configurable driver-free double for the three board-authorization ports. The

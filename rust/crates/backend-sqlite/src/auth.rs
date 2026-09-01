@@ -16,9 +16,9 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
     host_runtime::environment::{EntropySource, OsEntropy},
-    identity::UserId,
     identity_access::auth::{
         SessionAudit, SessionIssue, SessionRevoke, SessionTokenHash, SessionValidation,
         SessionValidationPort,
@@ -254,7 +254,7 @@ fn persistence(error: sqlx::Error) -> PersistenceFailure {
 
 #[derive(Debug, Error)]
 #[error("persisted session user id is invalid")]
-struct InvalidPersistedUserId(#[source] silverhand_backend_core::identity::EmptyUserId);
+struct InvalidPersistedUserId(#[source] silverhand_backend_core::foundation::identity::EmptyUserId);
 
 #[derive(Debug, Error)]
 #[error("authenticated session references a missing user")]

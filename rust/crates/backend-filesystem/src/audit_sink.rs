@@ -853,7 +853,7 @@ mod tests {
         CliInvokeIssues, CliInvokeMethod, CliInvokeRoute,
     };
     use silverhand_backend_core::foundation::cli_preflight_audit::NonNegativeFiniteF64;
-    use silverhand_backend_core::identity::AgentId;
+    use silverhand_backend_core::foundation::identity::AgentId;
     use std::future::Future;
     use std::io;
     use std::pin::Pin;
@@ -1269,7 +1269,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_agent_audit_facade_projects_each_variant_addressably_and_persists() {
-        use silverhand_backend_core::identity::{AgentId, ConversationId, UserId};
+        use silverhand_backend_core::foundation::identity::{AgentId, ConversationId, UserId};
         use silverhand_backend_core::messaging::AttachmentId;
 
         let dir = tempfile::tempdir().unwrap();

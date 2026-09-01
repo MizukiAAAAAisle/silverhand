@@ -35,7 +35,7 @@
 //! avatar blob even when one is present.
 
 use crate::{
-    identity::AgentId,
+    foundation::identity::AgentId,
     identity_access::agent_avatar::{
         AgentAvatarAssignment, AgentAvatarBlobPointer, AgentAvatarBlobStore, AgentAvatarRow,
         OwnedAgentAvatarBlob,

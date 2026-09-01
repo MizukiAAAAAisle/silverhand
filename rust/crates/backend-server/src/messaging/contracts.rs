@@ -17,7 +17,7 @@ use std::{
 
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, UserId},
+    foundation::identity::{AgentId, ConversationId, UserId},
     messaging::{
         AddressedPrincipals, DirectLineAuthority, MessageContent, PrincipalKind, SendActor,
         SendDestination, SendMessage, SendMessageDraft,

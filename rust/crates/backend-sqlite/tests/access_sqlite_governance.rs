@@ -17,7 +17,7 @@
 
 use sqlx::{Connection, SqliteConnection};
 
-use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
+use silverhand_backend_core::foundation::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::identity_access::access::{
     WorkspaceAccessPolicy, WorkspaceGovernance, WorkspaceRole,
 };

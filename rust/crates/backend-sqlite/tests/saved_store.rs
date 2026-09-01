@@ -4,7 +4,7 @@
 //! typed `SavedStoreError`.
 
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     messaging::collaboration::saved::{SavedListQuery, SavedReadPort},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;

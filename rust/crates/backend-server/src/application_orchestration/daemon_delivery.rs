@@ -4,9 +4,9 @@ use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use axum::Router;
 use silverhand_backend_core::{
+    foundation::identity::{ConversationId, HostId, UserId},
     host_runtime::custody::{HostCredentialLookup, VerifyHostTokenFact, verify_host_token},
     host_runtime::runtime_event::DaemonEventDurablePort,
-    identity::{ConversationId, HostId, UserId},
     runtime_delivery::{RuntimeDispatchReadPort, RuntimeInboxCustodyPort},
 };
 
@@ -110,9 +110,11 @@ impl<C, D, H> DaemonDeliveryRuntime<C, D, H> {
     pub(crate) async fn hydrate_run_states_for_test(
         &self,
         host: &str,
-        daemon: &silverhand_backend_core::identity::DaemonInstanceId,
+        daemon: &silverhand_backend_core::foundation::identity::DaemonInstanceId,
         connection_id: &str,
-        active_agents: std::collections::HashSet<silverhand_backend_core::identity::AgentId>,
+        active_agents: std::collections::HashSet<
+            silverhand_backend_core::foundation::identity::AgentId,
+        >,
         runtimes: Vec<crate::daemon_events::HydratedRuntime>,
     ) -> Result<(), DaemonRuntimeEventError>
     where
@@ -200,7 +202,7 @@ where
     pub(crate) async fn start(
         &self,
         conversation: &ConversationId,
-        agent: &silverhand_backend_core::identity::AgentId,
+        agent: &silverhand_backend_core::foundation::identity::AgentId,
     ) -> Result<(), DaemonDeliveryError> {
         self.runtime.start(conversation, agent).await
     }
@@ -208,7 +210,7 @@ where
     pub(crate) async fn start_if_idle(
         &self,
         conversation: &ConversationId,
-        agent: &silverhand_backend_core::identity::AgentId,
+        agent: &silverhand_backend_core::foundation::identity::AgentId,
     ) -> Result<(), DaemonDeliveryError> {
         self.runtime.start_if_idle(conversation, agent).await
     }
@@ -216,7 +218,7 @@ where
     pub(crate) async fn deliver(
         &self,
         conversation: &ConversationId,
-        agent: &silverhand_backend_core::identity::AgentId,
+        agent: &silverhand_backend_core::foundation::identity::AgentId,
     ) -> Result<(), DaemonDeliveryError> {
         self.runtime.deliver(conversation, agent).await
     }
@@ -390,7 +392,7 @@ where
     fn attached(
         &self,
         host: HostId,
-        daemon: silverhand_backend_core::identity::DaemonInstanceId,
+        daemon: silverhand_backend_core::foundation::identity::DaemonInstanceId,
         connection_id: String,
         owner: UserId,
         authority: DaemonConnectionAuthority,

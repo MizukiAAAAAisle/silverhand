@@ -20,8 +20,8 @@ use axum::{
 };
 use serde::Deserialize;
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, UserId},
     host_runtime::runtime_credential::RuntimePrincipal,
-    identity::{AgentId, UserId},
     messaging::MessageId,
     messaging::collaboration::reaction::{
         ReactionAftermath, ReactionChange, ReactionEmoji, ReactionMutation, ReactionMutationPort,
@@ -301,7 +301,7 @@ where
 async fn mutate_agent<M, R, A>(
     state: &Inner<M, R, A>,
     actor: AgentId,
-    source: Option<silverhand_backend_core::identity::ConversationId>,
+    source: Option<silverhand_backend_core::foundation::identity::ConversationId>,
     message: MessageId,
     raw_emoji: String,
     change: ReactionChange,

@@ -2,9 +2,9 @@
 
 use serde_json::json;
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
-    identity::{AgentId, ConversationId, UserId},
     identity_access::agents::session_scope::AgentSessionScope,
     messaging::{
         PrincipalIdentity,

@@ -75,7 +75,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    identity::{AgentId, Principal, UserId},
+    foundation::identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::{
@@ -592,9 +592,9 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        foundation::identity::{AgentId, HostId, UserId},
         foundation::persistence::PersistenceFailure,
         host_runtime::aftermath::CustodyEffectFailure,
-        identity::{AgentId, HostId, UserId},
         identity_access::agent_detail_read::{
             AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
         },

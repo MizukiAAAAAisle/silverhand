@@ -22,7 +22,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::Value;
-use silverhand_backend_core::identity::UserId;
+use silverhand_backend_core::foundation::identity::UserId;
 use silverhand_backend_server::workspaces::{self, WORKSPACES_PATH};
 use silverhand_backend_sqlite::workspace_cold_read::SqliteWorkspaceColdRead;
 use sqlx::{Connection, Executor};

@@ -7,8 +7,8 @@ use std::{
 };
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, ConversationId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, ConversationId, WorkspaceId},
     messaging::{
         SendClock, SendEntropy,
         collaboration::workspace_rename_messaging::{

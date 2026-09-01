@@ -1,4 +1,4 @@
-use silverhand_backend_core::identity::{ConversationId, UserId};
+use silverhand_backend_core::foundation::identity::{ConversationId, UserId};
 use silverhand_backend_sqlite::messaging::{
     MessagingStore, collaboration::conversation_participation::ConversationParticipationRefusal,
 };

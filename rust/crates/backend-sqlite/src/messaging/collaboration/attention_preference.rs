@@ -1,7 +1,7 @@
 use crate::messaging::{HostEnvironment, MessagingStore};
 use silverhand_backend_core::{
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{ConversationId, UserId, WorkspaceId},
     messaging::{
         SendClock,
         collaboration::attention_preference::{

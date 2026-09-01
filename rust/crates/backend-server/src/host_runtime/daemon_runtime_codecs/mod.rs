@@ -2,8 +2,8 @@
 
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::identity::AgentId,
     host_runtime::runtime_credential::RuntimeScope,
-    identity::AgentId,
     runtime_delivery::{RuntimeMember, RuntimePlacement, RuntimeRoster, RuntimeSpawnPlan},
 };
 

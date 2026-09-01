@@ -100,9 +100,9 @@ use silverhand_backend_core::{
         AgentArmProvisioningPort, AgentMaterializationLookup, AgentMaterializationWrite,
         IdempotencyKey,
     },
+    foundation::identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
     host_runtime::agent_materialize::AgentMaterializePort,
     host_runtime::read::ComputerReadModel,
-    identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
     identity_access::agent_detail_read::AgentDetailReadModel,
     identity_access::agent_profile_write::AgentChangedSink,
     identity_access::agents::{
@@ -887,12 +887,12 @@ mod tests {
             IdempotentReservationRow, MaterializationFlipRow, RawProvisionOutcome,
             ReserveAgentInput, ReserveRecord,
         },
+        foundation::identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
         foundation::persistence::PersistenceFailure,
         host_runtime::agent_materialize::{
             AgentMaterializeReceipt, AgentMaterializeRefusal, AgentMaterializeTarget,
         },
         host_runtime::{computer::ComputerRecord, read::ComputerReadModel},
-        identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
         identity_access::agent_detail_read::{
             AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
         },

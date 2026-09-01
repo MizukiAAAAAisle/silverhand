@@ -16,8 +16,8 @@ use axum::{
 };
 use serde_json::Value;
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, UserId},
     identity_access::agent_detail_read::{
         AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
     },

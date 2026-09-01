@@ -42,9 +42,9 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::identity::{AgentId, HostId, UserId},
     foundation::persistence::PersistenceFailure,
     host_runtime::aftermath::{CustodyEffectFailure, DaemonConnectionControl},
-    identity::{AgentId, HostId, UserId},
     identity_access::capability::computer_access::{ComputerAccess, can_access_computer},
     teardown::{
         cascade::{CascadeConsent, CascadeRefused, ComputerLifecycle, hold_computer_lifecycle},
@@ -335,10 +335,10 @@ where
 mod tests {
     use super::*;
     use crate::{
+        foundation::identity::ConversationId,
         host_runtime::computer::{HostKind, ProvisioningSource},
         host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
         host_runtime::runtime_event::RuntimeObservedStatus,
-        identity::ConversationId,
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::computer_access::ComputerOwnershipFacts,
         teardown::{

@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId},
+    foundation::identity::{ConversationId, UserId},
     messaging::{
         ThreadRootId,
         collaboration::thread_follow::{
@@ -264,7 +264,7 @@ mod tests {
     };
     use serde_json::Value;
     use silverhand_backend_core::{
-        identity::AgentId,
+        foundation::identity::AgentId,
         messaging::collaboration::thread_follow::{
             CommittedHumanFollow, CommittedHumanUnfollow, FollowedAt, ThreadFollowChangedFact,
             ThreadFollowPublicationFailure, ThreadFollowerAgent, ThreadFollowerState,

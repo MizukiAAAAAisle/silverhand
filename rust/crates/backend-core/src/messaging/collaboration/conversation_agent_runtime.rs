@@ -6,8 +6,8 @@
 use std::{error::Error, future::Future};
 
 use crate::{
+    foundation::identity::{AgentId, ConversationId, UserId},
     host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
-    identity::{AgentId, ConversationId, UserId},
     messaging::collaboration::runtime_control::CliSessionId,
 };
 

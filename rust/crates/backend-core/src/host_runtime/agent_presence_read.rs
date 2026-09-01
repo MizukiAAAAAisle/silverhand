@@ -27,7 +27,7 @@
 use std::future::Future;
 
 use crate::{
-    foundation::persistence::PersistenceFailure, identity::AgentId,
+    foundation::identity::AgentId, foundation::persistence::PersistenceFailure,
     identity_access::capability::agent_view::AgentVisibility,
     policy::agent_presence::ActivityInstant,
 };
@@ -102,7 +102,7 @@ pub trait AgentPresenceReadModel {
 mod tests {
     use super::*;
     use crate::{
-        identity::AgentId,
+        foundation::identity::AgentId,
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
         policy::agent_presence,

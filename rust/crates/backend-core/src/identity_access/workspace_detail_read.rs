@@ -57,8 +57,8 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::identity::{UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{UserId, WorkspaceId},
     identity_access::workspace_face::WorkspaceFace,
 };
 
@@ -200,7 +200,7 @@ pub trait WorkspaceDetailReadUnitOfWork {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::AgentId;
+    use crate::foundation::identity::AgentId;
 
     fn regular_face() -> WorkspaceFace {
         WorkspaceFace {

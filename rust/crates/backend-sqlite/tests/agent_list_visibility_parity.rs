@@ -27,7 +27,7 @@
 //! gate and is not re-checked here.
 
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::agent_list_read::{AgentListReadModel, ListScope, visible_agents},
     identity_access::capability::agent_view::VisibleStages,

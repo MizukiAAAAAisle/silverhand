@@ -29,10 +29,10 @@ use thiserror::Error;
 
 use super::clock::EnrollmentClock;
 use super::role::{WorkspaceRole, role_governs_workspace};
-use crate::identity::Principal;
+use crate::foundation::identity::Principal;
 use crate::{
+    foundation::identity::{UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{UserId, WorkspaceId},
 };
 
 /// A person's display identity, resolved for the enrollment response. Read
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn an_agent_principal_never_governs_even_with_a_role_fact() {
         let actor = Principal::Agent {
-            agent_id: crate::identity::AgentId::parse("a").unwrap(),
+            agent_id: crate::foundation::identity::AgentId::parse("a").unwrap(),
         };
         assert!(!human_enrollment_authorized(
             &actor,

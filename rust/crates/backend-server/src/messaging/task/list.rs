@@ -32,8 +32,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use silverhand_backend_core::foundation::identity::WorkspaceId;
 use silverhand_backend_core::host_runtime::runtime_credential::RuntimePrincipal;
-use silverhand_backend_core::identity::WorkspaceId;
 use silverhand_backend_core::messaging::task::{
     AgentBoardResolver, AgentReadableBoards, TaskCandidateFetch, TaskCandidateQuery,
     TaskListAccess, TaskListForbidden, TaskParticipationReads, TaskReadCapability,

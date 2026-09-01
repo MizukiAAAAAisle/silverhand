@@ -15,7 +15,7 @@
 
 use std::future::Future;
 
-use crate::{foundation::persistence::PersistenceFailure, identity::UserId};
+use crate::{foundation::identity::UserId, foundation::persistence::PersistenceFailure};
 
 /// What an email resolves to for login: the owning user, and the stored PHC if a
 /// password credential exists. `password_hash` is `None` for a profile-only user

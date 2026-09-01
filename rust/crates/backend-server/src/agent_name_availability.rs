@@ -36,7 +36,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     identity_access::human_auth_flows::HandleNamespaceRead,
     identity_access::participant_handle_availability::{
         ParticipantHandleAvailability, probe_participant_handle,

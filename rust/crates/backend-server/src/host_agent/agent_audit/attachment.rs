@@ -7,7 +7,7 @@ use axum::{
 };
 use silverhand_backend_core::{
     foundation::blob_store::{BlobReadOutcome, BlobStore},
-    identity::{AgentId, ConversationId, Principal, UserId},
+    foundation::identity::{AgentId, ConversationId, Principal, UserId},
     identity_access::agent_audit_read::{AgentAuditEvent, AgentAuditReadModel, AgentAuditSink},
     messaging::AttachmentId,
 };

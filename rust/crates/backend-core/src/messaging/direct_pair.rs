@@ -172,7 +172,7 @@ pub struct DirectPairMintIdentityMismatch;
 mod tests {
     use std::{convert::Infallible, sync::Mutex};
 
-    use crate::identity::{AgentId, UserId};
+    use crate::foundation::identity::{AgentId, UserId};
 
     use super::*;
 

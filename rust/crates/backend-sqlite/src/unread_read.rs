@@ -21,8 +21,8 @@
 use std::{collections::HashMap, path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{ConversationId, UserId, WorkspaceId},
     messaging::{
         MessageId, ThreadRootId,
         unread::{LatestUnread, UnreadAudience, UnreadReadModel, ViewerUnread},

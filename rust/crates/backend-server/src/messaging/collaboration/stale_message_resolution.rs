@@ -19,8 +19,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
     foundation::cli_invoke_audit::CliStaleResolutionReason,
+    foundation::identity::{AgentId, ConversationId},
     host_runtime::runtime_credential::RuntimePrincipal,
-    identity::{AgentId, ConversationId},
     messaging::{
         CapabilityDenied, SendCapability,
         collaboration::stale_message_resolution::{

@@ -9,8 +9,8 @@
 //! be invisible.
 
 use crate::{
+    foundation::identity::{HostId, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{HostId, UserId},
     identity_access::capability::computer_access::{
         ComputerAccess, ComputerAccessHeld, can_access_computer,
     },
@@ -82,7 +82,7 @@ pub trait ComputerReadModel: Clone + Send + Sync + 'static {
 ///         computer::{ComputerRecord, HostKind, ProvisioningSource},
 ///         read::{OwnedComputer, find_owned_computer},
 ///     },
-///     identity::{HostId, UserId},
+///     foundation::identity::{HostId, UserId},
 /// };
 /// let owner = UserId::parse("u1").unwrap();
 /// let record = ComputerRecord {

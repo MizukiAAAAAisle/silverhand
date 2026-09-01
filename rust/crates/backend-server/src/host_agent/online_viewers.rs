@@ -9,7 +9,7 @@
 //! composed over the real liveness authority rather than a second projection.
 
 use silverhand_backend_core::{
-    cold_read::presence::OnlineViewers, identity::UserId,
+    cold_read::presence::OnlineViewers, foundation::identity::UserId,
     viewer_read_model::user_presence_last_seen::LastSeenSink,
 };
 

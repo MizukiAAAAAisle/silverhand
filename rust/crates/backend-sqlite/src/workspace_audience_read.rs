@@ -14,8 +14,8 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::{UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{UserId, WorkspaceId},
     identity_access::access::WorkspaceHumanAudienceReadPort,
 };
 use sqlx::{

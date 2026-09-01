@@ -10,7 +10,7 @@
 //! from an invented one, and authority answers second.
 
 use crate::{
-    identity::{AgentId, Principal, UserId},
+    foundation::identity::{AgentId, Principal, UserId},
     identity_access::capability::decision::Decision,
 };
 

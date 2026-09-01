@@ -510,10 +510,10 @@ mod tests {
     use garde::Validate;
     use serde::Deserialize;
     use silverhand_backend_core::{
+        foundation::identity::{AgentId, DaemonInstanceId},
         host_runtime::runtime_credential::{
             RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
         },
-        identity::{AgentId, DaemonInstanceId},
     };
     use tower::ServiceExt;
 

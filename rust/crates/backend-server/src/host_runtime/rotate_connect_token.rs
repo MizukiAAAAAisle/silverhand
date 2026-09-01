@@ -40,6 +40,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::identity::{HostId, UserId},
     host_runtime::{
         aftermath::DaemonConnectionControl,
         custody::{CredentialIssueRefusal, CredentialIssueUnitOfWork},
@@ -47,7 +48,6 @@ use silverhand_backend_core::{
         read::{ComputerReadModel, find_owned_computer},
         rotation::{ConnectTokenRotationError, ConnectTokenRotationRefusal, RotateConnectToken},
     },
-    identity::{HostId, UserId},
 };
 
 use crate::error;

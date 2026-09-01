@@ -16,7 +16,8 @@
 use std::future::Future;
 
 use crate::{
-    cold_read::presence::LastSeenAt, foundation::persistence::PersistenceFailure, identity::UserId,
+    cold_read::presence::LastSeenAt, foundation::identity::UserId,
+    foundation::persistence::PersistenceFailure,
 };
 
 /// Persists one viewer's sealed last-seen instant. The value is already

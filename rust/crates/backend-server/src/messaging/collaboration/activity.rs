@@ -9,7 +9,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::{UserId, WorkspaceId},
+    foundation::identity::{UserId, WorkspaceId},
     messaging::collaboration::activity::{
         ActivityItem, ActivityList, ActivityLocation, ActivityReadModel, ActivitySalience,
         ActivitySource,
@@ -155,7 +155,7 @@ mod tests {
         http::Request,
     };
     use silverhand_backend_core::{
-        identity::{ConversationId, WorkspaceId},
+        foundation::identity::{ConversationId, WorkspaceId},
         messaging::{
             NotificationId,
             collaboration::activity::{

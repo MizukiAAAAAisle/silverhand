@@ -1,5 +1,5 @@
 use crate::{
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     messaging::{MessageId, NotificationId, ThreadRootId},
 };
 

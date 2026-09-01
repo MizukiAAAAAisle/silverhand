@@ -22,8 +22,8 @@
 
 use std::future::Future;
 
+use crate::foundation::identity::{AgentId, WorkspaceId};
 use crate::foundation::persistence::PersistenceFailure;
-use crate::identity::{AgentId, WorkspaceId};
 
 use super::orchestrator::ScheduleId;
 use super::read::ScheduleView;

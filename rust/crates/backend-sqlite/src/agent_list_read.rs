@@ -37,7 +37,7 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    foundation::persistence::PersistenceFailure, identity::UserId,
+    foundation::identity::UserId, foundation::persistence::PersistenceFailure,
     identity_access::agent_detail_read::AgentDetailFacts,
     identity_access::agent_list_read::AgentListReadModel,
 };

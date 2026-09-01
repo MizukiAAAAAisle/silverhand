@@ -33,7 +33,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     identity_access::workspace_name_availability::{
         RegularWorkspaceNamespace, WorkspaceNameAvailability, probe_workspace_name,
     },

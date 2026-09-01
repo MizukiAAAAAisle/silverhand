@@ -299,9 +299,9 @@ mod tests {
     };
     use silverhand_backend_core::{
         embedded_bootstrap::BootstrapChoice,
+        foundation::identity::UserId,
         foundation::persistence::PersistenceFailure,
         host_runtime::environment::EntropySource,
-        identity::UserId,
         identity_access::auth::{
             EntropySessionTokenMint, MintedSession, SessionMintError, SessionTokenHash,
         },

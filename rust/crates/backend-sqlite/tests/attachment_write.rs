@@ -2,9 +2,9 @@ use std::{error::Error, time::Duration};
 
 use silverhand_backend_core::{
     foundation::blob_store::{BlobAliasId, BlobStorageKey, StorageKind, StoredBlob},
+    foundation::identity::{ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
     foundation::wire_number::JsSafeInteger,
-    identity::{ConversationId, UserId},
     messaging::{
         AttachmentId,
         collaboration::attachment::{

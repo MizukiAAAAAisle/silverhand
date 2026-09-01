@@ -35,9 +35,9 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, DaemonInstanceId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::RuntimeScope,
-    identity::{AgentId, DaemonInstanceId},
     messaging::task::{TaskCandidateFetch, TaskCandidateQuery, TaskListCandidate},
 };
 use silverhand_backend_server::{
@@ -189,7 +189,10 @@ async fn mounted() -> Mounted {
                 agent: AgentId::parse(AGENT).unwrap(),
             },
             DaemonInstanceId::parse("daemon-1").unwrap(),
-            silverhand_backend_core::identity::ConversationId::parse("conversation0001").unwrap(),
+            silverhand_backend_core::foundation::identity::ConversationId::parse(
+                "conversation0001",
+            )
+            .unwrap(),
             &transport,
         )
         .await

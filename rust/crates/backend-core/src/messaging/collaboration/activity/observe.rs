@@ -9,7 +9,7 @@
 use std::{error::Error, future::Future};
 
 use crate::{
-    identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     messaging::{MessageSeq, NotificationId, ThreadRootId},
 };
 

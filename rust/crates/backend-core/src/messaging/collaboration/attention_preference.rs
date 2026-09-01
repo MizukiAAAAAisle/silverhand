@@ -1,6 +1,6 @@
 //! Viewer-private channel tiers and workspace mute suppressors.
 
-use crate::identity::{ConversationId, UserId, WorkspaceId};
+use crate::foundation::identity::{ConversationId, UserId, WorkspaceId};
 use std::{error::Error, future::Future};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

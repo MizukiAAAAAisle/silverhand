@@ -15,7 +15,7 @@ use super::{
         Clock, ClockFailure, EntropyFailure, EntropySource, now_ms, random_base64url, random_hex,
     },
 };
-use crate::{foundation::persistence::PersistenceFailure, identity::UserId};
+use crate::{foundation::identity::UserId, foundation::persistence::PersistenceFailure};
 
 const HOST_ID_BYTES: usize = 12;
 const HOST_NAME_BYTES: usize = 4;

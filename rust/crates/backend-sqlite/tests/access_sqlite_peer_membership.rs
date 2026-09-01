@@ -15,7 +15,7 @@
 //! so the port must answer `false` for the home and `true` only where a real
 //! regular edge exists.
 
-use silverhand_backend_core::identity::{AgentId, WorkspaceId};
+use silverhand_backend_core::foundation::identity::{AgentId, WorkspaceId};
 use silverhand_backend_core::identity_access::agent_peer_profile::PeerTargetMembership;
 use silverhand_backend_sqlite::access::SqliteAccessStore;
 use sqlx::Connection;

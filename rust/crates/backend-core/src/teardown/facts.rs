@@ -5,10 +5,10 @@
 //! or conversation cannot silently become an input to a delete.
 
 use crate::{
+    foundation::identity::{AgentId, ConversationId, HostId},
     host_runtime::computer::{HostKind, ProvisioningSource},
     host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
     host_runtime::runtime_event::RuntimeObservedStatus,
-    identity::{AgentId, ConversationId, HostId},
     identity_access::agent_lifecycle::MaterializationStatus,
 };
 

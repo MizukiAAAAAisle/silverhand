@@ -1,7 +1,7 @@
 use std::{error::Error, time::Duration};
 
 use silverhand_backend_core::{
-    identity::UserId,
+    foundation::identity::UserId,
     identity_access::auth::{HumanSessionAuthenticator, SessionBearer, SessionClock, SessionTtl},
 };
 use silverhand_backend_sqlite::auth::SqliteSessionStore;

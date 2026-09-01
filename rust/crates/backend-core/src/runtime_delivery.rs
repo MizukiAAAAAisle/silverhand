@@ -5,9 +5,9 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{RuntimePrincipal, RuntimeScope},
-    identity::{AgentId, ConversationId, UserId, WorkspaceId},
     identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
     messaging::{AddressedPrincipals, FromKind, MessageContent, PrincipalKind, ReferencePositions},
 };

@@ -11,7 +11,7 @@
 //! second definition cannot come back without breaking this build.
 
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     messaging::{
         EnvironmentUnavailable, MessageId, NotificationId, ParticipantHandle, SendEntropy,
         collaboration::{

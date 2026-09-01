@@ -39,9 +39,9 @@ use super::{
     read::OwnedComputer,
 };
 use crate::{
+    foundation::identity::HostId,
     foundation::persistence::PersistenceFailure,
     host_runtime::computer::{ComputerRecord, HostKind},
-    identity::HostId,
 };
 
 /// Why an app-managed rotation is refused.
@@ -556,10 +556,10 @@ mod tests {
 
     use super::*;
     use crate::{
+        foundation::identity::UserId,
         host_runtime::{
             computer::ProvisioningSource, environment::base64url, read::find_owned_computer,
         },
-        identity::UserId,
     };
 
     const NOW: i64 = 1_700_000_000_123;

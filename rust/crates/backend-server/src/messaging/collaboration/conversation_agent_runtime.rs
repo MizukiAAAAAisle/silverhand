@@ -11,7 +11,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId},
+    foundation::identity::{ConversationId, UserId},
     messaging::collaboration::conversation_agent_runtime::{
         BoundConversationAgentRuntimeProjection, ConversationAgentRuntimeReadPort,
         ConversationAgentRuntimeRefusal,
@@ -115,8 +115,8 @@ mod tests {
         http::Request,
     };
     use silverhand_backend_core::{
+        foundation::identity::{AgentId, ConversationId, UserId},
         host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
-        identity::{AgentId, ConversationId, UserId},
         messaging::collaboration::{
             CliSessionId,
             conversation_agent_runtime::{

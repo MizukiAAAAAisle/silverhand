@@ -10,8 +10,8 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
+    foundation::identity::{DaemonInstanceId, UserId},
     host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
-    identity::{DaemonInstanceId, UserId},
     messaging::{
         MessageId,
         collaboration::reaction::{
@@ -357,8 +357,11 @@ async fn runtime_route_binds_the_authenticated_agent_and_source_before_the_uow()
         DaemonInstanceId::parse("daemon-1").unwrap(),
     );
     let principal = RuntimePrincipal::ConversationSlot {
-        agent: silverhand_backend_core::identity::AgentId::parse("agent-1").unwrap(),
-        source: silverhand_backend_core::identity::ConversationId::parse("conversation-1").unwrap(),
+        agent: silverhand_backend_core::foundation::identity::AgentId::parse("agent-1").unwrap(),
+        source: silverhand_backend_core::foundation::identity::ConversationId::parse(
+            "conversation-1",
+        )
+        .unwrap(),
         custody,
     };
     let app =
@@ -473,8 +476,9 @@ async fn cold_aggregate_and_live_fact_share_the_authoritative_post_change_count(
 
 fn runtime_principal(source: &str) -> RuntimePrincipal {
     RuntimePrincipal::ConversationSlot {
-        agent: silverhand_backend_core::identity::AgentId::parse("agent-1").unwrap(),
-        source: silverhand_backend_core::identity::ConversationId::parse(source).unwrap(),
+        agent: silverhand_backend_core::foundation::identity::AgentId::parse("agent-1").unwrap(),
+        source: silverhand_backend_core::foundation::identity::ConversationId::parse(source)
+            .unwrap(),
         custody: RuntimeCustody::new(
             RuntimeGeneration::new(1).unwrap(),
             DaemonInstanceId::parse("daemon-1").unwrap(),

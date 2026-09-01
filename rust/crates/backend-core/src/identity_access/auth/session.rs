@@ -4,7 +4,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::{foundation::persistence::PersistenceFailure, identity::UserId};
+use crate::{foundation::identity::UserId, foundation::persistence::PersistenceFailure};
 
 pub const DEFAULT_SESSION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
 

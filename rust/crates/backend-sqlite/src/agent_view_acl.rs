@@ -41,7 +41,7 @@
 
 use std::collections::HashMap;
 
-use silverhand_backend_core::identity::{AgentId, UserId};
+use silverhand_backend_core::foundation::identity::{AgentId, UserId};
 use sqlx::{Row, SqliteConnection};
 
 macro_rules! direct_pair_arm_tag {

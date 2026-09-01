@@ -8,7 +8,7 @@
 use std::{error::Error, future::Future};
 
 use crate::{
-    identity::{ConversationId, UserId},
+    foundation::identity::{ConversationId, UserId},
     messaging::{MessageId, MessageSeq, ThreadRootId},
 };
 

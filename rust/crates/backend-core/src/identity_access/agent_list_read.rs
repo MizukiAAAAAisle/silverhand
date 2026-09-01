@@ -38,8 +38,8 @@
 use std::future::Future;
 
 use crate::{
+    foundation::identity::{AgentId, Principal, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::AgentDetailFacts,
     identity_access::capability::agent_view::{ViewRefused, VisibleStages, can_view_agent},
     identity_access::capability::decision::Decision,

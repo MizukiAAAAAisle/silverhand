@@ -1,5 +1,5 @@
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{ConversationId, UserId, WorkspaceId},
     messaging::{EnvironmentUnavailable, SendClock, collaboration::attention_preference::*},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;

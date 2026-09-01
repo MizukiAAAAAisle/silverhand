@@ -18,7 +18,7 @@ use silverhand_backend_core::{
         BlobAliasId, BlobDeleteOutcome, BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore,
         StorageKind, StoredBlob,
     },
-    identity::UserId,
+    foundation::identity::UserId,
     messaging::{
         SendClock, SendEntropy,
         collaboration::attachment::{

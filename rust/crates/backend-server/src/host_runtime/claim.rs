@@ -38,6 +38,7 @@ use axum::{
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
+    foundation::identity::{HostId, UserId},
     host_runtime::{
         claim::{
             ClaimLocalComputer, ClaimLocalComputerError, ClaimLocalComputerUnitOfWork,
@@ -47,7 +48,6 @@ use silverhand_backend_core::{
         custody::{CredentialIssueRefusal, CredentialIssueUnitOfWork, HostCredentialInventory},
         environment::{Clock, EntropySource},
     },
-    identity::{HostId, UserId},
 };
 
 use crate::error;

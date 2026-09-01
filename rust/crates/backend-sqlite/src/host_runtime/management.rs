@@ -5,12 +5,12 @@
 //! [`SqliteHostRuntimeStore`]; neither opens a second store or connection authority.
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, HostId},
     foundation::persistence::PersistenceFailure,
     host_runtime::{
         status::{HostStatusAgentFact, HostStatusStoredFacts, HostStatusStoredReadModel},
         update::{UpdateComputerDecision, UpdateComputerTransaction, UpdateComputerUnitOfWork},
     },
-    identity::{AgentId, HostId},
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::agents::runtime::RuntimeKind,
 };
@@ -176,6 +176,7 @@ fn decode_status_agent(row: &sqlx::sqlite::SqliteRow) -> Result<HostStatusAgentF
 
 #[cfg(test)]
 mod tests {
+    use silverhand_backend_core::foundation::identity::UserId;
     use silverhand_backend_core::host_runtime::{
         computer::ComputerDisplayLabel,
         status::{HostStatusStoredReadModel, visible_host_status},
@@ -183,7 +184,6 @@ mod tests {
             UpdateComputer, UpdateComputerCommand, UpdateComputerInput, UpdateComputerOutcome,
         },
     };
-    use silverhand_backend_core::identity::UserId;
     use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
 
     use super::*;

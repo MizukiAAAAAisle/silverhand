@@ -11,7 +11,7 @@
 //! member edge.
 
 use silverhand_backend_core::{
-    identity::{AgentId, UserId, WorkspaceId},
+    foundation::identity::{AgentId, UserId, WorkspaceId},
     workspace_data_plane::{
         AgentWorkspaceScopeRead, AgentWorkspaceScopeRefusal, AgentWorkspaceScopeResolution,
         resolve_agent_workspace_scope,

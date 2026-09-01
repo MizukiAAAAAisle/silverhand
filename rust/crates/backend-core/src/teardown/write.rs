@@ -75,7 +75,7 @@
 use std::future::Future;
 
 use crate::{
-    identity::{AgentId, HostId, UserId},
+    foundation::identity::{AgentId, HostId, UserId},
     teardown::{
         cascade::{CascadeAdmitted, CascadeConsent, CascadeRefused, ComputerLifecycleHeld},
         contract::{TeardownContractViolation, TeardownFailure, same_agent, same_computer},
@@ -125,7 +125,7 @@ pub struct ComputerTeardownKey {
 /// ```
 /// use silverhand_backend_core::{
 ///     identity_access::agent_lifecycle::MaterializationStatus,
-///     identity::{AgentId, HostId},
+///     foundation::identity::{AgentId, HostId},
 ///     teardown::{
 ///         eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},
 ///         facts::{AgentTeardownCapture, AgentTeardownFacts},
@@ -237,7 +237,7 @@ pub enum AgentTeardownCommit {
 /// use silverhand_backend_core::{
 ///     identity_access::capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
 ///     host_runtime::computer::{HostKind, ProvisioningSource},
-///     identity::{HostId, UserId},
+///     foundation::identity::{HostId, UserId},
 ///     teardown::{
 ///         cascade::{CascadeAdmission, CascadeConsent, ComputerLifecycle, admit_cascade, hold_computer_lifecycle},
 ///         facts::ComputerTeardownFacts,

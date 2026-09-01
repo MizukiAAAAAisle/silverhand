@@ -19,8 +19,8 @@
 use std::future::Future;
 
 use crate::{
+    foundation::identity::{UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
-    identity::{UserId, WorkspaceId},
     identity_access::workspace_face::{WorkspaceFace, WorkspaceFaceReadPort},
     viewer_read_model::viewer_workspace_sort::{ViewerSortState, ViewerWorkspaceSortReadPort},
 };
@@ -78,7 +78,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        identity::WorkspaceId,
+        foundation::identity::WorkspaceId,
         viewer_read_model::viewer_workspace_sort::{SortMode, ViewerSortEntry, WorkspaceSortScope},
     };
 

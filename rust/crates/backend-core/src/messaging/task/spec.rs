@@ -23,7 +23,7 @@
 //! its adapter; that is existing debt to close when the schedule wire lands, not
 //! a shape to copy.)
 
-use crate::identity::{AgentId, UserId};
+use crate::foundation::identity::{AgentId, UserId};
 
 /// Persisted task lifecycle status. Mirrors the `tasks.status` CHECK set and
 /// the `schema.ts` enum. The legal transitions between these — and which are
@@ -89,7 +89,7 @@ impl TaskStatus {
 /// only invariant at a read boundary is non-emptiness: a row whose primary key
 /// decodes to the empty string is persistence corruption, never a legal task.
 /// This is a task-domain id, so it lives with the task bounded context rather
-/// than the cross-capability `crate::identity` home.
+/// than the cross-capability `crate::foundation::identity` home.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct TaskId(String);
 

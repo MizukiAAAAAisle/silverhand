@@ -14,7 +14,7 @@ use axum::{
 };
 use serde_json::json;
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId},
+    foundation::identity::{ConversationId, UserId},
     messaging::collaboration::channel_lifecycle::{
         BoundChannelDetail, ChannelDetailReadPort, ChannelDetailRefusal, ChannelLifecyclePlacement,
         ChannelLifecycleRow,
@@ -135,7 +135,7 @@ mod tests {
     };
     use serde_json::Value;
     use silverhand_backend_core::{
-        identity::{ConversationId, UserId, WorkspaceId},
+        foundation::identity::{ConversationId, UserId, WorkspaceId},
         identity_access::access::WorkspaceRole,
         messaging::{
             collaboration::{

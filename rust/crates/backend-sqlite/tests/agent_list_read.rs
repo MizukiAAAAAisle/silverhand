@@ -22,8 +22,8 @@
 use std::collections::BTreeSet;
 
 use silverhand_backend_core::{
+    foundation::identity::{AgentId, Principal, UserId},
     foundation::persistence::PersistenceFailure,
-    identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::AgentDetailReadModel,
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::agent_list_read::AgentListReadModel,

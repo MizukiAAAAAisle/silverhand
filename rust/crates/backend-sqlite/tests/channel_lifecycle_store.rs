@@ -1,5 +1,5 @@
 use silverhand_backend_core::{
-    identity::{ConversationId, UserId},
+    foundation::identity::{ConversationId, UserId},
     messaging::collaboration::{
         channel_directory::{ChannelVisibility, DirectoryRoster},
         channel_lifecycle::{

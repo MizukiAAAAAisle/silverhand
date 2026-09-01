@@ -6,7 +6,7 @@
 //! empty-family short-circuit, and the `target_label` LEFT JOIN (resolved board
 //! vs deleted target) over real rows.
 
-use silverhand_backend_core::identity::AgentId;
+use silverhand_backend_core::foundation::identity::AgentId;
 use silverhand_backend_core::messaging::schedule::{
     ScheduleListLimit, ScheduleListQuery, ScheduleListReadModel, ScheduleStatus, ScheduleView,
 };

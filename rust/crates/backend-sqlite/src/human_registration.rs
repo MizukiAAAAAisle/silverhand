@@ -19,9 +19,9 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
     host_runtime::environment::{EntropySource, OsEntropy},
-    identity::UserId,
     identity_access::credential::PreparedPasswordCredential,
     identity_access::human_auth_flows::{HumanRegistration, HumanRegistrationUnitOfWork},
     identity_access::user_identity::{DisplayName, EmailAddress, ParticipantHandle, UserRecord},

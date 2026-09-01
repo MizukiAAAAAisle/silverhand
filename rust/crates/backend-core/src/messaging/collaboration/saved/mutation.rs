@@ -1,6 +1,6 @@
 use std::{error::Error, future::Future};
 
-use crate::{identity::UserId, messaging::MessageId};
+use crate::{foundation::identity::UserId, messaging::MessageId};
 
 use super::{BoundSavedEntry, SavedEntry, SavedIdentityMismatch};
 
@@ -304,7 +304,7 @@ mod tests {
     };
 
     use crate::{
-        identity::{ConversationId, UserId},
+        foundation::identity::{ConversationId, UserId},
         messaging::{FromKind, MessageId, MessageSeq, collaboration::saved::*},
     };
 

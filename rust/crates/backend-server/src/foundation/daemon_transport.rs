@@ -25,7 +25,7 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use silverhand_backend_core::identity::{DaemonInstanceId, HostId, UserId};
+use silverhand_backend_core::foundation::identity::{DaemonInstanceId, HostId, UserId};
 use tokio::{
     sync::{Notify, mpsc, oneshot, watch},
     time::Instant,
@@ -1020,8 +1020,8 @@ impl Error for HostDataPlaneFailure {}
 ///
 /// fn forge() -> HostDataPlaneRequest {
 ///     HostDataPlaneRequest {
-///         host: silverhand_backend_core::identity::HostId::parse("host-1").unwrap(),
-///         expected_instance: silverhand_backend_core::identity::DaemonInstanceId::parse("i").unwrap(),
+///         host: silverhand_backend_core::foundation::identity::HostId::parse("host-1").unwrap(),
+///         expected_instance: silverhand_backend_core::foundation::identity::DaemonInstanceId::parse("i").unwrap(),
 ///         kind: HostDataPlaneCommandKind::RuntimeCatalog,
 ///         params: serde_json::json!({ "force": true }),
 ///         timeout: std::time::Duration::from_secs(1),
@@ -1042,7 +1042,7 @@ impl Error for HostDataPlaneFailure {}
 /// ```
 ///
 /// ```
-/// use silverhand_backend_core::identity::HostId;
+/// use silverhand_backend_core::foundation::identity::HostId;
 /// use silverhand_backend_server::{
 ///     daemon_delivery::{DaemonDeliveryController, OwningHostDataPlane},
 ///     host_control::runtime_catalog::{self, RuntimeCatalogOutcome, RuntimeCatalogRequest},
@@ -1912,6 +1912,7 @@ mod tests {
     use std::ops::Range;
 
     use silverhand_backend_core::{
+        foundation::identity::{AgentId, ConversationId},
         foundation::persistence::PersistenceFailure,
         host_runtime::runtime_credential::{
             ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimePrincipal,
@@ -1921,7 +1922,6 @@ mod tests {
             aftermath::DaemonConnectionControl, read::ComputerReadModel,
             rotation::DaemonRotationAck,
         },
-        identity::{AgentId, ConversationId},
         messaging::{MessageContent, ReferencePositions},
         runtime_delivery::{
             ClaimPendingInbox, ClaimedInboxBatch, DeliveryInstruction, DeliveryLeaseOwner,
@@ -2162,6 +2162,7 @@ mod tests {
         use std::{io, thread};
 
         use silverhand_backend_core::{
+            foundation::identity::{AgentId, ConversationId, UserId},
             foundation::wire_number::JsSafeInteger,
             host_runtime::scope_runtime_stop::{
                 ScopeRuntimeStopOutcome, ScopeRuntimeStopPort, ScopeRuntimeStopRefusal,
@@ -2171,7 +2172,6 @@ mod tests {
                 computer::{ComputerRecord, HostKind, ProvisioningSource},
                 read::ComputerReadModel,
             },
-            identity::{AgentId, ConversationId, UserId},
         };
 
         use crate::host_runtime::daemon_runtime_codecs::runtime_stop::RuntimeStopCommand;
@@ -2846,10 +2846,12 @@ mod tests {
         };
         use serde_json::{Number, Value};
         use silverhand_backend_core::{
+            foundation::identity::{
+                AgentId, ConversationId, DaemonInstanceId, UserId, WorkspaceId,
+            },
             host_runtime::runtime_credential::{
                 RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
             },
-            identity::{AgentId, ConversationId, DaemonInstanceId, UserId, WorkspaceId},
             identity_access::access::WorkspaceRole,
             messaging::{
                 collaboration::{
@@ -3596,10 +3598,10 @@ mod tests {
     #[tokio::test]
     async fn materialize_command_stays_on_its_captured_host_and_connection_generation() {
         use silverhand_backend_core::{
+            foundation::identity::WorkspaceId,
             host_runtime::agent_materialize::{
                 AgentMaterializePort, AgentMaterializeTarget, AgentMaterializeTemplate,
             },
-            identity::WorkspaceId,
             identity_access::agents::runtime::RuntimeKind,
         };
 
@@ -3930,10 +3932,10 @@ mod tests {
     #[tokio::test]
     async fn materialize_refuses_a_target_that_names_a_different_host_than_the_capture() {
         use silverhand_backend_core::{
+            foundation::identity::WorkspaceId,
             host_runtime::agent_materialize::{
                 AgentMaterializePort, AgentMaterializeTarget, AgentMaterializeTemplate,
             },
-            identity::WorkspaceId,
             identity_access::agents::runtime::RuntimeKind,
         };
 
@@ -4204,7 +4206,7 @@ mod tests {
 
         async fn conversation_exists(
             &mut self,
-            _: &silverhand_backend_core::identity::ConversationId,
+            _: &silverhand_backend_core::foundation::identity::ConversationId,
         ) -> Result<bool, Self::Error> {
             unreachable!("agent-scope clear reads no conversation")
         }
@@ -4215,7 +4217,7 @@ mod tests {
 
         async fn agent_is_member(
             &mut self,
-            _: &silverhand_backend_core::identity::ConversationId,
+            _: &silverhand_backend_core::foundation::identity::ConversationId,
             _: &AgentId,
         ) -> Result<bool, Self::Error> {
             unreachable!("agent-scope clear checks no membership")
@@ -4223,7 +4225,7 @@ mod tests {
 
         async fn actor_may_post(
             &mut self,
-            _: &silverhand_backend_core::identity::ConversationId,
+            _: &silverhand_backend_core::foundation::identity::ConversationId,
             _: &UserId,
         ) -> Result<bool, Self::Error> {
             unreachable!("agent-scope clear runs no post gate")

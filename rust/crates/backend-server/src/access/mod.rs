@@ -37,8 +37,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
+use silverhand_backend_core::foundation::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-use silverhand_backend_core::identity::{AgentId, Principal, UserId, WorkspaceId};
 use silverhand_backend_core::identity_access::access::{
     AddAgentMemberError, AddHumanMemberError, AgentEnrollmentReadPort, AgentEnrollmentUnitOfWork,
     EnrollmentClock, HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, ViewerAnnounce,

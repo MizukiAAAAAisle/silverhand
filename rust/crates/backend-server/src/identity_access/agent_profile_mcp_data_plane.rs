@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use silverhand_backend_core::{
-    identity::AgentId,
+    foundation::identity::AgentId,
     identity_access::agent_profile_mcp::{
         AgentProfileMcpDataPlane, AgentProfileMcpPlacementRead, McpBytesWritten, McpDataPlaneFault,
         McpDataPlaneFaultCode, McpProbeCommand, McpProbeOutcome,

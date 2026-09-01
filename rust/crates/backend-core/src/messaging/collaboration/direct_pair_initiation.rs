@@ -15,7 +15,7 @@
 //!
 //! ```compile_fail
 //! use silverhand_backend_core::{
-//!     identity::{AgentId, UserId},
+//!     foundation::identity::{AgentId, UserId},
 //!     messaging::collaboration::direct_pair_initiation::AuthorizedDirectPairInitiation,
 //! };
 //! let _forged = AuthorizedDirectPairInitiation {
@@ -27,7 +27,7 @@
 use std::{error::Error, future::Future};
 
 use crate::{
-    identity::{AgentId, UserId},
+    foundation::identity::{AgentId, UserId},
     messaging::{
         ConversationId, DirectPairMint, DirectPairOpenedPort, DirectPairParticipants,
         EnvironmentUnavailable, OpenDirectPairError, PrincipalIdentity, SameDirectPairParticipant,

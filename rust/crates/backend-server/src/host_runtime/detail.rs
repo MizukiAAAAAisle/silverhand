@@ -31,8 +31,8 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
+    foundation::identity::{HostId, UserId},
     host_runtime::read::{ComputerReadModel, find_owned_computer},
-    identity::{HostId, UserId},
 };
 
 use crate::{

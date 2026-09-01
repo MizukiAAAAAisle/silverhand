@@ -30,8 +30,8 @@ use axum::{
 };
 use serde_json::Value;
 use silverhand_backend_core::{
+    foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
-    identity::UserId,
     identity_access::agent_detail_read::AgentDetailFacts,
     identity_access::agent_list_read::AgentListReadModel,
     identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},

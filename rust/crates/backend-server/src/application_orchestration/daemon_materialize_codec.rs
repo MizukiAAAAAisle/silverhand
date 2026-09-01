@@ -60,8 +60,8 @@ pub(crate) fn decode_result(value: &Value) -> Option<AgentMaterializeReceipt> {
 mod tests {
     use super::*;
     use silverhand_backend_core::{
+        foundation::identity::{AgentId, HostId, WorkspaceId},
         host_runtime::agent_materialize::AgentMaterializeTemplate,
-        identity::{AgentId, HostId, WorkspaceId},
         identity_access::agents::runtime::RuntimeKind,
     };
 

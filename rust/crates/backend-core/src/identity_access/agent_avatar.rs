@@ -6,7 +6,7 @@
 //! storage-fault type ([`AvatarStorageFailure`]) — because none of those name a
 //! custody. It does NOT reuse the user path's blob POINTER: `users.avatar_storage_key`
 //! and `agents.avatar_storage_key` are two distinct custodies (one minted per
-//! [`crate::identity::UserId`], one per [`AgentId`]), so this bounded context owns its
+//! [`crate::foundation::identity::UserId`], one per [`AgentId`]), so this bounded context owns its
 //! own opaque [`AgentAvatarBlobPointer`] and its own read capability
 //! ([`AgentAvatarBlobRead`]). The two pointers never share a domain type; only the
 //! production adapter's private key→bytes plumbing is shared.
@@ -58,8 +58,8 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    foundation::identity::AgentId,
     foundation::persistence::PersistenceFailure,
-    identity::AgentId,
     identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
 };
 
@@ -141,7 +141,7 @@ pub trait AgentAvatarBlobRead: Clone + Send + Sync + 'static {
 /// mutating `put`/`delete` the upload and clear routes own. Distinct from the user
 /// [`crate::identity_access::avatar::AvatarBlobStore`]: the two custodies never share a domain type, and
 /// the production adapter MUST mint agent keys under a DIFFERENT static namespace than
-/// user keys — so even if an [`AgentId`] and a [`crate::identity::UserId`] carry the
+/// user keys — so even if an [`AgentId`] and a [`crate::foundation::identity::UserId`] carry the
 /// same raw string, their blobs never collide. `put` mints a FRESH physical key on
 /// every call (re-uploading identical bytes never clobbers or cache-hits), returning
 /// the agent-owned [`AgentAvatarBlobPointer`]; only the private `StoredBlob`

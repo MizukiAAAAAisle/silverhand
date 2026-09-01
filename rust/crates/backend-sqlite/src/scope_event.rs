@@ -3,9 +3,9 @@
 use std::{error::Error, path::Path, time::Duration};
 
 use silverhand_backend_core::{
+    foundation::identity::{ConversationId, UserId},
     foundation::persistence::PersistenceFailure,
     foundation::scope_event::{AuthorizeEventScope, EventScope},
-    identity::{ConversationId, UserId},
 };
 use sqlx::{
     Row, SqlitePool,
@@ -93,10 +93,11 @@ impl SqliteEventScopeAuthority {
                 }
                 let workspace = workspace_raw
                     .ok_or_else(|| PersistenceFailure::from_source(MissingPersistedCoordinate))?;
-                let workspace = silverhand_backend_core::identity::WorkspaceId::parse(workspace)
-                    .map_err(|source| {
-                        PersistenceFailure::from_source(InvalidPersistedScope(source))
-                    })?;
+                let workspace =
+                    silverhand_backend_core::foundation::identity::WorkspaceId::parse(workspace)
+                        .map_err(|source| {
+                            PersistenceFailure::from_source(InvalidPersistedScope(source))
+                        })?;
                 let member: i64 = sqlx::query_scalar(SELECT_WORKSPACE_CONVERSATION_MEMBERSHIP)
                     .bind(workspace.as_str())
                     .bind(conversation.as_str())
@@ -170,7 +171,7 @@ fn decode_endpoint(kind: &str, id: String) -> Result<Endpoint, PersistenceFailur
         "human" => UserId::parse(id)
             .map(Endpoint::Human)
             .map_err(|source| PersistenceFailure::from_source(InvalidPersistedScope(source))),
-        "agent" => silverhand_backend_core::identity::AgentId::parse(id)
+        "agent" => silverhand_backend_core::foundation::identity::AgentId::parse(id)
             .map(|_| Endpoint::Agent)
             .map_err(|source| PersistenceFailure::from_source(InvalidPersistedScope(source))),
         _ => Err(PersistenceFailure::from_source(InvalidEndpointKind)),
