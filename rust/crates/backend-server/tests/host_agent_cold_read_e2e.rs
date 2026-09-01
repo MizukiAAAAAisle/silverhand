@@ -43,8 +43,8 @@ use silverhand_backend_core::{
     identity::UserId,
     persistence::PersistenceFailure,
     policy::presence_grace::{GraceWindow, PresenceFact},
-    user_presence_cold_read::UserPresenceReadModel,
-    user_presence_last_seen::LastSeenSink,
+    viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
+    viewer_read_model::user_presence_last_seen::LastSeenSink,
 };
 use silverhand_backend_server::{
     host_agent::presence::{PRESENCE_PATH, router},

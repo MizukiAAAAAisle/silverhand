@@ -9514,8 +9514,8 @@ mod presence_composition {
         identity::UserId,
         persistence::PersistenceFailure,
         policy::presence_grace::PresenceFact,
-        user_presence_cold_read::UserPresenceReadModel,
-        user_presence_last_seen::LastSeenSink,
+        viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
+        viewer_read_model::user_presence_last_seen::LastSeenSink,
     };
     use silverhand_backend_server::{
         foundation::scope_event_transport::ConnectionLifecycle,

@@ -1,6 +1,6 @@
 //! The durable half of presence: persisting a viewer's sealed last-seen instant.
 //!
-//! This is the write counterpart of [`crate::user_presence_cold_read`]. When a
+//! This is the write counterpart of [`crate::viewer_read_model::user_presence_cold_read`]. When a
 //! viewer's grace window expires into an offline fact, that fact carries a
 //! [`LastSeenAt`] whose range was already enforced once, where the disconnect
 //! clock entered the domain (`policy::presence_grace::on_disconnect`). This port

@@ -35,7 +35,7 @@ use silverhand_backend_core::{
         read_user_presence,
     },
     identity::UserId,
-    user_presence_cold_read::UserPresenceReadModel,
+    viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
 };
 
 use crate::error;
@@ -158,7 +158,7 @@ mod tests {
         cold_read::presence::{LastSeenAt, OnlineViewers, UserPresenceFacts},
         identity::UserId,
         persistence::PersistenceFailure,
-        user_presence_cold_read::UserPresenceReadModel,
+        viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
     };
     use tower::ServiceExt;
 

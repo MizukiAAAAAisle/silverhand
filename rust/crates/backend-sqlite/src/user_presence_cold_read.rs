@@ -30,7 +30,7 @@ use silverhand_backend_core::{
     cold_read::presence::{LastSeenAt, LastSeenOutOfRange, UserPresenceFacts},
     identity::UserId,
     persistence::PersistenceFailure,
-    user_presence_cold_read::UserPresenceReadModel,
+    viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
 };
 use sqlx::{
     Row, SqlitePool,

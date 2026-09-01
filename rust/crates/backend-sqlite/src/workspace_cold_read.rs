@@ -25,7 +25,7 @@ use silverhand_backend_core::{
     },
     identity_access::workspace_face::{WorkspaceFace, WorkspaceFaceReadPort},
     persistence::PersistenceFailure,
-    viewer_workspace_sort::{
+    viewer_read_model::viewer_workspace_sort::{
         SortMode, ViewerSortEntry, ViewerSortState, ViewerWorkspaceSortReadPort,
         WORKSPACE_SORT_LIST_KEY, WorkspaceSortScope,
     },

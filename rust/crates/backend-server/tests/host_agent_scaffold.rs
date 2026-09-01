@@ -157,8 +157,13 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // the app composition root by the #task:2234 integration (CP4 runtime-switch route).
     ("backend-core", "agent_runtime_switch"),
     ("backend-core", "teardown"),
-    ("backend-core", "user_presence_cold_read"),
-    ("backend-core", "user_presence_last_seen"),
+    // #task:2279 — the C1-adjacent `viewer_read_model` relocation namespace: a directory
+    // container declared once at the crate root, owning the relocated presence/sort leaves
+    // (`user_presence_cold_read` read model, `user_presence_last_seen` LastSeenSink port,
+    // `viewer_workspace_sort` read model). Their old flat crate-root entries are removed; the
+    // organization map/gate is the authority for each leaf's owner/target inside the container
+    // and this seam entry does NOT descend into it. Kept a single entry as further leaves land.
+    ("backend-core", "viewer_read_model"),
     // #task:2193 — the workspace metadata/read vertical. Core primitives and ports;
     // their SQLite adapters and server routes are the sibling entries below. Mounted at
     // the app composition root by the #task:2223 integration. This vertical's core leaves
@@ -361,7 +366,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
 /// of pre-existing modules, not a lane addition. #task:2277 then likewise relocated two more
 /// inherited backend-core directory modules (`access`, `auth`) under `identity_access`, on
 /// the same terms — directory-preserving moves of pre-existing modules, folded into the same
-/// container seam entry.
+/// container seam entry. #task:2279 relocated the inherited `viewer_workspace_sort` read model
+/// under the new `viewer_read_model` container on identical terms (its flat entry removed here,
+/// covered by that container's seam entry via the CP projection).
 ///
 /// CP1-temporary, with G3's accounting: it guards "every lane module is registered
 /// where it is guarded", it is deleted when the seam is extracted into the
@@ -402,7 +409,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-core", "runtime_delivery"),
     ("backend-core", "runtime_event"),
     ("backend-core", "scope_event"),
-    ("backend-core", "viewer_workspace_sort"),
     // #task:2256 categorized-file audit sink: the OS adapter that owns the CLI
     // preflight-failure log file and its writer lifecycle, home of the reusable
     // `CategorizedJsonlWriter` primitive. A non-seam production module the host-agent seam
@@ -508,6 +514,11 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // subset of the seam ledger. It is a namespace CONTAINER: its leaves' owners live in the
     // organization map/gate, not here.
     ("backend-core", "identity_access"),
+    // #task:2279 — the `viewer_read_model` relocation namespace, likewise a directory-shaped
+    // container (`viewer_read_model/mod.rs`) owning the relocated presence/sort leaves. Same
+    // terms as `identity_access`: one declaration at the crate root, leaf owners live in the
+    // organization map/gate.
+    ("backend-core", "viewer_read_model"),
 ];
 
 /// The modules a composition must name to ACTIVATE this lane: rules that decide, a
@@ -542,9 +553,11 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// actually mounted. It therefore covers only the legacy root namespaces still
 /// expressible at the owning-root layer. Once a lane module relocates under an
 /// organization container (the agent-detail and agent-list read ports moved to
-/// `crate::identity_access::{agent_detail_read,agent_list_read}` in #task:2275, and the
+/// `crate::identity_access::{agent_detail_read,agent_list_read}` in #task:2275, the
 /// `capability` decision namespace moved to `crate::identity_access::capability` in
-/// #task:2277), it drops out of BOTH this table and the seam ledger: a container such as
+/// #task:2277, and the `user_presence_cold_read` read port moved to
+/// `crate::viewer_read_model::user_presence_cold_read` in #task:2279), it drops out of BOTH
+/// this table and the seam ledger: a container such as
 /// `identity_access` holds both activated and unmounted leaves, so it is NOT added here as
 /// a whole. A nested leaf's real existence/relocation is the organization gate's authority,
 /// and its actual mount is the composition/route behavior tests' — this table is not the
@@ -557,7 +570,6 @@ const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "host_resources_read"),
     ("backend-core", "policy"),
     ("backend-core", "teardown"),
-    ("backend-core", "user_presence_cold_read"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),

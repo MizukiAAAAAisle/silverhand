@@ -32,7 +32,7 @@ use silverhand_backend_core::{
     identity::UserId,
     identity_access::workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
     identity_access::workspace_face::WorkspaceFace,
-    viewer_workspace_sort::{ViewerSortState, WORKSPACE_SORT_LIST_KEY},
+    viewer_read_model::viewer_workspace_sort::{ViewerSortState, WORKSPACE_SORT_LIST_KEY},
 };
 
 use crate::error;
@@ -180,8 +180,12 @@ struct ViewerSortEntryDto {
     starred_at: Option<i64>,
 }
 
-impl From<&silverhand_backend_core::viewer_workspace_sort::ViewerSortEntry> for ViewerSortEntryDto {
-    fn from(entry: &silverhand_backend_core::viewer_workspace_sort::ViewerSortEntry) -> Self {
+impl From<&silverhand_backend_core::viewer_read_model::viewer_workspace_sort::ViewerSortEntry>
+    for ViewerSortEntryDto
+{
+    fn from(
+        entry: &silverhand_backend_core::viewer_read_model::viewer_workspace_sort::ViewerSortEntry,
+    ) -> Self {
         Self {
             entity_id: entry.entity_id.as_str().to_owned(),
             rank: entry.rank,
@@ -205,7 +209,9 @@ mod tests {
         identity_access::workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
         identity_access::workspace_face::WorkspaceFace,
         persistence::PersistenceFailure,
-        viewer_workspace_sort::{SortMode, ViewerSortEntry, ViewerSortState, WorkspaceSortScope},
+        viewer_read_model::viewer_workspace_sort::{
+            SortMode, ViewerSortEntry, ViewerSortState, WorkspaceSortScope,
+        },
     };
     use tower::ServiceExt;
 

@@ -10,7 +10,7 @@ use std::{
 use silverhand_backend_core::{
     identity::UserId,
     policy::presence_grace::{GraceWindow, PresenceFact, is_online, on_connect, on_disconnect},
-    user_presence_last_seen::LastSeenSink,
+    viewer_read_model::user_presence_last_seen::LastSeenSink,
 };
 use tokio::task::JoinHandle;
 

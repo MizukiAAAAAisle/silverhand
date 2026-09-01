@@ -2,7 +2,7 @@
 //! envelope, composed from two bounded contexts over ONE database snapshot.
 //!
 //! The workspace list ([`crate::identity_access::workspace_face`]) and the viewer's sort
-//! preferences ([`crate::viewer_workspace_sort`]) are separate contexts with
+//! preferences ([`crate::viewer_read_model::viewer_workspace_sort`]) are separate contexts with
 //! separate ports; this module is the thin application seam that composes them.
 //! The composition is deliberate and explicit rather than a single fused query:
 //! the sort read is filtered to the set derived FROM the workspace read (the
@@ -22,7 +22,7 @@ use crate::{
     identity::{UserId, WorkspaceId},
     identity_access::workspace_face::{WorkspaceFace, WorkspaceFaceReadPort},
     persistence::PersistenceFailure,
-    viewer_workspace_sort::{ViewerSortState, ViewerWorkspaceSortReadPort},
+    viewer_read_model::viewer_workspace_sort::{ViewerSortState, ViewerWorkspaceSortReadPort},
 };
 
 /// The whole cold-read envelope for one authenticated viewer.
@@ -79,7 +79,7 @@ mod tests {
     use super::*;
     use crate::{
         identity::WorkspaceId,
-        viewer_workspace_sort::{SortMode, ViewerSortEntry, WorkspaceSortScope},
+        viewer_read_model::viewer_workspace_sort::{SortMode, ViewerSortEntry, WorkspaceSortScope},
     };
 
     /// A driver-free snapshot double implementing both context ports. It records

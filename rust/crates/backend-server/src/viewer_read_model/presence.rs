@@ -7,8 +7,8 @@ use silverhand_backend_core::{
     identity::UserId,
     policy::presence_grace::{GraceWindow, PresenceFact},
     scope_event::EventScope,
-    user_presence_cold_read::UserPresenceReadModel,
-    user_presence_last_seen::LastSeenSink,
+    viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
+    viewer_read_model::user_presence_last_seen::LastSeenSink,
 };
 
 use crate::{

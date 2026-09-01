@@ -21,7 +21,7 @@ use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
     cold_read::presence::LastSeenAt, identity::UserId, persistence::PersistenceFailure,
-    user_presence_last_seen::LastSeenSink,
+    viewer_read_model::user_presence_last_seen::LastSeenSink,
 };
 use sqlx::{
     SqlitePool,

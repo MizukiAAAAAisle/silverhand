@@ -20,7 +20,7 @@ use silverhand_backend_core::{
     identity::UserId,
     persistence::PersistenceFailure,
     policy::presence_grace::{GraceWindow, PresenceFact},
-    user_presence_last_seen::LastSeenSink,
+    viewer_read_model::user_presence_last_seen::LastSeenSink,
 };
 use silverhand_backend_server::{
     foundation::scope_event_transport::ConnectionLifecycle,
