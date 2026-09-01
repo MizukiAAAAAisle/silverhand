@@ -64,7 +64,7 @@ pub trait SendAftermath {
 /// of copying components — it states the sharing itself rather than describing today's
 /// components.
 ///
-/// The constructor is crate-private, so [`crate::scope_events::ScopeEventHub::messaging_aftermath`]
+/// The constructor is crate-private, so [`crate::foundation::scope_event_transport::ScopeEventHub::messaging_aftermath`]
 /// is the only way a composition crate can obtain one. That does NOT make a second fan-out
 /// impossible — the factory can be called twice, and a second hub is still reachable through
 /// the public `ScopeEventHub::production`. What it removes is the quiet version: forking

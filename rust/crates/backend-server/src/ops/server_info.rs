@@ -26,8 +26,8 @@ use serde::Serialize;
 
 use crate::{
     daemon_delivery::OUTBOUND_PROTOCOL_VERSION,
+    foundation::scope_event_transport::{DESKTOP_SERVER_API_EPOCH, MINIMUM_CLIENT_API_EPOCH},
     ops::bind_address::BindAddressScope,
-    scope_events::{DESKTOP_SERVER_API_EPOCH, MINIMUM_CLIENT_API_EPOCH},
 };
 
 pub const SERVER_INFO_PATH: &str = "/api/server/info";

@@ -416,7 +416,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-server", "host_runtime"),
     ("backend-server", "messaging"),
     ("backend-server", "runtime_credential"),
-    ("backend-server", "scope_events"),
     ("backend-server", "workspaces"),
     ("backend-sqlite", "access"),
     ("backend-sqlite", "auth"),
@@ -457,7 +456,13 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
 /// The organization gate uses these CP tables ONLY as a root-COVERAGE compatibility check
 /// (they still cover the current root tree exactly once), never as a landed/residual
 /// authority. Organization accounting stays separate from route/product ledgers.
-const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[("backend-core", "agents")];
+const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
+    ("backend-core", "agents"),
+    ("backend-server", "conversation_messaging"),
+    ("backend-server", "foundation"),
+    ("backend-server", "identity_access"),
+    ("backend-server", "viewer_read_model"),
+];
 
 /// The seam modules that are DIRECTORY modules, owning a `<name>/mod.rs`. G5 reads
 /// that file, so a flat module must not appear here — the gate would then fail on a
@@ -1320,9 +1325,16 @@ fn g4_the_seam_touches_only_crate_roots_and_only_as_declarations() {
             }
             // A co-owner the lane registered is not a fork: a name distributed across
             // roles (a core port and its SQLite adapter, a SQLite lane and its route
-            // surface) lists each owning root as its own seam entry. Only an owner in a
-            // root NOT in the ledger is the accidental second declaration this refuses.
-            if SEAM_ROOT_MODULES.contains(&(*other_dir, *namespace)) {
+            // surface) lists each owning root as its own entry. Only an owner in a
+            // root NOT registered in ANY CP inventory is the accidental second declaration
+            // this refuses. A relocation namespace container legitimately appears in more
+            // than one crate — registered in SEAM in one crate (#task:2272, backend-core's
+            // identity_access owns a route-seam leaf) and in ORGANIZATION_ROOT_MODULES in
+            // another (#task:2270, backend-server's organization containers) — so the
+            // exemption consults registered_modules (the same per-root union g0 uses), never
+            // SEAM alone. This is not a new durable inventory; it reuses g0's registration
+            // truth so a registered co-owner is not misread as a fork (#task:2273).
+            if registered_modules(other_dir).contains(&(*namespace).to_owned()) {
                 continue;
             }
             let other = rust_root()

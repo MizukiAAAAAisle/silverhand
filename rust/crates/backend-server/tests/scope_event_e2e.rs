@@ -9,7 +9,7 @@ use log_capture::LogBuffer;
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl};
 use silverhand_backend_core::identity::UserId;
-use silverhand_backend_server::scope_events::{
+use silverhand_backend_server::foundation::scope_event_transport::{
     AllowedOrigin, ConnectionLifecycle, DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH,
     EVENT_WS_SESSION_COOKIE, EventWebSocketConfig, ScopeEventHub, router,
 };
@@ -109,7 +109,7 @@ async fn running(
     path: &std::path::Path,
 ) -> (
     std::net::SocketAddr,
-    silverhand_backend_server::scope_events::EventWebSocketController,
+    silverhand_backend_server::foundation::scope_event_transport::EventWebSocketController,
     tokio::task::JoinHandle<()>,
 ) {
     let sessions = HumanSessionAuthenticator::new(

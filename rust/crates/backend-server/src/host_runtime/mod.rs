@@ -31,6 +31,7 @@ pub mod resolve;
 pub mod revoke;
 pub mod rotate_connect_token;
 pub mod rotate_token;
+pub mod scope_event_publishers;
 
 use host_wire::HostDto;
 

@@ -23,8 +23,9 @@ use silverhand_backend_core::{
     user_presence_last_seen::LastSeenSink,
 };
 use silverhand_backend_server::{
+    foundation::scope_event_transport::ConnectionLifecycle,
     host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers},
-    scope_events::{ConnectionLifecycle, DisconnectClock, PresenceConnectionFeed},
+    viewer_read_model::presence::{DisconnectClock, PresenceConnectionFeed},
 };
 
 /// A disconnect clock authority that is down: every read fails. Its error carries

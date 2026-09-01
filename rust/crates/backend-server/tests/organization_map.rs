@@ -992,10 +992,11 @@ fn cp_table(source: &str, name: &str) -> BTreeSet<(String, String)> {
 //
 // physical_target is a FULL Rust module path. A NORMAL row targets `crate::namespace::leaf`;
 // a SELF-NAMED top-level context root (module name == owner namespace: embedded_bootstrap /
-// workspace_data_plane / host_runtime) targets its own path `crate::module`. landed is
+// workspace_data_plane / host_runtime and later context roots) targets its own path
+// `crate::module`. landed is
 // derived mechanically: a root is landed iff its CURRENT full path (`crate::module`) equals
-// its physical_target — that is exactly the self-named context roots (9 across the three
-// crates); every other root targets a namespaced path it does not yet occupy and is
+// its physical_target — that is exactly the self-named context roots; every other root
+// targets a namespaced path it does not yet occupy and is
 // residual. residual = scanned roots − mechanically-landed, derived from the map + real tree
 // ONLY. The CP inventories in host_agent_scaffold.rs keep their original G4/G5 semantics and
 // are used here only as a root-COVERAGE compatibility check, never as a landed/residual
@@ -1253,6 +1254,96 @@ fn landed_is_tree_derived_self_named_contexts_are_landed_and_nested_leaves_exist
         "no nested landed leaf found — the relocation container path is unexercised; \
          landed={landed:?}"
     );
+}
+
+#[test]
+fn resolved_scope_event_split_is_exact_and_every_leaf_is_declared() {
+    let map = load_map();
+    let axes = load_axes(&map);
+    let ns_by_owner = validated_namespaces(&map, &axes);
+    let rows = map["resolved_splits"]
+        .as_array()
+        .expect("resolved_splits array");
+    let scope_rows: Vec<&Value> = rows
+        .iter()
+        .filter(|row| as_str(row, "source") == "backend-server::scope_events")
+        .collect();
+    let expected: BTreeSet<String> = [
+        "transport_substrate",
+        "product_envelope",
+        "user_presence_policy_effect",
+        "agent_presence_availability_adapters",
+        "identity_workspace_adapters",
+        "messaging_notification_saved_reaction_attachment_direct_pair_adapters",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    let actual: BTreeSet<String> = scope_rows
+        .iter()
+        .map(|row| as_str(row, "responsibility").to_owned())
+        .collect();
+    assert_eq!(actual, expected, "scope-event resolved split drifted");
+    assert_eq!(
+        actual.len(),
+        scope_rows.len(),
+        "scope-event responsibility is recorded more than once"
+    );
+    assert!(
+        !scanned_roots().contains(&("backend-server".to_owned(), "scope_events".to_owned())),
+        "the resolved source aggregation must no longer be a crate root"
+    );
+
+    let open: BTreeSet<&str> = map["open_rulings"]
+        .as_array()
+        .expect("open_rulings array")
+        .iter()
+        .map(|value| value.as_str().expect("open ruling string"))
+        .collect();
+    for row in scope_rows {
+        let responsibility = as_str(row, "responsibility");
+        let context = format!("resolved scope_events::{responsibility}");
+        let owner = as_str(row, "business_owner");
+        let role = as_str(row, "structural_role");
+        assert_axis(&axes, owner, role, &context);
+        assert!(
+            !open.contains(
+                format!(
+                    "backend-server::scope_events split group '{responsibility}' final leaf module name"
+                )
+                .as_str()
+            ),
+            "{context}: final leaf is still listed as an open ruling"
+        );
+
+        let target = as_str(row, "physical_target");
+        assert_full_target(target, "backend-server", owner, &ns_by_owner, &context);
+        let segments: Vec<&str> = target.split("::").collect();
+        let crate_src = rust_root().join("crates/backend-server/src");
+        let mut declaring_file = crate_src.join("lib.rs");
+        let mut module_prefix = crate_src;
+        for segment in &segments[1..] {
+            let declarations: BTreeSet<String> = module_declarations(&read(&declaring_file))
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect();
+            assert!(
+                declarations.contains(*segment),
+                "{context}: `{segment}` is not declared by {}",
+                declaring_file.display()
+            );
+            module_prefix = module_prefix.join(segment);
+            let flat = module_prefix.with_extension("rs");
+            let directory = module_prefix.join("mod.rs");
+            declaring_file = if flat.exists() {
+                flat
+            } else if directory.exists() {
+                directory
+            } else {
+                panic!("{context}: declared leaf `{segment}` has no source file")
+            };
+        }
+    }
 }
 
 #[test]
