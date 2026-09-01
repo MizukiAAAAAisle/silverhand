@@ -38,7 +38,7 @@ use silverhand_backend_core::{
 };
 
 use crate::foundation::error;
-use crate::workspaces::ViewerWorkspaceDto;
+use crate::identity_access::workspaces::ViewerWorkspaceDto;
 
 /// The product route template, in axum's `{id}` capture syntax. A request to
 /// `/api/workspaces/` (empty segment) does not match, so the TypeScript route's
@@ -129,7 +129,7 @@ where
 /// built from a raw face that never passed the classifier. This is the wire half
 /// of the identity seal — the projector eats the sealed type and nothing wider.
 /// The published-workspace shape itself is the crate's one canonical
-/// [`ViewerWorkspaceDto`](crate::workspaces::ViewerWorkspaceDto); the gate lives
+/// [`ViewerWorkspaceDto`](crate::identity_access::workspaces::ViewerWorkspaceDto); the gate lives
 /// here on THIS response type, not on the shared DTO.
 #[derive(Serialize)]
 struct WorkspaceDetailResponse {

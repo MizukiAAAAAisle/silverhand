@@ -29,7 +29,7 @@ use silverhand_backend_core::identity_access::access::{
     ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceAccessPolicy, WorkspaceGovernance,
     WorkspaceRole, WorkspaceUserMembership,
 };
-use silverhand_backend_server::access::{
+use silverhand_backend_server::identity_access::access::{
     router,
     wire::{AGENT_NOT_OWNED_CODE, AGENT_NOT_OWNED_MESSAGE},
 };

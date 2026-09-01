@@ -45,7 +45,7 @@ use silverhand_backend_core::{
     },
     identity_access::user_identity::{UserChangedAnnounceFailure, UserChangedSink},
 };
-use silverhand_backend_server::{
+use silverhand_backend_server::identity_access::{
     human_auth::{self, HumanAuthDeps},
     users::{self, UsersDeps},
 };

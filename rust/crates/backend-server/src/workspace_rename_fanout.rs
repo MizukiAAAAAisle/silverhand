@@ -24,7 +24,9 @@ use silverhand_backend_core::{
     identity_access::workspace_metadata_write::WorkspaceNameChange,
 };
 
-use crate::workspace_metadata_write::{WorkspaceRenameFanout, WorkspaceRenameFanoutFailure};
+use crate::identity_access::workspace_metadata_write::{
+    WorkspaceRenameFanout, WorkspaceRenameFanoutFailure,
+};
 
 /// Wires the messaging store, daemon delivery, and scope-event hub into the route's
 /// [`WorkspaceRenameFanout`] requirement. The messaging store `M` satisfies the

@@ -103,8 +103,8 @@ impl From<&WorkspaceColdRead> for WorkspaceColdReadResponse {
 ///
 /// This is the ONE canonical published-workspace wire projection for the crate:
 /// the workspace-list route here, the detail route
-/// ([`crate::workspace_detail`]), and the metadata-write route
-/// ([`crate::workspace_metadata_write`]) all serve this exact shape, so it is
+/// ([`crate::identity_access::workspace_detail`]), and the metadata-write route
+/// ([`crate::identity_access::workspace_metadata_write`]) all serve this exact shape, so it is
 /// defined once and imported rather than re-declared per route. The `From<&
 /// WorkspaceFace>` is the projection; a route that must gate WHICH faces may reach
 /// the wire (the detail route, which admits only an `AuthorizedWorkspaceFace`)

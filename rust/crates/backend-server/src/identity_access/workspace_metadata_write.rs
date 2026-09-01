@@ -130,7 +130,7 @@ use crate::foundation::error;
 use crate::foundation::wire_admission;
 use crate::foundation::wire_admission::ObjectOnly;
 use crate::foundation::wire_patch::{PatchField, RequiredPatchField};
-use crate::workspaces::ViewerWorkspaceDto;
+use crate::identity_access::workspaces::ViewerWorkspaceDto;
 
 /// The rename/describe route template, in axum's `{id}` capture syntax. An empty
 /// segment does not match, so the product's `if (!id) 400` branch is
@@ -548,7 +548,8 @@ struct WorkspaceArchiveRaw {
 
 /// Success body: `{ "workspace": {ViewerWorkspaceDto} }`, mirroring
 /// `c.json({ workspace: toViewerWorkspace(updated) })`. The workspace shape is the
-/// crate's one canonical [`ViewerWorkspaceDto`](crate::workspaces::ViewerWorkspaceDto).
+/// crate's one canonical
+/// [`ViewerWorkspaceDto`](crate::identity_access::workspaces::ViewerWorkspaceDto).
 #[derive(Serialize)]
 struct WorkspaceMutationResponse {
     workspace: ViewerWorkspaceDto,

@@ -1,6 +1,6 @@
 //! The human-directory and avatar HTTP surface — the four routes ported from
 //! `packages/backend/src/routes/users.ts` (`createUsersApp`) that are NOT the
-//! `me` profile pair (those live in [`crate::human_auth`]):
+//! `me` profile pair (those live in [`crate::identity_access::human_auth`]):
 //!
 //! * `GET    /api/users`             — the global human directory.
 //! * `POST   /api/me/avatar`         — upload/replace the caller's avatar.
@@ -22,7 +22,7 @@
 //!
 //! The directory and the mutating routes project the same [`UserDto`] (and its
 //! cache-busted `avatar_url` rule) that `GET /api/me` does; this module imports it
-//! from [`crate::human_auth`] rather than defining a second identity/DTO/avatar-URL
+//! from [`crate::identity_access::human_auth`] rather than defining a second identity/DTO/avatar-URL
 //! authority.
 //!
 //! ## `/me` NoSuchUser is a dangling-session safe-500, not the TS 404
@@ -36,7 +36,7 @@
 //! ## Two integration residuals (no production adapter ships here)
 //!
 //! * The `user_changed` announce sink is the #2220 residual (reused from
-//!   [`crate::human_auth`]'s wiring); a mutating avatar write owes the same
+//!   [`crate::identity_access::human_auth`]'s wiring); a mutating avatar write owes the same
 //!   changed-only app-scope hint a profile edit does.
 //! * The avatar blob backend is the #2221 residual; this leaf depends only on the
 //!   narrow [`AvatarBlobStore`] capability and ships no production adapter.
@@ -63,8 +63,8 @@ use silverhand_backend_core::{
 
 use crate::foundation::error;
 use crate::foundation::multipart_transport::{accumulate_capped, declared_content_type};
-use crate::human_auth::{UserDto, log_lost_announce};
 use crate::identity_access::auth::{PublicJsonUnauthorized, require_human_session};
+use crate::identity_access::human_auth::{UserDto, log_lost_announce};
 
 /// `apiPaths.users`.
 pub const USERS_PATH: &str = "/api/users";

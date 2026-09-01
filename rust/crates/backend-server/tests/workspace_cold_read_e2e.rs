@@ -34,8 +34,8 @@ use silverhand_backend_core::{
     identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
     identity_access::workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
 };
-use silverhand_backend_server::{
-    identity_access::auth::{PublicJsonUnauthorized, require_human_session},
+use silverhand_backend_server::identity_access::{
+    auth::{PublicJsonUnauthorized, require_human_session},
     workspaces::{self, WORKSPACES_PATH},
 };
 use silverhand_backend_sqlite::{

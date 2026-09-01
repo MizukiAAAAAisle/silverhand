@@ -42,7 +42,7 @@ use silverhand_backend_core::{
         WorkspaceMetadataAnnounceFailure, WorkspaceMetadataChangedSink, WorkspaceNameChange,
     },
 };
-use silverhand_backend_server::workspace_metadata_write::{
+use silverhand_backend_server::identity_access::workspace_metadata_write::{
     self, WorkspaceMetadataClock, WorkspaceRenameFanout, WorkspaceRenameFanoutFailure,
 };
 use silverhand_backend_sqlite::{

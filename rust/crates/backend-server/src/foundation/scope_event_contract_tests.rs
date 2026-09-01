@@ -5112,7 +5112,7 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
             .await
             .unwrap();
     let enroll_app = crate::identity_access::auth::require_human_session(
-        crate::access::router(
+        crate::identity_access::access::router(
             store.clone(),
             store,
             hub.workspace_membership_publisher(),
@@ -5122,7 +5122,7 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
         crate::identity_access::auth::PublicJsonUnauthorized,
     );
     let read_app = crate::identity_access::auth::require_human_session(
-        crate::workspaces::router(cold_read),
+        crate::identity_access::workspaces::router(cold_read),
         authenticator(),
         crate::identity_access::auth::PublicJsonUnauthorized,
     );

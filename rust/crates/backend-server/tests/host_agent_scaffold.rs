@@ -228,19 +228,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // leaf consumes only the typed data-plane port; #task:2231 supplies that production face.
     ("backend-server", "internal_agent"),
     ("backend-server", "host_resources"),
-    ("backend-server", "human_auth"),
-    // #task:2222 — the human-directory and avatar route surface (GET /api/users,
-    // POST/DELETE /api/me/avatar, GET /api/users/{id}/avatar). Sibling of the core
-    // `avatar` entry above; mounted by the #task:2223 integration.
-    ("backend-server", "users"),
     ("backend-server", "ops"),
     // #task:2229 — the runtime start/stop/clear production capability. It owns
     // exact-custody commands, the ephemeral clear waiter, and committed clear
     // settlement; its route verticals are mounted by #task:2234 (CP4 clear/switch, CP5 stop).
     ("backend-server", "runtime_control"),
     ("backend-server", "scope_runtime_stop"),
-    ("backend-server", "workspace_detail"),
-    ("backend-server", "workspace_metadata_write"),
     // #task:2220 — the workspace-rename fan-out production adapter, wiring the core
     // rename orchestrator over the messaging store, daemon delivery, and scope-event
     // hub. Assembled into the workspace-metadata-write mount by the #task:2223
@@ -395,7 +388,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     // owning-root container entry covers both via the CP projection, keeping their
     // non-seam baseline. It carries no seam obligation, matching the two adapters it holds.
     ("backend-filesystem", "foundation"),
-    ("backend-server", "access"),
     ("backend-server", "current_schema"),
     ("backend-server", "daemon_delivery"),
     ("backend-server", "daemon_events"),
@@ -403,7 +395,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-server", "host_runtime"),
     ("backend-server", "messaging"),
     ("backend-server", "runtime_credential"),
-    ("backend-server", "workspaces"),
     ("backend-sqlite", "current_schema"),
     // #task:2294 relocated four low-fanout read adapters (`agent_availability_read`,
     // `agent_presence_read`, `computer_agents_read`, `host_resources_read`) under this
@@ -455,10 +446,10 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
     // `current_schema` root remains a separate resolver axis and is excluded from physical
     // relocation. This single owning-root entry covers production without descending.
     ("backend-server", "foundation"),
-    // #task:2301 relocated six settled identity/access leaves under the existing dual-role
-    // context. Map + real tree derive partial 8/14/6; `access`, `human_auth`, `users`,
-    // `workspace_detail`, `workspace_metadata_write`, and `workspaces` remain flat. The
-    // accepted `agent_profile_mcp_data_plane` root facade remains a separately named path.
+    // #task:2302 completed the production-settled identity/access relocation: the self-row
+    // plus thirteen independent leaves derive 14/14/0. The accepted named
+    // `agent_profile_mcp_data_plane` root facade remains a separate compatibility path, not
+    // a second business unit. This owning-root entry covers production without descending.
     ("backend-server", "identity_access"),
     ("backend-server", "viewer_read_model"),
 ];

@@ -40,7 +40,9 @@ impl ProcessClock for SystemProcessClock {
 /// so the one process-clock owner satisfies it directly. The composition injects
 /// `SystemProcessClock`; it does NOT mint a second wall-clock reader for the leaf, so
 /// every production `SystemTime::now()` for this contract stays in this one file.
-impl crate::workspace_metadata_write::WorkspaceMetadataClock for SystemProcessClock {
+impl crate::identity_access::workspace_metadata_write::WorkspaceMetadataClock
+    for SystemProcessClock
+{
     fn now_unix_millis(&self) -> i64 {
         signed_unix_millis(SystemTime::now())
     }

@@ -40,7 +40,7 @@ use silverhand_backend_core::{
     },
     identity_access::user_identity::{UserChangedAnnounceFailure, UserChangedSink},
 };
-use silverhand_backend_server::human_auth::{self, HumanAuthDeps};
+use silverhand_backend_server::identity_access::human_auth::{self, HumanAuthDeps};
 use silverhand_backend_sqlite::{
     identity_access::auth::SqliteSessionStore, identity_access::credential::SqliteCredentialStore,
     identity_access::handle_namespace::SqliteHandleNamespace,

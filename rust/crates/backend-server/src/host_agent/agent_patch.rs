@@ -53,7 +53,7 @@
 //! 1. NO Zod `issues` array. The refusal body is terminally `{ "error": "invalid
 //!    input" }` for every semantic fault (the `.refine` "no fields to update" case
 //!    included), WITHOUT the per-issue array the TS route emits. This mirrors the
-//!    ratified `PATCH /api/me` decision ([`crate::human_auth`]): no shared response
+//!    ratified `PATCH /api/me` decision ([`crate::identity_access::human_auth`]): no shared response
 //!    schema pins `issues`, no client branches on it, and reproducing the full Zod
 //!    projection is a large, drift-prone surface with no reachable consumer. The typed
 //!    TUNING `400` (which DOES carry an actionable `code`) is reproduced exactly.
