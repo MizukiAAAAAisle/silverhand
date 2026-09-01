@@ -58,8 +58,8 @@ use thiserror::Error;
 
 use crate::{
     identity::{UserId, WorkspaceId},
+    identity_access::workspace_face::WorkspaceFace,
     persistence::PersistenceFailure,
-    workspace_face::WorkspaceFace,
 };
 
 /// A workspace's published face together with the identity facts the read

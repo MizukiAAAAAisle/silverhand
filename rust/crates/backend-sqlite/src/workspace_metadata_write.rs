@@ -32,12 +32,12 @@ use silverhand_backend_core::{
         WorkspaceGovernanceFacts, WorkspaceGovernanceFloor, WorkspaceRole, governance_floor_verdict,
     },
     identity::{AgentId, Principal, UserId, WorkspaceId},
-    persistence::PersistenceFailure,
-    workspace_face::WorkspaceFace,
-    workspace_metadata_write::{
+    identity_access::workspace_face::WorkspaceFace,
+    identity_access::workspace_metadata_write::{
         PriorWorkspaceAddress, WorkspaceArchiveWrite, WorkspaceMetadataEdit,
         WorkspaceMetadataWrite, WorkspaceMetadataWriteUnitOfWork,
     },
+    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,
@@ -432,7 +432,7 @@ impl WorkspaceMetadataWriteUnitOfWork for SqliteWorkspaceMetadataWrite {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use silverhand_backend_core::workspace_name::CanonicalWorkspaceName;
+    use silverhand_backend_core::identity_access::workspace_name::CanonicalWorkspaceName;
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =

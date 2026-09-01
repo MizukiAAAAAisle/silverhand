@@ -7,7 +7,7 @@
 //! context owns: it spans both tables, and the answer must be identical whether it
 //! is asked by the agent-create form, this probe, or password signup. The one
 //! authority for that cross-context question is
-//! [`HandleNamespaceRead`](crate::human_auth_flows::HandleNamespaceRead); this
+//! [`HandleNamespaceRead`](crate::identity_access::human_auth_flows::HandleNamespaceRead); this
 //! module composes it with the shared handle FORMAT authority
 //! ([`ParticipantHandle::parse`]) so the probe can never report `available` for a
 //! handle create would refuse.
@@ -38,8 +38,8 @@
 //! does not vary by viewer has no natural reminder it sits behind the perimeter.
 
 use crate::{
-    human_auth_flows::HandleNamespaceRead, persistence::PersistenceFailure,
-    user_identity::ParticipantHandle,
+    identity_access::human_auth_flows::HandleNamespaceRead,
+    identity_access::user_identity::ParticipantHandle, persistence::PersistenceFailure,
 };
 
 /// The verdict, as ONE value with three arms.

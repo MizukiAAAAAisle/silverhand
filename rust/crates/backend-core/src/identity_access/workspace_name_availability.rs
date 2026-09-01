@@ -1,7 +1,7 @@
 //! Is a proposed regular-workspace name still free? — the read behind
 //! `GET /api/workspaces/name-availability`.
 //!
-//! This is a DIFFERENT question from [`crate::workspace_name`]'s. That module
+//! This is a DIFFERENT question from [`crate::identity_access::workspace_name`]'s. That module
 //! answers whether a name is *storable at all* (format), a verdict computable from
 //! the string alone. This one answers whether the regular-workspace namespace
 //! *already holds* the name's folded key — a database fact about other rows. The
@@ -55,7 +55,9 @@ use std::future::Future;
 
 use thiserror::Error;
 
-use crate::{persistence::PersistenceFailure, workspace_name::CanonicalWorkspaceName};
+use crate::{
+    identity_access::workspace_name::CanonicalWorkspaceName, persistence::PersistenceFailure,
+};
 
 /// The verdict, as ONE value with three arms.
 ///
@@ -69,7 +71,7 @@ use crate::{persistence::PersistenceFailure, workspace_name::CanonicalWorkspaceN
 pub enum WorkspaceNameAvailability {
     /// The name cannot be stored under any circumstances — empty, over the cap, or
     /// carrying a forbidden code point. No lookup was performed. The specific
-    /// [`crate::workspace_name::WorkspaceNameIssue`] is deliberately dropped: this
+    /// [`crate::identity_access::workspace_name::WorkspaceNameIssue`] is deliberately dropped: this
     /// endpoint publishes one undifferentiated `invalid`, so which rule refused is
     /// not a wire contract.
     Invalid,

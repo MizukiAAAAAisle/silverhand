@@ -55,6 +55,7 @@ use crate::{
     identity::HostId,
     identity::UserId,
     identity::WorkspaceId,
+    identity_access::user_identity::ParticipantHandle,
     messaging::DirectPairParticipants,
     messaging::MessageId,
     messaging::PrincipalIdentity,
@@ -63,7 +64,6 @@ use crate::{
         OnboardingWriteWitness, OnboardingWritten,
     },
     persistence::PersistenceFailure,
-    user_identity::ParticipantHandle,
 };
 
 /// The canonical `materialization_failed_code` the crash-recovery sweep stamps on a row a

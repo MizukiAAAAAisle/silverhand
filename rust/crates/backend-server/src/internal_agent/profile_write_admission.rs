@@ -45,7 +45,7 @@ use silverhand_backend_core::{
     identity_access::avatar::{
         AVATAR_MAX_BYTES, AvatarContentType, AvatarRejection, validate_avatar,
     },
-    user_identity::DisplayName,
+    identity_access::user_identity::DisplayName,
 };
 
 use crate::multipart_transport::{accumulate_capped, declared_content_type, drain};

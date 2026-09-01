@@ -42,8 +42,8 @@ use silverhand_backend_core::{
         AVATAR_MAX_BYTES, AvatarBlobPointer, AvatarBlobRead, AvatarBlobReadOutcome,
         AvatarBlobStore, AvatarContentType, AvatarStorageFailure,
     },
+    identity_access::user_identity::{UserChangedAnnounceFailure, UserChangedSink},
     persistence::PersistenceFailure,
-    user_identity::{UserChangedAnnounceFailure, UserChangedSink},
 };
 use silverhand_backend_server::{
     human_auth::{self, HumanAuthDeps},

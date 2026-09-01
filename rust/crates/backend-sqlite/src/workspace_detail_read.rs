@@ -23,8 +23,8 @@ use silverhand_backend_core::{
     identity_access::workspace_detail_read::{
         WorkspaceDetailForViewer, WorkspaceDetailReadUnitOfWork,
     },
+    identity_access::workspace_face::WorkspaceFace,
     persistence::PersistenceFailure,
-    workspace_face::WorkspaceFace,
 };
 use sqlx::{
     Row, SqlitePool,

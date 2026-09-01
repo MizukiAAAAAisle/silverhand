@@ -5,7 +5,7 @@
 //! Its reason to change is the editable-workspace contract: a workspace's
 //! display name (and the uniqueness key that name folds to), its description, and
 //! whether it is archived. That is a DISTINCT authority from
-//! [`crate::workspace_face`] (which only PROJECTS a workspace's published face for
+//! [`crate::identity_access::workspace_face`] (which only PROJECTS a workspace's published face for
 //! a reader) and from [`crate::access`] enrollment (which writes roster edges).
 //! This context owns the mutation and the fact it yields, nothing more.
 //!
@@ -84,7 +84,7 @@
 //! The public door resolves at this path:
 //!
 //! ```
-//! use silverhand_backend_core::workspace_metadata_write::{
+//! use silverhand_backend_core::identity_access::workspace_metadata_write::{
 //!     AnnouncedWorkspaceMetadata, WorkspaceMetadataUpdateWithAnnounce,
 //! };
 //! ```
@@ -94,7 +94,7 @@
 //! the announce obligation unskippable:
 //!
 //! ```compile_fail
-//! use silverhand_backend_core::workspace_metadata_write::{
+//! use silverhand_backend_core::identity_access::workspace_metadata_write::{
 //!     CommittedWorkspaceMetadata, update_workspace_metadata,
 //! };
 //! ```
@@ -105,9 +105,9 @@ use thiserror::Error;
 
 use crate::{
     identity::{Principal, WorkspaceId},
+    identity_access::workspace_face::WorkspaceFace,
+    identity_access::workspace_name::CanonicalWorkspaceName,
     persistence::PersistenceFailure,
-    workspace_face::WorkspaceFace,
-    workspace_name::CanonicalWorkspaceName,
 };
 
 /// A metadata edit, modeled as the THREE shapes the write actually performs —

@@ -30,9 +30,9 @@ use axum::{
 use serde::Serialize;
 use silverhand_backend_core::{
     identity::UserId,
+    identity_access::workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
+    identity_access::workspace_face::WorkspaceFace,
     viewer_workspace_sort::{ViewerSortState, WORKSPACE_SORT_LIST_KEY},
-    workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
-    workspace_face::WorkspaceFace,
 };
 
 use crate::error;
@@ -202,10 +202,10 @@ mod tests {
     use serde_json::{Value, json};
     use silverhand_backend_core::{
         identity::{UserId, WorkspaceId},
+        identity_access::workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
+        identity_access::workspace_face::WorkspaceFace,
         persistence::PersistenceFailure,
         viewer_workspace_sort::{SortMode, ViewerSortEntry, ViewerSortState, WorkspaceSortScope},
-        workspace_cold_read::{WorkspaceColdRead, WorkspaceColdReadUnitOfWork},
-        workspace_face::WorkspaceFace,
     };
     use tower::ServiceExt;
 

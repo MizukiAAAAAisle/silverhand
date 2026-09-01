@@ -20,15 +20,15 @@ use std::{collections::HashSet, path::Path, time::Duration};
 
 use silverhand_backend_core::{
     identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    identity_access::workspace_cold_read::{
+        WorkspaceColdRead, WorkspaceColdReadUnitOfWork, compose_workspace_cold_read,
+    },
+    identity_access::workspace_face::{WorkspaceFace, WorkspaceFaceReadPort},
     persistence::PersistenceFailure,
     viewer_workspace_sort::{
         SortMode, ViewerSortEntry, ViewerSortState, ViewerWorkspaceSortReadPort,
         WORKSPACE_SORT_LIST_KEY, WorkspaceSortScope,
     },
-    workspace_cold_read::{
-        WorkspaceColdRead, WorkspaceColdReadUnitOfWork, compose_workspace_cold_read,
-    },
-    workspace_face::{WorkspaceFace, WorkspaceFaceReadPort},
 };
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,
@@ -342,7 +342,7 @@ mod snapshot_isolation_tests {
     //! only way to interleave a commit at the seam the public API runs atomically.
 
     use super::*;
-    use silverhand_backend_core::workspace_face::WorkspaceFaceReadPort;
+    use silverhand_backend_core::identity_access::workspace_face::WorkspaceFaceReadPort;
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =

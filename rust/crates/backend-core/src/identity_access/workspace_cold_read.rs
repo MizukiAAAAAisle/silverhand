@@ -1,7 +1,7 @@
 //! The authenticated workspace cold read: the whole `GET /api/workspaces`
 //! envelope, composed from two bounded contexts over ONE database snapshot.
 //!
-//! The workspace list ([`crate::workspace_face`]) and the viewer's sort
+//! The workspace list ([`crate::identity_access::workspace_face`]) and the viewer's sort
 //! preferences ([`crate::viewer_workspace_sort`]) are separate contexts with
 //! separate ports; this module is the thin application seam that composes them.
 //! The composition is deliberate and explicit rather than a single fused query:
@@ -20,9 +20,9 @@ use std::future::Future;
 
 use crate::{
     identity::{UserId, WorkspaceId},
+    identity_access::workspace_face::{WorkspaceFace, WorkspaceFaceReadPort},
     persistence::PersistenceFailure,
     viewer_workspace_sort::{ViewerSortState, ViewerWorkspaceSortReadPort},
-    workspace_face::{WorkspaceFace, WorkspaceFaceReadPort},
 };
 
 /// The whole cold-read envelope for one authenticated viewer.

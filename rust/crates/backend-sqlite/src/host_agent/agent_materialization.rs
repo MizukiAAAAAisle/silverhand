@@ -907,7 +907,7 @@ mod tests {
         agents::runtime::RuntimeKind,
         agents::session_scope::AgentSessionScope,
         identity::HostId,
-        user_identity::ParticipantHandle,
+        identity_access::user_identity::ParticipantHandle,
     };
     use tempfile::TempDir;
 

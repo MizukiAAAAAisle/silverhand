@@ -23,6 +23,8 @@ use silverhand_backend_core::{
     direct_pair_read::DirectPairReadModel,
     host_runtime::{aftermath::AgentAvailabilityAnnouncer, agent_roster::ComputerAgentsReadPort},
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId},
+    identity_access::user_identity::UserChangedSink,
+    identity_access::workspace_metadata_write::WorkspaceMetadataChangedSink,
     messaging::{
         AddressedPrincipals, AttachmentId, CapabilityDenied, CommittedMessageView, CreatedMessage,
         DirectLineAuthority, DirectPairOpenedFact, DirectPairOpenedPort, DirectPairParticipants,
@@ -53,8 +55,6 @@ use silverhand_backend_core::{
     policy::presence_grace::{GraceWindow, PresenceFact},
     runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
     scope_event::{AuthorizeEventScope, EventScope},
-    user_identity::UserChangedSink,
-    workspace_metadata_write::WorkspaceMetadataChangedSink,
 };
 use silverhand_backend_sqlite::{
     direct_pair_read::SqliteDirectPairReadModel,

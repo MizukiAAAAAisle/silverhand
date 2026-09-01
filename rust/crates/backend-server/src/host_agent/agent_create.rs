@@ -110,12 +110,12 @@ use silverhand_backend_core::{
     identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
     identity_access::agent_detail_read::AgentDetailReadModel,
     identity_access::agent_profile_write::AgentChangedSink,
+    identity_access::user_identity::ParticipantHandle,
     messaging::{
         MessageId,
         environment::SendEntropy,
         post_commit::{EffectFailure, RuntimeStart},
     },
-    user_identity::ParticipantHandle,
 };
 
 use crate::agent_wire::{AgentDto, reproject_committed_agent};
@@ -285,11 +285,11 @@ where
 /// `Clone`/`Send`/`Sync`/`'static` bundle by its own supertrait bounds, named here only
 /// to keep the `router` where-clause readable.
 pub trait AgentMaterializationLookupHandles:
-    silverhand_backend_core::human_auth_flows::HandleNamespaceRead
+    silverhand_backend_core::identity_access::human_auth_flows::HandleNamespaceRead
 {
 }
 impl<T> AgentMaterializationLookupHandles for T where
-    T: silverhand_backend_core::human_auth_flows::HandleNamespaceRead
+    T: silverhand_backend_core::identity_access::human_auth_flows::HandleNamespaceRead
 {
 }
 
@@ -893,12 +893,13 @@ mod tests {
         },
         agents::runtime::RuntimeKind,
         host_runtime::{computer::ComputerRecord, read::ComputerReadModel},
-        human_auth_flows::HandleNamespaceRead,
         identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
         identity_access::agent_detail_read::{
             AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
         },
         identity_access::agent_profile_write::{AgentChangedAnnounceFailure, AgentChangedSink},
+        identity_access::human_auth_flows::HandleNamespaceRead,
+        identity_access::user_identity::ParticipantHandle,
         messaging::{
             MessageId,
             collaboration::RuntimePlacementRefusal,
@@ -906,7 +907,6 @@ mod tests {
             post_commit::{EffectFailure, RuntimeStart},
         },
         persistence::PersistenceFailure,
-        user_identity::ParticipantHandle,
     };
     use tower::ServiceExt;
 

@@ -2,7 +2,7 @@
 //! request into a session for the single local viewer.
 //!
 //! This is the composition seam where the embedded-bootstrap context meets the
-//! user-identity authority ([`crate::user_identity`]) and the session authority
+//! user-identity authority ([`crate::identity_access::user_identity`]) and the session authority
 //! ([`crate::auth`]). It mirrors the TS `routes.ts` embedded-bootstrap handler +
 //! `UserAuthService.register`: decide 0/1/>1 viewers under ONE write lock, create
 //! the profile-only local viewer on an empty DB (and backfill its owner
@@ -27,8 +27,8 @@ use thiserror::Error;
 use crate::{
     auth::{IssuedSessionSecret, SessionAudit, SessionIssue, SessionMintError, SessionTokenMint},
     identity::UserId,
+    identity_access::user_identity::{UserChangedAnnounce, UserChangedSink, UserRecord},
     persistence::PersistenceFailure,
-    user_identity::{UserChangedAnnounce, UserChangedSink, UserRecord},
 };
 
 // ===========================================================================
@@ -202,7 +202,7 @@ mod tests {
     use crate::{
         auth::{EntropySessionTokenMint, MintedSession, SessionTokenHash},
         host_runtime::environment::EntropySource,
-        user_identity::UserChangedAnnounceFailure,
+        identity_access::user_identity::UserChangedAnnounceFailure,
     };
     use std::sync::{
         Arc, Mutex,

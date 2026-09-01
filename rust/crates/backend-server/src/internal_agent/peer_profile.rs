@@ -36,9 +36,9 @@ use silverhand_backend_core::{
         PeerProfileOutcome, PeerTargetMembership, admit_peer_profile,
     },
     identity_access::agent_profile_read::{AgentProfileReadModel, ProfileReadFault},
+    identity_access::user_identity::ParticipantHandle,
     name_canonicalization::is_ecmascript_trim_whitespace,
     runtime_credential::RuntimePrincipal,
-    user_identity::ParticipantHandle,
 };
 
 use super::wire::{AgentProfileDto, agent_profile_dto};

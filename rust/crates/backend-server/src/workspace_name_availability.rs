@@ -136,8 +136,8 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        identity_access::workspace_name::CanonicalWorkspaceName,
         identity_access::workspace_name_availability::HeldName, persistence::PersistenceFailure,
-        workspace_name::CanonicalWorkspaceName,
     };
     use tower::ServiceExt;
 

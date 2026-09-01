@@ -58,7 +58,7 @@ use silverhand_backend_core::{
         AvatarPointerWriteUnitOfWork, AvatarRejection, AvatarStorageRefRead, AvatarUploadOutcome,
         BlobCleanup, CandidateAvatar, CommittedAvatar, clear_avatar, fetch_avatar, upload_avatar,
     },
-    user_identity::{UserChangedSink, UserDirectoryRead, UserProfileRead},
+    identity_access::user_identity::{UserChangedSink, UserDirectoryRead, UserProfileRead},
 };
 
 use crate::auth::{PublicJsonUnauthorized, require_human_session};

@@ -4,7 +4,7 @@
 //! [`crate::agent_materialization`] (reserve / activate-and-provision / fail / reopen /
 //! idempotent lookup), the host-side materialize command
 //! ([`crate::agent_materialize`]), the placement rule ([`crate::host_runtime`]), the
-//! shared handle namespace ([`crate::human_auth_flows::HandleNamespaceRead`]) and id
+//! shared handle namespace ([`crate::identity_access::human_auth_flows::HandleNamespaceRead`]) and id
 //! minting (`crate::messaging::identity`). It owns the DECISION at each step; the row
 //! writes, the host command and the reads are ports.
 //!
@@ -63,8 +63,9 @@ use crate::{
         lifecycle::{HostLifecycleStatus, lifecycle_status},
         read::ComputerReadModel,
     },
-    human_auth_flows::HandleNamespaceRead,
     identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
+    identity_access::human_auth_flows::HandleNamespaceRead,
+    identity_access::user_identity::ParticipantHandle,
     messaging::{
         MessageId,
         collaboration::RuntimePlacementRefusal,
@@ -74,7 +75,6 @@ use crate::{
     },
     name_canonicalization::is_ecmascript_trim_whitespace,
     persistence::PersistenceFailure,
-    user_identity::ParticipantHandle,
 };
 
 /// The already-admitted create request, in the core's own vocabulary.

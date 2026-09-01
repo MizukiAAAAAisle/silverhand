@@ -17,11 +17,11 @@
 
 use silverhand_backend_core::{
     identity::WorkspaceId,
+    identity_access::workspace_metadata_write::WorkspaceNameChange,
     messaging::collaboration::workspace_rename_messaging::{
         ConversationAgentsReadPort, WorkspaceRenameChannelsReadPort, WorkspaceRenameDeliveryPort,
         WorkspaceRenameMessageAuthorPort, WorkspaceRenamePublicationPort, fan_out_workspace_rename,
     },
-    workspace_metadata_write::WorkspaceNameChange,
 };
 
 use crate::workspace_metadata_write::{WorkspaceRenameFanout, WorkspaceRenameFanoutFailure};

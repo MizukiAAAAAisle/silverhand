@@ -7,9 +7,11 @@ use silverhand_backend_core::{
     },
     identity::{AgentId, UserId, WorkspaceId},
     identity_access::agent_profile_write::{AgentChangedAnnounceFailure, AgentChangedSink},
+    identity_access::user_identity::{UserChangedAnnounceFailure, UserChangedSink},
+    identity_access::workspace_metadata_write::{
+        WorkspaceMetadataAnnounceFailure, WorkspaceMetadataChangedSink,
+    },
     scope_event::EventScope,
-    user_identity::{UserChangedAnnounceFailure, UserChangedSink},
-    workspace_metadata_write::{WorkspaceMetadataAnnounceFailure, WorkspaceMetadataChangedSink},
 };
 
 use crate::foundation::{

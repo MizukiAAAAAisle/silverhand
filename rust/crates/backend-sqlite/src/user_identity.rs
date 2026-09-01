@@ -22,12 +22,12 @@ use silverhand_backend_core::{
         AvatarBlobPointer, AvatarContentType, AvatarPointerWrite, AvatarPointerWriteUnitOfWork,
         AvatarStorageRef, AvatarStorageRefRead,
     },
-    messaging::AvatarRevision,
-    persistence::PersistenceFailure,
-    user_identity::{
+    identity_access::user_identity::{
         DisplayName, UserDirectoryRead, UserEmailLookup, UserProfileRead, UserProfileWrite,
         UserProfileWriteUnitOfWork, UserRecord,
     },
+    messaging::AvatarRevision,
+    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, SqlitePool,

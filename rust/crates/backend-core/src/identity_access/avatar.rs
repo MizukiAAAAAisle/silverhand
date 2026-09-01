@@ -16,7 +16,7 @@
 //!   product's `ctx.blobStorage.kind`), so it never crosses the DB or the wire.
 //!   The production filesystem/blob adapter is a #2221 integration residual; this
 //!   leaf supplies only the port + deterministic test adapters.
-//! * [`UserChangedSink`] — reused from [`crate::user_identity`]; a mutating avatar
+//! * [`UserChangedSink`] — reused from [`crate::identity_access::user_identity`]; a mutating avatar
 //!   write owes the same changed-only `user_changed` app-scope announce a profile
 //!   edit does. The production sink is a #2220 integration residual.
 //!
@@ -35,8 +35,10 @@ use thiserror::Error;
 
 use crate::{
     identity::UserId,
+    identity_access::user_identity::{
+        UserChangedAnnounce, UserChangedSink, UserProfileRead, UserRecord,
+    },
     persistence::PersistenceFailure,
-    user_identity::{UserChangedAnnounce, UserChangedSink, UserProfileRead, UserRecord},
 };
 
 // ===========================================================================
@@ -637,8 +639,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity_access::user_identity::UserChangedAnnounceFailure;
     use crate::messaging::AvatarRevision;
-    use crate::user_identity::UserChangedAnnounceFailure;
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},

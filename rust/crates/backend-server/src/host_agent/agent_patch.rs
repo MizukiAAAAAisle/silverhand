@@ -89,7 +89,7 @@ use silverhand_backend_core::{
         AgentProfileWriteUnitOfWork, AgentTuningEdit, FieldEdit, RequiredEdit, TuningRejection,
         update_agent_profile_and_announce,
     },
-    user_identity::DisplayName,
+    identity_access::user_identity::DisplayName,
 };
 
 use crate::clock::ProcessClock;

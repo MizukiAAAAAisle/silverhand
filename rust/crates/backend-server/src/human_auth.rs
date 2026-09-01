@@ -10,8 +10,8 @@
 //! * `PATCH /api/me`      — the caller's own `display_name` (behind the perimeter).
 //!
 //! These handlers are thin transports over the application flows in
-//! [`silverhand_backend_core::human_auth_flows`] and
-//! [`silverhand_backend_core::user_identity`]: the domain owns the security
+//! [`silverhand_backend_core::identity_access::human_auth_flows`] and
+//! [`silverhand_backend_core::identity_access::user_identity`]: the domain owns the security
 //! ordering (hash → handle → email), the uniform credential answer, the
 //! committed-fact seal, the change gate, and the `user_changed` announce fate.
 //! This module's only jobs are request-boundary admission — the frozen
@@ -54,7 +54,7 @@
 //!
 //! ## Faults take the lane's safe `500`, never a JSON envelope
 //!
-//! Every [`HumanAuthError`](silverhand_backend_core::human_auth_flows::HumanAuthError)
+//! Every [`HumanAuthError`](silverhand_backend_core::identity_access::human_auth_flows::HumanAuthError)
 //! arm, a revoke persistence fault, and an untrustworthy committed row take the
 //! crate-wide bare `text/plain` `Internal Server Error`, so no adapter detail can
 //! leak and a misconfiguration is never dressed as a product answer.
@@ -74,17 +74,17 @@ use silverhand_backend_core::{
         SessionIssue, SessionRevoke, SessionTokenMint,
     },
     credential::{LoginCredentialLookup, PasswordHasher},
-    human_auth_flows::{
+    identity::UserId,
+    identity_access::human_auth_flows::{
         HandleNamespaceRead, HumanRegistrationUnitOfWork, Login, LoginCommand, LoginPorts, Signup,
         SignupCommand, SignupPorts, log_in, log_out, sign_up,
     },
-    identity::UserId,
-    messaging::PrincipalKind,
-    user_identity::{
+    identity_access::user_identity::{
         DisplayName, EmailAddress, ParticipantHandle, UserChangedAnnounce, UserChangedSink,
         UserEmailLookup, UserProfileRead, UserProfileUpdate, UserProfileWriteUnitOfWork,
         UserRecord, read_self_profile, update_self_display_name,
     },
+    messaging::PrincipalKind,
 };
 
 use crate::auth::{PublicJsonUnauthorized, require_human_session};

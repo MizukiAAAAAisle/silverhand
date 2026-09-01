@@ -24,9 +24,9 @@ use silverhand_backend_core::{
     embedded_bootstrap::{BootstrapChoice, EmbeddedBootstrapUnitOfWork},
     host_runtime::environment::{EntropySource, OsEntropy},
     identity::UserId,
+    identity_access::user_identity::UserRecord,
     messaging::AvatarRevision,
     persistence::PersistenceFailure,
-    user_identity::UserRecord,
 };
 use sqlx::{
     Row, SqlitePool,

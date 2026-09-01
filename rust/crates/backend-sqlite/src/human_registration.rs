@@ -21,10 +21,10 @@ use std::{path::Path, time::Duration};
 use silverhand_backend_core::{
     credential::PreparedPasswordCredential,
     host_runtime::environment::{EntropySource, OsEntropy},
-    human_auth_flows::{HumanRegistration, HumanRegistrationUnitOfWork},
     identity::UserId,
+    identity_access::human_auth_flows::{HumanRegistration, HumanRegistrationUnitOfWork},
+    identity_access::user_identity::{DisplayName, EmailAddress, ParticipantHandle, UserRecord},
     persistence::PersistenceFailure,
-    user_identity::{DisplayName, EmailAddress, ParticipantHandle, UserRecord},
 };
 use sqlx::{
     Row, SqlitePool,

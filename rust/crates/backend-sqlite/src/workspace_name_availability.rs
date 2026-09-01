@@ -15,9 +15,9 @@
 use std::path::Path;
 
 use silverhand_backend_core::{
+    identity_access::workspace_name::CanonicalWorkspaceName,
     identity_access::workspace_name_availability::{HeldName, RegularWorkspaceNamespace},
     persistence::PersistenceFailure,
-    workspace_name::CanonicalWorkspaceName,
 };
 use sqlx::{
     Row, SqlitePool,

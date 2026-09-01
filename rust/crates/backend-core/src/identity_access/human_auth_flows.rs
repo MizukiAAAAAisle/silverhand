@@ -1,7 +1,7 @@
 //! The human credentialed-session application flows: signup, login, logout.
 //!
 //! These are the composition seam where three bounded contexts meet — the
-//! user-identity authority ([`crate::user_identity`]), the password-credential
+//! user-identity authority ([`crate::identity_access::user_identity`]), the password-credential
 //! authority ([`crate::credential`]), and the session authority
 //! ([`crate::auth`]). Each context owns its own tables and invariants; this
 //! module orchestrates them into the three public flows, exactly as the TS
@@ -32,11 +32,11 @@ use crate::{
         LoginCredentialLookup, PasswordHashError, PasswordHasher, PreparedPasswordCredential,
     },
     identity::UserId,
-    persistence::PersistenceFailure,
-    user_identity::{
+    identity_access::user_identity::{
         DisplayName, EmailAddress, ParticipantHandle, UserChangedAnnounce, UserChangedSink,
         UserEmailLookup, UserProfileRead, UserRecord,
     },
+    persistence::PersistenceFailure,
 };
 
 // ===========================================================================
@@ -370,7 +370,7 @@ mod tests {
         auth::{MintedSession, SessionTokenHash},
         credential::LoginCandidate,
         host_runtime::environment::EntropySource,
-        user_identity::UserChangedAnnounceFailure,
+        identity_access::user_identity::UserChangedAnnounceFailure,
     };
     use std::sync::{
         Arc, Mutex,

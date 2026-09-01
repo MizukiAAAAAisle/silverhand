@@ -3,7 +3,7 @@
 //! moves.
 //!
 //! This is the audience source the post-commit
-//! [`WorkspaceMetadataChangedSink`](crate::workspace_metadata_write::WorkspaceMetadataChangedSink)
+//! [`WorkspaceMetadataChangedSink`](crate::identity_access::workspace_metadata_write::WorkspaceMetadataChangedSink)
 //! fans out over: that sink is handed one `workspace_id` and owes a per-viewer
 //! `metadata_changed` hint to every human member, so SOMETHING has to turn the
 //! id into the member set. That enumeration is an access-context fact — human

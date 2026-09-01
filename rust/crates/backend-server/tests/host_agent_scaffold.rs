@@ -165,13 +165,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "user_presence_last_seen"),
     // #task:2193 — the workspace metadata/read vertical. Core primitives and ports;
     // their SQLite adapters and server routes are the sibling entries below. Mounted at
-    // the app composition root by the #task:2223 integration. Two of this vertical's core
-    // leaves relocated under the `identity_access` namespace per #task:2274
-    // (`workspace_detail_read`, `workspace_name_availability`); their owner/target lives in
-    // the organization map, not as flat seam entries here.
+    // the app composition root by the #task:2223 integration. This vertical's core leaves
+    // relocated under the `identity_access` namespace across #task:2274
+    // (`workspace_detail_read`, `workspace_name_availability`) and #task:2276
+    // (`workspace_metadata_write`, `workspace_name`); their owner/target lives in the
+    // organization map, not as flat seam entries here. `name_canonicalization` stays flat.
     ("backend-core", "name_canonicalization"),
-    ("backend-core", "workspace_metadata_write"),
-    ("backend-core", "workspace_name"),
     // Shared binary64-exact integer primitive. #task:2227's runtime-stop codec is
     // the first migration consumer; domain positivity remains outside this module.
     ("backend-core", "wire_number"),
@@ -183,10 +182,12 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // #task:2193 CP2 — the human credentialed-session vertical (signup/login/
     // logout + self profile). Core bounded contexts and their ports; the SQLite
     // adapters and the server route surface are the sibling entries below. Mounted at
-    // the app composition root by the #task:2223 integration.
+    // the app composition root by the #task:2223 integration. This vertical's
+    // `human_auth_flows` and `user_identity` core leaves relocated under the
+    // `identity_access` namespace per #task:2276; their owner/target lives in the
+    // organization map, not as flat seam entries here. The directory-shaped `credential`
+    // context stays flat.
     ("backend-core", "credential"),
-    ("backend-core", "human_auth_flows"),
-    ("backend-core", "user_identity"),
     // #task:2222 — the human-directory and avatar route family (Rust Wave 2). The
     // avatar sub-capability of the `users` authority (ports + orchestration; it
     // reuses the CP2 identity above). Its server route surface is the sibling `users`
@@ -354,6 +355,13 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
 /// composition-root request-body perimeter, a non-seam production module the
 /// host-agent seam lane did not add), bringing backend-app to 2.
 ///
+/// #task:2276 then relocated two inherited backend-core modules
+/// (`workspace_cold_read`, `workspace_face`) under the C1 `identity_access` namespace,
+/// removing their flat entries here; they are now covered by the single `identity_access`
+/// container seam entry via the owning-root CP projection, and the organization map/gate is
+/// the authority for their owner/target inside the container. This is a physical relocation
+/// of pre-existing modules, not a lane addition.
+///
 /// CP1-temporary, with G3's accounting: it guards "every lane module is registered
 /// where it is guarded", it is deleted when the seam is extracted into the
 /// integration commit that owns those lines, and its owner is the review gate. A
@@ -396,8 +404,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-core", "runtime_event"),
     ("backend-core", "scope_event"),
     ("backend-core", "viewer_workspace_sort"),
-    ("backend-core", "workspace_cold_read"),
-    ("backend-core", "workspace_face"),
     // #task:2256 categorized-file audit sink: the OS adapter that owns the CLI
     // preflight-failure log file and its writer lifecycle, home of the reusable
     // `CategorizedJsonlWriter` primitive. A non-seam production module the host-agent seam

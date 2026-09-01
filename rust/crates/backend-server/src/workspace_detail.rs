@@ -178,7 +178,7 @@ mod tests {
     use serde_json::{Value, json};
     use silverhand_backend_core::{
         identity_access::workspace_detail_read::WorkspaceDetailForViewer,
-        persistence::PersistenceFailure, workspace_face::WorkspaceFace,
+        identity_access::workspace_face::WorkspaceFace, persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
 
@@ -352,10 +352,10 @@ mod tests {
         use crate::workspace_name_availability::{
             self as name_availability, WORKSPACE_NAME_AVAILABILITY_PATH,
         };
+        use silverhand_backend_core::identity_access::workspace_name::CanonicalWorkspaceName;
         use silverhand_backend_core::identity_access::workspace_name_availability::{
             HeldName, RegularWorkspaceNamespace,
         };
-        use silverhand_backend_core::workspace_name::CanonicalWorkspaceName;
 
         #[derive(Clone)]
         struct EmptyNamespace;

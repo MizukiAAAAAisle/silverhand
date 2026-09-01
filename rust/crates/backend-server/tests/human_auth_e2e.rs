@@ -36,7 +36,7 @@ use silverhand_backend_core::{
     },
     host_runtime::environment::OsEntropy,
     identity::UserId,
-    user_identity::{UserChangedAnnounceFailure, UserChangedSink},
+    identity_access::user_identity::{UserChangedAnnounceFailure, UserChangedSink},
 };
 use silverhand_backend_server::human_auth::{self, HumanAuthDeps};
 use silverhand_backend_sqlite::{

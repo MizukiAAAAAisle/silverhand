@@ -38,7 +38,7 @@ use silverhand_backend_core::{
     embedded_bootstrap::{
         BootstrapPorts, EmbeddedBootstrap, EmbeddedBootstrapUnitOfWork, bootstrap_session,
     },
-    user_identity::UserChangedSink,
+    identity_access::user_identity::UserChangedSink,
 };
 
 use crate::embedded_bootstrap::token::EmbeddedBootstrapTokenAuthority;
@@ -302,8 +302,8 @@ mod tests {
         embedded_bootstrap::BootstrapChoice,
         host_runtime::environment::EntropySource,
         identity::UserId,
+        identity_access::user_identity::{UserChangedAnnounceFailure, UserRecord},
         persistence::PersistenceFailure,
-        user_identity::{UserChangedAnnounceFailure, UserRecord},
     };
     use std::{
         net::{Ipv4Addr, Ipv6Addr},

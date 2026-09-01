@@ -36,8 +36,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    human_auth_flows::HandleNamespaceRead,
     identity::UserId,
+    identity_access::human_auth_flows::HandleNamespaceRead,
     identity_access::participant_handle_availability::{
         ParticipantHandleAvailability, probe_participant_handle,
     },
@@ -137,7 +137,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        persistence::PersistenceFailure, user_identity::ParticipantHandle,
+        identity_access::user_identity::ParticipantHandle, persistence::PersistenceFailure,
     };
     use tower::ServiceExt;
 

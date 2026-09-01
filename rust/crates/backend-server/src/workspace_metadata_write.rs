@@ -3,7 +3,7 @@
 //! `PATCH /api/workspaces/{id}/archive`.
 //!
 //! Both routes are thin transports over the write context in
-//! [`silverhand_backend_core::workspace_metadata_write`]: the domain owns the
+//! [`silverhand_backend_core::identity_access::workspace_metadata_write`]: the domain owns the
 //! atomic write, the in-lock governance re-derivation, the collision decision,
 //! the committed-fact seal, and — for a rename — the `metadata_changed` viewer
 //! hint the commit owes. This module's only jobs are the request-boundary
@@ -111,12 +111,12 @@ use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::access::WorkspaceGovernanceFloor;
-use silverhand_backend_core::workspace_name::CanonicalWorkspaceName;
+use silverhand_backend_core::identity_access::workspace_name::CanonicalWorkspaceName;
 use silverhand_backend_core::{
     access::{WorkspaceGovernanceFactsRead, WorkspaceRole, governance_floor_verdict},
     identity::{Principal, UserId, WorkspaceId},
-    workspace_face::WorkspaceFace,
-    workspace_metadata_write::{
+    identity_access::workspace_face::WorkspaceFace,
+    identity_access::workspace_metadata_write::{
         WorkspaceArchiveUpdate, WorkspaceMetadataAnnounce, WorkspaceMetadataChangedSink,
         WorkspaceMetadataEdit, WorkspaceMetadataUpdateWithAnnounce,
         WorkspaceMetadataWriteUnitOfWork, WorkspaceNameChange, archive_workspace,

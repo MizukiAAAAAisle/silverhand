@@ -30,7 +30,7 @@
 //! and the shared primitive returns neither a title type nor a title issue.
 //!
 //! ```
-//! use silverhand_backend_core::workspace_name::CanonicalWorkspaceName;
+//! use silverhand_backend_core::identity_access::workspace_name::CanonicalWorkspaceName;
 //!
 //! let name = CanonicalWorkspaceName::parse("  Straße  ").unwrap();
 //! assert_eq!(name.name(), "Straße");
@@ -38,7 +38,7 @@
 //! ```
 //!
 //! ```compile_fail
-//! use silverhand_backend_core::workspace_name::CanonicalWorkspaceName;
+//! use silverhand_backend_core::identity_access::workspace_name::CanonicalWorkspaceName;
 //!
 //! let _forged = CanonicalWorkspaceName {
 //!     name: "Real".to_owned(),
@@ -228,7 +228,7 @@ mod tests {
         // two-stage envelope reproduces the title verdict for every arm except a
         // clean name in (64, 128], which the workspace 64 cap recaps to `too_long`.
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../packages/shared/tests/fixtures/conversation-title-parity.json"
+            "../../../../../packages/shared/tests/fixtures/conversation-title-parity.json"
         ))
         .unwrap();
         for test_case in fixture["cases"].as_array().unwrap() {

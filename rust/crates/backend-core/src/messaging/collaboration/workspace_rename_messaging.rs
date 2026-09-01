@@ -344,7 +344,7 @@ pub trait WorkspaceRenamePublicationPort {
 }
 
 /// A post-commit rename fan-out leg could not be completed. Opaque and
-/// source-preserving like [`crate::workspace_metadata_write::WorkspaceMetadataAnnounceFailure`],
+/// source-preserving like [`crate::identity_access::workspace_metadata_write::WorkspaceMetadataAnnounceFailure`],
 /// and for the same reason: the rename is already durable, so a failure here is a
 /// LOST effect to be reported (the concrete cause stays available as `source` for
 /// the boundary that logs it), never a corrupted fact and never a request refusal.
@@ -370,7 +370,7 @@ impl WorkspaceRenameFanoutFailure {
 /// message per channel, push it to each of that channel's agents, and publish it
 /// to the channel's live subscribers. The dual of the TypeScript
 /// `PATCH /api/workspaces/:id` per-channel loop, driven off the sealed
-/// [`WorkspaceNameChange`](crate::workspace_metadata_write::WorkspaceNameChange)
+/// [`WorkspaceNameChange`](crate::identity_access::workspace_metadata_write::WorkspaceNameChange)
 /// the write hands onward — NOT a second decision about whether a rename happened.
 ///
 /// BEST-EFFORT after commit, with a layered, un-fusable failure contract so each
