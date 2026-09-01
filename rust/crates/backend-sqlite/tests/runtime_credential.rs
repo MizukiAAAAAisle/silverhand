@@ -7,7 +7,7 @@ use silverhand_backend_core::{
         RuntimeEventTime, RuntimeFinalStatus, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
 };
-use silverhand_backend_sqlite::runtime_credential::SqliteRuntimeCustodyStore;
+use silverhand_backend_sqlite::host_runtime::runtime_credential::SqliteRuntimeCustodyStore;
 use sqlx::{Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
 use tempfile::TempDir;
 

@@ -93,7 +93,8 @@ use silverhand_backend_sqlite::{
     auth::SqliteSessionStore, conversation_messaging::messaging::MessagingStore,
     conversation_messaging::runtime_delivery::SqliteRuntimeDeliveryStore,
     foundation::scope_event::SqliteEventScopeAuthority, host_agent::SqliteHostAgentStore,
-    host_runtime::SqliteHostRuntimeStore, runtime_credential::SqliteRuntimeCustodyStore,
+    host_runtime::SqliteHostRuntimeStore,
+    host_runtime::runtime_credential::SqliteRuntimeCustodyStore,
 };
 use sqlx::{Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::sync::{

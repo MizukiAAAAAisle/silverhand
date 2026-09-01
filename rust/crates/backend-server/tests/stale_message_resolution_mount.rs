@@ -62,7 +62,7 @@ use silverhand_backend_sqlite::{
         MessagingStore,
         collaboration::stale_message_resolution::SqliteStaleMessageResolutionAdmission,
     },
-    runtime_credential::SqliteRuntimeCustodyStore,
+    host_runtime::runtime_credential::SqliteRuntimeCustodyStore,
 };
 use sqlx::Connection;
 use tower::ServiceExt;

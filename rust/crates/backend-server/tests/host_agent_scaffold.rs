@@ -333,7 +333,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // above. Each is the sibling of its `backend-core` entry; directory-shaped
     // scaffolds with no adapter yet, UNMOUNTED.
     ("backend-sqlite", "agent_audit_read"),
-    ("backend-sqlite", "agent_runtime_state_read"),
     ("backend-sqlite", "embedded_bootstrap"),
     ("backend-sqlite", "workspace_data_plane"),
     // #task:2291 — the backend-sqlite `foundation` relocation namespace: a directory
@@ -457,12 +456,12 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-sqlite", "current_schema"),
     // #task:2294 relocated four low-fanout read adapters (`agent_availability_read`,
     // `agent_presence_read`, `computer_agents_read`, `host_resources_read`) under this
-    // existing self-named `host_runtime` context (dual role). Their flat SEAM entries are
-    // removed; this single owning-root entry now covers them via the CP projection and does
-    // NOT descend into the context. The `host_runtime` self-row stays landed; residual
-    // host_runtime leaves are `agent_runtime_state_read` and `runtime_credential`.
+    // existing self-named `host_runtime` context (dual role). #task:2295 then relocated the
+    // final two — the `agent_runtime_state_read` directory leaf and the `runtime_credential`
+    // custody adapter — closing the namespace 7/7/0 (1 self-row + 6 leaves, zero residual).
+    // Their flat SEAM/DIRECTORY/inherited entries are removed; this single owning-root entry
+    // covers them via the CP projection and does NOT descend into the context.
     ("backend-sqlite", "host_runtime"),
-    ("backend-sqlite", "runtime_credential"),
     ("backend-sqlite", "workspace_cold_read"),
 ];
 
@@ -540,7 +539,6 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "embedded_bootstrap"),
     ("backend-core", "workspace_data_plane"),
     ("backend-sqlite", "agent_audit_read"),
-    ("backend-sqlite", "agent_runtime_state_read"),
     ("backend-sqlite", "embedded_bootstrap"),
     ("backend-sqlite", "workspace_data_plane"),
     ("backend-sqlite", "host_agent"),

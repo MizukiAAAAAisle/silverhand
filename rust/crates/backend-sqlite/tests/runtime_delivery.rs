@@ -19,7 +19,7 @@ use silverhand_backend_core::{
 };
 use silverhand_backend_sqlite::{
     conversation_messaging::runtime_delivery::SqliteRuntimeDeliveryStore,
-    runtime_credential::SqliteRuntimeCustodyStore,
+    host_runtime::runtime_credential::SqliteRuntimeCustodyStore,
 };
 use sqlx::{Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::ops::Range;

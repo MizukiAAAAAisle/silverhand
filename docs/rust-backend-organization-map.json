@@ -388,11 +388,11 @@
       "audited_rust_writers": [
         {
           "function": "claim_transaction",
-          "path": "rust/crates/backend-sqlite/src/runtime_credential.rs"
+          "path": "rust/crates/backend-sqlite/src/host_runtime/runtime_credential.rs"
         },
         {
           "function": "finalize_transaction",
-          "path": "rust/crates/backend-sqlite/src/runtime_credential.rs"
+          "path": "rust/crates/backend-sqlite/src/host_runtime/runtime_credential.rs"
         },
         {
           "function": "commit_exit",
@@ -427,7 +427,7 @@
       "audited_rust_writers": [
         {
           "function": "insert_event",
-          "path": "rust/crates/backend-sqlite/src/runtime_credential.rs"
+          "path": "rust/crates/backend-sqlite/src/host_runtime/runtime_credential.rs"
         },
         {
           "function": "insert_runtime_projection_event",

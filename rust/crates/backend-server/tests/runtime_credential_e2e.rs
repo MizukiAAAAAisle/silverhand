@@ -39,7 +39,7 @@ use silverhand_backend_server::{
     },
 };
 use silverhand_backend_sqlite::{
-    host_agent::SqliteHostAgentStore, runtime_credential::SqliteRuntimeCustodyStore,
+    host_agent::SqliteHostAgentStore, host_runtime::runtime_credential::SqliteRuntimeCustodyStore,
 };
 use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
 use tempfile::TempDir;

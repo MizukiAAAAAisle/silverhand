@@ -1931,7 +1931,8 @@ mod tests {
     };
     use silverhand_backend_sqlite::{
         conversation_messaging::runtime_delivery::SqliteRuntimeDeliveryStore,
-        host_runtime::SqliteHostRuntimeStore, runtime_credential::SqliteRuntimeCustodyStore,
+        host_runtime::SqliteHostRuntimeStore,
+        host_runtime::runtime_credential::SqliteRuntimeCustodyStore,
     };
     use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
 
@@ -2866,7 +2867,8 @@ mod tests {
         };
         use silverhand_backend_sqlite::{
             conversation_messaging::runtime_delivery::SqliteRuntimeDeliveryStore,
-            host_runtime::SqliteHostRuntimeStore, runtime_credential::SqliteRuntimeCustodyStore,
+            host_runtime::SqliteHostRuntimeStore,
+            host_runtime::runtime_credential::SqliteRuntimeCustodyStore,
         };
         use sqlx::Connection;
         use tower::ServiceExt;

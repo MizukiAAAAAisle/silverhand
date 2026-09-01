@@ -14,7 +14,6 @@ pub mod agent_detail_read;
 pub mod agent_list_read;
 pub mod agent_profile_read;
 pub mod agent_profile_write;
-pub mod agent_runtime_state_read;
 pub mod agent_view_acl;
 
 pub mod auth;
@@ -26,7 +25,6 @@ pub mod handle_namespace;
 pub mod host_agent;
 pub mod host_runtime;
 pub mod human_registration;
-pub mod runtime_credential;
 pub mod user_identity;
 pub mod viewer_read_model;
 pub mod workspace_audience_read;
