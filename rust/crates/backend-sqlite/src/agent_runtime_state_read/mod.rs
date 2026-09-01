@@ -1,6 +1,6 @@
 //! SQLite adapter for the agent runtime-state cold read.
 //!
-//! It supplies the facts [`silverhand_backend_core::agent_runtime_state_read`]
+//! It supplies the facts [`silverhand_backend_core::host_runtime::agent_runtime_state_read`]
 //! declares, resolved together on ONE `BEGIN DEFERRED` snapshot: the agent's ACL
 //! arms + stage, its COMPLETE participation set (each row carrying its archived flag
 //! and this viewer's readability), and its durable seats with per-scope undelivered

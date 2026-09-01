@@ -55,7 +55,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_runtime_state_read::{
+    host_runtime::agent_runtime_state_read::{
         AgentRuntimeStateReadModel, AgentRuntimeStateView, PresentationFocus, RuntimeFocusView,
         RuntimeParticipationView, RuntimeSeatScopeView, RuntimeSeatView,
     },

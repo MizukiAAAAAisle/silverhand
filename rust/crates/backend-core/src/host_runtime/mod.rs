@@ -64,3 +64,10 @@ pub mod scope_runtime_stop;
 pub mod runtime_credential;
 pub mod runtime_event;
 pub mod runtime_transition;
+
+// Relocated C2 leaves (#task:2282). The agent-scoped bulk-stop orchestration vocabulary
+// and the runtime-state read model — two independent units sharing this namespace, not
+// merged. The runtime-state read model is a directory leaf: it is one mapped business unit;
+// its internal children (`model`) are not separate map units.
+pub mod agent_bulk_stop;
+pub mod agent_runtime_state_read;

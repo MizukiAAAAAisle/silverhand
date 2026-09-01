@@ -45,7 +45,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_bulk_stop::{
+    host_runtime::agent_bulk_stop::{
         AgentBulkStopOutcome, AgentBulkStopReadPort, BulkStopSeatFailure, BulkStopSeatFault,
         bulk_stop_agent_runtimes,
     },
@@ -322,7 +322,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_bulk_stop::AgentBulkStopSnapshot,
+        host_runtime::agent_bulk_stop::AgentBulkStopSnapshot,
         host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
         host_runtime::runtime_event::RuntimeObservedStatus,
         host_runtime::scope_runtime_stop::{ScopeRuntimeStopOutcome, ScopeRuntimeStopTarget},

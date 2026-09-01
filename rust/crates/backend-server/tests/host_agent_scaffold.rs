@@ -125,13 +125,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // leaves relocate, their old crate-root entries are removed and `identity_access` stays
     // a single entry here.
     ("backend-core", "identity_access"),
-    // The agent-scoped bulk runtime stop (POST /api/agents/{id}/stop): its
-    // source-bound snapshot read port and the aggregation use case. It consumes
-    // #task:2227's `scope_runtime_stop` capability per seat and mints no new stop
-    // adapter or refusal vocabulary. Its SQLite adapter rides the existing
-    // `host_agent` store and its server route is the `host_agent::agent_stop`
-    // submodule; mounted at the app composition root by the #task:2234 integration (CP5).
-    ("backend-core", "agent_bulk_stop"),
     // #task:2226 — internal profile/MCP consumer vocabulary and pure
     // orchestration. The production data-plane adapter is #task:2231 below; mounted at
     // the app composition root by the #task:2234 integration (CP7a peer-profile, CP7b MCP).
@@ -196,11 +189,11 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // decision vocabulary). Each has a same-named SQLite adapter in the backend-sqlite
     // block below. Directory-shaped scaffolds — no port/adapter/route/mount yet, so all
     // are absent from `ACTIVATION_NAMESPACES` (UNMOUNTED). #task:2278 relocated the
-    // `agent_audit_read` read-model directory under the C1 `identity_access` namespace
-    // (its owner/target lives in the organization map, folded into the container seam
-    // entry); `agent_runtime_state_read`, `embedded_bootstrap`, and `workspace_data_plane`
-    // remain flat backend-core roots.
-    ("backend-core", "agent_runtime_state_read"),
+    // `agent_audit_read` read-model directory under the C1 `identity_access` namespace, and
+    // #task:2282 relocated the `agent_runtime_state_read` read-model directory under the
+    // dual-role `host_runtime` namespace (both owners/targets live in the organization map,
+    // folded into their container seam entries); `embedded_bootstrap` and
+    // `workspace_data_plane` remain flat backend-core roots.
     ("backend-core", "embedded_bootstrap"),
     ("backend-core", "workspace_data_plane"),
     ("backend-filesystem", "runtime_detection"),
@@ -491,9 +484,9 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // #task:2248 — the residual-wave core ports and their SQLite adapters are all
     // directory-shaped scaffolds too, so they join this inventory (G0 holds it to the
     // exact directory-shaped subset of the seam ledger). #task:2278 relocated the
-    // backend-core `agent_audit_read` directory under `identity_access`, so its flat
-    // directory entry is removed here; the backend-sqlite adapter stays a flat root.
-    ("backend-core", "agent_runtime_state_read"),
+    // backend-core `agent_audit_read` directory under `identity_access`, and #task:2282
+    // relocated the backend-core `agent_runtime_state_read` directory under `host_runtime`,
+    // so their flat directory entries are removed here; the backend-sqlite adapters stay flat.
     ("backend-core", "embedded_bootstrap"),
     ("backend-core", "workspace_data_plane"),
     ("backend-sqlite", "agent_audit_read"),

@@ -21,7 +21,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    agent_runtime_state_read::{
+    host_runtime::agent_runtime_state_read::{
         AgentRuntimeStateFacts, AgentRuntimeStateReadModel, RuntimeParticipationFact,
         RuntimeSeatFact, RuntimeSeatScopeFact,
     },
