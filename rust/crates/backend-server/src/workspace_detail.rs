@@ -350,7 +350,7 @@ mod tests {
     /// segment; this pins that it is not shadowed regardless of merge order.
     #[tokio::test]
     async fn the_static_name_availability_path_is_not_shadowed_by_the_id_route() {
-        use crate::workspace_name_availability::{
+        use crate::identity_access::workspace_name_availability::{
             self as name_availability, WORKSPACE_NAME_AVAILABILITY_PATH,
         };
         use silverhand_backend_core::identity_access::workspace_name::CanonicalWorkspaceName;

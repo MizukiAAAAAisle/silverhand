@@ -15,7 +15,7 @@
 //! extractor and hands them down; it never re-sorts, and it never drops a row the
 //! port returned.
 //!
-//! Projection is shared with detail through [`crate::agent_wire`]: the two responses
+//! Projection is shared with detail through [`crate::identity_access::agent_wire`]: the two responses
 //! differ ONLY in their wrapper, so one projector serves both and neither can drift
 //! a field.
 
@@ -36,7 +36,7 @@ use silverhand_backend_core::{
 
 use crate::foundation::error;
 
-use crate::agent_wire::{AgentDto, agent_dto};
+use crate::identity_access::agent_wire::{AgentDto, agent_dto};
 
 /// The product route template.
 pub const AGENTS_PATH: &str = "/api/agents";
@@ -148,7 +148,7 @@ fn opted_in(value: Option<&str>) -> bool {
 }
 
 /// Success body: `{ "agents": [AgentDto] }`. The array carries the shared
-/// [`crate::agent_wire`] projector; the list and detail faces differ only here, in
+/// [`crate::identity_access::agent_wire`] projector; the list and detail faces differ only here, in
 /// the wrapper.
 #[derive(Serialize)]
 struct AgentListResponse {

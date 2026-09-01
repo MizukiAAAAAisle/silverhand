@@ -28,7 +28,7 @@
 //! untouched), applied through the SAME [`update_internal_profile`] row UoW. Their product
 //! success body is the FULL `AgentDto` `agentService` echoes — NOT the narrow profile DTO —
 //! so they reproject through #2225's single crate-root ACL-free projector face
-//! ([`reproject_committed_agent`](crate::agent_wire::reproject_committed_agent)), never a
+//! ([`reproject_committed_agent`](crate::identity_access::agent_wire::reproject_committed_agent)), never a
 //! forked second projector. `POST` answers `{ avatar_url, agent }` (the top-level
 //! `avatar_url` echoes the DTO's own derived value); `DELETE` answers `{ agent }`. A
 //! post-commit reproject that finds the row gone is a safe `500` (the face's `Vanished`),
@@ -69,9 +69,9 @@ use super::{
     wire::{AgentProfileDto, agent_profile_dto},
 };
 use crate::{
-    agent_wire::{AgentDto, reproject_committed_agent},
     foundation::clock::ProcessClock,
     foundation::error,
+    identity_access::agent_wire::{AgentDto, reproject_committed_agent},
 };
 
 /// The dedicated avatar route path. The `{aid}` segment is what the self-pin layer binds;

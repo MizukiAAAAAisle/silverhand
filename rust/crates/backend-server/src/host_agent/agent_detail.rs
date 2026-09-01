@@ -44,7 +44,7 @@ use silverhand_backend_core::{
 
 use crate::foundation::error;
 
-use crate::agent_wire::{AgentDto, agent_dto};
+use crate::identity_access::agent_wire::{AgentDto, agent_dto};
 
 /// The product route template, in axum's `{id}` capture syntax.
 pub const AGENT_DETAIL_PATH: &str = "/api/agents/{id}";
@@ -176,7 +176,7 @@ fn opted_in(value: Option<&str>) -> bool {
 }
 
 /// Success body: `{ "agent": {AgentDto} }`, wrapping the shared
-/// [`crate::agent_wire`] projector `agentRowToDto` builds.
+/// [`crate::identity_access::agent_wire`] projector `agentRowToDto` builds.
 #[derive(Serialize)]
 struct AgentDetailResponse {
     agent: AgentDto,

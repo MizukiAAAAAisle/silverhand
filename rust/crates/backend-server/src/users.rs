@@ -61,10 +61,10 @@ use silverhand_backend_core::{
     identity_access::user_identity::{UserChangedSink, UserDirectoryRead, UserProfileRead},
 };
 
-use crate::auth::{PublicJsonUnauthorized, require_human_session};
 use crate::foundation::error;
 use crate::foundation::multipart_transport::{accumulate_capped, declared_content_type};
 use crate::human_auth::{UserDto, log_lost_announce};
+use crate::identity_access::auth::{PublicJsonUnauthorized, require_human_session};
 
 /// `apiPaths.users`.
 pub const USERS_PATH: &str = "/api/users";

@@ -24,7 +24,7 @@ use axum::{
 };
 use serde_json::Value;
 use silverhand_backend_core::foundation::identity::UserId;
-use silverhand_backend_server::workspace_name_availability::{
+use silverhand_backend_server::identity_access::workspace_name_availability::{
     self, WORKSPACE_NAME_AVAILABILITY_PATH,
 };
 use silverhand_backend_sqlite::identity_access::workspace_name_availability::SqliteRegularWorkspaceNamespace;

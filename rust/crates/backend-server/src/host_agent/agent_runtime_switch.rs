@@ -88,11 +88,11 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::agent_wire::{AgentDto, reproject_committed_agent};
 use crate::foundation::clock::ProcessClock;
 use crate::foundation::error;
 use crate::foundation::wire_admission::{self, ValidatedJson};
 use crate::foundation::wire_patch::RequiredNullable;
+use crate::identity_access::agent_wire::{AgentDto, reproject_committed_agent};
 
 /// The product route template, in axum's `{id}` capture syntax.
 pub const AGENT_RUNTIME_PATH: &str = "/api/agents/{id}/runtime";

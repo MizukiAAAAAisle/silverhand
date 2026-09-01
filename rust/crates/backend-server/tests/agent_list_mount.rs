@@ -37,8 +37,8 @@ use silverhand_backend_core::{
     identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
 };
 use silverhand_backend_server::{
-    auth::{PublicJsonUnauthorized, require_human_session},
     host_agent::agent_list::{AGENTS_PATH, router},
+    identity_access::auth::{PublicJsonUnauthorized, require_human_session},
 };
 use silverhand_backend_sqlite::{
     identity_access::agent_list_read::SqliteAgentListColdRead,

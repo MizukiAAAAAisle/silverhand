@@ -213,27 +213,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // and the organization map/gate is the authority for the leaf's owner/target inside
     // the namespace. Directory-shaped, so it also joins `DIRECTORY_NAMESPACES` below.
     ("backend-filesystem", "host_runtime"),
-    // #task:2223 — the production avatar blob adapter (`SingleKindAvatarBlobs`),
-    // bridging the #task:2222 `avatar` capability to #task:2221's local blob store
-    // under one ambient storage kind. An adapter like `foundation::clock` /
-    // `password_hasher`, so it belongs in this seam ledger but NOT
-    // `ACTIVATION_NAMESPACES`.
-    ("backend-server", "avatar_blob"),
     // #task:2231 — the production typed adapter for the accepted internal
     // profile-MCP port, sharing the owning-host registry and exposing no raw
     // dispatcher. Wired into the internal MCP routes by the #task:2234 integration (CP7b).
     ("backend-server", "agent_profile_mcp_data_plane"),
-    // #task:2225 — the crate-root route surface for the handle-availability probe
-    // (route 1). The tuning-write (route 2) and avatar (route 5) surfaces are
-    // `host_agent` submodules, already covered by the `host_agent` entry. Mounted at the
-    // app composition root by the #task:2234 integration (CP2).
-    ("backend-server", "agent_name_availability"),
-    // #task:2225 — the single crate-root full-`AgentDto` authority: the
-    // `agentRowToDto` projector plus the shared post-commit `reproject_committed_agent`
-    // face every mutating agent face runs. Crate-root, not a `host_agent` submodule, so
-    // it is not owned by one route family's namespace (#task:2226's internal faces
-    // consume the same face). `pub(crate)`, no route of its own, UNMOUNTED.
-    ("backend-server", "agent_wire"),
     // #task:2229 — the crate-root production `RuntimeControlPort` adapter plus the
     // typed daemon codecs for agent materialize / runtime start / clear-session.
     ("backend-server", "agent_materialize"),
@@ -251,7 +234,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // `avatar` entry above; mounted by the #task:2223 integration.
     ("backend-server", "users"),
     ("backend-server", "ops"),
-    ("backend-server", "password_hasher"),
     // #task:2229 — the runtime start/stop/clear production capability. It owns
     // exact-custody commands, the ephemeral clear waiter, and committed clear
     // settlement; its route verticals are mounted by #task:2234 (CP4 clear/switch, CP5 stop).
@@ -259,7 +241,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-server", "scope_runtime_stop"),
     ("backend-server", "workspace_detail"),
     ("backend-server", "workspace_metadata_write"),
-    ("backend-server", "workspace_name_availability"),
     // #task:2220 — the workspace-rename fan-out production adapter, wiring the core
     // rename orchestrator over the messaging store, daemon delivery, and scope-event
     // hub. Assembled into the workspace-metadata-write mount by the #task:2223
@@ -415,7 +396,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     // non-seam baseline. It carries no seam obligation, matching the two adapters it holds.
     ("backend-filesystem", "foundation"),
     ("backend-server", "access"),
-    ("backend-server", "auth"),
     ("backend-server", "current_schema"),
     ("backend-server", "daemon_delivery"),
     ("backend-server", "daemon_events"),
@@ -475,6 +455,10 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
     // `current_schema` root remains a separate resolver axis and is excluded from physical
     // relocation. This single owning-root entry covers production without descending.
     ("backend-server", "foundation"),
+    // #task:2301 relocated six settled identity/access leaves under the existing dual-role
+    // context. Map + real tree derive partial 8/14/6; `access`, `human_auth`, `users`,
+    // `workspace_detail`, `workspace_metadata_write`, and `workspaces` remain flat. The
+    // accepted `agent_profile_mcp_data_plane` root facade remains a separately named path.
     ("backend-server", "identity_access"),
     ("backend-server", "viewer_read_model"),
 ];

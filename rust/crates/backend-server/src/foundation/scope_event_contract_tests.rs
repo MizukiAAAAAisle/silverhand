@@ -5111,7 +5111,7 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
         silverhand_backend_sqlite::identity_access::workspace_cold_read::SqliteWorkspaceColdRead::open(&path)
             .await
             .unwrap();
-    let enroll_app = crate::auth::require_human_session(
+    let enroll_app = crate::identity_access::auth::require_human_session(
         crate::access::router(
             store.clone(),
             store,
@@ -5119,12 +5119,12 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
             AtClock(JOIN_MS),
         ),
         authenticator(),
-        crate::auth::PublicJsonUnauthorized,
+        crate::identity_access::auth::PublicJsonUnauthorized,
     );
-    let read_app = crate::auth::require_human_session(
+    let read_app = crate::identity_access::auth::require_human_session(
         crate::workspaces::router(cold_read),
         authenticator(),
-        crate::auth::PublicJsonUnauthorized,
+        crate::identity_access::auth::PublicJsonUnauthorized,
     );
 
     // The page-load authority BEFORE the change, read through the SAME served cold

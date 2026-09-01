@@ -11,7 +11,7 @@ interface BearerCase {
 }
 
 const cases = JSON.parse(readFileSync(new URL(
-  '../../../../rust/crates/backend-server/src/auth/fixtures/public_bearer_grammar.json',
+  '../../../../rust/crates/backend-server/src/identity_access/auth/fixtures/public_bearer_grammar.json',
   import.meta.url,
 ), 'utf8')) as BearerCase[];
 

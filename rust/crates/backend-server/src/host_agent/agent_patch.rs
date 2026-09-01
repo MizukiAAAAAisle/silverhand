@@ -97,7 +97,7 @@ use crate::foundation::error;
 use crate::foundation::wire_admission::{self, ValidatedJson, patch_within_utf16_max};
 use crate::foundation::wire_patch::{Forbidden, PatchField, RequiredPatchField};
 
-use crate::agent_wire::{AgentDto, reproject_committed_agent};
+use crate::identity_access::agent_wire::{AgentDto, reproject_committed_agent};
 
 /// The product route template, in axum's `{id}` capture syntax.
 pub const AGENT_PATCH_PATH: &str = "/api/agents/{id}";

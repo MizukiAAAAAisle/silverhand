@@ -27,7 +27,7 @@
 //! `user_token` on signup/login, and reads `Authorization: Bearer <token>` on the
 //! authenticated routes. There is no `Set-Cookie` anywhere in this surface, so the
 //! port replicates exactly that: `user_token` in the body, and the shared
-//! [`crate::auth::require_human_session`] perimeter (which reads the same bearer
+//! [`crate::identity_access::auth::require_human_session`] perimeter (which reads the same bearer
 //! grammar as logout) guards `GET`/`PATCH /api/me`. Logout is NOT behind the
 //! perimeter — it must read the raw bearer itself to revoke unknown/expired
 //! bearers with the same `401` a missing bearer gets — so it derives the bearer
@@ -87,11 +87,11 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::auth::{PublicJsonUnauthorized, require_human_session};
 use crate::foundation::bearer::strict_bearer_credential;
 use crate::foundation::error;
 use crate::foundation::wire_admission::{self, ValidatedJson, ValidatedJsonRejection};
 use crate::foundation::wire_patch::RequiredPatchField;
+use crate::identity_access::auth::{PublicJsonUnauthorized, require_human_session};
 use crate::messaging::author_wire::principal_avatar_url;
 
 /// `authPaths.signup`.

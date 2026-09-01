@@ -39,9 +39,7 @@ use silverhand_backend_filesystem::host_runtime::runtime_detection::MachineRunti
 #[cfg(test)]
 use silverhand_backend_server::internal_agent::cli_invoke::CLI_INVOKE_PRODUCTION_PERIMETER;
 use silverhand_backend_server::{
-    access, agent_name_availability,
-    auth::{PublicJsonUnauthorized, require_human_session},
-    avatar_blob::SingleKindAvatarBlobs,
+    access,
     daemon_delivery::{
         DaemonDeliveryController, DaemonDeliveryRuntime, DaemonHostConnections,
         OnboardingDeliveryAdapter,
@@ -66,6 +64,13 @@ use silverhand_backend_server::{
     host_control::runtime_availability::DataPlaneRuntimeAvailabilityProbe,
     host_resources, host_runtime,
     human_auth::{self, HumanAuthDeps},
+    identity_access::{
+        agent_name_availability,
+        auth::{PublicJsonUnauthorized, require_human_session},
+        avatar_blob::SingleKindAvatarBlobs,
+        password_hasher::SpawnBlockingHasher,
+        workspace_name_availability,
+    },
     internal_agent::{
         cli_invoke::audit_cli_invocations,
         diagnostics::cli_trace::cli_trace_router,
@@ -105,13 +110,12 @@ use silverhand_backend_server::{
         runtimes,
         server_info::{self, ServerAdvertisement},
     },
-    password_hasher::SpawnBlockingHasher,
     runtime_credential::{RuntimeCredentialAuthority, require_runtime_credential},
     users::{self, UsersDeps},
     viewer_read_model::presence::{
         HubPresencePublisher, SystemDisconnectClock, compose_presence_vertical,
     },
-    workspace_data_plane, workspace_detail, workspace_metadata_write, workspace_name_availability,
+    workspace_data_plane, workspace_detail, workspace_metadata_write,
     workspace_rename_fanout::WorkspaceRenameFanoutAdapter,
     workspaces,
 };

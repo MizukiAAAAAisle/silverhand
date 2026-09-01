@@ -19,8 +19,8 @@ use silverhand_backend_core::{
     identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
 };
 use silverhand_backend_server::{
-    auth::{PublicJsonUnauthorized, require_human_session},
     direct_pairs::{self, DIRECT_PAIRS_PATH},
+    identity_access::auth::{PublicJsonUnauthorized, require_human_session},
 };
 use silverhand_backend_sqlite::{
     conversation_messaging::direct_pair_read::SqliteDirectPairReadModel,

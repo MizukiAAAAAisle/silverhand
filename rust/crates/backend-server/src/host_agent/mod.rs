@@ -13,7 +13,8 @@
 //!
 //! The full-`AgentDto` projector and the shared post-commit
 //! `reproject_committed_agent` face — the single crate authority every face that
-//! returns an agent goes through — live at the crate root ([`crate::agent_wire`]),
+//! returns an agent goes through — live in the identity/access context
+//! ([`crate::identity_access::agent_wire`]),
 //! not here: they are shared across route families (this one and #task:2226's
 //! internal faces), so they are not owned by any one family's namespace.
 

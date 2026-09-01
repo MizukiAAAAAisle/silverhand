@@ -8225,7 +8225,7 @@ mod channel_directory_activation {
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
-        auth::{PublicJsonUnauthorized, require_human_session},
+        identity_access::auth::{PublicJsonUnauthorized, require_human_session},
         messaging::collaboration::{
             channel_directory, channel_lifecycle, conversation_agent_directory,
         },
@@ -8446,7 +8446,7 @@ mod runtime_activity_activation {
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
-        auth::{PublicJsonUnauthorized, require_human_session},
+        identity_access::auth::{PublicJsonUnauthorized, require_human_session},
         messaging::collaboration::{
             activity, conversation_agent_activity, conversation_agent_run_states,
             conversation_agent_run_states::{
@@ -8735,7 +8735,7 @@ mod message_nav_search_activation {
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
-        auth::{PublicJsonUnauthorized, require_human_session},
+        identity_access::auth::{PublicJsonUnauthorized, require_human_session},
         messaging::collaboration::{
             conversation_message_window, conversation_ref, conversation_threads,
             conversation_unread, human_search,
@@ -9018,7 +9018,7 @@ mod unread_attention_activation {
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
-        auth::{PublicJsonUnauthorized, require_human_session},
+        identity_access::auth::{PublicJsonUnauthorized, require_human_session},
         messaging::collaboration::{attention_projection, message_unread},
     };
     use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
@@ -9240,8 +9240,8 @@ mod host_resources_activation {
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
-        auth::{PublicJsonUnauthorized, require_human_session},
         host_resources,
+        identity_access::auth::{PublicJsonUnauthorized, require_human_session},
     };
     use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;
 

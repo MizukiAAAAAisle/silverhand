@@ -4,12 +4,8 @@
 
 pub mod access;
 pub mod agent_materialize;
-pub mod agent_name_availability;
 pub mod agent_profile_mcp_data_plane;
-pub(crate) mod agent_wire;
 pub(crate) mod application_orchestration;
-pub mod auth;
-pub mod avatar_blob;
 pub mod conversation_messaging;
 pub mod daemon_delivery;
 mod daemon_events;
@@ -26,7 +22,6 @@ pub mod identity_access;
 pub mod internal_agent;
 pub mod messaging;
 pub mod ops;
-pub mod password_hasher;
 pub mod runtime_control;
 pub mod runtime_credential;
 pub mod scope_runtime_stop;
@@ -35,7 +30,6 @@ pub mod viewer_read_model;
 pub mod workspace_data_plane;
 pub mod workspace_detail;
 pub mod workspace_metadata_write;
-pub mod workspace_name_availability;
 pub mod workspace_rename_fanout;
 pub mod workspaces;
 
