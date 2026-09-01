@@ -6,8 +6,8 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use silverhand_backend_core::{
+    application_orchestration::teardown::intent::{BeginDeletion, begin_agent_deletion},
     foundation::identity::AgentId,
-    teardown::intent::{BeginDeletion, begin_agent_deletion},
 };
 use silverhand_backend_server::{
     daemon_delivery::{HOST_WEBSOCKET_PATH, OUTBOUND_PROTOCOL_VERSION},

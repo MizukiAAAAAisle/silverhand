@@ -12,19 +12,19 @@
 //! identical statement without a second code path.
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, HostId},
-    foundation::persistence::PersistenceFailure,
-    host_runtime::agent_bulk_stop::{AgentBulkStopReadPort, AgentBulkStopSnapshot},
-    host_runtime::runtime_credential::RuntimeScope,
-    identity_access::agent_profile_mcp::{AgentProfileMcpPlacement, AgentProfileMcpPlacementRead},
-    identity_access::capability::computer_access::ComputerOwnershipFacts,
-    teardown::{
+    application_orchestration::teardown::{
         facts::{
             AgentRuntimeSessionFacts, AgentTeardownCapture, AgentTeardownFacts,
             ComputerTeardownFacts, StoredBlobRef,
         },
         read::AgentTeardownReadPort,
     },
+    foundation::identity::{AgentId, HostId},
+    foundation::persistence::PersistenceFailure,
+    host_runtime::agent_bulk_stop::{AgentBulkStopReadPort, AgentBulkStopSnapshot},
+    host_runtime::runtime_credential::RuntimeScope,
+    identity_access::agent_profile_mcp::{AgentProfileMcpPlacement, AgentProfileMcpPlacementRead},
+    identity_access::capability::computer_access::ComputerOwnershipFacts,
 };
 use sqlx::{Row, SqliteConnection, sqlite::SqliteRow};
 

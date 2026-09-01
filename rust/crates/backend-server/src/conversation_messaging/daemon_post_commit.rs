@@ -1,7 +1,7 @@
 //! Messaging-owned post-commit daemon wake effects.
 
 use silverhand_backend_core::{
-    agent_creation::OnboardingInboxEnsure,
+    application_orchestration::agent_creation::OnboardingInboxEnsure,
     conversation_messaging::messaging::{
         CreatedMessage, MessageId,
         collaboration::workspace_rename_messaging::{

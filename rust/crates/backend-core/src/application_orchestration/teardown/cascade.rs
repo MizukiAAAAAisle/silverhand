@@ -20,21 +20,21 @@
 //! implementation remembering to ask in that order. Order is not enough on its own:
 //! three answers asked in sequence can still be about three different computers, so
 //! each step here also checks that it is asking about the computer the previous step
-//! answered for, in [`crate::teardown::contract`]'s vocabulary.
+//! answered for, in [`crate::application_orchestration::teardown::contract`]'s vocabulary.
 //!
 //! A regular workspace is NOT rooted on a computer, so this cascade can never
 //! reach one. Its member agents placed here are deleted, which is the same outcome
 //! as deleting those agents individually.
 
 use crate::{
-    foundation::identity::UserId,
-    host_runtime::computer::is_user_managed,
-    identity_access::capability::computer_access::ComputerAccessHeld,
-    teardown::{
+    application_orchestration::teardown::{
         contract::{TeardownContractViolation, same_computer},
         eligibility::{TeardownBranch, teardown_branch},
         facts::{AgentTeardownFacts, ComputerTeardownFacts},
     },
+    foundation::identity::UserId,
+    host_runtime::computer::is_user_managed,
+    identity_access::capability::computer_access::ComputerAccessHeld,
 };
 
 /// "Delete this computer and everything on it."
@@ -63,7 +63,7 @@ pub enum CascadeConsent {
 /// for a requester no rule matched.
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::teardown::cascade::ComputerLifecycleHeld;
+/// use silverhand_backend_core::application_orchestration::teardown::cascade::ComputerLifecycleHeld;
 /// // Assembled from parts, this would end a lifecycle nobody was authorized for.
 /// let _: ComputerLifecycleHeld = ComputerLifecycleHeld {
 ///     access: unimplemented!(),
@@ -78,7 +78,7 @@ pub enum CascadeConsent {
 ///     identity_access::capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
 ///     host_runtime::computer::{HostKind, ProvisioningSource},
 ///     foundation::identity::{HostId, UserId},
-///     teardown::{
+///     application_orchestration::teardown::{
 ///         cascade::{ComputerLifecycle, ComputerLifecycleHeld, hold_computer_lifecycle},
 ///         facts::ComputerTeardownFacts,
 ///     },
@@ -190,7 +190,7 @@ pub enum CascadeRefused {
 /// reporting the fan-out on another computer's owner.
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::teardown::cascade::CascadeAdmitted;
+/// use silverhand_backend_core::application_orchestration::teardown::cascade::CascadeAdmitted;
 /// // Assembled from parts, this would admit a cascade over rows no rule judged.
 /// let _: CascadeAdmitted = CascadeAdmitted {
 ///     lifecycle: unimplemented!(),
@@ -205,7 +205,7 @@ pub enum CascadeRefused {
 ///     identity_access::capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
 ///     host_runtime::computer::{HostKind, ProvisioningSource},
 ///     foundation::identity::{HostId, UserId},
-///     teardown::{
+///     application_orchestration::teardown::{
 ///         cascade::{
 ///             CascadeAdmission, CascadeAdmitted, CascadeConsent, ComputerLifecycle, admit_cascade,
 ///             hold_computer_lifecycle,

@@ -44,7 +44,7 @@ pub enum HostKind {
 /// DECIDES something takes its own narrow projection instead — ownership goes to
 /// [`crate::identity_access::capability::computer_access`], the lifecycle stamps to
 /// [`super::lifecycle`], teardown's two halves to
-/// [`crate::teardown::facts::ComputerTeardownFacts`] — so no decision can quietly
+/// [`crate::application_orchestration::teardown::facts::ComputerTeardownFacts`] — so no decision can quietly
 /// widen to a field that happens to be here.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComputerRecord {

@@ -59,15 +59,15 @@ use std::{
 };
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, HostId},
-    foundation::persistence::PersistenceFailure,
-    teardown::{
+    application_orchestration::teardown::{
         agent_delete_resume::{
             AgentDeletionFence, AgentDeletionResidue, ResidueFault, ResumeOutcome, RetryReason,
             resume_agent_deletion,
         },
         intent::{AgentDeletionAttempt, AgentDeletionLifecyclePort, pending_agent_deletions},
     },
+    foundation::identity::{AgentId, HostId},
+    foundation::persistence::PersistenceFailure,
 };
 use tokio::task::JoinHandle;
 
@@ -773,9 +773,7 @@ mod tests {
     };
 
     use silverhand_backend_core::{
-        host_runtime::aftermath::CustodyEffectFailure,
-        identity_access::agent_lifecycle::MaterializationStatus,
-        teardown::{
+        application_orchestration::teardown::{
             agent_delete_resume::QuiescePurgeFailure,
             contract::TeardownFailure,
             eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},
@@ -786,6 +784,8 @@ mod tests {
             },
             write::AgentTornDown,
         },
+        host_runtime::aftermath::CustodyEffectFailure,
+        identity_access::agent_lifecycle::MaterializationStatus,
     };
     use tokio::sync::Notify;
 

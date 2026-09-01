@@ -357,8 +357,9 @@ mod tests {
         source: &str,
         status: RuntimeObservedStatus,
         gen_value: i64,
-    ) -> silverhand_backend_core::teardown::facts::AgentRuntimeSessionFacts {
-        silverhand_backend_core::teardown::facts::AgentRuntimeSessionFacts {
+    ) -> silverhand_backend_core::application_orchestration::teardown::facts::AgentRuntimeSessionFacts
+    {
+        silverhand_backend_core::application_orchestration::teardown::facts::AgentRuntimeSessionFacts {
             scope: RuntimeScope::ConversationSlot {
                 agent: agent(id),
                 source: ConversationId::parse(source).expect("conversation id"),
@@ -532,7 +533,7 @@ mod tests {
 
     /// A snapshot on `a1`, host `h1`, with the given seats — source-bound to a1.
     fn snapshot(
-        seats: Vec<silverhand_backend_core::teardown::facts::AgentRuntimeSessionFacts>,
+        seats: Vec<silverhand_backend_core::application_orchestration::teardown::facts::AgentRuntimeSessionFacts>,
     ) -> SnapshotOutcome {
         SnapshotOutcome::Present(AgentBulkStopSnapshot {
             source: agent("a1"),

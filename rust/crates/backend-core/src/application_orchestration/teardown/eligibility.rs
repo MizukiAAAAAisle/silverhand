@@ -9,8 +9,8 @@
 //! that makes having taken them safe.
 
 use crate::{
-    foundation::identity::HostId, identity_access::agent_lifecycle::MaterializationStatus,
-    teardown::facts::AgentTeardownFacts,
+    application_orchestration::teardown::facts::AgentTeardownFacts, foundation::identity::HostId,
+    identity_access::agent_lifecycle::MaterializationStatus,
 };
 
 /// What teardown a row's CURRENT stage owes.
@@ -108,13 +108,13 @@ pub enum EligibilityMoved {
 ///
 ///  - an implementation cannot report a committed teardown from a comparison it
 ///    re-stated itself, because the outcome type it must return can only be built
-///    around a witness (see [`crate::teardown::write::AgentTornDown`]);
+///    around a witness (see [`crate::application_orchestration::teardown::write::AgentTornDown`]);
 ///  - the facts a committed teardown reports as the row it deleted are the facts
 ///    this rule judged, because it has no copy of its own to report instead.
 ///
 /// It does NOT by itself make a committed outcome single-channel. The post-commit
 /// capture is a second channel that describes a row, and binding it to this witness
-/// is [`crate::teardown::write::AgentTornDown::seal`]'s job, not this type's.
+/// is [`crate::application_orchestration::teardown::write::AgentTornDown::seal`]'s job, not this type's.
 ///
 /// It also does not prove the facts handed in were read under the mechanism, or
 /// read unfiltered. A witness minted from fabricated facts is a well-formed
@@ -124,7 +124,7 @@ pub enum EligibilityMoved {
 /// naive suite happens to try.
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::teardown::eligibility::EligibilityHeld;
+/// use silverhand_backend_core::application_orchestration::teardown::eligibility::EligibilityHeld;
 /// // Assembled from parts, this would admit a write no rule judged.
 /// let _: EligibilityHeld = EligibilityHeld { facts: unimplemented!() };
 /// ```
@@ -137,7 +137,7 @@ pub enum EligibilityMoved {
 /// use silverhand_backend_core::{
 ///     identity_access::agent_lifecycle::MaterializationStatus,
 ///     foundation::identity::{AgentId, HostId},
-///     teardown::{
+///     application_orchestration::teardown::{
 ///         eligibility::{
 ///             AgentTeardownEligibility, EligibilityHeld, EligibilityVerdict, hold_eligibility,
 ///         },

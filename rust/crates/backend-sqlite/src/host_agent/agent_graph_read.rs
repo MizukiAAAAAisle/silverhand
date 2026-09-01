@@ -10,7 +10,7 @@
 //! tables rather than borrowing the detail read model.
 
 use silverhand_backend_core::{
-    agent_creation::AgentGraphRead,
+    application_orchestration::agent_creation::AgentGraphRead,
     conversation_messaging::messaging::{MessageId, agent_onboarding::ONBOARDING_DM_TITLE},
     foundation::identity::{AgentId, ConversationId},
     foundation::persistence::PersistenceFailure,

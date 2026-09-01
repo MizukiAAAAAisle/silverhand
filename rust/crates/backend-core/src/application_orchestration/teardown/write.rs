@@ -31,8 +31,8 @@
 //! decided before the lock is exactly the stale answer this boundary exists to
 //! reject. What keeps that from becoming trust is the shape of the outcome types:
 //! [`AgentTornDown`] and [`ComputerCascade`] can only be built around a witness the
-//! rules mint ([`crate::teardown::eligibility::EligibilityHeld`],
-//! [`crate::teardown::cascade::CascadeAdmitted`]), and those witnesses OWN the facts
+//! rules mint ([`crate::application_orchestration::teardown::eligibility::EligibilityHeld`],
+//! [`crate::application_orchestration::teardown::cascade::CascadeAdmitted`]), and those witnesses OWN the facts
 //! they judged, so the row a committed outcome reports as deleted is the row a rule
 //! admitted. An implementation that re-stated a comparison inline has nothing to
 //! return.
@@ -43,7 +43,7 @@
 //! both outcome types are built through a FALLIBLE seal that binds every channel to
 //! the request's own coordinates — [`AgentTornDown::seal`] and
 //! [`ComputerCascade::seal`]. A mismatch there is an internal contract failure
-//! ([`crate::teardown::contract`]), never a product refusal: a caller cannot cause
+//! ([`crate::application_orchestration::teardown::contract`]), never a product refusal: a caller cannot cause
 //! it and has nothing to do about it.
 //!
 //! For the computer axis the witness chain also fixes the ORDER: the cascade
@@ -75,13 +75,13 @@
 use std::future::Future;
 
 use crate::{
-    foundation::identity::{AgentId, HostId, UserId},
-    teardown::{
+    application_orchestration::teardown::{
         cascade::{CascadeAdmitted, CascadeConsent, CascadeRefused, ComputerLifecycleHeld},
         contract::{TeardownContractViolation, TeardownFailure, same_agent, same_computer},
         eligibility::{AgentTeardownEligibility, EligibilityHeld, EligibilityMoved},
         facts::{AgentTeardownCapture, AgentTeardownFacts},
     },
+    foundation::identity::{AgentId, HostId, UserId},
 };
 
 /// Which agent this write may tear down.
@@ -112,7 +112,7 @@ pub struct ComputerTeardownKey {
 /// touched. [`Self::seal`] is what makes the pair one agent's.
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::teardown::write::AgentTornDown;
+/// use silverhand_backend_core::application_orchestration::teardown::write::AgentTornDown;
 /// // Assembled from parts, this would report a teardown no rule admitted.
 /// let _: AgentTornDown = AgentTornDown {
 ///     held: unimplemented!(),
@@ -126,7 +126,7 @@ pub struct ComputerTeardownKey {
 /// use silverhand_backend_core::{
 ///     identity_access::agent_lifecycle::MaterializationStatus,
 ///     foundation::identity::{AgentId, HostId},
-///     teardown::{
+///     application_orchestration::teardown::{
 ///         eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},
 ///         facts::{AgentTeardownCapture, AgentTeardownFacts},
 ///         write::AgentTornDown,
@@ -222,7 +222,7 @@ pub enum AgentTeardownCommit {
 /// it derives from is deleted there.
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::teardown::write::ComputerCascade;
+/// use silverhand_backend_core::application_orchestration::teardown::write::ComputerCascade;
 /// // Assembled from parts, this would report a fan-out no rule judged.
 /// let _: ComputerCascade = ComputerCascade {
 ///     lifecycle: unimplemented!(),
@@ -238,7 +238,7 @@ pub enum AgentTeardownCommit {
 ///     identity_access::capability::computer_access::{ComputerAccess, ComputerOwnershipFacts, can_access_computer},
 ///     host_runtime::computer::{HostKind, ProvisioningSource},
 ///     foundation::identity::{HostId, UserId},
-///     teardown::{
+///     application_orchestration::teardown::{
 ///         cascade::{CascadeAdmission, CascadeConsent, ComputerLifecycle, admit_cascade, hold_computer_lifecycle},
 ///         facts::ComputerTeardownFacts,
 ///         write::{ComputerCascade, ComputerTeardownKey},
@@ -415,19 +415,19 @@ pub trait AgentTeardownUnitOfWork: Clone + Send + Sync + 'static {
 mod tests {
     use super::*;
     use crate::{
+        application_orchestration::teardown::{
+            cascade::{
+                CascadeAdmission, ComputerLifecycle, admit_cascade, hold_computer_lifecycle,
+            },
+            eligibility::{EligibilityVerdict, hold_eligibility},
+            facts::{AgentRuntimeSessionFacts, ComputerTeardownFacts, StoredBlobRef},
+        },
         host_runtime::computer::{HostKind, ProvisioningSource},
         host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
         host_runtime::runtime_event::RuntimeObservedStatus,
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::computer_access::{
             ComputerAccess, ComputerOwnershipFacts, can_access_computer,
-        },
-        teardown::{
-            cascade::{
-                CascadeAdmission, ComputerLifecycle, admit_cascade, hold_computer_lifecycle,
-            },
-            eligibility::{EligibilityVerdict, hold_eligibility},
-            facts::{AgentRuntimeSessionFacts, ComputerTeardownFacts, StoredBlobRef},
         },
     };
 

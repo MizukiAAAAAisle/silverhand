@@ -46,9 +46,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    foundation::identity::{HostId, UserId},
-    host_runtime::aftermath::DaemonConnectionControl,
-    teardown::{
+    application_orchestration::teardown::{
         cascade::{CascadeConsent, CascadeRefused},
         computer_delete::{
             ComputerCascadeEffects, DeleteComputer, DeleteComputerError, DeleteComputerRefusal,
@@ -57,6 +55,8 @@ use silverhand_backend_core::{
         read::AgentTeardownReadPort,
         write::AgentTeardownUnitOfWork,
     },
+    foundation::identity::{HostId, UserId},
+    host_runtime::aftermath::DaemonConnectionControl,
 };
 
 use crate::error;
@@ -393,17 +393,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        foundation::identity::AgentId,
-        foundation::persistence::PersistenceFailure,
-        host_runtime::{
-            aftermath::CustodyEffectFailure,
-            computer::{HostKind, ProvisioningSource},
-        },
-        identity_access::agent_lifecycle::MaterializationStatus,
-        identity_access::capability::computer_access::{
-            ComputerAccess, ComputerOwnershipFacts, can_access_computer,
-        },
-        teardown::{
+        application_orchestration::teardown::{
             cascade::{
                 CascadeAdmission, ComputerLifecycle, admit_cascade, hold_computer_lifecycle,
             },
@@ -414,6 +404,16 @@ mod tests {
                 AgentTeardownCommit, AgentTeardownKey, ComputerCascade, ComputerCascadeCommit,
                 ComputerTeardownKey,
             },
+        },
+        foundation::identity::AgentId,
+        foundation::persistence::PersistenceFailure,
+        host_runtime::{
+            aftermath::CustodyEffectFailure,
+            computer::{HostKind, ProvisioningSource},
+        },
+        identity_access::agent_lifecycle::MaterializationStatus,
+        identity_access::capability::computer_access::{
+            ComputerAccess, ComputerOwnershipFacts, can_access_computer,
         },
     };
     use tower::ServiceExt;

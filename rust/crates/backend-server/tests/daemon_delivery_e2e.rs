@@ -14,6 +14,10 @@ use log_capture::LogBuffer;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
+    application_orchestration::teardown::{
+        computer_delete::ComputerCascadeEffects,
+        facts::{AgentRuntimeSessionFacts, StoredBlobRef},
+    },
     conversation_messaging::messaging::{
         AddressedPrincipals, CreatedMessage, DirectLineAuthority, FromKind, MessageContent,
         MessageId, MessageSeq, PrincipalKind, ReferencePositions, SendActor, SendDestination,
@@ -52,10 +56,6 @@ use silverhand_backend_core::{
     },
     identity_access::agents::runtime::RuntimeKind,
     identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
-    teardown::{
-        computer_delete::ComputerCascadeEffects,
-        facts::{AgentRuntimeSessionFacts, StoredBlobRef},
-    },
 };
 use silverhand_backend_filesystem::blob_store::LocalBlobStore;
 use silverhand_backend_server::{

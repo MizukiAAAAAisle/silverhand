@@ -42,11 +42,7 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    foundation::identity::{AgentId, HostId, UserId},
-    foundation::persistence::PersistenceFailure,
-    host_runtime::aftermath::{CustodyEffectFailure, DaemonConnectionControl},
-    identity_access::capability::computer_access::{ComputerAccess, can_access_computer},
-    teardown::{
+    application_orchestration::teardown::{
         cascade::{CascadeConsent, CascadeRefused, ComputerLifecycle, hold_computer_lifecycle},
         contract::TeardownFailure,
         facts::{AgentRuntimeSessionFacts, StoredBlobRef, is_running_session},
@@ -55,6 +51,10 @@ use crate::{
             AgentTeardownUnitOfWork, ComputerCascade, ComputerCascadeCommit, ComputerTeardownKey,
         },
     },
+    foundation::identity::{AgentId, HostId, UserId},
+    foundation::persistence::PersistenceFailure,
+    host_runtime::aftermath::{CustodyEffectFailure, DaemonConnectionControl},
+    identity_access::capability::computer_access::{ComputerAccess, can_access_computer},
 };
 
 /// What a committed computer cascade owes the rest of the system.
@@ -335,18 +335,18 @@ where
 mod tests {
     use super::*;
     use crate::{
+        application_orchestration::teardown::{
+            cascade::{CascadeAdmission, admit_cascade},
+            eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},
+            facts::{AgentTeardownCapture, AgentTeardownFacts, ComputerTeardownFacts},
+            write::{AgentTeardownCommit, AgentTeardownKey, AgentTornDown},
+        },
         foundation::identity::ConversationId,
         host_runtime::computer::{HostKind, ProvisioningSource},
         host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
         host_runtime::runtime_event::RuntimeObservedStatus,
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::computer_access::ComputerOwnershipFacts,
-        teardown::{
-            cascade::{CascadeAdmission, admit_cascade},
-            eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},
-            facts::{AgentTeardownCapture, AgentTeardownFacts, ComputerTeardownFacts},
-            write::{AgentTeardownCommit, AgentTeardownKey, AgentTornDown},
-        },
     };
     use std::sync::{Arc, Mutex};
 

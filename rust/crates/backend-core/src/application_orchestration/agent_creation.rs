@@ -1,7 +1,7 @@
 //! The create-agent unit of work: `POST /api/agents`.
 //!
 //! This orchestrates the create saga end to end, over the durable primitives in
-//! [`crate::agent_materialization`] (reserve / activate-and-provision / fail / reopen /
+//! [`crate::application_orchestration::agent_materialization`] (reserve / activate-and-provision / fail / reopen /
 //! idempotent lookup), the host-side materialize command
 //! ([`crate::host_runtime::agent_materialize`]), the placement rule ([`crate::host_runtime`]), the
 //! shared handle namespace ([`crate::identity_access::human_auth_flows::HandleNamespaceRead`]) and id
@@ -42,9 +42,9 @@ use std::future::Future;
 
 use thiserror::Error;
 
-use crate::agent_materialization::{FailOutcome, fail_materialization};
+use crate::application_orchestration::agent_materialization::{FailOutcome, fail_materialization};
 use crate::{
-    agent_materialization::{
+    application_orchestration::agent_materialization::{
         AgentArmProvisioningPort, AgentMaterializationLookup, AgentMaterializationWrite,
         IdempotencyKey, IdempotentReservation, ProvisionedActivation, ReopenOutcome,
         ReserveAgentInput, ReserveOutcome, find_idempotent_reservation, home_workspace_id_for,
@@ -340,7 +340,9 @@ pub enum CreateAgentOutcome {
 #[derive(Debug, Error)]
 pub enum CreateAgentFault {
     #[error(transparent)]
-    Materialization(#[from] crate::agent_materialization::MaterializationFault),
+    Materialization(
+        #[from] crate::application_orchestration::agent_materialization::MaterializationFault,
+    ),
     #[error(transparent)]
     Persistence(#[from] PersistenceFailure),
     #[error(transparent)]
@@ -886,7 +888,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 
     use super::*;
-    use crate::agent_materialization::{
+    use crate::application_orchestration::agent_materialization::{
         ActivationFlipRow, IdempotentReservationRow, MaterializationFlipRow, RawAgentArmGraph,
         RawConversationAgentEdge, RawConversationArmGraph, RawConversationUserEdge,
         RawCreatorIdentity, RawHomeWorkspaceRow, RawOnboardingDmRow, RawProvisionOutcome,

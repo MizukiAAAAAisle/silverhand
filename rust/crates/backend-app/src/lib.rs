@@ -13,6 +13,7 @@ use std::{
 
 use axum::Router;
 use silverhand_backend_core::{
+    application_orchestration::teardown::computer_delete::DeleteComputer,
     foundation::blob_store::StorageKind,
     host_runtime::{
         claim::ClaimLocalComputer,
@@ -27,7 +28,6 @@ use silverhand_backend_core::{
     },
     identity_access::credential::Argon2idPasswordHasher,
     policy::presence_grace::GraceWindow,
-    teardown::computer_delete::DeleteComputer,
 };
 #[cfg(test)]
 use silverhand_backend_filesystem::audit_sink::CliPreflightFileSink;

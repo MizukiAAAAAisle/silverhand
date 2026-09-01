@@ -11,15 +11,15 @@ use std::{error::Error, fmt, future::Future, sync::Arc, time::Duration};
 use serde_json::{Value, json};
 
 use silverhand_backend_core::{
-    foundation::blob_store::{BlobStorageKey, BlobStore, StorageKind, StoredBlob},
-    foundation::identity::{AgentId, HostId},
-    host_runtime::aftermath::CustodyEffectFailure,
-    teardown::{
+    application_orchestration::teardown::{
         agent_delete_resume::{AgentDeletionFence, AgentDeletionResidue, QuiescePurgeFailure},
         computer_delete::ComputerCascadeEffects,
         facts::{AgentRuntimeSessionFacts, StoredBlobRef},
         intent::AgentDeletionLifecyclePort,
     },
+    foundation::blob_store::{BlobStorageKey, BlobStore, StorageKind, StoredBlob},
+    foundation::identity::{AgentId, HostId},
+    host_runtime::aftermath::CustodyEffectFailure,
 };
 use silverhand_backend_filesystem::blob_store::{LocalBlobStore, LocalBlobStoreError};
 

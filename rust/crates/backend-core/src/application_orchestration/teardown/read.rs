@@ -6,19 +6,21 @@
 //! path answers "not yours" without taking a write lock to say no.
 //!
 //! None of it is the decision. The authoritative facts are re-read inside the
-//! mechanism ([`crate::teardown::write::AgentTeardownUnitOfWork`]) and judged there
-//! by [`crate::teardown::eligibility::hold_eligibility`] and
-//! [`crate::teardown::cascade::admit_cascade`]. A cascade that trusted this face
+//! mechanism ([`crate::application_orchestration::teardown::write::AgentTeardownUnitOfWork`]) and judged there
+//! by [`crate::application_orchestration::teardown::eligibility::hold_eligibility`] and
+//! [`crate::application_orchestration::teardown::cascade::admit_cascade`]. A cascade that trusted this face
 //! would delete an agent that moved computer meanwhile, or tear down a row whose
 //! materialization restarted.
 
 use std::future::Future;
 
 use crate::{
+    application_orchestration::teardown::facts::{
+        AgentRuntimeSessionFacts, AgentTeardownFacts, ComputerTeardownFacts,
+    },
     foundation::identity::{AgentId, HostId},
     foundation::persistence::PersistenceFailure,
     identity_access::capability::computer_access::ComputerOwnershipFacts,
-    teardown::facts::{AgentRuntimeSessionFacts, AgentTeardownFacts, ComputerTeardownFacts},
 };
 
 /// The read-only face, safe outside any transaction.

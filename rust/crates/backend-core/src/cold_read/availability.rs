@@ -249,7 +249,7 @@ pub struct HostAttachmentFacts {
 /// code that read them, which no client can cause or act on. Answering `Offline`
 /// would hide it behind a plausible value, and answering `Online` would report a
 /// reachable agent from another row's facts. It is the same class of failure as
-/// [`crate::teardown::contract`], and a separate type because it is about a
+/// [`crate::application_orchestration::teardown::contract`], and a separate type because it is about a
 /// different aggregate: one vocabulary per aggregate, so a caller's mapping cannot
 /// be reused past the boundary where it was reviewed.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]

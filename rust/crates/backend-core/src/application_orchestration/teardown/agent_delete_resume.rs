@@ -11,7 +11,7 @@
 //! ## The order is the contract, and it is fence-then-commit
 //!
 //! The single-agent path purges BEFORE the control-plane rows are deleted and fails
-//! closed — the same order [`crate::teardown::write`] fixes for this axis, and the
+//! closed — the same order [`crate::application_orchestration::teardown::write`] fixes for this axis, and the
 //! opposite of the computer cascade, which purges after its commit best-effort because
 //! the rows that could name those bytes are themselves going away. So:
 //!
@@ -39,10 +39,7 @@
 use std::{error::Error, fmt, future::Future};
 
 use crate::{
-    foundation::identity::AgentId,
-    foundation::persistence::PersistenceFailure,
-    host_runtime::aftermath::CustodyEffectFailure,
-    teardown::{
+    application_orchestration::teardown::{
         contract::TeardownFailure,
         facts::StoredBlobRef,
         intent::{
@@ -51,6 +48,9 @@ use crate::{
         },
         write::AgentTornDown,
     },
+    foundation::identity::AgentId,
+    foundation::persistence::PersistenceFailure,
+    host_runtime::aftermath::CustodyEffectFailure,
 };
 
 /// The owning-host precommit fence + quiescence + home purge, narrowed to the
@@ -277,10 +277,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        foundation::identity::HostId,
-        foundation::persistence::PersistenceFailure,
-        identity_access::agent_lifecycle::MaterializationStatus,
-        teardown::{
+        application_orchestration::teardown::{
             contract::TeardownContractViolation,
             eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},
             facts::{AgentTeardownCapture, AgentTeardownFacts},
@@ -288,6 +285,9 @@ mod tests {
                 BeginDeletion, BeginDeletionRecord, PersistedDeletionIntent, begin_agent_deletion,
             },
         },
+        foundation::identity::HostId,
+        foundation::persistence::PersistenceFailure,
+        identity_access::agent_lifecycle::MaterializationStatus,
     };
 
     fn agent(id: &str) -> AgentId {

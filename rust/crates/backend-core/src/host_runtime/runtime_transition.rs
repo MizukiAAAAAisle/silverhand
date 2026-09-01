@@ -9,7 +9,7 @@
 //! a switch racing a delete — fail loudly instead of interleaving.
 //!
 //! This is a distinct write authority from the capability-neutral
-//! [`crate::identity_access::agent_profile_write`] row writer, exactly as [`crate::teardown`] is: the
+//! [`crate::identity_access::agent_profile_write`] row writer, exactly as [`crate::application_orchestration::teardown`] is: the
 //! profile writer decides a per-capability column edit inside its lock, whereas this is
 //! a three-step lock lifecycle — acquire, release, commit-and-release — keyed on the
 //! lock columns.

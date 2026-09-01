@@ -75,20 +75,20 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, Principal, UserId},
-    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
-    identity_access::agent_lifecycle::MaterializationStatus,
-    identity_access::capability::{
-        agent_authority::{AgentAuthority, can_edit_agent},
-        agent_view::{VisibleStages, can_view_agent},
-    },
-    teardown::{
+    application_orchestration::teardown::{
         agent_delete_resume::AgentDeletionResidue,
         eligibility::{AgentTeardownEligibility, TeardownBranch, teardown_branch},
         intent::{
             AgentDeletionAttempt, AgentDeletionLifecyclePort, BeginDeletion, begin_agent_deletion,
         },
         write::{AgentTeardownCommit, AgentTeardownKey, AgentTeardownUnitOfWork},
+    },
+    foundation::identity::{AgentId, Principal, UserId},
+    identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
+    identity_access::agent_lifecycle::MaterializationStatus,
+    identity_access::capability::{
+        agent_authority::{AgentAuthority, can_edit_agent},
+        agent_view::{VisibleStages, can_view_agent},
     },
 };
 
@@ -592,15 +592,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        foundation::identity::{AgentId, HostId, UserId},
-        foundation::persistence::PersistenceFailure,
-        host_runtime::aftermath::CustodyEffectFailure,
-        identity_access::agent_detail_read::{
-            AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
-        },
-        identity_access::agent_lifecycle::MaterializationStatus,
-        identity_access::agents::runtime::RuntimeKind,
-        teardown::{
+        application_orchestration::teardown::{
             agent_delete_resume::AgentDeletionResidue,
             cascade::CascadeConsent,
             contract::TeardownFailure,
@@ -617,6 +609,14 @@ mod tests {
                 ComputerCascadeCommit, ComputerTeardownKey,
             },
         },
+        foundation::identity::{AgentId, HostId, UserId},
+        foundation::persistence::PersistenceFailure,
+        host_runtime::aftermath::CustodyEffectFailure,
+        identity_access::agent_detail_read::{
+            AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
+        },
+        identity_access::agent_lifecycle::MaterializationStatus,
+        identity_access::agents::runtime::RuntimeKind,
     };
     use tower::ServiceExt;
 

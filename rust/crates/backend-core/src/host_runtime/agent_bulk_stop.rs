@@ -30,13 +30,13 @@
 use std::future::Future;
 
 use crate::{
+    application_orchestration::teardown::facts::{AgentRuntimeSessionFacts, is_running_session},
     foundation::identity::{AgentId, HostId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
     host_runtime::scope_runtime_stop::{
         ScopeRuntimeStopPort, ScopeRuntimeStopRefusal, ScopeRuntimeStopTarget,
     },
-    teardown::facts::{AgentRuntimeSessionFacts, is_running_session},
 };
 
 /// One SQLite-snapshot capture of everything the bulk stop needs, taken under a single

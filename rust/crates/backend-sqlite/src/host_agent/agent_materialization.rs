@@ -16,7 +16,7 @@
 //! answer. There is no activate write here — see the core module docs.
 
 use silverhand_backend_core::{
-    agent_materialization::{
+    application_orchestration::agent_materialization::{
         ActivationFlipRow, AgentArmProvisioningPort, AgentMaterializationLookup,
         AgentMaterializationWrite, DEPENDENT_GRAPH_FAILED_CODE, IdempotentReservationRow,
         MaterializationFlipRow, RawAgentArmGraph, RawConversationAgentEdge,
@@ -172,7 +172,7 @@ impl AgentMaterializationLookup for SqliteHostAgentStore {
     async fn find_by_idempotency(
         &self,
         creator: &UserId,
-        key: &silverhand_backend_core::agent_materialization::IdempotencyKey,
+        key: &silverhand_backend_core::application_orchestration::agent_materialization::IdempotencyKey,
     ) -> Result<Option<IdempotentReservationRow>, PersistenceFailure> {
         let row = sqlx::query(FIND_BY_IDEMPOTENCY)
             .bind(creator.as_str())
@@ -897,7 +897,7 @@ mod tests {
     use std::path::PathBuf;
 
     use silverhand_backend_core::{
-        agent_materialization::{
+        application_orchestration::agent_materialization::{
             DEPENDENT_GRAPH_FAILED_CODE, FailOutcome, IdempotencyKey, MaterializationFault,
             ProvisionedActivation, ReopenOutcome, ReserveOutcome, fail_materialization,
             find_idempotent_reservation, mark_stale_materializations_failed,

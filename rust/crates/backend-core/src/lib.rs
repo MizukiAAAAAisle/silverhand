@@ -6,8 +6,7 @@
 //! It has no Axum, SQLx, SQLite, HTTP, or wire-DTO dependency. Persistence and
 //! wire adapters live in sibling crates and project from application facts.
 
-pub mod agent_creation;
-pub mod agent_materialization;
+pub mod application_orchestration;
 pub mod cold_read;
 pub mod conversation_messaging;
 pub mod embedded_bootstrap;
@@ -15,6 +14,5 @@ pub mod foundation;
 pub mod host_runtime;
 pub mod identity_access;
 pub mod policy;
-pub mod teardown;
 pub mod viewer_read_model;
 pub mod workspace_data_plane;

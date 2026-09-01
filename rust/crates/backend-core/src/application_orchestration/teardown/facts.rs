@@ -80,7 +80,7 @@ pub struct AgentTeardownCapture {
     /// below is already keyed by what it carries — but a capture is the SECOND
     /// channel through which a committed teardown could describe a row, so it must
     /// name the row it came from or nothing can check that it is the same one the
-    /// rule admitted. See [`crate::teardown::write::AgentTornDown::seal`].
+    /// rule admitted. See [`crate::application_orchestration::teardown::write::AgentTornDown::seal`].
     pub agent_id: AgentId,
     pub runtime_sessions: Vec<AgentRuntimeSessionFacts>,
     pub dm_blob_refs: Vec<StoredBlobRef>,
@@ -99,7 +99,7 @@ pub struct AgentTeardownCapture {
 ///
 /// Both halves here are projected RAW rather than pre-combined into one deletable
 /// flag, because the combination is a rule — see
-/// [`crate::teardown::cascade::hold_computer_lifecycle`] — and an adapter that
+/// [`crate::application_orchestration::teardown::cascade::hold_computer_lifecycle`] — and an adapter that
 /// collapsed them would hold that rule where no test of this layer can see it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComputerTeardownFacts {

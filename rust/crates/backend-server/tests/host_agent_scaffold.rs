@@ -94,18 +94,14 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // contract). Their old flat crate-root seam entries are removed; the single owning-root
     // `host_runtime` entry (in the inherited list below) covers them via the CP projection,
     // and the organization map/gate owns each leaf's owner/target inside the namespace.
-    // #task:2225 — the single-UoW create/provision-and-activate authority: the core
-    // materialization writer plus the exhaustive `provision_and_activate` use case that
-    // seals both the agent and conversation arms. Core capability, mounted at the app
-    // composition root by the #task:2234 integration (CP6 create route).
-    ("backend-core", "agent_materialization"),
-    // #task:2225 — the create-agent unit of work (`POST /api/agents`): the saga that
-    // owns each decision over the `agent_materialization` primitives, the host
-    // materialize command, the placement rule and the shared handle namespace. Core
-    // orchestration only — the wire projection, post-commit effects and status mapping
-    // belong to the route face. Mounted at the app composition root by the #task:2234
-    // integration (CP6 create route).
-    ("backend-core", "agent_creation"),
+    // #task:2287 — the create/provision saga (`agent_creation`), the materialization
+    // writer/use case (`agent_materialization`), and the deletion/cascade domain (`teardown`)
+    // relocated under the `application_orchestration` namespace, closing the backend-core
+    // settled-row relocation ledger (residual=0). Their old flat crate-root seam entries are
+    // removed; the single `application_orchestration` owning-root entry (below) covers them via
+    // the CP projection, and the organization map/gate owns each leaf's owner/target inside the
+    // namespace. (`cold_read`/`policy` remain explicit split_required roots — NOT part of this
+    // closure.)
     // #task:2225 — the public agent-lifecycle and avatar route family (Rust Wave 3).
     // All of this family's backend-core core leaves have relocated under the C1
     // `identity_access` namespace: the handle-availability probe (#task:2272), the
@@ -138,7 +134,14 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // namespace, closing it at 11/11/0. Its flat crate-root seam entry is removed; the single
     // `host_runtime` owning-root entry covers all landed leaves via the CP projection, and the
     // organization map/gate owns each leaf's owner/target inside the namespace.
-    ("backend-core", "teardown"),
+    // #task:2287 — the `application_orchestration` relocation namespace: a directory container
+    // declared once at the crate root, owning the relocated `agent_creation` saga,
+    // `agent_materialization` writer/use case, and `teardown` deletion/cascade directory leaf.
+    // Their old flat crate-root entries are removed; the organization map/gate owns each leaf's
+    // owner/target inside the container and this seam entry does NOT descend into it. This closed
+    // the backend-core settled-row relocation ledger (residual=0); `cold_read`/`policy` remain
+    // explicit split_required roots, out of scope.
+    ("backend-core", "application_orchestration"),
     // #task:2279 — the C1-adjacent `viewer_read_model` relocation namespace: a directory
     // container declared once at the crate root, owning the relocated presence/sort leaves
     // (`user_presence_cold_read` read model, `user_presence_last_seen` LastSeenSink port,
@@ -466,7 +469,6 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
 const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
-    ("backend-core", "teardown"),
     ("backend-filesystem", "runtime_detection"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
@@ -512,6 +514,11 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // direct-pair-read / messaging / runtime-delivery units. Same terms: one declaration at
     // the crate root, leaf owners live in the organization map/gate.
     ("backend-core", "conversation_messaging"),
+    // #task:2287 — the `application_orchestration` relocation namespace, likewise a
+    // directory-shaped container (`application_orchestration/mod.rs`) owning the relocated
+    // agent-creation / agent-materialization / teardown units. Same terms: one declaration at
+    // the crate root, leaf owners live in the organization map/gate.
+    ("backend-core", "application_orchestration"),
 ];
 
 /// The modules a composition must name to ACTIVATE this lane: rules that decide, a
@@ -551,7 +558,9 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// #task:2277, the `user_presence_cold_read` read port moved to
 /// `crate::viewer_read_model::user_presence_cold_read` in #task:2279, and the
 /// `agent_availability_read`, `agent_presence_read`, and `host_resources_read` read ports
-/// moved under the dual-role `crate::host_runtime` context/namespace in #task:2280), it
+/// moved under the dual-role `crate::host_runtime` context/namespace in #task:2280, and the
+/// `teardown` deletion/cascade domain moved under `crate::application_orchestration` in
+/// #task:2287), it
 /// drops out of BOTH this table and the seam ledger: a container such as
 /// `identity_access` holds both activated and unmounted leaves, so it is NOT added here as
 /// a whole. A nested leaf's real existence/relocation is the organization gate's authority,
@@ -561,7 +570,6 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
-    ("backend-core", "teardown"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),

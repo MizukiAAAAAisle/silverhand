@@ -91,12 +91,12 @@ use garde::Validate;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use silverhand_backend_core::{
-    agent_creation::{
+    application_orchestration::agent_creation::{
         AgentGraphRead, CreateAgentFault, CreateAgentInput, CreateAgentOutcome, CreateAgentPorts,
         CreatedAgent, CreatedArm, CreatedCoordinates, EchoedAgent, MaterializeFailureCode,
         create_agent,
     },
-    agent_materialization::{
+    application_orchestration::agent_materialization::{
         AgentArmProvisioningPort, AgentMaterializationLookup, AgentMaterializationWrite,
         IdempotencyKey,
     },
@@ -882,8 +882,8 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_creation::MetadataField,
-        agent_materialization::{
+        application_orchestration::agent_creation::MetadataField,
+        application_orchestration::agent_materialization::{
             IdempotentReservationRow, MaterializationFlipRow, RawProvisionOutcome,
             ReserveAgentInput, ReserveRecord,
         },

@@ -12,8 +12,7 @@
 //! why the capture is taken first: the storage keys vanish with the rows.
 
 use silverhand_backend_core::{
-    foundation::persistence::PersistenceFailure,
-    teardown::{
+    application_orchestration::teardown::{
         cascade::CascadeConsent,
         contract::TeardownFailure,
         eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},
@@ -22,6 +21,7 @@ use silverhand_backend_core::{
             ComputerCascadeCommit, ComputerTeardownKey,
         },
     },
+    foundation::persistence::PersistenceFailure,
 };
 
 use super::{
@@ -89,10 +89,10 @@ mod tests {
     use std::{path::PathBuf, time::Duration};
 
     use silverhand_backend_core::{
+        application_orchestration::teardown::facts::AgentTeardownCapture,
         foundation::identity::{AgentId, HostId},
         host_runtime::runtime_credential::RuntimeScope,
         host_runtime::runtime_event::RuntimeObservedStatus,
-        teardown::facts::AgentTeardownCapture,
     };
     use sqlx::Connection;
     use tempfile::TempDir;

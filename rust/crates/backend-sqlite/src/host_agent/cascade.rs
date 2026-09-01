@@ -16,9 +16,7 @@
 //! its post-commit work captured before its delete erases the rows that work reads.
 
 use silverhand_backend_core::{
-    foundation::persistence::PersistenceFailure,
-    identity_access::capability::computer_access::{ComputerAccess, can_access_computer},
-    teardown::{
+    application_orchestration::teardown::{
         cascade::{
             CascadeAdmission, CascadeConsent, ComputerLifecycle, admit_cascade,
             hold_computer_lifecycle,
@@ -27,6 +25,8 @@ use silverhand_backend_core::{
         eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},
         write::{AgentTornDown, ComputerCascade, ComputerCascadeCommit, ComputerTeardownKey},
     },
+    foundation::persistence::PersistenceFailure,
+    identity_access::capability::computer_access::{ComputerAccess, can_access_computer},
 };
 
 use super::{
@@ -127,8 +127,8 @@ mod tests {
     use std::{path::PathBuf, time::Duration};
 
     use silverhand_backend_core::{
+        application_orchestration::teardown::cascade::CascadeRefused,
         foundation::identity::{HostId, UserId},
-        teardown::cascade::CascadeRefused,
     };
     use sqlx::Connection;
     use tempfile::TempDir;

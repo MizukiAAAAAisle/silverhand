@@ -18,7 +18,7 @@ use std::{
 
 use std::collections::HashSet;
 
-use silverhand_backend_core::agent_creation::OnboardingInboxEnsure;
+use silverhand_backend_core::application_orchestration::agent_creation::OnboardingInboxEnsure;
 use silverhand_backend_core::conversation_messaging::messaging::{
     self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationRefusal,
     CreatedMessage, DirectPairEndpoints, DirectPairMint, DirectPairMinted, DirectPairOpenedPort,

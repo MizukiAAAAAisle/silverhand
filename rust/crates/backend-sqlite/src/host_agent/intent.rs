@@ -11,10 +11,7 @@
 //! row is `AttemptLost`, not a second teardown.
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, HostId},
-    foundation::persistence::PersistenceFailure,
-    identity_access::agent_lifecycle::MaterializationStatus,
-    teardown::{
+    application_orchestration::teardown::{
         contract::TeardownFailure,
         eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},
         intent::{
@@ -23,6 +20,9 @@ use silverhand_backend_core::{
         },
         write::AgentTornDown,
     },
+    foundation::identity::{AgentId, HostId},
+    foundation::persistence::PersistenceFailure,
+    identity_access::agent_lifecycle::MaterializationStatus,
 };
 use sqlx::{Row, sqlite::SqliteRow};
 use thiserror::Error;
@@ -217,7 +217,7 @@ impl AgentDeletionLifecyclePort for SqliteHostAgentStore {
 mod tests {
     use std::{path::PathBuf, time::Duration};
 
-    use silverhand_backend_core::teardown::intent::{
+    use silverhand_backend_core::application_orchestration::teardown::intent::{
         BeginDeletion, begin_agent_deletion, pending_agent_deletions,
     };
     use sqlx::Connection;

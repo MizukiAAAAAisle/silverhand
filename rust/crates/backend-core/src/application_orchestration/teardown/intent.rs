@@ -19,7 +19,7 @@
 //! mint a token that routes a purge and a fan-out at a row nobody asked about — so
 //! the mint that serves a request binds the parts to the requested id, and the
 //! completing call binds the committed teardown back to the attempt. Both mismatches
-//! are internal contract failures ([`crate::teardown::contract`]), never product
+//! are internal contract failures ([`crate::application_orchestration::teardown::contract`]), never product
 //! answers: the refusal arms here are facts a user can act on, and a spliced
 //! coordinate is not one of them.
 //!
@@ -29,12 +29,12 @@
 use std::future::Future;
 
 use crate::{
-    foundation::identity::{AgentId, HostId},
-    foundation::persistence::PersistenceFailure,
-    teardown::{
+    application_orchestration::teardown::{
         contract::{TeardownContractViolation, TeardownFailure, same_agent, same_computer},
         write::AgentTornDown,
     },
+    foundation::identity::{AgentId, HostId},
+    foundation::persistence::PersistenceFailure,
 };
 
 /// A deletion attempt that is durably recorded. Carries exactly what completing
@@ -42,7 +42,7 @@ use crate::{
 /// marker's own timestamp, which is the token the completing CAS matches on.
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::teardown::intent::AgentDeletionAttempt;
+/// use silverhand_backend_core::application_orchestration::teardown::intent::AgentDeletionAttempt;
 /// // Assembled from parts, this would authorize completing a deletion no marker
 /// // on disk ever started.
 /// let _: AgentDeletionAttempt = AgentDeletionAttempt {
@@ -61,7 +61,7 @@ use crate::{
 /// ```
 /// use silverhand_backend_core::{
 ///     foundation::identity::{AgentId, HostId},
-///     teardown::intent::AgentDeletionAttempt,
+///     application_orchestration::teardown::intent::AgentDeletionAttempt,
 /// };
 /// fn parts(attempt: &AgentDeletionAttempt) -> (&AgentId, &HostId, i64) {
 ///     (attempt.agent_id(), attempt.host_id(), attempt.deletion_started_at())
@@ -162,7 +162,7 @@ pub enum CompleteDeletion {
     ///
     /// The completing write's compare-and-set is "still active, still on the
     /// computer this attempt routes to", which IS
-    /// [`crate::teardown::eligibility::AgentTeardownEligibility::ActiveOn`] — so it
+    /// [`crate::application_orchestration::teardown::eligibility::AgentTeardownEligibility::ActiveOn`] — so it
     /// mints its witness through the same rule the other producers use rather than
     /// re-stating the comparison for itself.
     Committed(Box<AgentTornDown>),
@@ -243,7 +243,7 @@ where
 ///
 /// This is a structural obligation on the CALL CHAIN, not a claim about any fence
 /// implementation's honesty. Its only constructor is [`PurgeReceipt::sealed`], which is
-/// `pub(crate)` and minted at exactly one site — [`crate::teardown::agent_delete_resume`],
+/// `pub(crate)` and minted at exactly one site — [`crate::application_orchestration::teardown::agent_delete_resume`],
 /// immediately after the fence port returns `Ok`. Because [`complete_agent_deletion`]
 /// consumes one by value, the borrow checker makes "complete without first awaiting the
 /// fence" unwriteable from outside this crate: a server-side caller cannot name the type
@@ -301,11 +301,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        identity_access::agent_lifecycle::MaterializationStatus,
-        teardown::{
+        application_orchestration::teardown::{
             eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},
             facts::{AgentTeardownCapture, AgentTeardownFacts},
         },
+        identity_access::agent_lifecycle::MaterializationStatus,
     };
 
     fn agent(id: &str) -> AgentId {
