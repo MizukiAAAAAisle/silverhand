@@ -14,15 +14,16 @@
 //! test module is invisible here regardless of its file path. All production items are
 //! walked, including inside inline modules and `impl` blocks.
 //!
-//! Doors (current anchor tree; owners move wholesale when #2266 splits composition):
+//! Doors (staged composition tree from #2266):
 //!
 //! 1. bind — `TcpListener::bind` : one production reference, direct callee of
-//!    `bind_and_prepare`; `bind_and_prepare` called once, by `run`.
-//! 2. bootstrap — `write_bootstrap_token_file` : one production call, direct callee of
-//!    `prepare_for_bound_listener_observed`.
-//! 3. finalize — one production `PreparedApp { .. }` struct literal in
-//!    `prepare_for_bound_listener_observed`, with exactly one root `Router::new` inside it.
-//!    The merge chain is NOT pinned.
+//!    `acquire_bound_listener`; its non-cloneable witness flows through the sealed
+//!    preparation links, with `bind_and_prepare` called once by `run`.
+//! 2. bootstrap — one `provision` call from `compose_after_audit`; its raw
+//!    `write_bootstrap_token_file` reference occurs exactly once inside `provision`.
+//! 3. finalize — one production `PreparedApp { .. }` struct literal in the consuming
+//!    `commit` door, and one root `Router::new` in `compose_after_audit`. The merge chain
+//!    is NOT pinned.
 
 use std::{
     fs,
@@ -40,17 +41,21 @@ pub struct Crate {
     files: Vec<(String, syn::File)>,
 }
 
-/// The composition call-chain: each intermediate link `(fn, expected_caller)`. Sealing
-/// walks this from the terminal outward. This SAME list feeds `guarded_names()` so alias
-/// rejection and occurrence sealing can never drift onto two different name sets.
+/// The composition call graph: each protected link `(fn, expected_caller)`. This SAME
+/// list feeds `guarded_names()` so alias rejection and occurrence sealing can never drift
+/// onto two different name sets.
 const CHAIN_LINKS: &[(&str, &str)] = &[
     ("bind_and_prepare", "run"),
+    ("acquire_bound_listener", "bind_and_prepare"),
     ("prepare_bound_listener", "bind_and_prepare"),
     ("prepare_bound_listener_observed", "prepare_bound_listener"),
     (
         "prepare_for_bound_listener_observed",
         "prepare_bound_listener_observed",
     ),
+    ("compose_after_audit", "prepare_for_bound_listener_observed"),
+    ("provision", "compose_after_audit"),
+    ("commit", "prepare_for_bound_listener_observed"),
 ];
 
 /// The terminal identifiers the doors match directly.
@@ -337,6 +342,8 @@ struct RefWalker<'a> {
 enum RefKind {
     /// A `TcpListener::bind(...)` path-call.
     TcpListenerBind,
+    /// A root `Router::new()` path-call.
+    RouterNew,
     /// Any reference to `write_bootstrap_token_file` (call or function value).
     BootstrapWrite,
     /// Any reference to a plain intermediate composition function by its terminal name
@@ -428,6 +435,20 @@ impl<'ast, 'a> Visit<'ast> for RefWalker<'a> {
                 self.record(line);
             }
         }
+        if self.kind == RefKind::RouterNew
+            && let Expr::Path(p) = &*node.func
+        {
+            let segs: Vec<String> = p
+                .path
+                .segments
+                .iter()
+                .map(|s| s.ident.to_string())
+                .collect();
+            if segs.len() >= 2 && segs[segs.len() - 2] == "Router" && segs[segs.len() - 1] == "new"
+            {
+                self.record(node.span().start().line);
+            }
+        }
         if self.kind == RefKind::BootstrapWrite
             && let Expr::Path(p) = &*node.func
             && p.path
@@ -467,6 +488,7 @@ impl<'ast, 'a> Visit<'ast> for RefWalker<'a> {
             RefKind::BootstrapWrite => Some("write_bootstrap_token_file"),
             RefKind::NamedFn(name) => Some(name),
             RefKind::TcpListenerBind => None,
+            RefKind::RouterNew => None,
         };
         if let Some(name) = guarded_value
             && node.path.segments.last().is_some_and(|s| s.ident == name)
@@ -499,6 +521,7 @@ impl<'ast, 'a> Visit<'ast> for RefWalker<'a> {
                 let raw = node.tokens.to_string();
                 let names = match self.kind {
                     RefKind::TcpListenerBind => raw.contains("TcpListener") && raw.contains("bind"),
+                    RefKind::RouterNew => raw.contains("Router") && raw.contains("new"),
                     RefKind::BootstrapWrite => raw.contains("write_bootstrap_token_file"),
                     RefKind::NamedFn(name) => raw.contains(name),
                 };
@@ -602,13 +625,13 @@ fn assert_single_sealed_occurrence(
 }
 
 fn check_bind(krate: &Crate) {
-    // Terminal: one TcpListener::bind, direct callee of bind_and_prepare.
+    // Terminal: one TcpListener::bind in the only constructor of the bound witness.
     assert_single_sealed_occurrence(
         krate,
         RefKind::TcpListenerBind,
         "bind",
         "TcpListener::bind",
-        "bind_and_prepare",
+        "acquire_bound_listener",
     );
     // Intermediate link: bind_and_prepare called exactly once, sealed, by `run`. Using the
     // NamedFn kind seals `bind_and_prepare` itself against a function-value/alias second
@@ -628,7 +651,7 @@ fn check_bootstrap(krate: &Crate) {
         RefKind::BootstrapWrite,
         "bootstrap",
         "write_bootstrap_token_file",
-        "prepare_for_bound_listener_observed",
+        "provision",
     );
 }
 
@@ -639,7 +662,6 @@ fn check_finalize(krate: &Crate) {
         in_loop: usize,
         in_closure: usize,
         owners: Vec<(String, String, usize, Option<String>)>,
-        router_new: usize,
     }
     impl<'ast, 'a> Visit<'ast> for C<'a> {
         fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
@@ -693,7 +715,6 @@ fn check_finalize(krate: &Crate) {
                 };
                 self.owners
                     .push((f, self.path.to_owned(), node.span().start().line, rejected));
-                self.router_new += RouterNewCounter::count_in_struct_fields(node);
             }
             visit::visit_expr_struct(self, node);
         }
@@ -729,7 +750,6 @@ fn check_finalize(krate: &Crate) {
         in_loop: 0,
         in_closure: 0,
         owners: Vec::new(),
-        router_new: 0,
     };
     for (path, file) in &krate.files {
         c.path = path;
@@ -754,58 +774,18 @@ fn check_finalize(krate: &Crate) {
         c.owners
     );
     assert!(
-        c.owners[0].0 == "prepare_for_bound_listener_observed",
+        c.owners[0].0 == "commit",
         "composition[finalize]: the `PreparedApp` literal must sit in \
-         `prepare_for_bound_listener_observed`, found in `{}` at {}:{}",
+         `commit`, found in `{}` at {}:{}",
         c.owners[0].0,
         c.owners[0].1,
         c.owners[0].2
     );
-    assert!(
-        c.router_new == 1,
-        "composition[finalize]: expected exactly one root `Router::new` inside the `PreparedApp` \
-         literal, found {}",
-        c.router_new
+    assert_single_sealed_occurrence(
+        krate,
+        RefKind::RouterNew,
+        "finalize",
+        "Router::new",
+        "compose_after_audit",
     );
-}
-
-struct RouterNewCounter {
-    count: usize,
-}
-impl RouterNewCounter {
-    fn count_in_struct_fields(node: &syn::ExprStruct) -> usize {
-        let mut rn = RouterNewCounter { count: 0 };
-        for field in &node.fields {
-            rn.visit_expr(&field.expr);
-        }
-        if let Some(rest) = &node.rest {
-            rn.visit_expr(rest);
-        }
-        rn.count
-    }
-}
-impl<'ast> Visit<'ast> for RouterNewCounter {
-    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
-        if let Expr::Path(p) = &*node.func {
-            let segs: Vec<String> = p
-                .path
-                .segments
-                .iter()
-                .map(|s| s.ident.to_string())
-                .collect();
-            if segs.len() >= 2 && segs[segs.len() - 2] == "Router" && segs[segs.len() - 1] == "new"
-            {
-                self.count += 1;
-            }
-        }
-        visit::visit_expr_call(self, node);
-    }
-    fn visit_macro(&mut self, node: &'ast Macro) {
-        if let Some(exprs) = macro_exprs(node) {
-            for e in exprs {
-                self.visit_expr(&e);
-            }
-        }
-        visit::visit_macro(self, node);
-    }
 }

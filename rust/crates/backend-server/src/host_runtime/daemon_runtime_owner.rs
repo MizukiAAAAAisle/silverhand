@@ -42,9 +42,9 @@ use crate::{
     host_runtime::daemon_runtime_transport::{
         DeliveryTransport, DeliveryTransportError, StartTransport, StopTransport,
     },
+    host_runtime::scope_event_publishers::HubHostRuntimeEvents,
     runtime_control::RuntimeClearSessionWaiters,
     runtime_credential::{RuntimeCredentialAuthority, RuntimeStartFailure, RuntimeStopTransport},
-    host_runtime::scope_event_publishers::HubHostRuntimeEvents,
 };
 
 enum DecodedRuntimeInboundEvent {

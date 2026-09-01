@@ -415,14 +415,13 @@ fn namespace_role(
         if let Some(leaf) = pt.strip_prefix(&expected_prefix)
             && !leaf.contains("::")
         {
-            let (is_landed, _base, resolved_leaf) =
-                resolve_settled_location(
-                    crate_name,
-                    crate_src,
-                    module,
-                    pt,
-                    compatibility_facade_path(r).as_deref(),
-                );
+            let (is_landed, _base, resolved_leaf) = resolve_settled_location(
+                crate_name,
+                crate_src,
+                module,
+                pt,
+                compatibility_facade_path(r).as_deref(),
+            );
             if is_landed {
                 landed_leaves.insert(resolved_leaf);
             }
@@ -526,7 +525,12 @@ fn scanned_crate_roots() -> HashMap<(String, String), bool> {
         .expect("crate_roots array")
         .iter()
         .filter(|r| compatibility_facade_path(r).is_some())
-        .map(|r| (as_str(r, "crate").to_owned(), as_str(r, "module").to_owned()))
+        .map(|r| {
+            (
+                as_str(r, "crate").to_owned(),
+                as_str(r, "module").to_owned(),
+            )
+        })
         .collect();
     let mut universe = HashMap::new();
     for krate in workspace_crates() {
@@ -607,11 +611,16 @@ fn row_universe_key(crate_src: &Path, row: &Value) -> (String, String) {
         .unwrap_or(false);
     if !cfg_test && row.get("target").is_some() {
         let pt = as_str(&row["migration"], "physical_target");
-        let (is_landed, _base, _leaf) =
-            resolve_settled_location(&krate, crate_src, module, pt, compatibility_facade_path(row).as_deref());
+        let (is_landed, _base, _leaf) = resolve_settled_location(
+            &krate,
+            crate_src,
+            module,
+            pt,
+            compatibility_facade_path(row).as_deref(),
+        );
         if is_landed && pt.split("::").count() >= 3 {
             // `crate::namespace::leaf` → universe key `namespace::leaf`.
-            let tail = pt.splitn(2, "::").nth(1).unwrap().to_owned();
+            let tail = pt.split_once("::").unwrap().1.to_owned();
             return (krate, tail);
         }
     }
@@ -729,8 +738,13 @@ fn every_row_is_a_strict_target_xor_split_union() {
         if !cfg_test {
             let (shape_base, shape_leaf) = if has_target {
                 let pt = as_str(&row["migration"], "physical_target");
-                let (_landed, base, leaf) =
-                    resolve_settled_location(krate, &crate_src, module, pt, compatibility_facade_path(row).as_deref());
+                let (_landed, base, leaf) = resolve_settled_location(
+                    krate,
+                    &crate_src,
+                    module,
+                    pt,
+                    compatibility_facade_path(row).as_deref(),
+                );
                 (base, leaf)
             } else {
                 (crate_src.clone(), module.to_owned())
@@ -1173,8 +1187,13 @@ fn mechanically_landed(map: &Value) -> BTreeSet<(String, String)> {
             let module = as_str(r, "module");
             let crate_src = root.join("crates").join(crate_name).join("src");
             let pt = as_str(&r["migration"], "physical_target");
-            let (is_landed, _base, _leaf) =
-                resolve_settled_location(crate_name, &crate_src, module, pt, compatibility_facade_path(r).as_deref());
+            let (is_landed, _base, _leaf) = resolve_settled_location(
+                crate_name,
+                &crate_src,
+                module,
+                pt,
+                compatibility_facade_path(r).as_deref(),
+            );
             if is_landed {
                 let key = row_universe_key(&crate_src, r);
                 landed.insert(key);
@@ -1456,7 +1475,10 @@ fn root_compatibility_facades_are_named_accepted_residuals_not_second_business_u
             format!("{crate_name}::{module}"),
             "facade path names the original root shim"
         );
-        assert_ne!(facade, pt, "facade path differs from the landed physical_target");
+        assert_ne!(
+            facade, pt,
+            "facade path differs from the landed physical_target"
+        );
         facades.push((crate_name, module, pt));
     }
     // The named accepted residual set is EXACTLY the five #2269 daemon root shims — not
@@ -1479,7 +1501,8 @@ fn root_compatibility_facades_are_named_accepted_residuals_not_second_business_u
     .map(|(c, m)| (c.to_owned(), m.to_owned()))
     .collect();
     assert_eq!(
-        actual, expected,
+        actual,
+        expected,
         "root compatibility facade set drifted from the five accepted #2269 daemon shims: \
          unexpected={:?} missing={:?}",
         &actual - &expected,

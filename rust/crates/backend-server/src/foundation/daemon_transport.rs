@@ -1938,6 +1938,7 @@ mod tests {
     use crate::{
         application_orchestration::daemon_delivery::DaemonDeliveryRuntime,
         current_schema,
+        foundation::scope_event_transport::ScopeEventHub,
         host_agent_background::agent_deletion_resumer::DeletionFenceBinder,
         host_control::management::disconnect::DaemonConnectionControlHandle,
         host_control::{status_seed::DaemonCustody, status_snapshot::StatusSnapshotOutcome},
@@ -1950,7 +1951,6 @@ mod tests {
             rotate_token::{parse_rotation_ack, rotation_params},
         },
         runtime_credential::RuntimeCredentialAuthority,
-        foundation::scope_event_transport::ScopeEventHub,
         scope_runtime_stop::ProductionScopeRuntimeStop,
     };
 
@@ -2868,8 +2868,8 @@ mod tests {
             current_schema,
             daemon_delivery::{DaemonDeliveryConfig, DaemonDeliveryRuntime},
             daemon_events::{AgentRunStateWire, AgentRunStatus, HydratedRuntime},
-            runtime_credential::RuntimeCredentialAuthority,
             foundation::scope_event_transport::ScopeEventHub,
+            runtime_credential::RuntimeCredentialAuthority,
         };
 
         const CONVERSATION: &str = "conversation0001";

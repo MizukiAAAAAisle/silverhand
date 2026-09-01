@@ -457,6 +457,7 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
 /// (they still cover the current root tree exactly once), never as a landed/residual
 /// authority. Organization accounting stays separate from route/product ledgers.
 const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
+    ("backend-app", "application_orchestration"),
     ("backend-core", "agents"),
     ("backend-server", "application_orchestration"),
     ("backend-server", "conversation_messaging"),
@@ -1335,7 +1336,7 @@ fn g4_the_seam_touches_only_crate_roots_and_only_as_declarations() {
             // exemption consults registered_modules (the same per-root union g0 uses), never
             // SEAM alone. This is not a new durable inventory; it reuses g0's registration
             // truth so a registered co-owner is not misread as a fork (#task:2273).
-            if registered_modules(other_dir).contains(&(*namespace).to_owned()) {
+            if registered_modules(other_dir).contains(*namespace) {
                 continue;
             }
             let other = rust_root()
