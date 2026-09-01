@@ -294,10 +294,8 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // `internal_agent::diagnostics` (internal runtime-credentialed family).
     ("backend-server", "embedded_bootstrap"),
     ("backend-server", "workspace_data_plane"),
-    ("backend-sqlite", "agent_availability_read"),
     ("backend-sqlite", "agent_detail_read"),
     ("backend-sqlite", "agent_list_read"),
-    ("backend-sqlite", "agent_presence_read"),
     // #task:2225 — the SQLite adapters for the Wave 3 verticals: the agent avatar
     // serve-ref read (route 5) and the agent tuning/profile row write (route 2). The
     // handle-availability probe (route 1) reuses the existing `handle_namespace`
@@ -311,7 +309,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-sqlite", "human_registration"),
     ("backend-sqlite", "user_identity"),
     ("backend-sqlite", "host_agent"),
-    ("backend-sqlite", "host_resources_read"),
     // #task:2290 — the `viewer_read_model` relocation namespace: a directory container
     // declared once at the backend-sqlite crate root (`viewer_read_model/mod.rs`), owning
     // the relocated presence/unread leaves (`user_presence_cold_read` SQLite read adapter,
@@ -327,10 +324,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-sqlite", "workspace_name_availability"),
     // #task:2220 — the SQLite reads the rename fan-out and the workspace-metadata
     // viewer hint consume: the conversation agent audience (folded into the rename
-    // messaging store) and the workspace human audience. `computer_agents_read` is
-    // the host-runtime agent roster the availability announcer enumerates. Not yet
-    // mounted (the app composition root is out of this task's scope).
-    ("backend-sqlite", "computer_agents_read"),
+    // messaging store) and the workspace human audience. Not yet mounted (the app
+    // composition root is out of this task's scope). (#task:2294 relocated the
+    // `computer_agents_read` host-runtime roster adapter under the `host_runtime`
+    // context; its flat entry is removed and covered by that owning-root entry.)
     ("backend-sqlite", "workspace_audience_read"),
     // #task:2248 — the same-named SQLite adapters for the residual-wave core ports
     // above. Each is the sibling of its `backend-core` entry; directory-shaped
@@ -458,6 +455,12 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-sqlite", "access"),
     ("backend-sqlite", "auth"),
     ("backend-sqlite", "current_schema"),
+    // #task:2294 relocated four low-fanout read adapters (`agent_availability_read`,
+    // `agent_presence_read`, `computer_agents_read`, `host_resources_read`) under this
+    // existing self-named `host_runtime` context (dual role). Their flat SEAM entries are
+    // removed; this single owning-root entry now covers them via the CP projection and does
+    // NOT descend into the context. The `host_runtime` self-row stays landed; residual
+    // host_runtime leaves are `agent_runtime_state_read` and `runtime_credential`.
     ("backend-sqlite", "host_runtime"),
     ("backend-sqlite", "runtime_credential"),
     ("backend-sqlite", "workspace_cold_read"),

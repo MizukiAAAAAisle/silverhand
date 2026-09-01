@@ -27,6 +27,14 @@ use thiserror::Error;
 
 mod management;
 
+// #task:2294 — four low-fanout read adapters relocated under this self-named
+// `host_runtime` context (dual role: real context + relocation namespace). Declared
+// here only; their owners/targets live in the organization map/gate.
+pub mod agent_availability_read;
+pub mod agent_presence_read;
+pub mod computer_agents_read;
+pub mod host_resources_read;
+
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 
 #[derive(Clone)]

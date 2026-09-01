@@ -22,7 +22,7 @@ use silverhand_backend_core::{
     host_runtime::agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
     policy::agent_presence::{self, ActivityInstant},
 };
-use silverhand_backend_sqlite::agent_presence_read::SqliteAgentPresenceColdRead;
+use silverhand_backend_sqlite::host_runtime::agent_presence_read::SqliteAgentPresenceColdRead;
 use sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
 
 #[path = "support/current_schema_snapshot.rs"]

@@ -9,25 +9,21 @@
 
 pub mod access;
 pub mod agent_audit_read;
-pub mod agent_availability_read;
 pub mod agent_avatar_read;
 pub mod agent_detail_read;
 pub mod agent_list_read;
-pub mod agent_presence_read;
 pub mod agent_profile_read;
 pub mod agent_profile_write;
 pub mod agent_runtime_state_read;
 pub mod agent_view_acl;
 
 pub mod auth;
-pub mod computer_agents_read;
 pub mod conversation_messaging;
 pub mod credential;
 pub mod embedded_bootstrap;
 pub mod foundation;
 pub mod handle_namespace;
 pub mod host_agent;
-pub mod host_resources_read;
 pub mod host_runtime;
 pub mod human_registration;
 pub mod runtime_credential;

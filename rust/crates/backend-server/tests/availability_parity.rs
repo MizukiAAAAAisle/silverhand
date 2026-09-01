@@ -37,7 +37,7 @@ use silverhand_backend_core::{
 use silverhand_backend_server::host_agent::{
     availability::router, host_attachment::HostAttachment,
 };
-use silverhand_backend_sqlite::agent_availability_read::SqliteAgentAvailabilityColdRead;
+use silverhand_backend_sqlite::host_runtime::agent_availability_read::SqliteAgentAvailabilityColdRead;
 use sqlx::{Connection, Executor};
 use tower::ServiceExt;
 

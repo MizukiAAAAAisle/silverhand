@@ -21,7 +21,7 @@ use silverhand_backend_core::{
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
 };
-use silverhand_backend_sqlite::agent_availability_read::SqliteAgentAvailabilityColdRead;
+use silverhand_backend_sqlite::host_runtime::agent_availability_read::SqliteAgentAvailabilityColdRead;
 use sqlx::Connection;
 
 #[path = "support/current_schema_snapshot.rs"]
