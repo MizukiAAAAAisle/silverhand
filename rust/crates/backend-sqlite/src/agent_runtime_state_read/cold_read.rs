@@ -38,12 +38,12 @@ use silverhand_backend_core::{
         AgentRuntimeStateFacts, AgentRuntimeStateReadModel, RuntimeParticipationFact,
         RuntimeSeatFact, RuntimeSeatScopeFact,
     },
+    host_runtime::runtime_credential::RuntimeGeneration,
+    host_runtime::runtime_event::RuntimeObservedStatus,
     identity::{AgentId, ConversationId, UserId},
     identity_access::agent_lifecycle::MaterializationStatus,
     messaging::collaboration::conversation_ref::ConversationRosterPolicy,
     persistence::PersistenceFailure,
-    runtime_credential::RuntimeGeneration,
-    runtime_event::RuntimeObservedStatus,
 };
 use sqlx::{
     Row, SqlitePool,

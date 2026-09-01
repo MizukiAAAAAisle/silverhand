@@ -127,9 +127,9 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::future::Future;
 
+use crate::host_runtime::runtime_credential::RuntimePrincipal;
 use crate::identity::{AgentId, ConversationId, UserId, WorkspaceId};
 use crate::persistence::PersistenceFailure;
-use crate::runtime_credential::RuntimePrincipal;
 
 use super::aggregate::{BoardKey, TaskAggregate};
 use super::spec::{TaskId, TaskNumber};
@@ -1150,9 +1150,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration};
     use crate::identity::DaemonInstanceId;
     use crate::messaging::task::TaskRow;
-    use crate::runtime_credential::{RuntimeCustody, RuntimeGeneration};
 
     /// A `todo` task on `ws:workspace_1` in `conv_1`.
     fn workspace_task() -> TaskAggregate {

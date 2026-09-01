@@ -145,12 +145,24 @@ fn forbidden_foundation_owner_imports(file: &syn::File) -> Vec<String> {
                 }))
                 || matches!(
                     path.as_slice(),
+                    // #task:2281 — the credential vocabulary relocated under the C2
+                    // host_runtime namespace, so its canonical path gained the `host_runtime`
+                    // segment. The prohibition follows the canonical path exactly (equally
+                    // strong): foundation must not import the concrete credential
+                    // principal/scope vocabulary. `runtime_delivery` has not relocated and keeps
+                    // its flat path.
+                    [core, namespace, module, name]
+                        if core == "silverhand_backend_core"
+                            && namespace == "host_runtime"
+                            && module == "runtime_credential"
+                            && matches!(name.as_str(), "RuntimePrincipal" | "RuntimeScope")
+                )
+                || matches!(
+                    path.as_slice(),
                     [core, module, name]
                         if core == "silverhand_backend_core"
-                            && ((module == "runtime_credential"
-                                && matches!(name.as_str(), "RuntimePrincipal" | "RuntimeScope"))
-                                || (module == "runtime_delivery"
-                                    && name == "RuntimeDeliveryFailureReason"))
+                            && module == "runtime_delivery"
+                            && name == "RuntimeDeliveryFailureReason"
                 )
         })
         .map(|path| path.join("::"))
@@ -177,14 +189,14 @@ fn foundation_transport_does_not_import_concrete_context_owners() {
     );
 
     let core_mutation: syn::File = syn::parse_str(
-        "use silverhand_backend_core::{runtime_credential::{RuntimePrincipal, RuntimeScope}, runtime_delivery::RuntimeDeliveryFailureReason};",
+        "use silverhand_backend_core::{host_runtime::runtime_credential::{RuntimePrincipal, RuntimeScope}, runtime_delivery::RuntimeDeliveryFailureReason};",
     )
     .unwrap();
     assert_eq!(
         forbidden_foundation_owner_imports(&core_mutation),
         [
-            "silverhand_backend_core::runtime_credential::RuntimePrincipal",
-            "silverhand_backend_core::runtime_credential::RuntimeScope",
+            "silverhand_backend_core::host_runtime::runtime_credential::RuntimePrincipal",
+            "silverhand_backend_core::host_runtime::runtime_credential::RuntimeScope",
             "silverhand_backend_core::runtime_delivery::RuntimeDeliveryFailureReason",
         ]
     );

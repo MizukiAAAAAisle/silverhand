@@ -30,10 +30,10 @@ use crate::{
 
 impl<C, D, H> DaemonDeliveryRuntime<C, D, H>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: silverhand_backend_core::runtime_delivery::RuntimeDispatchReadPort
         + silverhand_backend_core::runtime_delivery::RuntimeInboxCustodyPort
-        + silverhand_backend_core::runtime_event::DaemonEventDurablePort,
+        + silverhand_backend_core::host_runtime::runtime_event::DaemonEventDurablePort,
     H: silverhand_backend_core::host_runtime::custody::HostCredentialLookup,
 {
     pub fn agent_run_states_router<A>(&self, admission: A) -> Router

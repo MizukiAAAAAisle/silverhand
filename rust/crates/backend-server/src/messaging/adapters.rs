@@ -16,6 +16,7 @@
 //! test rather than the happy paths.
 
 use silverhand_backend_core::{
+    host_runtime::runtime_credential::RuntimePrincipal,
     identity::{ConversationId, UserId},
     messaging::{
         AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, DirectLineAuthority,
@@ -23,7 +24,6 @@ use silverhand_backend_core::{
         SendDestination, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
         TargetAddress,
     },
-    runtime_credential::RuntimePrincipal,
 };
 
 use super::{
@@ -290,9 +290,9 @@ mod tests {
     use silverhand_backend_core::persistence::PersistenceFailure;
     use silverhand_backend_core::{
         cli_invoke_audit::CliStaleResolutionReason,
+        host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration},
         identity::{AgentId, DaemonInstanceId},
         messaging::ThreadRootId,
-        runtime_credential::{RuntimeCustody, RuntimeGeneration},
     };
 
     use super::*;

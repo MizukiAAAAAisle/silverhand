@@ -26,12 +26,9 @@
 //! insert/update triggers.
 
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId},
-    identity_access::agents::runtime::RuntimeKind,
-    persistence::PersistenceFailure,
-    runtime_credential::RuntimeScope,
-    runtime_event::RuntimeObservedStatus,
-    runtime_transition::{
+    host_runtime::runtime_credential::RuntimeScope,
+    host_runtime::runtime_event::RuntimeObservedStatus,
+    host_runtime::runtime_transition::{
         AbortTransition, BeginTransitionRecord, CompleteTransitionRecord,
         RuntimeTransitionAfterImage, RuntimeTransitionCommit, RuntimeTransitionInboxReclaimRecord,
         RuntimeTransitionInboxReclaimRow, RuntimeTransitionInboxWrite, RuntimeTransitionLock,
@@ -39,6 +36,9 @@ use silverhand_backend_core::{
         RuntimeTransitionSeatSnapshotRecord, RuntimeTransitionSeatSnapshotRow,
         RuntimeTransitionWrite,
     },
+    identity::{AgentId, ConversationId},
+    identity_access::agents::runtime::RuntimeKind,
+    persistence::PersistenceFailure,
 };
 use sqlx::{Row, sqlite::SqliteRow};
 use thiserror::Error;
@@ -406,7 +406,7 @@ impl RuntimeTransitionSeatRead for SqliteHostAgentStore {
 mod tests {
     use std::{path::PathBuf, time::Duration};
 
-    use silverhand_backend_core::runtime_transition::{
+    use silverhand_backend_core::host_runtime::runtime_transition::{
         BeginTransition, CompleteTransition, abort_runtime_transition, begin_runtime_transition,
         complete_runtime_transition,
     };

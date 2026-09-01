@@ -43,6 +43,7 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
+    host_runtime::runtime_credential::RuntimePrincipal,
     identity::AgentId,
     identity_access::agent_avatar::{AgentAvatarBlobPointer, AgentAvatarBlobStore},
     identity_access::agent_detail_read::AgentDetailReadModel,
@@ -58,7 +59,6 @@ use silverhand_backend_core::{
         InternalAvatarEdit, InternalProfileEdit, InternalProfileWriteOutcome,
         update_internal_profile,
     },
-    runtime_credential::RuntimePrincipal,
 };
 
 use super::{
@@ -551,6 +551,9 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        host_runtime::runtime_credential::{
+            RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
+        },
         identity::{DaemonInstanceId, UserId},
         identity_access::agent_avatar::{
             AgentAvatarBlobRead, AgentAvatarRow, OwnedAgentAvatarBlob,
@@ -566,7 +569,6 @@ mod tests {
         identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
         messaging::AvatarRevision,
         persistence::PersistenceFailure,
-        runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     };
     use std::sync::{
         Arc, Mutex,

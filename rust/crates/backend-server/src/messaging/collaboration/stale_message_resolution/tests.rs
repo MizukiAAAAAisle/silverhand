@@ -12,12 +12,12 @@ use axum::{
 };
 use futures_util::stream;
 use silverhand_backend_core::{
+    host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
     identity::{AgentId, ConversationId, DaemonInstanceId},
     messaging::{
         CapabilityDenied, SendCapability,
         collaboration::stale_message_resolution::StaleMessageResolutionAdmissionFact,
     },
-    runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};

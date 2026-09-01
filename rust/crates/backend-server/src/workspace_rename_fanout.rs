@@ -86,10 +86,10 @@ where
 mod tests {
     use silverhand_backend_core::{
         host_runtime::custody::HostCredentialLookup,
+        host_runtime::runtime_credential::RuntimeCustodyPort,
+        host_runtime::runtime_event::DaemonEventDurablePort,
         messaging::{SendClock, SendEntropy},
-        runtime_credential::RuntimeCustodyPort,
         runtime_delivery::{RuntimeDispatchReadPort, RuntimeInboxCustodyPort},
-        runtime_event::DaemonEventDurablePort,
     };
     use silverhand_backend_sqlite::messaging::collaboration::workspace_rename_messaging::SqliteWorkspaceRenameMessaging;
 

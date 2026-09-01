@@ -6,10 +6,10 @@
 
 use crate::{
     host_runtime::computer::{HostKind, ProvisioningSource},
+    host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
+    host_runtime::runtime_event::RuntimeObservedStatus,
     identity::{AgentId, ConversationId, HostId},
     identity_access::agent_lifecycle::MaterializationStatus,
-    runtime_credential::{RuntimeGeneration, RuntimeScope},
-    runtime_event::RuntimeObservedStatus,
 };
 
 /// The agent facts a teardown consumes. Every field has a named consumer:

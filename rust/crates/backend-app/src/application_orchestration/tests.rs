@@ -652,8 +652,8 @@ async fn prepared_residual_faces_share_one_drained_cli_audit_owner() {
     };
 
     use silverhand_backend_core::{
+        host_runtime::runtime_credential::RuntimeScope,
         identity::{ConversationId, DaemonInstanceId},
-        runtime_credential::RuntimeScope,
     };
     use silverhand_backend_server::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
@@ -3848,8 +3848,8 @@ async fn the_eighteen_convergence_keys_dispatch_after_real_authentication() {
     };
 
     use silverhand_backend_core::{
+        host_runtime::runtime_credential::RuntimeScope,
         identity::{ConversationId, DaemonInstanceId},
-        runtime_credential::RuntimeScope,
     };
     use silverhand_backend_server::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
@@ -4774,8 +4774,8 @@ async fn the_composition_internal_self_scope_family_reaches_and_effects_over_one
     };
 
     use silverhand_backend_core::{
+        host_runtime::runtime_credential::RuntimeScope,
         identity::{ConversationId, DaemonInstanceId},
-        runtime_credential::RuntimeScope,
     };
     use silverhand_backend_server::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
@@ -5216,8 +5216,8 @@ async fn the_composition_internal_profile_mcp_family_reaches_the_daemon_wire() {
     };
 
     use silverhand_backend_core::{
+        host_runtime::runtime_credential::RuntimeScope,
         identity::{ConversationId, DaemonInstanceId},
-        runtime_credential::RuntimeScope,
     };
     use silverhand_backend_server::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,

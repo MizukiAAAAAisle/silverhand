@@ -4,7 +4,7 @@ use std::{error::Error, fmt};
 
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    runtime_credential::{RuntimeGeneration, RuntimeScope},
+    host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
     wire_number::JsSafeInteger,
 };
 

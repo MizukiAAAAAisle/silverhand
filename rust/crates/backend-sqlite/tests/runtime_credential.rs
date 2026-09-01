@@ -1,11 +1,11 @@
 use std::{error::Error, path::Path};
 
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, DaemonInstanceId},
-    runtime_credential::{
+    host_runtime::runtime_credential::{
         ClaimRuntimeCustody, FinalizeRuntimeCustody, RuntimeCustody, RuntimeCustodyPort,
         RuntimeEventTime, RuntimeFinalStatus, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
+    identity::{AgentId, ConversationId, DaemonInstanceId},
 };
 use silverhand_backend_sqlite::runtime_credential::SqliteRuntimeCustodyStore;
 use sqlx::{Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};

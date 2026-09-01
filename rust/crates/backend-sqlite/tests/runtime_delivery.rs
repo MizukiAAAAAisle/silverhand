@@ -1,18 +1,20 @@
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, DaemonInstanceId},
-    messaging::{MessageContent, ReferencePositions},
-    persistence::PersistenceFailure,
-    policy::agent_presence,
-    runtime_credential::{ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeScope},
-    runtime_delivery::{
-        ClaimPendingInbox, DeliveryLeaseOwner, InboxSettlementDisposition,
-        RuntimeDeliveryFailureReason, RuntimeDispatchReadPort, RuntimeInboxCustodyPort,
+    host_runtime::runtime_credential::{
+        ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeScope,
     },
-    runtime_event::{
+    host_runtime::runtime_event::{
         CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
         ProjectRuntimeStatus, RuntimeActivityCommitResult, RuntimeActivityFact,
         RuntimeActivityKind, RuntimeActivityPayload, RuntimeEventAdmission, RuntimeExitDisposition,
         RuntimeObservedStatus,
+    },
+    identity::{AgentId, ConversationId, DaemonInstanceId},
+    messaging::{MessageContent, ReferencePositions},
+    persistence::PersistenceFailure,
+    policy::agent_presence,
+    runtime_delivery::{
+        ClaimPendingInbox, DeliveryLeaseOwner, InboxSettlementDisposition,
+        RuntimeDeliveryFailureReason, RuntimeDispatchReadPort, RuntimeInboxCustodyPort,
     },
 };
 use silverhand_backend_sqlite::{
@@ -181,7 +183,7 @@ fn scope() -> RuntimeScope {
 async fn claim_runtime(
     fixture: &Fixture,
     daemon: &str,
-) -> silverhand_backend_core::runtime_credential::RuntimePrincipal {
+) -> silverhand_backend_core::host_runtime::runtime_credential::RuntimePrincipal {
     fixture
         .custody
         .claim_or_current(ClaimRuntimeCustody::new(
@@ -1215,7 +1217,7 @@ fn activity_out_of_range(error: &PersistenceFailure) -> Option<i64> {
 /// path; the fault path aborts before the activity is inserted.
 async fn record_presence(
     fixture: &Fixture,
-    principal: &silverhand_backend_core::runtime_credential::RuntimePrincipal,
+    principal: &silverhand_backend_core::host_runtime::runtime_credential::RuntimePrincipal,
     observed: i64,
 ) -> Result<Option<RuntimeActivityCommitResult>, PersistenceFailure> {
     fixture

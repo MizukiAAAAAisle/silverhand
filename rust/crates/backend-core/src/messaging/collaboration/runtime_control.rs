@@ -7,9 +7,9 @@
 use std::{error::Error, fmt, future::Future};
 
 use crate::{
+    host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
     identity_access::agents::session_scope::AgentSessionScope,
-    runtime_credential::{RuntimeGeneration, RuntimeScope},
 };
 
 /// A runtime *start* intent. It deliberately carries **no** `RuntimeScope`: the
@@ -77,14 +77,14 @@ impl RuntimeSeatTarget {
     }
 
     /// Mint a clear target for a runtime-transition seat. The [`TransitionClearCandidate`] can
-    /// only be produced by iterating a sealed [`crate::runtime_transition::RuntimeTransitionSeatSnapshot`]
+    /// only be produced by iterating a sealed [`crate::host_runtime::runtime_transition::RuntimeTransitionSeatSnapshot`]
     /// under the exact held lock, and its inner row is private, so the scope here is provably a
     /// seat that snapshot enumerated — never a caller-picked arm. This is the sole cross-module
     /// mint site, and it takes the sealed candidate rather than a bare scope so the transition
     /// module never needs to depend on this target type or `UserId`.
     pub(crate) fn for_transition_clear(
         actor: UserId,
-        candidate: &crate::runtime_transition::TransitionClearCandidate<'_>,
+        candidate: &crate::host_runtime::runtime_transition::TransitionClearCandidate<'_>,
     ) -> Self {
         Self::new(actor, candidate.scope().clone())
     }

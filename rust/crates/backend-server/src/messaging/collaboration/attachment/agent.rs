@@ -22,6 +22,7 @@ use serde::Deserialize;
 use serde_json::json;
 use silverhand_backend_core::{
     blob_store::{BlobAliasId, BlobNamespace, BlobReadOutcome, BlobStore},
+    host_runtime::runtime_credential::RuntimePrincipal,
     identity::AgentId,
     messaging::{
         AddressRefusal, AttachmentId, SendClock, SendEntropy, TargetAddress,
@@ -37,7 +38,6 @@ use silverhand_backend_core::{
             AttachmentPostCommitMaintenance,
         },
     },
-    runtime_credential::RuntimePrincipal,
 };
 use silverhand_backend_filesystem::blob_store::{LocalBlobAliasOutcome, LocalBlobAliasStore};
 

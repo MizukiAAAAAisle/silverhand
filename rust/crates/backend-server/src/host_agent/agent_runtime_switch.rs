@@ -69,6 +69,10 @@ use silverhand_backend_core::{
         SwitchAgentRuntimeError, SwitchAgentRuntimeRequest, SwitchAgentSnapshotRead,
         SwitchConversationCoordination, switch_agent_runtime,
     },
+    host_runtime::runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustodyReadPort},
+    host_runtime::runtime_transition::{
+        RuntimeTransitionInboxWrite, RuntimeTransitionSeatRead, RuntimeTransitionWrite,
+    },
     identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::AgentDetailReadModel,
     identity_access::agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
@@ -82,10 +86,6 @@ use silverhand_backend_core::{
     },
     messaging::collaboration::RuntimeControlPort,
     name_canonicalization::is_ecmascript_trim_whitespace,
-    runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustodyReadPort},
-    runtime_transition::{
-        RuntimeTransitionInboxWrite, RuntimeTransitionSeatRead, RuntimeTransitionWrite,
-    },
 };
 
 use crate::agent_wire::{AgentDto, reproject_committed_agent};
@@ -686,6 +686,12 @@ mod tests {
             RuntimeAvailabilityProbeFault, RuntimeAvailabilityVerdict, SwitchAgentRuntimeError,
             SwitchAgentRuntimeFault, SwitchAgentSnapshot,
         },
+        host_runtime::runtime_credential::{RuntimePrincipal, RuntimeScope},
+        host_runtime::runtime_transition::{
+            AbortTransition, BeginTransitionRecord, CompleteTransitionRecord,
+            RuntimeTransitionCommit, RuntimeTransitionInboxReclaimRecord, RuntimeTransitionLock,
+            RuntimeTransitionSeatSnapshotRecord,
+        },
         identity::{ConversationId, HostId},
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
         identity_access::agent_lifecycle::MaterializationStatus,
@@ -694,12 +700,6 @@ mod tests {
             ClearSessionOutcome, ClearSessionProviderRefusal, HardStopRuntimeOutcome,
             HardStopRuntimeProviderRefusal, RuntimeSeatTarget, RuntimeStartTarget,
             StartRuntimeOutcome, StartRuntimeProviderRefusal,
-        },
-        runtime_credential::{RuntimePrincipal, RuntimeScope},
-        runtime_transition::{
-            AbortTransition, BeginTransitionRecord, CompleteTransitionRecord,
-            RuntimeTransitionCommit, RuntimeTransitionInboxReclaimRecord, RuntimeTransitionLock,
-            RuntimeTransitionSeatSnapshotRecord,
         },
     };
     use tower::ServiceExt;

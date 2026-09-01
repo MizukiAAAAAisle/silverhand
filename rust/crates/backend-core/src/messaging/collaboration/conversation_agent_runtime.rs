@@ -6,9 +6,9 @@
 use std::{error::Error, future::Future};
 
 use crate::{
+    host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
     identity::{AgentId, ConversationId, UserId},
     messaging::collaboration::runtime_control::CliSessionId,
-    runtime_credential::{RuntimeGeneration, RuntimeScope},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

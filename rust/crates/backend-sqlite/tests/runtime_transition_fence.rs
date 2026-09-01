@@ -1,18 +1,20 @@
 use std::ops::Range;
 
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, DaemonInstanceId},
-    identity_access::agents::runtime::RuntimeKind,
-    messaging::{MessageContent, ReferencePositions},
-    runtime_credential::{ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeScope},
-    runtime_delivery::{ClaimPendingInbox, DeliveryLeaseOwner, RuntimeInboxCustodyPort},
-    runtime_event::RuntimeObservedStatus,
-    runtime_transition::{
+    host_runtime::runtime_credential::{
+        ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeScope,
+    },
+    host_runtime::runtime_event::RuntimeObservedStatus,
+    host_runtime::runtime_transition::{
         AbortTransition, BeginTransition, ReadRuntimeTransitionSeats,
         ReclaimRuntimeTransitionInboxes, RuntimeTransitionWrite, abort_runtime_transition,
         begin_runtime_transition, read_runtime_transition_seats,
         reclaim_runtime_transition_inboxes,
     },
+    identity::{AgentId, ConversationId, DaemonInstanceId},
+    identity_access::agents::runtime::RuntimeKind,
+    messaging::{MessageContent, ReferencePositions},
+    runtime_delivery::{ClaimPendingInbox, DeliveryLeaseOwner, RuntimeInboxCustodyPort},
 };
 use silverhand_backend_sqlite::{
     host_agent::SqliteHostAgentStore, runtime_credential::SqliteRuntimeCustodyStore,
@@ -130,7 +132,7 @@ async fn fixture() -> Fixture {
 
 async fn current_principal(
     fixture: &Fixture,
-) -> silverhand_backend_core::runtime_credential::RuntimePrincipal {
+) -> silverhand_backend_core::host_runtime::runtime_credential::RuntimePrincipal {
     fixture.custody.current(scope()).await.unwrap().unwrap()
 }
 

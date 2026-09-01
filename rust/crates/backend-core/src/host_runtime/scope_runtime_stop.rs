@@ -8,8 +8,8 @@
 use std::{error::Error, future::Future};
 
 use crate::{
+    host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
     identity::HostId,
-    runtime_credential::{RuntimeGeneration, RuntimeScope},
 };
 
 /// The exact runtime seat an already-admitted caller wants stopped.

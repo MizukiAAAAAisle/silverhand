@@ -416,12 +416,12 @@ mod tests {
     use super::*;
     use crate::{
         host_runtime::computer::{HostKind, ProvisioningSource},
+        host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
+        host_runtime::runtime_event::RuntimeObservedStatus,
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::computer_access::{
             ComputerAccess, ComputerOwnershipFacts, can_access_computer,
         },
-        runtime_credential::{RuntimeGeneration, RuntimeScope},
-        runtime_event::RuntimeObservedStatus,
         teardown::{
             cascade::{
                 CascadeAdmission, ComputerLifecycle, admit_cascade, hold_computer_lifecycle,

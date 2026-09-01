@@ -53,11 +53,11 @@ use std::{collections::HashSet, future::Future};
 use thiserror::Error;
 
 use crate::{
+    host_runtime::runtime_credential::RuntimeScope,
+    host_runtime::runtime_event::RuntimeObservedStatus,
     identity::{AgentId, ConversationId},
     identity_access::agents::runtime::RuntimeKind,
     persistence::PersistenceFailure,
-    runtime_credential::RuntimeScope,
-    runtime_event::RuntimeObservedStatus,
 };
 
 /// The runtime change committed in one write, mirroring the TypeScript

@@ -1912,6 +1912,10 @@ mod tests {
     use std::ops::Range;
 
     use silverhand_backend_core::{
+        host_runtime::runtime_credential::{
+            ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimePrincipal,
+            RuntimeScope,
+        },
         host_runtime::{
             aftermath::DaemonConnectionControl, read::ComputerReadModel,
             rotation::DaemonRotationAck,
@@ -1919,10 +1923,6 @@ mod tests {
         identity::{AgentId, ConversationId},
         messaging::{MessageContent, ReferencePositions},
         persistence::PersistenceFailure,
-        runtime_credential::{
-            ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimePrincipal,
-            RuntimeScope,
-        },
         runtime_delivery::{
             ClaimPendingInbox, ClaimedInboxBatch, DeliveryInstruction, DeliveryLeaseOwner,
             InboxDeliveryId, RuntimeDispatchReadPort, RuntimeDispatchTarget,
@@ -2235,8 +2235,10 @@ mod tests {
             ScopeRuntimeStopTarget::new(
                 HostId::parse(host).unwrap(),
                 scope,
-                silverhand_backend_core::runtime_credential::RuntimeGeneration::new(generation)
-                    .unwrap(),
+                silverhand_backend_core::host_runtime::runtime_credential::RuntimeGeneration::new(
+                    generation,
+                )
+                .unwrap(),
             )
         }
 
@@ -2439,7 +2441,10 @@ mod tests {
                 &RuntimeScope::AgentSlot {
                     agent: AgentId::parse("agent-a").unwrap(),
                 },
-                silverhand_backend_core::runtime_credential::RuntimeGeneration::new(31).unwrap(),
+                silverhand_backend_core::host_runtime::runtime_credential::RuntimeGeneration::new(
+                    31,
+                )
+                .unwrap(),
             )
             .unwrap();
 
@@ -2841,6 +2846,9 @@ mod tests {
         };
         use serde_json::{Number, Value};
         use silverhand_backend_core::{
+            host_runtime::runtime_credential::{
+                RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
+            },
             identity::{AgentId, ConversationId, DaemonInstanceId, UserId, WorkspaceId},
             identity_access::access::WorkspaceRole,
             messaging::{
@@ -2852,9 +2860,6 @@ mod tests {
                     },
                 },
                 conversation_title::CanonicalConversationTitle,
-            },
-            runtime_credential::{
-                RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
             },
         };
         use silverhand_backend_sqlite::{
@@ -3998,7 +4003,8 @@ mod tests {
             &RuntimeScope::AgentSlot {
                 agent: AgentId::parse("agent-a").unwrap(),
             },
-            silverhand_backend_core::runtime_credential::RuntimeGeneration::new(1).unwrap(),
+            silverhand_backend_core::host_runtime::runtime_credential::RuntimeGeneration::new(1)
+                .unwrap(),
             Duration::from_secs(10),
         )
         .await
@@ -4016,12 +4022,14 @@ mod tests {
     #[derive(Clone)]
     struct ClearCustody;
 
-    impl silverhand_backend_core::runtime_credential::RuntimeCustodyPort for ClearCustody {
+    impl silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort
+        for ClearCustody
+    {
         async fn claim_or_current(
             &self,
-            _claim: silverhand_backend_core::runtime_credential::ClaimRuntimeCustody,
+            _claim: silverhand_backend_core::host_runtime::runtime_credential::ClaimRuntimeCustody,
         ) -> Result<
-            Option<silverhand_backend_core::runtime_credential::ClaimedRuntime>,
+            Option<silverhand_backend_core::host_runtime::runtime_credential::ClaimedRuntime>,
             PersistenceFailure,
         > {
             unreachable!("clear never claims custody")
@@ -4043,7 +4051,7 @@ mod tests {
 
         async fn finalize(
             &self,
-            _finalization: silverhand_backend_core::runtime_credential::FinalizeRuntimeCustody,
+            _finalization: silverhand_backend_core::host_runtime::runtime_credential::FinalizeRuntimeCustody,
         ) -> Result<bool, PersistenceFailure> {
             Ok(true)
         }
@@ -4085,7 +4093,7 @@ mod tests {
 
         async fn snapshot(
             &self,
-            _scope: &silverhand_backend_core::runtime_credential::RuntimeScope,
+            _scope: &silverhand_backend_core::host_runtime::runtime_credential::RuntimeScope,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot>,
             Self::Error,
@@ -4273,10 +4281,11 @@ mod tests {
             agent: AgentId::parse("agent-a").unwrap(),
         };
         let generation =
-            silverhand_backend_core::runtime_credential::RuntimeGeneration::new(7).unwrap();
+            silverhand_backend_core::host_runtime::runtime_credential::RuntimeGeneration::new(7)
+                .unwrap();
         let principal = RuntimePrincipal::for_scope(
             scope.clone(),
-            silverhand_backend_core::runtime_credential::RuntimeCustody::new(
+            silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustody::new(
                 generation,
                 daemon.clone(),
             ),
@@ -4367,8 +4376,11 @@ mod tests {
         );
         waiters.notify_exit(&RuntimePrincipal::for_scope(
             principal.scope(),
-            silverhand_backend_core::runtime_credential::RuntimeCustody::new(
-                silverhand_backend_core::runtime_credential::RuntimeGeneration::new(8).unwrap(),
+            silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustody::new(
+                silverhand_backend_core::host_runtime::runtime_credential::RuntimeGeneration::new(
+                    8,
+                )
+                .unwrap(),
                 principal.custody().daemon_instance().clone(),
             ),
         ));
@@ -4427,20 +4439,22 @@ mod tests {
     #[derive(Clone)]
     struct StartCustody;
 
-    impl silverhand_backend_core::runtime_credential::RuntimeCustodyPort for StartCustody {
+    impl silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort
+        for StartCustody
+    {
         async fn claim_or_current(
             &self,
-            claim: silverhand_backend_core::runtime_credential::ClaimRuntimeCustody,
+            claim: silverhand_backend_core::host_runtime::runtime_credential::ClaimRuntimeCustody,
         ) -> Result<
-            Option<silverhand_backend_core::runtime_credential::ClaimedRuntime>,
+            Option<silverhand_backend_core::host_runtime::runtime_credential::ClaimedRuntime>,
             PersistenceFailure,
         > {
             Ok(Some(
-                silverhand_backend_core::runtime_credential::ClaimedRuntime::new(
+                silverhand_backend_core::host_runtime::runtime_credential::ClaimedRuntime::new(
                     RuntimePrincipal::for_scope(
                         claim.scope().clone(),
-                        silverhand_backend_core::runtime_credential::RuntimeCustody::new(
-                            silverhand_backend_core::runtime_credential::RuntimeGeneration::new(1)
+                        silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustody::new(
+                            silverhand_backend_core::host_runtime::runtime_credential::RuntimeGeneration::new(1)
                                 .unwrap(),
                             claim.daemon_instance().clone(),
                         ),
@@ -4466,7 +4480,7 @@ mod tests {
 
         async fn finalize(
             &self,
-            _finalization: silverhand_backend_core::runtime_credential::FinalizeRuntimeCustody,
+            _finalization: silverhand_backend_core::host_runtime::runtime_credential::FinalizeRuntimeCustody,
         ) -> Result<bool, PersistenceFailure> {
             Ok(true)
         }
@@ -4507,7 +4521,7 @@ mod tests {
 
         async fn snapshot(
             &self,
-            _scope: &silverhand_backend_core::runtime_credential::RuntimeScope,
+            _scope: &silverhand_backend_core::host_runtime::runtime_credential::RuntimeScope,
         ) -> Result<
             Option<silverhand_backend_core::messaging::collaboration::RuntimeControlSeatSnapshot>,
             Self::Error,
@@ -4530,9 +4544,9 @@ mod tests {
     #[tokio::test]
     async fn runtime_control_start_traverses_typed_codec_and_production_fifo() {
         use silverhand_backend_core::{
+            host_runtime::runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustody},
             identity_access::agents::runtime::RuntimeKind,
             messaging::collaboration::{RuntimeControlPort, RuntimeStartTarget},
-            runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustody},
             runtime_delivery::{RuntimeAgentSpec, RuntimeSpawnPlan},
         };
         let registry = DaemonRegistry::with_process_epoch("start-production".to_owned());
@@ -4581,7 +4595,10 @@ mod tests {
                 agent: agent.clone(),
             },
             RuntimeCustody::new(
-                silverhand_backend_core::runtime_credential::RuntimeGeneration::new(1).unwrap(),
+                silverhand_backend_core::host_runtime::runtime_credential::RuntimeGeneration::new(
+                    1,
+                )
+                .unwrap(),
                 DaemonInstanceId::parse("daemon-a").unwrap(),
             ),
         );
@@ -5138,8 +5155,11 @@ mod tests {
             RuntimeScope::AgentSlot {
                 agent: AgentId::parse("fixture-agent").unwrap(),
             },
-            silverhand_backend_core::runtime_credential::RuntimeCustody::new(
-                silverhand_backend_core::runtime_credential::RuntimeGeneration::new(1).unwrap(),
+            silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustody::new(
+                silverhand_backend_core::host_runtime::runtime_credential::RuntimeGeneration::new(
+                    1,
+                )
+                .unwrap(),
                 DaemonInstanceId::parse("fixture-daemon").unwrap(),
             ),
         );

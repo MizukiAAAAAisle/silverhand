@@ -35,6 +35,7 @@ use axum::{
 };
 use serde_json::Value;
 use silverhand_backend_core::{
+    host_runtime::runtime_credential::RuntimeScope,
     identity::{AgentId, ConversationId, DaemonInstanceId},
     messaging::{
         CapabilityDenied, SendCapability,
@@ -44,7 +45,6 @@ use silverhand_backend_core::{
         },
     },
     persistence::PersistenceFailure,
-    runtime_credential::RuntimeScope,
 };
 use silverhand_backend_server::{
     clock::ProcessClock,

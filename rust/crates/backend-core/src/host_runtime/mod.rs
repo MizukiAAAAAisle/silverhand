@@ -56,3 +56,11 @@ pub mod agent_materialize;
 pub mod agent_presence_read;
 pub mod host_resources_read;
 pub mod scope_runtime_stop;
+
+// Relocated C2 runtime-authority vocabulary leaves (#task:2281). Three independent
+// authorities that merely share this namespace — the credential principal/scope/generation
+// vocabulary, the observed runtime event/status vocabulary, and the durable runtime
+// transition lock/facts — with disjoint types, ports, and error taxonomies (not merged).
+pub mod runtime_credential;
+pub mod runtime_event;
+pub mod runtime_transition;

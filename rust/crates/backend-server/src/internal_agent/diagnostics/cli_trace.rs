@@ -56,7 +56,7 @@ use serde::Deserialize;
 use serde_json::json;
 use silverhand_backend_core::{
     cli_preflight_audit::{CliPreflightAuditSink, CliPreflightFailure, NonNegativeFiniteF64},
-    runtime_credential::RuntimePrincipal,
+    host_runtime::runtime_credential::RuntimePrincipal,
     wire_text,
 };
 
@@ -261,8 +261,10 @@ mod tests {
     use axum::http::{Request as HttpRequest, StatusCode, header::CONTENT_TYPE};
     use serde_json::Value;
     use silverhand_backend_core::{
+        host_runtime::runtime_credential::{
+            RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
+        },
         identity::{AgentId, ConversationId, DaemonInstanceId},
-        runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     };
     use silverhand_backend_filesystem::audit_sink::{AppTag, AuditClock, CliAuditFile};
     use std::sync::{Arc, Mutex};

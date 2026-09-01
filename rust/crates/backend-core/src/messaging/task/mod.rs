@@ -46,7 +46,7 @@
 //! ([`TaskReadCapability`], the parity of `canAgentUseCapability`).
 //! Each agent arm is itself an un-forgeable witness — the coordinate-less by-id arm
 //! is a [`GlobalAgentRead`] minted only by reading the scope from the authenticated
-//! [`RuntimePrincipal`](crate::runtime_credential::RuntimePrincipal) (agent-slot,
+//! [`RuntimePrincipal`](crate::host_runtime::runtime_credential::RuntimePrincipal) (agent-slot,
 //! never a conversation-frame) and the operation from a typed [`TaskReadAddress`]
 //! (by-id, never by-number) ([`authorize_global_by_id`]), taking the agent from the
 //! principal and RETAINING the requested id so the provenance gate binds the witness to

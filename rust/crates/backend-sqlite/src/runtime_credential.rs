@@ -6,12 +6,12 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    identity::DaemonInstanceId,
-    persistence::PersistenceFailure,
-    runtime_credential::{
+    host_runtime::runtime_credential::{
         ClaimRuntimeCustody, ClaimedRuntime, FinalizeRuntimeCustody, RuntimeCustody,
         RuntimeCustodyPort, RuntimeFinalStatus, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
+    identity::DaemonInstanceId,
+    persistence::PersistenceFailure,
 };
 use sqlx::{
     Row, SqliteConnection, SqlitePool,
@@ -390,7 +390,7 @@ fn persistence(error: sqlx::Error) -> PersistenceFailure {
 #[derive(Debug, Error)]
 #[error("persisted runtime generation is invalid")]
 struct InvalidPersistedGeneration(
-    #[source] silverhand_backend_core::runtime_credential::InvalidRuntimeGeneration,
+    #[source] silverhand_backend_core::host_runtime::runtime_credential::InvalidRuntimeGeneration,
 );
 
 #[derive(Debug, Error)]

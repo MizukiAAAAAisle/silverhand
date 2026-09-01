@@ -115,6 +115,7 @@ mod tests {
         http::Request,
     };
     use silverhand_backend_core::{
+        host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
         identity::{AgentId, ConversationId, UserId},
         messaging::collaboration::{
             CliSessionId,
@@ -124,7 +125,6 @@ mod tests {
                 RuntimeProjectionStatus,
             },
         },
-        runtime_credential::{RuntimeGeneration, RuntimeScope},
     };
     use silverhand_backend_sqlite::messaging::MessagingStore;
     use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};

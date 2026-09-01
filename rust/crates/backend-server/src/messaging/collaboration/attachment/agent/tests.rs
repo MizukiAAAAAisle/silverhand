@@ -19,6 +19,9 @@ use silverhand_backend_core::{
         BlobDeleteOutcome, BlobNamespace, BlobReadOutcome, BlobStorageKey, BlobStore, StorageKind,
         StoredBlob,
     },
+    host_runtime::runtime_credential::{
+        RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
+    },
     identity::{AgentId, ConversationId, DaemonInstanceId},
     messaging::{
         AddressRefusal, DirectPairAllocation, ResolvedStream, SendClock, SendEntropy,
@@ -32,7 +35,6 @@ use silverhand_backend_core::{
         environment::EnvironmentUnavailable,
     },
     persistence::PersistenceFailure,
-    runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},
 };
 use silverhand_backend_filesystem::blob_store::{LocalBlobStore, LocalBlobStoreError};
 use silverhand_backend_sqlite::messaging::{

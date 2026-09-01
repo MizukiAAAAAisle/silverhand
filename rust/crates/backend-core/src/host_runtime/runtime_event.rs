@@ -10,9 +10,9 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
+    host_runtime::runtime_credential::{RuntimeEventTime, RuntimePrincipal},
     identity::{AgentId, ConversationId, UserId},
     persistence::PersistenceFailure,
-    runtime_credential::{RuntimeEventTime, RuntimePrincipal},
     runtime_delivery::{DeliveryLeaseOwner, InboxDeliveryId, InboxSettlementDisposition},
 };
 
@@ -722,7 +722,7 @@ pub trait DaemonEventDurablePort: Clone + Send + Sync + 'static {
     fn current_admission(
         &self,
         host_id: String,
-        scope: crate::runtime_credential::RuntimeScope,
+        scope: crate::host_runtime::runtime_credential::RuntimeScope,
     ) -> impl Future<Output = Result<Option<RuntimeEventAdmission>, PersistenceFailure>> + Send;
 
     fn commit_exit(

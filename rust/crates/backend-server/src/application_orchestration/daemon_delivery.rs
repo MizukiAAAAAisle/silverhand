@@ -5,9 +5,9 @@ use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use axum::Router;
 use silverhand_backend_core::{
     host_runtime::custody::{HostCredentialLookup, VerifyHostTokenFact, verify_host_token},
+    host_runtime::runtime_event::DaemonEventDurablePort,
     identity::{ConversationId, HostId, UserId},
     runtime_delivery::{RuntimeDispatchReadPort, RuntimeInboxCustodyPort},
-    runtime_event::DaemonEventDurablePort,
 };
 
 use crate::{
@@ -126,7 +126,7 @@ impl<C, D, H> DaemonDeliveryRuntime<C, D, H> {
 
 impl<C, D, H> DaemonDeliveryRuntime<C, D, H>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
@@ -384,7 +384,7 @@ struct ProductionStatusSeedEffect<C, D> {
 
 impl<C, D> DaemonStatusSeedEffect for ProductionStatusSeedEffect<C, D>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
 {
     fn attached(

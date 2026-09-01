@@ -9,7 +9,7 @@
 //! and the crash-recovery bulk fail.
 //!
 //! This is a distinct write authority from the capability-neutral
-//! [`crate::identity_access::agent_profile_write`] row writer and the [`crate::runtime_transition`] lock
+//! [`crate::identity_access::agent_profile_write`] row writer and the [`crate::host_runtime::runtime_transition`] lock
 //! lifecycle: the profile writer edits an existing row's columns from a before-image, and
 //! runtime-transition is a lock state machine; this is the `materialization_status`
 //! directed state machine plus the INSERT that seeds it.

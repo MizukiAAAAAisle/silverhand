@@ -29,12 +29,12 @@ use axum::{
     routing::post,
 };
 use silverhand_backend_core::{
+    host_runtime::runtime_credential::RuntimePrincipal,
     identity::{ConversationId, UserId},
     messaging::{
         AddressRefusal, ChannelAccess, ChannelAccessRefusal, DirectLineAuthority, SendCapability,
         SendMessageOutcome, SendMessageUnitOfWork, TargetAddress,
     },
-    runtime_credential::RuntimePrincipal,
 };
 use std::sync::Arc;
 

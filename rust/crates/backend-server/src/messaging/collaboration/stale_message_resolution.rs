@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
     cli_invoke_audit::CliStaleResolutionReason,
+    host_runtime::runtime_credential::RuntimePrincipal,
     identity::{AgentId, ConversationId},
     messaging::{
         CapabilityDenied, SendCapability,
@@ -27,7 +28,6 @@ use silverhand_backend_core::{
             StaleMessageResolutionAdmissionRefusal,
         },
     },
-    runtime_credential::RuntimePrincipal,
 };
 
 use crate::internal_agent::cli_invoke::CliInvokeRequestContext;

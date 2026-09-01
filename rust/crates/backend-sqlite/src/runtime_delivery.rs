@@ -4,6 +4,16 @@ use std::{collections::HashSet, path::Path, time::Duration};
 
 use serde::Serialize;
 use silverhand_backend_core::{
+    host_runtime::runtime_credential::{RuntimeGeneration, RuntimePrincipal, RuntimeScope},
+    host_runtime::runtime_event::{
+        CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
+        ProjectRuntimeStatus, RefineRuntimeToolCallInput, RefinedRuntimeActivity,
+        RuntimeActivityCommitResult, RuntimeActivityFact, RuntimeActivityKind,
+        RuntimeActivityPayload, RuntimeConsumedCommitResult, RuntimeEventAdmission,
+        RuntimeExitCommitResult, RuntimeExitDisposition, RuntimeSessionInitCommitResult,
+        RuntimeStatusCommitResult, RuntimeStatusTarget, RuntimeToolCallInputCommitResult,
+        StampRuntimePresence, UpsertRuntimeTextActivity,
+    },
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId},
     identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
     messaging::{
@@ -17,7 +27,6 @@ use silverhand_backend_core::{
     },
     persistence::PersistenceFailure,
     policy::agent_presence,
-    runtime_credential::{RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     runtime_delivery::{
         ClaimPendingInbox, ClaimedInboxBatch, ClaimedInboxDelivery, DeliveryInstruction,
         DeliveryLeaseOwner, InboxDeliveryId, InboxSettlementDisposition, MAX_DELIVERIES_PER_BATCH,
@@ -25,15 +34,6 @@ use silverhand_backend_core::{
         RuntimeDispatchReadPort, RuntimeDispatchTarget, RuntimeInboxCustodyPort, RuntimeMember,
         RuntimePlacement, RuntimeRoster, RuntimeSessionSpec, RuntimeSpawnPlan, RuntimeWorkspaceRef,
         classify_delivery_instruction, runtime_scope_for,
-    },
-    runtime_event::{
-        CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
-        ProjectRuntimeStatus, RefineRuntimeToolCallInput, RefinedRuntimeActivity,
-        RuntimeActivityCommitResult, RuntimeActivityFact, RuntimeActivityKind,
-        RuntimeActivityPayload, RuntimeConsumedCommitResult, RuntimeEventAdmission,
-        RuntimeExitCommitResult, RuntimeExitDisposition, RuntimeSessionInitCommitResult,
-        RuntimeStatusCommitResult, RuntimeStatusTarget, RuntimeToolCallInputCommitResult,
-        StampRuntimePresence, UpsertRuntimeTextActivity,
     },
 };
 use sqlx::{
@@ -913,7 +913,7 @@ impl RuntimeDispatchReadPort for SqliteRuntimeDeliveryStore {
                 .map_err(PersistenceFailure::from_source)?;
                 Ok(RuntimePrincipal::for_scope(
                     scope,
-                    silverhand_backend_core::runtime_credential::RuntimeCustody::new(
+                    silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustody::new(
                         generation,
                         persisted_daemon,
                     ),
@@ -1060,7 +1060,7 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
                 host_id,
                 RuntimePrincipal::for_scope(
                     scope,
-                    silverhand_backend_core::runtime_credential::RuntimeCustody::new(
+                    silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustody::new(
                         generation, daemon,
                     ),
                 ),
@@ -1356,7 +1356,7 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
         &self,
         admission: RuntimeEventAdmission,
         event: RuntimeActivityFact,
-        presence_at: silverhand_backend_core::runtime_credential::RuntimeEventTime,
+        presence_at: silverhand_backend_core::host_runtime::runtime_credential::RuntimeEventTime,
     ) -> Result<Option<RuntimeActivityCommitResult>, PersistenceFailure> {
         let mut tx = self
             .pool
@@ -1486,7 +1486,7 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
             Some(RefinedRuntimeActivity::new(
                 id,
                 payload_json,
-                silverhand_backend_core::runtime_credential::RuntimeEventTime::from_unix_millis(
+                silverhand_backend_core::host_runtime::runtime_credential::RuntimeEventTime::from_unix_millis(
                     created_at,
                 ),
             )),

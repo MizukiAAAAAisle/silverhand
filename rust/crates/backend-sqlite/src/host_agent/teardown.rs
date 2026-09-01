@@ -89,9 +89,9 @@ mod tests {
     use std::{path::PathBuf, time::Duration};
 
     use silverhand_backend_core::{
+        host_runtime::runtime_credential::RuntimeScope,
+        host_runtime::runtime_event::RuntimeObservedStatus,
         identity::{AgentId, HostId},
-        runtime_credential::RuntimeScope,
-        runtime_event::RuntimeObservedStatus,
         teardown::facts::AgentTeardownCapture,
     };
     use sqlx::Connection;

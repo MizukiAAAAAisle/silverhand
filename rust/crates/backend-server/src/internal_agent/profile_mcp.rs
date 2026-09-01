@@ -44,8 +44,9 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
+    host_runtime::runtime_credential::RuntimePrincipal,
     identity_access::agent_profile_mcp::AgentProfileMcpDataPlane,
-    identity_access::mcp_config::parse_mcp_config, runtime_credential::RuntimePrincipal,
+    identity_access::mcp_config::parse_mcp_config,
 };
 
 use crate::host_agent::public_profile_mcp::wire::{
@@ -203,13 +204,15 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
+        host_runtime::runtime_credential::{
+            RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
+        },
         identity::{AgentId, DaemonInstanceId},
         identity_access::agent_profile_mcp::{
             McpBytesWritten, McpDataPlaneFault, McpDataPlaneFaultCode, McpProbeCommand,
             McpProbeOutcome, McpProbePhase, McpProbeServerInfo, McpProbeTool,
         },
         persistence::PersistenceFailure,
-        runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     };
     use std::sync::{
         Arc, Mutex,

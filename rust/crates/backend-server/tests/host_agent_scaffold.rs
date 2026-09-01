@@ -141,11 +141,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // owner/target lives in the organization map, not as flat seam entries here.
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
-    // #task:2225 — the durable runtime-transition lock (begin/complete/abort) behind
-    // the public runtime-switch route. A distinct write authority from the profile
-    // row writer, keyed on the lock columns; its SQLite adapter rides the existing
-    // `host_agent` store. Mounted at the app composition root by the #task:2234 integration (CP4).
-    ("backend-core", "runtime_transition"),
     // #task:2225 — the agent runtime-switch saga (`PUT /api/agents/{id}/runtime`):
     // clears the old-runtime sessions and moves the `runtime` column without changing
     // identity or racing a delete, orchestrating that window over the durable
@@ -364,7 +359,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
 /// the same terms — directory-preserving moves of pre-existing modules, folded into the same
 /// container seam entry. #task:2279 relocated the inherited `viewer_workspace_sort` read model
 /// under the new `viewer_read_model` container on identical terms (its flat entry removed here,
-/// covered by that container's seam entry via the CP projection).
+/// covered by that container's seam entry via the CP projection). #task:2281 relocated the
+/// inherited `runtime_credential` and `runtime_event` vocabulary under the dual-role
+/// `host_runtime` context/namespace on the same terms (flat entries removed here, covered by
+/// the single `host_runtime` owning-root entry).
 ///
 /// CP1-temporary, with G3's accounting: it guards "every lane module is registered
 /// where it is guarded", it is deleted when the seam is extracted into the
@@ -401,9 +399,7 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-core", "identity"),
     ("backend-core", "messaging"),
     ("backend-core", "persistence"),
-    ("backend-core", "runtime_credential"),
     ("backend-core", "runtime_delivery"),
-    ("backend-core", "runtime_event"),
     ("backend-core", "scope_event"),
     // #task:2256 categorized-file audit sink: the OS adapter that owns the CLI
     // preflight-failure log file and its writer lifecycle, home of the reusable

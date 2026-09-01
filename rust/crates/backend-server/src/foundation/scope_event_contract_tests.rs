@@ -19,6 +19,7 @@ use silverhand_backend_core::{
     blob_store::{BlobStorageKey, StorageKind, StoredBlob},
     direct_pair_read::DirectPairReadModel,
     host_runtime::agent_availability_read::AgentAvailabilityReadModel,
+    host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
     host_runtime::{aftermath::AgentAvailabilityAnnouncer, agent_roster::ComputerAgentsReadPort},
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId},
     identity_access::access::{WorkspaceHumanAudienceReadPort, WorkspaceRole},
@@ -53,7 +54,6 @@ use silverhand_backend_core::{
     },
     persistence::PersistenceFailure,
     policy::presence_grace::{GraceWindow, PresenceFact},
-    runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
     scope_event::{AuthorizeEventScope, EventScope},
 };
 use silverhand_backend_sqlite::{

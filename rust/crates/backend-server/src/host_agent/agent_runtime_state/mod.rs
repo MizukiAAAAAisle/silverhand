@@ -59,11 +59,11 @@ use silverhand_backend_core::{
         AgentRuntimeStateReadModel, AgentRuntimeStateView, PresentationFocus, RuntimeFocusView,
         RuntimeParticipationView, RuntimeSeatScopeView, RuntimeSeatView,
     },
-    identity::{AgentId, Principal, UserId},
-    identity_access::capability::agent_view::{VisibleStages, can_view_agent},
-    runtime_credential::{
+    host_runtime::runtime_credential::{
         AgentSlotPresentationFocusPort, RuntimeCustodyReadPort, RuntimeGeneration, RuntimeScope,
     },
+    identity::{AgentId, Principal, UserId},
+    identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 
 use crate::error;

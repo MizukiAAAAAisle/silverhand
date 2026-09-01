@@ -10,9 +10,9 @@ use silverhand_backend_core::{
         AgentRuntimeStateReadModel, AgentRuntimeStateView, PresentationFocus, RuntimeFocusView,
         RuntimeSeatScopeView,
     },
+    host_runtime::runtime_credential::RuntimeGeneration,
+    host_runtime::runtime_event::RuntimeObservedStatus,
     identity::{AgentId, ConversationId, UserId},
-    runtime_credential::RuntimeGeneration,
-    runtime_event::RuntimeObservedStatus,
 };
 
 use super::SqliteAgentRuntimeStateColdRead;

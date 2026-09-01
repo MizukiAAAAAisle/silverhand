@@ -5,7 +5,7 @@
 //! must be cleared before the `runtime` column moves, and nothing may spawn or deliver under
 //! the agent while that window is open. This module orchestrates that window against narrow
 //! typed ports; the durable half — the compare-and-set lock lifecycle, the committed-fact
-//! seal, and the lock-fenced seat/inbox reads — lives in [`crate::runtime_transition`] and is
+//! seal, and the lock-fenced seat/inbox reads — lives in [`crate::host_runtime::runtime_transition`] and is
 //! reused verbatim here.
 //!
 //! # Shape of the transition (mirrors the TypeScript `switchAgentRuntime`)
@@ -45,6 +45,18 @@ use std::future::Future;
 use futures_util::future::join_all;
 
 use crate::{
+    host_runtime::runtime_credential::{
+        AgentSlotPresentationFocusPort, RuntimeCustodyReadPort, RuntimeScope,
+    },
+    host_runtime::runtime_event::RuntimeObservedStatus,
+    host_runtime::runtime_transition::{
+        AbortTransition, BeginTransition, CommittedRuntimeTransition, CompleteTransition,
+        ReadRuntimeTransitionSeats, ReclaimRuntimeTransitionInboxes, RuntimeTransitionCommit,
+        RuntimeTransitionFault, RuntimeTransitionInboxWrite, RuntimeTransitionLock,
+        RuntimeTransitionSeatRead, RuntimeTransitionWrite, TransitionClearCandidate,
+        abort_runtime_transition, begin_runtime_transition, complete_runtime_transition,
+        read_runtime_transition_seats, reclaim_runtime_transition_inboxes,
+    },
     identity::{AgentId, ConversationId, HostId},
     identity_access::agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
     identity_access::agents::{
@@ -53,16 +65,6 @@ use crate::{
     },
     messaging::collaboration::{RuntimeControlPort, RuntimeSeatTarget, RuntimeStartTarget},
     persistence::PersistenceFailure,
-    runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustodyReadPort, RuntimeScope},
-    runtime_event::RuntimeObservedStatus,
-    runtime_transition::{
-        AbortTransition, BeginTransition, CommittedRuntimeTransition, CompleteTransition,
-        ReadRuntimeTransitionSeats, ReclaimRuntimeTransitionInboxes, RuntimeTransitionCommit,
-        RuntimeTransitionFault, RuntimeTransitionInboxWrite, RuntimeTransitionLock,
-        RuntimeTransitionSeatRead, RuntimeTransitionWrite, TransitionClearCandidate,
-        abort_runtime_transition, begin_runtime_transition, complete_runtime_transition,
-        read_runtime_transition_seats, reclaim_runtime_transition_inboxes,
-    },
 };
 
 /// The validated runtime-switch request. Tuning legality (model/effort/fast-mode against the
@@ -828,17 +830,17 @@ mod tests {
     };
 
     use crate::{
-        identity::{DaemonInstanceId, UserId},
-        messaging::collaboration::{
-            ClearSessionOutcome, ClearSessionProviderRefusal, RuntimePlacementRefusal,
-            RuntimeSeatTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal,
-        },
-        runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
-        runtime_transition::{
+        host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
+        host_runtime::runtime_transition::{
             BeginTransitionRecord, CompleteTransitionRecord, RuntimeTransitionAfterImage,
             RuntimeTransitionInboxReclaimRecord, RuntimeTransitionInboxReclaimRow,
             RuntimeTransitionLockRow, RuntimeTransitionSeatRow,
             RuntimeTransitionSeatSnapshotRecord, RuntimeTransitionSeatSnapshotRow,
+        },
+        identity::{DaemonInstanceId, UserId},
+        messaging::collaboration::{
+            ClearSessionOutcome, ClearSessionProviderRefusal, RuntimePlacementRefusal,
+            RuntimeSeatTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal,
         },
     };
 

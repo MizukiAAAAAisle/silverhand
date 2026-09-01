@@ -34,6 +34,7 @@ use axum::{
 use serde_json::{Value, json};
 use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_core::{
+    host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
     identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
     messaging::{
         AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
@@ -41,7 +42,6 @@ use silverhand_backend_core::{
         SendCapability, SendDestination, SendMessage, SendMessageError, SendMessageOutcome,
         SendMessageUnitOfWork, TargetAddress,
     },
-    runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal},
 };
 use silverhand_backend_server::messaging::router::{SendState, send_router};
 use tower::ServiceExt;

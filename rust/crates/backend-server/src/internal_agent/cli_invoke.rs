@@ -24,7 +24,7 @@ use silverhand_backend_core::{
         CliStaleResolutionReason,
     },
     cli_preflight_audit::NonNegativeFiniteF64,
-    runtime_credential::RuntimePrincipal,
+    host_runtime::runtime_credential::RuntimePrincipal,
 };
 
 const CLI_TRACE_PATH: &str = "/internal/agents/{aid}/cli-trace";
@@ -510,8 +510,10 @@ mod tests {
     use garde::Validate;
     use serde::Deserialize;
     use silverhand_backend_core::{
+        host_runtime::runtime_credential::{
+            RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
+        },
         identity::{AgentId, DaemonInstanceId},
-        runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     };
     use tower::ServiceExt;
 

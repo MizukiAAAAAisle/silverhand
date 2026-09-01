@@ -3,6 +3,7 @@
 use silverhand_backend_core::{
     agent_creation::OnboardingInboxEnsure,
     host_runtime::custody::HostCredentialLookup,
+    host_runtime::runtime_event::DaemonEventDurablePort,
     identity::{AgentId, ConversationId},
     messaging::{
         CreatedMessage, MessageId,
@@ -15,7 +16,6 @@ use silverhand_backend_core::{
         },
     },
     runtime_delivery::{RuntimeDispatchReadPort, RuntimeInboxCustodyPort},
-    runtime_event::DaemonEventDurablePort,
 };
 
 use crate::application_orchestration::daemon_delivery::DaemonDeliveryRuntime;
@@ -27,7 +27,7 @@ pub struct DaemonDeliveryEffects<C, D, H> {
 
 impl<C, D, H> DaemonDeliveryRuntime<C, D, H>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
@@ -44,7 +44,7 @@ impl<C, D, H> DaemonDeliveryEffects<C, D, H> {
 
 impl<C, D, H> RuntimeStart for DaemonDeliveryEffects<C, D, H>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
@@ -62,7 +62,7 @@ where
 
 impl<C, D, H> RuntimeDelivery for DaemonDeliveryEffects<C, D, H>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
@@ -80,7 +80,7 @@ where
 
 impl<C, D, H> DaemonDeliveryEffects<C, D, H>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
@@ -112,7 +112,7 @@ impl<Ensure, C, D, H> crate::host_agent::agent_create::OnboardingDelivery
     for OnboardingDeliveryAdapter<Ensure, C, D, H>
 where
     Ensure: OnboardingInboxEnsure,
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
@@ -131,7 +131,7 @@ where
 
 impl<C, D, H> MainDelivery for DaemonDeliveryEffects<C, D, H>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
@@ -149,7 +149,7 @@ where
 
 impl<C, D, H> ReplyDelivery for DaemonDeliveryEffects<C, D, H>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
@@ -167,7 +167,7 @@ where
 
 impl<C, D, H> WorkspaceRenameDeliveryPort for DaemonDeliveryEffects<C, D, H>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {
@@ -187,7 +187,7 @@ where
 
 impl<C, D, H> IdleStart for DaemonDeliveryEffects<C, D, H>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
     H: HostCredentialLookup,
 {

@@ -336,11 +336,11 @@ mod tests {
     use super::*;
     use crate::{
         host_runtime::computer::{HostKind, ProvisioningSource},
+        host_runtime::runtime_credential::{RuntimeGeneration, RuntimeScope},
+        host_runtime::runtime_event::RuntimeObservedStatus,
         identity::ConversationId,
         identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::computer_access::ComputerOwnershipFacts,
-        runtime_credential::{RuntimeGeneration, RuntimeScope},
-        runtime_event::RuntimeObservedStatus,
         teardown::{
             cascade::{CascadeAdmission, admit_cascade},
             eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},

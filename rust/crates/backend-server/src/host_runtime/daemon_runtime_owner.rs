@@ -12,17 +12,19 @@ use std::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, DaemonInstanceId},
-    persistence::PersistenceFailure,
-    runtime_credential::{
+    host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeEventTime, RuntimeFinalStatus, RuntimeGeneration, RuntimePrincipal,
         RuntimeScope,
     },
+    host_runtime::runtime_event::{
+        CommitRuntimeConsumed, DaemonEventDurablePort, RuntimeEventAdmission,
+    },
+    identity::{AgentId, ConversationId, DaemonInstanceId},
+    persistence::PersistenceFailure,
     runtime_delivery::{
         DeliveryLeaseOwner, InboxDeliveryId, RuntimeDeliveryFailureReason, RuntimeDispatchReadPort,
         RuntimeDispatchTarget, RuntimeInboxCustodyPort,
     },
-    runtime_event::{CommitRuntimeConsumed, DaemonEventDurablePort, RuntimeEventAdmission},
 };
 
 use crate::{
@@ -427,7 +429,7 @@ impl<C, D> DaemonRuntimeOwner<C, D> {
 
 impl<C, D> DaemonRuntimeOwner<C, D>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
 {
     pub(crate) fn new(
@@ -786,7 +788,7 @@ where
         {
             Ok(result) => {
                 if result.disposition()
-                    == silverhand_backend_core::runtime_event::RuntimeExitDisposition::Applied
+                    == silverhand_backend_core::host_runtime::runtime_event::RuntimeExitDisposition::Applied
                 {
                     self.clear_session_waiters.notify_exit(&principal);
                 }
@@ -872,7 +874,7 @@ where
 
 impl<C, D> DaemonRuntimeHydration for DaemonRuntimeOwner<C, D>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
 {
     fn hydrate<'a>(
@@ -889,7 +891,7 @@ where
 
 impl<C, D> DaemonRuntimeEventEffects for DaemonRuntimeOwner<C, D>
 where
-    C: silverhand_backend_core::runtime_credential::RuntimeCustodyPort,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
 {
     fn handle<'a>(

@@ -12,6 +12,9 @@ use std::{
 };
 
 use silverhand_backend_core::{
+    host_runtime::runtime_credential::{
+        RuntimeCustody, RuntimeCustodyPort, RuntimeFinalStatus, RuntimePrincipal, RuntimeScope,
+    },
     host_runtime::scope_runtime_stop::{
         ScopeRuntimeStopPort, ScopeRuntimeStopRefusal, ScopeRuntimeStopTarget,
     },
@@ -27,9 +30,6 @@ use silverhand_backend_core::{
         StartRuntimeOutcome, StartRuntimeProviderRefusal, seal_clear_session_commit,
     },
     persistence::PersistenceFailure,
-    runtime_credential::{
-        RuntimeCustody, RuntimeCustodyPort, RuntimeFinalStatus, RuntimePrincipal, RuntimeScope,
-    },
     runtime_delivery::{RuntimeDispatchReadPort, RuntimeDispatchTarget},
 };
 use tokio::sync::Notify;
@@ -651,7 +651,7 @@ pub(crate) async fn clear_captured(
     data_plane: &OwningHostDataPlane,
     custody: HostDataPlaneCustody,
     scope: &RuntimeScope,
-    generation: silverhand_backend_core::runtime_credential::RuntimeGeneration,
+    generation: silverhand_backend_core::host_runtime::runtime_credential::RuntimeGeneration,
     timeout: Duration,
 ) -> Result<ClearDispatchOutcome, RuntimeControlAdapterFailure> {
     let params = runtime_clear_session_codec::encode(scope, generation)
@@ -714,8 +714,10 @@ mod tests {
         RuntimePrincipal::for_scope(
             scope,
             RuntimeCustody::new(
-                silverhand_backend_core::runtime_credential::RuntimeGeneration::new(generation)
-                    .unwrap(),
+                silverhand_backend_core::host_runtime::runtime_credential::RuntimeGeneration::new(
+                    generation,
+                )
+                .unwrap(),
                 DaemonInstanceId::parse(daemon).unwrap(),
             ),
         )

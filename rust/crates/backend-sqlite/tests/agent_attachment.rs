@@ -2,6 +2,9 @@ use std::{error::Error, time::Duration};
 
 use silverhand_backend_core::{
     blob_store::{BlobStorageKey, StorageKind, StoredBlob},
+    host_runtime::runtime_credential::{
+        RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
+    },
     identity::{AgentId, ConversationId, DaemonInstanceId},
     messaging::{
         AttachmentId, ResolvedStream,
@@ -16,7 +19,6 @@ use silverhand_backend_core::{
         },
     },
     persistence::PersistenceFailure,
-    runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},
 };
 use silverhand_backend_sqlite::messaging::{
     MessagingStore, collaboration::attachment::AgentAttachmentStoreError,

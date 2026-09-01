@@ -14,18 +14,18 @@ use serde::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    identity::{AgentId, ConversationId, DaemonInstanceId, HostId},
-    persistence::PersistenceFailure,
-    runtime_credential::{
+    host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeEventTime, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
-    runtime_event::{
+    host_runtime::runtime_event::{
         CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort, ProjectRuntimeStatus,
         RefineRuntimeToolCallInput, RuntimeActivityFact, RuntimeActivityKind,
         RuntimeActivityPayload, RuntimeEventAdmission, RuntimeExitCommitResult,
         RuntimeExitDisposition, RuntimeObservedStatus, RuntimeStatusTarget, StampRuntimePresence,
         UpsertRuntimeTextActivity,
     },
+    identity::{AgentId, ConversationId, DaemonInstanceId, HostId},
+    persistence::PersistenceFailure,
 };
 
 use crate::{
@@ -1887,9 +1887,11 @@ mod tests {
 
     use serde_json::Number;
     use silverhand_backend_core::{
+        host_runtime::runtime_credential::{
+            RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
+        },
+        host_runtime::runtime_event::{RuntimeEventAdmission, RuntimeObservedStatus},
         identity::{AgentId, ConversationId, DaemonInstanceId},
-        runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},
-        runtime_event::{RuntimeEventAdmission, RuntimeObservedStatus},
     };
 
     use super::{

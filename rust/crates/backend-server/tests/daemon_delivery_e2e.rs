@@ -16,6 +16,18 @@ use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
     blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
     host_runtime::aftermath::{CustodyEffectFailure, DaemonConnectionControl},
+    host_runtime::runtime_credential::{
+        ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeGeneration,
+        RuntimePrincipal, RuntimeScope,
+    },
+    host_runtime::runtime_event::{
+        CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
+        ProjectRuntimeStatus, RefineRuntimeToolCallInput, RuntimeActivityCommitResult,
+        RuntimeActivityFact, RuntimeConsumedCommitResult, RuntimeEventAdmission,
+        RuntimeExitCommitResult, RuntimeObservedStatus, RuntimeSessionInitCommitResult,
+        RuntimeStatusCommitResult, RuntimeToolCallInputCommitResult, StampRuntimePresence,
+        UpsertRuntimeTextActivity,
+    },
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
     identity_access::agent_profile_mcp::{
         AgentProfileMcpDataPlane, McpDataPlaneFaultCode, McpProbeCommand,
@@ -35,22 +47,10 @@ use silverhand_backend_core::{
         post_commit::{IdleStart, MainDelivery},
     },
     persistence::PersistenceFailure,
-    runtime_credential::{
-        ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeGeneration,
-        RuntimePrincipal, RuntimeScope,
-    },
     runtime_delivery::{
         ClaimPendingInbox, DeliveryLeaseOwner, InboxDeliveryId, InboxSettlementDisposition,
         RuntimeDeliveryFailureReason, RuntimeDispatchReadPort, RuntimeDispatchTarget,
         RuntimeInboxCustodyPort,
-    },
-    runtime_event::{
-        CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
-        ProjectRuntimeStatus, RefineRuntimeToolCallInput, RuntimeActivityCommitResult,
-        RuntimeActivityFact, RuntimeConsumedCommitResult, RuntimeEventAdmission,
-        RuntimeExitCommitResult, RuntimeObservedStatus, RuntimeSessionInitCommitResult,
-        RuntimeStatusCommitResult, RuntimeToolCallInputCommitResult, StampRuntimePresence,
-        UpsertRuntimeTextActivity,
     },
     teardown::{
         computer_delete::ComputerCascadeEffects,

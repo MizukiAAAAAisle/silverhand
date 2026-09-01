@@ -42,9 +42,9 @@
 
 use std::future::Future;
 
+use crate::host_runtime::runtime_credential::RuntimePrincipal;
 use crate::identity::{AgentId, ConversationId, WorkspaceId};
 use crate::persistence::PersistenceFailure;
-use crate::runtime_credential::RuntimePrincipal;
 
 use super::read::{
     AgentBoardResolver, AgentReadableBoards, AuthorizedTaskBoards, BoardAuthorization,
@@ -199,9 +199,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host_runtime::runtime_credential::{RuntimeCustody, RuntimeGeneration};
     use crate::identity::DaemonInstanceId;
     use crate::messaging::task::{BoardResolution, PairKey, ReadableBoard, ResolvedBoard};
-    use crate::runtime_credential::{RuntimeCustody, RuntimeGeneration};
 
     /// A configurable driver-free double for the three board-authorization ports. The
     /// resolver echoes the requested subject (so the minter binds it), returning the
