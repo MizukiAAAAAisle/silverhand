@@ -10,7 +10,7 @@
 //!
 //! WHAT IT NO LONGER OWNS: the shape itself, NOR its refusal. Deciding what a
 //! request IS belongs to [`super::admission`], the one authority for it; rendering a
-//! shape/semantic refusal belongs to [`crate::wire_admission::invalid_input`], the one
+//! shape/semantic refusal belongs to [`crate::foundation::wire_admission::invalid_input`], the one
 //! `422 {"error":"invalid input"}` every mounted write face shares. This module renders
 //! only the two answers that are THIS door's own: the ingress fence's envelope bound and
 //! the content cap, whose two wordings are a contract the shared refusal cannot express.

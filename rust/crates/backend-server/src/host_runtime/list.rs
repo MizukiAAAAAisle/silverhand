@@ -28,7 +28,7 @@ use silverhand_backend_core::{
     host_runtime::read::{ComputerReadModel, owned_computers},
 };
 
-use crate::error;
+use crate::foundation::error;
 
 use super::{
     HOSTS_PATH,

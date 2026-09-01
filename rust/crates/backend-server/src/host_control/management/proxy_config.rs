@@ -15,10 +15,10 @@ use silverhand_backend_core::{
 
 use crate::{
     daemon_delivery::OwningHostDataPlane,
-    error,
+    foundation::error,
+    foundation::wire_admission::from_object_slice,
+    foundation::wire_patch::PatchField,
     host_control::proxy_config::{self, ProxyConfig, ProxyConfigOutcome, ProxyConfigRequest},
-    wire_admission::from_object_slice,
-    wire_patch::PatchField,
 };
 
 use super::{internal_error, read_body};

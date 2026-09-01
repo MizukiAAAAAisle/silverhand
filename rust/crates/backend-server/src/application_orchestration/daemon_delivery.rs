@@ -12,12 +12,12 @@ use silverhand_backend_core::{
 
 use crate::{
     daemon_events::DaemonRuntimeEventError,
-    error,
     foundation::daemon_transport::{
         AuthenticatedDaemonHost, DaemonConnectionAuthority, DaemonHostAuthentication,
         DaemonHostReadyEffect, DaemonOwnerFailure, DaemonProtocolAdmission, DaemonStatusSeedEffect,
         DaemonTransport, DaemonTransportController,
     },
+    foundation::error,
     host_agent_background::agent_deletion_resumer::HostReadyObserver,
     host_control::{
         admission::{

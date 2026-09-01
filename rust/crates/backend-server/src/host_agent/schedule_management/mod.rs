@@ -40,7 +40,7 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
+use crate::foundation::error;
 
 /// The anti-enumeration refusal string, pinned to the TypeScript handler.
 const AGENT_NOT_FOUND: &str = "agent not found";

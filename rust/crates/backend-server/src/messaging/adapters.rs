@@ -93,7 +93,7 @@ pub(crate) fn reach(
 #[derive(Debug)]
 pub(crate) enum HumanRefusal {
     Access(ChannelAccessRefusal),
-    Authority(crate::error::BoundaryFailure),
+    Authority(crate::foundation::error::BoundaryFailure),
     Payload(PayloadRefusal),
     Send(SendMessageError),
 }
@@ -106,7 +106,7 @@ pub(crate) enum AgentRefusal {
     Address(AddressRefusal),
     OutOfSessionScope,
     CapabilityDenied,
-    Authority(crate::error::BoundaryFailure),
+    Authority(crate::foundation::error::BoundaryFailure),
     Send(SendMessageError),
 }
 
@@ -131,7 +131,9 @@ where
     access
         .may_post(channel, author)
         .await
-        .map_err(|source| HumanRefusal::Authority(crate::error::BoundaryFailure::new(source)))?
+        .map_err(|source| {
+            HumanRefusal::Authority(crate::foundation::error::BoundaryFailure::new(source))
+        })?
         .map_err(HumanRefusal::Access)?;
 
     let request = validate_human_payload(raw_body).map_err(HumanRefusal::Payload)?;
@@ -235,7 +237,9 @@ where
     let stream = address
         .resolve(credential.agent(), request.target(), allocation)
         .await
-        .map_err(|source| AgentRefusal::Authority(crate::error::BoundaryFailure::new(source)))?
+        .map_err(|source| {
+            AgentRefusal::Authority(crate::foundation::error::BoundaryFailure::new(source))
+        })?
         .map_err(AgentRefusal::Address)?;
 
     reach(credential, &stream).map_err(|OutOfSessionScope| AgentRefusal::OutOfSessionScope)?;
@@ -243,7 +247,9 @@ where
     capability
         .may_send_messages(credential.agent(), &stream.conversation)
         .await
-        .map_err(|source| AgentRefusal::Authority(crate::error::BoundaryFailure::new(source)))?
+        .map_err(|source| {
+            AgentRefusal::Authority(crate::foundation::error::BoundaryFailure::new(source))
+        })?
         .map_err(|CapabilityDenied| AgentRefusal::CapabilityDenied)?;
 
     if let (Some(audit), Some(reason)) = (audit, request.stale_resolution_reason()) {

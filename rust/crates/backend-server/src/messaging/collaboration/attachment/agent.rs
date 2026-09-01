@@ -206,7 +206,7 @@ where
         Ok(Ok(value)) => value,
         Ok(Err(refusal)) => return address_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment target resolution failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment target resolution failed");
             return internal();
         }
     };
@@ -223,13 +223,13 @@ where
         Ok(Ok(value)) => match value.bind(&target) {
             Ok(value) => value,
             Err(error) => {
-                tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment upload admission identity seal failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment upload admission identity seal failed");
                 return internal();
             }
         },
         Ok(Err(refusal)) => return upload_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment upload admission failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment upload admission failed");
             return internal();
         }
     };
@@ -261,14 +261,14 @@ where
     let attachment = match mint_attachment_id(&state.0.environment) {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment id entropy unavailable");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment id entropy unavailable");
             return internal();
         }
     };
     let created_at = match state.0.environment.now_unix_ms() {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment clock unavailable");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment clock unavailable");
             return internal();
         }
     };
@@ -278,7 +278,7 @@ where
     ) {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment namespace projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment namespace projection failed");
             return internal();
         }
     };
@@ -291,7 +291,7 @@ where
     {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment blob write failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment blob write failed");
             return internal();
         }
     };
@@ -307,7 +307,7 @@ where
         Ok(value) => value,
         Err(error) => {
             cleanup_uncommitted(&state.0.blobs, &blob, "invalid agent upload command").await;
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment upload command projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment upload command projection failed");
             return internal();
         }
     };
@@ -315,7 +315,7 @@ where
         Ok(Ok(fact)) => match fact.bind(&runtime, target.conversation()) {
             Ok(bound) => (StatusCode::CREATED, Json(record_json(bound.record()))).into_response(),
             Err(error) => {
-                tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment create identity seal failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment create identity seal failed");
                 internal()
             }
         },
@@ -325,7 +325,7 @@ where
         }
         Err(error) => {
             cleanup_uncommitted(&state.0.blobs, &blob, "failed agent upload persistence").await;
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment upload persistence failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment upload persistence failed");
             internal()
         }
     }
@@ -355,13 +355,13 @@ where
         Ok(Ok(value)) => match value.bind(&runtime, &attachment) {
             Ok(value) => value,
             Err(error) => {
-                tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment update admission identity seal failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment update admission identity seal failed");
                 return internal();
             }
         },
         Ok(Err(refusal)) => return update_admission_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment update admission failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment update admission failed");
             return internal();
         }
     };
@@ -383,7 +383,7 @@ where
     ) {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment update namespace projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment update namespace projection failed");
             return internal();
         }
     };
@@ -396,7 +396,7 @@ where
     {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment replacement blob write failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment replacement blob write failed");
             return internal();
         }
     };
@@ -404,7 +404,7 @@ where
         Ok(value) => value,
         Err(error) => {
             cleanup_uncommitted(&state.0.blobs, &blob, "invalid agent update command").await;
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment update command projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment update command projection failed");
             return internal();
         }
     };
@@ -416,14 +416,14 @@ where
         }
         Err(error) => {
             cleanup_uncommitted(&state.0.blobs, &blob, "failed agent update persistence").await;
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment update persistence failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment update persistence failed");
             return internal();
         }
     };
     let bound = match fact.bind(&runtime, &attachment) {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment update identity seal failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment update identity seal failed");
             return internal();
         }
     };
@@ -431,11 +431,11 @@ where
         .updated(bound.before().blob(), bound.after().blob(), bound.alias())
         .await
     {
-        tracing::warn!(error_chain=%crate::error::describe(&error), "committed agent attachment update blob maintenance incomplete");
+        tracing::warn!(error_chain=%crate::foundation::error::describe(&error), "committed agent attachment update blob maintenance incomplete");
     }
     let changed = bound.changed();
     if let Err(error) = state.0.publisher.publish(&changed).await {
-        tracing::error!(error_chain=%crate::error::describe(&error), "committed agent attachment_changed publication failed");
+        tracing::error!(error_chain=%crate::foundation::error::describe(&error), "committed agent attachment_changed publication failed");
     }
     Json(record_json(bound.after())).into_response()
 }
@@ -462,21 +462,21 @@ where
         Ok(Ok(value)) => value,
         Ok(Err(refusal)) => return read_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment locate authority failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment locate authority failed");
             return internal();
         }
     };
     let bound = match fact.bind(&runtime, &attachment) {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment locate identity seal failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment locate identity seal failed");
             return internal();
         }
     };
     let alias = match BlobAliasId::from_semantic_id(attachment.as_str()) {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment alias projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment alias projection failed");
             return internal();
         }
     };
@@ -500,7 +500,7 @@ where
             internal()
         }
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment alias materialization failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment alias materialization failed");
             internal()
         }
     }
@@ -528,14 +528,14 @@ where
         Ok(Ok(value)) => value,
         Ok(Err(refusal)) => return read_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment download authority failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment download authority failed");
             return internal();
         }
     };
     let bound = match fact.bind(&runtime, &attachment) {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment download identity seal failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment download identity seal failed");
             return internal();
         }
     };
@@ -547,7 +547,7 @@ where
             return internal();
         }
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment blob read failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment blob read failed");
             return internal();
         }
     };
@@ -569,7 +569,7 @@ fn runtime_coordinates(
     let path_agent = AgentId::parse(raw_agent)
         .map_err(|_| Box::new(error(StatusCode::BAD_REQUEST, "agent id required")))?;
     AgentAttachmentRuntime::bind(&principal, &path_agent).map_err(|error| {
-        tracing::error!(error_chain=%crate::error::describe(&error), "agent attachment runtime/path identity seal failed");
+        tracing::error!(error_chain=%crate::foundation::error::describe(&error), "agent attachment runtime/path identity seal failed");
         Box::new(internal())
     })
 }

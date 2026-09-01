@@ -12,7 +12,7 @@ use silverhand_backend_core::{
 };
 
 use super::{AgentAuditState, internal_error, not_found, owner_floor, wire};
-use crate::error;
+use crate::foundation::error;
 
 pub(super) async fn list<P, B, S>(
     State(state): State<AgentAuditState<P, B, S>>,

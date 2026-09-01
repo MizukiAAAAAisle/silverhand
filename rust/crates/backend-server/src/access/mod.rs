@@ -8,7 +8,7 @@
 //! (`404`) without the body being buffered, so a caller without standing cannot
 //! probe the body's shape or which product arm it would select. Only when the
 //! floor admits is the body decoded — through the shared
-//! [`ObjectOnly<T>`](crate::wire_admission::ObjectOnly) object floor via a
+//! [`ObjectOnly<T>`](crate::foundation::wire_admission::ObjectOnly) object floor via a
 //! DEFERRED `Json` extraction — so a structurally malformed / wrong-shaped
 //! (top-level array/scalar/null) / wrong-typed body keeps its native framework
 //! rejection, and only then does the **application door** run — agent existence,
@@ -46,8 +46,8 @@ use silverhand_backend_core::identity_access::access::{
     add_workspace_agent_member, add_workspace_human_member,
 };
 
-use crate::error;
-use crate::wire_admission::ObjectOnly;
+use crate::foundation::error;
+use crate::foundation::wire_admission::ObjectOnly;
 use wire::{
     AGENT_NOT_FOUND, AGENT_NOT_OWNED_CODE, AGENT_NOT_OWNED_MESSAGE, AddMemberRaw, AddMemberRequest,
     AddWorkspaceAgentMemberResponse, AddWorkspaceHumanMemberResponse, ErrorBody, FORBIDDEN,
@@ -111,7 +111,7 @@ where
 /// without that perimeter — a composition fault, so it takes the lane's safe
 /// `500`.
 ///
-/// [`ObjectOnly<T>`]: crate::wire_admission::ObjectOnly
+/// [`ObjectOnly<T>`]: crate::foundation::wire_admission::ObjectOnly
 async fn add_member<P, A, S, C>(
     Path(workspace_id): Path<String>,
     viewer: Option<Extension<UserId>>,

@@ -60,7 +60,7 @@ use crate::{
     daemon_delivery::{
         DaemonDeliveryController, HostDataPlaneRequest, OwningHostDataPlane, command,
     },
-    error,
+    foundation::error,
 };
 
 use super::{

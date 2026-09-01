@@ -105,7 +105,7 @@ where
             }
             Err(failure) => {
                 tracing::error!(
-                    error_chain = %crate::error::describe(&failure),
+                    error_chain = %crate::foundation::error::describe(&failure),
                     "direct-pair initiation authority failed"
                 );
                 return internal();
@@ -174,7 +174,7 @@ where
         Err(DirectPairFirstSendError::Send(failure)) => refused_send(&failure),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "direct-pair initiation failed before first-message send completed"
             );
             internal()
@@ -196,7 +196,7 @@ fn error(status: StatusCode, message: &'static str) -> Response {
 /// answers.
 fn refuse_payload(refusal: PayloadRefusal) -> Response {
     match refusal {
-        PayloadRefusal::Invalid => crate::wire_admission::invalid_input(),
+        PayloadRefusal::Invalid => crate::foundation::wire_admission::invalid_input(),
         PayloadRefusal::ContentTooLarge { actual_bytes } => {
             human_content_too_large(actual_bytes).into_response()
         }

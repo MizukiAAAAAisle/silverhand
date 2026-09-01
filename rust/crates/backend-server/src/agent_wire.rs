@@ -166,7 +166,7 @@ impl ReprojectFault {
             ),
             Self::ReadFailed(cause) => tracing::error!(
                 operation,
-                error_chain = %crate::error::describe(&cause),
+                error_chain = %crate::foundation::error::describe(&cause),
                 "agent post-commit projection read failed"
             ),
         }

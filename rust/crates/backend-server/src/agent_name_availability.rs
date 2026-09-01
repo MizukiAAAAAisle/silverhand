@@ -43,7 +43,7 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
+use crate::foundation::error;
 
 /// The product route template. A STATIC segment under `/api/agents`.
 pub const AGENT_NAME_AVAILABILITY_PATH: &str = "/api/agents/name-availability";

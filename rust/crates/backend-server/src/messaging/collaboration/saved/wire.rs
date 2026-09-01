@@ -40,7 +40,7 @@ fn audit_publication_failure(
 ) {
     if let Some(failure) = failure {
         tracing::error!(
-            error_chain = %crate::error::describe(failure),
+            error_chain = %crate::foundation::error::describe(failure),
             "saved-message publication failed"
         );
     }

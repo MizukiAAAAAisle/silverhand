@@ -36,8 +36,8 @@ use silverhand_backend_core::{
 };
 
 use crate::{
-    daemon_delivery::DaemonDeliveryController, error,
-    foundation::daemon_transport::DaemonConnectionAuthority,
+    daemon_delivery::DaemonDeliveryController,
+    foundation::daemon_transport::DaemonConnectionAuthority, foundation::error,
 };
 
 use super::{

@@ -41,7 +41,7 @@ use axum::{
 };
 
 use super::send_request::{MESSAGE_SEND_MAX_BODY_BYTES, envelope_too_large};
-use crate::error;
+use crate::foundation::error;
 
 /// What reading a request body can come to. Three outcomes, because two of the
 /// refusals belong to different parties.

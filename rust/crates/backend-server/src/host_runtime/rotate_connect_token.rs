@@ -50,7 +50,7 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
+use crate::foundation::error;
 
 use super::{
     ErrorBody, host_not_found,

@@ -15,7 +15,7 @@
 //! ordering (hash → handle → email), the uniform credential answer, the
 //! committed-fact seal, the change gate, and the `user_changed` announce fate.
 //! This module's only jobs are request-boundary admission — the frozen
-//! [`ValidatedJson<T>`](crate::wire_admission::ValidatedJson) extractor decodes
+//! [`ValidatedJson<T>`](crate::foundation::wire_admission::ValidatedJson) extractor decodes
 //! the body into a typed DTO (native `Json` owns JSON syntax / wrong-type /
 //! content-type rejection), garde enforces the transport password bounds, and a
 //! `TryFrom`/`into_command` normalizes the identity value objects — and the wire
@@ -88,11 +88,11 @@ use silverhand_backend_core::{
 };
 
 use crate::auth::{PublicJsonUnauthorized, require_human_session};
-use crate::error;
 use crate::foundation::bearer::strict_bearer_credential;
+use crate::foundation::error;
+use crate::foundation::wire_admission::{self, ValidatedJson, ValidatedJsonRejection};
+use crate::foundation::wire_patch::RequiredPatchField;
 use crate::messaging::author_wire::principal_avatar_url;
-use crate::wire_admission::{self, ValidatedJson, ValidatedJsonRejection};
-use crate::wire_patch::RequiredPatchField;
 
 /// `authPaths.signup`.
 pub const SIGNUP_PATH: &str = "/auth/signup";

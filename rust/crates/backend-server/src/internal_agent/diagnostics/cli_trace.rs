@@ -11,7 +11,7 @@
 //! layer's).
 //!
 //! The body is a STRICT closed object admitted through the frozen
-//! [`ValidatedJson`]/[`ObjectOnly`](crate::wire_admission) contract. Every field is optional
+//! [`ValidatedJson`]/[`ObjectOnly`](crate::foundation::wire_admission) contract. Every field is optional
 //! (absent is fine — a half-formed CLI invocation still reports) but NON-NULL when present
 //! ([`RequiredPatchField`]: a present `null` is refused for every field). Named string
 //! bounds are UTF-16 code units delegated to the sole primitive
@@ -62,8 +62,8 @@ use silverhand_backend_core::{
     host_runtime::runtime_credential::RuntimePrincipal,
 };
 
-use crate::wire_admission::ValidatedJson;
-use crate::wire_patch::RequiredPatchField;
+use crate::foundation::wire_admission::ValidatedJson;
+use crate::foundation::wire_patch::RequiredPatchField;
 
 /// The route path. The `{aid}` segment is what the self-pin layer binds; the handler takes
 /// no path param and trusts `credential.agent()`.
@@ -99,7 +99,7 @@ where
 
 /// The strict closed-object body. Every field is optional (`#[serde(default)]` →
 /// [`RequiredPatchField::Missing`]) but non-null when present; unknown keys are rejected
-/// (`deny_unknown_fields`), and the [`ObjectOnly`](crate::wire_admission) wrapper inside
+/// (`deny_unknown_fields`), and the [`ObjectOnly`](crate::foundation::wire_admission) wrapper inside
 /// [`ValidatedJson`] rejects a non-object top-level shape before any field binds.
 #[derive(Debug, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]

@@ -41,7 +41,7 @@ use silverhand_backend_core::conversation_messaging::messaging::{
 };
 use silverhand_backend_core::foundation::cli_invoke_audit::CliStaleResolutionReason;
 
-use crate::wire_patch::RequiredPatchField;
+use crate::foundation::wire_patch::RequiredPatchField;
 
 /// The most attachments one message may reference.
 pub(crate) const MAX_MESSAGE_ATTACHMENTS: usize = 20;
@@ -311,7 +311,7 @@ pub(crate) fn validate_agent_payload(
 ///
 /// The top-level object floor — rejecting a value-shaped JSON array that serde would
 /// otherwise bind to the struct's fields positionally — is NOT hand-rolled here. It is the
-/// shared [`ObjectOnly<T>`](crate::wire_admission::ObjectOnly) map-only wrapper from the
+/// shared [`ObjectOnly<T>`](crate::foundation::wire_admission::ObjectOnly) map-only wrapper from the
 /// `ValidatedJson` governance anchor (#2246): decoding through it commits the value to a map
 /// (a top-level array, scalar, or null becomes an "invalid type" fault) before delegating to
 /// `T`'s own visitor, so every native `T` verdict is preserved. This door stays Value-first
@@ -322,8 +322,8 @@ fn decode<T: serde::de::DeserializeOwned>(
     body: Option<serde_json::Value>,
 ) -> Result<T, PayloadRefusal> {
     let value = body.unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
-    serde_json::from_value::<crate::wire_admission::ObjectOnly<T>>(value)
-        .map(|crate::wire_admission::ObjectOnly(inner)| inner)
+    serde_json::from_value::<crate::foundation::wire_admission::ObjectOnly<T>>(value)
+        .map(|crate::foundation::wire_admission::ObjectOnly(inner)| inner)
         .map_err(|_| PayloadRefusal::Invalid)
 }
 

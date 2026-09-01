@@ -102,7 +102,7 @@ where
         Ok(Ok(execution)) => {
             if let Some(failure) = execution.publication_failure() {
                 tracing::error!(
-                    error_chain = %crate::error::describe(failure),
+                    error_chain = %crate::foundation::error::describe(failure),
                     "committed channel creation publication failed"
                 );
             }
@@ -111,7 +111,7 @@ where
         Ok(Err(reason)) => refusal(reason, &requested_title),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "channel creation failed"
             );
             internal()

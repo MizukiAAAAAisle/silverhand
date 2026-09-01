@@ -219,13 +219,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // `password_hasher`, so it belongs in this seam ledger but NOT
     // `ACTIVATION_NAMESPACES`.
     ("backend-server", "avatar_blob"),
-    // #task:2236 — the shared JSON write-admission extractor (`ValidatedJson<T>`) plus
-    // the garde adapters delegating to the `wire_text`/`wire_number` primitives, and the
-    // crate-private PATCH presence algebra (`wire_patch`: missing/null/value tri-state,
-    // non-nullable, forbidden). Wire FRAMEWORK/transport vocabulary placed by its bounded
-    // context; admission seams like the adapters above, NOT activation namespaces.
-    ("backend-server", "wire_admission"),
-    ("backend-server", "wire_patch"),
     // #task:2231 — the production typed adapter for the accepted internal
     // profile-MCP port, sharing the owning-host registry and exposing no raw
     // dispatcher. Wired into the internal MCP routes by the #task:2234 integration (CP7b).
@@ -427,7 +420,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-server", "daemon_delivery"),
     ("backend-server", "daemon_events"),
     ("backend-server", "direct_pairs"),
-    ("backend-server", "error"),
     ("backend-server", "host_runtime"),
     ("backend-server", "messaging"),
     ("backend-server", "runtime_credential"),
@@ -478,11 +470,10 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-app", "foundation"),
     ("backend-server", "application_orchestration"),
     ("backend-server", "conversation_messaging"),
-    // #task:2299 relocated the first three settled technical leaves (`bearer`, `clock`,
-    // `multipart_transport`) under the existing dual-role `foundation` context. The
-    // organization map + real tree derive PARTIAL 4/7/3 (self-row + three landed leaves;
-    // `error`, `wire_admission`, and `wire_patch` remain flat). Their stale flat CP entries
-    // are removed and this single owning-root entry covers them without descending.
+    // #task:2300 completed the production-settled foundation relocation: the self-row plus
+    // six independent technical/framework leaves derive 7/7/0. The cfg-test/path-backed
+    // `current_schema` root remains a separate resolver axis and is excluded from physical
+    // relocation. This single owning-root entry covers production without descending.
     ("backend-server", "foundation"),
     ("backend-server", "identity_access"),
     ("backend-server", "viewer_read_model"),

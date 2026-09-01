@@ -49,10 +49,10 @@ use silverhand_backend_core::{
     identity_access::mcp_config::parse_mcp_config,
 };
 
+use crate::foundation::wire_admission::ValidatedJson;
 use crate::host_agent::public_profile_mcp::wire::{
     ProbeRequest, ReadConfigResponse, data_plane_error, probe_outcome_wire,
 };
-use crate::wire_admission::ValidatedJson;
 
 /// The product route template for reading/replacing the config. `{aid}` is consumed
 /// by the credential layer, which self-pins it.

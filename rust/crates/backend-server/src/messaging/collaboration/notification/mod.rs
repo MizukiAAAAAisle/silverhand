@@ -18,7 +18,7 @@ use silverhand_backend_core::{
 };
 use std::{collections::HashMap, sync::Arc};
 
-use crate::wire_admission::ValidatedJson;
+use crate::foundation::wire_admission::ValidatedJson;
 
 pub const LIST_PATH: &str = "/api/notifications";
 pub const UNREAD_PATH: &str = "/api/notifications/unread";
@@ -154,7 +154,7 @@ async fn list<R: NotificationReadPort, C: NotificationClearPort, A: Notification
                 .into_response()
         }
         Err(e) => {
-            tracing::error!(error_chain=%crate::error::describe(&e),"notification list failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"notification list failed");
             internal()
         }
     }
@@ -166,14 +166,14 @@ async fn unread<R: NotificationReadPort, C: NotificationClearPort, A: Notificati
     let Some(viewer) = viewer(principal) else {
         return internal();
     };
-    match s.0.reads.unread_summary(&viewer).await{Ok(v)=>Json(json!({"total":v.total,"by_workspace":v.by_workspace.iter().map(|(k,v)|(k.as_str(),v)).collect::<HashMap<_,_>>(),"latest_by_workspace":v.latest_by_workspace.iter().map(|(k,v)|(k.as_str(),json!({"conversation_id":v.conversation.as_str(),"message_id":v.message.as_str(),"thread_root_id":v.thread_root.as_ref().map(|x|x.as_str())}))).collect::<HashMap<_,_>>() })).into_response(),Err(e)=>{tracing::error!(error_chain=%crate::error::describe(&e),"notification summary failed");internal()}}
+    match s.0.reads.unread_summary(&viewer).await{Ok(v)=>Json(json!({"total":v.total,"by_workspace":v.by_workspace.iter().map(|(k,v)|(k.as_str(),v)).collect::<HashMap<_,_>>(),"latest_by_workspace":v.latest_by_workspace.iter().map(|(k,v)|(k.as_str(),json!({"conversation_id":v.conversation.as_str(),"message_id":v.message.as_str(),"thread_root_id":v.thread_root.as_ref().map(|x|x.as_str())}))).collect::<HashMap<_,_>>() })).into_response(),Err(e)=>{tracing::error!(error_chain=%crate::foundation::error::describe(&e),"notification summary failed");internal()}}
 }
 async fn clear<R: NotificationReadPort, C: NotificationClearPort, A: NotificationAftermath>(
     State(s): State<NotificationState<R, C, A>>,
     principal: Option<Extension<UserId>>,
     body: Result<
         ValidatedJson<MarkNotificationsRead>,
-        crate::wire_admission::ValidatedJsonRejection,
+        crate::foundation::wire_admission::ValidatedJsonRejection,
     >,
 ) -> Response {
     // Structure and content-type are axum's native verdict (object-only decode →
@@ -188,7 +188,7 @@ async fn clear<R: NotificationReadPort, C: NotificationClearPort, A: Notificatio
     // Admission guaranteed a selector exists (the refine), so this is infallible;
     // resolving it here keeps the precedence in one place.
     let Some(selector) = request.selector() else {
-        return crate::wire_admission::invalid_input();
+        return crate::foundation::wire_admission::invalid_input();
     };
     let Some(viewer) = viewer(principal) else {
         return internal();
@@ -196,12 +196,12 @@ async fn clear<R: NotificationReadPort, C: NotificationClearPort, A: Notificatio
     match clear_notifications(&s.0.clears, &s.0.aftermath, viewer, selector).await {
         Ok(done) => {
             if let Some(e) = done.first_failure() {
-                tracing::error!(error_chain=%crate::error::describe(e),"notification clear effect failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(e),"notification clear effect failed");
             }
             Json(json!({"marked":done.committed().marked()})).into_response()
         }
         Err(e) => {
-            tracing::error!(error_chain=%crate::error::describe(&e),"notification clear failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"notification clear failed");
             internal()
         }
     }

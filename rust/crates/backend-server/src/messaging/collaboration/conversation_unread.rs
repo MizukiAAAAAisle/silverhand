@@ -53,7 +53,7 @@ async fn read<P: ConversationUnreadReadPort>(
         Ok(Ok(value)) => match value.bind(&conversation) {
             Ok(value) => success(&value),
             Err(error) => {
-                tracing::error!(error_chain=%crate::error::describe(&error),"conversation-unread identity seal failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(&error),"conversation-unread identity seal failed");
                 internal()
             }
         },
@@ -62,7 +62,7 @@ async fn read<P: ConversationUnreadReadPort>(
         }
         Ok(Err(ConversationUnreadRefusal::Forbidden)) => error(StatusCode::FORBIDDEN, "forbidden"),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error),"conversation-unread projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"conversation-unread projection failed");
             internal()
         }
     }

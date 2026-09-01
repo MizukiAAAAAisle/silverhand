@@ -325,7 +325,7 @@ fn report_failures(report: EffectReport) {
             event = "message.post_commit_effect_failed",
             message_id = message.as_str(),
             effect = ?step,
-            error_chain = crate::error::describe(&failure),
+            error_chain = crate::foundation::error::describe(&failure),
             "committed message post-commit effect failed"
         );
     }

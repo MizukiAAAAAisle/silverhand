@@ -31,7 +31,7 @@ use tokio::{
     time::Instant,
 };
 
-use crate::{error, foundation::bearer::strict_bearer_credential};
+use crate::{foundation::bearer::strict_bearer_credential, foundation::error};
 
 use self::command::{CapabilityRefusalAdmission, EncodedDaemonCommand, IssuedDaemonCommandKind};
 

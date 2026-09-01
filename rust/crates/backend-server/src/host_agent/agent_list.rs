@@ -34,7 +34,7 @@ use silverhand_backend_core::{
     identity_access::capability::agent_view::VisibleStages,
 };
 
-use crate::error;
+use crate::foundation::error;
 
 use crate::agent_wire::{AgentDto, agent_dto};
 

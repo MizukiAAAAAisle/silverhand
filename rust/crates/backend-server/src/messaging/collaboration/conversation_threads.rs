@@ -69,7 +69,7 @@ async fn read<P: ConversationThreadsReadPort>(
         Ok(Err(refusal)) => return refusal_wire(refusal),
         Err(error) => {
             tracing::error!(
-                error_chain=%crate::error::describe(&error),
+                error_chain=%crate::foundation::error::describe(&error),
                 "conversation-threads admission failed"
             );
             return internal();
@@ -94,7 +94,7 @@ async fn read<P: ConversationThreadsReadPort>(
             Ok(page) => success(&page),
             Err(error) => {
                 tracing::error!(
-                    error_chain=%crate::error::describe(&error),
+                    error_chain=%crate::foundation::error::describe(&error),
                     "conversation-threads identity seal failed"
                 );
                 internal()
@@ -103,7 +103,7 @@ async fn read<P: ConversationThreadsReadPort>(
         Ok(Err(refusal)) => refusal_wire(refusal),
         Err(error) => {
             tracing::error!(
-                error_chain=%crate::error::describe(&error),
+                error_chain=%crate::foundation::error::describe(&error),
                 "conversation-threads projection failed"
             );
             internal()

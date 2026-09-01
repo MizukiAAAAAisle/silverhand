@@ -42,9 +42,9 @@ use silverhand_backend_core::{
 };
 
 use crate::embedded_bootstrap::token::EmbeddedBootstrapTokenAuthority;
-use crate::error;
+use crate::foundation::error;
+use crate::foundation::wire_admission::{ValidatedJson, ValidatedJsonRejection};
 use crate::human_auth::{UserDto, log_lost_announce};
-use crate::wire_admission::{ValidatedJson, ValidatedJsonRejection};
 
 /// `authPaths.embeddedBootstrap`.
 pub const EMBEDDED_BOOTSTRAP_PATH: &str = "/auth/embedded-bootstrap";

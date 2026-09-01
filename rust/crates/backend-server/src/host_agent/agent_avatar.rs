@@ -51,7 +51,7 @@ use silverhand_backend_core::{
     identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 
-use crate::error;
+use crate::foundation::error;
 
 /// The product route template, in axum's `{id}` capture syntax.
 pub const AGENT_AVATAR_PATH: &str = "/api/agents/{id}/avatar";

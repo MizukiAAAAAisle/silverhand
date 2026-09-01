@@ -71,7 +71,7 @@ async fn set_channel<P: AttentionPreferencePort, A: AttentionPreferenceAftermath
         Ok(Ok(v)) => v,
         Ok(Err(r)) => return channel_admission_refusal(r),
         Err(e) => {
-            tracing::error!(error_chain=%crate::error::describe(&e),"channel attention admission failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"channel attention admission failed");
             return internal();
         }
     };
@@ -89,7 +89,7 @@ async fn set_channel<P: AttentionPreferencePort, A: AttentionPreferenceAftermath
         }
         Ok(Err(r)) => channel_write_refusal(r),
         Err(e) => {
-            tracing::error!(error_chain=%crate::error::describe(&e),"channel attention write failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"channel attention write failed");
             internal()
         }
     }
@@ -113,7 +113,7 @@ async fn get_workspace<P: AttentionPreferencePort, A: AttentionPreferenceAfterma
         }
         Ok(Err(r)) => workspace_read_refusal(r),
         Err(e) => {
-            tracing::error!(error_chain=%crate::error::describe(&e),"workspace attention read failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"workspace attention read failed");
             internal()
         }
     }
@@ -141,7 +141,7 @@ async fn set_workspace<P: AttentionPreferencePort, A: AttentionPreferenceAfterma
         Ok(Ok(v)) => v,
         Ok(Err(r)) => return workspace_admission_refusal(r),
         Err(e) => {
-            tracing::error!(error_chain=%crate::error::describe(&e),"workspace attention admission failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"workspace attention admission failed");
             return internal();
         }
     };
@@ -160,7 +160,7 @@ async fn set_workspace<P: AttentionPreferencePort, A: AttentionPreferenceAfterma
         }
         Ok(Err(r)) => workspace_write_refusal(r),
         Err(e) => {
-            tracing::error!(error_chain=%crate::error::describe(&e),"workspace attention write failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"workspace attention write failed");
             internal()
         }
     }
@@ -276,6 +276,6 @@ fn report_effect(
     error:Option<&silverhand_backend_core::conversation_messaging::messaging::collaboration::attention_preference::AttentionPreferenceEffectFailure>,
 ) {
     if let Some(error) = error {
-        tracing::error!(error_chain=%crate::error::describe(error),"attention preference effect failed");
+        tracing::error!(error_chain=%crate::foundation::error::describe(error),"attention preference effect failed");
     }
 }

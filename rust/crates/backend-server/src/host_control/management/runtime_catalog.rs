@@ -14,7 +14,7 @@ use silverhand_backend_core::{
 
 use crate::{
     daemon_delivery::OwningHostDataPlane,
-    error,
+    foundation::error,
     host_control::runtime_catalog::{
         self, DetectedRuntime, RuntimeCatalogOutcome, RuntimeCatalogRequest,
     },

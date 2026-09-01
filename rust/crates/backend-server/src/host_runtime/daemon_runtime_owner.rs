@@ -33,7 +33,7 @@ use crate::{
         DaemonRuntimeEventOwner, HostRuntimeActivitySource, HydratedRuntime, RuntimeEventDirective,
         RuntimeProductEvent, decode_product_event,
     },
-    error,
+    foundation::error,
     foundation::{
         daemon_command as command,
         daemon_transport::{

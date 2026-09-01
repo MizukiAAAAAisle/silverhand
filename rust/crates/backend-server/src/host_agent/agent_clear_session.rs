@@ -43,7 +43,7 @@ use silverhand_backend_core::{
     identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 
-use crate::error;
+use crate::foundation::error;
 use crate::messaging::collaboration::runtime_control::{clear_session_success, placement_refusal};
 
 /// The product route template, in axum's `{id}` capture syntax.

@@ -41,7 +41,7 @@ use silverhand_backend_core::{
 };
 
 use crate::{
-    error,
+    foundation::error,
     foundation::{bearer::strict_bearer_credential, clock::ProcessClock},
 };
 

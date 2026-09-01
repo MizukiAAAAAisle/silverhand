@@ -17,7 +17,7 @@ use silverhand_backend_core::{
 use super::{
     AgentAuditState, bad_request, conversation_floor, internal_error, not_found, owner_floor, wire,
 };
-use crate::error;
+use crate::foundation::error;
 use crate::messaging::collaboration::conversation_message_window::{
     MessageWindowQueryWire, query_refusal_wire, request,
 };

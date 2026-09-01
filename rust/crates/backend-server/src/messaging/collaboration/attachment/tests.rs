@@ -125,7 +125,7 @@ async fn committed_delete_attempts_both_cleanup_legs_and_reports_both_failures()
             .await
             .unwrap_err();
     assert_eq!(error.operation, "delete attachment blob and alias");
-    let chain = crate::error::describe(&error);
+    let chain = crate::foundation::error::describe(&error);
     assert!(chain.contains("physical delete failed"), "{chain}");
     assert!(chain.contains("alias delete failed"), "{chain}");
     assert_eq!(blobs.physical_deletes.load(Ordering::SeqCst), 1);

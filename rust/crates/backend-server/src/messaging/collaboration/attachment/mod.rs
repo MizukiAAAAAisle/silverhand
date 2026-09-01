@@ -193,13 +193,13 @@ where
         Ok(Ok(page)) => match page.bind(&viewer, &conversation, &query) {
             Ok(page) => list_success(&page),
             Err(error) => {
-                tracing::error!(error_chain=%crate::error::describe(&error), "attachment list identity seal failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment list identity seal failed");
                 internal()
             }
         },
         Ok(Err(refusal)) => channel_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment list failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment list failed");
             internal()
         }
     }
@@ -221,13 +221,13 @@ where
         Ok(Ok(facets)) => match facets.bind(&viewer, &conversation) {
             Ok(facets) => sender_facets_success(&facets),
             Err(error) => {
-                tracing::error!(error_chain=%crate::error::describe(&error), "attachment facets identity seal failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment facets identity seal failed");
                 internal()
             }
         },
         Ok(Err(refusal)) => channel_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment facets failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment facets failed");
             internal()
         }
     }
@@ -250,14 +250,14 @@ where
         Ok(Ok(fact)) => fact,
         Ok(Err(_)) => return attachment_not_found(),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment download authority failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment download authority failed");
             return internal();
         }
     };
     let bound = match fact.bind(&viewer, &attachment) {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment download identity seal failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment download identity seal failed");
             return internal();
         }
     };
@@ -269,7 +269,7 @@ where
             return internal();
         }
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment blob read failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment blob read failed");
             return internal();
         }
     };
@@ -299,7 +299,7 @@ where
         Ok(Ok(value)) => match value.bind(&viewer, &conversation) {
             Ok(value) => value,
             Err(error) => {
-                tracing::error!(error_chain=%crate::error::describe(&error), "attachment upload admission identity seal failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment upload admission identity seal failed");
                 return internal();
             }
         },
@@ -310,7 +310,7 @@ where
             return error(StatusCode::FORBIDDEN, "forbidden");
         }
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment upload admission failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment upload admission failed");
             return internal();
         }
     };
@@ -344,14 +344,14 @@ where
     let attachment = match mint_attachment_id(&state.0.environment) {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment id entropy unavailable");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment id entropy unavailable");
             return internal();
         }
     };
     let created_at = match state.0.environment.now_unix_ms() {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment clock unavailable");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment clock unavailable");
             return internal();
         }
     };
@@ -361,7 +361,7 @@ where
     ) {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment namespace projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment namespace projection failed");
             return internal();
         }
     };
@@ -374,7 +374,7 @@ where
     {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment blob write failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment blob write failed");
             return internal();
         }
     };
@@ -391,7 +391,7 @@ where
         Ok(value) => value,
         Err(error) => {
             cleanup_uncommitted(&state.0.blobs, &blob, "invalid upload command").await;
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment upload command projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment upload command projection failed");
             return internal();
         }
     };
@@ -399,7 +399,7 @@ where
         Ok(Ok(fact)) => match fact.bind(&viewer, &conversation) {
             Ok(bound) => (StatusCode::CREATED, Json(record_json(bound.record()))).into_response(),
             Err(error) => {
-                tracing::error!(error_chain=%crate::error::describe(&error), "attachment create identity seal failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment create identity seal failed");
                 internal()
             }
         },
@@ -414,7 +414,7 @@ where
         }
         Err(error) => {
             cleanup_uncommitted(&state.0.blobs, &blob, "failed upload persistence").await;
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment upload persistence failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment upload persistence failed");
             internal()
         }
     }
@@ -439,14 +439,14 @@ where
         Ok(Ok(value)) => match value.bind(&viewer, &attachment) {
             Ok(value) => value,
             Err(error) => {
-                tracing::error!(error_chain=%crate::error::describe(&error), "attachment update admission identity seal failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment update admission identity seal failed");
                 return internal();
             }
         },
         Ok(Err(AttachmentWriteAdmissionRefusal::NotFound)) => return attachment_not_found(),
         Ok(Err(AttachmentWriteAdmissionRefusal::Forbidden)) => return update_forbidden(),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment update admission failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment update admission failed");
             return internal();
         }
     };
@@ -468,7 +468,7 @@ where
     ) {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment update namespace projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment update namespace projection failed");
             return internal();
         }
     };
@@ -481,7 +481,7 @@ where
     {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment replacement blob write failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment replacement blob write failed");
             return internal();
         }
     };
@@ -495,7 +495,7 @@ where
         Ok(value) => value,
         Err(error) => {
             cleanup_uncommitted(&state.0.blobs, &blob, "invalid update command").await;
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment update command projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment update command projection failed");
             return internal();
         }
     };
@@ -510,25 +510,25 @@ where
         }
         Err(error) => {
             cleanup_uncommitted(&state.0.blobs, &blob, "failed update persistence").await;
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment update persistence failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment update persistence failed");
             return internal();
         }
     };
     let bound = match fact.bind(&viewer, &attachment) {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment update identity seal failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment update identity seal failed");
             return internal();
         }
     };
     let outcome = maintain_committed_update(bound, &BlobMaintenance(state.0.blobs.clone())).await;
     if let Err(error) = outcome.maintenance() {
-        tracing::warn!(error_chain=%crate::error::describe(error), "committed attachment update blob maintenance incomplete");
+        tracing::warn!(error_chain=%crate::foundation::error::describe(error), "committed attachment update blob maintenance incomplete");
     }
     let committed = outcome.committed();
     let changed = committed.changed();
     if let Err(error) = state.0.publisher.publish(&changed).await {
-        tracing::error!(error_chain=%crate::error::describe(&error), "committed attachment_changed publication failed");
+        tracing::error!(error_chain=%crate::foundation::error::describe(&error), "committed attachment_changed publication failed");
     }
     Json(record_json(committed.after())).into_response()
 }
@@ -565,20 +565,20 @@ where
             );
         }
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment delete persistence failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment delete persistence failed");
             return internal();
         }
     };
     let bound = match fact.bind(&viewer, &attachment) {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "attachment delete identity seal failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "attachment delete identity seal failed");
             return internal();
         }
     };
     let outcome = maintain_committed_delete(bound, &BlobMaintenance(state.0.blobs.clone())).await;
     if let Err(error) = outcome.maintenance() {
-        tracing::warn!(error_chain=%crate::error::describe(error), "committed attachment delete blob maintenance incomplete");
+        tracing::warn!(error_chain=%crate::foundation::error::describe(error), "committed attachment delete blob maintenance incomplete");
     }
     StatusCode::NO_CONTENT.into_response()
 }
@@ -825,8 +825,8 @@ impl fmt::Display for CombinedBlobMaintenanceFailures {
         write!(
             formatter,
             "primary [{}]; secondary [{}]",
-            crate::error::describe(&self.primary),
-            crate::error::describe(&self.secondary)
+            crate::foundation::error::describe(&self.primary),
+            crate::foundation::error::describe(&self.secondary)
         )
     }
 }
@@ -855,7 +855,7 @@ async fn cleanup_uncommitted<B: BlobStore>(
     cause: &'static str,
 ) {
     if let Err(error) = blobs.delete(blob).await {
-        tracing::warn!(error_chain=%crate::error::describe(&error), cause, "uncommitted attachment blob cleanup failed");
+        tracing::warn!(error_chain=%crate::foundation::error::describe(&error), cause, "uncommitted attachment blob cleanup failed");
     }
 }
 

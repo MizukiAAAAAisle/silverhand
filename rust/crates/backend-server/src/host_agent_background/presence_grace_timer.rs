@@ -14,7 +14,7 @@ use silverhand_backend_core::{
 };
 use tokio::task::JoinHandle;
 
-use crate::error;
+use crate::foundation::error;
 
 /// Publication of a decided presence fact on the app scope. Publishing is
 /// fallible because the live transport is, and it runs while the presence state

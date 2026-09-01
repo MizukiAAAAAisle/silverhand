@@ -35,7 +35,7 @@ use silverhand_backend_core::{
     viewer_read_model::viewer_workspace_sort::{ViewerSortState, WORKSPACE_SORT_LIST_KEY},
 };
 
-use crate::error;
+use crate::foundation::error;
 
 pub const WORKSPACES_PATH: &str = "/api/workspaces";
 

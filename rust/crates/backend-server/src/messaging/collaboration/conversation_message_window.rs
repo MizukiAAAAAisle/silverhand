@@ -71,7 +71,7 @@ async fn read<P: ConversationMessageWindowReadPort>(
         Ok(Err(refusal)) => return refusal_wire(refusal),
         Err(error) => {
             tracing::error!(
-                error_chain=%crate::error::describe(&error),
+                error_chain=%crate::foundation::error::describe(&error),
                 "conversation-message-window admission failed"
             );
             return internal();
@@ -88,7 +88,7 @@ async fn read<P: ConversationMessageWindowReadPort>(
                 Ok(response) => response,
                 Err(error) => {
                     tracing::error!(
-                        error_chain=%crate::error::describe(&error),
+                        error_chain=%crate::foundation::error::describe(&error),
                         "conversation-message-window wire projection failed"
                     );
                     internal()
@@ -96,7 +96,7 @@ async fn read<P: ConversationMessageWindowReadPort>(
             },
             Err(error) => {
                 tracing::error!(
-                    error_chain=%crate::error::describe(&error),
+                    error_chain=%crate::foundation::error::describe(&error),
                     "conversation-message-window identity seal failed"
                 );
                 internal()
@@ -105,7 +105,7 @@ async fn read<P: ConversationMessageWindowReadPort>(
         Ok(Err(refusal)) => refusal_wire(refusal),
         Err(error) => {
             tracing::error!(
-                error_chain=%crate::error::describe(&error),
+                error_chain=%crate::foundation::error::describe(&error),
                 "conversation-message-window projection failed"
             );
             internal()

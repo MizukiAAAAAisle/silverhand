@@ -49,7 +49,7 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
+use crate::foundation::error;
 
 /// The product route templates, in axum's `{id}` capture syntax.
 pub const AGENT_WORKSPACE_TREE_PATH: &str = "/api/agents/{id}/workspace/tree";

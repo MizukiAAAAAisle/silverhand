@@ -15,12 +15,12 @@ pub const MESSAGE_REACTION_CHANGED_EVENT: &str = "message_reaction_changed";
 /// Human mutation body (`POST`/`DELETE /api/messages/{id}/reactions`). The message id
 /// is a path coordinate, so the body carries only the emoji. A closed object: an unknown
 /// key is a native decode fault, an array-shaped body is rejected by the shared
-/// [`ObjectOnly`](crate::wire_admission::ObjectOnly) floor inside [`ValidatedJson`], and a
+/// [`ObjectOnly`](crate::foundation::wire_admission::ObjectOnly) floor inside [`ValidatedJson`], and a
 /// non-string `emoji` keeps axum's native typed rejection. There is NO garde rule — emoji
 /// grammar is a domain verdict resolved by [`ReactionEmoji`](silverhand_backend_core::conversation_messaging::messaging::collaboration::reaction::ReactionEmoji)
 /// under the write lock, never an admission-stage refusal.
 ///
-/// [`ValidatedJson`]: crate::wire_admission::ValidatedJson
+/// [`ValidatedJson`]: crate::foundation::wire_admission::ValidatedJson
 #[derive(Debug, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub(super) struct HumanReactRaw {

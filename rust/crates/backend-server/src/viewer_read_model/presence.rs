@@ -157,7 +157,7 @@ where
             Err(error) => {
                 tracing::error!(
                     user_id = %viewer.as_str(),
-                    error_chain = %crate::error::describe(&error),
+                    error_chain = %crate::foundation::error::describe(&error),
                     "presence: disconnect wall clock unavailable; evicting the connection without an offline instant"
                 );
                 self.timers.evict(viewer, connection_id);

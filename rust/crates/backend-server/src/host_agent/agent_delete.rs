@@ -92,8 +92,8 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
 use crate::foundation::clock::ProcessClock;
+use crate::foundation::error;
 use crate::host_agent_background::agent_deletion_resumer::{
     AgentDeletionResumer, DeletionFenceBinder, DeletionRunOutcome,
 };
@@ -492,7 +492,7 @@ fn confirmed(body: &Bytes) -> bool {
     // `confirm`, opening the consent gate off a shape TS rejects. `from_object_slice`
     // makes a top-level array/scalar a decode fault like any other — collapsing to the
     // single `false` refusal — without this leaf re-rolling an object visitor.
-    crate::wire_admission::from_object_slice::<ConfirmBody>(body)
+    crate::foundation::wire_admission::from_object_slice::<ConfirmBody>(body)
         .map(|parsed| parsed.confirm)
         .unwrap_or_default()
 }

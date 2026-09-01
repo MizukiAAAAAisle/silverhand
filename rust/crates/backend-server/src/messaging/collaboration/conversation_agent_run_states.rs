@@ -239,7 +239,7 @@ where
         Ok(Ok(fact)) => {
             if let Err(failure) = fact.bind(&viewer, &conversation) {
                 tracing::error!(
-                    error_chain = %crate::error::describe(&failure),
+                    error_chain = %crate::foundation::error::describe(&failure),
                     "conversation-agent-run-states admission identity seal failed"
                 );
                 return internal();
@@ -253,7 +253,7 @@ where
         }
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "conversation-agent-run-states admission failed"
             );
             return internal();
@@ -264,7 +264,7 @@ where
         Ok(states) => states,
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "conversation-agent-run-states owner snapshot failed"
             );
             return internal();
@@ -278,7 +278,7 @@ where
         Ok(states) => states,
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "conversation-agent-run-states snapshot identity seal failed"
             );
             return internal();

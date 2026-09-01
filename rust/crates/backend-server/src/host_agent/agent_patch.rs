@@ -14,7 +14,7 @@
 //!     (or system) may; anyone else who could merely *see* it gets `403
 //!     {"error":"forbidden"}`.
 //!  3. WIRE ADMISSION — decode and validate the body through the shared
-//!     [`ValidatedJson`](crate::wire_admission::ValidatedJson) extractor plus the
+//!     [`ValidatedJson`](crate::foundation::wire_admission::ValidatedJson) extractor plus the
 //!     `TryFrom<AgentPatchRaw>` cross-field step. Two failure planes, kept distinct:
 //!     a STRUCTURAL fault (malformed JSON, a wrong-typed field, a `runtime` key, a
 //!     missing `Content-Type`) keeps axum's native `Json` rejection unchanged
@@ -92,10 +92,10 @@ use silverhand_backend_core::{
     identity_access::user_identity::DisplayName,
 };
 
-use crate::error;
 use crate::foundation::clock::ProcessClock;
-use crate::wire_admission::{self, ValidatedJson, patch_within_utf16_max};
-use crate::wire_patch::{Forbidden, PatchField, RequiredPatchField};
+use crate::foundation::error;
+use crate::foundation::wire_admission::{self, ValidatedJson, patch_within_utf16_max};
+use crate::foundation::wire_patch::{Forbidden, PatchField, RequiredPatchField};
 
 use crate::agent_wire::{AgentDto, reproject_committed_agent};
 
@@ -1272,7 +1272,7 @@ mod tests {
 ///
 /// Scope is the SEMANTIC value plane only: is a JSON object admitted, and to what
 /// op-form. HTTP status classification (malformed-JSON `400` vs semantic `422` vs `415`)
-/// is the extractor matrix in [`crate::wire_admission`], not this corpus — so a
+/// is the extractor matrix in [`crate::foundation::wire_admission`], not this corpus — so a
 /// wrong-typed field, which the extractor path would reject as a native decode fault,
 /// folds here into the single "reject" verdict.
 #[cfg(test)]

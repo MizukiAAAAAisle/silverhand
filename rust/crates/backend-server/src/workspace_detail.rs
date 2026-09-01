@@ -37,7 +37,7 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
+use crate::foundation::error;
 use crate::workspaces::ViewerWorkspaceDto;
 
 /// The product route template, in axum's `{id}` capture syntax. A request to

@@ -647,7 +647,7 @@ where
         Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
         Err(cause) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&cause),
+                error_chain = %crate::foundation::error::describe(&cause),
                 "event websocket session authentication failed"
             );
             return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
@@ -909,7 +909,7 @@ async fn connection<A, S>(
                     }
                     Some(ConnectionEvent::Failure(cause)) => {
                         tracing::error!(
-                            error_chain = %crate::error::describe(cause.as_ref()),
+                            error_chain = %crate::foundation::error::describe(cause.as_ref()),
                             "scope event delivery failed"
                         );
                         let _ = close(&mut socket, 1011, "internal_error").await;
@@ -1014,7 +1014,7 @@ where
                                 Ok(false) => break,
                                 Err(cause) => {
                                     tracing::error!(
-                                        error_chain = %crate::error::describe(&cause),
+                                        error_chain = %crate::foundation::error::describe(&cause),
                                         "scope replay authorization failed"
                                     );
                                     close(socket, 1011, "internal_error").await?;
@@ -1148,7 +1148,7 @@ where
         }
         Err(cause) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&cause),
+                error_chain = %crate::foundation::error::describe(&cause),
                 "scope subscription authorization failed"
             );
             close(socket, 1011, "internal_error").await?;
@@ -1165,7 +1165,7 @@ async fn hub_or_close<T>(
         Ok(value) => Ok(value),
         Err(cause) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&cause),
+                error_chain = %crate::foundation::error::describe(&cause),
                 "scope event registry failed"
             );
             close(socket, 1011, "internal_error").await?;
@@ -1336,7 +1336,7 @@ async fn send_server(socket: &mut WebSocket, frame: &ServerFrame<'_>) -> Result<
 async fn send_json(socket: &mut WebSocket, frame: &impl Serialize) -> Result<(), ()> {
     let json = serde_json::to_string(frame).map_err(|cause| {
         tracing::error!(
-            error_chain = %crate::error::describe(&cause),
+            error_chain = %crate::foundation::error::describe(&cause),
             "scope frame serialization failed"
         );
     })?;

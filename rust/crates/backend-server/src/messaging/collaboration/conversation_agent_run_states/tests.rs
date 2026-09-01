@@ -363,7 +363,7 @@ async fn production_visibility_authority_gates_the_live_owner() {
 fn owner_snapshot_failure_preserves_the_concrete_daemon_cause_chain() {
     let failure = RunStateSnapshotFailure::owner(DaemonRuntimeEventError::StatePoisoned);
     assert_eq!(
-        crate::error::describe(&failure),
+        crate::foundation::error::describe(&failure),
         "live agent run-state owner snapshot failed: daemon runtime event state lock was poisoned"
     );
 }

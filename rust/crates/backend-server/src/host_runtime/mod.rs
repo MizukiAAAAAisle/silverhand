@@ -18,8 +18,8 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
-use crate::wire_admission::ValidatedJson;
+use crate::foundation::error;
+use crate::foundation::wire_admission::ValidatedJson;
 
 pub mod agent_materialize;
 pub mod cascade_effects;

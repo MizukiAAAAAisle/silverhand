@@ -59,9 +59,9 @@ use silverhand_backend_core::{
     host_runtime::aftermath::DaemonConnectionControl,
 };
 
-use crate::error;
-use crate::wire_admission::from_object_slice;
-use crate::wire_patch::RequiredPatchField;
+use crate::foundation::error;
+use crate::foundation::wire_admission::from_object_slice;
+use crate::foundation::wire_patch::RequiredPatchField;
 
 use super::{ErrorBody, host_not_found, internal_error};
 

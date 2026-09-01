@@ -175,7 +175,7 @@ where
     };
     let admitted = match admit_request(request) {
         Ok(admitted) => admitted,
-        Err(()) => return crate::wire_admission::invalid_input(),
+        Err(()) => return crate::foundation::wire_admission::invalid_input(),
     };
 
     let source = match state
@@ -188,7 +188,7 @@ where
         Ok(Err(StaleMessageResolutionAdmissionRefusal::Forbidden)) => return forbidden(),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "stale-message resolution post authority failed"
             );
             return internal();
@@ -198,7 +198,7 @@ where
         Ok(bound) => bound,
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "stale-message resolution admission identity seal failed"
             );
             return internal();
@@ -215,7 +215,7 @@ where
         Ok(Err(CapabilityDenied)) => return capability_denied(),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "stale-message resolution capability authority failed"
             );
             return internal();
@@ -292,14 +292,14 @@ impl TryFrom<StaleResolutionBody> for AdmittedRequest {
 /// unreadable body arrived as an empty object, so its required fields are simply missing.
 ///
 /// The top-level object floor (rejecting a value-shaped array serde would bind to the
-/// struct positionally) is the shared [`ObjectOnly<T>`](crate::wire_admission::ObjectOnly)
+/// struct positionally) is the shared [`ObjectOnly<T>`](crate::foundation::wire_admission::ObjectOnly)
 /// map-only wrapper from the `ValidatedJson` anchor (#2246), consumed here rather than
 /// restated as a route-local `Value` check. This route decodes Value-first to keep the
 /// bounded-body/identity ordering, so duplicate keys were already collapsed last-wins at the
 /// `serde_json::from_slice::<Value>` parse — a route-order exception, not native duplicate
 /// rejection.
 fn admit_request(value: Value) -> Result<AdmittedRequest, ()> {
-    let crate::wire_admission::ObjectOnly(raw): crate::wire_admission::ObjectOnly<
+    let crate::foundation::wire_admission::ObjectOnly(raw): crate::foundation::wire_admission::ObjectOnly<
         StaleResolutionBody,
     > = serde_json::from_value(value).map_err(|_| ())?;
     raw.validate().map_err(|_| ())?;

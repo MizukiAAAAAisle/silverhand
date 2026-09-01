@@ -70,8 +70,8 @@ use super::{
 };
 use crate::{
     agent_wire::{AgentDto, reproject_committed_agent},
-    error,
     foundation::clock::ProcessClock,
+    foundation::error,
 };
 
 /// The dedicated avatar route path. The `{aid}` segment is what the self-pin layer binds;

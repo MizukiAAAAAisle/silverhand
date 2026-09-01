@@ -322,9 +322,9 @@ fn internal(body: &'static str) -> Response {
         .into_response()
 }
 
-fn authority_failure(cause: &crate::error::BoundaryFailure) -> Response {
+fn authority_failure(cause: &crate::foundation::error::BoundaryFailure) -> Response {
     tracing::error!(
-        error_chain = %crate::error::describe(cause),
+        error_chain = %crate::foundation::error::describe(cause),
         "message-send pre-send authority failed"
     );
     internal("Internal Server Error")
@@ -343,7 +343,9 @@ fn human_wire(refusal: HumanRefusal) -> Response {
             gate_refusal(StatusCode::FORBIDDEN, "forbidden")
         }
         HumanRefusal::Authority(cause) => authority_failure(&cause),
-        HumanRefusal::Payload(PayloadRefusal::Invalid) => crate::wire_admission::invalid_input(),
+        HumanRefusal::Payload(PayloadRefusal::Invalid) => {
+            crate::foundation::wire_admission::invalid_input()
+        }
         HumanRefusal::Payload(PayloadRefusal::ContentTooLarge { actual_bytes }) => {
             human_content_too_large(actual_bytes).into_response()
         }
@@ -353,7 +355,9 @@ fn human_wire(refusal: HumanRefusal) -> Response {
 
 fn agent_wire(refusal: AgentRefusal) -> Response {
     match refusal {
-        AgentRefusal::Payload(PayloadRefusal::Invalid) => crate::wire_admission::invalid_input(),
+        AgentRefusal::Payload(PayloadRefusal::Invalid) => {
+            crate::foundation::wire_admission::invalid_input()
+        }
         AgentRefusal::Payload(PayloadRefusal::ContentTooLarge { actual_bytes }) => {
             agent_content_too_large(actual_bytes).into_response()
         }

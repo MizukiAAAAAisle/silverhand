@@ -39,7 +39,7 @@ use silverhand_backend_core::{
     identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 
-use crate::{error, host_agent::host_attachment::HostAttachment};
+use crate::{foundation::error, host_agent::host_attachment::HostAttachment};
 
 /// The product route template, in axum's `{id}` capture syntax.
 pub const AVAILABILITY_PATH: &str = "/api/agents/{id}/availability";

@@ -107,7 +107,7 @@ where
         Ok(Ok(entries)) => list_success(&entries),
         Ok(Err(refusal)) => list_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain = %crate::error::describe(&error), "saved list read failed");
+            tracing::error!(error_chain = %crate::foundation::error::describe(&error), "saved list read failed");
             internal_error_response()
         }
     }
@@ -225,7 +225,7 @@ where
         Ok(Ok(execution)) => save_success(execution),
         Ok(Err(_)) => message_not_found(),
         Err(error) => {
-            tracing::error!(error_chain = %crate::error::describe(&error), "save message failed");
+            tracing::error!(error_chain = %crate::foundation::error::describe(&error), "save message failed");
             internal_error_response()
         }
     }
@@ -251,7 +251,7 @@ where
         Ok(Ok(execution)) => unsave_success(execution),
         Ok(Err(_)) => message_not_found(),
         Err(error) => {
-            tracing::error!(error_chain = %crate::error::describe(&error), "unsave message failed");
+            tracing::error!(error_chain = %crate::foundation::error::describe(&error), "unsave message failed");
             internal_error_response()
         }
     }

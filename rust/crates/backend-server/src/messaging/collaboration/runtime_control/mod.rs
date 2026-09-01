@@ -113,7 +113,7 @@ where
         Ok(Err(StartRuntimeRefusal::Provider(refusal))) => start_refusal(refusal),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "conversation runtime start failed"
             );
             internal_error()
@@ -154,7 +154,7 @@ where
             Ok(None) => legacy_stop_refusal(),
             Err(failure) => {
                 tracing::error!(
-                    error_chain = %crate::error::describe(&failure),
+                    error_chain = %crate::foundation::error::describe(&failure),
                     "conversation runtime-stop admission failed"
                 );
                 internal_error()
@@ -175,7 +175,7 @@ where
         Ok(Err(HardStopRuntimeRefusal::Provider(refusal))) => hard_stop_refusal(refusal),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "conversation runtime hard-stop failed"
             );
             internal_error()
@@ -215,7 +215,7 @@ where
         }
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "conversation runtime clear-session failed"
             );
             internal_error()

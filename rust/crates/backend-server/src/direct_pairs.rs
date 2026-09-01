@@ -17,7 +17,7 @@ use silverhand_backend_core::{
     foundation::identity::UserId,
 };
 
-use crate::{error, messaging::author_wire::principal_avatar_url};
+use crate::{foundation::error, messaging::author_wire::principal_avatar_url};
 
 pub const DIRECT_PAIRS_PATH: &str = "/api/direct-pairs";
 

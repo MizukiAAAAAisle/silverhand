@@ -55,8 +55,8 @@ use serde::Serialize;
 use silverhand_backend_core::foundation::persistence::WriteProbe;
 
 use crate::{
-    error,
     foundation::clock::ProcessClock,
+    foundation::error,
     ops::deployment::{DeploymentMode, ServerMode},
 };
 

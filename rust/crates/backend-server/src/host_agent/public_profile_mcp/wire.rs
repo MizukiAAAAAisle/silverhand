@@ -24,7 +24,7 @@ use silverhand_backend_core::identity_access::agent_profile_mcp::{
     McpProbeServerInfo, McpProbeTool,
 };
 
-use crate::wire_patch::RequiredPatchField;
+use crate::foundation::wire_patch::RequiredPatchField;
 
 // ===========================================================================
 // GET — raw read body.
@@ -44,7 +44,7 @@ pub(crate) struct ReadConfigResponse {
 /// The probe request: `{ server_name, include_tools? }`, strict. `server_name` is the
 /// RAW user-visible name (never the `silverhand_<scope>__` runtime spelling).
 ///
-/// Admission rides the frozen [`ValidatedJson`](crate::wire_admission::ValidatedJson)
+/// Admission rides the frozen [`ValidatedJson`](crate::foundation::wire_admission::ValidatedJson)
 /// model: a malformed body is a native `400`; a missing/duplicate/unknown key, a
 /// wrong-typed field, a present `include_tools: null`, or a top-level NON-object shape
 /// (an array such as `["srv", true]`, a scalar, `null`) is a native `422` — the shared

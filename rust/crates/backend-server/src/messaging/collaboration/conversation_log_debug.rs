@@ -331,7 +331,7 @@ where
         Ok(fact) => status_response(&fact, false),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "conversation log-debug local status identity seal failed"
             );
             internal()
@@ -371,7 +371,7 @@ where
             Ok(now) => now,
             Err(failure) => {
                 tracing::error!(
-                    error_chain = %crate::error::describe(&failure),
+                    error_chain = %crate::foundation::error::describe(&failure),
                     "conversation log-debug clock failed"
                 );
                 return internal();
@@ -397,7 +397,7 @@ where
             Ok(fact) => fact,
             Err(failure) => {
                 tracing::error!(
-                    error_chain = %crate::error::describe(&failure),
+                    error_chain = %crate::foundation::error::describe(&failure),
                     "conversation log-debug local enable seal failed"
                 );
                 return internal();
@@ -414,7 +414,7 @@ where
             Ok(fact) => fact,
             Err(failure) => {
                 tracing::error!(
-                    error_chain = %crate::error::describe(&failure),
+                    error_chain = %crate::foundation::error::describe(&failure),
                     "conversation log-debug local disable seal failed"
                 );
                 return internal();
@@ -462,7 +462,7 @@ async fn admit<P: ConversationLogDebugAdmissionPort>(
             .map(|_| ())
             .map_err(|failure| {
                 tracing::error!(
-                    error_chain = %crate::error::describe(&failure),
+                    error_chain = %crate::foundation::error::describe(&failure),
                     "conversation log-debug admission identity seal failed"
                 );
                 Box::new(internal())
@@ -476,7 +476,7 @@ async fn admit<P: ConversationLogDebugAdmissionPort>(
         }
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "conversation log-debug admission failed"
             );
             Err(Box::new(internal()))

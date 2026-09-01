@@ -34,7 +34,7 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
+use crate::foundation::error;
 
 /// The product route template, in axum's `{id}` capture syntax.
 pub const HOST_RESOURCES_PATH: &str = "/api/hosts/{id}/resources";

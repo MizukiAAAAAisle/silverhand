@@ -234,9 +234,9 @@ mod tests {
     /// derived struct visitor would fill fields from a sequence, and only the
     /// shared `ObjectOnly<T>` map floor rejects that.
     ///
-    /// [`from_object_slice`]: crate::wire_admission::from_object_slice
+    /// [`from_object_slice`]: crate::foundation::wire_admission::from_object_slice
     fn decode(body: &str) -> Result<AddMemberRaw, serde_json::Error> {
-        crate::wire_admission::from_object_slice::<AddMemberRaw>(body.as_bytes())
+        crate::foundation::wire_admission::from_object_slice::<AddMemberRaw>(body.as_bytes())
     }
 
     /// Classify a structurally valid body into a product arm, or `Err(())` for a

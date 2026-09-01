@@ -33,7 +33,7 @@ use silverhand_backend_core::{
 };
 
 use super::wire::{AgentProfileDto, agent_profile_dto};
-use crate::error;
+use crate::foundation::error;
 
 /// The product route template. `{aid}` is consumed by the credential layer, which
 /// self-pins it; this handler trusts the resulting principal.

@@ -29,7 +29,7 @@ use silverhand_backend_core::{
     host_runtime::runtime_credential::RuntimePrincipal,
 };
 
-use crate::wire_admission::{ValidatedJson, ValidatedJsonRejection, invalid_input};
+use crate::foundation::wire_admission::{ValidatedJson, ValidatedJsonRejection, invalid_input};
 use wire::{
     AgentReactRaw, HumanReactRaw, detail_success, internal_error, internal_error_response,
     invalid_reaction, mutation_refusal, mutation_success, not_found,
@@ -334,7 +334,7 @@ where
         Ok(Ok(execution)) => {
             if let Some(failure) = execution.publication_failure() {
                 tracing::error!(
-                    error_chain = %crate::error::describe(failure),
+                    error_chain = %crate::foundation::error::describe(failure),
                     "reaction publication failed"
                 );
             }
@@ -342,7 +342,7 @@ where
         }
         Ok(Err(refusal)) => mutation_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain = %crate::error::describe(&error), "reaction mutation failed");
+            tracing::error!(error_chain = %crate::foundation::error::describe(&error), "reaction mutation failed");
             internal_error_response()
         }
     }
@@ -375,7 +375,7 @@ where
         Ok(Ok(detail)) => detail_success(&detail),
         Ok(Err(_)) => not_found(),
         Err(error) => {
-            tracing::error!(error_chain = %crate::error::describe(&error), "reaction detail read failed");
+            tracing::error!(error_chain = %crate::foundation::error::describe(&error), "reaction detail read failed");
             internal_error_response()
         }
     }

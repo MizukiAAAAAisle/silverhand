@@ -73,8 +73,8 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
 use crate::foundation::clock::ProcessClock;
+use crate::foundation::error;
 
 use super::agent_avatar::AGENT_AVATAR_PATH;
 use crate::agent_wire::{AgentDto, reproject_committed_agent};

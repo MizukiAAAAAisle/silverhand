@@ -33,7 +33,7 @@ use silverhand_backend_core::{
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 use crate::{
-    error,
+    foundation::error,
     foundation::{
         bearer::strict_bearer_credential,
         clock::{ProcessClock, SystemProcessClock},

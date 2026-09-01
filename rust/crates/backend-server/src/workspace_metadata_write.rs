@@ -58,7 +58,7 @@
 //! To keep that ordering the handler takes an owned `Request` (never an eager body
 //! extractor) and decodes it with a DEFERRED `Json::<ObjectOnly<Raw>>::from_request`
 //! only after the floor admits, so a `404`/`403` caller never has their body
-//! buffered. The shared [`ObjectOnly<T>`](crate::wire_admission::ObjectOnly) map
+//! buffered. The shared [`ObjectOnly<T>`](crate::foundation::wire_admission::ObjectOnly) map
 //! floor rejects a top-level array/scalar/null (a derived struct visitor would
 //! otherwise decode a JSON array into fields positionally); the native decode owns
 //! the remaining structural rejections (malformed → `400`, wrong
@@ -126,10 +126,10 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
-use crate::wire_admission;
-use crate::wire_admission::ObjectOnly;
-use crate::wire_patch::{PatchField, RequiredPatchField};
+use crate::foundation::error;
+use crate::foundation::wire_admission;
+use crate::foundation::wire_admission::ObjectOnly;
+use crate::foundation::wire_patch::{PatchField, RequiredPatchField};
 use crate::workspaces::ViewerWorkspaceDto;
 
 /// The rename/describe route template, in axum's `{id}` capture syntax. An empty
@@ -202,7 +202,7 @@ pub trait WorkspaceRenameFanout: Clone + Send + Sync + 'static {
 /// the channels were simply not told.
 ///
 /// `Display`/`Error` are implemented by hand rather than derived, because this
-/// module imports the `crate::error` module, which shadows `thiserror`'s `#[error]`
+/// module imports the `crate::foundation::error` module, which shadows `thiserror`'s `#[error]`
 /// derive helper in attribute position.
 #[derive(Debug)]
 pub struct WorkspaceRenameFanoutFailure {

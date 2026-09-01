@@ -59,7 +59,7 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
+use crate::foundation::error;
 use crate::messaging::collaboration::runtime_control::placement_refusal;
 
 /// The product route template, in axum's `{id}` capture syntax.

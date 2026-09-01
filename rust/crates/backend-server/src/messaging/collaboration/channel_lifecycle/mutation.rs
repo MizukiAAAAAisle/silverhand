@@ -116,7 +116,7 @@ where
         Ok(Err(refusal)) => archive_refusal(refusal),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "channel archive failed"
             );
             internal()
@@ -168,7 +168,7 @@ where
                 Ok(Err(refusal)) => visibility_refusal(refusal),
                 Err(failure) => {
                     tracing::error!(
-                        error_chain = %crate::error::describe(&failure),
+                        error_chain = %crate::foundation::error::describe(&failure),
                         "channel visibility mutation failed"
                     );
                     internal()
@@ -193,7 +193,7 @@ where
                 Ok(Err(refusal)) => rename_refusal(refusal, &requested),
                 Err(failure) => {
                     tracing::error!(
-                        error_chain = %crate::error::describe(&failure),
+                        error_chain = %crate::foundation::error::describe(&failure),
                         "channel rename failed"
                     );
                     internal()
@@ -242,7 +242,7 @@ async fn admit<P: ChannelMutationAdmissionPort>(
             .map(|_| ())
             .map_err(|failure| {
                 tracing::error!(
-                    error_chain = %crate::error::describe(&failure),
+                    error_chain = %crate::foundation::error::describe(&failure),
                     "channel mutation admission identity seal failed"
                 );
                 AdmissionRefusal::Internal
@@ -251,7 +251,7 @@ async fn admit<P: ChannelMutationAdmissionPort>(
         Ok(Err(ChannelMutationAdmissionRefusal::Forbidden)) => Err(AdmissionRefusal::Forbidden),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "channel mutation admission failed"
             );
             Err(AdmissionRefusal::Internal)
@@ -478,7 +478,7 @@ fn report_effect(
 ) {
     if let Some(failure) = failure {
         tracing::error!(
-            error_chain = %crate::error::describe(failure),
+            error_chain = %crate::foundation::error::describe(failure),
             operation,
             "committed channel mutation aftermath failed"
         );

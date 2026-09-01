@@ -16,7 +16,7 @@ use silverhand_backend_core::{
 };
 
 use crate::{
-    error,
+    foundation::error,
     host_control::{
         admission::HostAdmission,
         status_seed::{HostStatusSeeds, SeedRead, SeededStatus},

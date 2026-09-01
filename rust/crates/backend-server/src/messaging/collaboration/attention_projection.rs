@@ -47,7 +47,7 @@ async fn badges<P: AttentionProjectionPort>(
     match state.0.badges(&viewer).await {
         Ok(value) => badge_wire(&value),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error),"attention badge projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"attention badge projection failed");
             internal()
         }
     }
@@ -78,7 +78,7 @@ async fn modes<P: AttentionProjectionPort>(
         Ok(Ok(value)) => modes_wire(&workspace, &value),
         Ok(Err(AttentionModesRefusal::Forbidden)) => error(StatusCode::FORBIDDEN, "forbidden"),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error),"attention mode projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"attention mode projection failed");
             internal()
         }
     }

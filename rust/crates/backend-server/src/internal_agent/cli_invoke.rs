@@ -517,7 +517,7 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    use crate::wire_admission::ValidatedJson;
+    use crate::foundation::wire_admission::ValidatedJson;
 
     use super::*;
 

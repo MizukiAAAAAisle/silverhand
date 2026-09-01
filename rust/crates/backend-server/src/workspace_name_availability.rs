@@ -39,7 +39,7 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
+use crate::foundation::error;
 
 /// The product route template. A STATIC segment under `/api/workspaces`; when it
 /// is merged alongside the `/api/workspaces/{id}` detail route, axum's router

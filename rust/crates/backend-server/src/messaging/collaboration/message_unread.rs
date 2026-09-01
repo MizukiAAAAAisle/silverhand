@@ -68,7 +68,7 @@ where
         Ok(Ok(value)) => match value.bind(&requested) {
             Ok(value) => workspace_success(&value),
             Err(error) => {
-                tracing::error!(error_chain=%crate::error::describe(&error),"workspace-message-unread identity seal failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(&error),"workspace-message-unread identity seal failed");
                 internal()
             }
         },
@@ -79,7 +79,7 @@ where
             error(StatusCode::FORBIDDEN, "forbidden")
         }
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error),"workspace-message-unread projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"workspace-message-unread projection failed");
             internal()
         }
     }
@@ -100,12 +100,12 @@ where
         Ok(value) => match value.bind(&viewer) {
             Ok(value) => summary_success(&value),
             Err(error) => {
-                tracing::error!(error_chain=%crate::error::describe(&error),"message-unread-summary identity seal failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(&error),"message-unread-summary identity seal failed");
                 internal()
             }
         },
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error),"message-unread-summary projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"message-unread-summary projection failed");
             internal()
         }
     }
@@ -131,7 +131,7 @@ where
         Ok(Ok(value)) => match value.bind(&requested) {
             Ok(value) => conversation_success(&value),
             Err(error) => {
-                tracing::error!(error_chain=%crate::error::describe(&error),"conversation-message-unread identity seal failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(&error),"conversation-message-unread identity seal failed");
                 internal()
             }
         },
@@ -142,7 +142,7 @@ where
             error(StatusCode::FORBIDDEN, "forbidden")
         }
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error),"conversation-message-unread projection failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"conversation-message-unread projection failed");
             internal()
         }
     }
@@ -161,7 +161,7 @@ fn workspace_success(value: &BoundWorkspaceMessageUnread) -> Response {
     let total = match value.total() {
         Ok(value) => value,
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error),"workspace-message-unread total overflowed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"workspace-message-unread total overflowed");
             return internal();
         }
     };

@@ -62,13 +62,13 @@ async fn observe_route<P: ObservationPort, A: ObservationAftermath>(
     match observe(&state.0.port, &state.0.aftermath, viewer, batch).await {
         Ok(Ok(done)) => {
             if let Some(error) = done.first_failure() {
-                tracing::error!(error_chain=%crate::error::describe(error),"Activity observe effect failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(error),"Activity observe effect failed");
             }
             Json(json!({"changed":done.committed().changed_anything()})).into_response()
         }
         Ok(Err(refusal)) => refusal_response(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error),"Activity observe failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"Activity observe failed");
             internal()
         }
     }

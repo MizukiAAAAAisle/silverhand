@@ -71,7 +71,7 @@ use silverhand_backend_core::{
 };
 use tokio::task::JoinHandle;
 
-use crate::error;
+use crate::foundation::error;
 
 /// Binds a purge fence to the daemon connection generation that owns a host, and reports
 /// the live generation id for the scheduler's book-keeping.

@@ -38,7 +38,7 @@ use silverhand_backend_core::{
     viewer_read_model::user_presence_cold_read::UserPresenceReadModel,
 };
 
-use crate::error;
+use crate::foundation::error;
 
 pub const PRESENCE_PATH: &str = "/api/presence";
 

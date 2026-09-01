@@ -57,7 +57,7 @@ async fn detail<P: ChannelDetailReadPort>(
             Ok(value) => success(&value),
             Err(failure) => {
                 tracing::error!(
-                    error_chain = %crate::error::describe(&failure),
+                    error_chain = %crate::foundation::error::describe(&failure),
                     "channel-detail identity seal failed"
                 );
                 internal()
@@ -69,7 +69,7 @@ async fn detail<P: ChannelDetailReadPort>(
         Ok(Err(ChannelDetailRefusal::Forbidden)) => error(StatusCode::FORBIDDEN, "forbidden"),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::error::describe(&failure),
+                error_chain = %crate::foundation::error::describe(&failure),
                 "channel-detail projection failed"
             );
             internal()

@@ -64,8 +64,8 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
-use crate::wire_admission::ValidatedJson;
+use crate::foundation::error;
+use crate::foundation::wire_admission::ValidatedJson;
 use wire::{ProbeRequest, ReadConfigResponse, data_plane_error, probe_outcome_wire};
 
 /// `GET`/`POST` share the config path; the probe is a distinct suffix.

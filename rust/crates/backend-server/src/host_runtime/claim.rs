@@ -50,9 +50,9 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::error;
-use crate::wire_admission::{ValidatedJson, invalid_input};
-use crate::wire_patch::RequiredPatchField;
+use crate::foundation::error;
+use crate::foundation::wire_admission::{ValidatedJson, invalid_input};
+use crate::foundation::wire_patch::RequiredPatchField;
 
 use super::{
     ErrorBody,

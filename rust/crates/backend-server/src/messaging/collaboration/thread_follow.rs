@@ -82,13 +82,13 @@ async fn read<P: ThreadFollowPort, A: ThreadFollowAftermath>(
         Ok(Ok(value)) => match value.bind(&viewer, &conversation, &message) {
             Ok(value) => state_success(&value),
             Err(error) => {
-                tracing::error!(error_chain=%crate::error::describe(&error), "thread-follower state identity seal failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(&error), "thread-follower state identity seal failed");
                 internal()
             }
         },
         Ok(Err(refusal)) => state_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "thread-follower state failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "thread-follower state failed");
             internal()
         }
     }
@@ -118,13 +118,13 @@ async fn follow<P: ThreadFollowPort, A: ThreadFollowAftermath>(
     {
         Ok(Ok(execution)) => {
             if let Some(failure) = execution.publication_failure() {
-                tracing::error!(error_chain=%crate::error::describe(failure), "committed thread-follow unread publication failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(failure), "committed thread-follow unread publication failed");
             }
             follow_success(execution.committed())
         }
         Ok(Err(refusal)) => follow_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "thread-follow write failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "thread-follow write failed");
             internal()
         }
     }
@@ -154,13 +154,13 @@ async fn unfollow<P: ThreadFollowPort, A: ThreadFollowAftermath>(
     {
         Ok(Ok(execution)) => {
             if let Some(failure) = execution.publication_failure() {
-                tracing::error!(error_chain=%crate::error::describe(failure), "committed thread-unfollow unread publication failed");
+                tracing::error!(error_chain=%crate::foundation::error::describe(failure), "committed thread-unfollow unread publication failed");
             }
             unfollow_success(execution.committed())
         }
         Ok(Err(refusal)) => unfollow_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::error::describe(&error), "thread-unfollow write failed");
+            tracing::error!(error_chain=%crate::foundation::error::describe(&error), "thread-unfollow write failed");
             internal()
         }
     }
