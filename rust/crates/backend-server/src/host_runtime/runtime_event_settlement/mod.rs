@@ -1,4 +1,4 @@
-//! Typed production owners for daemon runtime status, activity and diagnostics.
+//! Typed settlement authority for daemon runtime state, activity, and diagnostics.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -14,27 +14,134 @@ use serde::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, DaemonInstanceId, HostId},
+    foundation::identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeEventTime, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
     host_runtime::runtime_event::{
         CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort, ProjectRuntimeStatus,
-        RefineRuntimeToolCallInput, RuntimeActivityFact, RuntimeActivityKind,
-        RuntimeActivityPayload, RuntimeEventAdmission, RuntimeExitCommitResult,
-        RuntimeExitDisposition, RuntimeObservedStatus, RuntimeStatusTarget, StampRuntimePresence,
-        UpsertRuntimeTextActivity,
+        RefineRuntimeToolCallInput, RefinedRuntimeActivity, RuntimeActivityFact,
+        RuntimeActivityKind, RuntimeActivityPayload, RuntimeEventAdmission,
+        RuntimeExitCommitResult, RuntimeExitDisposition, RuntimeObservedStatus,
+        RuntimeStatusTarget, StampRuntimePresence, UpsertRuntimeTextActivity,
     },
 };
 
-use crate::{
-    foundation::{scope_event_transport::ScopeEventHubError, scope_event_wire::DaemonSideEvent},
-    host_runtime::host_control::status_seed::{
-        AttachedStatusCustody, CustodyUnavailable, HostRuntimeActivity,
-    },
-    host_runtime::scope_event_publishers::HubHostRuntimeEvents,
+use crate::host_runtime::host_control::status_seed::{
+    AttachedStatusCustody, CustodyUnavailable, HostRuntimeActivity,
 };
+
+/// A transport-neutral, source-preserving failure from an already-authorized
+/// live projection. Durable truth has already committed when this error is
+/// retained for a drain directive.
+#[derive(Debug)]
+pub(crate) struct LiveProjectionFailure(Box<dyn Error + Send + Sync>);
+
+impl LiveProjectionFailure {
+    pub(crate) fn from_source(source: impl Error + Send + Sync + 'static) -> Self {
+        Self(Box::new(source))
+    }
+}
+
+impl fmt::Display for LiveProjectionFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("daemon runtime live projection failed")
+    }
+}
+
+impl Error for LiveProjectionFailure {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ConversationRuntimeProjectionFact {
+    AgentActivity {
+        conversation: ConversationId,
+        state: AgentRunStateWire,
+    },
+    AgentInitTimeout {
+        conversation: ConversationId,
+        agent: AgentId,
+        reason: InitTimeoutReason,
+        elapsed_ms: i64,
+        timeout_ms: i64,
+        retrying: bool,
+        retry_attempt: i64,
+        max_retries: i64,
+        cooldown_until: Option<i64>,
+    },
+    CompactionStale {
+        conversation: ConversationId,
+        agent: AgentId,
+        elapsed_ms: i64,
+    },
+    AgentEvent {
+        conversation: ConversationId,
+        agent: AgentId,
+        event: ParsedEventWire,
+    },
+    Activity {
+        id: i64,
+        fact: RuntimeActivityFact,
+    },
+    RefinedToolCall {
+        conversation: ConversationId,
+        agent: AgentId,
+        activity: RefinedRuntimeActivity,
+    },
+}
+
+pub(crate) trait ConversationRuntimeProjectionPort: Send + Sync {
+    fn publish(&self, fact: ConversationRuntimeProjectionFact)
+    -> Result<(), LiveProjectionFailure>;
+}
+
+pub(crate) trait AgentPresenceEffectPort: Send + Sync {
+    fn publish(&self, viewers: &[UserId], agent: &AgentId) -> Result<(), LiveProjectionFailure>;
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum RuntimeStatusProjectionUpdate {
+    Active {
+        cli_session_id: Option<String>,
+    },
+    StartingRetry {
+        retry_attempt: i64,
+        max_retries: i64,
+        timeout_reason: Option<InitTimeoutReason>,
+    },
+    CrashedCooldown {
+        cooldown_until: i64,
+        attempts_exhausted: i64,
+    },
+    Exit {
+        status: RuntimeObservedStatus,
+        code: Option<i64>,
+        intentional: bool,
+        clear_cli_session_id: bool,
+        run_state: Option<Box<AgentRunStateWire>>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeStatusProjectionFact {
+    pub(crate) targets: Vec<RuntimeStatusTarget>,
+    pub(crate) agent: AgentId,
+    pub(crate) update: RuntimeStatusProjectionUpdate,
+}
+
+pub(crate) trait RuntimeStatusProjectionPort: Send + Sync {
+    fn publish_host_connection_changed(
+        &self,
+        owner: &UserId,
+        host: &HostId,
+    ) -> Result<(), LiveProjectionFailure>;
+
+    fn publish(&self, fact: RuntimeStatusProjectionFact) -> Result<(), LiveProjectionFailure>;
+}
 
 #[derive(Debug)]
 pub(crate) enum RuntimeEventDirective {
@@ -42,7 +149,7 @@ pub(crate) enum RuntimeEventDirective {
     Drain {
         conversation: ConversationId,
         agent: AgentId,
-        post_commit_failure: Option<DaemonRuntimeEventError>,
+        post_commit_failure: Option<LiveProjectionFailure>,
     },
 }
 
@@ -51,7 +158,7 @@ pub(crate) struct RuntimeExitPostCommit {
     conversation: ConversationId,
     agent: AgentId,
     status_targets: Vec<RuntimeStatusTarget>,
-    status: &'static str,
+    status: RuntimeObservedStatus,
     code: Option<i64>,
     intentional: bool,
     clear_cli_session_id: bool,
@@ -72,13 +179,15 @@ impl RuntimeExitPostCommit {
 }
 
 #[derive(Clone)]
-pub(crate) struct DaemonRuntimeEventOwner<P> {
+pub(crate) struct RuntimeEventSettlement<P> {
     durable: P,
-    hub: HubHostRuntimeEvents,
+    conversation_projection: Arc<dyn ConversationRuntimeProjectionPort>,
+    presence_effect: Arc<dyn AgentPresenceEffectPort>,
+    status_projection: Arc<dyn RuntimeStatusProjectionPort>,
     state: Arc<Mutex<RuntimeOwnerState>>,
 }
 
-impl<P> DaemonRuntimeEventOwner<P> {
+impl<P> RuntimeEventSettlement<P> {
     pub(crate) fn host_runtime_activity(&self) -> HostRuntimeActivitySource {
         HostRuntimeActivitySource {
             state: Arc::clone(&self.state),
@@ -90,7 +199,7 @@ impl<P> DaemonRuntimeEventOwner<P> {
         owner: &silverhand_backend_core::foundation::identity::UserId,
         host: &HostId,
     ) -> Result<(), DaemonRuntimeEventError> {
-        self.hub
+        self.status_projection
             .publish_host_connection_changed(owner, host)
             .map_err(DaemonRuntimeEventError::from)
     }
@@ -226,14 +335,21 @@ struct PendingTextActivity {
 
 const TEXT_ACTIVITY_MAX_CHARS: usize = 16 * 1024;
 
-impl<P> DaemonRuntimeEventOwner<P>
+impl<P> RuntimeEventSettlement<P>
 where
     P: DaemonEventDurablePort,
 {
-    pub(crate) fn new(durable: P, hub: HubHostRuntimeEvents) -> Self {
+    pub(crate) fn new(
+        durable: P,
+        conversation_projection: Arc<dyn ConversationRuntimeProjectionPort>,
+        presence_effect: Arc<dyn AgentPresenceEffectPort>,
+        status_projection: Arc<dyn RuntimeStatusProjectionPort>,
+    ) -> Self {
         Self {
             durable,
-            hub,
+            conversation_projection,
+            presence_effect,
+            status_projection,
             state: Arc::new(Mutex::new(RuntimeOwnerState::default())),
         }
     }
@@ -381,10 +497,10 @@ where
                         .insert(admission.principal().agent().clone());
                     state.runs.insert(admission, event.state.clone());
                 }
-                self.publish(
-                    event.coordinate.conversation()?,
-                    DaemonSideEvent::AgentActivity(serde_json::to_value(event.state)?),
-                )?;
+                self.publish_conversation(ConversationRuntimeProjectionFact::AgentActivity {
+                    conversation: event.coordinate.conversation()?,
+                    state: event.state,
+                })?;
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::Output(event) => {
@@ -428,8 +544,9 @@ where
                     .publish_status(
                         projected.targets(),
                         &event.coordinate.agent()?,
-                        json!({ "status": "active" }),
-                        None,
+                        RuntimeStatusProjectionUpdate::Active {
+                            cli_session_id: None,
+                        },
                     )
                     .err();
                 Ok(RuntimeEventDirective::Drain {
@@ -459,19 +576,17 @@ where
                         state.init_failed.insert(admission);
                     }
                 }
-                self.publish(
-                    event.coordinate.conversation()?,
-                    DaemonSideEvent::AgentInitTimeout(json!({
-                        "agent_id": event.coordinate.agent_id,
-                        "reason": event.timeout_reason.as_str(),
-                        "elapsed_ms": event.elapsed_ms,
-                        "timeout_ms": event.timeout_ms,
-                        "retrying": event.retrying,
-                        "retry_attempt": event.retry_attempt,
-                        "max_retries": event.max_retries,
-                        "cooldown_until": event.cooldown_until,
-                    })),
-                )?;
+                self.publish_conversation(ConversationRuntimeProjectionFact::AgentInitTimeout {
+                    conversation: event.coordinate.conversation()?,
+                    agent: event.coordinate.agent()?,
+                    reason: event.timeout_reason,
+                    elapsed_ms: event.elapsed_ms,
+                    timeout_ms: event.timeout_ms,
+                    retrying: event.retrying,
+                    retry_attempt: event.retry_attempt,
+                    max_retries: event.max_retries,
+                    cooldown_until: event.cooldown_until,
+                })?;
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::InitRetrying(event) => {
@@ -504,14 +619,11 @@ where
                     self.publish_status(
                         projected.targets(),
                         &event.coordinate.agent()?,
-                        json!({
-                            "status": "starting",
-                            "reason": "init_timeout_retrying",
-                            "retry_attempt": event.retry_attempt,
-                            "max_retries": event.max_retries,
-                            "timeout_reason": timeout.map(InitTimeoutReason::as_str),
-                        }),
-                        None,
+                        RuntimeStatusProjectionUpdate::StartingRetry {
+                            retry_attempt: event.retry_attempt,
+                            max_retries: event.max_retries,
+                            timeout_reason: timeout,
+                        },
                     )?;
                 }
                 Ok(RuntimeEventDirective::None)
@@ -547,13 +659,10 @@ where
                     self.publish_status(
                         projected.targets(),
                         &event.coordinate.agent()?,
-                        json!({
-                            "status": "crashed",
-                            "reason": "init_cooldown",
-                            "cooldown_until": event.cooldown_until,
-                            "attempts_exhausted": event.attempts_exhausted,
-                        }),
-                        None,
+                        RuntimeStatusProjectionUpdate::CrashedCooldown {
+                            cooldown_until: event.cooldown_until,
+                            attempts_exhausted: event.attempts_exhausted,
+                        },
                     )?;
                 }
                 Ok(RuntimeEventDirective::None)
@@ -562,13 +671,11 @@ where
                 let _admission = self
                     .current_admission(host_id, daemon, event.coordinate.scope()?)
                     .await?;
-                self.publish(
-                    event.coordinate.conversation()?,
-                    DaemonSideEvent::CompactionStale(json!({
-                        "agent_id": event.coordinate.agent_id,
-                        "elapsed_ms": event.elapsed_ms,
-                    })),
-                )?;
+                self.publish_conversation(ConversationRuntimeProjectionFact::CompactionStale {
+                    conversation: event.coordinate.conversation()?,
+                    agent: event.coordinate.agent()?,
+                    elapsed_ms: event.elapsed_ms,
+                })?;
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::OutputDropped(event) => {
@@ -671,18 +778,17 @@ where
         activity_id: i64,
     ) -> Result<(), DaemonRuntimeEventError> {
         let presence = self.publish_presence(presence_viewers, agent);
-        let activity = self.publish(
-            conversation.clone(),
-            DaemonSideEvent::ConversationActivity(json!({
-                "id": activity_id,
-                "conversation_id": conversation.as_str(),
-                "agent_id": agent.as_str(),
-                "kind": "message_received",
-                "payload": { "count": count },
-                "created_at": observed_at,
-            })),
-        );
-        finish_live_effects([presence, activity])
+        let activity = self.publish_conversation(ConversationRuntimeProjectionFact::Activity {
+            id: activity_id,
+            fact: RuntimeActivityFact::new(
+                conversation.clone(),
+                agent.clone(),
+                RuntimeActivityKind::MessageReceived,
+                RuntimeActivityPayload::MessageReceived { count },
+                RuntimeEventTime::from_unix_millis(observed_at),
+            ),
+        });
+        finish_live_effects([presence, activity]).map_err(Into::into)
     }
 
     pub(crate) fn complete_exit_state(
@@ -721,7 +827,7 @@ where
             }
             (init_failed, fatal, clear_cli_session_id, run_state)
         };
-        let status = runtime_exit_status(init_failed, fatal, intentional, code).as_str();
+        let status = runtime_exit_status(init_failed, fatal, intentional, code);
         Ok(Some(RuntimeExitPostCommit {
             conversation,
             agent: admission.principal().agent().clone(),
@@ -739,23 +845,17 @@ where
         &self,
         effect: &RuntimeExitPostCommit,
     ) -> Result<(), DaemonRuntimeEventError> {
-        let mut payload = json!({
-            "status": effect.status,
-            "exit_code": effect.code,
-            "intentional": effect.intentional,
-        });
-        if effect.clear_cli_session_id {
-            payload
-                .as_object_mut()
-                .expect("status payload is an object")
-                .insert("cli_session_id".into(), Value::Null);
-        }
-        self.publish_status(
+        Ok(self.publish_status(
             &effect.status_targets,
             &effect.agent,
-            payload,
-            Some(json!({ "run_state": effect.run_state })),
-        )
+            RuntimeStatusProjectionUpdate::Exit {
+                status: effect.status,
+                code: effect.code,
+                intentional: effect.intentional,
+                clear_cli_session_id: effect.clear_cli_session_id,
+                run_state: effect.run_state.clone().map(Box::new),
+            },
+        )?)
     }
 
     async fn handle_parsed(
@@ -778,10 +878,11 @@ where
         }
         let sanitized = event.parsed.sanitized();
         debug_assert_eq!(sanitized.kind(), parsed_kind);
-        let agent_event = DaemonSideEvent::AgentEvent(json!({
-            "agent_id": event.coordinate.agent_id,
-            "event": sanitized,
-        }));
+        let agent_event = ConversationRuntimeProjectionFact::AgentEvent {
+            conversation: event.coordinate.conversation()?,
+            agent: event.coordinate.agent()?,
+            event: sanitized,
+        };
         if let ParsedEventWire::Error {
             code,
             fatal: Some(true),
@@ -816,23 +917,25 @@ where
                 .await?
                 .ok_or(DaemonRuntimeEventError::StaleRuntime)?;
             let presence = self.publish_presence(committed.presence_viewers(), &agent);
-            let agent_projection = self.publish(conversation.clone(), agent_event);
-            let activity = self.publish(
-                conversation.clone(),
-                DaemonSideEvent::ConversationActivity(json!({
-                    "id": committed.activity_id(),
-                    "conversation_id": conversation.as_str(),
-                    "agent_id": agent.as_str(),
-                    "kind": "session_init",
-                    "payload": { "text": session_id },
-                    "created_at": event.ts,
-                })),
-            );
+            let agent_projection = self.publish_conversation(agent_event);
+            let activity = self.publish_conversation(ConversationRuntimeProjectionFact::Activity {
+                id: committed.activity_id(),
+                fact: RuntimeActivityFact::new(
+                    conversation.clone(),
+                    agent.clone(),
+                    RuntimeActivityKind::SessionInit,
+                    RuntimeActivityPayload::Text {
+                        text: session_id.clone(),
+                    },
+                    RuntimeEventTime::from_unix_millis(event.ts),
+                ),
+            });
             let status = self.publish_status(
                 committed.status_targets(),
                 &agent,
-                json!({ "status": "active", "cli_session_id": session_id }),
-                None,
+                RuntimeStatusProjectionUpdate::Active {
+                    cli_session_id: Some(session_id.clone()),
+                },
             );
             let post_commit_failure =
                 finish_live_effects([presence, agent_projection, activity, status]).err();
@@ -888,25 +991,17 @@ where
                 };
                 let agent = event.coordinate.agent()?;
                 let presence = self.publish_presence(committed.presence_viewers(), &agent);
-                let agent_projection =
-                    self.publish(event.coordinate.conversation()?, agent_event.clone());
+                let agent_projection = self.publish_conversation(agent_event.clone());
                 let activity = if let Some(refined) = committed.refined() {
-                    let conversation = event.coordinate.conversation()?;
-                    self.publish(
-                        conversation,
-                        DaemonSideEvent::ConversationActivity(json!({
-                            "id": refined.id(),
-                            "conversation_id": event.coordinate.conversation_id,
-                            "agent_id": event.coordinate.agent_id,
-                            "kind": "tool_call",
-                            "payload": serde_json::from_str::<Value>(refined.payload_json())?,
-                            "created_at": refined.created_at().as_unix_millis(),
-                        })),
-                    )
+                    self.publish_conversation(ConversationRuntimeProjectionFact::RefinedToolCall {
+                        conversation: event.coordinate.conversation()?,
+                        agent: event.coordinate.agent()?,
+                        activity: refined.clone(),
+                    })
                 } else {
                     Ok(())
                 };
-                finish_live_effects([presence, agent_projection, activity])
+                finish_live_effects([presence, agent_projection, activity]).map_err(Into::into)
             }
             _ => {
                 self.clear_pending_text(&admission)?;
@@ -924,18 +1019,19 @@ where
                         .await?
                         .ok_or(DaemonRuntimeEventError::StaleRuntime)?;
                     let presence = self.publish_presence(&viewers, &event.coordinate.agent()?);
-                    let agent_projection =
-                        self.publish(event.coordinate.conversation()?, agent_event.clone());
-                    finish_live_effects([presence, agent_projection])
+                    let agent_projection = self.publish_conversation(agent_event.clone());
+                    finish_live_effects([presence, agent_projection]).map_err(Into::into)
                 }
             }
         };
         let live_failure = match activity_projection {
             Ok(()) => None,
-            Err(DaemonRuntimeEventError::Hub(cause)) => Some(DaemonRuntimeEventError::Hub(cause)),
+            Err(DaemonRuntimeEventError::LiveProjection(cause)) => Some(cause),
             Err(cause) => return Err(cause),
         };
-        finish_live_effects([live_failure.map_or(Ok(()), Err)])?;
+        if let Some(cause) = live_failure {
+            return Err(DaemonRuntimeEventError::LiveProjection(cause));
+        }
         Ok(directive)
     }
 
@@ -958,7 +1054,7 @@ where
         kind: RuntimeActivityKind,
         fragment: &str,
         observed_at: i64,
-        agent_event: DaemonSideEvent,
+        agent_event: ConversationRuntimeProjectionFact,
     ) -> Result<(), DaemonRuntimeEventError> {
         if fragment.is_empty() {
             let viewers = self
@@ -971,8 +1067,8 @@ where
                 .await?
                 .ok_or(DaemonRuntimeEventError::StaleRuntime)?;
             let presence = self.publish_presence(&viewers, &coordinate.agent()?);
-            let agent_projection = self.publish(coordinate.conversation()?, agent_event);
-            return finish_live_effects([presence, agent_projection]);
+            let agent_projection = self.publish_conversation(agent_event);
+            return finish_live_effects([presence, agent_projection]).map_err(Into::into);
         }
         let (fact, previous_event_id) = {
             let mut state = self
@@ -1041,27 +1137,19 @@ where
             }
         }
         let presence = self.publish_presence(id.presence_viewers(), fact.agent());
-        let agent_projection = self.publish(fact.conversation().clone(), agent_event);
-        let payload = activity_payload_value(fact.payload())?;
-        let activity = self.publish(
-            fact.conversation().clone(),
-            DaemonSideEvent::ConversationActivity(json!({
-                "id": id.id(),
-                "conversation_id": fact.conversation().as_str(),
-                "agent_id": fact.agent().as_str(),
-                "kind": fact.kind().as_str(),
-                "payload": payload,
-                "created_at": fact.created_at().as_unix_millis(),
-            })),
-        );
-        finish_live_effects([presence, agent_projection, activity])
+        let agent_projection = self.publish_conversation(agent_event);
+        let activity = self.publish_conversation(ConversationRuntimeProjectionFact::Activity {
+            id: id.id(),
+            fact,
+        });
+        finish_live_effects([presence, agent_projection, activity]).map_err(Into::into)
     }
 
     async fn record_and_publish(
         &self,
         admission: RuntimeEventAdmission,
         fact: RuntimeActivityFact,
-        agent_event: Option<DaemonSideEvent>,
+        agent_event: Option<ConversationRuntimeProjectionFact>,
     ) -> Result<(), DaemonRuntimeEventError> {
         let id = self
             .durable
@@ -1074,21 +1162,13 @@ where
             .ok_or(DaemonRuntimeEventError::StaleRuntime)?;
         let presence = self.publish_presence(id.presence_viewers(), fact.agent());
         let agent_projection = agent_event
-            .map(|event| self.publish(fact.conversation().clone(), event))
+            .map(|event| self.publish_conversation(event))
             .unwrap_or(Ok(()));
-        let payload = activity_payload_value(fact.payload())?;
-        let activity = self.publish(
-            fact.conversation().clone(),
-            DaemonSideEvent::ConversationActivity(json!({
-                "id": id.id(),
-                "conversation_id": fact.conversation().as_str(),
-                "agent_id": fact.agent().as_str(),
-                "kind": fact.kind().as_str(),
-                "payload": payload,
-                "created_at": fact.created_at().as_unix_millis(),
-            })),
-        );
-        finish_live_effects([presence, agent_projection, activity])
+        let activity = self.publish_conversation(ConversationRuntimeProjectionFact::Activity {
+            id: id.id(),
+            fact,
+        });
+        finish_live_effects([presence, agent_projection, activity]).map_err(Into::into)
     }
 
     async fn current_admission(
@@ -1136,56 +1216,28 @@ where
         &self,
         targets: &[RuntimeStatusTarget],
         agent: &AgentId,
-        payload: Value,
-        origin_payload: Option<Value>,
-    ) -> Result<(), DaemonRuntimeEventError> {
-        let mut first_failure = None;
-        for target in targets {
-            let mut object = payload
-                .as_object()
-                .cloned()
-                .ok_or(DaemonRuntimeEventError::InvalidPayload)?;
-            if target.carries_origin_detail()
-                && let Some(detail) = origin_payload.as_ref().and_then(Value::as_object)
-            {
-                object.extend(detail.clone());
-            }
-            object.insert("agent_id".into(), Value::String(agent.as_str().to_owned()));
-            if let Err(cause) = self.publish(
-                target.conversation().clone(),
-                DaemonSideEvent::AgentStatus(Value::Object(object)),
-            ) && first_failure.is_none()
-            {
-                first_failure = Some(cause);
-            }
-        }
-        first_failure.map_or(Ok(()), Err)
+        update: RuntimeStatusProjectionUpdate,
+    ) -> Result<(), LiveProjectionFailure> {
+        self.status_projection.publish(RuntimeStatusProjectionFact {
+            targets: targets.to_vec(),
+            agent: agent.clone(),
+            update,
+        })
     }
 
-    fn publish(
+    fn publish_conversation(
         &self,
-        conversation: ConversationId,
-        event: DaemonSideEvent,
-    ) -> Result<(), DaemonRuntimeEventError> {
-        self.hub
-            .publish_daemon_side(&conversation, event)
-            .map_err(Into::into)
+        fact: ConversationRuntimeProjectionFact,
+    ) -> Result<(), LiveProjectionFailure> {
+        self.conversation_projection.publish(fact)
     }
 
     fn publish_presence(
         &self,
         viewers: &[silverhand_backend_core::foundation::identity::UserId],
         agent: &AgentId,
-    ) -> Result<(), DaemonRuntimeEventError> {
-        let mut first_failure = None;
-        for viewer in viewers {
-            if let Err(cause) = self.hub.publish_agent_presence_changed(viewer, agent)
-                && first_failure.is_none()
-            {
-                first_failure = Some(cause.into());
-            }
-        }
-        first_failure.map_or(Ok(()), Err)
+    ) -> Result<(), LiveProjectionFailure> {
+        self.presence_effect.publish(viewers, agent)
     }
 }
 
@@ -1197,9 +1249,7 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
-fn finish_live_effects<const N: usize>(
-    effects: [Result<(), DaemonRuntimeEventError>; N],
-) -> Result<(), DaemonRuntimeEventError> {
+fn finish_live_effects<E, const N: usize>(effects: [Result<(), E>; N]) -> Result<(), E> {
     for effect in effects {
         effect?;
     }
@@ -1230,53 +1280,11 @@ fn runtime_exit_should_respawn(init_failed: bool, fatal: bool, intentional: bool
     !intentional && !init_failed && !fatal
 }
 
-fn activity_payload_value(
-    payload: &RuntimeActivityPayload,
-) -> Result<Value, DaemonRuntimeEventError> {
-    Ok(match payload {
-        RuntimeActivityPayload::None => Value::Null,
-        RuntimeActivityPayload::Text { text } => json!({ "text": text }),
-        RuntimeActivityPayload::ToolCall {
-            name,
-            input_json,
-            tool_call_id,
-        } => json!({
-            "name": name,
-            "input": serde_json::from_str::<Value>(input_json)?,
-            "tool_call_id": tool_call_id,
-        }),
-        RuntimeActivityPayload::ToolOutput {
-            name,
-            tool_call_id,
-            outcome,
-        } => json!({
-            "name": name, "tool_call_id": tool_call_id, "outcome": outcome,
-        }),
-        RuntimeActivityPayload::ApiResponse { status, message } => {
-            json!({ "status": status, "message": message })
-        }
-        RuntimeActivityPayload::Error {
-            message,
-            code,
-            fatal,
-        } => json!({ "message": message, "code": code, "fatal": fatal }),
-        RuntimeActivityPayload::ParsedEventDropped {
-            parsed_kind,
-            encoded_bytes,
-            reason,
-        } => json!({
-            "parsed_kind": parsed_kind, "encoded_bytes": encoded_bytes, "reason": reason,
-        }),
-        RuntimeActivityPayload::MessageReceived { count } => json!({ "count": count }),
-    })
-}
-
 #[derive(Debug)]
 pub(crate) enum DaemonRuntimeEventError {
     Persistence(PersistenceFailure),
-    Hub(ScopeEventHubError),
-    Decode(Box<dyn Error + Send + Sync>),
-    Json(serde_json::Error),
+    IngressCodec(Box<dyn Error + Send + Sync>),
+    LiveProjection(LiveProjectionFailure),
     StatePoisoned,
     StaleRuntime,
     InvalidPayload,
@@ -1284,7 +1292,7 @@ pub(crate) enum DaemonRuntimeEventError {
 
 impl DaemonRuntimeEventError {
     fn source(error: impl Error + Send + Sync + 'static) -> Self {
-        Self::Decode(Box::new(error))
+        Self::IngressCodec(Box::new(error))
     }
 }
 
@@ -1292,10 +1300,8 @@ impl fmt::Display for DaemonRuntimeEventError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Persistence(_) => "daemon runtime event persistence failed",
-            Self::Hub(_) => "daemon runtime event live projection failed",
-            Self::Decode(_) | Self::Json(_) | Self::InvalidPayload => {
-                "daemon runtime event decode failed"
-            }
+            Self::LiveProjection(_) => "daemon runtime event live projection failed",
+            Self::IngressCodec(_) | Self::InvalidPayload => "daemon runtime event decode failed",
             Self::StatePoisoned => "daemon runtime event state lock was poisoned",
             Self::StaleRuntime => "daemon runtime event custody is stale",
         })
@@ -1306,9 +1312,8 @@ impl Error for DaemonRuntimeEventError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Persistence(source) => Some(source),
-            Self::Hub(source) => Some(source),
-            Self::Decode(source) => Some(source.as_ref()),
-            Self::Json(source) => Some(source),
+            Self::IngressCodec(source) => Some(source.as_ref()),
+            Self::LiveProjection(source) => Some(source),
             Self::StatePoisoned | Self::StaleRuntime | Self::InvalidPayload => None,
         }
     }
@@ -1319,14 +1324,14 @@ impl From<PersistenceFailure> for DaemonRuntimeEventError {
         Self::Persistence(value)
     }
 }
-impl From<ScopeEventHubError> for DaemonRuntimeEventError {
-    fn from(value: ScopeEventHubError) -> Self {
-        Self::Hub(value)
+impl From<LiveProjectionFailure> for DaemonRuntimeEventError {
+    fn from(value: LiveProjectionFailure) -> Self {
+        Self::LiveProjection(value)
     }
 }
 impl From<serde_json::Error> for DaemonRuntimeEventError {
     fn from(value: serde_json::Error) -> Self {
-        Self::Json(value)
+        Self::IngressCodec(Box::new(value))
     }
 }
 
@@ -1489,7 +1494,7 @@ pub(crate) enum InitTimeoutReason {
     PostProtocol,
 }
 impl InitTimeoutReason {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Silence => "silence",
             Self::PreProtocolCap => "pre_protocol_cap",
@@ -1897,7 +1902,7 @@ mod tests {
     };
 
     use super::{
-        AgentRunStateWire, AgentRunStatus, DaemonRuntimeEventError, DaemonRuntimeEventOwner,
+        AgentRunStateWire, AgentRunStatus, DaemonRuntimeEventError, RuntimeEventSettlement,
         RuntimeOwnerState, finish_live_effects, runtime_exit_should_respawn, runtime_exit_status,
     };
 
@@ -1944,12 +1949,13 @@ mod tests {
 
     fn owner(
         entries: impl IntoIterator<Item = (RuntimeEventAdmission, AgentRunStateWire)>,
-    ) -> DaemonRuntimeEventOwner<()> {
-        let owner = DaemonRuntimeEventOwner {
+    ) -> RuntimeEventSettlement<()> {
+        let hub = crate::foundation::scope_event_transport::ScopeEventHub::production().unwrap();
+        let owner = RuntimeEventSettlement {
             durable: (),
-            hub: crate::foundation::scope_event_transport::ScopeEventHub::production()
-                .unwrap()
-                .host_runtime_events(),
+            conversation_projection: std::sync::Arc::new(hub.runtime_activity_publisher()),
+            presence_effect: std::sync::Arc::new(hub.agent_presence_publisher()),
+            status_projection: std::sync::Arc::new(hub.runtime_status_publisher()),
             state: std::sync::Arc::new(std::sync::Mutex::new(RuntimeOwnerState::default())),
         };
         owner.state.lock().unwrap().runs.extend(entries);

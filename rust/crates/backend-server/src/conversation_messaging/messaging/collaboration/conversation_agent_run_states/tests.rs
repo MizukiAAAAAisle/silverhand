@@ -29,7 +29,7 @@ use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions}
 use tower::ServiceExt;
 
 use super::*;
-use crate::daemon_events::{
+use crate::host_runtime::runtime_event_settlement::{
     AgentActivitySnippetKind, AgentRunStatus, AgentRunTerminalReason, DaemonRuntimeEventError,
 };
 

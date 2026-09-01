@@ -1615,6 +1615,87 @@ fn resolved_scope_event_split_is_exact_and_every_leaf_is_declared() {
 }
 
 #[test]
+fn resolved_daemon_event_split_is_exact_and_every_leaf_is_declared() {
+    let map = load_map();
+    let rows = map["resolved_splits"]
+        .as_array()
+        .expect("resolved_splits array");
+    let daemon_rows: Vec<&Value> = rows
+        .iter()
+        .filter(|row| as_str(row, "source") == "backend-server::daemon_events")
+        .collect();
+    let expected: BTreeSet<(String, String, String, String)> = [
+        (
+            "runtime_settlement_state_codecs",
+            "C2",
+            "application",
+            "backend-server::host_runtime::runtime_event_settlement",
+        ),
+        (
+            "conversation_activity_projection_publisher",
+            "C3",
+            "adapter",
+            "backend-server::conversation_messaging::runtime_activity_publisher",
+        ),
+        (
+            "user_presence_publication",
+            "viewer_read_model",
+            "adapter",
+            "backend-server::viewer_read_model::agent_presence_publisher",
+        ),
+        (
+            "agent_host_status_presence_publication",
+            "C2",
+            "adapter",
+            "backend-server::host_runtime::runtime_status_publisher",
+        ),
+    ]
+    .into_iter()
+    .map(|(responsibility, owner, role, target)| {
+        (
+            responsibility.to_owned(),
+            owner.to_owned(),
+            role.to_owned(),
+            target.to_owned(),
+        )
+    })
+    .collect();
+    let actual: BTreeSet<(String, String, String, String)> = daemon_rows
+        .iter()
+        .map(|row| {
+            assert_eq!(as_str(row, "kind"), "context_internal_leaf");
+            (
+                as_str(row, "responsibility").to_owned(),
+                as_str(row, "business_owner").to_owned(),
+                as_str(row, "structural_role").to_owned(),
+                as_str(row, "physical_target").to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected, "daemon-event resolved split drifted");
+    assert_eq!(
+        actual.len(),
+        daemon_rows.len(),
+        "daemon responsibility duplicated"
+    );
+    assert!(
+        !scanned_roots().contains(&("backend-server".to_owned(), "daemon_events".to_owned())),
+        "the resolved daemon_events aggregation must no longer be a crate root"
+    );
+
+    // First falsifier: deleting, duplicating, retargeting, or reclassifying any one row
+    // breaks exact equality before a broader map invariant can accidentally mask it.
+    let mut mutation = actual.clone();
+    mutation.remove(&(
+        "runtime_settlement_state_codecs".to_owned(),
+        "C2".to_owned(),
+        "application".to_owned(),
+        "backend-server::host_runtime::runtime_event_settlement".to_owned(),
+    ));
+    assert_ne!(mutation, expected);
+}
+
+#[test]
 fn root_compatibility_facades_are_named_accepted_residuals_not_second_business_units() {
     // #task:2273 (Cindy point 5): a root compatibility facade must be REPORTED, not swallowed.
     // Each facade row is landed at its physical_target (its one business identity) AND its

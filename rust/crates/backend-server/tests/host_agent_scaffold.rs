@@ -382,7 +382,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-filesystem", "foundation"),
     ("backend-server", "current_schema"),
     ("backend-server", "daemon_delivery"),
-    ("backend-server", "daemon_events"),
     // #task:2308 relocated the final `host_control` directory leaf beneath this owning root,
     // closing the production-settled host-runtime axis at 8/8/0. Accepted compatibility facades
     // remain separately named paths and are not business units.

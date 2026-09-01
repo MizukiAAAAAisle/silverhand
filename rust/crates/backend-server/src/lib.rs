@@ -7,7 +7,6 @@ pub mod agent_profile_mcp_data_plane;
 pub mod application_orchestration;
 pub mod conversation_messaging;
 pub mod daemon_delivery;
-mod daemon_events;
 pub mod embedded_bootstrap;
 pub mod foundation;
 pub mod host_agent;

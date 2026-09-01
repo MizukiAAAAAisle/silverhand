@@ -124,7 +124,9 @@ pub(super) async fn compose_after_audit(
         runtime_credentials.clone(),
         delivery_store,
         host_store.clone(),
-        hub.host_runtime_events(),
+        hub.runtime_activity_publisher(),
+        hub.agent_presence_publisher(),
+        hub.runtime_status_publisher(),
     )
     .map_err(|source| StartupError::Composition {
         name: "daemon delivery runtime",

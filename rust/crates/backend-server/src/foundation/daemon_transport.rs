@@ -2401,6 +2401,7 @@ mod tests {
             .unwrap();
             database.close().await.unwrap();
 
+            let event_hub = ScopeEventHub::production().unwrap();
             let runtime = DaemonDeliveryRuntime::new(
                 RuntimeCredentialAuthority::production(
                     SqliteRuntimeCustodyStore::open(&path).await.unwrap(),
@@ -2408,7 +2409,9 @@ mod tests {
                 SqliteRuntimeDeliveryStore::open(&path).await.unwrap(),
                 SqliteHostRuntimeStore::open(&path).await.unwrap(),
                 DaemonDeliveryConfig::production(),
-                ScopeEventHub::production().unwrap().host_runtime_events(),
+                event_hub.runtime_activity_publisher(),
+                event_hub.agent_presence_publisher(),
+                event_hub.runtime_status_publisher(),
             )
             .unwrap();
             let host = HostId::parse("host-a").unwrap();
@@ -2880,9 +2883,11 @@ mod tests {
         use crate::{
             current_schema,
             daemon_delivery::{DaemonDeliveryConfig, DaemonDeliveryRuntime},
-            daemon_events::{AgentRunStateWire, AgentRunStatus, HydratedRuntime},
             foundation::scope_event_transport::ScopeEventHub,
             host_runtime::runtime_credential::RuntimeCredentialAuthority,
+            host_runtime::runtime_event_settlement::{
+                AgentRunStateWire, AgentRunStatus, HydratedRuntime,
+            },
         };
 
         const CONVERSATION: &str = "conversation0001";
@@ -2929,7 +2934,7 @@ mod tests {
         }
 
         /// A fresh production runtime. Every construction builds its own live
-        /// owner (`DaemonRuntimeEventOwner::new`), so two calls against the same
+        /// owner (`RuntimeEventSettlement::new`), so two calls against the same
         /// database are two independent owners — the falsifier's second owner.
         async fn build_runtime(
             path: &Path,
@@ -2941,12 +2946,15 @@ mod tests {
             let custody = SqliteRuntimeCustodyStore::open(path).await.unwrap();
             let data = SqliteRuntimeDeliveryStore::open(path).await.unwrap();
             let hosts = SqliteHostRuntimeStore::open(path).await.unwrap();
+            let event_hub = ScopeEventHub::production().unwrap();
             DaemonDeliveryRuntime::new(
                 RuntimeCredentialAuthority::production(custody),
                 data,
                 hosts,
                 DaemonDeliveryConfig::production(),
-                ScopeEventHub::production().unwrap().host_runtime_events(),
+                event_hub.runtime_activity_publisher(),
+                event_hub.agent_presence_publisher(),
+                event_hub.runtime_status_publisher(),
             )
             .unwrap()
         }
@@ -4799,7 +4807,7 @@ mod tests {
                 .collect::<std::collections::BTreeSet<_>>()
         );
         assert_eq!(
-            crate::daemon_events::ParsedEventWire::IMPLEMENTED_KINDS
+            crate::host_runtime::runtime_event_settlement::ParsedEventWire::IMPLEMENTED_KINDS
                 .iter()
                 .copied()
                 .collect::<std::collections::BTreeSet<_>>(),
@@ -4816,8 +4824,9 @@ mod tests {
             let DaemonFrame::Runtime { kind, value } = parsed_frame else {
                 panic!("parsed fixture reached the wrong owner: {}", parsed["kind"]);
             };
-            let crate::daemon_events::RuntimeProductEvent::Parsed(event) =
-                crate::daemon_events::decode_product_event(&kind, &value).unwrap()
+            let crate::host_runtime::runtime_event_settlement::RuntimeProductEvent::Parsed(event) =
+                crate::host_runtime::runtime_event_settlement::decode_product_event(&kind, &value)
+                    .unwrap()
             else {
                 panic!("parsed fixture reached the wrong owner: {}", parsed["kind"]);
             };
@@ -4828,9 +4837,9 @@ mod tests {
             .find(|frame| frame["kind"] == "runtime_state")
             .unwrap();
         for test_case in fixture["runState"]["valid"].as_array().unwrap() {
-            let state = serde_json::from_value::<crate::daemon_events::AgentRunStateWire>(
-                test_case["state"].clone(),
-            )
+            let state = serde_json::from_value::<
+                crate::host_runtime::runtime_event_settlement::AgentRunStateWire,
+            >(test_case["state"].clone())
             .unwrap_or_else(|_| panic!("valid run state rejected: {}", test_case["name"]));
             assert_eq!(
                 serde_json::to_value(&state).unwrap(),
@@ -4853,9 +4862,9 @@ mod tests {
         }
         for test_case in fixture["runState"]["invalid"].as_array().unwrap() {
             assert!(
-                serde_json::from_value::<crate::daemon_events::AgentRunStateWire>(
-                    test_case["state"].clone(),
-                )
+                serde_json::from_value::<
+                    crate::host_runtime::runtime_event_settlement::AgentRunStateWire,
+                >(test_case["state"].clone(),)
                 .is_err(),
                 "invalid hydrate/live run state accepted: {}",
                 test_case["name"]

@@ -11,14 +11,14 @@ use silverhand_backend_core::{
 };
 
 use crate::{
-    daemon_events::DaemonRuntimeEventError,
+    conversation_messaging::runtime_activity_publisher::HubRuntimeActivityPublisher,
     foundation::daemon_transport::{
         AuthenticatedDaemonHost, DaemonConnectionAuthority, DaemonHostAuthentication,
         DaemonHostReadyEffect, DaemonOwnerFailure, DaemonProtocolAdmission, DaemonStatusSeedEffect,
         DaemonTransport, DaemonTransportController,
     },
     foundation::error,
-    host_runtime::daemon_runtime_owner::DaemonRuntimeOwner,
+    host_runtime::daemon_runtime_owner::{DaemonRuntimeOwner, DaemonRuntimeParameters},
     host_runtime::host_agent_background::agent_deletion_resumer::HostReadyObserver,
     host_runtime::host_control::{
         admission::{
@@ -28,7 +28,12 @@ use crate::{
         status_seed::{HostStatusSeeds, SeedAttempt},
     },
     host_runtime::runtime_credential::RuntimeCredentialAuthority,
-    host_runtime::scope_event_publishers::HubHostRuntimeEvents,
+    host_runtime::{
+        runtime_event_settlement::DaemonRuntimeEventError,
+        runtime_status_publisher::HubRuntimeStatusPublisher,
+        scope_event_publishers::HubAgentPresenceChangedEdge,
+    },
+    viewer_read_model::agent_presence_publisher::AgentPresencePublisher,
 };
 
 pub use crate::conversation_messaging::daemon_post_commit::{
@@ -101,8 +106,10 @@ impl<C, D, H> DaemonDeliveryRuntime<C, D, H> {
     pub(crate) fn conversation_agent_run_states(
         &self,
         conversation: &ConversationId,
-    ) -> Result<Vec<crate::daemon_events::ConversationAgentRunStateSnapshot>, DaemonRuntimeEventError>
-    {
+    ) -> Result<
+        Vec<crate::host_runtime::runtime_event_settlement::ConversationAgentRunStateSnapshot>,
+        DaemonRuntimeEventError,
+    > {
         self.runtime.conversation_run_states(conversation)
     }
 
@@ -115,7 +122,7 @@ impl<C, D, H> DaemonDeliveryRuntime<C, D, H> {
         active_agents: std::collections::HashSet<
             silverhand_backend_core::foundation::identity::AgentId,
         >,
-        runtimes: Vec<crate::daemon_events::HydratedRuntime>,
+        runtimes: Vec<crate::host_runtime::runtime_event_settlement::HydratedRuntime>,
     ) -> Result<(), DaemonRuntimeEventError>
     where
         D: DaemonEventDurablePort,
@@ -136,14 +143,18 @@ where
         credentials: RuntimeCredentialAuthority<C>,
         data: D,
         host_credentials: H,
-        event_hub: HubHostRuntimeEvents,
+        conversation_projection: HubRuntimeActivityPublisher,
+        presence_effect: AgentPresencePublisher<HubAgentPresenceChangedEdge>,
+        status_projection: HubRuntimeStatusPublisher,
     ) -> Result<Self, DaemonDeliveryBuildError> {
         Self::new(
             credentials,
             data,
             host_credentials,
             DaemonDeliveryConfig::production(),
-            event_hub,
+            conversation_projection,
+            presence_effect,
+            status_projection,
         )
     }
 
@@ -152,16 +163,22 @@ where
         data: D,
         host_credentials: H,
         config: DaemonDeliveryConfig,
-        event_hub: HubHostRuntimeEvents,
+        conversation_projection: HubRuntimeActivityPublisher,
+        presence_effect: AgentPresencePublisher<HubAgentPresenceChangedEdge>,
+        status_projection: HubRuntimeStatusPublisher,
     ) -> Result<Self, DaemonDeliveryBuildError> {
         let transport = DaemonTransport::new(config)?;
         let runtime = DaemonRuntimeOwner::new(
             credentials,
             data,
-            event_hub,
-            transport.owning_host_data_plane(),
-            transport.command_timeout(),
-            transport.lease_ttl_ms(),
+            conversation_projection,
+            presence_effect,
+            status_projection,
+            DaemonRuntimeParameters::new(
+                transport.owning_host_data_plane(),
+                transport.command_timeout(),
+                transport.lease_ttl_ms(),
+            ),
         );
         let seeds = HostStatusSeeds::new(
             Arc::new(transport.owning_host_data_plane()),

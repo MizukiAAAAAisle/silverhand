@@ -284,7 +284,9 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
         RuntimeCredentialAuthority::production(custody),
         data,
         hosts,
-        event_hub.host_runtime_events(),
+        event_hub.runtime_activity_publisher(),
+        event_hub.agent_presence_publisher(),
+        event_hub.runtime_status_publisher(),
     )
     .unwrap();
     let runtime_control = runtime.runtime_control();

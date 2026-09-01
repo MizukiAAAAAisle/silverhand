@@ -3,7 +3,7 @@
 use std::{error::Error, fmt};
 
 use silverhand_backend_core::{
-    foundation::identity::{AgentId, ConversationId, HostId, UserId},
+    foundation::identity::{AgentId, HostId, UserId},
     foundation::scope_event::EventScope,
     host_runtime::agent_availability_read::AgentAvailabilityReadModel,
     host_runtime::{
@@ -13,19 +13,28 @@ use silverhand_backend_core::{
     identity_access::capability::agent_view::agent_viewer_user_ids,
 };
 
-use crate::foundation::{
-    scope_event_transport::{ScopeEventHub, ScopeEventHubError},
-    scope_event_wire::{DaemonSideEvent, ProductEvent},
+use crate::{
+    foundation::{
+        scope_event_transport::{ScopeEventHub, ScopeEventHubError},
+        scope_event_wire::ProductEvent,
+    },
+    host_runtime::runtime_event_settlement::LiveProjectionFailure,
 };
 
-/// Typed host-runtime publication surface. Its field and constructor are private;
-/// cross-crate callers can only derive it from an existing [`ScopeEventHub`].
+pub(crate) trait AgentPresenceChangedEdge {
+    fn publish_agent_presence_changed(
+        &self,
+        viewer: &UserId,
+        agent: &AgentId,
+    ) -> Result<(), LiveProjectionFailure>;
+}
+
 #[derive(Clone)]
-pub struct HubHostRuntimeEvents(ScopeEventHub);
+pub struct HubAgentPresenceChangedEdge(ScopeEventHub);
 
 impl ScopeEventHub {
-    pub fn host_runtime_events(&self) -> HubHostRuntimeEvents {
-        HubHostRuntimeEvents(self.clone())
+    pub(crate) fn agent_presence_changed_edge(&self) -> HubAgentPresenceChangedEdge {
+        HubAgentPresenceChangedEdge(self.clone())
     }
 
     /// Builds custody-driven availability fan-out over this hub. The adapter constructor
@@ -73,50 +82,20 @@ impl ScopeEventHub {
     }
 }
 
-impl HubHostRuntimeEvents {
-    pub(crate) fn publish_host_connection_changed(
-        &self,
-        viewer: &UserId,
-        host: &HostId,
-    ) -> Result<(), ScopeEventHubError> {
-        self.0.publish(
-            EventScope::Viewer(viewer.clone()),
-            ProductEvent::HostConnectionChanged {
-                host_id: host.as_str().to_owned(),
-            },
-        )
-    }
-
-    pub(crate) fn publish_agent_presence_changed(
+impl AgentPresenceChangedEdge for HubAgentPresenceChangedEdge {
+    fn publish_agent_presence_changed(
         &self,
         viewer: &UserId,
         agent: &AgentId,
-    ) -> Result<(), ScopeEventHubError> {
-        self.0.publish(
-            EventScope::Viewer(viewer.clone()),
-            ProductEvent::AgentPresenceChanged {
-                agent_id: agent.as_str().to_owned(),
-            },
-        )
-    }
-
-    pub(crate) fn publish_daemon_side(
-        &self,
-        conversation: &ConversationId,
-        event: DaemonSideEvent,
-    ) -> Result<(), ScopeEventHubError> {
-        let event = match event {
-            DaemonSideEvent::AgentActivity(payload) => ProductEvent::AgentActivity(payload),
-            DaemonSideEvent::AgentStatus(payload) => ProductEvent::AgentStatus(payload),
-            DaemonSideEvent::AgentInitTimeout(payload) => ProductEvent::AgentInitTimeout(payload),
-            DaemonSideEvent::CompactionStale(payload) => ProductEvent::CompactionStale(payload),
-            DaemonSideEvent::AgentEvent(payload) => ProductEvent::AgentEvent(payload),
-            DaemonSideEvent::ConversationActivity(payload) => {
-                ProductEvent::ConversationActivity(payload)
-            }
-        };
+    ) -> Result<(), LiveProjectionFailure> {
         self.0
-            .publish(EventScope::ConversationSide(conversation.clone()), event)
+            .publish(
+                EventScope::Viewer(viewer.clone()),
+                ProductEvent::AgentPresenceChanged {
+                    agent_id: agent.as_str().to_owned(),
+                },
+            )
+            .map_err(LiveProjectionFailure::from_source)
     }
 }
 

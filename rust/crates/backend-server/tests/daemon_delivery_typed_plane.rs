@@ -6,12 +6,242 @@ use std::{
 };
 
 use syn::{
-    Fields, FnArg, Item, ItemFn, ItemStruct, ItemType, ReturnType, Type, UseTree, Visibility,
+    Expr, ExprCall, Fields, FnArg, Item, ItemFn, ItemStruct, ItemTrait, ItemType, ReturnType, Type,
+    UseTree, Visibility,
     visit::{self, Visit},
 };
 
 fn src_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
+}
+
+fn read_source(path: &str) -> String {
+    fs::read_to_string(src_root().join(path)).unwrap()
+}
+
+fn occurrences(source: &str, needle: &str) -> usize {
+    source.match_indices(needle).count()
+}
+
+fn item_attrs(item: &Item) -> &[syn::Attribute] {
+    match item {
+        Item::Const(item) => &item.attrs,
+        Item::Enum(item) => &item.attrs,
+        Item::ExternCrate(item) => &item.attrs,
+        Item::Fn(item) => &item.attrs,
+        Item::ForeignMod(item) => &item.attrs,
+        Item::Impl(item) => &item.attrs,
+        Item::Macro(item) => &item.attrs,
+        Item::Mod(item) => &item.attrs,
+        Item::Static(item) => &item.attrs,
+        Item::Struct(item) => &item.attrs,
+        Item::Trait(item) => &item.attrs,
+        Item::TraitAlias(item) => &item.attrs,
+        Item::Type(item) => &item.attrs,
+        Item::Union(item) => &item.attrs,
+        Item::Use(item) => &item.attrs,
+        _ => &[],
+    }
+}
+
+fn call_path(call: &ExprCall) -> Option<Vec<String>> {
+    let Expr::Path(path) = call.func.as_ref() else {
+        return None;
+    };
+    Some(
+        path.path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect(),
+    )
+}
+
+fn path_ends_with(path: &[String], suffix: &[&str]) -> bool {
+    path.len() >= suffix.len()
+        && path[path.len() - suffix.len()..]
+            .iter()
+            .map(String::as_str)
+            .eq(suffix.iter().copied())
+}
+
+fn is_runtime_owner_state_construction(call: &ExprCall) -> bool {
+    let Some(outer_path) = call_path(call) else {
+        return false;
+    };
+    let [Expr::Call(mutex_call)] = call.args.iter().collect::<Vec<_>>().as_slice() else {
+        return false;
+    };
+    let Some(mutex_path) = call_path(mutex_call) else {
+        return false;
+    };
+    let [Expr::Call(default_call)] = mutex_call.args.iter().collect::<Vec<_>>().as_slice() else {
+        return false;
+    };
+    let Some(default_path) = call_path(default_call) else {
+        return false;
+    };
+    path_ends_with(&outer_path, &["Arc", "new"])
+        && path_ends_with(&mutex_path, &["Mutex", "new"])
+        && path_ends_with(&default_path, &["RuntimeOwnerState", "default"])
+}
+
+#[derive(Default)]
+struct SettlementProductionFacts {
+    runtime_owner_states: usize,
+    state_constructions: usize,
+    trait_names: Vec<String>,
+    boundary_violations: Vec<&'static str>,
+}
+
+impl SettlementProductionFacts {
+    fn record_violation(&mut self, label: &'static str) {
+        if !self.boundary_violations.contains(&label) {
+            self.boundary_violations.push(label);
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for SettlementProductionFacts {
+    fn visit_item(&mut self, item: &'ast Item) {
+        if !is_cfg_test(item_attrs(item)) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_item_struct(&mut self, item: &'ast ItemStruct) {
+        if item.ident == "RuntimeOwnerState" {
+            self.runtime_owner_states += 1;
+        }
+        visit::visit_item_struct(self, item);
+    }
+
+    fn visit_item_trait(&mut self, item: &'ast ItemTrait) {
+        self.trait_names.push(item.ident.to_string());
+        visit::visit_item_trait(self, item);
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if is_runtime_owner_state_construction(call) {
+            self.state_constructions += 1;
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_ident(&mut self, ident: &'ast syn::Ident) {
+        match ident.to_string().as_str() {
+            "ScopeEventHubError" => self.record_violation("raw hub error"),
+            "ScopeEventHub" => self.record_violation("raw hub"),
+            "ProductEvent" => self.record_violation("raw product event"),
+            "scope_event_wire" => self.record_violation("wire event"),
+            "HubRuntimeActivityPublisher" => self.record_violation("conversation adapter"),
+            "AgentPresencePublisher" => self.record_violation("viewer adapter"),
+            "HubRuntimeStatusPublisher" => self.record_violation("status adapter"),
+            _ => {}
+        }
+        visit::visit_ident(self, ident);
+    }
+}
+
+fn settlement_production_facts(source: &str) -> SettlementProductionFacts {
+    let parsed = syn::parse_file(source).expect("settlement source must parse");
+    let mut facts = SettlementProductionFacts::default();
+    facts.visit_file(&parsed);
+    facts
+}
+
+#[test]
+fn daemon_event_split_keeps_one_state_and_transport_neutral_typed_boundaries() {
+    let settlement = read_source("host_runtime/runtime_event_settlement/mod.rs");
+    let production = settlement_production_facts(&settlement);
+    assert_eq!(production.runtime_owner_states, 1);
+    assert_eq!(
+        production.state_constructions, 1,
+        "the settlement state must have one construction authority"
+    );
+    assert_eq!(production.boundary_violations, Vec::<&str>::new());
+    for port in [
+        "ConversationRuntimeProjectionPort",
+        "AgentPresenceEffectPort",
+        "RuntimeStatusProjectionPort",
+    ] {
+        assert_eq!(
+            production
+                .trait_names
+                .iter()
+                .filter(|candidate| candidate.as_str() == port)
+                .count(),
+            1,
+            "missing typed port {port}"
+        );
+    }
+    assert!(settlement.contains("LiveProjection(LiveProjectionFailure)"));
+    assert!(settlement.contains("IngressCodec(Box<dyn Error + Send + Sync>)"));
+
+    let activity = read_source("conversation_messaging/runtime_activity_publisher.rs");
+    let presence = read_source("viewer_read_model/agent_presence_publisher.rs");
+    let status = read_source("host_runtime/runtime_status_publisher.rs");
+    let edge = read_source("host_runtime/scope_event_publishers.rs");
+    assert!(activity.contains("impl ConversationRuntimeProjectionPort"));
+    assert!(presence.contains("impl<E> AgentPresenceEffectPort"));
+    assert!(presence.contains("E: AgentPresenceChangedEdge"));
+    assert!(!presence.contains("ProductEvent"));
+    assert!(!presence.contains("ScopeEventHubError"));
+    assert!(status.contains("impl RuntimeStatusProjectionPort"));
+    assert_eq!(
+        occurrences(&edge, "ProductEvent::AgentPresenceChanged"),
+        1,
+        "the C2 edge must remain the sole agent-presence wire encoder"
+    );
+    assert!(edge.contains("pub(crate) fn agent_presence_changed_edge"));
+    assert_eq!(
+        occurrences(&edge, "pub fn agent_presence_changed_edge"),
+        0,
+        "the narrow presence edge factory must remain crate-internal"
+    );
+    for (name, adapter) in [
+        ("activity", activity.as_str()),
+        ("presence", presence.as_str()),
+        ("status", status.as_str()),
+    ] {
+        let concrete_dependencies = [
+            "HubRuntimeActivityPublisher",
+            "AgentPresencePublisher",
+            "HubRuntimeStatusPublisher",
+        ]
+        .into_iter()
+        .filter(|candidate| adapter.contains(candidate))
+        .count();
+        assert_eq!(
+            concrete_dependencies, 1,
+            "{name} adapter imported another concrete publisher"
+        );
+    }
+
+    assert_eq!(
+        occurrences(
+            &read_source("foundation/scope_event_wire.rs"),
+            "DaemonSideEvent"
+        ),
+        0
+    );
+    assert_eq!(
+        occurrences(
+            &read_source("host_runtime/scope_event_publishers.rs"),
+            "HubHostRuntimeEvents"
+        ),
+        0
+    );
+
+    let mutation = format!(
+        "{settlement}\nuse crate::foundation::scope_event_transport::{{ScopeEventHub, ScopeEventHubError}};\nuse silverhand_protocol::ProductEvent;"
+    );
+    let mutated = settlement_production_facts(&mutation);
+    assert_eq!(
+        mutated.boundary_violations,
+        ["raw hub", "raw hub error", "raw product event"],
+        "the falsifier must reject forbidden dependencies injected after the cfg(test) module"
+    );
 }
 
 fn rust_files(root: &Path, files: &mut Vec<PathBuf>) {
@@ -78,7 +308,6 @@ const FORBIDDEN_FOUNDATION_OWNER_MODULES: &[&str] = &[
     "agent_profile_mcp_data_plane",
     "application_orchestration",
     "conversation_messaging",
-    "daemon_events",
     "host_agent_background",
     "host_control",
     "host_runtime",

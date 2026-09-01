@@ -42,14 +42,14 @@
     "embedded_bootstrap": "self-declared top-level bounded context: choose/create bootstrap UoW + own auth/token lifecycle (incl token-file custody)"
   },
   "accounting": {
-    "production_roots": 147,
+    "production_roots": 146,
     "test_support_roots": 3,
-    "total_scanned": 150,
+    "total_scanned": 149,
     "per_crate": {
       "backend_app": 4,
       "backend_core": 63,
       "backend_filesystem": 3,
-      "backend_server": 43,
+      "backend_server": 42,
       "backend_sqlite": 37
     },
     "rule": "every scanned `mod` decl gets exactly one row; #[cfg(test)] rows carry target.structural_role=test_support in the map (no external whitelist)"
@@ -1931,52 +1931,6 @@
     },
     {
       "crate": "backend-server",
-      "module": "daemon_events",
-      "source_shape": "file",
-      "needs_ruling": false,
-      "split_required": {
-        "kind": "file_responsibilities",
-        "current_container": {
-          "source_shape": "file"
-        },
-        "responsibilities": [
-          {
-            "responsibility": "runtime_settlement_state_codecs",
-            "business_owner": "C2",
-            "structural_role": "application",
-            "target_parent_namespace": "backend-server::host_runtime",
-            "needs_ruling": true
-          },
-          {
-            "responsibility": "conversation_activity_projection_publisher",
-            "business_owner": "C3",
-            "structural_role": "adapter",
-            "target_parent_namespace": "backend-server::conversation_messaging",
-            "needs_ruling": true
-          },
-          {
-            "responsibility": "user_presence_publication",
-            "business_owner": "viewer_read_model",
-            "structural_role": "adapter",
-            "target_parent_namespace": "backend-server::viewer_read_model",
-            "needs_ruling": true
-          },
-          {
-            "responsibility": "agent_host_status_presence_publication",
-            "business_owner": "C2",
-            "structural_role": "adapter",
-            "target_parent_namespace": "backend-server::host_runtime",
-            "needs_ruling": true
-          }
-        ]
-      },
-      "note": "single file; logical responsibilities for the future large-file lane, not child modules",
-      "migration": {
-        "split": true
-      }
-    },
-    {
-      "crate": "backend-server",
       "module": "direct_pairs",
       "source_shape": "file",
       "needs_ruling": false,
@@ -3214,7 +3168,7 @@
     },
     {
       "entry": "transport:daemon_frames",
-      "authority": "server::{daemon_delivery,daemon_events}",
+      "authority": "server::{application_orchestration::daemon_delivery,host_runtime::runtime_event_settlement}",
       "impl_owner": "daemon transport",
       "business_owner": "foundation",
       "structural_role": "transport",
@@ -3230,10 +3184,6 @@
     }
   ],
   "open_rulings": [
-    "backend-server::daemon_events split group 'runtime_settlement_state_codecs' final leaf module name",
-    "backend-server::daemon_events split group 'conversation_activity_projection_publisher' final leaf module name",
-    "backend-server::daemon_events split group 'user_presence_publication' final leaf module name",
-    "backend-server::daemon_events split group 'agent_host_status_presence_publication' final leaf module name",
     "backend-server::host_agent split group 'public_agent_identity_profile' final leaf module name",
     "backend-server::host_agent split group 'agent_runtime_control' final leaf module name",
     "backend-server::host_agent split group 'agent_provisioning_sagas' final leaf module name",
@@ -3335,6 +3285,38 @@
       "business_owner": "C3",
       "structural_role": "adapter",
       "physical_target": "backend-server::conversation_messaging::scope_event_publishers"
+    },
+    {
+      "source": "backend-server::daemon_events",
+      "responsibility": "runtime_settlement_state_codecs",
+      "kind": "context_internal_leaf",
+      "business_owner": "C2",
+      "structural_role": "application",
+      "physical_target": "backend-server::host_runtime::runtime_event_settlement"
+    },
+    {
+      "source": "backend-server::daemon_events",
+      "responsibility": "conversation_activity_projection_publisher",
+      "kind": "context_internal_leaf",
+      "business_owner": "C3",
+      "structural_role": "adapter",
+      "physical_target": "backend-server::conversation_messaging::runtime_activity_publisher"
+    },
+    {
+      "source": "backend-server::daemon_events",
+      "responsibility": "user_presence_publication",
+      "kind": "context_internal_leaf",
+      "business_owner": "viewer_read_model",
+      "structural_role": "adapter",
+      "physical_target": "backend-server::viewer_read_model::agent_presence_publisher"
+    },
+    {
+      "source": "backend-server::daemon_events",
+      "responsibility": "agent_host_status_presence_publication",
+      "kind": "context_internal_leaf",
+      "business_owner": "C2",
+      "structural_role": "adapter",
+      "physical_target": "backend-server::host_runtime::runtime_status_publisher"
     }
   ],
   "migration_ledger": {

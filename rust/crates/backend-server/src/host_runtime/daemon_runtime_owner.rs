@@ -6,6 +6,7 @@ use std::{
     fmt,
     future::Future,
     pin::Pin,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -28,11 +29,7 @@ use silverhand_backend_core::{
 };
 
 use crate::{
-    daemon_events::{
-        AgentRunStateWire, ConversationAgentRunStateSnapshot, DaemonRuntimeEventError,
-        DaemonRuntimeEventOwner, HostRuntimeActivitySource, HydratedRuntime, RuntimeEventDirective,
-        RuntimeProductEvent, decode_product_event,
-    },
+    conversation_messaging::runtime_activity_publisher::HubRuntimeActivityPublisher,
     foundation::error,
     foundation::{
         daemon_command as command,
@@ -47,8 +44,15 @@ use crate::{
     host_runtime::runtime_credential::{
         RuntimeCredentialAuthority, RuntimeStartFailure, RuntimeStopTransport,
     },
-    host_runtime::scope_event_publishers::HubHostRuntimeEvents,
+    host_runtime::runtime_event_settlement::{
+        AgentRunStateWire, ConversationAgentRunStateSnapshot, DaemonRuntimeEventError,
+        HostRuntimeActivitySource, HydratedRuntime, RuntimeEventDirective, RuntimeEventSettlement,
+        RuntimeProductEvent, decode_product_event,
+    },
+    host_runtime::runtime_status_publisher::HubRuntimeStatusPublisher,
+    host_runtime::scope_event_publishers::HubAgentPresenceChangedEdge,
     runtime_control::RuntimeClearSessionWaiters,
+    viewer_read_model::agent_presence_publisher::AgentPresencePublisher,
 };
 
 enum DecodedRuntimeInboundEvent {
@@ -366,11 +370,31 @@ impl Error for EventIdentityError {}
 pub(crate) struct DaemonRuntimeOwner<C, D> {
     credentials: RuntimeCredentialAuthority<C>,
     data: D,
-    events: DaemonRuntimeEventOwner<D>,
+    events: RuntimeEventSettlement<D>,
     clear_session_waiters: RuntimeClearSessionWaiters,
     data_plane: OwningHostDataPlane,
     command_timeout: Duration,
     lease_ttl_ms: i64,
+}
+
+pub(crate) struct DaemonRuntimeParameters {
+    data_plane: OwningHostDataPlane,
+    command_timeout: Duration,
+    lease_ttl_ms: i64,
+}
+
+impl DaemonRuntimeParameters {
+    pub(crate) fn new(
+        data_plane: OwningHostDataPlane,
+        command_timeout: Duration,
+        lease_ttl_ms: i64,
+    ) -> Self {
+        Self {
+            data_plane,
+            command_timeout,
+            lease_ttl_ms,
+        }
+    }
 }
 
 impl<C, D> DaemonRuntimeOwner<C, D> {
@@ -437,19 +461,24 @@ where
     pub(crate) fn new(
         credentials: RuntimeCredentialAuthority<C>,
         data: D,
-        event_hub: HubHostRuntimeEvents,
-        data_plane: OwningHostDataPlane,
-        command_timeout: Duration,
-        lease_ttl_ms: i64,
+        conversation_projection: HubRuntimeActivityPublisher,
+        presence_effect: AgentPresencePublisher<HubAgentPresenceChangedEdge>,
+        status_projection: HubRuntimeStatusPublisher,
+        parameters: DaemonRuntimeParameters,
     ) -> Self {
         Self {
             credentials,
-            events: DaemonRuntimeEventOwner::new(data.clone(), event_hub),
+            events: RuntimeEventSettlement::new(
+                data.clone(),
+                Arc::new(conversation_projection),
+                Arc::new(presence_effect),
+                Arc::new(status_projection),
+            ),
             clear_session_waiters: RuntimeClearSessionWaiters::default(),
             data,
-            data_plane,
-            command_timeout,
-            lease_ttl_ms,
+            data_plane: parameters.data_plane,
+            command_timeout: parameters.command_timeout,
+            lease_ttl_ms: parameters.lease_ttl_ms,
         }
     }
 

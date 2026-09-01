@@ -69,16 +69,6 @@ pub(crate) enum ViewerWorkspaceChange {
     MetadataChanged,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum DaemonSideEvent {
-    AgentActivity(Value),
-    AgentStatus(Value),
-    AgentInitTimeout(Value),
-    CompactionStale(Value),
-    AgentEvent(Value),
-    ConversationActivity(Value),
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NotificationKind {

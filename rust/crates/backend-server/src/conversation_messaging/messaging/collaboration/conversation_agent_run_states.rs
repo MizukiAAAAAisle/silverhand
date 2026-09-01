@@ -2,7 +2,7 @@
 //!
 //! This capability intentionally joins two independent authorities at the
 //! boundary: SQLite decides whether the viewer may see the requested
-//! conversation, while `DaemonRuntimeEventOwner` supplies the ephemeral
+//! conversation, while `RuntimeEventSettlement` supplies the ephemeral
 //! process-memory snapshot. No runtime state is reconstructed from storage.
 
 use std::{error::Error, fmt, sync::Arc};
@@ -24,7 +24,7 @@ use silverhand_backend_core::{
 
 use crate::{
     daemon_delivery::DaemonDeliveryRuntime,
-    daemon_events::{
+    host_runtime::runtime_event_settlement::{
         AgentRunStateWire as DaemonAgentRunState,
         ConversationAgentRunStateSnapshot as DaemonAgentRunStateSnapshot, DaemonRuntimeEventError,
     },

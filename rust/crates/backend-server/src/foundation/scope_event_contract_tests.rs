@@ -77,13 +77,13 @@ use tower::ServiceExt;
 use crate::conversation_messaging::scope_event_publishers::latest_unread_wire;
 use crate::conversation_messaging::scope_event_publishers::*;
 use crate::current_schema;
-use crate::daemon_events::{
-    DaemonRuntimeEventOwner, ParsedEventWire, RuntimeCoordinate, RuntimeEventDirective,
-    RuntimeParsedEvent, RuntimeProductEvent, RuntimeScopeWire,
-};
 use crate::foundation::scope_event_wire::*;
 use crate::host_runtime::host_agent_background::presence_grace_timer::{
     PresenceFactSink, PresenceGraceTimers,
+};
+use crate::host_runtime::runtime_event_settlement::{
+    ParsedEventWire, RuntimeCoordinate, RuntimeEventDirective, RuntimeEventSettlement,
+    RuntimeParsedEvent, RuntimeProductEvent, RuntimeScopeWire,
 };
 use crate::host_runtime::scope_event_publishers::*;
 use crate::identity_access::scope_event_publishers::*;
@@ -404,7 +404,12 @@ async fn session_init_attempts_every_live_audience_and_still_requests_one_drain(
         .entry(first_scope.clone())
         .or_insert_with(ScopeState::new)
         .seq = TransportSeq(MAX_TRANSPORT_SEQ);
-    let owner = DaemonRuntimeEventOwner::new(durable, hub.host_runtime_events());
+    let owner = RuntimeEventSettlement::new(
+        durable,
+        Arc::new(hub.runtime_activity_publisher()),
+        Arc::new(hub.agent_presence_publisher()),
+        Arc::new(hub.runtime_status_publisher()),
+    );
     let daemon = DaemonInstanceId::parse("daemon-1").unwrap();
     let directive = owner
         .handle(
@@ -439,11 +444,12 @@ async fn session_init_attempts_every_live_audience_and_still_requests_one_drain(
     };
     assert_eq!(conversation, first);
     assert_eq!(drained_agent, agent());
+    let post_commit_failure =
+        post_commit_failure.expect("the first live projection failure must be retained");
     assert!(matches!(
-        post_commit_failure,
-        Some(crate::daemon_events::DaemonRuntimeEventError::Hub(
-            ScopeEventHubError::SequenceExhausted
-        ))
+        Error::source(&post_commit_failure)
+            .and_then(|source| source.downcast_ref::<ScopeEventHubError>()),
+        Some(ScopeEventHubError::SequenceExhausted)
     ));
     assert_eq!(
         hub.scopes.lock().unwrap()[&first_scope].seq,

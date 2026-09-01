@@ -7,4 +7,5 @@
 pub(crate) mod daemon_post_commit;
 pub mod direct_pairs;
 pub mod messaging;
+pub mod runtime_activity_publisher;
 pub mod scope_event_publishers;
