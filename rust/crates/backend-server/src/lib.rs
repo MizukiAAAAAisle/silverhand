@@ -7,6 +7,7 @@ pub mod agent_materialize;
 pub mod agent_name_availability;
 pub mod agent_profile_mcp_data_plane;
 pub(crate) mod agent_wire;
+pub(crate) mod application_orchestration;
 pub mod auth;
 pub mod avatar_blob;
 mod bearer;

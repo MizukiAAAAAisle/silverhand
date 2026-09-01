@@ -36,8 +36,7 @@ use silverhand_backend_core::identity::{AgentId, DaemonInstanceId, HostId};
 #[cfg(test)]
 use crate::daemon_delivery::{CommandRefusal, DaemonRefusalCode};
 use crate::daemon_delivery::{
-    HostDataPlaneCommandKind, HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest,
-    OwningHostDataPlane,
+    HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest, OwningHostDataPlane, command,
 };
 
 use super::wire_number::js_safe_integer;
@@ -201,8 +200,7 @@ pub async fn probe(
     let answer = match dispatch
         .dispatch(HostDataPlaneRequest {
             custody: custody.clone(),
-            kind: HostDataPlaneCommandKind::HostStatus,
-            params: json!({}),
+            command: command::host_status(json!({})),
             timeout: PROBE_TIMEOUT,
         })
         .await

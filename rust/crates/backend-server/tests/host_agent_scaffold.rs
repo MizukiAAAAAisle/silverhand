@@ -458,6 +458,7 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
 /// authority. Organization accounting stays separate from route/product ledgers.
 const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agents"),
+    ("backend-server", "application_orchestration"),
     ("backend-server", "conversation_messaging"),
     ("backend-server", "foundation"),
     ("backend-server", "identity_access"),

@@ -35,7 +35,10 @@ use silverhand_backend_core::{
     identity::{HostId, UserId},
 };
 
-use crate::error;
+use crate::{
+    daemon_delivery::DaemonDeliveryController, error,
+    foundation::daemon_transport::DaemonConnectionAuthority,
+};
 
 use super::{
     host_not_found,
@@ -54,6 +57,29 @@ pub const HOST_DETAIL_PATH: &str = "/api/hosts/{id}";
 /// in-memory live view, not persistence.
 pub trait ConnectedHostName: Clone + Send + Sync + 'static {
     fn connected_host_name(&self, computer: &HostId) -> Option<String>;
+}
+
+#[derive(Clone)]
+pub struct ConnectedHostNameView {
+    authority: DaemonConnectionAuthority,
+}
+
+impl ConnectedHostNameView {
+    pub(crate) fn new(authority: DaemonConnectionAuthority) -> Self {
+        Self { authority }
+    }
+}
+
+impl ConnectedHostName for ConnectedHostNameView {
+    fn connected_host_name(&self, computer: &HostId) -> Option<String> {
+        self.authority.connected_host_name(computer)
+    }
+}
+
+impl DaemonDeliveryController {
+    pub fn connected_host_names(&self) -> ConnectedHostNameView {
+        ConnectedHostNameView::new(self.connection_authority())
+    }
 }
 
 #[derive(Clone)]

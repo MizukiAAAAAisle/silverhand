@@ -53,7 +53,42 @@ use std::{
 use silverhand_backend_core::identity::{AgentId, DaemonInstanceId, HostId};
 use tokio::time::Instant;
 
-use crate::host_control::status_snapshot::{StatusSnapshot, StatusSnapshotOutcome};
+use crate::{
+    foundation::daemon_transport::{HostDataPlaneCustody, OwningHostDataPlane},
+    host_control::status_snapshot::{
+        self, StatusSnapshot, StatusSnapshotOutcome, StatusSnapshotRequest,
+    },
+};
+
+impl DaemonCustody for OwningHostDataPlane {
+    fn attached_custody(
+        &self,
+        host: &HostId,
+    ) -> Result<Option<AttachedStatusCustody>, CustodyUnavailable> {
+        Ok(self
+            .resolve(host)
+            .map_err(|_| CustodyUnavailable)?
+            .map(|custody| AttachedStatusCustody {
+                daemon_instance: custody.daemon_instance().clone(),
+                connection_id: custody.connection_id().to_owned(),
+            }))
+    }
+
+    fn probe_status<'a>(
+        &'a self,
+        host: HostId,
+        custody: AttachedStatusCustody,
+    ) -> Pin<Box<dyn Future<Output = StatusSnapshotOutcome> + Send + 'a>> {
+        Box::pin(async move {
+            let custody = HostDataPlaneCustody::captured(
+                host,
+                custody.daemon_instance,
+                custody.connection_id,
+            );
+            status_snapshot::probe(self, StatusSnapshotRequest::new(custody)).await
+        })
+    }
+}
 
 /// The deployed ladder. Six attempts, five waits, ~48s of patience, and then this
 /// custody stays unseeded for the rest of its connection generation: a bounded

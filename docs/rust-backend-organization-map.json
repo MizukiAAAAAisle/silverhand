@@ -42,15 +42,15 @@
     "embedded_bootstrap": "self-declared top-level bounded context: choose/create bootstrap UoW + own auth/token lifecycle (incl token-file custody)"
   },
   "accounting": {
-    "production_roots": 143,
+    "production_roots": 144,
     "test_support_roots": 3,
-    "total_scanned": 146,
+    "total_scanned": 147,
     "per_crate": {
-      "backend_core": 61,
-      "backend_server": 42,
-      "backend_sqlite": 37,
       "backend_app": 3,
-      "backend_filesystem": 3
+      "backend_core": 61,
+      "backend_filesystem": 3,
+      "backend_server": 43,
+      "backend_sqlite": 37
     },
     "rule": "every scanned `mod` decl gets exactly one row; #[cfg(test)] rows carry target.structural_role=test_support in the map (no external whitelist)"
   },
@@ -1840,7 +1840,8 @@
         "structural_role": "http"
       },
       "migration": {
-        "physical_target": "backend-server::host_runtime::agent_materialize"
+        "physical_target": "backend-server::host_runtime::agent_materialize",
+        "compatibility_facade": "backend-server::agent_materialize"
       }
     },
     {
@@ -1866,7 +1867,8 @@
         "structural_role": "http"
       },
       "migration": {
-        "physical_target": "backend-server::identity_access::agent_profile_mcp_data_plane"
+        "physical_target": "backend-server::identity_access::agent_profile_mcp_data_plane",
+        "compatibility_facade": "backend-server::agent_profile_mcp_data_plane"
       }
     },
     {
@@ -1937,109 +1939,17 @@
     },
     {
       "crate": "backend-server",
-      "module": "conversation_messaging",
-      "source_shape": "directory",
+      "module": "daemon_delivery",
+      "source_shape": "file",
       "needs_ruling": false,
       "target": {
-        "business_owner": "C3",
-        "structural_role": "adapter"
+        "business_owner": "application_orchestration",
+        "structural_role": "composition"
       },
+      "note": "#2269: compatibility-only facade. Sealed command/connection truth moved to foundation::daemon_{command,transport}; runtime adapters/codecs to host_runtime::{runtime_control,scope_runtime_stop,daemon_runtime_transport,daemon_runtime_codecs}; teardown/purge to host_runtime::cascade_effects; token rotation and host lifecycle projections to their host-runtime/host-control owners; materialize adapter to host_runtime::agent_materialize with its codec in application_orchestration; profile-MCP adapter/codec to identity_access; messaging effects to conversation_messaging::daemon_post_commit; workspace refusal/codec ownership remains workspace_data_plane.",
       "migration": {
-        "physical_target": "backend-server::conversation_messaging"
-      }
-    },
-    {
-      "crate": "backend-server",
-      "module": "daemon_delivery",
-      "source_shape": "hybrid",
-      "needs_ruling": false,
-      "split_required": {
-        "kind": "hybrid",
-        "current_container": {
-          "source_shape": "hybrid"
-        },
-        "child_groups": [
-          {
-            "group": "runtime_lifecycle_codecs",
-            "business_owner": "C2",
-            "structural_role": "adapter",
-            "members": [
-              "runtime_start_codec",
-              "runtime_stop_codec",
-              "runtime_clear_session_codec"
-            ],
-            "target_parent_namespace": "backend-server::host_runtime",
-            "needs_ruling": true
-          },
-          {
-            "group": "materialize_codec",
-            "business_owner": "application_orchestration",
-            "structural_role": "adapter",
-            "members": [
-              "agent_materialize_codec"
-            ],
-            "target_parent_namespace": "backend-server::application_orchestration",
-            "needs_ruling": true
-          },
-          {
-            "group": "profile_mcp_codec",
-            "business_owner": "C1",
-            "structural_role": "adapter",
-            "members": [
-              "agent_profile_mcp_codec"
-            ],
-            "target_parent_namespace": "backend-server::identity_access",
-            "needs_ruling": true
-          }
-        ],
-        "file_responsibilities": [
-          {
-            "responsibility": "registry_generation_fifo_pending_deadline_rawwire_selectloop",
-            "business_owner": "foundation",
-            "structural_role": "transport",
-            "target_parent_namespace": "backend-server::foundation",
-            "needs_ruling": true
-          },
-          {
-            "responsibility": "runtime_host_lifecycle_adapters",
-            "business_owner": "C2",
-            "structural_role": "adapter",
-            "target_parent_namespace": "backend-server::host_runtime",
-            "needs_ruling": true
-          },
-          {
-            "responsibility": "messaging_post_commit_adapters",
-            "business_owner": "C3",
-            "structural_role": "adapter",
-            "target_parent_namespace": "backend-server::conversation_messaging",
-            "needs_ruling": true
-          },
-          {
-            "responsibility": "teardown_purge_and_agent_materialization_sagas",
-            "business_owner": "application_orchestration",
-            "structural_role": "adapter",
-            "target_parent_namespace": "backend-server::application_orchestration",
-            "needs_ruling": true
-          },
-          {
-            "responsibility": "profile_mcp",
-            "business_owner": "C1",
-            "structural_role": "adapter",
-            "target_parent_namespace": "backend-server::identity_access",
-            "needs_ruling": true
-          },
-          {
-            "responsibility": "workspace_fs",
-            "business_owner": "workspace_data_plane",
-            "structural_role": "adapter",
-            "target_parent_namespace": "backend-server::workspace_data_plane",
-            "needs_ruling": true
-          }
-        ]
-      },
-      "note": "#2268: hybrid. child_groups close the 5 codec subfiles; file_responsibilities restore the 7541-line daemon_delivery.rs main-body owners (frozen #2268 mapping)",
-      "migration": {
-        "split": true
+        "physical_target": "backend-server::application_orchestration::daemon_delivery",
+        "compatibility_facade": "backend-server::daemon_delivery"
       }
     },
     {
@@ -2125,19 +2035,6 @@
       },
       "migration": {
         "physical_target": "backend-server::foundation::error"
-      }
-    },
-    {
-      "crate": "backend-server",
-      "module": "foundation",
-      "source_shape": "directory",
-      "needs_ruling": false,
-      "target": {
-        "business_owner": "foundation",
-        "structural_role": "transport"
-      },
-      "migration": {
-        "physical_target": "backend-server::foundation"
       }
     },
     {
@@ -2289,19 +2186,6 @@
     },
     {
       "crate": "backend-server",
-      "module": "identity_access",
-      "source_shape": "directory",
-      "needs_ruling": false,
-      "target": {
-        "business_owner": "C1",
-        "structural_role": "adapter"
-      },
-      "migration": {
-        "physical_target": "backend-server::identity_access"
-      }
-    },
-    {
-      "crate": "backend-server",
       "module": "internal_agent",
       "source_shape": "directory",
       "needs_ruling": false,
@@ -2433,7 +2317,8 @@
         "structural_role": "http"
       },
       "migration": {
-        "physical_target": "backend-server::host_runtime::runtime_control"
+        "physical_target": "backend-server::host_runtime::runtime_control",
+        "compatibility_facade": "backend-server::runtime_control"
       }
     },
     {
@@ -2459,7 +2344,8 @@
         "structural_role": "http"
       },
       "migration": {
-        "physical_target": "backend-server::host_runtime::scope_runtime_stop"
+        "physical_target": "backend-server::host_runtime::scope_runtime_stop",
+        "compatibility_facade": "backend-server::scope_runtime_stop"
       }
     },
     {
@@ -2499,19 +2385,6 @@
       },
       "migration": {
         "physical_target": "backend-server::foundation::wire_patch"
-      }
-    },
-    {
-      "crate": "backend-server",
-      "module": "viewer_read_model",
-      "source_shape": "directory",
-      "needs_ruling": false,
-      "target": {
-        "business_owner": "viewer_read_model",
-        "structural_role": "application"
-      },
-      "migration": {
-        "physical_target": "backend-server::viewer_read_model"
       }
     },
     {
@@ -3210,6 +3083,71 @@
       "migration": {
         "physical_target": "backend-filesystem::host_runtime::runtime_detection"
       }
+    },
+    {
+      "crate": "backend-server",
+      "module": "conversation_messaging",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C3",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-server::conversation_messaging"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "foundation",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "transport"
+      },
+      "migration": {
+        "physical_target": "backend-server::foundation"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "identity_access",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-server::identity_access"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "viewer_read_model",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-server::viewer_read_model"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "application_orchestration",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "application_orchestration",
+        "structural_role": "composition"
+      },
+      "migration": {
+        "physical_target": "backend-server::application_orchestration"
+      }
     }
   ],
   "nonschema_presence_ledger": [
@@ -3306,15 +3244,6 @@
     "backend-core::cold_read split group 'presence' final leaf module name",
     "backend-core::policy split group 'agent_presence' final leaf module name",
     "backend-core::policy split group 'human_presence_grace' final leaf module name",
-    "backend-server::daemon_delivery split group 'runtime_lifecycle_codecs' final leaf module name",
-    "backend-server::daemon_delivery split group 'materialize_codec' final leaf module name",
-    "backend-server::daemon_delivery split group 'profile_mcp_codec' final leaf module name",
-    "backend-server::daemon_delivery split group 'registry_generation_fifo_pending_deadline_rawwire_selectloop' final leaf module name",
-    "backend-server::daemon_delivery split group 'runtime_host_lifecycle_adapters' final leaf module name",
-    "backend-server::daemon_delivery split group 'messaging_post_commit_adapters' final leaf module name",
-    "backend-server::daemon_delivery split group 'teardown_purge_and_agent_materialization_sagas' final leaf module name",
-    "backend-server::daemon_delivery split group 'profile_mcp' final leaf module name",
-    "backend-server::daemon_delivery split group 'workspace_fs' final leaf module name",
     "backend-server::daemon_events split group 'runtime_settlement_state_codecs' final leaf module name",
     "backend-server::daemon_events split group 'conversation_activity_projection_publisher' final leaf module name",
     "backend-server::daemon_events split group 'user_presence_publication' final leaf module name",
@@ -3385,7 +3314,7 @@
     }
   ],
   "migration_ledger": {
-    "note": "Organization residual/landed is derived, NOT stored. A settled crate_root carries a full physical_target Rust module path: a normal row targets crate::namespace::leaf, while a self-named top-level context root targets its own path crate::module (already at its target). A split row is residual by construction and its GROUPS carry only target_parent_namespace (crate::owner-ns) + needs_ruling — the final leaf module name is unevidenced (see open_rulings), NOT a fabricated full target. Completed large-file splits leave the crate-root universe and move to resolved_splits, whose final leaf paths are checked against real declared modules. A root is LANDED iff its current full path equals its physical_target; residual = scanned roots − landed (from the map + real tree only). The CP root inventories in host_agent_scaffold.rs keep their original G4/G5 seam semantics and are used only as a root-coverage compatibility check, never as a landed/residual authority. Route/product ledgers stay separate."
+    "note": "Organization residual/landed is derived, NOT stored. A settled crate_root carries a full physical_target Rust module path: a normal row targets crate::namespace::leaf, while a self-named top-level context root targets its own path crate::module (already at its target). Beside embedded_bootstrap / workspace_data_plane / host_runtime, the landed backend-server roots now include application_orchestration (#2269), conversation_messaging, foundation, identity_access and viewer_read_model (#2270). A split row is residual by construction and its GROUPS carry only target_parent_namespace (crate::owner-ns) + needs_ruling. Completed large-file splits leave the crate-root universe and move to resolved_splits, whose final leaf paths are checked against real declared modules. A root is LANDED iff its current full path equals its physical_target; residual = scanned roots - landed (from the map + real tree only). The CP root inventories in host_agent_scaffold.rs keep their original G4/G5 seam semantics and are used only as a root-coverage compatibility check, never as a landed/residual authority. Route/product ledgers stay separate."
   },
   "target_namespaces": {
     "note": "The real Rust module namespace each business_owner relocates into. physical_target is a full path crate::namespace::leaf. landed is derived mechanically (current full path == physical_target); no row is landed until it actually resides at its full target path. Namespaces must be legal Rust idents, unique, and cover exactly the business_owner axis.",

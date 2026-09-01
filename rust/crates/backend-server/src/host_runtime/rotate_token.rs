@@ -31,7 +31,7 @@
 //! store and the live websocket transport, and picks the arm from the deployment mode
 //! (#task:2197).
 
-use std::{error::Error as StdError, sync::Arc};
+use std::{error::Error as StdError, fmt, sync::Arc, time::Duration};
 
 use axum::{
     Json, Router,
@@ -41,21 +41,27 @@ use axum::{
     routing::post,
 };
 use serde::Serialize;
+use serde_json::{Value, json};
 use silverhand_backend_core::{
     host_runtime::{
         custody::{CredentialIssueRefusal, CredentialIssueUnitOfWork},
         environment::{Clock, EntropySource},
         read::{ComputerReadModel, OwnedComputer, find_owned_computer},
         rotation::{
-            DaemonRotationError, DaemonTokenRotationChannel, HostTokenRotationError,
-            HostTokenRotationRefusal, RotateHostToken, RotateHostTokenThroughDaemon,
-            admit_host_token_rotation,
+            DaemonRotationAck, DaemonRotationError, DaemonTokenRotationChannel,
+            HostTokenRotationError, HostTokenRotationRefusal, RotateHostToken,
+            RotateHostTokenThroughDaemon, RotatedTokenDelivery, admit_host_token_rotation,
         },
     },
     identity::{HostId, UserId},
 };
 
-use crate::{daemon_delivery::DaemonRotationDeliveryError, error};
+use crate::{
+    daemon_delivery::{
+        DaemonDeliveryController, HostDataPlaneRequest, OwningHostDataPlane, command,
+    },
+    error,
+};
 
 use super::{
     ErrorBody, host_not_found,
@@ -100,6 +106,109 @@ const TRANSPORT_NO_CONNECTION_CODE: &str = "transport_no_connection";
 /// 503/502 split does — so a single token is faithful. Falsifier: a caller that branches
 /// on the specific 502 code forces the adapter to stop collapsing.
 const TRANSPORT_UNREACHABLE_CODE: &str = "transport_unreachable";
+const HOST_TOKEN_ROTATION_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Clone)]
+pub struct DaemonTokenRotation {
+    data_plane: OwningHostDataPlane,
+}
+
+impl DaemonTokenRotation {
+    pub(crate) fn new(data_plane: OwningHostDataPlane) -> Self {
+        Self { data_plane }
+    }
+}
+
+impl DaemonTokenRotationChannel for DaemonTokenRotation {
+    type Failure = DaemonRotationDeliveryError;
+
+    async fn deliver_rotated_token(
+        &self,
+        delivery: RotatedTokenDelivery,
+    ) -> Result<DaemonRotationAck, Self::Failure> {
+        let custody = self
+            .data_plane
+            .resolve(delivery.computer())
+            .map_err(|_| DaemonRotationDeliveryError::Unreachable)?
+            .ok_or(DaemonRotationDeliveryError::NoConnection)?;
+        let host_id = delivery.computer().as_str().to_owned();
+        let issued_at = delivery.issued_at();
+        let grace_until = delivery.grace_until();
+        let params = rotation_params(&host_id, delivery.reveal_token(), issued_at, grace_until);
+        let answer = self
+            .data_plane
+            .dispatch(HostDataPlaneRequest {
+                custody: custody.clone(),
+                command: command::rotate_token(params),
+                timeout: HOST_TOKEN_ROTATION_TIMEOUT,
+            })
+            .await
+            .map_err(|_| DaemonRotationDeliveryError::Unreachable)?;
+        let result = answer
+            .into_result_for(&custody)
+            .map_err(|_| DaemonRotationDeliveryError::Unreachable)?;
+        parse_rotation_ack(&result).ok_or(DaemonRotationDeliveryError::Unreachable)
+    }
+}
+
+#[derive(Debug)]
+pub enum DaemonRotationDeliveryError {
+    NoConnection,
+    Unreachable,
+}
+
+impl fmt::Display for DaemonRotationDeliveryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NoConnection => "no daemon is connected for this computer",
+            Self::Unreachable => "the daemon could not be reached for a token rotation",
+        })
+    }
+}
+
+impl StdError for DaemonRotationDeliveryError {}
+
+impl DaemonDeliveryController {
+    pub fn host_token_rotation(&self) -> DaemonTokenRotation {
+        DaemonTokenRotation::new(self.owning_host_data_plane())
+    }
+}
+
+pub(crate) fn rotation_params(
+    host_id: &str,
+    host_token: String,
+    issued_at: i64,
+    grace_until: i64,
+) -> Value {
+    json!({
+        "host_id": host_id,
+        "host_token": host_token,
+        "issued_at": issued_at,
+        "grace_until": grace_until,
+    })
+}
+
+pub(crate) fn parse_rotation_ack(result: &Value) -> Option<DaemonRotationAck> {
+    let object = result.as_object()?;
+    match object.get("rotated").and_then(Value::as_bool) {
+        Some(true) => {
+            let acknowledged = object.get("host_id").and_then(Value::as_str)?;
+            let computer = HostId::parse(acknowledged).ok()?;
+            let config_refreshed_at = object.get("config_refreshed_at").and_then(Value::as_i64)?;
+            Some(DaemonRotationAck::Stored {
+                computer,
+                config_refreshed_at,
+            })
+        }
+        _ => Some(DaemonRotationAck::Refused {
+            reason: object
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        }),
+    }
+}
 
 /// The route's window into a rotation transport's failure: the two facts an HTTP answer
 /// needs from it. The transport keeps its own closed failure set; this asks it only which

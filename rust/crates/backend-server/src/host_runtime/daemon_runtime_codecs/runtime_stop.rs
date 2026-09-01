@@ -12,8 +12,6 @@ use silverhand_backend_core::{
     wire_number::JsSafeInteger,
 };
 
-pub(crate) const KIND: &str = "runtime_stop";
-
 /// A complete, admitted `runtime_stop` params object. Its payload is private so a
 /// sender can move it to the transport but cannot edit one coordinate after the
 /// generation admission has passed.

@@ -20,15 +20,45 @@ use silverhand_backend_core::{
 };
 
 use crate::daemon_delivery::{
-    AgentWorkspaceFsRefusalCode, CommandRefusal, HostDataPlaneAnswerMismatch,
-    HostDataPlaneCommandKind, HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest,
-    OwningHostDataPlane,
+    CommandRefusal, HostDataPlaneAnswerMismatch, HostDataPlaneCustody, HostDataPlaneFailure,
+    HostDataPlaneRequest, OwningHostDataPlane, command,
 };
 
 use super::codec;
 
 /// TS `INDEX_TIMEOUT_MS`/`READ_TIMEOUT_MS` — both reads share one 30s budget.
 const WORKSPACE_FS_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub(crate) const WORKSPACE_FS_CAPABILITY_CODES: [&str; 4] = [
+    "fs_unavailable",
+    "registry_unavailable",
+    "forbidden_path",
+    "not_found",
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AgentWorkspaceFsRefusalCode {
+    FsUnavailable,
+    RegistryUnavailable,
+    ForbiddenPath,
+    NotFound,
+}
+
+impl AgentWorkspaceFsRefusalCode {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "fs_unavailable" => Some(Self::FsUnavailable),
+            "registry_unavailable" => Some(Self::RegistryUnavailable),
+            "forbidden_path" => Some(Self::ForbiddenPath),
+            "not_found" => Some(Self::NotFound),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) fn admits_workspace_fs_refusal(raw: &str) -> bool {
+    WORKSPACE_FS_CAPABILITY_CODES.contains(&raw)
+}
 
 /// Holds no placement authority: the host coordinate is supplied per call by the
 /// route off the agent row it already read, so this plane only owns the one live
@@ -37,6 +67,12 @@ const WORKSPACE_FS_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct ProductionWorkspaceDataPlane {
     data_plane: OwningHostDataPlane,
     timeout: Duration,
+}
+
+impl<C, D, H> crate::daemon_delivery::DaemonDeliveryRuntime<C, D, H> {
+    pub fn workspace_data_plane(&self) -> ProductionWorkspaceDataPlane {
+        ProductionWorkspaceDataPlane::new(self.owning_host_data_plane())
+    }
 }
 
 impl ProductionWorkspaceDataPlane {
@@ -68,8 +104,10 @@ impl WorkspaceDataPlane for ProductionWorkspaceDataPlane {
         let result = dispatch_captured(
             &self.data_plane,
             custody,
-            HostDataPlaneCommandKind::AgentWorkspaceTree,
-            codec::encode_tree(agent, workspace),
+            command::agent_workspace_tree(
+                codec::encode_tree(agent, workspace),
+                admits_workspace_fs_refusal,
+            ),
             self.timeout,
         )
         .await?;
@@ -87,8 +125,10 @@ impl WorkspaceDataPlane for ProductionWorkspaceDataPlane {
         let result = dispatch_captured(
             &self.data_plane,
             custody,
-            HostDataPlaneCommandKind::AgentWorkspaceFileRead,
-            codec::encode_file(agent, workspace, path),
+            command::agent_workspace_file_read(
+                codec::encode_file(agent, workspace, path),
+                admits_workspace_fs_refusal,
+            ),
             self.timeout,
         )
         .await?;
@@ -99,16 +139,14 @@ impl WorkspaceDataPlane for ProductionWorkspaceDataPlane {
 async fn dispatch_captured(
     data_plane: &OwningHostDataPlane,
     custody: HostDataPlaneCustody,
-    kind: HostDataPlaneCommandKind,
-    params: Value,
+    command: command::EncodedDaemonCommand,
     timeout: Duration,
 ) -> Result<Value, WorkspaceFsFault> {
     let expected = custody.clone();
     let answer = data_plane
         .dispatch(HostDataPlaneRequest {
             custody,
-            kind,
-            params,
+            command,
             timeout,
         })
         .await
@@ -133,7 +171,10 @@ fn map_failure(failure: HostDataPlaneFailure) -> WorkspaceFsFault {
             fault(WorkspaceFsFaultCode::HostAttachPending)
         }
         HostDataPlaneFailure::TimedOut => fault(WorkspaceFsFaultCode::DaemonTimeout),
-        HostDataPlaneFailure::Refused(CommandRefusal::AgentWorkspaceFsScoped(code)) => {
+        HostDataPlaneFailure::Refused(CommandRefusal::Capability(refusal)) => {
+            let Some(code) = AgentWorkspaceFsRefusalCode::parse(refusal.code()) else {
+                return fault(WorkspaceFsFaultCode::DaemonInternalError);
+            };
             fault(match code {
                 AgentWorkspaceFsRefusalCode::FsUnavailable => WorkspaceFsFaultCode::FsUnavailable,
                 AgentWorkspaceFsRefusalCode::RegistryUnavailable => {
@@ -173,7 +214,7 @@ fn fault(code: WorkspaceFsFaultCode) -> WorkspaceFsFault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon_delivery::{DaemonRefusalCode, RuntimeRefusalCode};
+    use crate::daemon_delivery::DaemonRefusalCode;
 
     #[test]
     fn every_transport_and_refusal_arm_maps_into_the_closed_product_taxonomy() {
@@ -195,27 +236,19 @@ mod tests {
                 WorkspaceFsFaultCode::DaemonTimeout,
             ),
             (
-                HostDataPlaneFailure::Refused(CommandRefusal::AgentWorkspaceFsScoped(
-                    AgentWorkspaceFsRefusalCode::FsUnavailable,
-                )),
+                HostDataPlaneFailure::Refused(CommandRefusal::capability("fs_unavailable")),
                 WorkspaceFsFaultCode::FsUnavailable,
             ),
             (
-                HostDataPlaneFailure::Refused(CommandRefusal::AgentWorkspaceFsScoped(
-                    AgentWorkspaceFsRefusalCode::RegistryUnavailable,
-                )),
+                HostDataPlaneFailure::Refused(CommandRefusal::capability("registry_unavailable")),
                 WorkspaceFsFaultCode::RegistryUnavailable,
             ),
             (
-                HostDataPlaneFailure::Refused(CommandRefusal::AgentWorkspaceFsScoped(
-                    AgentWorkspaceFsRefusalCode::ForbiddenPath,
-                )),
+                HostDataPlaneFailure::Refused(CommandRefusal::capability("forbidden_path")),
                 WorkspaceFsFaultCode::ForbiddenPath,
             ),
             (
-                HostDataPlaneFailure::Refused(CommandRefusal::AgentWorkspaceFsScoped(
-                    AgentWorkspaceFsRefusalCode::NotFound,
-                )),
+                HostDataPlaneFailure::Refused(CommandRefusal::capability("not_found")),
                 WorkspaceFsFaultCode::NotFound,
             ),
             // A transport registry read failure is distinct from the daemon's own
@@ -246,9 +279,7 @@ mod tests {
                 WorkspaceFsFaultCode::DaemonInternalError,
             ),
             (
-                HostDataPlaneFailure::Refused(CommandRefusal::RuntimeScoped(
-                    RuntimeRefusalCode::RegistryUnavailable,
-                )),
+                HostDataPlaneFailure::Refused(CommandRefusal::capability("agent_deleting")),
                 WorkspaceFsFaultCode::DaemonInternalError,
             ),
         ];
