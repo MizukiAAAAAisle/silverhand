@@ -134,12 +134,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // owner/target lives in the organization map, not as flat seam entries here.
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
-    // #task:2225 — the agent runtime-switch saga (`PUT /api/agents/{id}/runtime`):
-    // clears the old-runtime sessions and moves the `runtime` column without changing
-    // identity or racing a delete, orchestrating that window over the durable
-    // `runtime_transition` lock (reused verbatim). Core orchestration only; mounted at
-    // the app composition root by the #task:2234 integration (CP4 runtime-switch route).
-    ("backend-core", "agent_runtime_switch"),
+    // #task:2283 — the agent runtime-switch saga relocated under the dual-role `host_runtime`
+    // namespace, closing it at 11/11/0. Its flat crate-root seam entry is removed; the single
+    // `host_runtime` owning-root entry covers all landed leaves via the CP projection, and the
+    // organization map/gate owns each leaf's owner/target inside the namespace.
     ("backend-core", "teardown"),
     // #task:2279 — the C1-adjacent `viewer_read_model` relocation namespace: a directory
     // container declared once at the crate root, owning the relocated presence/sort leaves

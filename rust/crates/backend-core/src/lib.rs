@@ -8,7 +8,6 @@
 
 pub mod agent_creation;
 pub mod agent_materialization;
-pub mod agent_runtime_switch;
 pub mod blob_store;
 pub mod cli_invoke_audit;
 pub mod cli_preflight_audit;

@@ -299,7 +299,7 @@ pub trait RuntimeCustodyPort: Clone + Send + Sync + 'static {
 /// The read-only slice of custody the runtime-switch saga depends on.
 ///
 /// The switch route consults live custody only to source-bind the AgentSlot presentation
-/// focus before a clear (see [`crate::agent_runtime_switch`]); it never claims, linearizes,
+/// focus before a clear (see [`crate::host_runtime::agent_runtime_switch`]); it never claims, linearizes,
 /// or finalizes. Depending on the full [`RuntimeCustodyPort`] would hand the product route
 /// the mutating capability: `claim_or_current` bypasses bearer reservation / token
 /// activation, and `finalize` bypasses the credential authority's own token revoke, scope

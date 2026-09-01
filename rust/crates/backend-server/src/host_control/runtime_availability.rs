@@ -11,7 +11,7 @@
 //! route reports, so the route renders one HTTP status per cause.
 
 use silverhand_backend_core::{
-    agent_runtime_switch::{
+    host_runtime::agent_runtime_switch::{
         RuntimeAvailabilityProbe, RuntimeAvailabilityProbeFault, RuntimeAvailabilityVerdict,
     },
     identity::HostId,

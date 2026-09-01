@@ -71,3 +71,9 @@ pub mod runtime_transition;
 // its internal children (`model`) are not separate map units.
 pub mod agent_bulk_stop;
 pub mod agent_runtime_state_read;
+
+// Relocated C2 leaf (#task:2283) — closes the host_runtime namespace at 11/11/0. The
+// agent runtime-switch saga (`PUT /api/agents/{id}/runtime`): a distinct orchestration unit
+// that reuses the runtime-transition lock, kept separate from the credential/event/transition,
+// stop, and state-read units also colocated here; namespace closure is not a conceptual merger.
+pub mod agent_runtime_switch;

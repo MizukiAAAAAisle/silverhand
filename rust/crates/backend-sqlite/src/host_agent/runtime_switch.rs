@@ -9,7 +9,7 @@
 //! as a read failure, never defaulted into a decision input.
 
 use silverhand_backend_core::{
-    agent_runtime_switch::{SwitchAgentSnapshot, SwitchAgentSnapshotRead},
+    host_runtime::agent_runtime_switch::{SwitchAgentSnapshot, SwitchAgentSnapshotRead},
     identity::AgentId,
     persistence::PersistenceFailure,
 };

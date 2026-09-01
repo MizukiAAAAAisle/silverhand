@@ -64,7 +64,7 @@ use axum::{
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    agent_runtime_switch::{
+    host_runtime::agent_runtime_switch::{
         RuntimeAvailabilityProbe, RuntimeAvailabilityProbeFault, SwitchAgentRuntimeConfig,
         SwitchAgentRuntimeError, SwitchAgentRuntimeRequest, SwitchAgentSnapshotRead,
         SwitchConversationCoordination, switch_agent_runtime,
@@ -682,7 +682,7 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_runtime_switch::{
+        host_runtime::agent_runtime_switch::{
             RuntimeAvailabilityProbeFault, RuntimeAvailabilityVerdict, SwitchAgentRuntimeError,
             SwitchAgentRuntimeFault, SwitchAgentSnapshot,
         },

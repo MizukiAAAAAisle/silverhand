@@ -15,7 +15,7 @@
 //! (`created_at >= ?`, in-flight rows INCLUDED, distinct ids ordered by id).
 
 use silverhand_backend_core::{
-    agent_runtime_switch::SwitchConversationCoordination,
+    host_runtime::agent_runtime_switch::SwitchConversationCoordination,
     identity::{AgentId, ConversationId},
     persistence::PersistenceFailure,
 };
