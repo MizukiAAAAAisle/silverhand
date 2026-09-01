@@ -558,16 +558,16 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_lifecycle::MaterializationStatus,
-        agents::runtime::RuntimeKind,
         identity_access::agent_avatar::{
             AgentAvatarBlobPointer, AgentAvatarBlobRead, AgentAvatarRow, OwnedAgentAvatarBlob,
         },
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
+        identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agent_profile_write::{
             AdmittedAgentProfileEdit, AgentChangedAnnounceFailure, AgentProfileRowWrite,
             AgentRowBefore, AgentTuningContext, CommittedAgentRow,
         },
+        identity_access::agents::runtime::RuntimeKind,
         identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
         persistence::PersistenceFailure,
     };

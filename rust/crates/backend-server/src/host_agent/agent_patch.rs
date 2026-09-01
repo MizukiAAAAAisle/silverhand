@@ -497,17 +497,17 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_lifecycle::MaterializationStatus,
-        agents::runtime::RuntimeKind,
         identity::{AgentId, UserId},
         identity_access::agent_avatar::AgentAvatarRow,
         identity_access::agent_detail_read::{
             AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
         },
+        identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agent_profile_write::{
             AdmittedAgentProfileEdit, AgentProfileRowWrite, AgentProfileWriteUnitOfWork,
             AgentRowBefore, AgentTuningContext, CommittedAgentRow, FieldEdit, RequiredEdit,
         },
+        identity_access::agents::runtime::RuntimeKind,
         persistence::PersistenceFailure,
     };
     use tower::ServiceExt;

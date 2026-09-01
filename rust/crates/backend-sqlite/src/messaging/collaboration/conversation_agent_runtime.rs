@@ -2,8 +2,8 @@
 
 use serde_json::json;
 use silverhand_backend_core::{
-    agents::session_scope::AgentSessionScope,
     identity::{AgentId, ConversationId, UserId},
+    identity_access::agents::session_scope::AgentSessionScope,
     messaging::{
         PrincipalIdentity,
         collaboration::{

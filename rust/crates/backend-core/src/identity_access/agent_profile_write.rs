@@ -36,7 +36,7 @@
 //! ## Legality is judged UNDER THE WRITE LOCK, against the row's CURRENT runtime
 //!
 //! PATCH cannot change `runtime` (the product's `z.never()`), so the tuning legality
-//! ([`crate::agents::runtime_capability`]) is judged against the runtime/model/effort
+//! ([`crate::identity_access::agents::runtime_capability`]) is judged against the runtime/model/effort
 //! read UNDER THE WRITE LOCK — not a pre-read snapshot. Judging it earlier would open a
 //! TOCTOU window: two concurrent PATCHes, each legal against the same stale state,
 //! could compose an illegal final row (e.g. one moves the model off `sol`, the other
@@ -64,12 +64,12 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    agents::{
+    identity::AgentId,
+    identity_access::agent_avatar::{AgentAvatarAssignment, AgentAvatarRow},
+    identity_access::agents::{
         runtime::RuntimeKind,
         runtime_capability::{reasoning_effort_valid_for_runtime, runtime_supports_fast_mode},
     },
-    identity::AgentId,
-    identity_access::agent_avatar::{AgentAvatarAssignment, AgentAvatarRow},
     persistence::PersistenceFailure,
 };
 

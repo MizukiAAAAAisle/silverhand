@@ -33,12 +33,12 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agent_lifecycle::MaterializationStatus,
-    agents::runtime::RuntimeKind,
     identity::{AgentId, UserId},
     identity_access::agent_detail_read::{
         AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
     },
+    identity_access::agent_lifecycle::MaterializationStatus,
+    identity_access::agents::runtime::RuntimeKind,
     persistence::PersistenceFailure,
 };
 use sqlx::{

@@ -1132,8 +1132,10 @@ async fn post_bind_startup_failure_closes_writers_and_leaves_no_token() {
 /// owned and tested by the filesystem sink; this proves the composition WIRING.
 #[tokio::test]
 async fn prepare_wires_a_recording_agent_audit_sink_that_persists_a_line() {
-    use silverhand_backend_core::agent_audit_read::{AgentAuditEvent, AgentAuditSink};
     use silverhand_backend_core::identity::UserId;
+    use silverhand_backend_core::identity_access::agent_audit_read::{
+        AgentAuditEvent, AgentAuditSink,
+    };
     use silverhand_backend_filesystem::audit_sink::WriterState;
 
     let fixture = fixture(true).await;
@@ -1226,11 +1228,13 @@ async fn prepare_fails_closed_before_routes_when_blob_root_cannot_open() {
 /// `agent-audit-<utc>.log`. The shared writer never cross-contaminates records.
 #[tokio::test]
 async fn the_two_audit_sinks_write_disjoint_prefixed_streams() {
-    use silverhand_backend_core::agent_audit_read::{AgentAuditEvent, AgentAuditSink};
     use silverhand_backend_core::cli_preflight_audit::{
         CliPreflightAuditSink, CliPreflightFailure,
     };
     use silverhand_backend_core::identity::UserId;
+    use silverhand_backend_core::identity_access::agent_audit_read::{
+        AgentAuditEvent, AgentAuditSink,
+    };
 
     let fixture = fixture(true).await;
     let log_dir = tempfile::tempdir().unwrap();

@@ -5,9 +5,9 @@
 //! or conversation cannot silently become an input to a delete.
 
 use crate::{
-    agent_lifecycle::MaterializationStatus,
     host_runtime::computer::{HostKind, ProvisioningSource},
     identity::{AgentId, ConversationId, HostId},
+    identity_access::agent_lifecycle::MaterializationStatus,
     runtime_credential::{RuntimeGeneration, RuntimeScope},
     runtime_event::RuntimeObservedStatus,
 };

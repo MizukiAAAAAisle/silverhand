@@ -124,7 +124,7 @@ pub struct ComputerTeardownKey {
 ///
 /// ```
 /// use silverhand_backend_core::{
-///     agent_lifecycle::MaterializationStatus,
+///     identity_access::agent_lifecycle::MaterializationStatus,
 ///     identity::{AgentId, HostId},
 ///     teardown::{
 ///         eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},
@@ -415,8 +415,8 @@ pub trait AgentTeardownUnitOfWork: Clone + Send + Sync + 'static {
 mod tests {
     use super::*;
     use crate::{
-        agent_lifecycle::MaterializationStatus,
         host_runtime::computer::{HostKind, ProvisioningSource},
+        identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::computer_access::{
             ComputerAccess, ComputerOwnershipFacts, can_access_computer,
         },

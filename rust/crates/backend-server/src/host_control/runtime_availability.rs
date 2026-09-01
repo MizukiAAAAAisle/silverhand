@@ -14,8 +14,8 @@ use silverhand_backend_core::{
     agent_runtime_switch::{
         RuntimeAvailabilityProbe, RuntimeAvailabilityProbeFault, RuntimeAvailabilityVerdict,
     },
-    agents::runtime::RuntimeKind,
     identity::HostId,
+    identity_access::agents::runtime::RuntimeKind,
 };
 
 use crate::{

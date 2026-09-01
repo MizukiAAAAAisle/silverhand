@@ -773,8 +773,8 @@ mod tests {
     };
 
     use silverhand_backend_core::{
-        agent_lifecycle::MaterializationStatus,
         host_runtime::aftermath::CustodyEffectFailure,
+        identity_access::agent_lifecycle::MaterializationStatus,
         teardown::{
             agent_delete_resume::QuiescePurgeFailure,
             contract::TeardownFailure,

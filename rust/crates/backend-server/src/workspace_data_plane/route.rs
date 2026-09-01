@@ -498,12 +498,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_lifecycle::MaterializationStatus,
-        agents::runtime::RuntimeKind,
         identity::{AgentId, HostId, UserId, WorkspaceId},
         identity_access::agent_detail_read::{
             AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
         },
+        identity_access::agent_lifecycle::MaterializationStatus,
+        identity_access::agents::runtime::RuntimeKind,
         persistence::PersistenceFailure,
         wire_number::JsSafeInteger,
         workspace_data_plane::{

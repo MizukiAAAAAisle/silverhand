@@ -301,7 +301,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        agent_lifecycle::MaterializationStatus,
+        identity_access::agent_lifecycle::MaterializationStatus,
         teardown::{
             eligibility::{AgentTeardownEligibility, EligibilityVerdict, hold_eligibility},
             facts::{AgentTeardownCapture, AgentTeardownFacts},

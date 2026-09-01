@@ -14,11 +14,13 @@ use log_capture::LogBuffer;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
-    agent_profile_mcp::{AgentProfileMcpDataPlane, McpDataPlaneFaultCode, McpProbeCommand},
-    agents::runtime::RuntimeKind,
     blob_store::{BlobNamespace, BlobReadOutcome, BlobStore},
     host_runtime::aftermath::{CustodyEffectFailure, DaemonConnectionControl},
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
+    identity_access::agent_profile_mcp::{
+        AgentProfileMcpDataPlane, McpDataPlaneFaultCode, McpProbeCommand,
+    },
+    identity_access::agents::runtime::RuntimeKind,
     identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
     messaging::{
         AddressedPrincipals, CreatedMessage, DirectLineAuthority, FromKind, MessageContent,
@@ -1349,11 +1351,11 @@ impl RuntimeControlAdmissionScope for ClearAdmissionScope {
         &mut self,
         _: &AgentId,
     ) -> Result<
-        Option<silverhand_backend_core::agents::session_scope::AgentSessionScope>,
+        Option<silverhand_backend_core::identity_access::agents::session_scope::AgentSessionScope>,
         Self::Error,
     > {
         Ok(Some(
-            silverhand_backend_core::agents::session_scope::AgentSessionScope::Conversation,
+            silverhand_backend_core::identity_access::agents::session_scope::AgentSessionScope::Conversation,
         ))
     }
 

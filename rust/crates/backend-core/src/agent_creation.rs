@@ -44,7 +44,6 @@ use thiserror::Error;
 
 use crate::agent_materialization::{FailOutcome, fail_materialization};
 use crate::{
-    agent_lifecycle::MaterializationStatus,
     agent_materialization::{
         AgentArmProvisioningPort, AgentMaterializationLookup, AgentMaterializationWrite,
         IdempotencyKey, IdempotentReservation, ProvisionedActivation, ReopenOutcome,
@@ -55,15 +54,16 @@ use crate::{
         AgentMaterializePort, AgentMaterializeRefusal, AgentMaterializeTarget,
         AgentMaterializeTemplate,
     },
-    agents::{
-        runtime::RuntimeKind, runtime_capability::runtime_default_model,
-        session_scope::AgentSessionScope,
-    },
     host_runtime::{
         lifecycle::{HostLifecycleStatus, lifecycle_status},
         read::ComputerReadModel,
     },
     identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
+    identity_access::agent_lifecycle::MaterializationStatus,
+    identity_access::agents::{
+        runtime::RuntimeKind, runtime_capability::runtime_default_model,
+        session_scope::AgentSessionScope,
+    },
     identity_access::human_auth_flows::HandleNamespaceRead,
     identity_access::user_identity::ParticipantHandle,
     messaging::{

@@ -30,18 +30,18 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    agent_audit_read::{
-        AgentAuditEvent, AgentAuditReadModel, AgentAuditSink, AuditAttachmentBundle,
-        AuditChatSummary, AuditChatsBundle, AuditSubjectFacts, AuditTranscriptBundle,
-        AuditTranscriptWindow,
-    },
-    agent_lifecycle::MaterializationStatus,
     blob_store::{
         BlobDeleteOutcome, BlobNamespace, BlobRead, BlobReadOutcome, BlobStorageKey, BlobStore,
         StorageKind, StoredBlob,
     },
     direct_pair_read::DirectPairCounterpart,
     identity::{AgentId, ConversationId, Principal, UserId, WorkspaceId},
+    identity_access::agent_audit_read::{
+        AgentAuditEvent, AgentAuditReadModel, AgentAuditSink, AuditAttachmentBundle,
+        AuditChatSummary, AuditChatsBundle, AuditSubjectFacts, AuditTranscriptBundle,
+        AuditTranscriptWindow,
+    },
+    identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_audit::AuditedConversation,
     messaging::{
         AttachmentId,

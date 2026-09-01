@@ -1,8 +1,8 @@
 use std::ops::Range;
 
 use silverhand_backend_core::{
-    agents::runtime::RuntimeKind,
     identity::{AgentId, ConversationId, DaemonInstanceId},
+    identity_access::agents::runtime::RuntimeKind,
     messaging::{MessageContent, ReferencePositions},
     runtime_credential::{ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeScope},
     runtime_delivery::{ClaimPendingInbox, DeliveryLeaseOwner, RuntimeInboxCustodyPort},

@@ -4,8 +4,8 @@
 //! artifact under the system temp root; no live database is opened, and the store
 //! under test provisions nothing.
 
-use silverhand_backend_core::agents::runtime::RuntimeKind;
 use silverhand_backend_core::identity::{AgentId, ConversationId, UserId};
+use silverhand_backend_core::identity_access::agents::runtime::RuntimeKind;
 use silverhand_backend_core::messaging::ParticipantHandle;
 use silverhand_backend_core::messaging::mention_cc::{
     CommittedMentionCopy, MentionCopyOutcome, MentionCopySource, render_copy_body,

@@ -7,8 +7,8 @@
 use std::{error::Error, fmt, future::Future};
 
 use crate::{
-    agents::session_scope::AgentSessionScope,
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId},
+    identity_access::agents::session_scope::AgentSessionScope,
     runtime_credential::{RuntimeGeneration, RuntimeScope},
 };
 

@@ -1,5 +1,5 @@
 //! SQLite adapter for the owner-audit read port
-//! ([`silverhand_backend_core::agent_audit_read`]). Same-named sibling of the core
+//! ([`silverhand_backend_core::identity_access::agent_audit_read`]). Same-named sibling of the core
 //! port; source-bound projection reads only, one `BEGIN DEFERRED` snapshot per face.
 //!
 //! The namespace declares and re-exports only — the projection itself lives in

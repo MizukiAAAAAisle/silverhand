@@ -45,12 +45,12 @@ use std::future::Future;
 use futures_util::future::join_all;
 
 use crate::{
-    agents::{
+    identity::{AgentId, ConversationId, HostId},
+    identity_access::agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
+    identity_access::agents::{
         runtime::RuntimeKind, runtime_catalog::SELECTABLE_RUNTIMES,
         session_scope::AgentSessionScope,
     },
-    identity::{AgentId, ConversationId, HostId},
-    identity_access::agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
     messaging::collaboration::{RuntimeControlPort, RuntimeSeatTarget, RuntimeStartTarget},
     persistence::PersistenceFailure,
     runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustodyReadPort, RuntimeScope},

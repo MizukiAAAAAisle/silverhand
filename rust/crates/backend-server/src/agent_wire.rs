@@ -45,7 +45,7 @@ pub(crate) struct AgentDto {
     name: String,
     display_name: String,
     /// The closed set's own spelling, like `materialization_status`: the projection
-    /// carries a decoded [`silverhand_backend_core::agents::runtime::RuntimeKind`], so
+    /// carries a decoded [`silverhand_backend_core::identity_access::agents::runtime::RuntimeKind`], so
     /// this shared wire has no way to emit a token the set does not hold.
     runtime: &'static str,
     model: Option<String>,
@@ -211,8 +211,9 @@ mod tests {
     use axum::body::to_bytes;
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_lifecycle::MaterializationStatus, agents::runtime::RuntimeKind, identity::UserId,
-        identity_access::agent_detail_read::AgentDetailProjection,
+        identity::UserId, identity_access::agent_detail_read::AgentDetailProjection,
+        identity_access::agent_lifecycle::MaterializationStatus,
+        identity_access::agents::runtime::RuntimeKind,
     };
 
     use super::*;

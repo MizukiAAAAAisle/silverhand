@@ -21,7 +21,7 @@
 //! ## Transport is borrowed, never owned
 //!
 //! These faces dispatch through the shared
-//! [`AgentProfileMcpDataPlane`](silverhand_backend_core::agent_profile_mcp) port — the
+//! [`AgentProfileMcpDataPlane`](silverhand_backend_core::identity_access::agent_profile_mcp) port — the
 //! SAME production instance the internal family uses, constructed once by the
 //! composition root and cloned in. This factory takes an already-built `D`; it never
 //! constructs one, so mounting cannot be induced into standing up a second data plane.
@@ -55,9 +55,9 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_profile_mcp::AgentProfileMcpDataPlane,
     identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
+    identity_access::agent_profile_mcp::AgentProfileMcpDataPlane,
     identity_access::capability::{
         agent_authority::{AgentAuthority, can_edit_agent},
         agent_view::{VisibleStages, can_view_agent},
@@ -243,14 +243,14 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_lifecycle::MaterializationStatus,
-        agent_profile_mcp::{
+        identity::{AgentId, UserId},
+        identity_access::agent_detail_read::{AgentDetailProjection, AgentDetailReadModel},
+        identity_access::agent_lifecycle::MaterializationStatus,
+        identity_access::agent_profile_mcp::{
             AgentProfileMcpDataPlane, McpBytesWritten, McpDataPlaneFault, McpDataPlaneFaultCode,
             McpProbeCommand, McpProbeOutcome, McpProbePhase, McpProbeServerInfo, McpProbeTool,
         },
-        agents::runtime::RuntimeKind,
-        identity::{AgentId, UserId},
-        identity_access::agent_detail_read::{AgentDetailProjection, AgentDetailReadModel},
+        identity_access::agents::runtime::RuntimeKind,
         persistence::PersistenceFailure,
     };
     use std::sync::{

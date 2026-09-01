@@ -46,9 +46,9 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agents::runtime::RuntimeKind,
     host_resources_read::{HostAgentResourceFact, HostResourcesFacts, HostResourcesReadModel},
     identity::{AgentId, HostId, UserId},
+    identity_access::agents::runtime::RuntimeKind,
     identity_access::capability::computer_access::ComputerOwnershipFacts,
     persistence::PersistenceFailure,
 };

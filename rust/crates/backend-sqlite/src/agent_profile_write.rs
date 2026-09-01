@@ -47,7 +47,6 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agents::runtime::RuntimeKind,
     identity::AgentId,
     identity_access::agent_avatar::{
         AgentAvatarRow, AgentAvatarRowCorruption, AgentAvatarServeRef, decode_agent_avatar_row,
@@ -56,6 +55,7 @@ use silverhand_backend_core::{
         AdmittedAgentProfileEdit, AgentProfileRowWrite, AgentProfileWriteUnitOfWork,
         AgentRowBefore, AgentTuningContext, CommittedAgentRow, FieldEdit, RequiredEdit,
     },
+    identity_access::agents::runtime::RuntimeKind,
     persistence::PersistenceFailure,
 };
 use sqlx::{

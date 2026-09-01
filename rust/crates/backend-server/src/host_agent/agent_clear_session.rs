@@ -261,9 +261,9 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_lifecycle::MaterializationStatus,
-        agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
         identity::{AgentId, UserId},
+        identity_access::agent_lifecycle::MaterializationStatus,
+        identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
         messaging::collaboration::{
             ClearSessionOutcome, ClearSessionProviderRefusal, CliSessionId, HardStopRuntimeOutcome,
             HardStopRuntimeProviderRefusal, RuntimeControlAdmission, RuntimeControlAdmissionScope,

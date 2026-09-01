@@ -47,14 +47,14 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    agent_lifecycle::MaterializationStatus,
-    agents::runtime::RuntimeKind,
-    agents::session_scope::AgentSessionScope,
     identity::AgentId,
     identity::ConversationId,
     identity::HostId,
     identity::UserId,
     identity::WorkspaceId,
+    identity_access::agent_lifecycle::MaterializationStatus,
+    identity_access::agents::runtime::RuntimeKind,
+    identity_access::agents::session_scope::AgentSessionScope,
     identity_access::user_identity::ParticipantHandle,
     messaging::DirectPairParticipants,
     messaging::MessageId,

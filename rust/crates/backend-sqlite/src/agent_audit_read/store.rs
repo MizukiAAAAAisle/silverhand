@@ -36,12 +36,12 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agent_audit_read::{
+    identity::{AgentId, ConversationId, Principal, WorkspaceId},
+    identity_access::agent_audit_read::{
         AgentAuditReadModel, AuditAttachmentBundle, AuditChatSummary, AuditChatsBundle,
         AuditSubjectFacts, AuditTranscriptBundle, AuditTranscriptWindow, audit_chats_floor,
         audit_conversation_floor,
     },
-    identity::{AgentId, ConversationId, Principal, WorkspaceId},
     identity_access::capability::agent_audit::AuditedConversation,
     messaging::{
         AttachmentId, MessageSeq,

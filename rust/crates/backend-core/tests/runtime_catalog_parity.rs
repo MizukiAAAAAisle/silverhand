@@ -22,7 +22,7 @@
 //! order for the remainder would pin something neither side owns.
 
 use serde_json::Value;
-use silverhand_backend_core::agents::{
+use silverhand_backend_core::identity_access::agents::{
     runtime::RuntimeKind,
     runtime_catalog::{SELECTABLE_RUNTIME_COUNT, SELECTABLE_RUNTIMES},
 };

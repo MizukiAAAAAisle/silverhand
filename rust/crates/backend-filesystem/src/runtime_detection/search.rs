@@ -35,7 +35,7 @@
 
 use std::path::{Path, PathBuf};
 
-use silverhand_backend_core::agents::runtime::RuntimeKind;
+use silverhand_backend_core::identity_access::agents::runtime::RuntimeKind;
 
 use super::machine::{DetectionPlatform, MachineFacts};
 use super::version::run_command;

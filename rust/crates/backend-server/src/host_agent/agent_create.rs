@@ -101,15 +101,15 @@ use silverhand_backend_core::{
         IdempotencyKey,
     },
     agent_materialize::AgentMaterializePort,
-    agents::{
-        runtime::RuntimeKind,
-        runtime_capability::{reasoning_effort_valid_for_runtime, runtime_supports_fast_mode},
-        session_scope::AgentSessionScope,
-    },
     host_runtime::read::ComputerReadModel,
     identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
     identity_access::agent_detail_read::AgentDetailReadModel,
     identity_access::agent_profile_write::AgentChangedSink,
+    identity_access::agents::{
+        runtime::RuntimeKind,
+        runtime_capability::{reasoning_effort_valid_for_runtime, runtime_supports_fast_mode},
+        session_scope::AgentSessionScope,
+    },
     identity_access::user_identity::ParticipantHandle,
     messaging::{
         MessageId,
@@ -883,7 +883,6 @@ mod tests {
     use serde_json::{Value, json};
     use silverhand_backend_core::{
         agent_creation::MetadataField,
-        agent_lifecycle::MaterializationStatus,
         agent_materialization::{
             IdempotentReservationRow, MaterializationFlipRow, RawProvisionOutcome,
             ReserveAgentInput, ReserveRecord,
@@ -891,13 +890,14 @@ mod tests {
         agent_materialize::{
             AgentMaterializeReceipt, AgentMaterializeRefusal, AgentMaterializeTarget,
         },
-        agents::runtime::RuntimeKind,
         host_runtime::{computer::ComputerRecord, read::ComputerReadModel},
         identity::{AgentId, ConversationId, HostId, UserId, WorkspaceId},
         identity_access::agent_detail_read::{
             AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
         },
+        identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::agent_profile_write::{AgentChangedAnnounceFailure, AgentChangedSink},
+        identity_access::agents::runtime::RuntimeKind,
         identity_access::human_auth_flows::HandleNamespaceRead,
         identity_access::user_identity::ParticipantHandle,
         messaging::{

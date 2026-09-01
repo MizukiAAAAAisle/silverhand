@@ -15,12 +15,12 @@
 //!    read error, not a silent default.
 
 use silverhand_backend_core::{
-    agent_lifecycle::MaterializationStatus,
-    agents::runtime::RuntimeKind,
     identity::{AgentId, UserId},
     identity_access::agent_detail_read::{
         AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
     },
+    identity_access::agent_lifecycle::MaterializationStatus,
+    identity_access::agents::runtime::RuntimeKind,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
     persistence::PersistenceFailure,
 };

@@ -277,8 +277,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        agent_lifecycle::MaterializationStatus,
         identity::HostId,
+        identity_access::agent_lifecycle::MaterializationStatus,
         persistence::PersistenceFailure,
         teardown::{
             contract::TeardownContractViolation,

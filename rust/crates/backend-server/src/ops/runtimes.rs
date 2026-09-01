@@ -70,7 +70,7 @@ use axum::{
     routing::get,
 };
 use serde::Serialize;
-use silverhand_backend_core::agents::runtime_catalog::{
+use silverhand_backend_core::identity_access::agents::runtime_catalog::{
     DetectedRuntime, RuntimeCatalogDetector, RuntimeDetection,
 };
 
@@ -201,7 +201,7 @@ mod tests {
         http::Request,
     };
     use serde_json::{Value, json};
-    use silverhand_backend_core::agents::runtime_catalog::RuntimeCatalog;
+    use silverhand_backend_core::identity_access::agents::runtime_catalog::RuntimeCatalog;
     use tower::ServiceExt;
 
     use super::*;

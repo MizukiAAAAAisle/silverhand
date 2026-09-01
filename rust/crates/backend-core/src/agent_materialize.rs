@@ -9,8 +9,8 @@
 use std::{error::Error, future::Future};
 
 use crate::{
-    agents::runtime::RuntimeKind,
     identity::{AgentId, HostId, WorkspaceId},
+    identity_access::agents::runtime::RuntimeKind,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

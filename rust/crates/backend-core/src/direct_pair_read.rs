@@ -9,8 +9,8 @@
 use std::future::Future;
 
 use crate::{
-    agents::runtime::RuntimeKind,
     identity::{ConversationId, UserId},
+    identity_access::agents::runtime::RuntimeKind,
     messaging::{ActiveAuthor, AvatarRevision, MessageAuthor, PrincipalIdentity},
     persistence::PersistenceFailure,
 };

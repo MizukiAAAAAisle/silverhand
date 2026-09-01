@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use silverhand_backend_core::agents::runtime::RuntimeKind;
+use silverhand_backend_core::identity_access::agents::runtime::RuntimeKind;
 
 use crate::daemon_delivery::{
     HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest, OwningHostDataPlane, command,

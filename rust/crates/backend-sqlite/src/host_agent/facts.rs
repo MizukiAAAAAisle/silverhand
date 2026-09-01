@@ -13,8 +13,8 @@
 
 use silverhand_backend_core::{
     agent_bulk_stop::{AgentBulkStopReadPort, AgentBulkStopSnapshot},
-    agent_profile_mcp::{AgentProfileMcpPlacement, AgentProfileMcpPlacementRead},
     identity::{AgentId, HostId},
+    identity_access::agent_profile_mcp::{AgentProfileMcpPlacement, AgentProfileMcpPlacementRead},
     identity_access::capability::computer_access::ComputerOwnershipFacts,
     persistence::PersistenceFailure,
     runtime_credential::RuntimeScope,
@@ -401,9 +401,9 @@ mod tests {
     use std::path::PathBuf;
 
     use silverhand_backend_core::{
-        agent_lifecycle::MaterializationStatus,
         host_runtime::computer::{HostKind, ProvisioningSource},
         identity::HostId,
+        identity_access::agent_lifecycle::MaterializationStatus,
     };
     use sqlx::Connection;
     use tempfile::TempDir;

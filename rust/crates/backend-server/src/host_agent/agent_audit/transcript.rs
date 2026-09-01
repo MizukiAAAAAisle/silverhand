@@ -9,9 +9,9 @@ use axum::{
 };
 use serde_json::json;
 use silverhand_backend_core::{
-    agent_audit_read::{AgentAuditEvent, AgentAuditReadModel, AgentAuditSink},
     blob_store::BlobStore,
     identity::{AgentId, ConversationId, Principal, UserId},
+    identity_access::agent_audit_read::{AgentAuditEvent, AgentAuditReadModel, AgentAuditSink},
 };
 
 use super::{

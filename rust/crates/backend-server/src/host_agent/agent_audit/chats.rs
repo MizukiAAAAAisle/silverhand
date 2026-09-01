@@ -6,9 +6,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use silverhand_backend_core::{
-    agent_audit_read::{AgentAuditEvent, AgentAuditReadModel, AgentAuditSink},
     blob_store::BlobStore,
     identity::{AgentId, Principal, UserId},
+    identity_access::agent_audit_read::{AgentAuditEvent, AgentAuditReadModel, AgentAuditSink},
 };
 
 use super::{AgentAuditState, internal_error, not_found, owner_floor, wire};

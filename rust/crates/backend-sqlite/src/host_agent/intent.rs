@@ -11,8 +11,8 @@
 //! row is `AttemptLost`, not a second teardown.
 
 use silverhand_backend_core::{
-    agent_lifecycle::MaterializationStatus,
     identity::{AgentId, HostId},
+    identity_access::agent_lifecycle::MaterializationStatus,
     persistence::PersistenceFailure,
     teardown::{
         contract::TeardownFailure,

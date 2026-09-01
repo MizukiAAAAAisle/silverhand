@@ -3465,7 +3465,7 @@ fn availability_view(
     creator: Option<&str>,
     direct_pairs: &[&str],
     workspaces: &[&str],
-    status: silverhand_backend_core::agent_lifecycle::MaterializationStatus,
+    status: silverhand_backend_core::identity_access::agent_lifecycle::MaterializationStatus,
 ) -> silverhand_backend_core::agent_availability_read::AgentViewFacts {
     use silverhand_backend_core::identity_access::capability::agent_view::{
         AgentViewerArms, AgentVisibility,
@@ -3500,7 +3500,7 @@ fn availability_agent_ids(frames: &[ScopedEvent]) -> Vec<String> {
 
 #[tokio::test]
 async fn availability_announcer_fans_out_per_agent_to_each_agents_own_viewer_audience() {
-    use silverhand_backend_core::agent_lifecycle::MaterializationStatus;
+    use silverhand_backend_core::identity_access::agent_lifecycle::MaterializationStatus;
     // Computer host-1 carries three agents. Two are active with different
     // audiences; the third is a non-active row that a viewer would still be
     // able to see if it were active. The announcer is handed ONLY the computer
@@ -3591,7 +3591,7 @@ async fn availability_announcer_fans_out_per_agent_to_each_agents_own_viewer_aud
 
 #[tokio::test]
 async fn availability_view_resolved_for_the_wrong_agent_is_a_failure_that_reaches_no_viewer() {
-    use silverhand_backend_core::agent_lifecycle::MaterializationStatus;
+    use silverhand_backend_core::identity_access::agent_lifecycle::MaterializationStatus;
     // The splice this guards against: the roster asks for agent-a, but the view
     // model resolves facts whose decoded `source()` is agent-b. Its ACL admits
     // viewer-99. Without the source==request bind, agent-a's `agent_id` payload

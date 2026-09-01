@@ -38,9 +38,9 @@ use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
     agent_availability_read::{AgentAvailabilityReadModel, AgentViewFacts},
-    agent_lifecycle::MaterializationStatus,
     cold_read::availability::HostReachabilityFacts,
     identity::{AgentId, HostId, UserId},
+    identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
     persistence::PersistenceFailure,
 };

@@ -63,7 +63,8 @@ pub(crate) enum DirectPairInitiationTarget<'value> {
 pub(crate) struct DirectPairInitiationCandidate {
     pub(crate) viewer: UserId,
     pub(crate) target: AgentId,
-    pub(crate) scope: silverhand_backend_core::agents::session_scope::AgentSessionScope,
+    pub(crate) scope:
+        silverhand_backend_core::identity_access::agents::session_scope::AgentSessionScope,
 }
 
 pub(crate) async fn direct_pair_initiation_candidate(
@@ -93,7 +94,7 @@ pub(crate) async fn direct_pair_initiation_candidate(
         Ok(DirectPairInitiationCandidate {
             viewer: UserId::parse(source_viewer).map_err(|_| corrupt("viewer_id"))?,
             target: AgentId::parse(source_target).map_err(|_| corrupt("agents.id"))?,
-            scope: silverhand_backend_core::agents::session_scope::AgentSessionScope::parse(&scope)
+            scope: silverhand_backend_core::identity_access::agents::session_scope::AgentSessionScope::parse(&scope)
                 .ok_or_else(|| corrupt("agents.session_scope"))?,
         })
     })
@@ -470,7 +471,7 @@ where
             .await?;
             if let Some(candidate) = candidate.filter(|candidate| {
                 candidate.scope
-                    == silverhand_backend_core::agents::session_scope::AgentSessionScope::Agent
+                    == silverhand_backend_core::identity_access::agents::session_scope::AgentSessionScope::Agent
             }) {
                 agents.push(candidate.target);
             }

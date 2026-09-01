@@ -34,12 +34,12 @@
 use std::{path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agent_lifecycle::MaterializationStatus,
     agent_runtime_state_read::{
         AgentRuntimeStateFacts, AgentRuntimeStateReadModel, RuntimeParticipationFact,
         RuntimeSeatFact, RuntimeSeatScopeFact,
     },
     identity::{AgentId, ConversationId, UserId},
+    identity_access::agent_lifecycle::MaterializationStatus,
     messaging::collaboration::conversation_ref::ConversationRosterPolicy,
     persistence::PersistenceFailure,
     runtime_credential::RuntimeGeneration,

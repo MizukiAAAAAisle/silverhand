@@ -44,8 +44,8 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_profile_mcp::AgentProfileMcpDataPlane, identity_access::mcp_config::parse_mcp_config,
-    runtime_credential::RuntimePrincipal,
+    identity_access::agent_profile_mcp::AgentProfileMcpDataPlane,
+    identity_access::mcp_config::parse_mcp_config, runtime_credential::RuntimePrincipal,
 };
 
 use crate::host_agent::public_profile_mcp::wire::{
@@ -117,7 +117,7 @@ where
 
 /// `{ ok: true, bytes_written: number }` — the daemon's byte count for the written
 /// `mcp.json`. `bytes_written` is an `i64` sourced from the port's
-/// [`McpBytesWritten`](silverhand_backend_core::agent_profile_mcp::McpBytesWritten),
+/// [`McpBytesWritten`](silverhand_backend_core::identity_access::agent_profile_mcp::McpBytesWritten),
 /// which has already guaranteed a JS-safe value, so the wire number is always exactly
 /// representable by a JavaScript consumer. (Internal-only: the public management faces
 /// carry no config write.)
@@ -203,11 +203,11 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_profile_mcp::{
+        identity::{AgentId, DaemonInstanceId},
+        identity_access::agent_profile_mcp::{
             McpBytesWritten, McpDataPlaneFault, McpDataPlaneFaultCode, McpProbeCommand,
             McpProbeOutcome, McpProbePhase, McpProbeServerInfo, McpProbeTool,
         },
-        identity::{AgentId, DaemonInstanceId},
         persistence::PersistenceFailure,
         runtime_credential::{RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     };

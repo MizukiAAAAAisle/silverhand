@@ -88,7 +88,6 @@ const CRATE_ROOTS: &[&str] = &[
 /// for a leaf's owner, physical target and residual/landed status inside the namespace.
 const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-core", "agent_availability_read"),
-    ("backend-core", "agent_lifecycle"),
     // #task:2229 — unmounted typed agent-materialize capability and its production
     // exact-custody data-plane adapter. The later create vertical consumes this
     // port; this ticket does not activate a route.
@@ -136,11 +135,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // orchestration. The production data-plane adapter is #task:2231 below; mounted at
     // the app composition root by the #task:2234 integration (CP7a peer-profile, CP7b MCP).
     // This family's core leaves relocated under the `identity_access` namespace across
-    // #task:2274 (`agent_peer_profile`, `internal_profile_write`, `mcp_config`) and
-    // #task:2275 (`agent_profile_read`); their owner/target lives in the organization
-    // map, not as flat seam entries here. The route-face vocabulary `agent_profile_mcp`
-    // stays flat below.
-    ("backend-core", "agent_profile_mcp"),
+    // #task:2274 (`agent_peer_profile`, `internal_profile_write`, `mcp_config`),
+    // #task:2275 (`agent_profile_read`), and #task:2278 (`agent_profile_mcp`); their
+    // owner/target lives in the organization map, not as flat seam entries here.
     ("backend-core", "cold_read"),
     ("backend-core", "host_resources_read"),
     ("backend-core", "policy"),
@@ -202,8 +199,11 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // (`agent_audit_read` deliberately distinct from the `capability::agent_audit`
     // decision vocabulary). Each has a same-named SQLite adapter in the backend-sqlite
     // block below. Directory-shaped scaffolds — no port/adapter/route/mount yet, so all
-    // are absent from `ACTIVATION_NAMESPACES` (UNMOUNTED).
-    ("backend-core", "agent_audit_read"),
+    // are absent from `ACTIVATION_NAMESPACES` (UNMOUNTED). #task:2278 relocated the
+    // `agent_audit_read` read-model directory under the C1 `identity_access` namespace
+    // (its owner/target lives in the organization map, folded into the container seam
+    // entry); `agent_runtime_state_read`, `embedded_bootstrap`, and `workspace_data_plane`
+    // remain flat backend-core roots.
     ("backend-core", "agent_runtime_state_read"),
     ("backend-core", "embedded_bootstrap"),
     ("backend-core", "workspace_data_plane"),
@@ -462,7 +462,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
 /// authority. Organization accounting stays separate from route/product ledgers.
 const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-app", "application_orchestration"),
-    ("backend-core", "agents"),
     ("backend-server", "application_orchestration"),
     ("backend-server", "conversation_messaging"),
     ("backend-server", "foundation"),
@@ -493,8 +492,9 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-server", "workspace_data_plane"),
     // #task:2248 — the residual-wave core ports and their SQLite adapters are all
     // directory-shaped scaffolds too, so they join this inventory (G0 holds it to the
-    // exact directory-shaped subset of the seam ledger).
-    ("backend-core", "agent_audit_read"),
+    // exact directory-shaped subset of the seam ledger). #task:2278 relocated the
+    // backend-core `agent_audit_read` directory under `identity_access`, so its flat
+    // directory entry is removed here; the backend-sqlite adapter stays a flat root.
     ("backend-core", "agent_runtime_state_read"),
     ("backend-core", "embedded_bootstrap"),
     ("backend-core", "workspace_data_plane"),

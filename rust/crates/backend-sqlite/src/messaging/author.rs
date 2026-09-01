@@ -25,8 +25,8 @@ use std::collections::{HashMap, HashSet};
 
 use silverhand_backend_core::persistence::PersistenceFailure;
 use silverhand_backend_core::{
-    agents::runtime::RuntimeKind,
     identity::{AgentId, UserId},
+    identity_access::agents::runtime::RuntimeKind,
     messaging::{AvatarRevision, FromKind, MessageAuthor, PrincipalIdentity, PrincipalKind},
 };
 use sqlx::{Row, SqliteConnection, sqlite::SqliteRow};

@@ -21,12 +21,12 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::{
-    agent_lifecycle::MaterializationStatus,
     agent_runtime_state_read::{
         AgentRuntimeStateFacts, AgentRuntimeStateReadModel, RuntimeParticipationFact,
         RuntimeSeatFact, RuntimeSeatScopeFact,
     },
     identity::{AgentId, ConversationId, DaemonInstanceId, UserId},
+    identity_access::agent_lifecycle::MaterializationStatus,
     messaging::collaboration::conversation_ref::ConversationRosterPolicy,
     persistence::PersistenceFailure,
     runtime_credential::{

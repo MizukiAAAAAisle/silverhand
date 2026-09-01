@@ -53,8 +53,8 @@ use std::{collections::HashSet, future::Future};
 use thiserror::Error;
 
 use crate::{
-    agents::runtime::RuntimeKind,
     identity::{AgentId, ConversationId},
+    identity_access::agents::runtime::RuntimeKind,
     persistence::PersistenceFailure,
     runtime_credential::RuntimeScope,
     runtime_event::RuntimeObservedStatus,

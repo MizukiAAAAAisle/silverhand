@@ -39,8 +39,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use silverhand_backend_core::agents::runtime::RuntimeKind;
-use silverhand_backend_core::agents::runtime_catalog::{
+use silverhand_backend_core::identity_access::agents::runtime::RuntimeKind;
+use silverhand_backend_core::identity_access::agents::runtime_catalog::{
     RuntimeCatalog, RuntimeCatalogDetector, RuntimeDetection, SELECTABLE_RUNTIMES,
 };
 use tokio::{sync::Mutex, task::JoinHandle};

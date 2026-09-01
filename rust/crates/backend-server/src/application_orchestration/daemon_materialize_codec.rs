@@ -61,8 +61,8 @@ mod tests {
     use super::*;
     use silverhand_backend_core::{
         agent_materialize::AgentMaterializeTemplate,
-        agents::runtime::RuntimeKind,
         identity::{AgentId, HostId, WorkspaceId},
+        identity_access::agents::runtime::RuntimeKind,
     };
 
     fn target(name: String) -> AgentMaterializeTarget {

@@ -9,7 +9,8 @@
 //! that makes having taken them safe.
 
 use crate::{
-    agent_lifecycle::MaterializationStatus, identity::HostId, teardown::facts::AgentTeardownFacts,
+    identity::HostId, identity_access::agent_lifecycle::MaterializationStatus,
+    teardown::facts::AgentTeardownFacts,
 };
 
 /// What teardown a row's CURRENT stage owes.
@@ -134,7 +135,7 @@ pub enum EligibilityMoved {
 ///
 /// ```
 /// use silverhand_backend_core::{
-///     agent_lifecycle::MaterializationStatus,
+///     identity_access::agent_lifecycle::MaterializationStatus,
 ///     identity::{AgentId, HostId},
 ///     teardown::{
 ///         eligibility::{

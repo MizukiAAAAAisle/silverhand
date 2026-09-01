@@ -10,9 +10,9 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_lifecycle::MaterializationStatus,
     host_runtime::status::{HostStatusAgentFact, HostStatusStoredReadModel, visible_host_status},
     identity::{AgentId, HostId, UserId},
+    identity_access::agent_lifecycle::MaterializationStatus,
 };
 
 use crate::{

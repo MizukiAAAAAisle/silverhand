@@ -19,8 +19,8 @@ use std::{
 use std::collections::HashSet;
 
 use silverhand_backend_core::agent_creation::OnboardingInboxEnsure;
-use silverhand_backend_core::agents::session_scope::AgentSessionScope;
 use silverhand_backend_core::identity::{AgentId, ConversationId, UserId, WorkspaceId};
+use silverhand_backend_core::identity_access::agents::session_scope::AgentSessionScope;
 use silverhand_backend_core::messaging::{
     self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationRefusal,
     CreatedMessage, DirectPairEndpoints, DirectPairMint, DirectPairMinted, DirectPairOpenedPort,
@@ -3471,7 +3471,9 @@ mod tests {
     /// touches the loader or the discriminator directly, only `resolve_authors`.
     #[tokio::test]
     async fn a_mixed_page_resolves_every_arm_through_one_batch_authority() {
-        use silverhand_backend_core::{agents::runtime::RuntimeKind, messaging::PrincipalIdentity};
+        use silverhand_backend_core::{
+            identity_access::agents::runtime::RuntimeKind, messaging::PrincipalIdentity,
+        };
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("mixed-batch.sqlite");

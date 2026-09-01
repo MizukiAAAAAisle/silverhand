@@ -323,10 +323,10 @@ mod tests {
     use serde_json::{Value, json};
     use silverhand_backend_core::{
         agent_bulk_stop::AgentBulkStopSnapshot,
-        agent_lifecycle::MaterializationStatus,
-        agents::runtime::RuntimeKind,
         identity::{ConversationId, HostId},
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
+        identity_access::agent_lifecycle::MaterializationStatus,
+        identity_access::agents::runtime::RuntimeKind,
         persistence::PersistenceFailure,
         runtime_credential::{RuntimeGeneration, RuntimeScope},
         runtime_event::RuntimeObservedStatus,

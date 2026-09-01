@@ -3594,8 +3594,8 @@ mod tests {
             agent_materialize::{
                 AgentMaterializePort, AgentMaterializeTarget, AgentMaterializeTemplate,
             },
-            agents::runtime::RuntimeKind,
             identity::WorkspaceId,
+            identity_access::agents::runtime::RuntimeKind,
         };
 
         let registry = DaemonRegistry::with_process_epoch("materialize-test".to_owned());
@@ -3673,17 +3673,21 @@ mod tests {
 
     #[derive(Clone)]
     struct McpPlacementRead {
-        fact: Option<silverhand_backend_core::agent_profile_mcp::AgentProfileMcpPlacement>,
+        fact: Option<
+            silverhand_backend_core::identity_access::agent_profile_mcp::AgentProfileMcpPlacement,
+        >,
     }
 
-    impl silverhand_backend_core::agent_profile_mcp::AgentProfileMcpPlacementRead for McpPlacementRead {
+    impl silverhand_backend_core::identity_access::agent_profile_mcp::AgentProfileMcpPlacementRead
+        for McpPlacementRead
+    {
         async fn read_mcp_placement(
             &self,
             _agent: &AgentId,
         ) -> Result<
-            Option<silverhand_backend_core::agent_profile_mcp::AgentProfileMcpPlacement>,
+            Option<silverhand_backend_core::identity_access::agent_profile_mcp::AgentProfileMcpPlacement>,
             PersistenceFailure,
-        > {
+        >{
             Ok(self.fact.clone())
         }
     }
@@ -3692,8 +3696,8 @@ mod tests {
         source: &str,
         host: &str,
         deletion_pending: bool,
-    ) -> silverhand_backend_core::agent_profile_mcp::AgentProfileMcpPlacement {
-        silverhand_backend_core::agent_profile_mcp::AgentProfileMcpPlacement::new(
+    ) -> silverhand_backend_core::identity_access::agent_profile_mcp::AgentProfileMcpPlacement {
+        silverhand_backend_core::identity_access::agent_profile_mcp::AgentProfileMcpPlacement::new(
             AgentId::parse(source).unwrap(),
             HostId::parse(host).unwrap(),
             deletion_pending,
@@ -3702,7 +3706,7 @@ mod tests {
 
     #[tokio::test]
     async fn profile_mcp_commands_are_typed_host_bound_and_generation_bound() {
-        use silverhand_backend_core::agent_profile_mcp::{
+        use silverhand_backend_core::identity_access::agent_profile_mcp::{
             AgentProfileMcpDataPlane, McpProbeCommand, McpProbePhase,
         };
 
@@ -3814,7 +3818,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             failure.code,
-            silverhand_backend_core::agent_profile_mcp::McpDataPlaneFaultCode::HostAttachPending
+            silverhand_backend_core::identity_access::agent_profile_mcp::McpDataPlaneFaultCode::HostAttachPending
         );
         assert!(matches!(
             successor_receive.try_recv(),
@@ -3825,7 +3829,7 @@ mod tests {
     #[tokio::test]
     async fn profile_mcp_write_decoder_closes_every_unsafe_byte_count() {
         use silverhand_backend_core::{
-            agent_profile_mcp::{AgentProfileMcpDataPlane, McpDataPlaneFaultCode},
+            identity_access::agent_profile_mcp::{AgentProfileMcpDataPlane, McpDataPlaneFaultCode},
             wire_number::JsSafeInteger,
         };
 
@@ -3880,7 +3884,7 @@ mod tests {
 
     #[tokio::test]
     async fn profile_mcp_persisted_refusals_bind_source_before_registry_or_deletion() {
-        use silverhand_backend_core::agent_profile_mcp::{
+        use silverhand_backend_core::identity_access::agent_profile_mcp::{
             AgentProfileMcpDataPlane, McpDataPlaneFaultCode,
         };
         use std::thread;
@@ -3924,8 +3928,8 @@ mod tests {
             agent_materialize::{
                 AgentMaterializePort, AgentMaterializeTarget, AgentMaterializeTemplate,
             },
-            agents::runtime::RuntimeKind,
             identity::WorkspaceId,
+            identity_access::agents::runtime::RuntimeKind,
         };
 
         // Both hosts are legitimately attached: A's capture and B's reserved target are each
@@ -4229,11 +4233,13 @@ mod tests {
             &mut self,
             agent: &AgentId,
         ) -> Result<
-            Option<silverhand_backend_core::agents::session_scope::AgentSessionScope>,
+            Option<
+                silverhand_backend_core::identity_access::agents::session_scope::AgentSessionScope,
+            >,
             Self::Error,
         > {
             Ok((agent == &self.agent).then_some(
-                silverhand_backend_core::agents::session_scope::AgentSessionScope::Agent,
+                silverhand_backend_core::identity_access::agents::session_scope::AgentSessionScope::Agent,
             ))
         }
 
@@ -4524,7 +4530,7 @@ mod tests {
     #[tokio::test]
     async fn runtime_control_start_traverses_typed_codec_and_production_fifo() {
         use silverhand_backend_core::{
-            agents::runtime::RuntimeKind,
+            identity_access::agents::runtime::RuntimeKind,
             messaging::collaboration::{RuntimeControlPort, RuntimeStartTarget},
             runtime_credential::{AgentSlotPresentationFocusPort, RuntimeCustody},
             runtime_delivery::{RuntimeAgentSpec, RuntimeSpawnPlan},

@@ -6,18 +6,14 @@
 //! It has no Axum, SQLx, SQLite, HTTP, or wire-DTO dependency. Persistence and
 //! wire adapters live in sibling crates and project from application facts.
 
-pub mod agent_audit_read;
 pub mod agent_availability_read;
 pub mod agent_bulk_stop;
 pub mod agent_creation;
-pub mod agent_lifecycle;
 pub mod agent_materialization;
 pub mod agent_materialize;
 pub mod agent_presence_read;
-pub mod agent_profile_mcp;
 pub mod agent_runtime_state_read;
 pub mod agent_runtime_switch;
-pub mod agents;
 pub mod blob_store;
 pub mod cli_invoke_audit;
 pub mod cli_preflight_audit;

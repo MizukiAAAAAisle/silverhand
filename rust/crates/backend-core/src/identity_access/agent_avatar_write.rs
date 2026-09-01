@@ -365,12 +365,12 @@ where
 mod tests {
     use super::*;
     use crate::{
-        agents::runtime::RuntimeKind,
         identity_access::agent_avatar::{AgentAvatarBlobRead, OwnedAgentAvatarBlob},
         identity_access::agent_profile_write::{
             AdmittedAgentProfileEdit, AgentChangedAnnounceFailure, AgentRowBefore,
             AgentTuningContext, CommittedAgentRow,
         },
+        identity_access::agents::runtime::RuntimeKind,
         identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType},
         persistence::PersistenceFailure,
     };

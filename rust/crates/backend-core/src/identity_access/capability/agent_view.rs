@@ -12,8 +12,8 @@
 use std::collections::{BTreeSet, HashSet};
 
 use crate::{
-    agent_lifecycle::MaterializationStatus,
     identity::{AgentId, Principal, UserId},
+    identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::decision::Decision,
 };
 

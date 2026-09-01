@@ -10,8 +10,8 @@
 //! and authorize another.
 
 use crate::{
-    agent_lifecycle::MaterializationStatus,
     identity::{AgentId, UserId},
+    identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::{
         agent_audit::AgentAuditSubject,
         agent_view::{AgentViewerArms, AgentVisibility},

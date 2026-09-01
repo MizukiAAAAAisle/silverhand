@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use silverhand_backend_core::agents::runtime::RuntimeKind;
+use silverhand_backend_core::identity_access::agents::runtime::RuntimeKind;
 
 #[cfg(test)]
 use crate::daemon_delivery::{CommandRefusal, DaemonRefusalCode};

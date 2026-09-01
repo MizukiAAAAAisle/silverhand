@@ -358,9 +358,9 @@ pub fn admit_cascade(
 mod tests {
     use super::*;
     use crate::{
-        agent_lifecycle::MaterializationStatus,
         host_runtime::computer::{HostKind, ProvisioningSource},
         identity::{AgentId, HostId},
+        identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::computer_access::{
             ComputerAccess, ComputerOwnershipFacts, can_access_computer,
         },

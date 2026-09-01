@@ -191,9 +191,9 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_lifecycle::MaterializationStatus,
         agent_presence_read::{AgentPresenceFacts, AgentPresenceReadModel},
         identity::{AgentId, UserId},
+        identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
         persistence::PersistenceFailure,
         policy::agent_presence,

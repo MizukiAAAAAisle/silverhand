@@ -1,5 +1,5 @@
 use crate::{AppConfig, StartupError, open};
-use silverhand_backend_core::agent_audit_read::{AgentAuditEvent, AgentAuditSink};
+use silverhand_backend_core::identity_access::agent_audit_read::{AgentAuditEvent, AgentAuditSink};
 use silverhand_backend_filesystem::audit_sink::{
     AgentAuditFileSink, AppTag, CliAuditFile, CliInvokeFileSink, CliPreflightFileSink, WriterState,
 };

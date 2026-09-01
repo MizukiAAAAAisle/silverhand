@@ -4,8 +4,8 @@ use std::{collections::HashSet, path::Path, time::Duration};
 
 use serde::Serialize;
 use silverhand_backend_core::{
-    agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
     identity::{AgentId, ConversationId, DaemonInstanceId, HostId, UserId, WorkspaceId},
+    identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
     messaging::{
         FromKind, MessageContent, MessageId, ReferencePositions,
         collaboration::{

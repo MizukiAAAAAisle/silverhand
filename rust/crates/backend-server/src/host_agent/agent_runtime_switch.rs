@@ -69,13 +69,13 @@ use silverhand_backend_core::{
         SwitchAgentRuntimeError, SwitchAgentRuntimeRequest, SwitchAgentSnapshotRead,
         SwitchConversationCoordination, switch_agent_runtime,
     },
-    agents::{
-        runtime::RuntimeKind,
-        runtime_capability::{reasoning_effort_valid_for_runtime, runtime_supports_fast_mode},
-    },
     identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::AgentDetailReadModel,
     identity_access::agent_profile_write::{AgentChangedAnnounce, AgentChangedSink},
+    identity_access::agents::{
+        runtime::RuntimeKind,
+        runtime_capability::{reasoning_effort_valid_for_runtime, runtime_supports_fast_mode},
+    },
     identity_access::capability::{
         agent_authority::{AgentAuthority, can_edit_agent},
         agent_view::{VisibleStages, can_view_agent},
@@ -682,14 +682,14 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_lifecycle::MaterializationStatus,
         agent_runtime_switch::{
             RuntimeAvailabilityProbeFault, RuntimeAvailabilityVerdict, SwitchAgentRuntimeError,
             SwitchAgentRuntimeFault, SwitchAgentSnapshot,
         },
-        agents::session_scope::AgentSessionScope,
         identity::{ConversationId, HostId},
         identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailProjection},
+        identity_access::agent_lifecycle::MaterializationStatus,
+        identity_access::agents::session_scope::AgentSessionScope,
         messaging::collaboration::{
             ClearSessionOutcome, ClearSessionProviderRefusal, HardStopRuntimeOutcome,
             HardStopRuntimeProviderRefusal, RuntimeSeatTarget, RuntimeStartTarget,

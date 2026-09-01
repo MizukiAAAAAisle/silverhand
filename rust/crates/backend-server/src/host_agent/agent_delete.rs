@@ -75,9 +75,9 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use silverhand_backend_core::{
-    agent_lifecycle::MaterializationStatus,
     identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
+    identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::{
         agent_authority::{AgentAuthority, can_edit_agent},
         agent_view::{VisibleStages, can_view_agent},
@@ -592,13 +592,13 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_lifecycle::MaterializationStatus,
-        agents::runtime::RuntimeKind,
         host_runtime::aftermath::CustodyEffectFailure,
         identity::{AgentId, HostId, UserId},
         identity_access::agent_detail_read::{
             AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
         },
+        identity_access::agent_lifecycle::MaterializationStatus,
+        identity_access::agents::runtime::RuntimeKind,
         persistence::PersistenceFailure,
         teardown::{
             agent_delete_resume::AgentDeletionResidue,

@@ -26,15 +26,15 @@
 //!   adapter cannot admit one human and render another — the splice is
 //!   unconstructable, not merely discouraged.
 //! * The stage gate and the wire's `materialization_status` are the same
-//!   [`MaterializationStatus`](crate::agent_lifecycle::MaterializationStatus), read
+//!   [`MaterializationStatus`](crate::identity_access::agent_lifecycle::MaterializationStatus), read
 //!   back off [`AgentVisibility`].
 
 use std::future::Future;
 
 use crate::{
-    agent_lifecycle::MaterializationStatus,
-    agents::runtime::RuntimeKind,
     identity::{AgentId, UserId},
+    identity_access::agent_lifecycle::MaterializationStatus,
+    identity_access::agents::runtime::RuntimeKind,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
     persistence::PersistenceFailure,
 };

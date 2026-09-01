@@ -26,8 +26,8 @@
 //! insert/update triggers.
 
 use silverhand_backend_core::{
-    agents::runtime::RuntimeKind,
     identity::{AgentId, ConversationId},
+    identity_access::agents::runtime::RuntimeKind,
     persistence::PersistenceFailure,
     runtime_credential::RuntimeScope,
     runtime_event::RuntimeObservedStatus,

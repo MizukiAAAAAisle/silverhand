@@ -5,13 +5,13 @@
 //! [`SqliteHostRuntimeStore`]; neither opens a second store or connection authority.
 
 use silverhand_backend_core::{
-    agent_lifecycle::MaterializationStatus,
-    agents::runtime::RuntimeKind,
     host_runtime::{
         status::{HostStatusAgentFact, HostStatusStoredFacts, HostStatusStoredReadModel},
         update::{UpdateComputerDecision, UpdateComputerTransaction, UpdateComputerUnitOfWork},
     },
     identity::{AgentId, HostId},
+    identity_access::agent_lifecycle::MaterializationStatus,
+    identity_access::agents::runtime::RuntimeKind,
     persistence::PersistenceFailure,
 };
 use sqlx::Row;

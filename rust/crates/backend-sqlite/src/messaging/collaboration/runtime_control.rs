@@ -1,8 +1,8 @@
 //! One-snapshot SQLite admission for conversation runtime control.
 
 use silverhand_backend_core::{
-    agents::session_scope::AgentSessionScope,
     identity::{AgentId, ConversationId, UserId},
+    identity_access::agents::session_scope::AgentSessionScope,
     messaging::collaboration::{RuntimeControlAdmission, RuntimeControlAdmissionScope},
 };
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};

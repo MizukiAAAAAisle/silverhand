@@ -33,7 +33,7 @@
 
 use std::future::Future;
 
-use crate::agents::runtime::RuntimeKind;
+use crate::identity_access::agents::runtime::RuntimeKind;
 
 /// The runtimes the product offers for selection, in the order it offers them.
 ///
@@ -122,7 +122,7 @@ pub struct DetectedRuntime {
 /// A pass that answers for a different number of runtimes does not compile:
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::agents::runtime_catalog::{RuntimeCatalog, RuntimeDetection};
+/// use silverhand_backend_core::identity_access::agents::runtime_catalog::{RuntimeCatalog, RuntimeDetection};
 /// // Three answers for four offered runtimes — there is no arm of the type that
 /// // could say which one was skipped, so this must not build a catalogue.
 /// let _ = RuntimeCatalog::from_detections([
@@ -137,7 +137,7 @@ pub struct DetectedRuntime {
 /// gate above would also pass on a renamed type or a bad import.
 ///
 /// ```
-/// use silverhand_backend_core::agents::runtime_catalog::{
+/// use silverhand_backend_core::identity_access::agents::runtime_catalog::{
 ///     RuntimeCatalog, RuntimeDetection, SELECTABLE_RUNTIMES,
 /// };
 /// let catalog = RuntimeCatalog::from_detections([

@@ -10,11 +10,11 @@ use std::time::Duration;
 
 use serde_json::Value;
 use silverhand_backend_core::{
-    agent_profile_mcp::{
+    identity::AgentId,
+    identity_access::agent_profile_mcp::{
         AgentProfileMcpDataPlane, AgentProfileMcpPlacementRead, McpBytesWritten, McpDataPlaneFault,
         McpDataPlaneFaultCode, McpProbeCommand, McpProbeOutcome,
     },
-    identity::AgentId,
 };
 
 use crate::daemon_delivery::{
@@ -86,7 +86,7 @@ impl<C, D, H> crate::daemon_delivery::DaemonDeliveryRuntime<C, D, H> {
         placements: P,
     ) -> ProductionAgentProfileMcpDataPlane<P>
     where
-        P: silverhand_backend_core::agent_profile_mcp::AgentProfileMcpPlacementRead,
+        P: silverhand_backend_core::identity_access::agent_profile_mcp::AgentProfileMcpPlacementRead,
     {
         ProductionAgentProfileMcpDataPlane::new(placements, self.owning_host_data_plane())
     }

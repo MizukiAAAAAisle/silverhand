@@ -33,7 +33,7 @@
 //! conservative runtime baseline until an explicit entry verifies it, matching the
 //! TypeScript comment that refuses to grant `max` to an unverified id.
 
-use crate::agents::runtime::RuntimeKind;
+use crate::identity_access::agents::runtime::RuntimeKind;
 
 /// The runtime baseline reasoning-effort options, in display order — the set a
 /// runtime accepts for any model without a verified per-model override. Empty means

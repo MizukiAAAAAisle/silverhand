@@ -6,7 +6,7 @@
 //! through the authenticated message-window projector [`message`].
 
 use serde_json::{Value, json};
-use silverhand_backend_core::agent_audit_read::{
+use silverhand_backend_core::identity_access::agent_audit_read::{
     AuditChatSummary, AuditChatsBundle, AuditTranscriptWindow,
 };
 

@@ -354,7 +354,7 @@ fn the_runtime_closed_set_has_exactly_one_owner() {
         "\"claude\" and \"codex\" only"
     ));
 
-    const OWNER: &str = "crates/backend-core/src/agents/runtime.rs";
+    const OWNER: &str = "crates/backend-core/src/identity_access/agents/runtime.rs";
     assert_eq!(
         declarations_of("RuntimeKind"),
         vec![(OWNER.to_owned(), "enum")],
@@ -439,7 +439,10 @@ fn no_public_use_opens_a_second_path_to_a_watched_name() {
     assert_eq!(
         (
             declares_public_module("crates/backend-core/src/messaging/mod.rs", "identity"),
-            declares_public_module("crates/backend-core/src/agents/mod.rs", "runtime"),
+            declares_public_module(
+                "crates/backend-core/src/identity_access/agents/mod.rs",
+                "runtime"
+            ),
         ),
         (false, true),
         "the identity's module is private and the runtime set's module is public, which is \

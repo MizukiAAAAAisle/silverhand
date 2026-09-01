@@ -37,12 +37,12 @@ use axum::{
 };
 use serde::Serialize;
 use silverhand_backend_core::{
-    agent_audit_read::{
+    blob_store::BlobStore,
+    identity::{AgentId, Principal},
+    identity_access::agent_audit_read::{
         AgentAuditReadModel, AgentAuditSink, AuditFloorVerdict, AuditSubjectFacts,
         audit_chats_floor, audit_conversation_floor,
     },
-    blob_store::BlobStore,
-    identity::{AgentId, Principal},
     identity_access::capability::agent_audit::AuditedConversation,
 };
 

@@ -23,8 +23,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use silverhand_backend_core::{
-    agents::runtime::RuntimeKind,
     identity::{AgentId, ConversationId, DaemonInstanceId},
+    identity_access::agents::runtime::RuntimeKind,
     runtime_credential::{
         AgentSlotPresentationFocusPort, RuntimeFinalStatus, RuntimePrincipal, RuntimeScope,
     },

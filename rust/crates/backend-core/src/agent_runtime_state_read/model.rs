@@ -46,8 +46,8 @@
 use std::future::Future;
 
 use crate::{
-    agent_lifecycle::MaterializationStatus,
     identity::{AgentId, ConversationId, UserId},
+    identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
     messaging::collaboration::conversation_ref::ConversationRosterPolicy,
     persistence::PersistenceFailure,

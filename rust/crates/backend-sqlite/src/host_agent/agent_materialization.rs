@@ -25,8 +25,8 @@ use silverhand_backend_core::{
         ReserveRecord, ReservedAgentRow, STALE_MATERIALIZATION_FAILED_CODE,
         agent_home_workspace_description, home_workspace_id_for,
     },
-    agents::session_scope::AgentSessionScope,
     identity::{AgentId, ConversationId, UserId},
+    identity_access::agents::session_scope::AgentSessionScope,
     messaging::{
         DirectPairMintIdentityMismatch, DirectPairOpenedFact, DirectPairOpenedPort,
         DirectPairParticipants, MessageId, OpenDirectPairError, ParticipantHandle,
@@ -897,16 +897,16 @@ mod tests {
     use std::path::PathBuf;
 
     use silverhand_backend_core::{
-        agent_lifecycle::MaterializationStatus,
         agent_materialization::{
             DEPENDENT_GRAPH_FAILED_CODE, FailOutcome, IdempotencyKey, MaterializationFault,
             ProvisionedActivation, ReopenOutcome, ReserveOutcome, fail_materialization,
             find_idempotent_reservation, mark_stale_materializations_failed,
             provision_and_activate, reopen_failed_materialization, reserve_agent,
         },
-        agents::runtime::RuntimeKind,
-        agents::session_scope::AgentSessionScope,
         identity::HostId,
+        identity_access::agent_lifecycle::MaterializationStatus,
+        identity_access::agents::runtime::RuntimeKind,
+        identity_access::agents::session_scope::AgentSessionScope,
         identity_access::user_identity::ParticipantHandle,
     };
     use tempfile::TempDir;

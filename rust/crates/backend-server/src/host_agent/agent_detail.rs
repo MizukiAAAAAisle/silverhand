@@ -36,9 +36,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use silverhand_backend_core::{
-    agent_lifecycle::MaterializationStatus,
     identity::{AgentId, Principal, UserId},
     identity_access::agent_detail_read::{AgentDetailFacts, AgentDetailReadModel},
+    identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::capability::agent_view::{VisibleStages, can_view_agent},
 };
 
@@ -218,12 +218,12 @@ mod tests {
     };
     use serde_json::{Value, json};
     use silverhand_backend_core::{
-        agent_lifecycle::MaterializationStatus,
-        agents::runtime::RuntimeKind,
         identity::{AgentId, UserId},
         identity_access::agent_detail_read::{
             AgentDetailFacts, AgentDetailProjection, AgentDetailReadModel,
         },
+        identity_access::agent_lifecycle::MaterializationStatus,
+        identity_access::agents::runtime::RuntimeKind,
         persistence::PersistenceFailure,
     };
     use tower::ServiceExt;

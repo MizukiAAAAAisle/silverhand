@@ -7,7 +7,7 @@
 //! that vocabulary so neither router re-declares it and neither copies the grammar.
 //!
 //! It owns ONLY the HTTP wire. The transport-neutral domain (the
-//! [`AgentProfileMcpDataPlane`](silverhand_backend_core::agent_profile_mcp) port, the
+//! [`AgentProfileMcpDataPlane`](silverhand_backend_core::identity_access::agent_profile_mcp) port, the
 //! probe command/outcome, the closed fault taxonomy) stays in `backend-core`, and the
 //! data-plane authority, placement, and transport keep their existing owners — nothing
 //! here dispatches or resolves a host.
@@ -19,7 +19,7 @@ use axum::{
 };
 use garde::Validate;
 use serde::{Deserialize, Serialize};
-use silverhand_backend_core::agent_profile_mcp::{
+use silverhand_backend_core::identity_access::agent_profile_mcp::{
     McpDataPlaneFault, McpDataPlaneFaultCode, McpProbeCommand, McpProbeOutcome, McpProbePhase,
     McpProbeServerInfo, McpProbeTool,
 };

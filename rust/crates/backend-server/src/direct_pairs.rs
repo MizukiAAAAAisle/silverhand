@@ -161,11 +161,11 @@ fn principal_kind(identity: &PrincipalIdentity) -> &'static str {
 mod tests {
     use serde_json::Value;
     use silverhand_backend_core::{
-        agents::runtime::RuntimeKind,
         direct_pair_read::{
             DirectPairCounterpart, DirectPairList, DirectPairListItem, DirectPairUnreadCount,
         },
         identity::{AgentId, ConversationId, UserId},
+        identity_access::agents::runtime::RuntimeKind,
         messaging::PrincipalIdentity,
     };
 

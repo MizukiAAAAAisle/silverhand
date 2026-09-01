@@ -3,12 +3,12 @@
 use std::{collections::HashMap, path::Path, time::Duration};
 
 use silverhand_backend_core::{
-    agents::runtime::RuntimeKind,
     direct_pair_read::{
         DirectPairCounterpart, DirectPairList, DirectPairListItem, DirectPairReadModel,
         DirectPairUnreadCount,
     },
     identity::{AgentId, ConversationId, UserId},
+    identity_access::agents::runtime::RuntimeKind,
     messaging::{AvatarRevision, PrincipalIdentity},
     persistence::PersistenceFailure,
 };

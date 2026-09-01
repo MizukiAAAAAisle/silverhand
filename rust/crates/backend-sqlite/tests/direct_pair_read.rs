@@ -1,9 +1,9 @@
 use std::error::Error;
 
 use silverhand_backend_core::{
-    agents::runtime::RuntimeKind,
     direct_pair_read::{DirectPairCounterpart, DirectPairReadModel},
     identity::UserId,
+    identity_access::agents::runtime::RuntimeKind,
     messaging::{ActiveAuthor, PrincipalIdentity},
 };
 use silverhand_backend_sqlite::direct_pair_read::{DirectPairReadError, SqliteDirectPairReadModel};

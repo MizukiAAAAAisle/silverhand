@@ -39,8 +39,8 @@ use std::future::Future;
 use thiserror::Error;
 
 use crate::{
-    agents::runtime::RuntimeKind,
     identity::{AgentId, HostId, UserId},
+    identity_access::agents::runtime::RuntimeKind,
     identity_access::capability::computer_access::{
         ComputerAccess, ComputerAccessRefused, ComputerOwnershipFacts, can_access_computer,
     },

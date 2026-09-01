@@ -22,7 +22,7 @@
 //! has been returned cannot afterwards be altered or have a field forged onto it.
 
 use super::{AgentId, PrincipalKind, UserId};
-use crate::agents::runtime::RuntimeKind;
+use crate::identity_access::agents::runtime::RuntimeKind;
 
 /// A principal named together with the identity that proves which one. Binding the
 /// kind to the id in one type is what makes an agent-kind value carrying a user id
@@ -195,7 +195,7 @@ impl UnresolvedAuthor {
 /// construction:
 ///
 /// ```compile_fail
-/// use silverhand_backend_core::{agents::runtime::RuntimeKind, messaging::ActiveAgent};
+/// use silverhand_backend_core::{identity_access::agents::runtime::RuntimeKind, messaging::ActiveAgent};
 ///
 /// // No public fields: an active agent cannot be assembled around the runtime
 /// // invariant by hand.

@@ -101,8 +101,8 @@ pub trait AgentPresenceReadModel {
 mod tests {
     use super::*;
     use crate::{
-        agent_lifecycle::MaterializationStatus,
         identity::AgentId,
+        identity_access::agent_lifecycle::MaterializationStatus,
         identity_access::capability::agent_view::{AgentViewerArms, AgentVisibility},
         policy::agent_presence,
     };

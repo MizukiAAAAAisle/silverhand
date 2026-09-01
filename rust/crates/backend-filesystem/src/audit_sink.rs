@@ -48,9 +48,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
-use silverhand_backend_core::agent_audit_read::{AgentAuditEvent, AgentAuditSink};
 use silverhand_backend_core::cli_invoke_audit::{CliInvoke, CliInvokeAuditSink};
 use silverhand_backend_core::cli_preflight_audit::{CliPreflightAuditSink, CliPreflightFailure};
+use silverhand_backend_core::identity_access::agent_audit_read::{AgentAuditEvent, AgentAuditSink};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;

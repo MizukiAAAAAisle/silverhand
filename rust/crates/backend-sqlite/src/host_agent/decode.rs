@@ -12,10 +12,10 @@
 //! turn bad data into a decision input.
 
 use silverhand_backend_core::{
-    agent_lifecycle::MaterializationStatus,
-    agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
     host_runtime::computer::{HostKind, ProvisioningSource},
     identity::{AgentId, ConversationId, HostId, UserId},
+    identity_access::agent_lifecycle::MaterializationStatus,
+    identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
     runtime_credential::RuntimeGeneration,
     runtime_event::RuntimeObservedStatus,
 };

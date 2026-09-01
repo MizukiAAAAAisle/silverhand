@@ -138,8 +138,9 @@ pub fn visible_agents<'a>(
 mod tests {
     use super::*;
     use crate::{
-        agent_lifecycle::MaterializationStatus, agents::runtime::RuntimeKind,
         identity_access::agent_detail_read::AgentDetailProjection,
+        identity_access::agent_lifecycle::MaterializationStatus,
+        identity_access::agents::runtime::RuntimeKind,
     };
 
     fn user(id: &str) -> UserId {
