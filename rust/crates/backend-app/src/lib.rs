@@ -39,11 +39,12 @@ use silverhand_backend_filesystem::host_runtime::runtime_detection::MachineRunti
 #[cfg(test)]
 use silverhand_backend_server::internal_agent::cli_invoke::CLI_INVOKE_PRODUCTION_PERIMETER;
 use silverhand_backend_server::{
+    conversation_messaging::direct_pairs,
     daemon_delivery::{
         DaemonDeliveryController, DaemonDeliveryRuntime, DaemonHostConnections,
         OnboardingDeliveryAdapter,
     },
-    direct_pairs, embedded_bootstrap,
+    embedded_bootstrap,
     foundation::{
         clock::SystemProcessClock,
         scope_event_transport::{

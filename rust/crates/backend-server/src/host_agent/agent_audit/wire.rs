@@ -10,7 +10,7 @@ use silverhand_backend_core::identity_access::agent_audit_read::{
     AuditChatSummary, AuditChatsBundle, AuditTranscriptWindow,
 };
 
-use crate::direct_pairs::counterpart_dto_value;
+use crate::conversation_messaging::direct_pairs::counterpart_dto_value;
 use crate::messaging::collaboration::conversation_message_window::{
     MessageWindowWireError, message,
 };

@@ -8,7 +8,6 @@ pub(crate) mod application_orchestration;
 pub mod conversation_messaging;
 pub mod daemon_delivery;
 mod daemon_events;
-pub mod direct_pairs;
 pub mod embedded_bootstrap;
 pub mod foundation;
 pub mod host_agent;

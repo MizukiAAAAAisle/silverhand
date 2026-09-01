@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn the_shared_fixture_covers_every_counterpart_arm_and_the_empty_wrapper() {
         let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../packages/shared/tests/fixtures/direct-pair-list.json"
+            "../../../../../packages/shared/tests/fixtures/direct-pair-list.json"
         ))
         .unwrap();
 
