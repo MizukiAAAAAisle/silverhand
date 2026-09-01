@@ -65,7 +65,7 @@ pub enum RuntimeCatalogOutcome {
 ///
 /// ```compile_fail
 /// use silverhand_backend_server::daemon_delivery::HostDataPlaneCustody;
-/// use silverhand_backend_server::host_control::runtime_catalog::RuntimeCatalog;
+/// use silverhand_backend_server::host_runtime::host_control::runtime_catalog::RuntimeCatalog;
 ///
 /// fn forge(custody: HostDataPlaneCustody) -> RuntimeCatalog {
 ///     RuntimeCatalog {
@@ -78,7 +78,7 @@ pub enum RuntimeCatalogOutcome {
 ///
 /// ```
 /// use silverhand_backend_server::daemon_delivery::HostDataPlaneCustody;
-/// use silverhand_backend_server::host_control::runtime_catalog::{
+/// use silverhand_backend_server::host_runtime::host_control::runtime_catalog::{
 ///     CatalogCoordinateMismatch, CatalogView, RuntimeCatalog,
 /// };
 ///

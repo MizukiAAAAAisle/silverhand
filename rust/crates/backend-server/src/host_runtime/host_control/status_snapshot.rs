@@ -1,6 +1,6 @@
 //! Typed request and result contract for the `host_status` command.
 //!
-//! Sibling of [`crate::host_control::runtime_catalog`] over the same transport
+//! Sibling of [`crate::host_runtime::host_control::runtime_catalog`] over the same transport
 //! primitive, and deliberately not sharing a vocabulary with it. `host_status`
 //! declares no daemon-business refusal codes, so its outcomes split on something
 //! else entirely: whether the machine is *absent* (nothing to report, and the read
@@ -100,7 +100,7 @@ impl UnreachableReason {
 /// use std::collections::HashSet;
 ///
 /// use silverhand_backend_core::foundation::identity::{DaemonInstanceId, HostId};
-/// use silverhand_backend_server::host_control::status_snapshot::StatusSnapshot;
+/// use silverhand_backend_server::host_runtime::host_control::status_snapshot::StatusSnapshot;
 ///
 /// fn forge() -> StatusSnapshot {
 ///     StatusSnapshot {
@@ -119,7 +119,7 @@ impl UnreachableReason {
 ///
 /// ```
 /// use silverhand_backend_core::foundation::identity::{DaemonInstanceId, HostId};
-/// use silverhand_backend_server::host_control::status_snapshot::{
+/// use silverhand_backend_server::host_runtime::host_control::status_snapshot::{
 ///     SnapshotCoordinateMismatch, SnapshotView, StatusSnapshot,
 /// };
 ///

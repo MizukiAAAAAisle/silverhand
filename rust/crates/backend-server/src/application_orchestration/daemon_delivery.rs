@@ -18,15 +18,15 @@ use crate::{
         DaemonTransport, DaemonTransportController,
     },
     foundation::error,
-    host_control::{
+    host_runtime::daemon_runtime_owner::DaemonRuntimeOwner,
+    host_runtime::host_agent_background::agent_deletion_resumer::HostReadyObserver,
+    host_runtime::host_control::{
         admission::{
             AdmissionUnavailable, DialerId, HostAdmission, ProtocolMismatch, RefusalNews,
             SlotOccupancy,
         },
         status_seed::{HostStatusSeeds, SeedAttempt},
     },
-    host_runtime::daemon_runtime_owner::DaemonRuntimeOwner,
-    host_runtime::host_agent_background::agent_deletion_resumer::HostReadyObserver,
     host_runtime::runtime_credential::RuntimeCredentialAuthority,
     host_runtime::scope_event_publishers::HubHostRuntimeEvents,
 };
@@ -39,12 +39,12 @@ pub use crate::foundation::daemon_transport::{
     HOST_WEBSOCKET_PATH, HostDataPlaneCustody, OUTBOUND_PROTOCOL_VERSION, OwningHostDataPlane,
     UPDATE_REQUIRED_CLOSE_REASON,
 };
-pub use crate::host_control::management::disconnect::DaemonConnectionControlHandle;
 pub use crate::host_runtime::cascade_effects::{
     DaemonAgentDeletionFence, DaemonCascadeEffects, DaemonHostConnections,
 };
 pub use crate::host_runtime::daemon_runtime_owner::DaemonDeliveryError;
 pub use crate::host_runtime::detail::ConnectedHostNameView;
+pub use crate::host_runtime::host_control::management::disconnect::DaemonConnectionControlHandle;
 pub use crate::host_runtime::rotate_token::{DaemonRotationDeliveryError, DaemonTokenRotation};
 
 pub(crate) use crate::foundation::daemon_command as command;

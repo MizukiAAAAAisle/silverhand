@@ -11,7 +11,6 @@ mod daemon_events;
 pub mod embedded_bootstrap;
 pub mod foundation;
 pub mod host_agent;
-pub mod host_control;
 pub mod host_runtime;
 pub mod identity_access;
 pub mod internal_agent;

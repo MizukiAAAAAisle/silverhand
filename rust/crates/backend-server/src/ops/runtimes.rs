@@ -40,7 +40,7 @@
 //!
 //! ## This is the LOCAL machine, never a daemon's
 //!
-//! `host_control::runtime_catalog` answers the same question about a REMOTE machine, by
+//! `host_runtime::host_control::runtime_catalog` answers the same question about a REMOTE machine, by
 //! asking its daemon over the control channel, and its rows are bound to a
 //! `(host, daemon instance)` coordinate. This face has no coordinate to bind: the
 //! answer is about the process's own filesystem. The two must not share an

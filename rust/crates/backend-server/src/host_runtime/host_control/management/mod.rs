@@ -23,7 +23,7 @@ use silverhand_backend_core::host_runtime::{
 use crate::{
     daemon_delivery::{DaemonConnectionControlHandle, OwningHostDataPlane},
     foundation::clock::ProcessClock,
-    host_control::{admission::HostAdmission, status_seed::HostStatusSeeds},
+    host_runtime::host_control::{admission::HostAdmission, status_seed::HostStatusSeeds},
 };
 
 pub mod disconnect;
@@ -87,7 +87,7 @@ fn computer_times_are_js_safe(record: &ComputerRecord) -> bool {
             record.finalized_at,
         ])
         .flatten()
-        .all(crate::host_control::wire_number::js_safe_integer)
+        .all(crate::host_runtime::host_control::wire_number::js_safe_integer)
 }
 
 use axum::response::IntoResponse;

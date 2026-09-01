@@ -71,17 +71,19 @@ use silverhand_backend_server::{
         EVENT_WS_SESSION_COOKIE, EventWebSocketConfig, EventWebSocketController, ScopeEventHub,
         router as scope_event_router,
     },
-    host_control::admission::ProtocolMismatchRefusal,
-    host_control::management::{self, update::HostLabelChangeEffect},
-    host_control::proxy_config::{self, ProxyConfig, ProxyConfigOutcome, ProxyConfigRequest},
-    host_control::runtime_catalog::{
+    host_runtime::host_agent_background::agent_deletion_resumer::HostReadyObserver,
+    host_runtime::host_control::admission::ProtocolMismatchRefusal,
+    host_runtime::host_control::management::{self, update::HostLabelChangeEffect},
+    host_runtime::host_control::proxy_config::{
+        self, ProxyConfig, ProxyConfigOutcome, ProxyConfigRequest,
+    },
+    host_runtime::host_control::runtime_catalog::{
         self, CatalogCoordinateMismatch, RuntimeCatalogOutcome, RuntimeCatalogRequest,
     },
-    host_control::status_seed::{SeedAttempt, SeedRead},
-    host_control::status_snapshot::{
+    host_runtime::host_control::status_seed::{SeedAttempt, SeedRead},
+    host_runtime::host_control::status_snapshot::{
         self, SnapshotCoordinateMismatch, StatusSnapshotOutcome, StatusSnapshotRequest,
     },
-    host_runtime::host_agent_background::agent_deletion_resumer::HostReadyObserver,
     host_runtime::runtime_credential::RuntimeCredentialAuthority,
     host_runtime::{
         cascade_effects::{AgentDeletedAnnouncement, ProductionComputerCascadeEffects},
@@ -199,8 +201,8 @@ impl HostLabelChangeEffect for RecordingHostLabelChange {
         _computer: &HostId,
     ) -> Result<
         (),
-        silverhand_backend_server::host_control::management::update::HostLabelChangeEffectFailure,
-    > {
+        silverhand_backend_server::host_runtime::host_control::management::update::HostLabelChangeEffectFailure,
+    >{
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }

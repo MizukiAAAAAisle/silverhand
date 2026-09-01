@@ -30,7 +30,9 @@ use silverhand_backend_core::{
 
 use crate::{
     foundation::{scope_event_transport::ScopeEventHubError, scope_event_wire::DaemonSideEvent},
-    host_control::status_seed::{AttachedStatusCustody, CustodyUnavailable, HostRuntimeActivity},
+    host_runtime::host_control::status_seed::{
+        AttachedStatusCustody, CustodyUnavailable, HostRuntimeActivity,
+    },
     host_runtime::scope_event_publishers::HubHostRuntimeEvents,
 };
 

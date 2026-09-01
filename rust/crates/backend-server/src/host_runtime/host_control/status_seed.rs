@@ -7,7 +7,7 @@
 //! `[1, 2, 5, 10, 30]` seconds.
 //!
 //! This leaf's one change reason is *when to ask, how often, and what to keep* — not
-//! what the question means, which is [`crate::host_control::status_snapshot`]'s. It
+//! what the question means, which is [`crate::host_runtime::host_control::status_snapshot`]'s. It
 //! therefore holds no timer: the ladder is an admission gate on the next attempt
 //! ([`SeedAttempt::Deferred`] names the delay the driver must wait), so the policy
 //! stays here and the sleeping stays in whichever driver owns the wake. A driver
@@ -55,7 +55,7 @@ use tokio::time::Instant;
 
 use crate::{
     foundation::daemon_transport::{HostDataPlaneCustody, OwningHostDataPlane},
-    host_control::status_snapshot::{
+    host_runtime::host_control::status_snapshot::{
         self, StatusSnapshot, StatusSnapshotOutcome, StatusSnapshotRequest,
     },
 };
@@ -424,7 +424,7 @@ enum Admission {
 /// use silverhand_backend_core::foundation::identity::HostId;
 /// use silverhand_backend_server::{
 ///     daemon_delivery::DaemonDeliveryController,
-///     host_control::status_seed::{HostStatusSeeds, SeedFailure, SeedRead},
+///     host_runtime::host_control::status_seed::{HostStatusSeeds, SeedFailure, SeedRead},
 /// };
 ///
 /// fn current(seeds: &HostStatusSeeds, host: &HostId) -> Result<SeedRead, SeedFailure> {
@@ -437,7 +437,7 @@ enum Admission {
 /// cannot be produced outside. The adapter is wired in this crate, never handed in.
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::host_control::status_seed::DaemonCustody;
+/// use silverhand_backend_server::host_runtime::host_control::status_seed::DaemonCustody;
 /// ```
 ///
 /// Second, and what still holds if the line above is ever deliberately relaxed: the
@@ -446,7 +446,7 @@ enum Admission {
 /// store is the only thing it would build.
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::host_control::status_seed::HostStatusSeeds;
+/// use silverhand_backend_server::host_runtime::host_control::status_seed::HostStatusSeeds;
 ///
 /// fn second_store() {
 ///     let _ = HostStatusSeeds::new;
@@ -756,7 +756,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::host_control::status_snapshot::{UnreachableReason, decode_for_tests};
+    use crate::host_runtime::host_control::status_snapshot::{UnreachableReason, decode_for_tests};
 
     /// How long a withheld frame may yield before the test calls it a defect instead
     /// of waiting for it.

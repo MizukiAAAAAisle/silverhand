@@ -221,7 +221,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // typed daemon codecs for agent materialize / runtime start / clear-session.
     ("backend-server", "agent_materialize"),
     ("backend-server", "host_agent"),
-    ("backend-server", "host_control"),
     // #task:2226 — internal-agent route family, mounted at the app composition root by
     // the #task:2234 integration (CP7a profile/avatar/peer-profile, CP7b MCP). Its MCP
     // leaf consumes only the typed data-plane port; #task:2231 supplies that production face.
@@ -384,10 +383,9 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-server", "current_schema"),
     ("backend-server", "daemon_delivery"),
     ("backend-server", "daemon_events"),
-    // #task:2306 relocated the `host_resources` and `runtime_credential` production leaves
-    // beneath this owning root, advancing host runtime to 6/8/2. The two directory-shaped
-    // residuals remain the separately inventoried `host_agent_background` and `host_control`;
-    // accepted compatibility facades remain separately named and are not business units.
+    // #task:2308 relocated the final `host_control` directory leaf beneath this owning root,
+    // closing the production-settled host-runtime axis at 8/8/0. Accepted compatibility facades
+    // remain separately named paths and are not business units.
     ("backend-server", "host_runtime"),
     ("backend-sqlite", "current_schema"),
     // #task:2294 relocated four low-fanout read adapters (`agent_availability_read`,
@@ -469,7 +467,6 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // NOT directory-shaped and is absent here.
     ("backend-filesystem", "host_runtime"),
     ("backend-server", "host_agent"),
-    ("backend-server", "host_control"),
     ("backend-server", "internal_agent"),
     ("backend-server", "ops"),
     // #task:2248 — the two residual-wave families that earn a new crate root
@@ -591,7 +588,6 @@ const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
     ("backend-server", "host_agent"),
-    ("backend-server", "host_control"),
     ("backend-server", "ops"),
 ];
 

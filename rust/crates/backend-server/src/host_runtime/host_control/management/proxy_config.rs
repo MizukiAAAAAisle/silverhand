@@ -18,7 +18,9 @@ use crate::{
     foundation::error,
     foundation::wire_admission::from_object_slice,
     foundation::wire_patch::PatchField,
-    host_control::proxy_config::{self, ProxyConfig, ProxyConfigOutcome, ProxyConfigRequest},
+    host_runtime::host_control::proxy_config::{
+        self, ProxyConfig, ProxyConfigOutcome, ProxyConfigRequest,
+    },
 };
 
 use super::{internal_error, read_body};
