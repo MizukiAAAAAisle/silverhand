@@ -564,7 +564,7 @@ async fn prepare_builds_a_real_cli_audit_sink_that_persists_the_exact_contract()
     use silverhand_backend_core::foundation::cli_preflight_audit::{
         CliPreflightAuditSink, CliPreflightFailure, NonNegativeFiniteF64,
     };
-    use silverhand_backend_filesystem::audit_sink::WriterState;
+    use silverhand_backend_filesystem::foundation::audit_sink::WriterState;
 
     let fixture = fixture(true).await;
     let log_dir = tempfile::tempdir().unwrap();
@@ -1082,7 +1082,7 @@ async fn run_unlinks_the_embedded_bootstrap_token_when_the_bind_fails() {
 /// background writer tasks remain live.
 #[tokio::test]
 async fn post_bind_startup_failure_closes_writers_and_leaves_no_token() {
-    use silverhand_backend_filesystem::audit_sink::WriterState;
+    use silverhand_backend_filesystem::foundation::audit_sink::WriterState;
 
     let fixture = fixture(true).await;
     let token_path = fixture
@@ -1136,7 +1136,7 @@ async fn prepare_wires_a_recording_agent_audit_sink_that_persists_a_line() {
     use silverhand_backend_core::identity_access::agent_audit_read::{
         AgentAuditEvent, AgentAuditSink,
     };
-    use silverhand_backend_filesystem::audit_sink::WriterState;
+    use silverhand_backend_filesystem::foundation::audit_sink::WriterState;
 
     let fixture = fixture(true).await;
     let log_dir = tempfile::tempdir().unwrap();

@@ -206,7 +206,13 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // `workspace_data_plane` remain flat backend-core roots.
     ("backend-core", "embedded_bootstrap"),
     ("backend-core", "workspace_data_plane"),
-    ("backend-filesystem", "runtime_detection"),
+    // #task:2289 relocated backend-filesystem's `runtime_detection` seam under a new
+    // dual-purpose `host_runtime` container namespace (a path-only move preserving the
+    // directory leaf and its exact child set). Its flat `runtime_detection` entry is
+    // removed; this single owning-root container entry covers it via the CP projection,
+    // and the organization map/gate is the authority for the leaf's owner/target inside
+    // the namespace. Directory-shaped, so it also joins `DIRECTORY_NAMESPACES` below.
+    ("backend-filesystem", "host_runtime"),
     // #task:2223 — the production avatar blob adapter (`SingleKindAvatarBlobs`),
     // bridging the #task:2222 `avatar` capability to #task:2221's local blob store
     // under one ambient storage kind. An adapter like `clock` / `password_hasher`
@@ -388,12 +394,14 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     // C3 `conversation_messaging` namespace (its flat entries removed here, covered by the
     // single `conversation_messaging` owning-root seam entry via the CP projection).
     ("backend-core", "host_runtime"),
-    // #task:2256 categorized-file audit sink: the OS adapter that owns the CLI
-    // preflight-failure log file and its writer lifecycle, home of the reusable
-    // `CategorizedJsonlWriter` primitive. A non-seam production module the host-agent seam
-    // lane did not add, in the same non-seam baseline as its sibling `blob_store`.
-    ("backend-filesystem", "audit_sink"),
-    ("backend-filesystem", "blob_store"),
+    // #task:2289 relocated backend-filesystem's two inherited non-seam adapters — the
+    // #task:2256 categorized-file audit sink (owner of the CLI preflight-failure log file
+    // and its writer lifecycle, home of the reusable `CategorizedJsonlWriter`) and its
+    // sibling `blob_store` (the local blob store) — under a new `foundation` container
+    // namespace. Their flat `audit_sink`/`blob_store` entries are removed; this single
+    // owning-root container entry covers both via the CP projection, keeping their
+    // non-seam baseline. It carries no seam obligation, matching the two adapters it holds.
+    ("backend-filesystem", "foundation"),
     ("backend-server", "access"),
     ("backend-server", "auth"),
     ("backend-server", "bearer"),
@@ -466,7 +474,12 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
 const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
-    ("backend-filesystem", "runtime_detection"),
+    // #task:2289 — the backend-filesystem `host_runtime` container is directory-shaped
+    // (declared once at the crate root with a `mod.rs`), owning the relocated
+    // `runtime_detection` directory leaf; its flat `runtime_detection` directory entry is
+    // removed. The sibling `foundation` container holds two flat-file adapters, so it is
+    // NOT directory-shaped and is absent here.
+    ("backend-filesystem", "host_runtime"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
@@ -1092,22 +1105,19 @@ fn g0_every_lane_module_sits_in_the_inventory_that_guards_it() {
     // The fifth workspace crate `backend-filesystem` is now in `CRATE_ROOTS`, so the
     // loop above scans all of its declarations. Prove those classifications are
     // load-bearing rather than trusting a reader: driven against the REAL filesystem
-    // root with the registry emptied, EVERY name is reported — the inherited
-    // `blob_store`, this lane's seam entry `runtime_detection`, and #task:2256's
-    // `audit_sink` — so deleting any classification turns G0 red. Without filesystem in
-    // the scan range, those entries would be dead and their deletion silent, which is the
-    // second-layer false-green this closes.
+    // root with the registry emptied, EVERY root declaration is reported — the two
+    // #task:2289 container namespaces `foundation` (the inherited `audit_sink`/`blob_store`
+    // adapters) and `host_runtime` (this lane's relocated `runtime_detection` seam) — so
+    // deleting any classification turns G0 red. Without filesystem in the scan range, those
+    // entries would be dead and their deletion silent, which is the second-layer
+    // false-green this closes.
     assert_eq!(
         classification_gaps(
             &root_module_declarations("backend-filesystem"),
             &BTreeSet::new(),
         )
         .0,
-        vec![
-            "audit_sink".to_owned(),
-            "blob_store".to_owned(),
-            "runtime_detection".to_owned()
-        ],
+        vec!["foundation".to_owned(), "host_runtime".to_owned()],
         "deleting backend-filesystem's root classification must turn G0 red"
     );
 

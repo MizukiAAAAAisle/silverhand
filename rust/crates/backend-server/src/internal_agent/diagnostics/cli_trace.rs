@@ -268,7 +268,7 @@ mod tests {
             RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
         },
     };
-    use silverhand_backend_filesystem::audit_sink::{AppTag, AuditClock, CliAuditFile};
+    use silverhand_backend_filesystem::foundation::audit_sink::{AppTag, AuditClock, CliAuditFile};
     use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
 

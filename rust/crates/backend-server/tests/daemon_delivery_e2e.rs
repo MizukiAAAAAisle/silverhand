@@ -57,7 +57,7 @@ use silverhand_backend_core::{
     identity_access::agents::runtime::RuntimeKind,
     identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
 };
-use silverhand_backend_filesystem::blob_store::LocalBlobStore;
+use silverhand_backend_filesystem::foundation::blob_store::LocalBlobStore;
 use silverhand_backend_server::{
     agent_profile_mcp_data_plane::ProductionAgentProfileMcpDataPlane,
     clock::ProcessClock,

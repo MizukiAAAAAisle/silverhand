@@ -47,7 +47,7 @@ impl crate::workspace_metadata_write::WorkspaceMetadataClock for SystemProcessCl
 }
 
 /// The categorized-file audit sink stamps each line's `ts` (and derives its per-boot
-/// filename) through a narrow [`AuditClock`](silverhand_backend_filesystem::audit_sink::AuditClock)
+/// filename) through a narrow [`AuditClock`](silverhand_backend_filesystem::foundation::audit_sink::AuditClock)
 /// capability rather than depending on this hub, so the sink's wire projection is
 /// pinnable behind a fixed clock in its own crate's tests. That capability is the SAME
 /// contract this port answers — signed Unix milliseconds, `Date.now()` parity — so the
@@ -55,7 +55,7 @@ impl crate::workspace_metadata_write::WorkspaceMetadataClock for SystemProcessCl
 /// `SystemProcessClock`. This `impl` is legal here (not in the filesystem crate) because
 /// backend-server depends on backend-filesystem, keeping the one production
 /// `SystemTime::now()` for this contract in this file.
-impl silverhand_backend_filesystem::audit_sink::AuditClock for SystemProcessClock {
+impl silverhand_backend_filesystem::foundation::audit_sink::AuditClock for SystemProcessClock {
     fn now_unix_millis(&self) -> i64 {
         signed_unix_millis(SystemTime::now())
     }

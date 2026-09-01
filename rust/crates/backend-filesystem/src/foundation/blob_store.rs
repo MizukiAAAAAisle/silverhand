@@ -54,7 +54,7 @@ impl BlobKeyEntropy for HostBlobKeyEntropy {
 ///
 /// ```compile_fail
 /// use std::path::PathBuf;
-/// use silverhand_backend_filesystem::blob_store::LocalBlobAliasPath;
+/// use silverhand_backend_filesystem::foundation::blob_store::LocalBlobAliasPath;
 /// let forged = LocalBlobAliasPath(PathBuf::from("/tmp/not-storage-owned"));
 /// # let _ = forged;
 /// ```

@@ -30,12 +30,12 @@ use silverhand_backend_core::{
     policy::presence_grace::GraceWindow,
 };
 #[cfg(test)]
-use silverhand_backend_filesystem::audit_sink::CliPreflightFileSink;
-use silverhand_backend_filesystem::{
+use silverhand_backend_filesystem::foundation::audit_sink::CliPreflightFileSink;
+use silverhand_backend_filesystem::foundation::{
     audit_sink::{AgentAuditFileSink, CliAuditFile},
     blob_store::LocalBlobStore,
-    runtime_detection::MachineRuntimeDetector,
 };
+use silverhand_backend_filesystem::host_runtime::runtime_detection::MachineRuntimeDetector;
 #[cfg(test)]
 use silverhand_backend_server::internal_agent::cli_invoke::CLI_INVOKE_PRODUCTION_PERIMETER;
 use silverhand_backend_server::{

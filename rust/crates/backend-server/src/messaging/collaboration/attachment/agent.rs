@@ -39,7 +39,9 @@ use silverhand_backend_core::{
     foundation::identity::AgentId,
     host_runtime::runtime_credential::RuntimePrincipal,
 };
-use silverhand_backend_filesystem::blob_store::{LocalBlobAliasOutcome, LocalBlobAliasStore};
+use silverhand_backend_filesystem::foundation::blob_store::{
+    LocalBlobAliasOutcome, LocalBlobAliasStore,
+};
 
 use super::{
     BlobMaintenance, MULTIPART_ENVELOPE_BYTES, agent_multipart_upload, attachment_not_found,

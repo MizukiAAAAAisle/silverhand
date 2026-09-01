@@ -5,7 +5,7 @@
 //! is the functional audit-evidence contract (#task:2254), not incidental logging.
 //!
 //! The sink is a typed port, deliberately NOT a raw `tracing` call. Backend-app injects
-//! the production `silverhand_backend_filesystem::audit_sink::AgentAuditFileSink`, whose
+//! the production `silverhand_backend_filesystem::foundation::audit_sink::AgentAuditFileSink`, whose
 //! flat, queryable JSONL projection reuses the shared categorized writer. This core crate
 //! retains only the event and port contract; counting fakes remain available to prove the
 //! route effect without importing filesystem policy.

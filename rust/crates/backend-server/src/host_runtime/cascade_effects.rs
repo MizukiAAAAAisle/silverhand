@@ -21,7 +21,7 @@ use silverhand_backend_core::{
     foundation::identity::{AgentId, HostId},
     host_runtime::aftermath::CustodyEffectFailure,
 };
-use silverhand_backend_filesystem::blob_store::{LocalBlobStore, LocalBlobStoreError};
+use silverhand_backend_filesystem::foundation::blob_store::{LocalBlobStore, LocalBlobStoreError};
 
 use crate::{
     daemon_delivery::{

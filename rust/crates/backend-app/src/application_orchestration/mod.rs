@@ -36,10 +36,10 @@ pub(super) async fn prepare_existing_listener_observed<F>(
 ) -> Result<(tokio::net::TcpListener, crate::PreparedApp), crate::StartupError>
 where
     F: FnOnce(
-        silverhand_backend_filesystem::audit_sink::CliPreflightFileSink<
+        silverhand_backend_filesystem::foundation::audit_sink::CliPreflightFileSink<
             silverhand_backend_server::clock::SystemProcessClock,
         >,
-        silverhand_backend_filesystem::audit_sink::AgentAuditFileSink<
+        silverhand_backend_filesystem::foundation::audit_sink::AgentAuditFileSink<
             silverhand_backend_server::clock::SystemProcessClock,
         >,
     ),
@@ -55,10 +55,10 @@ async fn prepare_bound_listener_observed<F>(
 ) -> Result<(tokio::net::TcpListener, crate::PreparedApp), crate::StartupError>
 where
     F: FnOnce(
-        silverhand_backend_filesystem::audit_sink::CliPreflightFileSink<
+        silverhand_backend_filesystem::foundation::audit_sink::CliPreflightFileSink<
             silverhand_backend_server::clock::SystemProcessClock,
         >,
-        silverhand_backend_filesystem::audit_sink::AgentAuditFileSink<
+        silverhand_backend_filesystem::foundation::audit_sink::AgentAuditFileSink<
             silverhand_backend_server::clock::SystemProcessClock,
         >,
     ),
@@ -73,10 +73,10 @@ async fn prepare_for_bound_listener_observed<F>(
 ) -> Result<(tokio::net::TcpListener, crate::PreparedApp), crate::StartupError>
 where
     F: FnOnce(
-        silverhand_backend_filesystem::audit_sink::CliPreflightFileSink<
+        silverhand_backend_filesystem::foundation::audit_sink::CliPreflightFileSink<
             silverhand_backend_server::clock::SystemProcessClock,
         >,
-        silverhand_backend_filesystem::audit_sink::AgentAuditFileSink<
+        silverhand_backend_filesystem::foundation::audit_sink::AgentAuditFileSink<
             silverhand_backend_server::clock::SystemProcessClock,
         >,
     ),

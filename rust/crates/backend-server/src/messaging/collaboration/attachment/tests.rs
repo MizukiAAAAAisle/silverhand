@@ -27,7 +27,7 @@ use silverhand_backend_core::{
     },
     foundation::identity::UserId,
 };
-use silverhand_backend_filesystem::blob_store::{
+use silverhand_backend_filesystem::foundation::blob_store::{
     LocalBlobAliasDeleteOutcome, LocalBlobAliasOutcome, LocalBlobAliasStore, LocalBlobStore,
 };
 use silverhand_backend_sqlite::messaging::MessagingStore;

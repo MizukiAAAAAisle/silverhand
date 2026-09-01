@@ -58,7 +58,9 @@ use silverhand_backend_core::{
     foundation::wire_number::JsSafeInteger,
     foundation::wire_text,
 };
-use silverhand_backend_filesystem::blob_store::{LocalBlobAliasOutcome, LocalBlobAliasStore};
+use silverhand_backend_filesystem::foundation::blob_store::{
+    LocalBlobAliasOutcome, LocalBlobAliasStore,
+};
 
 use crate::messaging::author_wire::author_dto;
 

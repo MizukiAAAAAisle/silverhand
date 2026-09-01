@@ -32,7 +32,7 @@
 //! One pass spawns a process per offered runtime, so the product caches a pass for
 //! thirty seconds. That cache is a property of the machine being asked about, not of
 //! any request or any route, so it lives in ONE component the composition root builds
-//! once ([`silverhand_backend_filesystem::runtime_detection::MachineRuntimeDetector`])
+//! once ([`silverhand_backend_filesystem::host_runtime::runtime_detection::MachineRuntimeDetector`])
 //! and [`detecting_router`] merely receives. A cache built here — per factory, per
 //! request, or as a second layer in front of the port — would either duplicate the
 //! window or reset it, and either way the thirty seconds would stop meaning what it

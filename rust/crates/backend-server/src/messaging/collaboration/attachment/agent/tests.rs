@@ -36,7 +36,7 @@ use silverhand_backend_core::{
         RuntimeCustody, RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
 };
-use silverhand_backend_filesystem::blob_store::{LocalBlobStore, LocalBlobStoreError};
+use silverhand_backend_filesystem::foundation::blob_store::{LocalBlobStore, LocalBlobStoreError};
 use silverhand_backend_sqlite::messaging::{
     MessagingStore, collaboration::attachment::SqliteAgentAttachment,
 };
