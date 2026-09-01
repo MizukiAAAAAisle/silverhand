@@ -16,7 +16,7 @@ use silverhand_backend_server::{
         DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH, EVENT_WS_SESSION_COOKIE,
         MINIMUM_CLIENT_API_EPOCH,
     },
-    host_agent_background::agent_deletion_resumer::DeletionRunOutcome,
+    host_runtime::host_agent_background::agent_deletion_resumer::DeletionRunOutcome,
 };
 use sqlx::{Connection, Executor};
 use tempfile::TempDir;
@@ -9520,7 +9520,7 @@ mod presence_composition {
     use silverhand_backend_server::{
         foundation::scope_event_transport::ConnectionLifecycle,
         host_agent::presence::{self, PRESENCE_PATH},
-        host_agent_background::presence_grace_timer::PresenceFactSink,
+        host_runtime::host_agent_background::presence_grace_timer::PresenceFactSink,
         viewer_read_model::presence::PresenceConnectionFeed,
     };
 

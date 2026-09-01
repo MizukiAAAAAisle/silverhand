@@ -78,11 +78,11 @@ use silverhand_backend_server::{
         agent_runtime_switch, agent_stop, availability, public_profile_mcp,
         schedule_management::{schedule_cancel_router, schedule_list_router},
     },
-    host_agent_background::{
-        agent_deletion_resumer::AgentDeletionResumer, presence_grace_timer::PresenceGraceTimers,
-    },
     host_control::management::{self},
     host_control::runtime_availability::DataPlaneRuntimeAvailabilityProbe,
+    host_runtime::host_agent_background::{
+        agent_deletion_resumer::AgentDeletionResumer, presence_grace_timer::PresenceGraceTimers,
+    },
     host_runtime::runtime_credential::{RuntimeCredentialAuthority, require_runtime_credential},
     host_runtime::{self, host_resources},
     identity_access::{

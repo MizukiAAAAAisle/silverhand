@@ -221,7 +221,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // typed daemon codecs for agent materialize / runtime start / clear-session.
     ("backend-server", "agent_materialize"),
     ("backend-server", "host_agent"),
-    ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
     // #task:2226 — internal-agent route family, mounted at the app composition root by
     // the #task:2234 integration (CP7a profile/avatar/peer-profile, CP7b MCP). Its MCP
@@ -470,7 +469,6 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // NOT directory-shaped and is absent here.
     ("backend-filesystem", "host_runtime"),
     ("backend-server", "host_agent"),
-    ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
     ("backend-server", "internal_agent"),
     ("backend-server", "ops"),
@@ -593,7 +591,6 @@ const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "cold_read"),
     ("backend-core", "policy"),
     ("backend-server", "host_agent"),
-    ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
     ("backend-server", "ops"),
 ];
@@ -1270,7 +1267,7 @@ fn g2_background_policy_names_no_timer_or_driver() {
 
 #[test]
 fn g2_background_timers_carry_no_http_surface() {
-    for path in lane_source_paths("backend-server", "host_agent_background") {
+    for path in lane_source_paths("backend-server", "host_runtime/host_agent_background") {
         let source = strip_comments(&read(&path));
         for forbidden in ["axum", "Router", "StatusCode"] {
             assert!(

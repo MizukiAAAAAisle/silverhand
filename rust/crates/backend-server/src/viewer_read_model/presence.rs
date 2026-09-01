@@ -16,7 +16,9 @@ use crate::{
         scope_event_transport::{ConnectionLifecycle, ScopeEventHub, ScopeEventHubError},
         scope_event_wire::ProductEvent,
     },
-    host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers},
+    host_runtime::host_agent_background::presence_grace_timer::{
+        PresenceFactSink, PresenceGraceTimers,
+    },
 };
 
 /// Narrow publication adapter for presence facts. It owns no clock, grace or persistence

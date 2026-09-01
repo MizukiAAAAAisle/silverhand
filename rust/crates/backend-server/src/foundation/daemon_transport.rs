@@ -1940,12 +1940,12 @@ mod tests {
         application_orchestration::daemon_delivery::DaemonDeliveryRuntime,
         current_schema,
         foundation::scope_event_transport::ScopeEventHub,
-        host_agent_background::agent_deletion_resumer::DeletionFenceBinder,
         host_control::management::disconnect::DaemonConnectionControlHandle,
         host_control::{status_seed::DaemonCustody, status_snapshot::StatusSnapshotOutcome},
         host_runtime::daemon_runtime_transport::{
             DeliveryDisposition, compose_delivery_text, delivery_disposition,
         },
+        host_runtime::host_agent_background::agent_deletion_resumer::DeletionFenceBinder,
         host_runtime::runtime_credential::RuntimeCredentialAuthority,
         host_runtime::{
             cascade_effects::{DaemonCascadeEffects, DaemonHostConnections},

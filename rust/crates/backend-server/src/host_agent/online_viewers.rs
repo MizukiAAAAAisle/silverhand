@@ -13,7 +13,9 @@ use silverhand_backend_core::{
     viewer_read_model::user_presence_last_seen::LastSeenSink,
 };
 
-use crate::host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers};
+use crate::host_runtime::host_agent_background::presence_grace_timer::{
+    PresenceFactSink, PresenceGraceTimers,
+};
 
 impl<L, S> OnlineViewers for PresenceGraceTimers<L, S>
 where

@@ -24,7 +24,9 @@ use silverhand_backend_core::{
 };
 use silverhand_backend_server::{
     foundation::scope_event_transport::ConnectionLifecycle,
-    host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers},
+    host_runtime::host_agent_background::presence_grace_timer::{
+        PresenceFactSink, PresenceGraceTimers,
+    },
     viewer_read_model::presence::{DisconnectClock, PresenceConnectionFeed},
 };
 

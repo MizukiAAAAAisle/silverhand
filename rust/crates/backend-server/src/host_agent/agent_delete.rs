@@ -94,7 +94,7 @@ use silverhand_backend_core::{
 
 use crate::foundation::clock::ProcessClock;
 use crate::foundation::error;
-use crate::host_agent_background::agent_deletion_resumer::{
+use crate::host_runtime::host_agent_background::agent_deletion_resumer::{
     AgentDeletionResumer, DeletionFenceBinder, DeletionRunOutcome,
 };
 use crate::host_runtime::scope_event_publishers::AgentAvailabilityEdge;

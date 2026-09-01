@@ -18,7 +18,6 @@ use crate::{
         DaemonTransport, DaemonTransportController,
     },
     foundation::error,
-    host_agent_background::agent_deletion_resumer::HostReadyObserver,
     host_control::{
         admission::{
             AdmissionUnavailable, DialerId, HostAdmission, ProtocolMismatch, RefusalNews,
@@ -27,6 +26,7 @@ use crate::{
         status_seed::{HostStatusSeeds, SeedAttempt},
     },
     host_runtime::daemon_runtime_owner::DaemonRuntimeOwner,
+    host_runtime::host_agent_background::agent_deletion_resumer::HostReadyObserver,
     host_runtime::runtime_credential::RuntimeCredentialAuthority,
     host_runtime::scope_event_publishers::HubHostRuntimeEvents,
 };

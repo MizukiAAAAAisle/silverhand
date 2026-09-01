@@ -82,7 +82,9 @@ use crate::daemon_events::{
     RuntimeParsedEvent, RuntimeProductEvent, RuntimeScopeWire,
 };
 use crate::foundation::scope_event_wire::*;
-use crate::host_agent_background::presence_grace_timer::{PresenceFactSink, PresenceGraceTimers};
+use crate::host_runtime::host_agent_background::presence_grace_timer::{
+    PresenceFactSink, PresenceGraceTimers,
+};
 use crate::host_runtime::scope_event_publishers::*;
 use crate::identity_access::scope_event_publishers::*;
 use crate::viewer_read_model::presence::{

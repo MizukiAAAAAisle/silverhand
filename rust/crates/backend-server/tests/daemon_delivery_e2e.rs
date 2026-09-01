@@ -71,7 +71,6 @@ use silverhand_backend_server::{
         EVENT_WS_SESSION_COOKIE, EventWebSocketConfig, EventWebSocketController, ScopeEventHub,
         router as scope_event_router,
     },
-    host_agent_background::agent_deletion_resumer::HostReadyObserver,
     host_control::admission::ProtocolMismatchRefusal,
     host_control::management::{self, update::HostLabelChangeEffect},
     host_control::proxy_config::{self, ProxyConfig, ProxyConfigOutcome, ProxyConfigRequest},
@@ -82,6 +81,7 @@ use silverhand_backend_server::{
     host_control::status_snapshot::{
         self, SnapshotCoordinateMismatch, StatusSnapshotOutcome, StatusSnapshotRequest,
     },
+    host_runtime::host_agent_background::agent_deletion_resumer::HostReadyObserver,
     host_runtime::runtime_credential::RuntimeCredentialAuthority,
     host_runtime::{
         cascade_effects::{AgentDeletedAnnouncement, ProductionComputerCascadeEffects},

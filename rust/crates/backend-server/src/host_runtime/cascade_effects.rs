@@ -29,10 +29,10 @@ use crate::{
         OwningHostDataPlane, command,
     },
     foundation::scope_event_transport::ScopeEventHub,
-    host_agent_background::agent_deletion_resumer::AgentDeletionResumer,
     host_runtime::daemon_runtime_codecs::runtime_stop::{
         self, RuntimeStopCodecError, RuntimeStopCommand,
     },
+    host_runtime::host_agent_background::agent_deletion_resumer::AgentDeletionResumer,
 };
 
 const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -189,7 +189,7 @@ impl DaemonHostConnections {
     }
 }
 
-impl crate::host_agent_background::agent_deletion_resumer::DeletionFenceBinder
+impl crate::host_runtime::host_agent_background::agent_deletion_resumer::DeletionFenceBinder
     for DaemonHostConnections
 {
     type Fence = DaemonAgentDeletionFence;
@@ -447,7 +447,7 @@ where
 /// [`recover`](AgentDeletionResumer::recover) once after boot; call
 /// [`on_host_ready`](AgentDeletionResumer::on_host_ready) from the daemon attach path;
 /// and drive [`try_now`](AgentDeletionResumer::try_now) from the public delete endpoint,
-/// mapping [`DeletionRunOutcome`](crate::host_agent_background::agent_deletion_resumer::DeletionRunOutcome)
+/// mapping [`DeletionRunOutcome`](crate::host_runtime::host_agent_background::agent_deletion_resumer::DeletionRunOutcome)
 /// to the response. Shutdown calls [`close`](AgentDeletionResumer::close).
 pub fn production_agent_deletion_resumer<L, A>(
     lifecycle: L,
