@@ -45,7 +45,7 @@ use silverhand_backend_core::{
 use silverhand_backend_server::{
     conversation_messaging::messaging::task::{TaskListState, task_list_router},
     foundation::clock::ProcessClock,
-    runtime_credential::{
+    host_runtime::runtime_credential::{
         RuntimeCredentialAuthority, RuntimeDispatchFailure, RuntimeEntropy, RuntimeStartHandoff,
         RuntimeStartTransport, require_runtime_credential,
     },

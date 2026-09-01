@@ -51,13 +51,13 @@ const LEGACY_PRINCIPAL_HEADER: &str = "x-silverhand-principal";
 /// transport consumes it for one child start.
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::runtime_credential::RuntimeBearer;
+/// use silverhand_backend_server::host_runtime::runtime_credential::RuntimeBearer;
 /// let token = RuntimeBearer::parse("secret").unwrap();
 /// let _ = token.clone();
 /// ```
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::runtime_credential::RuntimeBearer;
+/// use silverhand_backend_server::host_runtime::runtime_credential::RuntimeBearer;
 /// let left = RuntimeBearer::parse("secret").unwrap();
 /// let right = RuntimeBearer::parse("secret").unwrap();
 /// let _ = left == right;
@@ -65,19 +65,19 @@ const LEGACY_PRINCIPAL_HEADER: &str = "x-silverhand-principal";
 ///
 /// ```compile_fail
 /// use std::ops::Deref;
-/// use silverhand_backend_server::runtime_credential::RuntimeBearer;
+/// use silverhand_backend_server::host_runtime::runtime_credential::RuntimeBearer;
 /// let token = RuntimeBearer::parse("secret").unwrap();
 /// let _: &str = Deref::deref(&token);
 /// ```
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::runtime_credential::RuntimeBearer;
+/// use silverhand_backend_server::host_runtime::runtime_credential::RuntimeBearer;
 /// let token = RuntimeBearer::parse("secret").unwrap();
 /// let _: &str = token.as_ref();
 /// ```
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::runtime_credential::RuntimeBearer;
+/// use silverhand_backend_server::host_runtime::runtime_credential::RuntimeBearer;
 /// let token = RuntimeBearer::parse("secret").unwrap();
 /// let _ = serde_json::to_string(&token).unwrap();
 /// ```

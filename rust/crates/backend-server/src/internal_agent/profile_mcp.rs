@@ -220,7 +220,7 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    use crate::runtime_credential::{
+    use crate::host_runtime::runtime_credential::{
         AuthenticateRuntimeCredential, RuntimeBearer, require_runtime_credential,
     };
 

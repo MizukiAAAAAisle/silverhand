@@ -655,7 +655,7 @@ async fn prepared_residual_faces_share_one_drained_cli_audit_owner() {
         foundation::identity::{ConversationId, DaemonInstanceId},
         host_runtime::runtime_credential::RuntimeScope,
     };
-    use silverhand_backend_server::runtime_credential::{
+    use silverhand_backend_server::host_runtime::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
     };
 
@@ -3851,7 +3851,7 @@ async fn the_eighteen_convergence_keys_dispatch_after_real_authentication() {
         foundation::identity::{ConversationId, DaemonInstanceId},
         host_runtime::runtime_credential::RuntimeScope,
     };
-    use silverhand_backend_server::runtime_credential::{
+    use silverhand_backend_server::host_runtime::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
     };
 
@@ -4777,7 +4777,7 @@ async fn the_composition_internal_self_scope_family_reaches_and_effects_over_one
         foundation::identity::{ConversationId, DaemonInstanceId},
         host_runtime::runtime_credential::RuntimeScope,
     };
-    use silverhand_backend_server::runtime_credential::{
+    use silverhand_backend_server::host_runtime::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
     };
 
@@ -5219,7 +5219,7 @@ async fn the_composition_internal_profile_mcp_family_reaches_the_daemon_wire() {
         foundation::identity::{ConversationId, DaemonInstanceId},
         host_runtime::runtime_credential::RuntimeScope,
     };
-    use silverhand_backend_server::runtime_credential::{
+    use silverhand_backend_server::host_runtime::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
     };
 
@@ -9240,7 +9240,7 @@ mod host_resources_activation {
         identity_access::auth::{HumanSessionAuthenticator, SessionTtl, SystemSessionClock},
     };
     use silverhand_backend_server::{
-        host_resources,
+        host_runtime::host_resources,
         identity_access::auth::{PublicJsonUnauthorized, require_human_session},
     };
     use silverhand_backend_sqlite::identity_access::auth::SqliteSessionStore;

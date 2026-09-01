@@ -32,7 +32,7 @@ use silverhand_backend_core::{
 };
 use silverhand_backend_server::{
     foundation::clock::ProcessClock,
-    runtime_credential::{
+    host_runtime::runtime_credential::{
         HydrateCredentialDisposition, PrepareRuntimeCredentialError, RuntimeCredentialAuthority,
         RuntimeDispatchFailure, RuntimeEntropy, RuntimeStartFailure, RuntimeStartHandoff,
         RuntimeStartTransport, RuntimeStopTransport, require_runtime_credential,

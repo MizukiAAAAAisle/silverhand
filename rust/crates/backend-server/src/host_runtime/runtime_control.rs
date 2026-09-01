@@ -42,7 +42,7 @@ use crate::{
     host_runtime::daemon_runtime_codecs::{
         runtime_clear_session as runtime_clear_session_codec, runtime_start as runtime_start_codec,
     },
-    runtime_credential::{
+    host_runtime::runtime_credential::{
         RuntimeCredentialAuthority, RuntimeDispatchFailure, RuntimeStartFailure,
         RuntimeStartHandoff, RuntimeStartTransport,
     },

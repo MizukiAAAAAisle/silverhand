@@ -8,7 +8,7 @@ use silverhand_backend_core::{
     foundation::wire_number::JsSafeInteger,
 };
 
-use crate::runtime_credential::RuntimeStartHandoff;
+use crate::host_runtime::runtime_credential::RuntimeStartHandoff;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RuntimeStartCodecError;

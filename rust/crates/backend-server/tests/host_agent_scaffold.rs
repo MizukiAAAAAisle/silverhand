@@ -227,7 +227,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // the #task:2234 integration (CP7a profile/avatar/peer-profile, CP7b MCP). Its MCP
     // leaf consumes only the typed data-plane port; #task:2231 supplies that production face.
     ("backend-server", "internal_agent"),
-    ("backend-server", "host_resources"),
     ("backend-server", "ops"),
     // #task:2229 — the runtime start/stop/clear production capability. It owns
     // exact-custody commands, the ephemeral clear waiter, and committed clear
@@ -386,8 +385,11 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-server", "current_schema"),
     ("backend-server", "daemon_delivery"),
     ("backend-server", "daemon_events"),
+    // #task:2306 relocated the `host_resources` and `runtime_credential` production leaves
+    // beneath this owning root, advancing host runtime to 6/8/2. The two directory-shaped
+    // residuals remain the separately inventoried `host_agent_background` and `host_control`;
+    // accepted compatibility facades remain separately named and are not business units.
     ("backend-server", "host_runtime"),
-    ("backend-server", "runtime_credential"),
     ("backend-sqlite", "current_schema"),
     // #task:2294 relocated four low-fanout read adapters (`agent_availability_read`,
     // `agent_presence_read`, `computer_agents_read`, `host_resources_read`) under this
@@ -593,7 +595,6 @@ const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
-    ("backend-server", "host_resources"),
     ("backend-server", "ops"),
 ];
 

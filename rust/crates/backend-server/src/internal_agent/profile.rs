@@ -2,7 +2,7 @@
 //!
 //! ## The `{aid}` binding is structural, and it is the credential layer's
 //!
-//! This route sits behind [`require_runtime_credential`](crate::runtime_credential::require_runtime_credential):
+//! This route sits behind [`require_runtime_credential`](crate::host_runtime::runtime_credential::require_runtime_credential):
 //! that layer authenticates the runtime bearer, extracts the `{aid}` path
 //! segment, and admits the request ONLY when the token's own agent equals that
 //! `{aid}` (a mismatch is an indistinguishable `401`, never a `403` that would
@@ -134,7 +134,7 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    use crate::runtime_credential::{
+    use crate::host_runtime::runtime_credential::{
         AuthenticateRuntimeCredential, RuntimeBearer, require_runtime_credential,
     };
 

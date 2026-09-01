@@ -1,3 +1,9 @@
+//! Host lifecycle routes and adapters.
+//!
+//! Six of the eight production-settled targets now live under this namespace. The remaining
+//! directory leaves are `host_agent_background` and `host_control`; compatibility facades stay
+//! separately named at the crate root and are not business residuals.
+
 use std::sync::Arc;
 
 use axum::{
@@ -29,6 +35,7 @@ pub(crate) mod daemon_runtime_owner;
 pub(crate) mod daemon_runtime_transport;
 pub mod delete;
 pub mod detail;
+pub mod host_resources;
 pub(crate) mod host_wire;
 pub mod list;
 pub mod resolve;
@@ -36,6 +43,7 @@ pub mod revoke;
 pub mod rotate_connect_token;
 pub mod rotate_token;
 pub mod runtime_control;
+pub mod runtime_credential;
 pub mod scope_event_publishers;
 pub mod scope_runtime_stop;
 

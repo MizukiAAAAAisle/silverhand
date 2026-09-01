@@ -1946,12 +1946,12 @@ mod tests {
         host_runtime::daemon_runtime_transport::{
             DeliveryDisposition, compose_delivery_text, delivery_disposition,
         },
+        host_runtime::runtime_credential::RuntimeCredentialAuthority,
         host_runtime::{
             cascade_effects::{DaemonCascadeEffects, DaemonHostConnections},
             daemon_runtime_codecs::runtime_start as runtime_start_codec,
             rotate_token::{parse_rotation_ack, rotation_params},
         },
-        runtime_credential::RuntimeCredentialAuthority,
         scope_runtime_stop::ProductionScopeRuntimeStop,
     };
 
@@ -2878,7 +2878,7 @@ mod tests {
             daemon_delivery::{DaemonDeliveryConfig, DaemonDeliveryRuntime},
             daemon_events::{AgentRunStateWire, AgentRunStatus, HydratedRuntime},
             foundation::scope_event_transport::ScopeEventHub,
-            runtime_credential::RuntimeCredentialAuthority,
+            host_runtime::runtime_credential::RuntimeCredentialAuthority,
         };
 
         const CONVERSATION: &str = "conversation0001";

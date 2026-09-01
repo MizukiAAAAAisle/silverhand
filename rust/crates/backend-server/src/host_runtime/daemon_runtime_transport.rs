@@ -25,7 +25,7 @@ use crate::{
         runtime_stop::{self, RuntimeStopCodecError, RuntimeStopCommand},
         spawn_options, workspace_wire,
     },
-    runtime_credential::{
+    host_runtime::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport, RuntimeStopTransport,
     },
 };

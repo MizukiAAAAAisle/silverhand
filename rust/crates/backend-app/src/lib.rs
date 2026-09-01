@@ -83,7 +83,8 @@ use silverhand_backend_server::{
     },
     host_control::management::{self},
     host_control::runtime_availability::DataPlaneRuntimeAvailabilityProbe,
-    host_resources, host_runtime,
+    host_runtime::runtime_credential::{RuntimeCredentialAuthority, require_runtime_credential},
+    host_runtime::{self, host_resources},
     identity_access::{
         access, agent_name_availability,
         auth::{PublicJsonUnauthorized, require_human_session},
@@ -112,7 +113,6 @@ use silverhand_backend_server::{
         runtimes,
         server_info::{self, ServerAdvertisement},
     },
-    runtime_credential::{RuntimeCredentialAuthority, require_runtime_credential},
     viewer_read_model::presence::{
         HubPresencePublisher, SystemDisconnectClock, compose_presence_vertical,
     },

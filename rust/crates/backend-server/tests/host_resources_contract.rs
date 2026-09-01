@@ -30,7 +30,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::foundation::identity::UserId;
-use silverhand_backend_server::host_resources::router;
+use silverhand_backend_server::host_runtime::host_resources::router;
 use silverhand_backend_sqlite::host_runtime::host_resources_read::SqliteHostResourcesColdRead;
 use sqlx::{Connection, Executor};
 use tower::ServiceExt;

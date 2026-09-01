@@ -4,7 +4,7 @@
 //! ## `{aid}` is still the executing agent; the target is the `handle` query
 //!
 //! Like the self routes, this sits behind
-//! [`require_runtime_credential`](crate::runtime_credential::require_runtime_credential),
+//! [`require_runtime_credential`](crate::host_runtime::runtime_credential::require_runtime_credential),
 //! which self-pins `{aid}` to the caller's own agent. Read HORIZON and write
 //! AUTHORITY are different axes: the self routes are self-only structurally, and
 //! that is worth keeping, so the peer read is a separate route with a

@@ -3,7 +3,7 @@
 //! ## Self-scoped, records through an injected port, no persistence of its own
 //!
 //! Like its `internal_agent` siblings this route sits behind the self-pin credential layer
-//! ([`require_runtime_credential`](crate::runtime_credential::require_runtime_credential)):
+//! ([`require_runtime_credential`](crate::host_runtime::runtime_credential::require_runtime_credential)):
 //! `{aid}` is bound to the caller's own agent before the handler runs, so the handler takes
 //! NO path param — the subject is `credential.agent()`, never a wire value, and the source
 //! conversation (present only for a ConversationSlot) is `credential.source()`. An absent
@@ -594,10 +594,10 @@ mod tests {
     struct PinnedAuthority {
         enrolled: AgentId,
     }
-    impl crate::runtime_credential::AuthenticateRuntimeCredential for PinnedAuthority {
+    impl crate::host_runtime::runtime_credential::AuthenticateRuntimeCredential for PinnedAuthority {
         async fn authenticate_runtime(
             &self,
-            _bearer: crate::runtime_credential::RuntimeBearer,
+            _bearer: crate::host_runtime::runtime_credential::RuntimeBearer,
             route_agent: AgentId,
         ) -> Result<
             Option<RuntimePrincipal>,
@@ -619,7 +619,7 @@ mod tests {
         let authority = PinnedAuthority {
             enrolled: AgentId::parse("a1").unwrap(),
         };
-        let router = crate::runtime_credential::require_runtime_credential(
+        let router = crate::host_runtime::runtime_credential::require_runtime_credential(
             cli_trace_router(sink.clone()),
             authority,
         );

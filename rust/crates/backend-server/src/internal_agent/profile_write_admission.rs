@@ -8,7 +8,7 @@
 //! ## What lives here, and what deliberately does not
 //!
 //! The self-pin credential layer
-//! ([`require_runtime_credential`](crate::runtime_credential::require_runtime_credential))
+//! ([`require_runtime_credential`](crate::host_runtime::runtime_credential::require_runtime_credential))
 //! already bound `{aid}` to the caller's own agent before any of this runs, so the
 //! product's `agent id required` / `404` / `403` ladder collapses upstream to a
 //! single indistinguishable `401`. Everything below is therefore body-level only.

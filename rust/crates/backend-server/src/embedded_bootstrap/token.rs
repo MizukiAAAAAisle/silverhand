@@ -4,7 +4,7 @@
 //! This is a process-lifetime operational secret, not a domain concept: it exists
 //! only because embedded mode hands the local client a loopback-written token file
 //! to prove it is the machine's owner. So it lives in the server packaging layer
-//! (beside [`crate::runtime_credential`], the other process-lifetime secret), never
+//! (beside [`crate::host_runtime::runtime_credential`], the other process-lifetime secret), never
 //! in the domain core.
 //!
 //! ## Atomic one-shot consume (a security property)

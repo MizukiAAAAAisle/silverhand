@@ -52,7 +52,7 @@ use silverhand_backend_server::{
         TracingStaleMessageResolutionObserver, router as stale_message_resolution_router,
     },
     foundation::clock::ProcessClock,
-    runtime_credential::{
+    host_runtime::runtime_credential::{
         RuntimeCredentialAuthority, RuntimeDispatchFailure, RuntimeEntropy, RuntimeStartHandoff,
         RuntimeStartTransport, require_runtime_credential,
     },
