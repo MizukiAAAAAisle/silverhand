@@ -23,8 +23,8 @@ pub mod agent_view_acl;
 
 pub mod auth;
 pub mod computer_agents_read;
+pub mod conversation_messaging;
 pub mod credential;
-pub mod direct_pair_read;
 pub mod embedded_bootstrap;
 pub mod foundation;
 pub mod handle_namespace;
@@ -33,7 +33,6 @@ pub mod host_resources_read;
 pub mod host_runtime;
 pub mod human_registration;
 pub mod runtime_credential;
-pub mod runtime_delivery;
 pub mod user_identity;
 pub mod viewer_read_model;
 pub mod workspace_audience_read;

@@ -59,9 +59,9 @@ use silverhand_backend_core::{
     policy::presence_grace::{GraceWindow, PresenceFact},
 };
 use silverhand_backend_sqlite::{
-    direct_pair_read::SqliteDirectPairReadModel,
+    conversation_messaging::direct_pair_read::SqliteDirectPairReadModel,
+    conversation_messaging::runtime_delivery::SqliteRuntimeDeliveryStore,
     messaging::MessagingStore,
-    runtime_delivery::SqliteRuntimeDeliveryStore,
     viewer_read_model::unread_read::{SqliteUnreadReadModel, UnreadReadModelError},
     viewer_read_model::user_presence_cold_read::SqliteUserPresenceColdRead,
     viewer_read_model::user_presence_last_seen::SqliteLastSeenSink,

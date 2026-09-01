@@ -6,7 +6,9 @@ use silverhand_backend_core::{
     foundation::identity::UserId,
     identity_access::agents::runtime::RuntimeKind,
 };
-use silverhand_backend_sqlite::direct_pair_read::{DirectPairReadError, SqliteDirectPairReadModel};
+use silverhand_backend_sqlite::conversation_messaging::direct_pair_read::{
+    DirectPairReadError, SqliteDirectPairReadModel,
+};
 use sqlx::Connection;
 
 #[path = "support/current_schema_snapshot.rs"]

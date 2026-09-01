@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 
 use crate::{
-    direct_pair_read::{DirectPairReadError, LivePrincipals, PairEvidence},
+    conversation_messaging::direct_pair_read::{DirectPairReadError, LivePrincipals, PairEvidence},
     messaging::{
         MessagingStore,
         author::{AuthorEvidence, resolve_authors},

@@ -18,7 +18,8 @@ use silverhand_backend_core::{
     policy::agent_presence,
 };
 use silverhand_backend_sqlite::{
-    runtime_credential::SqliteRuntimeCustodyStore, runtime_delivery::SqliteRuntimeDeliveryStore,
+    conversation_messaging::runtime_delivery::SqliteRuntimeDeliveryStore,
+    runtime_credential::SqliteRuntimeCustodyStore,
 };
 use sqlx::{Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::ops::Range;

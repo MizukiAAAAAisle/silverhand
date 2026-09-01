@@ -163,7 +163,7 @@
         },
         {
           "function": "stamp_agent_presence",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
       ],
       "audited_ts_writers": [
@@ -396,19 +396,19 @@
         },
         {
           "function": "commit_exit",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         },
         {
           "function": "commit_session_init",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         },
         {
           "function": "project_status",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         },
         {
           "function": "settle_clear_bound",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
       ],
       "audited_ts_writers": [
@@ -431,11 +431,11 @@
         },
         {
           "function": "insert_runtime_projection_event",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         },
         {
           "function": "settle_clear_bound",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
       ],
       "audited_ts_writers": [
@@ -454,7 +454,7 @@
       "audited_rust_writers": [
         {
           "function": "settle_clear_bound",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
       ],
       "audited_ts_writers": [
@@ -505,7 +505,7 @@
         },
         {
           "function": "settle_clear_bound",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
       ],
       "audited_ts_writers": [
@@ -545,7 +545,7 @@
         },
         {
           "function": "settle_clear_bound",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
       ],
       "audited_ts_writers": [
@@ -665,7 +665,7 @@
         },
         {
           "function": "settle_clear_bound",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
       ],
       "audited_ts_writers": [
@@ -696,15 +696,15 @@
         },
         {
           "function": "claim",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         },
         {
           "function": "commit_exit",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         },
         {
           "function": "release_owner",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
       ],
       "audited_ts_writers": [
@@ -808,15 +808,15 @@
       "audited_rust_writers": [
         {
           "function": "insert_activity_row",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         },
         {
           "function": "refine_tool_call_input",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         },
         {
           "function": "upsert_text_activity",
-          "path": "rust/crates/backend-sqlite/src/runtime_delivery.rs"
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
         }
       ],
       "audited_ts_writers": [

@@ -2597,7 +2597,7 @@ mod presentation_tests {
     #[test]
     fn rust_projection_consumes_the_shared_cross_language_fixtures() {
         let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../packages/shared/tests/fixtures/runtime-delivery-presentation.json"
+            "../../../../../packages/shared/tests/fixtures/runtime-delivery-presentation.json"
         ))
         .unwrap();
         for case in fixture["cases"].as_array().unwrap() {

@@ -27,7 +27,7 @@
 //! resolves authors through [`crate::messaging::author::resolve_authors`], so an audit
 //! message means exactly what the authenticated channel window means — but it selects
 //! its OWN `mode=all` rows (no mainline/thread filter). The direct-pair counterpart is
-//! resolved through [`crate::direct_pair_read`]'s `PairEvidence`/`LivePrincipals`, so
+//! resolved through [`crate::conversation_messaging::direct_pair_read`]'s `PairEvidence`/`LivePrincipals`, so
 //! the audit list and the DM list agree on deleted-vs-active and read-only. The
 //! attachment row is loaded through [`crate::messaging::collaboration::attachment::load_attachment`]
 //! and bound here by `channel == conversation`; the blob store is NEVER touched in the
@@ -65,7 +65,7 @@ use thiserror::Error;
 use crate::{
     agent_detail_read::{AgentDetailColdReadError, agent_detail_select_from, decode_agent_row},
     agent_view_acl::read_agent_audience,
-    direct_pair_read::{DirectPairReadError, LivePrincipals, PairEvidence},
+    conversation_messaging::direct_pair_read::{DirectPairReadError, LivePrincipals, PairEvidence},
     messaging::{
         author::resolve_authors,
         collaboration::{

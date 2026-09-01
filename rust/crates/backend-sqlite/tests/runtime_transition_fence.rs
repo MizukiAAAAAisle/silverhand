@@ -19,8 +19,8 @@ use silverhand_backend_core::{
     identity_access::agents::runtime::RuntimeKind,
 };
 use silverhand_backend_sqlite::{
+    conversation_messaging::runtime_delivery::SqliteRuntimeDeliveryStore,
     host_agent::SqliteHostAgentStore, runtime_credential::SqliteRuntimeCustodyStore,
-    runtime_delivery::SqliteRuntimeDeliveryStore,
 };
 use sqlx::{Connection, Executor, Row, SqliteConnection};
 
