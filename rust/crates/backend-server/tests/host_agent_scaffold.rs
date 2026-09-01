@@ -215,8 +215,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-filesystem", "host_runtime"),
     // #task:2223 — the production avatar blob adapter (`SingleKindAvatarBlobs`),
     // bridging the #task:2222 `avatar` capability to #task:2221's local blob store
-    // under one ambient storage kind. An adapter like `clock` / `password_hasher`
-    // below, so it belongs in this seam ledger but NOT `ACTIVATION_NAMESPACES`.
+    // under one ambient storage kind. An adapter like `foundation::clock` /
+    // `password_hasher`, so it belongs in this seam ledger but NOT
+    // `ACTIVATION_NAMESPACES`.
     ("backend-server", "avatar_blob"),
     // #task:2236 — the shared JSON write-admission extractor (`ValidatedJson<T>`) plus
     // the garde adapters delegating to the `wire_text`/`wire_number` primitives, and the
@@ -225,12 +226,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // context; admission seams like the adapters above, NOT activation namespaces.
     ("backend-server", "wire_admission"),
     ("backend-server", "wire_patch"),
-    // #task:2242 — the crate-private multipart STREAM transport vocabulary
-    // (`declared_content_type` / `accumulate_capped` / `drain`) shared by the four
-    // mounted avatar/profile upload faces. Route-neutral transport plumbing only — it
-    // holds no route policy, MIME allowlist, or admission seam — placed by its bounded
-    // context like the wire framework above, NOT an activation namespace.
-    ("backend-server", "multipart_transport"),
     // #task:2231 — the production typed adapter for the accepted internal
     // profile-MCP port, sharing the owning-host registry and exposing no raw
     // dispatcher. Wired into the internal MCP routes by the #task:2234 integration (CP7b).
@@ -249,7 +244,6 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // #task:2229 — the crate-root production `RuntimeControlPort` adapter plus the
     // typed daemon codecs for agent materialize / runtime start / clear-session.
     ("backend-server", "agent_materialize"),
-    ("backend-server", "clock"),
     ("backend-server", "host_agent"),
     ("backend-server", "host_agent_background"),
     ("backend-server", "host_control"),
@@ -429,7 +423,6 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     ("backend-filesystem", "foundation"),
     ("backend-server", "access"),
     ("backend-server", "auth"),
-    ("backend-server", "bearer"),
     ("backend-server", "current_schema"),
     ("backend-server", "daemon_delivery"),
     ("backend-server", "daemon_events"),
@@ -485,6 +478,11 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
     ("backend-app", "foundation"),
     ("backend-server", "application_orchestration"),
     ("backend-server", "conversation_messaging"),
+    // #task:2299 relocated the first three settled technical leaves (`bearer`, `clock`,
+    // `multipart_transport`) under the existing dual-role `foundation` context. The
+    // organization map + real tree derive PARTIAL 4/7/3 (self-row + three landed leaves;
+    // `error`, `wire_admission`, and `wire_patch` remain flat). Their stale flat CP entries
+    // are removed and this single owning-root entry covers them without descending.
     ("backend-server", "foundation"),
     ("backend-server", "identity_access"),
     ("backend-server", "viewer_read_model"),

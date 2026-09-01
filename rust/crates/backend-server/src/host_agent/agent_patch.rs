@@ -92,8 +92,8 @@ use silverhand_backend_core::{
     identity_access::user_identity::DisplayName,
 };
 
-use crate::clock::ProcessClock;
 use crate::error;
+use crate::foundation::clock::ProcessClock;
 use crate::wire_admission::{self, ValidatedJson, patch_within_utf16_max};
 use crate::wire_patch::{Forbidden, PatchField, RequiredPatchField};
 

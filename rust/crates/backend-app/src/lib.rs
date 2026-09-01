@@ -42,14 +42,16 @@ use silverhand_backend_server::{
     access, agent_name_availability,
     auth::{PublicJsonUnauthorized, require_human_session},
     avatar_blob::SingleKindAvatarBlobs,
-    clock::SystemProcessClock,
     daemon_delivery::{
         DaemonDeliveryController, DaemonDeliveryRuntime, DaemonHostConnections,
         OnboardingDeliveryAdapter,
     },
     direct_pairs, embedded_bootstrap,
-    foundation::scope_event_transport::{
-        AllowedOrigin, EventWebSocketConfig, EventWebSocketController, ScopeEventHub,
+    foundation::{
+        clock::SystemProcessClock,
+        scope_event_transport::{
+            AllowedOrigin, EventWebSocketConfig, EventWebSocketController, ScopeEventHub,
+        },
     },
     host_agent::{
         agent_audit, agent_avatar, agent_avatar_write, agent_clear_session, agent_create,

@@ -38,7 +38,7 @@
 //! ## Multipart admission composes shared transport primitives, keeps its own policy
 //!
 //! The bounded read, the field drain, and the "declared type or octet-stream default"
-//! read are the route-neutral [`crate::multipart_transport`] primitives, shared with the
+//! read are the route-neutral [`crate::foundation::multipart_transport`] primitives, shared with the
 //! sibling avatar/profile faces. What stays HERE is this route's POLICY: the whole
 //! envelope is decoded (every part drained to end, including the selected file's bytes
 //! past `cap + 1`) so a malformed/truncated part ANYWHERE — even after a valid `file` —
@@ -73,12 +73,12 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::clock::ProcessClock;
 use crate::error;
+use crate::foundation::clock::ProcessClock;
 
 use super::agent_avatar::AGENT_AVATAR_PATH;
 use crate::agent_wire::{AgentDto, reproject_committed_agent};
-use crate::multipart_transport::{accumulate_capped, declared_content_type, drain};
+use crate::foundation::multipart_transport::{accumulate_capped, declared_content_type, drain};
 
 /// The anti-enumeration refusal string, pinned to the TypeScript handler.
 const AGENT_NOT_FOUND: &str = "agent not found";

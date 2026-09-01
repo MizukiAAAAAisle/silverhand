@@ -40,7 +40,10 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::{bearer::strict_bearer_credential, clock::ProcessClock, error};
+use crate::{
+    error,
+    foundation::{bearer::strict_bearer_credential, clock::ProcessClock},
+};
 
 use super::{ErrorBody, internal_error};
 

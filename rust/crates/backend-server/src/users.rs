@@ -63,8 +63,8 @@ use silverhand_backend_core::{
 
 use crate::auth::{PublicJsonUnauthorized, require_human_session};
 use crate::error;
+use crate::foundation::multipart_transport::{accumulate_capped, declared_content_type};
 use crate::human_auth::{UserDto, log_lost_announce};
-use crate::multipart_transport::{accumulate_capped, declared_content_type};
 
 /// `apiPaths.users`.
 pub const USERS_PATH: &str = "/api/users";

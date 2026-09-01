@@ -20,7 +20,7 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::{clock::ProcessClock, ops::deployment::ServerMode};
+use crate::{foundation::clock::ProcessClock, ops::deployment::ServerMode};
 
 pub const HEALTH_PATH: &str = "/api/health";
 

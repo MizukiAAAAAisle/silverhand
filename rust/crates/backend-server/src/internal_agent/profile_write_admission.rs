@@ -48,7 +48,7 @@ use silverhand_backend_core::{
     identity_access::user_identity::DisplayName,
 };
 
-use crate::multipart_transport::{accumulate_capped, declared_content_type, drain};
+use crate::foundation::multipart_transport::{accumulate_capped, declared_content_type, drain};
 
 /// The maximum `description` length in UTF-16 code units — the product's
 /// `z.string().max(2000)`. Distinct from the display-name bound: no trim, and an

@@ -31,7 +31,7 @@ use silverhand_backend_core::{
     identity_access::agents::runtime::RuntimeKind,
 };
 use silverhand_backend_server::{
-    clock::ProcessClock,
+    foundation::clock::ProcessClock,
     runtime_credential::{
         HydrateCredentialDisposition, PrepareRuntimeCredentialError, RuntimeCredentialAuthority,
         RuntimeDispatchFailure, RuntimeEntropy, RuntimeStartFailure, RuntimeStartHandoff,

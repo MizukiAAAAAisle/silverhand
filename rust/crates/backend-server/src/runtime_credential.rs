@@ -33,9 +33,11 @@ use silverhand_backend_core::{
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 use crate::{
-    bearer::strict_bearer_credential,
-    clock::{ProcessClock, SystemProcessClock},
     error,
+    foundation::{
+        bearer::strict_bearer_credential,
+        clock::{ProcessClock, SystemProcessClock},
+    },
 };
 
 const TOKEN_BYTES: usize = 32;

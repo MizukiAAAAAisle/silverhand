@@ -47,7 +47,7 @@ use silverhand_backend_core::{
     host_runtime::runtime_credential::RuntimeScope,
 };
 use silverhand_backend_server::{
-    clock::ProcessClock,
+    foundation::clock::ProcessClock,
     messaging::collaboration::stale_message_resolution::{
         StaleMessageResolutionObservation, StaleMessageResolutionObserver,
         TracingStaleMessageResolutionObserver, router as stale_message_resolution_router,

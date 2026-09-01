@@ -7,7 +7,7 @@ use axum::{
 };
 use silverhand_backend_core::identity_access::auth::{AuthenticateHumanSession, SessionBearer};
 
-use crate::{bearer::strict_bearer_credential, error};
+use crate::{error, foundation::bearer::strict_bearer_credential};
 
 pub trait HumanSessionRejection: Clone + Send + Sync + 'static {
     fn unauthorized_response(&self) -> Response;

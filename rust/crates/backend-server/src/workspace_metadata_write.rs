@@ -154,7 +154,7 @@ const INTERNAL_ERROR_BODY: &str = "Internal Server Error";
 /// mirroring the sibling per-slice clocks (`EnrollmentClock`, `RuntimeClock`, …).
 /// Its production owner is not a bespoke app-layer wrapper: this contract is the
 /// same signed-`Date.now()`-millis answer the process-clock port already gives, so
-/// the existing [`crate::clock::SystemProcessClock`] implements this trait directly
+/// the existing [`crate::foundation::clock::SystemProcessClock`] implements this trait directly
 /// and the composition injects that one owner. Injecting the capability lets a test
 /// pin the `updated_at`/`archived_at` the write stamps, so the `200` body is
 /// deterministic.

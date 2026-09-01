@@ -22,8 +22,8 @@ use silverhand_backend_core::{
 };
 
 use crate::{
-    clock::ProcessClock,
     error,
+    foundation::clock::ProcessClock,
     foundation::scope_event_transport::ScopeEventHub,
     host_runtime::host_wire::{HostDto, host_wire},
     wire_admission::from_object_slice,

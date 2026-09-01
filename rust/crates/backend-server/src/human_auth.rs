@@ -31,7 +31,7 @@
 //! grammar as logout) guards `GET`/`PATCH /api/me`. Logout is NOT behind the
 //! perimeter — it must read the raw bearer itself to revoke unknown/expired
 //! bearers with the same `401` a missing bearer gets — so it derives the bearer
-//! through the one canonical [`crate::bearer::strict_bearer_credential`] the
+//! through the one canonical [`crate::foundation::bearer::strict_bearer_credential`] the
 //! perimeter uses, never a second grammar.
 //!
 //! ## Two deliberate, reachability-priced wire divergences (flagged for review)
@@ -88,8 +88,8 @@ use silverhand_backend_core::{
 };
 
 use crate::auth::{PublicJsonUnauthorized, require_human_session};
-use crate::bearer::strict_bearer_credential;
 use crate::error;
+use crate::foundation::bearer::strict_bearer_credential;
 use crate::messaging::author_wire::principal_avatar_url;
 use crate::wire_admission::{self, ValidatedJson, ValidatedJsonRejection};
 use crate::wire_patch::RequiredPatchField;
