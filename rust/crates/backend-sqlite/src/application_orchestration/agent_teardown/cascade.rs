@@ -29,12 +29,13 @@ use silverhand_backend_core::{
     identity_access::capability::computer_access::{ComputerAccess, can_access_computer},
 };
 
+use crate::foundation::host_agent_store::SqliteHostAgentStore;
+
 use super::{
     facts::{
         capture_agent, select_agents_on_host, select_computer_lifecycle, select_computer_ownership,
     },
-    store::SqliteHostAgentStore,
-    teardown::DELETE_AGENT,
+    unit_of_work::DELETE_AGENT,
 };
 
 /// Re-states the legality the witness chain established, so a computer that stopped

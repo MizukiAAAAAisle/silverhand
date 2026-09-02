@@ -7,10 +7,10 @@
 //! facts and `PersistenceFailure`, so no driver type reaches the application or
 //! the wire.
 
+pub mod application_orchestration;
 pub mod conversation_messaging;
 pub mod embedded_bootstrap;
 pub mod foundation;
-pub mod host_agent;
 pub mod host_runtime;
 pub mod identity_access;
 pub mod viewer_read_model;

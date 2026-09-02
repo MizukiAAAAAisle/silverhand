@@ -261,7 +261,7 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // entry covers all 18 via the CP projection and does NOT descend into them. There is no
     // backend-sqlite identity_access self-row.
     ("backend-sqlite", "identity_access"),
-    ("backend-sqlite", "host_agent"),
+    ("backend-sqlite", "application_orchestration"),
     // #task:2290 — the `viewer_read_model` relocation namespace: a directory container
     // declared once at the backend-sqlite crate root (`viewer_read_model/mod.rs`), owning
     // the relocated presence/unread leaves (`user_presence_cold_read` SQLite read adapter,
@@ -482,7 +482,7 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     ("backend-core", "workspace_data_plane"),
     ("backend-sqlite", "embedded_bootstrap"),
     ("backend-sqlite", "workspace_data_plane"),
-    ("backend-sqlite", "host_agent"),
+    ("backend-sqlite", "application_orchestration"),
     // #task:2272 — the C1 `identity_access` relocation namespace is directory-shaped
     // (declared once at the crate root with a `mod.rs`), so it joins this directory-shaped
     // subset of the seam ledger. It is a namespace CONTAINER: its leaves' owners live in the

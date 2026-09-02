@@ -94,7 +94,7 @@ use silverhand_backend_server::{
 use silverhand_backend_sqlite::{
     conversation_messaging::messaging::MessagingStore,
     conversation_messaging::runtime_delivery::SqliteRuntimeDeliveryStore,
-    foundation::scope_event::SqliteEventScopeAuthority, host_agent::SqliteHostAgentStore,
+    foundation::{host_agent_store::SqliteHostAgentStore, scope_event::SqliteEventScopeAuthority},
     host_runtime::SqliteHostRuntimeStore,
     host_runtime::runtime_credential::SqliteRuntimeCustodyStore,
     identity_access::auth::SqliteSessionStore,

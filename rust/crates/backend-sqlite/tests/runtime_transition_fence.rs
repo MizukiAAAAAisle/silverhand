@@ -20,7 +20,8 @@ use silverhand_backend_core::{
 };
 use silverhand_backend_sqlite::{
     conversation_messaging::runtime_delivery::SqliteRuntimeDeliveryStore,
-    host_agent::SqliteHostAgentStore, host_runtime::runtime_credential::SqliteRuntimeCustodyStore,
+    foundation::host_agent_store::SqliteHostAgentStore,
+    host_runtime::runtime_credential::SqliteRuntimeCustodyStore,
 };
 use sqlx::{Connection, Executor, Row, SqliteConnection};
 

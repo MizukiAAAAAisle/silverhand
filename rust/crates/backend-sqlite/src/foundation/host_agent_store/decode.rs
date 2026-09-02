@@ -23,50 +23,50 @@ use thiserror::Error;
 
 /// A token or coordinate outside its set is corrupt storage: it reaches the caller
 /// as a read failure, never as a default that would turn bad data into a decision.
-pub(super) fn decode_error<E>(error: E) -> sqlx::Error
+pub(crate) fn decode_error<E>(error: E) -> sqlx::Error
 where
     E: std::error::Error + Send + Sync + 'static,
 {
     sqlx::Error::Decode(Box::new(error))
 }
 
-pub(super) fn agent_id(raw: String) -> Result<AgentId, sqlx::Error> {
+pub(crate) fn agent_id(raw: String) -> Result<AgentId, sqlx::Error> {
     AgentId::parse(raw).map_err(decode_error)
 }
 
-pub(super) fn host_id(raw: String) -> Result<HostId, sqlx::Error> {
+pub(crate) fn host_id(raw: String) -> Result<HostId, sqlx::Error> {
     HostId::parse(raw).map_err(decode_error)
 }
 
-pub(super) fn conversation_id(raw: String) -> Result<ConversationId, sqlx::Error> {
+pub(crate) fn conversation_id(raw: String) -> Result<ConversationId, sqlx::Error> {
     ConversationId::parse(raw).map_err(decode_error)
 }
 
-pub(super) fn user_id(raw: String) -> Result<UserId, sqlx::Error> {
+pub(crate) fn user_id(raw: String) -> Result<UserId, sqlx::Error> {
     UserId::parse(raw).map_err(decode_error)
 }
 
-pub(super) fn generation(raw: i64) -> Result<RuntimeGeneration, sqlx::Error> {
+pub(crate) fn generation(raw: i64) -> Result<RuntimeGeneration, sqlx::Error> {
     RuntimeGeneration::new(raw).map_err(decode_error)
 }
 
-pub(super) fn materialization_status(raw: &str) -> Result<MaterializationStatus, sqlx::Error> {
+pub(crate) fn materialization_status(raw: &str) -> Result<MaterializationStatus, sqlx::Error> {
     MaterializationStatus::parse(raw).map_err(decode_error)
 }
 
-pub(super) fn observed_status(raw: &str) -> Result<RuntimeObservedStatus, sqlx::Error> {
+pub(crate) fn observed_status(raw: &str) -> Result<RuntimeObservedStatus, sqlx::Error> {
     RuntimeObservedStatus::parse(raw).map_err(decode_error)
 }
 
-pub(super) fn runtime(raw: &str) -> Result<RuntimeKind, sqlx::Error> {
+pub(crate) fn runtime(raw: &str) -> Result<RuntimeKind, sqlx::Error> {
     RuntimeKind::parse(raw).ok_or_else(|| decode_error(InvalidRuntimeKind))
 }
 
-pub(super) fn session_scope(raw: &str) -> Result<AgentSessionScope, sqlx::Error> {
+pub(crate) fn session_scope(raw: &str) -> Result<AgentSessionScope, sqlx::Error> {
     AgentSessionScope::parse(raw).ok_or_else(|| decode_error(InvalidSessionScope))
 }
 
-pub(super) fn host_kind(raw: &str) -> Result<HostKind, sqlx::Error> {
+pub(crate) fn host_kind(raw: &str) -> Result<HostKind, sqlx::Error> {
     match raw {
         "local" => Ok(HostKind::Local),
         "remote" => Ok(HostKind::Remote),
@@ -74,7 +74,7 @@ pub(super) fn host_kind(raw: &str) -> Result<HostKind, sqlx::Error> {
     }
 }
 
-pub(super) fn provisioning_source(raw: &str) -> Result<ProvisioningSource, sqlx::Error> {
+pub(crate) fn provisioning_source(raw: &str) -> Result<ProvisioningSource, sqlx::Error> {
     match raw {
         "app_install" => Ok(ProvisioningSource::AppInstall),
         "user_invite" => Ok(ProvisioningSource::UserInvite),

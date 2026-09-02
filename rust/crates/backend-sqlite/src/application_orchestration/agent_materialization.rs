@@ -37,7 +37,7 @@ use silverhand_backend_core::{
 };
 use sqlx::{Row, SqliteConnection, sqlite::SqliteRow};
 
-use super::store::SqliteHostAgentStore;
+use crate::foundation::host_agent_store::{SqliteHostAgentStore, decode};
 
 /// Insert a fresh `pending_materialization` row and return the columns the domain seals
 /// its committed identity against. `display_name` seeds from the handle, matching the
@@ -118,7 +118,7 @@ fn fast_mode_column(fast_mode: Option<bool>) -> Option<i64> {
 /// the domain to parse and bind.
 fn reserved_agent_row(row: &SqliteRow) -> Result<ReservedAgentRow, sqlx::Error> {
     Ok(ReservedAgentRow {
-        agent_id: super::decode::agent_id(row.try_get::<String, _>("id")?)?,
+        agent_id: decode::agent_id(row.try_get::<String, _>("id")?)?,
         name: row.try_get::<String, _>("name")?,
         display_name: row.try_get::<String, _>("display_name")?,
         runtime: row.try_get::<String, _>("runtime")?,
@@ -139,7 +139,7 @@ fn reserved_agent_row(row: &SqliteRow) -> Result<ReservedAgentRow, sqlx::Error> 
 /// Project a flip after-image from its `RETURNING` row.
 fn flip_row(row: &SqliteRow) -> Result<MaterializationFlipRow, sqlx::Error> {
     Ok(MaterializationFlipRow {
-        agent_id: super::decode::agent_id(row.try_get::<String, _>("id")?)?,
+        agent_id: decode::agent_id(row.try_get::<String, _>("id")?)?,
         materialization_status: row.try_get::<String, _>("materialization_status")?,
         materialization_failed_code: row
             .try_get::<Option<String>, _>("materialization_failed_code")?,
@@ -152,7 +152,7 @@ fn flip_row(row: &SqliteRow) -> Result<MaterializationFlipRow, sqlx::Error> {
 /// status, and runtime are carried raw for the domain to bind and parse.
 fn idempotent_reservation_row(row: &SqliteRow) -> Result<IdempotentReservationRow, sqlx::Error> {
     Ok(IdempotentReservationRow {
-        agent_id: super::decode::agent_id(row.try_get::<String, _>("id")?)?,
+        agent_id: decode::agent_id(row.try_get::<String, _>("id")?)?,
         created_by_user_id: row.try_get::<String, _>("created_by_user_id")?,
         idempotency_key: row.try_get::<Option<String>, _>("idempotency_key")?,
         materialization_status: row.try_get::<String, _>("materialization_status")?,
@@ -359,10 +359,10 @@ const READ_CREATOR_IDENTITY: &str = "SELECT id, name FROM users WHERE id = ?";
 
 /// Project the activation flip after-image from its `RETURNING` row. The `AgentId` is
 /// decoded from the row's OWN `id`; the handle, scope, and creator ride back raw for the
-/// domain ([`ActivatedAgent::seal`]) to parse and bind.
+/// domain (`ActivatedAgent::seal`) to parse and bind.
 fn activation_flip_row(row: &SqliteRow) -> Result<ActivationFlipRow, sqlx::Error> {
     Ok(ActivationFlipRow {
-        agent_id: super::decode::agent_id(row.try_get::<String, _>("id")?)?,
+        agent_id: decode::agent_id(row.try_get::<String, _>("id")?)?,
         name: row.try_get::<String, _>("name")?,
         materialization_status: row.try_get::<String, _>("materialization_status")?,
         session_scope: row.try_get::<String, _>("session_scope")?,
@@ -568,7 +568,7 @@ async fn write_agent_graph_on(
     // needs them to WRITE the graph, and returns the creator's own-row identity (and the
     // participants it opened the pair against) raw so the core use case can re-derive and
     // source-bind the same facts from the seal.
-    let creator = super::decode::user_id(flip.created_by_user_id.clone())
+    let creator = decode::user_id(flip.created_by_user_id.clone())
         .map_err(PersistenceFailure::from_source)?;
     let creator_identity = read_creator_identity_on(conn, &creator)
         .await?
@@ -653,7 +653,7 @@ async fn write_conversation_graph_on(
     onboarding_message_id: MessageId,
     now_ms: i64,
 ) -> Result<RawConversationArmGraph, PersistenceFailure> {
-    let creator = super::decode::user_id(flip.created_by_user_id.clone())
+    let creator = decode::user_id(flip.created_by_user_id.clone())
         .map_err(PersistenceFailure::from_source)?;
     let agent_handle = ParticipantHandle::parse(flip.name.as_str()).map_err(|_| {
         PersistenceFailure::from_source(ProvisioningRowBroken(

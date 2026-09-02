@@ -14,7 +14,9 @@ use sqlx::{
 };
 use thiserror::Error;
 
-pub(super) const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
+pub(crate) mod decode;
+
+pub(crate) const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -36,7 +38,7 @@ impl SqliteHostAgentStore {
         Self::open_with_busy_timeout(path, BUSY_TIMEOUT).await
     }
 
-    pub(super) async fn open_with_busy_timeout(
+    pub(crate) async fn open_with_busy_timeout(
         path: impl AsRef<Path>,
         busy_timeout: Duration,
     ) -> Result<Self, SqliteHostAgentStoreError> {
@@ -58,13 +60,13 @@ impl SqliteHostAgentStore {
 
     /// The connection for single-statement reads that need no multi-statement
     /// snapshot.
-    pub(super) fn pool(&self) -> &SqlitePool {
+    pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
     }
 
     /// The single place that reserves the one writer before the first statement of
     /// a write axis.
-    pub(super) async fn begin_root_write(&self) -> Result<Transaction<'_, Sqlite>, sqlx::Error> {
+    pub(crate) async fn begin_root_write(&self) -> Result<Transaction<'_, Sqlite>, sqlx::Error> {
         self.pool.begin_with(ROOT_WRITE_BEGIN).await
     }
 }

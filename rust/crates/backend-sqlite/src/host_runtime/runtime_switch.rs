@@ -15,7 +15,7 @@ use silverhand_backend_core::{
 };
 use sqlx::{Row, sqlite::SqliteRow};
 
-use super::{decode, store::SqliteHostAgentStore};
+use crate::foundation::host_agent_store::{SqliteHostAgentStore, decode};
 
 /// The four row facts the preflight and the under-lock re-read decide from. SEATS
 /// are NOT read here — those come through the lock-fenced sealed seat read so they

@@ -31,14 +31,14 @@ mod management;
 // `host_runtime` context (dual role: real context + relocation namespace). Declared
 // here only; their owners/targets live in the organization map/gate.
 pub mod agent_availability_read;
+pub(crate) mod agent_bulk_stop_read;
 pub mod agent_presence_read;
+pub mod agent_runtime_state_read;
 pub mod computer_agents_read;
 pub mod host_resources_read;
-// #task:2295 — the final two host_runtime units relocated under this context, closing
-// the namespace 7/7/0: the `agent_runtime_state_read` directory leaf and the
-// `runtime_credential` custody adapter. Declared here only; owners/targets live in the map.
-pub mod agent_runtime_state_read;
 pub mod runtime_credential;
+mod runtime_switch;
+mod runtime_transition;
 
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 

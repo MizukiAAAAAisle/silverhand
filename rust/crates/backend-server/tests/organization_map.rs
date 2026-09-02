@@ -2239,6 +2239,226 @@ fn resolved_ops_split_is_exact_and_keeps_local_and_remote_catalogues_separate() 
 }
 
 #[test]
+fn resolved_sqlite_host_agent_split_is_exact_and_keeps_one_store_authority() {
+    let map = load_map();
+    let rows = map["resolved_splits"]
+        .as_array()
+        .expect("resolved_splits array");
+    let sqlite_rows: Vec<&Value> = rows
+        .iter()
+        .filter(|row| as_str(row, "source") == "backend-sqlite::host_agent")
+        .collect();
+    let expected: BTreeSet<(String, String, String, String, String)> = [
+        (
+            "agent_graph_read",
+            "context_internal_leaf",
+            "application_orchestration",
+            "adapter",
+            "backend-sqlite::application_orchestration::agent_graph_read",
+        ),
+        (
+            "agent_materialization",
+            "context_internal_leaf",
+            "application_orchestration",
+            "adapter",
+            "backend-sqlite::application_orchestration::agent_materialization",
+        ),
+        (
+            "agent_teardown_cascade",
+            "context_internal_leaf",
+            "application_orchestration",
+            "adapter",
+            "backend-sqlite::application_orchestration::agent_teardown::cascade",
+        ),
+        (
+            "agent_teardown_facts",
+            "context_internal_leaf",
+            "application_orchestration",
+            "adapter",
+            "backend-sqlite::application_orchestration::agent_teardown::facts",
+        ),
+        (
+            "agent_deletion_intent",
+            "context_internal_leaf",
+            "application_orchestration",
+            "adapter",
+            "backend-sqlite::application_orchestration::agent_teardown::intent",
+        ),
+        (
+            "agent_teardown_unit_of_work",
+            "context_internal_leaf",
+            "application_orchestration",
+            "adapter",
+            "backend-sqlite::application_orchestration::agent_teardown::unit_of_work",
+        ),
+        (
+            "runtime_switch",
+            "context_internal_leaf",
+            "C2",
+            "adapter",
+            "backend-sqlite::host_runtime::runtime_switch",
+        ),
+        (
+            "runtime_transition",
+            "context_internal_leaf",
+            "C2",
+            "adapter",
+            "backend-sqlite::host_runtime::runtime_transition",
+        ),
+        (
+            "agent_bulk_stop_read",
+            "context_internal_leaf",
+            "C2",
+            "adapter",
+            "backend-sqlite::host_runtime::agent_bulk_stop_read",
+        ),
+        (
+            "shared_store",
+            "settled_crate_root",
+            "foundation",
+            "adapter",
+            "backend-sqlite::foundation::host_agent_store",
+        ),
+        (
+            "agent_profile_mcp_placement_read",
+            "settled_crate_root",
+            "C1",
+            "adapter",
+            "backend-sqlite::identity_access::agent_profile_mcp_placement_read",
+        ),
+    ]
+    .into_iter()
+    .map(|(responsibility, kind, owner, role, target)| {
+        (
+            responsibility.to_owned(),
+            kind.to_owned(),
+            owner.to_owned(),
+            role.to_owned(),
+            target.to_owned(),
+        )
+    })
+    .collect();
+    let actual: BTreeSet<(String, String, String, String, String)> = sqlite_rows
+        .iter()
+        .map(|row| {
+            (
+                as_str(row, "responsibility").to_owned(),
+                as_str(row, "kind").to_owned(),
+                as_str(row, "business_owner").to_owned(),
+                as_str(row, "structural_role").to_owned(),
+                as_str(row, "physical_target").to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected, "sqlite host-agent split drifted");
+    assert_eq!(actual.len(), sqlite_rows.len(), "responsibility duplicated");
+
+    let source = rust_root().join("crates/backend-sqlite/src");
+    assert!(
+        !source.join("host_agent.rs").exists() && !source.join("host_agent").exists(),
+        "the split umbrella must be deleted, not retained as a facade"
+    );
+
+    let store = source.join("foundation/host_agent_store/mod.rs");
+    let store_children: BTreeSet<String> = module_declarations(&read(&store))
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        store_children,
+        BTreeSet::from(["decode".to_owned()]),
+        "the settled store unit has exactly one internal decode child"
+    );
+    assert!(
+        source
+            .join("foundation/host_agent_store/decode.rs")
+            .exists()
+    );
+    assert!(
+        !sqlite_rows
+            .iter()
+            .any(|row| as_str(row, "physical_target").ends_with("::decode")),
+        "decode is not an independently accounted authority"
+    );
+
+    fn collect_rs(directory: &Path, out: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(directory).expect("read sqlite source directory") {
+            let path = entry.expect("source entry").path();
+            if path.is_dir() {
+                collect_rs(&path, out);
+            } else if path.extension().and_then(|value| value.to_str()) == Some("rs") {
+                out.push(path);
+            }
+        }
+    }
+    let mut sources = Vec::new();
+    collect_rs(&source, &mut sources);
+    let bodies: Vec<(PathBuf, String)> = sources
+        .into_iter()
+        .map(|path| {
+            let body = read(&path);
+            (path, body)
+        })
+        .collect();
+    let containing = |needle: &str| -> Vec<PathBuf> {
+        bodies
+            .iter()
+            .filter(|(_, body)| body.contains(needle))
+            .map(|(path, _)| path.clone())
+            .collect()
+    };
+    assert_eq!(
+        containing("pub struct SqliteHostAgentStore"),
+        vec![store.clone()],
+        "the store/pool authority must have one definition"
+    );
+    assert_eq!(
+        containing("impl AgentTeardownReadPort for SqliteHostAgentStore"),
+        vec![source.join("application_orchestration/agent_teardown/facts.rs")],
+        "application teardown facts own only the application read port"
+    );
+    assert_eq!(
+        containing("impl AgentBulkStopReadPort for SqliteHostAgentStore"),
+        vec![source.join("host_runtime/agent_bulk_stop_read.rs")],
+        "C2 owns the bulk-stop read port"
+    );
+    assert_eq!(
+        containing("impl AgentProfileMcpPlacementRead for SqliteHostAgentStore"),
+        vec![source.join("identity_access/agent_profile_mcp_placement_read.rs")],
+        "C1 owns the profile-MCP placement port"
+    );
+    for runtime in [
+        "host_runtime/agent_bulk_stop_read.rs",
+        "host_runtime/runtime_switch.rs",
+        "host_runtime/runtime_transition.rs",
+    ] {
+        assert!(
+            !read(&source.join(runtime)).contains("crate::application_orchestration"),
+            "runtime adapter {runtime} must not depend on the application adapter"
+        );
+    }
+
+    // First falsifier: the C1 placement trait cannot drift back into the application
+    // teardown facts leaf without breaking the exact responsibility assignment.
+    let mut wrong_trait_owner = actual.clone();
+    wrong_trait_owner.remove(&(
+        "agent_profile_mcp_placement_read".to_owned(),
+        "settled_crate_root".to_owned(),
+        "C1".to_owned(),
+        "adapter".to_owned(),
+        "backend-sqlite::identity_access::agent_profile_mcp_placement_read".to_owned(),
+    ));
+    wrong_trait_owner.insert((
+        "agent_profile_mcp_placement_read".to_owned(),
+        "context_internal_leaf".to_owned(),
+        "application_orchestration".to_owned(),
+        "adapter".to_owned(),
+        "backend-sqlite::application_orchestration::agent_teardown::facts".to_owned(),
+    ));
+    assert_ne!(wrong_trait_owner, expected);
+}
+
+#[test]
 fn root_compatibility_facades_are_named_accepted_residuals_not_second_business_units() {
     // #task:2273 (Cindy point 5): a root compatibility facade must be REPORTED, not swallowed.
     // Each facade row is landed at its physical_target (its one business identity) AND its

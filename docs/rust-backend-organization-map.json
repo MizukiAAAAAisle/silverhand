@@ -42,15 +42,15 @@
     "embedded_bootstrap": "self-declared top-level bounded context: choose/create bootstrap UoW + own auth/token lifecycle (incl token-file custody)"
   },
   "accounting": {
-    "production_roots": 144,
+    "production_roots": 146,
     "test_support_roots": 3,
-    "total_scanned": 147,
+    "total_scanned": 149,
     "per_crate": {
       "backend_app": 4,
       "backend_core": 63,
       "backend_filesystem": 3,
       "backend_server": 40,
-      "backend_sqlite": 37
+      "backend_sqlite": 39
     },
     "rule": "every scanned `mod` decl gets exactly one row; #[cfg(test)] rows carry target.structural_role=test_support in the map (no external whitelist)"
   },
@@ -111,55 +111,55 @@
         },
         {
           "function": "fail",
-          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
         },
         {
           "function": "fail_after_rolled_back_provision",
-          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
         },
         {
           "function": "flip_to_active_on",
-          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
         },
         {
           "function": "mark_stale_failed",
-          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
         },
         {
           "function": "reopen_failed",
-          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
         },
         {
           "function": "reserve",
-          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
         },
         {
           "function": "cascade_computer",
-          "path": "rust/crates/backend-sqlite/src/host_agent/cascade.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_teardown/cascade.rs"
         },
         {
           "function": "begin",
-          "path": "rust/crates/backend-sqlite/src/host_agent/intent.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_teardown/intent.rs"
         },
         {
           "function": "complete",
-          "path": "rust/crates/backend-sqlite/src/host_agent/intent.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_teardown/intent.rs"
         },
         {
           "function": "abort",
-          "path": "rust/crates/backend-sqlite/src/host_agent/runtime_transition.rs"
+          "path": "rust/crates/backend-sqlite/src/host_runtime/runtime_transition.rs"
         },
         {
           "function": "begin",
-          "path": "rust/crates/backend-sqlite/src/host_agent/runtime_transition.rs"
+          "path": "rust/crates/backend-sqlite/src/host_runtime/runtime_transition.rs"
         },
         {
           "function": "complete",
-          "path": "rust/crates/backend-sqlite/src/host_agent/runtime_transition.rs"
+          "path": "rust/crates/backend-sqlite/src/host_runtime/runtime_transition.rs"
         },
         {
           "function": "tear_down_agent",
-          "path": "rust/crates/backend-sqlite/src/host_agent/teardown.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_teardown/unit_of_work.rs"
         },
         {
           "function": "stamp_agent_presence",
@@ -187,7 +187,7 @@
         },
         {
           "function": "write_conversation_graph_on",
-          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
         },
         {
           "function": "write_archived",
@@ -223,7 +223,7 @@
         },
         {
           "function": "write_conversation_graph_on",
-          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
         }
       ],
       "audited_ts_writers": [
@@ -326,7 +326,7 @@
       "audited_rust_writers": [
         {
           "function": "cascade_computer",
-          "path": "rust/crates/backend-sqlite/src/host_agent/cascade.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_teardown/cascade.rs"
         },
         {
           "function": "update_computer",
@@ -473,7 +473,7 @@
       "audited_rust_writers": [
         {
           "function": "write_conversation_graph_on",
-          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
         },
         {
           "function": "create_inner",
@@ -684,7 +684,7 @@
       "audited_rust_writers": [
         {
           "function": "reclaim_transition_inboxes",
-          "path": "rust/crates/backend-sqlite/src/host_agent/runtime_transition.rs"
+          "path": "rust/crates/backend-sqlite/src/host_runtime/runtime_transition.rs"
         },
         {
           "function": "ensure_delivery",
@@ -762,7 +762,7 @@
         },
         {
           "function": "write_conversation_graph_on",
-          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
         },
         {
           "function": "insert_user_raw",
@@ -785,7 +785,7 @@
       "audited_rust_writers": [
         {
           "function": "write_conversation_graph_on",
-          "path": "rust/crates/backend-sqlite/src/host_agent/agent_materialization.rs"
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
         },
         {
           "function": "create_inner",
@@ -2494,56 +2494,41 @@
     },
     {
       "crate": "backend-sqlite",
-      "module": "host_agent",
+      "module": "application_orchestration",
       "source_shape": "directory",
       "needs_ruling": false,
-      "split_required": {
-        "kind": "directory_members",
-        "current_container": {
-          "structural_role": "adapter"
-        },
-        "groups": [
-          {
-            "group": "agent_provisioning_teardown_sagas",
-            "business_owner": "application_orchestration",
-            "structural_role": "adapter",
-            "members": [
-              "agent_graph_read",
-              "agent_materialization",
-              "cascade",
-              "decode",
-              "facts",
-              "intent",
-              "teardown"
-            ],
-            "target_parent_namespace": "backend-sqlite::application_orchestration",
-            "needs_ruling": true
-          },
-          {
-            "group": "runtime_control_adapters",
-            "business_owner": "C2",
-            "structural_role": "adapter",
-            "members": [
-              "runtime_switch",
-              "runtime_transition"
-            ],
-            "target_parent_namespace": "backend-sqlite::host_runtime",
-            "needs_ruling": true
-          },
-          {
-            "group": "shared_store",
-            "business_owner": "foundation",
-            "structural_role": "adapter",
-            "members": [
-              "store"
-            ],
-            "target_parent_namespace": "backend-sqlite::foundation",
-            "needs_ruling": true
-          }
-        ]
+      "target": {
+        "business_owner": "application_orchestration",
+        "structural_role": "adapter"
       },
       "migration": {
-        "split": true
+        "physical_target": "backend-sqlite::application_orchestration"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "host_agent_store",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "foundation",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::foundation::host_agent_store"
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "agent_profile_mcp_placement_read",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::agent_profile_mcp_placement_read"
       }
     },
     {
@@ -3030,11 +3015,7 @@
       "note": "token-file custody owned by embedded_bootstrap"
     }
   ],
-  "open_rulings": [
-    "backend-sqlite::host_agent split group 'agent_provisioning_teardown_sagas' final leaf module name",
-    "backend-sqlite::host_agent split group 'runtime_control_adapters' final leaf module name",
-    "backend-sqlite::host_agent split group 'shared_store' final leaf module name"
-  ],
+  "open_rulings": [],
   "accepted_not_reopened": [
     "attachments->C3",
     "conversation_users/conversation_agents->C3",
@@ -3419,6 +3400,94 @@
       "business_owner": "foundation",
       "structural_role": "http",
       "physical_target": "backend-server::foundation::server_info"
+    },
+    {
+      "source": "backend-sqlite::host_agent",
+      "responsibility": "agent_graph_read",
+      "kind": "context_internal_leaf",
+      "business_owner": "application_orchestration",
+      "structural_role": "adapter",
+      "physical_target": "backend-sqlite::application_orchestration::agent_graph_read"
+    },
+    {
+      "source": "backend-sqlite::host_agent",
+      "responsibility": "agent_materialization",
+      "kind": "context_internal_leaf",
+      "business_owner": "application_orchestration",
+      "structural_role": "adapter",
+      "physical_target": "backend-sqlite::application_orchestration::agent_materialization"
+    },
+    {
+      "source": "backend-sqlite::host_agent",
+      "responsibility": "agent_teardown_cascade",
+      "kind": "context_internal_leaf",
+      "business_owner": "application_orchestration",
+      "structural_role": "adapter",
+      "physical_target": "backend-sqlite::application_orchestration::agent_teardown::cascade"
+    },
+    {
+      "source": "backend-sqlite::host_agent",
+      "responsibility": "agent_teardown_facts",
+      "kind": "context_internal_leaf",
+      "business_owner": "application_orchestration",
+      "structural_role": "adapter",
+      "physical_target": "backend-sqlite::application_orchestration::agent_teardown::facts"
+    },
+    {
+      "source": "backend-sqlite::host_agent",
+      "responsibility": "agent_deletion_intent",
+      "kind": "context_internal_leaf",
+      "business_owner": "application_orchestration",
+      "structural_role": "adapter",
+      "physical_target": "backend-sqlite::application_orchestration::agent_teardown::intent"
+    },
+    {
+      "source": "backend-sqlite::host_agent",
+      "responsibility": "agent_teardown_unit_of_work",
+      "kind": "context_internal_leaf",
+      "business_owner": "application_orchestration",
+      "structural_role": "adapter",
+      "physical_target": "backend-sqlite::application_orchestration::agent_teardown::unit_of_work"
+    },
+    {
+      "source": "backend-sqlite::host_agent",
+      "responsibility": "runtime_switch",
+      "kind": "context_internal_leaf",
+      "business_owner": "C2",
+      "structural_role": "adapter",
+      "physical_target": "backend-sqlite::host_runtime::runtime_switch"
+    },
+    {
+      "source": "backend-sqlite::host_agent",
+      "responsibility": "runtime_transition",
+      "kind": "context_internal_leaf",
+      "business_owner": "C2",
+      "structural_role": "adapter",
+      "physical_target": "backend-sqlite::host_runtime::runtime_transition"
+    },
+    {
+      "source": "backend-sqlite::host_agent",
+      "responsibility": "agent_bulk_stop_read",
+      "kind": "context_internal_leaf",
+      "business_owner": "C2",
+      "structural_role": "adapter",
+      "physical_target": "backend-sqlite::host_runtime::agent_bulk_stop_read"
+    },
+    {
+      "source": "backend-sqlite::host_agent",
+      "responsibility": "shared_store",
+      "kind": "settled_crate_root",
+      "business_owner": "foundation",
+      "structural_role": "adapter",
+      "physical_target": "backend-sqlite::foundation::host_agent_store"
+    },
+    {
+      "source": "backend-sqlite::host_agent",
+      "responsibility": "agent_profile_mcp_placement_read",
+      "kind": "settled_crate_root",
+      "business_owner": "C1",
+      "structural_role": "adapter",
+      "physical_target": "backend-sqlite::identity_access::agent_profile_mcp_placement_read"
     }
   ],
   "migration_ledger": {

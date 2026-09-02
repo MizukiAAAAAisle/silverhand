@@ -27,11 +27,11 @@ use silverhand_backend_core::{
 use sqlx::{Row, sqlite::SqliteRow};
 use thiserror::Error;
 
+use crate::foundation::host_agent_store::{SqliteHostAgentStore, decode};
+
 use super::{
-    decode,
     facts::{capture_agent, select_agent_facts},
-    store::SqliteHostAgentStore,
-    teardown::DELETE_AGENT,
+    unit_of_work::DELETE_AGENT,
 };
 
 /// The pre-read the marker write decides from. It reads `runtime_transition_target`,

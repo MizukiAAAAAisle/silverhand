@@ -24,10 +24,11 @@ use silverhand_backend_core::{
     foundation::persistence::PersistenceFailure,
 };
 
+use crate::foundation::host_agent_store::SqliteHostAgentStore;
+
 use super::{
     cascade,
     facts::{capture_agent, select_agent_facts},
-    store::SqliteHostAgentStore,
 };
 
 /// The single-agent-row delete both write axes use: this axis deletes the one row

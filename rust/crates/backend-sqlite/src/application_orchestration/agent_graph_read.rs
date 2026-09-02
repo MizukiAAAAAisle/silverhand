@@ -16,7 +16,7 @@ use silverhand_backend_core::{
     foundation::persistence::PersistenceFailure,
 };
 
-use super::store::SqliteHostAgentStore;
+use crate::foundation::host_agent_store::SqliteHostAgentStore;
 
 /// The agent's home `Onboarding` DM: the one fixed-roster channel the conversation-scope
 /// provision opened in the workspace this agent owns. Bound by `owner_agent_id` rather

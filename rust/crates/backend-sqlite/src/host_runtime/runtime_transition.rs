@@ -4,7 +4,9 @@
 //! This adapter WITNESSES; it never mints the domain verdict. Each write projects the
 //! row it actually touched from its own `RETURNING` clause — the acquired lock's
 //! `id`/`target`/`started_at`, or the committed after-image's every column — and the
-//! core free functions ([`begin_runtime_transition`], [`complete_runtime_transition`])
+//! core free functions
+//! ([`begin_runtime_transition`](silverhand_backend_core::host_runtime::runtime_transition::begin_runtime_transition),
+//! [`complete_runtime_transition`](silverhand_backend_core::host_runtime::runtime_transition::complete_runtime_transition))
 //! bind the subject and seal it against the request. The adapter cannot claim success
 //! for a row it did not touch: no `RETURNING` row means no witness.
 //!
@@ -43,7 +45,7 @@ use silverhand_backend_core::{
 use sqlx::{Row, sqlite::SqliteRow};
 use thiserror::Error;
 
-use super::store::SqliteHostAgentStore;
+use crate::foundation::host_agent_store::{SqliteHostAgentStore, decode};
 
 /// The pre-read `begin` decides from: enough to answer `NotFound` / `Deleting` /
 /// `InProgress` before the acquiring compare-and-set runs.
@@ -131,7 +133,7 @@ fn fast_mode_column(fast_mode: Option<bool>) -> Option<i64> {
 /// columns are non-null because this statement just set them.
 fn begin_lock_row(row: &SqliteRow) -> Result<RuntimeTransitionLockRow, sqlx::Error> {
     Ok(RuntimeTransitionLockRow {
-        agent_id: super::decode::agent_id(row.try_get::<String, _>("id")?)?,
+        agent_id: decode::agent_id(row.try_get::<String, _>("id")?)?,
         target: row.try_get::<String, _>("runtime_transition_target")?,
         started_at: row.try_get::<i64, _>("runtime_transition_started_at")?,
     })
@@ -145,7 +147,7 @@ fn held_lock_row(row: &SqliteRow) -> Result<Option<RuntimeTransitionLockRow>, sq
         return Ok(None);
     };
     Ok(Some(RuntimeTransitionLockRow {
-        agent_id: super::decode::agent_id(row.try_get::<String, _>("id")?)?,
+        agent_id: decode::agent_id(row.try_get::<String, _>("id")?)?,
         target,
         started_at,
     }))
@@ -161,7 +163,7 @@ fn marker_matches(lock: &RuntimeTransitionLock, row: &RuntimeTransitionLockRow) 
 /// the row's OWN `id`; the lock pair is read back so core can prove it cleared.
 fn complete_after_image(row: &SqliteRow) -> Result<RuntimeTransitionAfterImage, sqlx::Error> {
     Ok(RuntimeTransitionAfterImage {
-        agent_id: super::decode::agent_id(row.try_get::<String, _>("id")?)?,
+        agent_id: decode::agent_id(row.try_get::<String, _>("id")?)?,
         runtime: row.try_get::<String, _>("runtime")?,
         model: row.try_get::<Option<String>, _>("model")?,
         reasoning_effort: row.try_get::<Option<String>, _>("reasoning_effort")?,
@@ -317,7 +319,7 @@ impl RuntimeTransitionInboxWrite for SqliteHostAgentStore {
             .into_iter()
             .map(|row| {
                 ConversationId::parse(row.try_get::<String, _>("conversation_id")?)
-                    .map_err(super::decode::decode_error)
+                    .map_err(decode::decode_error)
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(PersistenceFailure::from_source)?;
@@ -371,19 +373,18 @@ impl RuntimeTransitionSeatRead for SqliteHostAgentStore {
         let seats = rows
             .into_iter()
             .map(|row| {
-                let agent = super::decode::agent_id(row.try_get::<String, _>("agent_id")?)?;
+                let agent = decode::agent_id(row.try_get::<String, _>("agent_id")?)?;
                 let conversation = row.try_get::<Option<String>, _>("conversation_id")?;
                 let scope = match conversation {
                     Some(source) => RuntimeScope::ConversationSlot {
                         agent,
-                        source: ConversationId::parse(source)
-                            .map_err(super::decode::decode_error)?,
+                        source: ConversationId::parse(source).map_err(decode::decode_error)?,
                     },
                     None => RuntimeScope::AgentSlot { agent },
                 };
                 let observed_status =
                     RuntimeObservedStatus::parse(&row.try_get::<String, _>("observed_status")?)
-                        .map_err(super::decode::decode_error)?;
+                        .map_err(decode::decode_error)?;
                 Ok(RuntimeTransitionSeatRow {
                     scope,
                     observed_status,
