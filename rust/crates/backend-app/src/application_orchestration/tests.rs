@@ -2689,7 +2689,8 @@ async fn the_composition_mounts_every_declared_route() {
         ("GET", "/api/saved"),
         ("POST", "/api/messages/msg000000000000001/save"),
         ("DELETE", "/api/messages/msg000000000000001/save"),
-        // #2218: `/api/runtimes`, the one root ops face that is authenticated (under
+        // #2218/#task:2321: `/api/runtimes`, the local runtime-catalog face that is
+        // authenticated (under
         // the product's `/api/*` bearer gate with no allowlist entry). Anon → 401.
         ("GET", "/api/runtimes"),
         // #2223 CP5: the four host residual doors, mounted behind the human perimeter.

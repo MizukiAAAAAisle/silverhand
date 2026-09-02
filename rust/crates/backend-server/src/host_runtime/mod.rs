@@ -2,6 +2,8 @@
 //!
 //! All eight production-settled targets now live under this namespace. Compatibility facades
 //! stay separately named at the crate root and are not business residuals.
+//! The resolved `local_runtime_catalog` HTTP leaf reports this process's coordinate-free machine
+//! detection and remains distinct from the remote, daemon-coordinate-bound host-control catalog.
 
 use std::sync::Arc;
 
@@ -46,6 +48,7 @@ pub mod host_control;
 pub mod host_resources;
 pub(crate) mod host_wire;
 pub mod list;
+pub mod local_runtime_catalog;
 pub mod resolve;
 pub mod revoke;
 pub mod rotate_connect_token;

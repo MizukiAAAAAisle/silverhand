@@ -277,7 +277,8 @@ pub(super) async fn compose_after_audit(
         OsEntropy,
         SystemClock,
     ));
-    // rotate-token's arm is the deployment profile, exactly like `runtimes_router` below.
+    // rotate-token's arm is the deployment profile, exactly like the local-runtime-catalog
+    // router below.
     // EMBEDDED mints in-process and reveals the secret in the HTTP body. REMOTE-ONLY
     // delivers the replacement over the daemon's OWN websocket — the transport the
     // `daemon_router` accepts in either profile — and returns no secret, matching the TS
@@ -446,14 +447,15 @@ pub(super) async fn compose_after_audit(
     // product's `/api/*` bearer gate with no allowlist entry), so it mounts behind this
     // same human-session perimeter. The profile — not a per-request flag — decides which
     // router: an embedded backend constructs the process's ONE runtime detector and can
-    // answer; a control-plane backend is handed [`runtimes::control_plane_router`], which
+    // answer; a control-plane backend is handed
+    // [`local_runtime_catalog::control_plane_router`], which
     // has no detector field to hold and so can only refuse `503`. The detector is
     // constructed ONLY in the embedded arm, so a standalone process never obtains one.
-    let runtimes_router = match config.deployment_profile {
+    let local_runtime_catalog_router = match config.deployment_profile {
         DeploymentProfile::Embedded => {
-            runtimes::detecting_router(MachineRuntimeDetector::for_this_process())
+            local_runtime_catalog::detecting_router(MachineRuntimeDetector::for_this_process())
         }
-        DeploymentProfile::RemoteOnly => runtimes::control_plane_router(),
+        DeploymentProfile::RemoteOnly => local_runtime_catalog::control_plane_router(),
     };
     // #2223 CP3: assemble the two workspace-metadata-write outbound authorities and the
     // human-auth deps from real production adapters, BEFORE `hub`/`sessions` are moved
@@ -944,7 +946,7 @@ pub(super) async fn compose_after_audit(
             ))
             // #2218: `/api/runtimes`, behind the human perimeter — anonymous → 401,
             // exactly as the product's un-allowlisted `/api/*` bearer gate refuses it.
-            .merge(runtimes_router),
+            .merge(local_runtime_catalog_router),
         sessions.clone(),
         PublicJsonUnauthorized,
     );
@@ -1019,8 +1021,8 @@ pub(super) async fn compose_after_audit(
         signup_enabled: config.signup_enabled,
         bind_address_scope: classify_bind_address_scope(&bound_listener_addr.ip().to_string()),
     });
-    let health_router = health::router(server_mode, SystemProcessClock);
-    let readyz_router = readiness::router(
+    let health_router = process_health::router(server_mode, SystemProcessClock);
+    let readyz_router = process_readiness::router(
         server_mode,
         deployment_mode,
         boot.clone(),

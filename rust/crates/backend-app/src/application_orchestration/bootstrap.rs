@@ -3,7 +3,9 @@ use silverhand_backend_core::{
     host_runtime::environment::OsEntropy,
     identity_access::auth::{EntropySessionTokenMint, SessionTokenMint},
 };
-use silverhand_backend_server::{embedded_bootstrap, ops::deployment::DeploymentProfile};
+use silverhand_backend_server::{
+    embedded_bootstrap, foundation::deployment_profile::DeploymentProfile,
+};
 
 /// The only bootstrap-provision door. This remains the last fallible startup step; on
 /// success the authority can move directly into the infallible final assembly.

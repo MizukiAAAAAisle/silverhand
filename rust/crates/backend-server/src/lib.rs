@@ -11,7 +11,6 @@ pub mod embedded_bootstrap;
 pub mod foundation;
 pub mod host_runtime;
 pub mod identity_access;
-pub mod ops;
 pub mod runtime_control;
 pub mod scheduling;
 pub mod scope_runtime_stop;

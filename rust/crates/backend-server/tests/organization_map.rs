@@ -203,6 +203,27 @@ fn is_cfg_test(attr: &syn::Attribute) -> bool {
     found
 }
 
+fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
+    match item {
+        syn::Item::Const(item) => &item.attrs,
+        syn::Item::Enum(item) => &item.attrs,
+        syn::Item::ExternCrate(item) => &item.attrs,
+        syn::Item::Fn(item) => &item.attrs,
+        syn::Item::ForeignMod(item) => &item.attrs,
+        syn::Item::Impl(item) => &item.attrs,
+        syn::Item::Macro(item) => &item.attrs,
+        syn::Item::Mod(item) => &item.attrs,
+        syn::Item::Static(item) => &item.attrs,
+        syn::Item::Struct(item) => &item.attrs,
+        syn::Item::Trait(item) => &item.attrs,
+        syn::Item::TraitAlias(item) => &item.attrs,
+        syn::Item::Type(item) => &item.attrs,
+        syn::Item::Union(item) => &item.attrs,
+        syn::Item::Use(item) => &item.attrs,
+        _ => &[],
+    }
+}
+
 /// Independent source_shape: `hybrid` iff a `<m>.rs` main body AND a `<m>/` directory that
 /// carries PRODUCTION child `mod` declarations both exist; `directory` for a namespace
 /// directory; else `file`. A sibling directory holding only test fixtures (no production
@@ -2023,6 +2044,198 @@ fn resolved_internal_agent_split_is_exact_and_collision_free() {
         "backend-server::identity_access::agent_wire".to_owned(),
     ));
     assert_ne!(occupied_wire_target, expected);
+}
+
+#[test]
+fn resolved_ops_split_is_exact_and_keeps_local_and_remote_catalogues_separate() {
+    use syn::visit::Visit as _;
+
+    let map = load_map();
+    let rows = map["resolved_splits"]
+        .as_array()
+        .expect("resolved_splits array");
+    let ops_rows: Vec<&Value> = rows
+        .iter()
+        .filter(|row| as_str(row, "source") == "backend-server::ops")
+        .collect();
+    let expected: BTreeSet<(String, String, String, String)> = [
+        (
+            "runtimes",
+            "C2",
+            "http",
+            "backend-server::host_runtime::local_runtime_catalog",
+        ),
+        (
+            "bind_address",
+            "foundation",
+            "domain",
+            "backend-server::foundation::bind_address_scope",
+        ),
+        (
+            "deployment",
+            "foundation",
+            "domain",
+            "backend-server::foundation::deployment_profile",
+        ),
+        (
+            "health",
+            "foundation",
+            "http",
+            "backend-server::foundation::process_health",
+        ),
+        (
+            "readiness",
+            "foundation",
+            "http",
+            "backend-server::foundation::process_readiness",
+        ),
+        (
+            "server_info",
+            "foundation",
+            "http",
+            "backend-server::foundation::server_info",
+        ),
+    ]
+    .into_iter()
+    .map(|(responsibility, owner, role, target)| {
+        (
+            responsibility.to_owned(),
+            owner.to_owned(),
+            role.to_owned(),
+            target.to_owned(),
+        )
+    })
+    .collect();
+    let actual: BTreeSet<(String, String, String, String)> = ops_rows
+        .iter()
+        .map(|row| {
+            assert_eq!(as_str(row, "kind"), "context_internal_leaf");
+            (
+                as_str(row, "responsibility").to_owned(),
+                as_str(row, "business_owner").to_owned(),
+                as_str(row, "structural_role").to_owned(),
+                as_str(row, "physical_target").to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected, "ops resolved split drifted");
+    assert_eq!(
+        actual.len(),
+        ops_rows.len(),
+        "ops responsibility duplicated"
+    );
+    assert!(
+        !scanned_roots().contains(&("backend-server".to_owned(), "ops".to_owned())),
+        "the resolved ops aggregation must no longer be a crate root"
+    );
+
+    let root = rust_root().join("crates/backend-server/src");
+    let foundation_children: BTreeSet<String> =
+        module_declarations(&read(&root.join("foundation/mod.rs")))
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+    let host_runtime_children: BTreeSet<String> =
+        module_declarations(&read(&root.join("host_runtime/mod.rs")))
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+    for child in [
+        "bind_address_scope",
+        "deployment_profile",
+        "process_health",
+        "process_readiness",
+        "server_info",
+    ] {
+        assert!(
+            foundation_children.contains(child),
+            "missing foundation::{child}"
+        );
+    }
+    assert!(host_runtime_children.contains("local_runtime_catalog"));
+    assert!(!foundation_children.contains("ops"));
+    assert!(!foundation_children.contains("operational_composition"));
+
+    let open: BTreeSet<&str> = map["open_rulings"]
+        .as_array()
+        .expect("open_rulings array")
+        .iter()
+        .map(|value| value.as_str().expect("open ruling string"))
+        .collect();
+    assert!(!open.contains("backend-server::ops split group 'runtimes' final leaf module name"));
+    assert!(!open.contains(
+        "backend-server::ops split group 'operational_composition' final leaf module name"
+    ));
+
+    // The coordinate-free local detector face must never import the remote host-control
+    // catalogue or a raw host/daemon coordinate. Walk every non-test top-level item, including
+    // any production item placed after the test module.
+    #[derive(Default)]
+    struct LocalCatalogueFacts {
+        forbidden: BTreeSet<String>,
+    }
+    impl<'ast> syn::visit::Visit<'ast> for LocalCatalogueFacts {
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            let segments: Vec<String> = path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect();
+            if segments
+                .windows(2)
+                .any(|pair| pair == ["host_runtime", "host_control"])
+                || segments.iter().any(|segment| {
+                    matches!(
+                        segment.as_str(),
+                        "ComputerId" | "DaemonInstanceId" | "HostId"
+                    )
+                })
+            {
+                self.forbidden.insert(segments.join("::"));
+            }
+            syn::visit::visit_path(self, path);
+        }
+    }
+    let catalogue = syn::parse_file(&read(&root.join("host_runtime/local_runtime_catalog.rs")))
+        .expect("local runtime catalogue parses");
+    let mut facts = LocalCatalogueFacts::default();
+    for item in &catalogue.items {
+        if !item_attrs(item).iter().any(is_cfg_test) {
+            facts.visit_item(item);
+        }
+    }
+    assert_eq!(facts.forbidden, BTreeSet::new());
+    let control_plane_factory = catalogue
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Fn(function) if function.sig.ident == "control_plane_router" => {
+                Some(function)
+            }
+            _ => None,
+        })
+        .expect("control_plane_router function");
+    assert!(
+        control_plane_factory.sig.inputs.is_empty(),
+        "the control-plane refusal must have no detector/coordinate dependency"
+    );
+
+    // First falsifier: the remote catalogue is a real occupied identity. Retargeting the local
+    // route there must break the exact set rather than merge coordinate-free and bound answers.
+    let mut occupied_remote_target = actual.clone();
+    occupied_remote_target.remove(&(
+        "runtimes".to_owned(),
+        "C2".to_owned(),
+        "http".to_owned(),
+        "backend-server::host_runtime::local_runtime_catalog".to_owned(),
+    ));
+    occupied_remote_target.insert((
+        "runtimes".to_owned(),
+        "C2".to_owned(),
+        "http".to_owned(),
+        "backend-server::host_runtime::host_control::runtime_catalog".to_owned(),
+    ));
+    assert_ne!(occupied_remote_target, expected);
 }
 
 #[test]

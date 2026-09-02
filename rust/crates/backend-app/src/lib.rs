@@ -69,12 +69,17 @@ use silverhand_backend_server::{
     },
     embedded_bootstrap,
     foundation::{
+        bind_address_scope::classify_bind_address_scope,
         cli_invoke_observer::audit_cli_invocations,
         cli_preflight_trace::cli_trace_router,
         clock::SystemProcessClock,
+        deployment_profile::DeploymentProfile,
+        process_health,
+        process_readiness::{self, BootProgress},
         scope_event_transport::{
             AllowedOrigin, EventWebSocketConfig, EventWebSocketController, ScopeEventHub,
         },
+        server_info::{self, ServerAdvertisement},
     },
     host_runtime::{
         self, agent_clear_session, agent_presence, agent_runtime_state, agent_runtime_switch,
@@ -84,7 +89,7 @@ use silverhand_backend_server::{
         },
         host_control::management::{self},
         host_control::runtime_availability::DataPlaneRuntimeAvailabilityProbe,
-        host_resources,
+        host_resources, local_runtime_catalog,
         runtime_credential::{RuntimeCredentialAuthority, require_runtime_credential},
     },
     identity_access::{
@@ -104,14 +109,6 @@ use silverhand_backend_server::{
         },
         users::{self, UsersDeps},
         workspace_detail, workspace_metadata_write, workspace_name_availability, workspaces,
-    },
-    ops::{
-        bind_address::classify_bind_address_scope,
-        deployment::DeploymentProfile,
-        health,
-        readiness::{self, BootProgress},
-        runtimes,
-        server_info::{self, ServerAdvertisement},
     },
     scheduling::schedule_management::{schedule_cancel_router, schedule_list_router},
     viewer_read_model::presence::{

@@ -54,10 +54,10 @@ use axum::{
 use serde::Serialize;
 use silverhand_backend_core::foundation::persistence::WriteProbe;
 
-use crate::{
-    foundation::clock::ProcessClock,
-    foundation::error,
-    ops::deployment::{DeploymentMode, ServerMode},
+use crate::foundation::{
+    clock::ProcessClock,
+    deployment_profile::{DeploymentMode, ServerMode},
+    error,
 };
 
 /// The probe path, outside `/api/*` in the product.

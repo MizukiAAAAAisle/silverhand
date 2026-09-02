@@ -225,9 +225,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // already-accounted owner namespaces and add no flat CP tuples.
     ("backend-server", "scheduling"),
     // #task:2317 relocated the internal self-profile and CLI observation faces beneath
-    // the already-accounted identity_access/foundation owner roots. Nested leaves add no
-    // flat CP tuple; composition behavior tests remain their mount authority.
-    ("backend-server", "ops"),
+    // identity_access/foundation; #task:2321 likewise relocates the process-operation
+    // leaves beneath host_runtime/foundation. Nested leaves add no flat CP tuple;
+    // composition behavior tests remain their mount authority.
     // #task:2229 — the runtime start/stop/clear production capability. It owns
     // exact-custody commands, the ephemeral clear waiter, and committed clear
     // settlement; its route verticals are mounted by #task:2234 (CP4 clear/switch, CP5 stop).
@@ -465,7 +465,6 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // NOT directory-shaped and is absent here.
     ("backend-filesystem", "host_runtime"),
     ("backend-server", "scheduling"),
-    ("backend-server", "ops"),
     // #task:2248 — the two residual-wave families that earn a new crate root
     // (embedded bootstrap, workspace data plane); directory-shaped so an
     // implementation lane can add route submodules within its own subtree without
@@ -551,13 +550,11 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// adds two, because its route surface is a crate-root SIBLING rather than a
 /// nested public-agent leaf: the read port `host_resources_read` and the surface
 /// `host_resources`. The root
-/// operational read cluster (#task:2195) adds exactly one, and it is the surface
-/// `ops`: none of its four faces reads a domain fact, so it declares no crate-root
-/// read port at all — the runtime catalogue's detector port is a leaf of the `agents`
-/// vocabulary namespace, and the readiness write probe is a store capability added to
-/// the INHERITED core namespace `persistence`, which this ledger never claimed —
-/// while its two adapters are excluded on the same grounds every other adapter here
-/// is. G0 keeps it a subset of the seam ledger.
+/// operational read cluster (#task:2195) is now nested beneath its real `host_runtime`
+/// and `foundation` owners (#task:2321). Its detector port remains a leaf of the
+/// `agents` vocabulary namespace and its readiness write probe remains an inherited
+/// persistence capability; the nested HTTP leaves' real mounts are pinned by the
+/// composition behavior gates, not duplicated in this flat root table.
 ///
 /// SCOPE (#task:2275, narrowed honestly): this table only does the
 /// `ACTIVATION_NAMESPACES ⊆ SEAM_ROOT_MODULES` self-check — it never proved a route is
@@ -578,8 +575,7 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// and its actual mount is the composition/route behavior tests' — this table is not the
 /// activation authority for nested leaves, and is deliberately not upgraded into a
 /// second full-path scanner for them.
-const ACTIVATION_NAMESPACES: &[(&str, &str)] =
-    &[("backend-server", "scheduling"), ("backend-server", "ops")];
+const ACTIVATION_NAMESPACES: &[(&str, &str)] = &[("backend-server", "scheduling")];
 
 fn rust_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

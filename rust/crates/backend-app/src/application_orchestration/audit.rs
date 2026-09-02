@@ -3,8 +3,8 @@ use silverhand_backend_core::identity_access::agent_audit_read::{AgentAuditEvent
 use silverhand_backend_filesystem::foundation::audit_sink::{
     AgentAuditFileSink, AppTag, CliAuditFile, CliInvokeFileSink, CliPreflightFileSink, WriterState,
 };
-use silverhand_backend_server::{
-    foundation::clock::SystemProcessClock, ops::deployment::DeploymentProfile,
+use silverhand_backend_server::foundation::{
+    clock::SystemProcessClock, deployment_profile::DeploymentProfile,
 };
 
 #[derive(Clone)]
