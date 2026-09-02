@@ -108,7 +108,7 @@ impl<Ensure, C, D, H> OnboardingDeliveryAdapter<Ensure, C, D, H> {
     }
 }
 
-impl<Ensure, C, D, H> crate::host_agent::agent_create::OnboardingDelivery
+impl<Ensure, C, D, H> crate::application_orchestration::agent_create::OnboardingDelivery
     for OnboardingDeliveryAdapter<Ensure, C, D, H>
 where
     Ensure: OnboardingInboxEnsure,

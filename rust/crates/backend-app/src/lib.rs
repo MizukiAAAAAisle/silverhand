@@ -39,7 +39,9 @@ use silverhand_backend_filesystem::host_runtime::runtime_detection::MachineRunti
 #[cfg(test)]
 use silverhand_backend_server::internal_agent::cli_invoke::CLI_INVOKE_PRODUCTION_PERIMETER;
 use silverhand_backend_server::{
-    application_orchestration::workspace_rename_fanout::WorkspaceRenameFanoutAdapter,
+    application_orchestration::{
+        agent_create, agent_delete, workspace_rename_fanout::WorkspaceRenameFanoutAdapter,
+    },
     conversation_messaging::direct_pairs,
     conversation_messaging::messaging::{
         TargetAddressRefusalLog,
@@ -72,25 +74,25 @@ use silverhand_backend_server::{
             AllowedOrigin, EventWebSocketConfig, EventWebSocketController, ScopeEventHub,
         },
     },
-    host_agent::{
-        agent_audit, agent_avatar, agent_avatar_write, agent_clear_session, agent_create,
-        agent_delete, agent_detail, agent_list, agent_patch, agent_presence, agent_runtime_state,
-        agent_runtime_switch, agent_stop, availability, public_profile_mcp,
-        schedule_management::{schedule_cancel_router, schedule_list_router},
+    host_runtime::{
+        self, agent_clear_session, agent_presence, agent_runtime_state, agent_runtime_switch,
+        agent_stop, availability,
+        host_agent_background::{
+            agent_deletion_resumer::AgentDeletionResumer, presence_grace_timer::PresenceGraceTimers,
+        },
+        host_control::management::{self},
+        host_control::runtime_availability::DataPlaneRuntimeAvailabilityProbe,
+        host_resources,
+        runtime_credential::{RuntimeCredentialAuthority, require_runtime_credential},
     },
-    host_runtime::host_agent_background::{
-        agent_deletion_resumer::AgentDeletionResumer, presence_grace_timer::PresenceGraceTimers,
-    },
-    host_runtime::host_control::management::{self},
-    host_runtime::host_control::runtime_availability::DataPlaneRuntimeAvailabilityProbe,
-    host_runtime::runtime_credential::{RuntimeCredentialAuthority, require_runtime_credential},
-    host_runtime::{self, host_resources},
     identity_access::{
-        access, agent_name_availability,
+        access, agent_audit, agent_avatar, agent_avatar_write, agent_detail, agent_list,
+        agent_name_availability, agent_patch,
         auth::{PublicJsonUnauthorized, require_human_session},
         avatar_blob::SingleKindAvatarBlobs,
         human_auth::{self, HumanAuthDeps},
         password_hasher::SpawnBlockingHasher,
+        public_profile_mcp,
         users::{self, UsersDeps},
         workspace_detail, workspace_metadata_write, workspace_name_availability, workspaces,
     },
@@ -113,6 +115,7 @@ use silverhand_backend_server::{
         runtimes,
         server_info::{self, ServerAdvertisement},
     },
+    scheduling::schedule_management::{schedule_cancel_router, schedule_list_router},
     viewer_read_model::presence::{
         HubPresencePublisher, SystemDisconnectClock, compose_presence_vertical,
     },

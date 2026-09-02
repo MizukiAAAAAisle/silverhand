@@ -24,7 +24,7 @@ use silverhand_backend_core::{
     identity_access::agent_lifecycle::MaterializationStatus,
     identity_access::agents::runtime::RuntimeKind,
 };
-use silverhand_backend_server::host_agent::schedule_management::schedule_cancel_router;
+use silverhand_backend_server::scheduling::schedule_management::schedule_cancel_router;
 use silverhand_backend_sqlite::conversation_messaging::messaging::schedule::SqliteScheduleCancel;
 use sqlx::SqliteConnection;
 use tower::ServiceExt;

@@ -527,7 +527,7 @@ impl HubDirectPairsChanged {
     }
 }
 
-impl crate::host_agent::agent_create::DirectPairsChanged for HubDirectPairsChanged {
+impl crate::application_orchestration::agent_create::DirectPairsChanged for HubDirectPairsChanged {
     async fn direct_pairs_changed(
         &self,
         viewer: &UserId,

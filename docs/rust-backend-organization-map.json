@@ -1970,88 +1970,6 @@
     },
     {
       "crate": "backend-server",
-      "module": "host_agent",
-      "source_shape": "directory",
-      "needs_ruling": false,
-      "split_required": {
-        "kind": "directory_members",
-        "current_container": {
-          "structural_role": "http"
-        },
-        "groups": [
-          {
-            "group": "public_agent_identity_profile",
-            "business_owner": "C1",
-            "structural_role": "http",
-            "members": [
-              "agent_audit",
-              "agent_avatar",
-              "agent_avatar_write",
-              "agent_detail",
-              "agent_list",
-              "agent_patch",
-              "public_profile_mcp"
-            ],
-            "target_parent_namespace": "backend-server::identity_access",
-            "needs_ruling": true
-          },
-          {
-            "group": "agent_runtime_control",
-            "business_owner": "C2",
-            "structural_role": "http",
-            "members": [
-              "agent_clear_session",
-              "agent_presence",
-              "agent_runtime_state",
-              "agent_runtime_switch",
-              "agent_stop",
-              "availability",
-              "host_attachment"
-            ],
-            "target_parent_namespace": "backend-server::host_runtime",
-            "needs_ruling": true
-          },
-          {
-            "group": "agent_provisioning_sagas",
-            "business_owner": "application_orchestration",
-            "structural_role": "http",
-            "members": [
-              "agent_create",
-              "agent_delete"
-            ],
-            "target_parent_namespace": "backend-server::application_orchestration",
-            "needs_ruling": true
-          },
-          {
-            "group": "viewer_presence",
-            "business_owner": "viewer_read_model",
-            "structural_role": "http",
-            "members": [
-              "online_viewers",
-              "presence"
-            ],
-            "target_parent_namespace": "backend-server::viewer_read_model",
-            "needs_ruling": true
-          },
-          {
-            "group": "schedule_management",
-            "business_owner": "C5",
-            "structural_role": "http",
-            "members": [
-              "schedule_management"
-            ],
-            "target_parent_namespace": "backend-server::scheduling",
-            "needs_ruling": true
-          }
-        ]
-      },
-      "note": "route-family umbrella; 19 child modules each covered exactly once",
-      "migration": {
-        "split": true
-      }
-    },
-    {
-      "crate": "backend-server",
       "module": "host_agent_background",
       "source_shape": "directory",
       "needs_ruling": false,
@@ -2277,6 +2195,19 @@
       "migration": {
         "physical_target": "backend-server::host_runtime::scope_runtime_stop",
         "compatibility_facade": "backend-server::scope_runtime_stop"
+      }
+    },
+    {
+      "crate": "backend-server",
+      "module": "scheduling",
+      "source_shape": "directory",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C5",
+        "structural_role": "http"
+      },
+      "migration": {
+        "physical_target": "backend-server::scheduling"
       }
     },
     {
@@ -3184,11 +3115,6 @@
     }
   ],
   "open_rulings": [
-    "backend-server::host_agent split group 'public_agent_identity_profile' final leaf module name",
-    "backend-server::host_agent split group 'agent_runtime_control' final leaf module name",
-    "backend-server::host_agent split group 'agent_provisioning_sagas' final leaf module name",
-    "backend-server::host_agent split group 'viewer_presence' final leaf module name",
-    "backend-server::host_agent split group 'schedule_management' final leaf module name",
     "backend-server::internal_agent split group 'internal_agent_profile' final leaf module name",
     "backend-server::internal_agent split group 'cli_diagnostics' final leaf module name",
     "backend-server::ops split group 'runtimes' final leaf module name",
@@ -3317,10 +3243,162 @@
       "business_owner": "C2",
       "structural_role": "adapter",
       "physical_target": "backend-server::host_runtime::runtime_status_publisher"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "agent_audit",
+      "kind": "context_internal_leaf",
+      "business_owner": "C1",
+      "structural_role": "http",
+      "physical_target": "backend-server::identity_access::agent_audit"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "agent_avatar",
+      "kind": "context_internal_leaf",
+      "business_owner": "C1",
+      "structural_role": "http",
+      "physical_target": "backend-server::identity_access::agent_avatar"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "agent_avatar_write",
+      "kind": "context_internal_leaf",
+      "business_owner": "C1",
+      "structural_role": "http",
+      "physical_target": "backend-server::identity_access::agent_avatar_write"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "agent_detail",
+      "kind": "context_internal_leaf",
+      "business_owner": "C1",
+      "structural_role": "http",
+      "physical_target": "backend-server::identity_access::agent_detail"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "agent_list",
+      "kind": "context_internal_leaf",
+      "business_owner": "C1",
+      "structural_role": "http",
+      "physical_target": "backend-server::identity_access::agent_list"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "agent_patch",
+      "kind": "context_internal_leaf",
+      "business_owner": "C1",
+      "structural_role": "http",
+      "physical_target": "backend-server::identity_access::agent_patch"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "public_profile_mcp",
+      "kind": "context_internal_leaf",
+      "business_owner": "C1",
+      "structural_role": "http",
+      "physical_target": "backend-server::identity_access::public_profile_mcp"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "agent_clear_session",
+      "kind": "context_internal_leaf",
+      "business_owner": "C2",
+      "structural_role": "http",
+      "physical_target": "backend-server::host_runtime::agent_clear_session"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "agent_presence",
+      "kind": "context_internal_leaf",
+      "business_owner": "C2",
+      "structural_role": "http",
+      "physical_target": "backend-server::host_runtime::agent_presence"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "agent_runtime_state",
+      "kind": "context_internal_leaf",
+      "business_owner": "C2",
+      "structural_role": "http",
+      "physical_target": "backend-server::host_runtime::agent_runtime_state"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "agent_runtime_switch",
+      "kind": "context_internal_leaf",
+      "business_owner": "C2",
+      "structural_role": "http",
+      "physical_target": "backend-server::host_runtime::agent_runtime_switch"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "agent_stop",
+      "kind": "context_internal_leaf",
+      "business_owner": "C2",
+      "structural_role": "http",
+      "physical_target": "backend-server::host_runtime::agent_stop"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "availability",
+      "kind": "context_internal_leaf",
+      "business_owner": "C2",
+      "structural_role": "http",
+      "physical_target": "backend-server::host_runtime::availability"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "host_attachment",
+      "kind": "context_internal_leaf",
+      "business_owner": "C2",
+      "structural_role": "adapter",
+      "physical_target": "backend-server::host_runtime::host_attachment"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "agent_create",
+      "kind": "context_internal_leaf",
+      "business_owner": "application_orchestration",
+      "structural_role": "http",
+      "physical_target": "backend-server::application_orchestration::agent_create"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "agent_delete",
+      "kind": "context_internal_leaf",
+      "business_owner": "application_orchestration",
+      "structural_role": "http",
+      "physical_target": "backend-server::application_orchestration::agent_delete"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "online_viewers",
+      "kind": "context_internal_leaf",
+      "business_owner": "viewer_read_model",
+      "structural_role": "adapter",
+      "physical_target": "backend-server::viewer_read_model::online_viewers"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "presence",
+      "kind": "context_internal_leaf",
+      "business_owner": "viewer_read_model",
+      "structural_role": "http",
+      "physical_target": "backend-server::viewer_read_model::user_presence_http"
+    },
+    {
+      "source": "backend-server::host_agent",
+      "responsibility": "schedule_management",
+      "kind": "context_internal_leaf",
+      "business_owner": "C5",
+      "structural_role": "http",
+      "physical_target": "backend-server::scheduling::schedule_management"
     }
   ],
   "migration_ledger": {
-    "note": "Organization residual/landed is derived, NOT stored. A settled crate_root carries a full physical_target Rust module path: a normal row targets crate::namespace::leaf, while a self-named top-level context root targets its own path crate::module (already at its target). Beside embedded_bootstrap / workspace_data_plane / host_runtime, the landed backend-server roots now include application_orchestration (#2269), conversation_messaging, foundation, identity_access and viewer_read_model (#2270). A split row is residual by construction and its GROUPS carry only target_parent_namespace (crate::owner-ns) + needs_ruling. Completed splits leave their source root and move to resolved_splits: `settled_crate_root` results are independently accounted by a matching settled row, while `context_internal_leaf` results remain internal to one already-accounted self/dual-role context and must not gain a second crate-root identity. Both kinds are checked against real declared modules. A root is LANDED iff its current full path equals its physical_target; residual = scanned roots - landed (from the map + real tree only). The CP root inventories in host_agent_scaffold.rs keep their original G4/G5 seam semantics and are used only as a root-coverage compatibility check, never as a landed/residual authority. Route/product ledgers stay separate."
+    "note": "Organization residual/landed is derived, NOT stored. A settled crate_root carries a full physical_target Rust module path: a normal row targets crate::namespace::leaf, while a self-named top-level context root targets its own path crate::module (already at its target). Beside embedded_bootstrap / workspace_data_plane / host_runtime, the landed backend-server roots now include application_orchestration (#2269), conversation_messaging, foundation, identity_access, scheduling and viewer_read_model (#2270). A split row is residual by construction and its GROUPS carry only target_parent_namespace (crate::owner-ns) + needs_ruling. Completed splits leave their source root and move to resolved_splits: `settled_crate_root` results are independently accounted by a matching settled row, while `context_internal_leaf` results remain internal to one already-accounted self/dual-role context and must not gain a second crate-root identity. Both kinds are checked against real declared modules. A root is LANDED iff its current full path equals its physical_target; residual = scanned roots - landed (from the map + real tree only). The CP root inventories in host_agent_scaffold.rs keep their original G4/G5 seam semantics and are used only as a root-coverage compatibility check, never as a landed/residual authority. Route/product ledgers stay separate."
   },
   "target_namespaces": {
     "note": "The real Rust module namespace each business_owner relocates into. physical_target is a full path crate::namespace::leaf. landed is derived mechanically (current full path == physical_target); no row is landed until it actually resides at its full target path. Namespaces must be legal Rust idents, unique, and cover exactly the business_owner axis.",

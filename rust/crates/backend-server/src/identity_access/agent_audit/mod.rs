@@ -1,5 +1,4 @@
-//! Owner-audit routes — a submodule of the public-agent management plane
-//! (`host_agent`), not a new top-level concept (#task:2254).
+//! Owner-audit routes in the identity/access HTTP boundary (#task:2254).
 //!
 //! Three read faces, one owner, one ladder:
 //!

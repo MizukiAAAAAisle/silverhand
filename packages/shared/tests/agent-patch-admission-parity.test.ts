@@ -8,7 +8,7 @@ import corpus from './fixtures/agent-patch-admission.json' with { type: 'json' }
  * This side is the ORACLE: every `verdict` / `canonical` in the fixture is signed by
  * running the REAL `UpdateAgentInputSchema` here, never restated by hand. The Rust half
  * (an in-crate module in
- * `rust/crates/backend-server/src/host_agent/agent_patch.rs`) reads the same file and
+ * `rust/crates/backend-server/src/identity_access/agent_patch.rs`) reads the same file and
  * holds its `AgentPatchRaw` decode + garde + `TryFrom<AgentTuningEdit>` to it.
  *
  * Scope is the SEMANTIC value plane only: whether a JSON object is admitted and, if so,

@@ -70,8 +70,8 @@ const CRATE_ROOTS: &[&str] = &[
 ///
 /// A name the lane deliberately distributes across roles lists each owning root as
 /// its own entry: a core port and its SQLite adapter (`user_presence_cold_read`), or
-/// a SQLite persistence lane and the server route surface that mounts it
-/// (`host_agent`). This mirrors the base crates, where `workspace_cold_read`,
+/// a SQLite persistence lane and a server route surface that mounts it. This mirrors
+/// the base crates, where `workspace_cold_read`,
 /// `direct_pair_read`, `access` and `auth` each name their own module in several
 /// roots; only an owner in a root NOT listed here is the accidental fork G4 refuses.
 ///
@@ -220,7 +220,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // #task:2229 — the crate-root production `RuntimeControlPort` adapter plus the
     // typed daemon codecs for agent materialize / runtime start / clear-session.
     ("backend-server", "agent_materialize"),
-    ("backend-server", "host_agent"),
+    // #task:2314 replaces the historical public-agent route umbrella with C5's real
+    // scheduling owner root. The other eighteen former children are internal leaves of
+    // already-accounted owner namespaces and add no flat CP tuples.
+    ("backend-server", "scheduling"),
     // #task:2226 — internal-agent route family, mounted at the app composition root by
     // the #task:2234 integration (CP7a profile/avatar/peer-profile, CP7b MCP). Its MCP
     // leaf consumes only the typed data-plane port; #task:2231 supplies that production face.
@@ -240,11 +243,10 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // composition root, so both are absent from `ACTIVATION_NAMESPACES` — UNMOUNTED.
     //
     // The other residual route surfaces are NOT new crate roots: they are submodules of
-    // the bounded contexts that already own them, so they add no crate-root seam and ride
-    // the existing `host_agent`/`internal_agent` entries — `host_agent::public_profile_mcp`,
-    // `host_agent::agent_runtime_state`, `host_agent::agent_audit`,
-    // `host_agent::schedule_management` (public-agent management plane), and
-    // `internal_agent::diagnostics` (internal runtime-credentialed family).
+    // the bounded contexts that own them. #task:2314 moved the public-agent leaves under
+    // `identity_access`, `host_runtime`, `application_orchestration`, `viewer_read_model`
+    // and the new `scheduling` owner; `internal_agent::diagnostics` remains under its
+    // existing internal route family.
     ("backend-server", "embedded_bootstrap"),
     ("backend-server", "workspace_data_plane"),
     // #task:2296 established the backend-sqlite `identity_access` relocation namespace: a pure
@@ -463,14 +465,14 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // removed. The sibling `foundation` container holds two flat-file adapters, so it is
     // NOT directory-shaped and is absent here.
     ("backend-filesystem", "host_runtime"),
-    ("backend-server", "host_agent"),
+    ("backend-server", "scheduling"),
     ("backend-server", "internal_agent"),
     ("backend-server", "ops"),
     // #task:2248 — the two residual-wave families that earn a new crate root
     // (embedded bootstrap, workspace data plane); directory-shaped so an
     // implementation lane can add route submodules within its own subtree without
-    // touching a shared declaration. The other residual surfaces are submodules of
-    // `host_agent`/`internal_agent` and are not crate-root seams.
+    // touching a shared declaration. Other route surfaces are nested under their
+    // owning contexts and are not additional crate-root seams.
     ("backend-server", "embedded_bootstrap"),
     ("backend-server", "workspace_data_plane"),
     // #task:2248 — the residual-wave core ports and their SQLite adapters are all
@@ -543,16 +545,13 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// materialization vocabulary the base crates already share; converting a stored
 /// token into that enum starts no rule, opens no port and fires no timer, so it is
 /// deliberately absent, while every deciding, reading, mounting, writing and timing
-/// module is present. The /api/presence vertical adds two: the read port
-/// `user_presence_cold_read`, and the route surface `host_agent` whose appearance in
-/// the composition root is the mount this fence refuses in CP1. The
-/// /api/agents/:id/availability vertical adds one: the read port
-/// `agent_availability_read`; its route surface is a submodule of `host_agent`,
-/// already listed. The /api/agents/:id/presence vertical adds one the
-/// same way again: the read port `agent_presence_read`, whose route surface is a
-/// submodule of `host_agent`. The /api/hosts/:id/resources vertical (#task:2198)
+/// module is present. #task:2314 replaced the historical public-agent activation root
+/// with the real C5 `scheduling` owner. The other former public-agent route leaves are
+/// nested under already-accounted owner namespaces; their real mounts remain proven by
+/// composition behavior gates rather than duplicated here. The /api/hosts/:id/resources
+/// vertical (#task:2198)
 /// adds two, because its route surface is a crate-root SIBLING rather than a
-/// `host_agent` leaf: the read port `host_resources_read` and the surface
+/// nested public-agent leaf: the read port `host_resources_read` and the surface
 /// `host_resources`. The root
 /// operational read cluster (#task:2195) adds exactly one, and it is the surface
 /// `ops`: none of its four faces reads a domain fact, so it declares no crate-root
@@ -582,7 +581,7 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
 /// activation authority for nested leaves, and is deliberately not upgraded into a
 /// second full-path scanner for them.
 const ACTIVATION_NAMESPACES: &[(&str, &str)] =
-    &[("backend-server", "host_agent"), ("backend-server", "ops")];
+    &[("backend-server", "scheduling"), ("backend-server", "ops")];
 
 fn rust_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

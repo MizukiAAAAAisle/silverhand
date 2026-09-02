@@ -1,7 +1,7 @@
 //! Composition-root MOUNT proof for `GET /api/agents` (#task:2197, batch 5).
 //!
 //! `agent_list_contract.rs` already drives the real `SqliteAgentListColdRead` through
-//! the real `host_agent::agent_list::router` and pins the wire bytes — but it injects
+//! the real `identity_access::agent_list::router` and pins the wire bytes — but it injects
 //! the `UserId` extension by hand, standing in for the perimeter. What no such test can
 //! show is that the route is actually MOUNTED behind the product's human perimeter:
 //! that an anonymous caller is refused BEFORE the port is touched, that a real seeded
@@ -37,7 +37,7 @@ use silverhand_backend_core::{
     identity_access::auth::{HumanSessionAuthenticator, SessionClock, SessionTtl},
 };
 use silverhand_backend_server::{
-    host_agent::agent_list::{AGENTS_PATH, router},
+    identity_access::agent_list::{AGENTS_PATH, router},
     identity_access::auth::{PublicJsonUnauthorized, require_human_session},
 };
 use silverhand_backend_sqlite::{

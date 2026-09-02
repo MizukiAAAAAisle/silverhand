@@ -952,7 +952,7 @@ async fn presence_read(router: &Router) -> Value {
     let response = router
         .clone()
         .oneshot(
-            axum::http::Request::get(crate::host_agent::presence::PRESENCE_PATH)
+            axum::http::Request::get(crate::viewer_read_model::user_presence_http::PRESENCE_PATH)
                 .extension(viewer())
                 .body(axum::body::Body::empty())
                 .unwrap(),
@@ -3165,7 +3165,7 @@ async fn typed_factories_share_the_originating_hub_scope_and_order() {
         PresenceFact::Online { user_id: user() },
     )
     .unwrap();
-    crate::host_agent::agent_create::DirectPairsChanged::direct_pairs_changed(
+    crate::application_orchestration::agent_create::DirectPairsChanged::direct_pairs_changed(
         &hub.direct_pairs_changed_sink(),
         &user(),
         &channel(),

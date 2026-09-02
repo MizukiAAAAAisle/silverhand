@@ -21,7 +21,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::foundation::identity::UserId;
-use silverhand_backend_server::host_agent::{agent_detail, agent_list};
+use silverhand_backend_server::identity_access::{agent_detail, agent_list};
 use silverhand_backend_sqlite::{
     identity_access::agent_detail_read::SqliteAgentDetailColdRead,
     identity_access::agent_list_read::SqliteAgentListColdRead,

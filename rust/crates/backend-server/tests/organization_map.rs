@@ -1696,6 +1696,201 @@ fn resolved_daemon_event_split_is_exact_and_every_leaf_is_declared() {
 }
 
 #[test]
+fn resolved_host_agent_split_is_exact_and_every_leaf_is_declared() {
+    let map = load_map();
+    let rows = map["resolved_splits"]
+        .as_array()
+        .expect("resolved_splits array");
+    let host_agent_rows: Vec<&Value> = rows
+        .iter()
+        .filter(|row| as_str(row, "source") == "backend-server::host_agent")
+        .collect();
+    let expected: BTreeSet<(String, String, String, String)> = [
+        (
+            "agent_audit",
+            "C1",
+            "http",
+            "backend-server::identity_access::agent_audit",
+        ),
+        (
+            "agent_avatar",
+            "C1",
+            "http",
+            "backend-server::identity_access::agent_avatar",
+        ),
+        (
+            "agent_avatar_write",
+            "C1",
+            "http",
+            "backend-server::identity_access::agent_avatar_write",
+        ),
+        (
+            "agent_detail",
+            "C1",
+            "http",
+            "backend-server::identity_access::agent_detail",
+        ),
+        (
+            "agent_list",
+            "C1",
+            "http",
+            "backend-server::identity_access::agent_list",
+        ),
+        (
+            "agent_patch",
+            "C1",
+            "http",
+            "backend-server::identity_access::agent_patch",
+        ),
+        (
+            "public_profile_mcp",
+            "C1",
+            "http",
+            "backend-server::identity_access::public_profile_mcp",
+        ),
+        (
+            "agent_clear_session",
+            "C2",
+            "http",
+            "backend-server::host_runtime::agent_clear_session",
+        ),
+        (
+            "agent_presence",
+            "C2",
+            "http",
+            "backend-server::host_runtime::agent_presence",
+        ),
+        (
+            "agent_runtime_state",
+            "C2",
+            "http",
+            "backend-server::host_runtime::agent_runtime_state",
+        ),
+        (
+            "agent_runtime_switch",
+            "C2",
+            "http",
+            "backend-server::host_runtime::agent_runtime_switch",
+        ),
+        (
+            "agent_stop",
+            "C2",
+            "http",
+            "backend-server::host_runtime::agent_stop",
+        ),
+        (
+            "availability",
+            "C2",
+            "http",
+            "backend-server::host_runtime::availability",
+        ),
+        (
+            "host_attachment",
+            "C2",
+            "adapter",
+            "backend-server::host_runtime::host_attachment",
+        ),
+        (
+            "agent_create",
+            "application_orchestration",
+            "http",
+            "backend-server::application_orchestration::agent_create",
+        ),
+        (
+            "agent_delete",
+            "application_orchestration",
+            "http",
+            "backend-server::application_orchestration::agent_delete",
+        ),
+        (
+            "online_viewers",
+            "viewer_read_model",
+            "adapter",
+            "backend-server::viewer_read_model::online_viewers",
+        ),
+        (
+            "presence",
+            "viewer_read_model",
+            "http",
+            "backend-server::viewer_read_model::user_presence_http",
+        ),
+        (
+            "schedule_management",
+            "C5",
+            "http",
+            "backend-server::scheduling::schedule_management",
+        ),
+    ]
+    .into_iter()
+    .map(|(responsibility, owner, role, target)| {
+        (
+            responsibility.to_owned(),
+            owner.to_owned(),
+            role.to_owned(),
+            target.to_owned(),
+        )
+    })
+    .collect();
+    let actual: BTreeSet<(String, String, String, String)> = host_agent_rows
+        .iter()
+        .map(|row| {
+            assert_eq!(as_str(row, "kind"), "context_internal_leaf");
+            (
+                as_str(row, "responsibility").to_owned(),
+                as_str(row, "business_owner").to_owned(),
+                as_str(row, "structural_role").to_owned(),
+                as_str(row, "physical_target").to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected, "host-agent resolved split drifted");
+    assert_eq!(
+        actual.len(),
+        host_agent_rows.len(),
+        "host-agent responsibility duplicated"
+    );
+    assert!(
+        !scanned_roots().contains(&("backend-server".to_owned(), "host_agent".to_owned())),
+        "the resolved host_agent aggregation must no longer be a crate root"
+    );
+
+    let scheduling_rows: Vec<&Value> = map["crate_roots"]
+        .as_array()
+        .expect("crate_roots array")
+        .iter()
+        .filter(|row| {
+            as_str(row, "crate") == "backend-server" && as_str(row, "module") == "scheduling"
+        })
+        .collect();
+    assert_eq!(scheduling_rows.len(), 1, "scheduling self-context row");
+    let scheduling = scheduling_rows[0];
+    assert_eq!(as_str(&scheduling["target"], "business_owner"), "C5");
+    assert_eq!(as_str(&scheduling["target"], "structural_role"), "http");
+    assert_eq!(
+        as_str(&scheduling["migration"], "physical_target"),
+        "backend-server::scheduling"
+    );
+
+    // First falsifier: the existing viewer-read-model presence policy occupies this target.
+    // Retargeting the HTTP face there must break exact equality instead of creating a second
+    // identity; only `user_presence_http` is the approved collision-free leaf.
+    let mut occupied_presence_target = actual.clone();
+    occupied_presence_target.remove(&(
+        "presence".to_owned(),
+        "viewer_read_model".to_owned(),
+        "http".to_owned(),
+        "backend-server::viewer_read_model::user_presence_http".to_owned(),
+    ));
+    occupied_presence_target.insert((
+        "presence".to_owned(),
+        "viewer_read_model".to_owned(),
+        "http".to_owned(),
+        "backend-server::viewer_read_model::presence".to_owned(),
+    ));
+    assert_ne!(occupied_presence_target, expected);
+}
+
+#[test]
 fn root_compatibility_facades_are_named_accepted_residuals_not_second_business_units() {
     // #task:2273 (Cindy point 5): a root compatibility facade must be REPORTED, not swallowed.
     // Each facade row is landed at its physical_target (its one business identity) AND its

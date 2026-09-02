@@ -8,7 +8,8 @@
 //! thin authenticated shell around [`switch_agent_runtime`]; the durable orchestration
 //! lives in the core saga and its typed ports, all injected here.
 //!
-//! The ladder mirrors the sibling public write face ([`super::agent_patch`]):
+//! The ladder mirrors the public identity write face
+//! ([`crate::identity_access::agent_patch`]):
 //!
 //!  1. VISIBILITY ([`can_view_agent`], active-only) — absence, a caller outside the
 //!     ACL, and a non-active stage all collapse to ONE `404 {"error":"agent not

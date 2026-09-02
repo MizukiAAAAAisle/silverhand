@@ -36,7 +36,9 @@ use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
 
 use futures_util::FutureExt;
-use silverhand_backend_server::host_agent::agent_create::{AftermathDispatch, AftermathLeg};
+use silverhand_backend_server::application_orchestration::agent_create::{
+    AftermathDispatch, AftermathLeg,
+};
 use tokio::task::JoinHandle;
 
 /// The single create-aftermath tracker. A clone shares the one `Arc<Mutex<..>>` state, so

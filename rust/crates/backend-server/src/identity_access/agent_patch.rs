@@ -1285,7 +1285,7 @@ mod corpus {
     use super::{AgentPatchRaw, AgentTuningEdit, DESCRIPTION_MAX_UTF16, REASONING_TOKEN_MAX};
 
     /// The shared fixture, embedded at compile time. The path climbs five levels from
-    /// this source file (`rust/crates/backend-server/src/host_agent/agent_patch.rs`) to
+    /// this source file (`rust/crates/backend-server/src/identity_access/agent_patch.rs`) to
     /// the repo root, then down into the shared package's fixtures.
     const CORPUS_JSON: &str =
         include_str!("../../../../../packages/shared/tests/fixtures/agent-patch-admission.json");

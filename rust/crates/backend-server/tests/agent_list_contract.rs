@@ -7,7 +7,7 @@
 //! is that those layers WIRE UP end to end: that the real SQLite
 //! `SqliteAgentListColdRead` — its `creator UNION relation` candidate SQL on one
 //! deferred snapshot, its strict per-row decode, its shared detail projection — feeds
-//! the real `host_agent::agent_list::router` and yields the exact wire bytes.
+//! the real `identity_access::agent_list::router` and yields the exact wire bytes.
 //!
 //! Three vectors driven through the real stack against a fresh current-schema
 //! database: the default view (own + workspace-reached agents, in `created_at` order,
@@ -25,7 +25,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::foundation::identity::UserId;
-use silverhand_backend_server::host_agent::agent_list::router;
+use silverhand_backend_server::identity_access::agent_list::router;
 use silverhand_backend_sqlite::identity_access::agent_list_read::SqliteAgentListColdRead;
 use sqlx::{Connection, Executor};
 use tower::ServiceExt;

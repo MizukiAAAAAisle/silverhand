@@ -5,7 +5,7 @@
 //! ## The two-authority ladder — BOTH faces are edit-class
 //!
 //! Both sit behind the authenticated human perimeter and the same two-authority ladder
-//! the sibling management writes ([`crate::host_agent::agent_patch`]) use:
+//! the sibling management writes ([`crate::identity_access::agent_patch`]) use:
 //!
 //!  1. VISIBILITY ([`can_view_agent`], active-only) — absence, a caller outside the ACL,
 //!     and a non-active stage all collapse to ONE `404 {"error":"agent not found"}`, so

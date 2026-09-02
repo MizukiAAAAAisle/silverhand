@@ -20,7 +20,7 @@
 //! shares with the public management faces — the probe request grammar and its one
 //! stateless rule, the probe-outcome projection, the data-plane fault→HTTP mapping,
 //! and the raw-config read body — lives in the single crate-private
-//! [`wire`](crate::host_agent::public_profile_mcp::wire) vocabulary both routers consume;
+//! [`wire`](crate::identity_access::public_profile_mcp::wire) vocabulary both routers consume;
 //! neither re-declares it. It does NOT own the transport: the production
 //! [`AgentProfileMcpDataPlane`] adapter is #2231's, reusing #2224's correlated-RPC
 //! data-plane root, wired at the backend-app #2234 CP7b mount. Deterministic fakes
@@ -50,7 +50,7 @@ use silverhand_backend_core::{
 };
 
 use crate::foundation::wire_admission::ValidatedJson;
-use crate::host_agent::public_profile_mcp::wire::{
+use crate::identity_access::public_profile_mcp::wire::{
     ProbeRequest, ReadConfigResponse, data_plane_error, probe_outcome_wire,
 };
 

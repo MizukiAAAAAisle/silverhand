@@ -4,6 +4,8 @@
 //! compatibility facade at the crate root, while its canonical module and workspace-rename
 //! fan-out live here.
 
+pub mod agent_create;
+pub mod agent_delete;
 pub(crate) mod daemon_delivery;
 pub(crate) mod daemon_materialize_codec;
 pub mod workspace_rename_fanout;

@@ -188,7 +188,8 @@ where
     K: DisconnectClock + 'static,
 {
     let timers = PresenceGraceTimers::new(last_seen_sink, publication, grace);
-    let router = crate::host_agent::presence::router(presence_cold_read, timers.clone());
+    let router =
+        crate::viewer_read_model::user_presence_http::router(presence_cold_read, timers.clone());
     let feed: Arc<dyn ConnectionLifecycle> = Arc::new(PresenceConnectionFeed::new(
         timers.clone(),
         disconnect_clock,

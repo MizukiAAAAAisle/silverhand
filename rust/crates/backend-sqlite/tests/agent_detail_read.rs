@@ -1,6 +1,6 @@
 //! Integration tests for the agent-detail cold-read SQL (#task:2195, batch 3).
 //!
-//! The route-level tests (backend-server/src/host_agent/agent_detail.rs) pin the
+//! The route-level tests (backend-server/src/identity_access/agent_detail.rs) pin the
 //! two-authority ORDER (source-bind, then ACL, then stage widener) against fake
 //! facts; these pin that the adapter's SQL RESOLVES those facts correctly from real
 //! committed rows. Two differentials are exercised:

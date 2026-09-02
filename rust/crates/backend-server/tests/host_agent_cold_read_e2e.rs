@@ -1,6 +1,6 @@
 //! Public composition e2e for GET /api/presence (#task:2195, batch 1).
 //!
-//! Drives the REAL served route — the production `host_agent::presence::router`
+//! Drives the REAL served route — the production `viewer_read_model::user_presence_http::router`
 //! over the SQLite `SqliteUserPresenceColdRead` adapter AND the real
 //! `PresenceGraceTimers` registry as the `OnlineViewers` authority — to prove
 //! properties the driver-free unit tests cannot:
@@ -47,10 +47,10 @@ use silverhand_backend_core::{
     viewer_read_model::user_presence_last_seen::LastSeenSink,
 };
 use silverhand_backend_server::{
-    host_agent::presence::{PRESENCE_PATH, router},
     host_runtime::host_agent_background::presence_grace_timer::{
         PresenceFactSink, PresenceGraceTimers,
     },
+    viewer_read_model::user_presence_http::{PRESENCE_PATH, router},
 };
 use silverhand_backend_sqlite::viewer_read_model::user_presence_cold_read::SqliteUserPresenceColdRead;
 use sqlx::{Connection, Executor, SqliteConnection};

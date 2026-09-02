@@ -9,7 +9,7 @@
 //! show is that those layers WIRE UP end to end: that the real SQLite
 //! `SqliteAgentPresenceColdRead` adapter — its `last_activity_at` and its two
 //! set-shaped ACL arms on one deferred snapshot, its strict decode — feeds the real
-//! `host_agent::agent_presence::router` and yields the exact wire bytes.
+//! `host_runtime::agent_presence::router` and yields the exact wire bytes.
 //!
 //! So this is a single LOAD-BEARING composition proof, not a differential and not a
 //! matrix: two vectors driven through the real stack against a fresh current-schema
@@ -35,7 +35,7 @@ use axum::{
 use serde_json::{Value, json};
 use silverhand_backend_core::{foundation::identity::UserId, host_runtime::agent_presence};
 use silverhand_backend_server::{
-    foundation::clock::SystemProcessClock, host_agent::agent_presence::router,
+    foundation::clock::SystemProcessClock, host_runtime::agent_presence::router,
 };
 use silverhand_backend_sqlite::host_runtime::agent_presence_read::SqliteAgentPresenceColdRead;
 use sqlx::{Connection, Executor};

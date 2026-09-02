@@ -420,7 +420,7 @@ async fn request_with_body(
 // write face onto the frozen `ValidatedJson` admission (#2246 object-only
 // floor), whose native Axum extractor requires the JSON content type and
 // answers `415` without it — the ratified, deliberate wave contract (see
-// `host_agent/agent_patch.rs`: "a missing `Content-Type` is `415`"). These
+// `identity_access/agent_patch.rs`: "a missing `Content-Type` is `415`"). These
 // mount-composition assertions predate the wave and drove those faces with a
 // bodiless / CT-less client, so they must now send the header every real
 // product client already sends. Production routing/composition is unchanged;
@@ -7092,7 +7092,7 @@ async fn the_composition_agent_create_face_drives_the_full_saga_and_post_commit_
     // `create_aftermath.close()`, the SHARED tracker rejects new work — a fresh dispatch is
     // dropped and nothing is spawned. Delete that close line and `closed` stays false → the
     // leg is spawned → `in_flight_len()` is 1 → this assert reddens.
-    silverhand_backend_server::host_agent::agent_create::AftermathDispatch::dispatch(
+    silverhand_backend_server::application_orchestration::agent_create::AftermathDispatch::dispatch(
         &close_probe,
         Box::pin(async {}),
     );
@@ -7763,7 +7763,7 @@ async fn the_composition_serves_agent_list_behind_the_perimeter() {
     // (bearer, but no JSON content type) is no longer method-shadowed (405); it reaches
     // the mounted create handler's frozen `ValidatedJson` admission, which — absent the
     // JSON content type — refuses with the wave's ratified native `415` before the body
-    // runs (see `host_agent/agent_patch.rs`: "a missing `Content-Type` is `415`"). The
+    // runs (see `identity_access/agent_patch.rs`: "a missing `Content-Type` is `415`"). The
     // non-405 refusal is the mount proof; the exact status is the ratified wire contract.
     let (status, body) = request(&router, "POST", path, Some(&bearer)).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{body}");
@@ -9521,9 +9521,9 @@ mod presence_composition {
     };
     use silverhand_backend_server::{
         foundation::scope_event_transport::ConnectionLifecycle,
-        host_agent::presence::{self, PRESENCE_PATH},
         host_runtime::host_agent_background::presence_grace_timer::PresenceFactSink,
         viewer_read_model::presence::PresenceConnectionFeed,
+        viewer_read_model::user_presence_http::{self, PRESENCE_PATH},
     };
 
     use super::*;
@@ -9733,7 +9733,7 @@ mod presence_composition {
         );
         let feed = PresenceConnectionFeed::new(shared.clone(), SystemDisconnectClock);
         feed.on_connect(&viewer, "conn-1");
-        let shared_router = presence::router(cold.clone(), shared);
+        let shared_router = user_presence_http::router(cold.clone(), shared);
         assert_eq!(presence_of(&shared_router, &viewer).await, "online");
 
         // Counterexample: TWO separate `new()`. The feed marks online in registry A;
@@ -9750,7 +9750,7 @@ mod presence_composition {
         );
         let split_feed = PresenceConnectionFeed::new(feed_registry, SystemDisconnectClock);
         split_feed.on_connect(&viewer, "conn-1");
-        let split_router = presence::router(cold, route_registry);
+        let split_router = user_presence_http::router(cold, route_registry);
         assert_eq!(presence_of(&split_router, &viewer).await, "offline");
     }
 }

@@ -9,7 +9,7 @@
 //! status AND body — the wire response must equal. The value is produced by the
 //! REAL production stack: the SQLite `SqliteAgentAvailabilityColdRead` adapter
 //! (its three ACL arms on one deferred snapshot, its strict decode) driven through
-//! the real `host_agent::availability::router`, so the actual wire projector — the
+//! the real `host_runtime::availability::router`, so the actual wire projector — the
 //! ACL-first two-authority order, the `{"availability": ...}` success body, and the
 //! one anti-enumeration `404 {"error":"agent not found"}` an absent row, a refused
 //! viewer, and a hidden stage all collapse to — is what gets compared.
@@ -34,7 +34,7 @@ use silverhand_backend_core::{
     foundation::persistence::PersistenceFailure,
     host_runtime::availability::HostAttachmentFacts,
 };
-use silverhand_backend_server::host_agent::{
+use silverhand_backend_server::host_runtime::{
     availability::router, host_attachment::HostAttachment,
 };
 use silverhand_backend_sqlite::host_runtime::agent_availability_read::SqliteAgentAvailabilityColdRead;

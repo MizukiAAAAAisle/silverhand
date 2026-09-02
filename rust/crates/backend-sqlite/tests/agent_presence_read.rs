@@ -1,6 +1,6 @@
 //! Integration tests for the agent-presence cold-read SQL (#task:2195, batch 4).
 //!
-//! The route-level tests (backend-server/src/host_agent/agent_presence.rs) and the
+//! The route-level tests (backend-server/src/host_runtime/agent_presence.rs) and the
 //! composed contract (backend-server/tests/agent_presence_contract.rs) pin the ACL
 //! ladder and the wire projection against real rows. These pin the ONE thing neither
 //! covers: that the adapter STRICT-DECODES the stored `last_activity_at` BEFORE it

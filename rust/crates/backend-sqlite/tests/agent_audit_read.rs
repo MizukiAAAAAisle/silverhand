@@ -1,6 +1,6 @@
 //! Real-adapter falsifiers for the owner-audit read model (#task:2254).
 //!
-//! The route-level tests (backend-server `host_agent/agent_audit/tests.rs`) pin the
+//! The route-level tests (backend-server `identity_access/agent_audit/tests.rs`) pin the
 //! two-stage ladder against fake facts; these pin the two properties that only the
 //! adapter's own transaction can carry, both flagged in Cindy's NON-PASS:
 //!

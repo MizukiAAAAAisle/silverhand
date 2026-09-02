@@ -149,7 +149,7 @@ pub(crate) enum ReprojectFault {
 
 impl ReprojectFault {
     /// Log at the boundary under the calling `operation`'s label and collapse to the
-    /// canonical safe `500` — byte-identical to every `host_agent` face's
+    /// canonical safe `500` — byte-identical to every public-agent face's
     /// `internal_error()` (`Internal Server Error`).
     pub(crate) fn into_safe_500(self, operation: &'static str, agent: &AgentId) -> Response {
         match self {

@@ -19,7 +19,7 @@
 //! into a [`PresenceSnapshot`] and merged by the driver-free [`read_user_presence`].
 //! The two must observe ONE fact — the `OnlineViewers` must be the registry the
 //! `user_presence` event publishes from — an obligation on the composition (see
-//! [`crate::host_agent::online_viewers`]), not enforced here.
+//! [`crate::viewer_read_model::online_viewers`]), not enforced here.
 
 use axum::{
     Json, Router,

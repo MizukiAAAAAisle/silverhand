@@ -110,7 +110,7 @@ pub struct HubAgentAvailabilityAnnouncer<H, V> {
 /// resolver/composition defect, not a product outcome. Retained as this agent's
 /// production failure so a spliced ACL can never fan one agent's availability out
 /// to another agent's viewers. Mirrors the availability route's source==request
-/// bind ([`crate::host_agent::availability`]).
+/// bind ([`crate::host_runtime::availability`]).
 #[derive(Debug)]
 struct AgentAvailabilityAudienceMismatch {
     requested: String,
@@ -180,7 +180,7 @@ where
 ///
 /// Resolves the agent's viewer audience from the committed view ACL, BINDS the
 /// resolved facts to the requested agent BEFORE reading its audience — the same
-/// source==request bind the availability route makes ([`crate::host_agent::availability`]).
+/// source==request bind the availability route makes ([`crate::host_runtime::availability`]).
 /// A view whose decoded source is a DIFFERENT agent is a resolver/splice defect:
 /// its ACL would send THIS agent's `agent_id` payload to some OTHER agent's viewers
 /// (leak + misdelivery) while missing this agent's true audience — fail closed

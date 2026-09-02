@@ -7,7 +7,7 @@
 //! `online.json` naming the present viewers, and one `expected.json` the wire body
 //! must equal. Here the value is produced by the REAL production stack — the SQLite
 //! `SqliteUserPresenceColdRead` adapter, sealed into a `PresenceSnapshot`, driven
-//! through the real `host_agent::presence::router` so the actual wire projector
+//! through the real `viewer_read_model::user_presence_http::router` so the actual wire projector
 //! (snake_case, the lowercase closed enum, the online arm's suppressed `null`, the
 //! `(created_at, id)` order) is what gets compared.
 //!
@@ -30,7 +30,7 @@ use serde_json::Value;
 use silverhand_backend_core::{
     foundation::identity::UserId, viewer_read_model::presence::OnlineViewers,
 };
-use silverhand_backend_server::host_agent::presence::{PRESENCE_PATH, router};
+use silverhand_backend_server::viewer_read_model::user_presence_http::{PRESENCE_PATH, router};
 use silverhand_backend_sqlite::viewer_read_model::user_presence_cold_read::SqliteUserPresenceColdRead;
 use sqlx::{Connection, Executor};
 use tower::ServiceExt;

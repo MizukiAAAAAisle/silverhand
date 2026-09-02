@@ -1,7 +1,7 @@
 //! Integration tests for the availability cold-read SQL (#task:2195, batch 2).
 //!
 //! The route-level tests
-//! (backend-server/src/host_agent/availability.rs) pin the two-authority ORDER
+//! (backend-server/src/host_runtime/availability.rs) pin the two-authority ORDER
 //! against fake facts; these pin that the adapter's SQL RESOLVES those facts
 //! correctly from real committed rows. The differential each case turns on is the
 //! set of viewers the three ACL arms union — drop or mis-gate one arm and a viewer

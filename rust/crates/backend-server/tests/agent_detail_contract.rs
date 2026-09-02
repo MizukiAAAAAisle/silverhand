@@ -8,7 +8,7 @@
 //! model. What no unit test can show is that those layers WIRE UP end to end: that
 //! the real SQLite `SqliteAgentDetailColdRead` adapter — its agent row and host
 //! `LEFT JOIN` plus its two set-shaped ACL arms on one deferred snapshot, its strict
-//! decode — feeds the real `host_agent::agent_detail::router` and yields the exact
+//! decode — feeds the real `identity_access::agent_detail::router` and yields the exact
 //! wire bytes.
 //!
 //! So this is a single LOAD-BEARING composition proof, not a differential and not a
@@ -30,7 +30,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use silverhand_backend_core::foundation::identity::UserId;
-use silverhand_backend_server::host_agent::agent_detail::router;
+use silverhand_backend_server::identity_access::agent_detail::router;
 use silverhand_backend_sqlite::identity_access::agent_detail_read::SqliteAgentDetailColdRead;
 use sqlx::{Connection, Executor};
 use tower::ServiceExt;

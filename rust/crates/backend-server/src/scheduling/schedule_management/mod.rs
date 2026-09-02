@@ -1,5 +1,4 @@
-//! Schedule-management routes — a submodule of the public-agent management
-//! plane (`host_agent`). Two faces over an agent's own schedules:
+//! Schedule-management routes — the C5 HTTP boundary over an agent's own schedules:
 //!
 //!  - `GET  /api/agents/{id}/schedules` — the owner's schedule list;
 //!  - `POST /api/agents/{id}/schedules/{scheduleId}/cancel` — owner cancel.

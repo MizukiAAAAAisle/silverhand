@@ -26,7 +26,13 @@ use silverhand_backend_core::{
 use crate::foundation::error;
 use crate::foundation::wire_admission::ValidatedJson;
 
+pub mod agent_clear_session;
 pub mod agent_materialize;
+pub mod agent_presence;
+pub mod agent_runtime_state;
+pub mod agent_runtime_switch;
+pub mod agent_stop;
+pub mod availability;
 pub mod cascade_effects;
 pub mod claim;
 pub(crate) mod daemon_runtime_codecs;
@@ -35,6 +41,7 @@ pub(crate) mod daemon_runtime_transport;
 pub mod delete;
 pub mod detail;
 pub mod host_agent_background;
+pub mod host_attachment;
 pub mod host_control;
 pub mod host_resources;
 pub(crate) mod host_wire;
