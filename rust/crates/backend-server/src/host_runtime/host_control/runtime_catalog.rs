@@ -23,8 +23,8 @@ use serde_json::{Value, json};
 use silverhand_backend_core::identity_access::agents::runtime::RuntimeKind;
 
 #[cfg(test)]
-use crate::daemon_delivery::{CommandRefusal, DaemonRefusalCode};
-use crate::daemon_delivery::{
+use crate::application_orchestration::daemon_delivery::{CommandRefusal, DaemonRefusalCode};
+use crate::application_orchestration::daemon_delivery::{
     HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest, OwningHostDataPlane, command,
 };
 
@@ -64,7 +64,7 @@ pub enum RuntimeCatalogOutcome {
 /// machines spell their daemon instance identically.
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::daemon_delivery::HostDataPlaneCustody;
+/// use silverhand_backend_server::application_orchestration::daemon_delivery::HostDataPlaneCustody;
 /// use silverhand_backend_server::host_runtime::host_control::runtime_catalog::RuntimeCatalog;
 ///
 /// fn forge(custody: HostDataPlaneCustody) -> RuntimeCatalog {
@@ -77,7 +77,7 @@ pub enum RuntimeCatalogOutcome {
 /// ```
 ///
 /// ```
-/// use silverhand_backend_server::daemon_delivery::HostDataPlaneCustody;
+/// use silverhand_backend_server::application_orchestration::daemon_delivery::HostDataPlaneCustody;
 /// use silverhand_backend_server::host_runtime::host_control::runtime_catalog::{
 ///     CatalogCoordinateMismatch, CatalogView, RuntimeCatalog,
 /// };

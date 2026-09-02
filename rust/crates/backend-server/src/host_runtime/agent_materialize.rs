@@ -6,11 +6,11 @@ use silverhand_backend_core::host_runtime::agent_materialize::{
     AgentMaterializePort, AgentMaterializeReceipt, AgentMaterializeRefusal, AgentMaterializeTarget,
 };
 
-use crate::application_orchestration::daemon_materialize_codec as agent_materialize_codec;
-use crate::daemon_delivery::{
+use crate::application_orchestration::daemon_delivery::{
     CommandRefusal, DaemonRefusalCode, HostDataPlaneAnswerMismatch, HostDataPlaneFailure,
     HostDataPlaneRequest, OwningHostDataPlane, command,
 };
+use crate::application_orchestration::daemon_materialize_codec as agent_materialize_codec;
 
 pub(crate) const AGENT_MATERIALIZE_CAPABILITY_CODES: [&str; 6] = [
     "agent_deleting",
@@ -55,7 +55,7 @@ pub struct ProductionAgentMaterialize {
     timeout: Duration,
 }
 
-impl<C, D, H> crate::daemon_delivery::DaemonDeliveryRuntime<C, D, H> {
+impl<C, D, H> crate::application_orchestration::daemon_delivery::DaemonDeliveryRuntime<C, D, H> {
     pub fn agent_materialize(&self) -> ProductionAgentMaterialize {
         ProductionAgentMaterialize::new(self.owning_host_data_plane(), self.command_timeout())
     }
@@ -101,7 +101,7 @@ impl Error for AgentMaterializeFailure {}
 
 impl AgentMaterializePort for ProductionAgentMaterialize {
     type Error = AgentMaterializeFailure;
-    type Captured = crate::daemon_delivery::HostDataPlaneCustody;
+    type Captured = crate::application_orchestration::daemon_delivery::HostDataPlaneCustody;
 
     async fn capture(
         &self,
@@ -136,7 +136,7 @@ impl AgentMaterializePort for ProductionAgentMaterialize {
 
 pub(crate) async fn materialize_captured(
     data_plane: &OwningHostDataPlane,
-    custody: crate::daemon_delivery::HostDataPlaneCustody,
+    custody: crate::application_orchestration::daemon_delivery::HostDataPlaneCustody,
     params: serde_json::Value,
     timeout: Duration,
 ) -> Result<Result<AgentMaterializeReceipt, AgentMaterializeRefusal>, AgentMaterializeFailure> {

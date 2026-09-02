@@ -10,8 +10,8 @@ use silverhand_backend_core::{
     foundation::identity::AgentId,
 };
 use silverhand_backend_server::{
+    application_orchestration::daemon_delivery::{HOST_WEBSOCKET_PATH, OUTBOUND_PROTOCOL_VERSION},
     conversation_messaging::messaging::MESSAGE_SEND_MAX_BODY_BYTES,
-    daemon_delivery::{HOST_WEBSOCKET_PATH, OUTBOUND_PROTOCOL_VERSION},
     foundation::scope_event_transport::{
         DESKTOP_API_EPOCH_HEADER, EVENT_WEBSOCKET_PATH, EVENT_WS_SESSION_COOKIE,
         MINIMUM_CLIENT_API_EPOCH,

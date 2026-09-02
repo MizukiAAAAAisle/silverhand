@@ -287,20 +287,13 @@ fn module_exists_in(base: &Path, module: &str) -> bool {
 /// Where a settled row's module physically resides. Landed iff it sits at its
 /// `physical_target` under the owner namespace; residual iff it still sits at the crate
 /// root. EXACTLY ONE must be true — both present is an un-cleaned coexistence, neither is a
-/// missing module — either fails the gate. The named exceptions are the explicitly accepted
-/// **root compatibility facades** (a `migration.compatibility_facade: "crate::module"` full
-/// path in the map — exactly the five #2269 re-export shims: `daemon_delivery`,
-/// `agent_materialize`, `agent_profile_mcp_data_plane`, `runtime_control`,
-/// `scope_runtime_stop`): the real home is the `physical_target` and a thin re-export file is
-/// permitted to remain at the crate root, so at_root + at_target coexist legitimately and the
-/// row is landed at its target. Returns `(is_landed, base_dir, leaf)`, where `base_dir` is the
-/// directory the module sits in and `leaf` its final segment.
+/// missing module — either fails the gate. There are no compatibility-path exceptions:
+/// a settled unit has one physical source path. Returns `(is_landed, base_dir, leaf)`, where
+/// `base_dir` is the directory the module sits in and `leaf` its final segment.
 fn resolve_settled_location(
-    crate_name: &str,
     crate_src: &Path,
     module: &str,
     physical_target: &str,
-    compatibility_facade: Option<&str>,
 ) -> (bool, PathBuf, String) {
     // physical_target is `crate::[namespace::]leaf`; segments after the crate name are the
     // module path under `src/`. A self-named context root (`crate::module`) has no extra
@@ -328,33 +321,6 @@ fn resolve_settled_location(
         return (true, crate_src.to_path_buf(), leaf);
     }
     let at_target = module_exists_in(&target_base, &leaf);
-    if let Some(facade) = compatibility_facade {
-        // A named, map-declared root compatibility facade (#task:2269). All three must hold:
-        //   (a) the facade path is EXACTLY this row's original root path `crate::module`;
-        //   (b) the physical_target is a DIFFERENT full path (the real home moved);
-        //   (c) both the root facade AND the target module physically exist.
-        // The row is landed at its target; the root shim is a NAMED residual, not a second
-        // business unit (its thin re-export nature is proven by
-        // `root_compatibility_facades_are_thin_re_exports`). This is the ONLY relaxation of
-        // at_root XOR at_target; every other row keeps the strict coexistence check.
-        assert_eq!(
-            facade,
-            format!("{crate_name}::{module}"),
-            "{module}: compatibility_facade must be this row's original root path \
-             `{crate_name}::{module}`"
-        );
-        assert_ne!(
-            facade, physical_target,
-            "{module}: compatibility_facade must differ from the physical_target — a facade \
-             marks a REAL relocation, not a module left in place"
-        );
-        assert!(
-            at_root && at_target,
-            "{module}: a compatibility_facade requires BOTH the root shim `{facade}` and the \
-             real module at `{physical_target}` to exist (at_root={at_root} at_target={at_target})"
-        );
-        return (true, target_base, leaf);
-    }
     assert!(
         at_root ^ at_target,
         "{module}: a settled module must reside at EXACTLY one of its crate root \
@@ -367,17 +333,6 @@ fn resolve_settled_location(
     } else {
         (false, crate_src.to_path_buf(), module.to_owned())
     }
-}
-
-/// The explicitly-declared root compatibility facade path of a crate_roots row, if any:
-/// `migration.compatibility_facade` is the FULL original root path (`crate::module`) whose
-/// thin re-export shim is kept at the crate root while the real module lives at the row's
-/// (different) `physical_target`. Read as structured data — never parsed from prose `note`.
-fn compatibility_facade_path(row: &Value) -> Option<String> {
-    row.get("migration")
-        .and_then(|m| m.get("compatibility_facade"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
 }
 
 /// The map's target namespaces (owner → namespace), as a `(crate-agnostic)` set of
@@ -438,13 +393,7 @@ fn namespace_role(
         if let Some(leaf) = pt.strip_prefix(&expected_prefix)
             && !leaf.contains("::")
         {
-            let (is_landed, _base, resolved_leaf) = resolve_settled_location(
-                crate_name,
-                crate_src,
-                module,
-                pt,
-                compatibility_facade_path(r).as_deref(),
-            );
+            let (is_landed, _base, resolved_leaf) = resolve_settled_location(crate_src, module, pt);
             if is_landed {
                 landed_leaves.insert(resolved_leaf);
             }
@@ -538,23 +487,6 @@ fn scanned_crate_roots() -> HashMap<(String, String), bool> {
     let root = rust_root();
     let map = load_map();
     let namespaces = target_namespaces(&map);
-    // Root compatibility facades (#task:2269): a `pub mod <m>;` at the crate root that is a
-    // thin re-export shim for a module whose real home is its physical_target. Its business
-    // identity is the LANDED target (emitted via the namespace descent), so the top-level
-    // facade declaration must NOT also be keyed as a separate residual root. Keyed
-    // `(crate, module)` from the map, the single authority.
-    let facades: BTreeSet<(String, String)> = map["crate_roots"]
-        .as_array()
-        .expect("crate_roots array")
-        .iter()
-        .filter(|r| compatibility_facade_path(r).is_some())
-        .map(|r| {
-            (
-                as_str(r, "crate").to_owned(),
-                as_str(r, "module").to_owned(),
-            )
-        })
-        .collect();
     let mut universe = HashMap::new();
     for krate in workspace_crates() {
         let crate_src = root.join("crates").join(&krate).join("src");
@@ -563,11 +495,6 @@ fn scanned_crate_roots() -> HashMap<(String, String), bool> {
             continue; // a non-library crate (e.g. a binary-only member) has no lib.rs
         }
         for (module, cfg_test) in module_declarations(&read(&lib)) {
-            if facades.contains(&(krate.clone(), module.clone())) {
-                // The facade's identity is its landed target, contributed by the namespace
-                // descent; do not double-key the root shim as a residual root.
-                continue;
-            }
             let is_namespace_dir = namespaces.contains(&module) && crate_src.join(&module).is_dir();
             if !is_namespace_dir {
                 let prior = universe.insert((krate.clone(), module.clone()), cfg_test);
@@ -634,13 +561,7 @@ fn row_universe_key(crate_src: &Path, row: &Value) -> (String, String) {
         .unwrap_or(false);
     if !cfg_test && row.get("target").is_some() {
         let pt = as_str(&row["migration"], "physical_target");
-        let (is_landed, _base, _leaf) = resolve_settled_location(
-            &krate,
-            crate_src,
-            module,
-            pt,
-            compatibility_facade_path(row).as_deref(),
-        );
+        let (is_landed, _base, _leaf) = resolve_settled_location(crate_src, module, pt);
         if is_landed && pt.split("::").count() >= 3 {
             // `crate::namespace::leaf` → universe key `namespace::leaf`.
             let tail = pt.split_once("::").unwrap().1.to_owned();
@@ -802,13 +723,7 @@ fn every_row_is_a_strict_target_xor_split_union() {
         if !cfg_test {
             let (shape_base, shape_leaf) = if has_target {
                 let pt = as_str(&row["migration"], "physical_target");
-                let (_landed, base, leaf) = resolve_settled_location(
-                    krate,
-                    &crate_src,
-                    module,
-                    pt,
-                    compatibility_facade_path(row).as_deref(),
-                );
+                let (_landed, base, leaf) = resolve_settled_location(&crate_src, module, pt);
                 (base, leaf)
             } else {
                 (crate_src.clone(), module.to_owned())
@@ -1251,13 +1166,7 @@ fn mechanically_landed(map: &Value) -> BTreeSet<(String, String)> {
             let module = as_str(r, "module");
             let crate_src = root.join("crates").join(crate_name).join("src");
             let pt = as_str(&r["migration"], "physical_target");
-            let (is_landed, _base, _leaf) = resolve_settled_location(
-                crate_name,
-                &crate_src,
-                module,
-                pt,
-                compatibility_facade_path(r).as_deref(),
-            );
+            let (is_landed, _base, _leaf) = resolve_settled_location(&crate_src, module, pt);
             if is_landed {
                 let key = row_universe_key(&crate_src, r);
                 landed.insert(key);
@@ -2459,120 +2368,43 @@ fn resolved_sqlite_host_agent_split_is_exact_and_keeps_one_store_authority() {
 }
 
 #[test]
-fn root_compatibility_facades_are_named_accepted_residuals_not_second_business_units() {
-    // #task:2273 (Cindy point 5): a root compatibility facade must be REPORTED, not swallowed.
-    // Each facade row is landed at its physical_target (its one business identity) AND its
-    // root shim is an ACCEPTED compatibility residual — a named leftover, never a second
-    // business unit. Prove both halves against the real tree:
-    //   - the row's landed identity is its physical_target (a different full path), so
-    //     mechanically_landed carries the target, NOT the root name; and
-    //   - the root shim is separately enumerable as a named accepted residual (the CP
-    //     coverage tracks it as an owning root, added explicitly, not folded away).
+fn root_compatibility_facades_are_forbidden() {
+    // #task:2327: the five #2269 shims were migration scaffolding, not public compatibility
+    // contracts. The terminal model has one canonical source path per business unit, so the
+    // map may not reopen a compatibility field and none of the former root files/declarations
+    // may return.
     let map = load_map();
-    let root = rust_root();
-    let landed = mechanically_landed(&map);
-    let mut facades: Vec<(String, String, String)> = Vec::new();
     for r in map["crate_roots"].as_array().expect("crate_roots array") {
-        let Some(facade) = compatibility_facade_path(r) else {
-            continue;
-        };
-        let crate_name = as_str(r, "crate").to_owned();
-        let module = as_str(r, "module").to_owned();
-        let pt = as_str(&r["migration"], "physical_target").to_owned();
-        let crate_src = root.join("crates").join(&crate_name).join("src");
-        // Landed identity is the TARGET, keyed as ns::leaf — never the bare root name.
-        let key = row_universe_key(&crate_src, r);
         assert!(
-            landed.contains(&key),
-            "{crate_name}::{module}: facade must be landed at its target identity {key:?}"
+            r.get("migration")
+                .and_then(|migration| migration.get("compatibility_facade"))
+                .is_none(),
+            "{}::{} reintroduced a forbidden compatibility_facade",
+            as_str(r, "crate"),
+            as_str(r, "module")
         );
-        assert_ne!(
-            key,
-            (crate_name.clone(), module.clone()),
-            "{crate_name}::{module}: a facade's landed identity is its target, not its root name — \
-             the root shim must not be counted as a second business unit"
-        );
-        assert_eq!(
-            facade,
-            format!("{crate_name}::{module}"),
-            "facade path names the original root shim"
-        );
-        assert_ne!(
-            facade, pt,
-            "facade path differs from the landed physical_target"
-        );
-        facades.push((crate_name, module, pt));
     }
-    // The named accepted residual set is EXACTLY the five #2269 daemon root shims — not
-    // merely "some row carries the field". #2269's Summary called this a single compatibility
-    // residual; the integration authority map corrects that to these five named residuals
-    // (#task:2273). Pinning the exact set means a sixth silent facade, or dropping one,
-    // fails here.
-    let actual: BTreeSet<(String, String)> = facades
-        .iter()
-        .map(|(c, m, _)| (c.clone(), m.clone()))
+    let server_src = rust_root().join("crates/backend-server/src");
+    let declarations: BTreeSet<String> = module_declarations(&read(&server_src.join("lib.rs")))
+        .into_iter()
+        .map(|(module, _)| module)
         .collect();
-    let expected: BTreeSet<(String, String)> = [
-        ("backend-server", "daemon_delivery"),
-        ("backend-server", "agent_materialize"),
-        ("backend-server", "agent_profile_mcp_data_plane"),
-        ("backend-server", "runtime_control"),
-        ("backend-server", "scope_runtime_stop"),
-    ]
-    .into_iter()
-    .map(|(c, m)| (c.to_owned(), m.to_owned()))
-    .collect();
-    assert_eq!(
-        actual,
-        expected,
-        "root compatibility facade set drifted from the five accepted #2269 daemon shims: \
-         unexpected={:?} missing={:?}",
-        &actual - &expected,
-        &expected - &actual
-    );
-}
-
-#[test]
-fn root_compatibility_facades_are_thin_re_exports() {
-    // The exactly five accepted exceptions to at_root XOR at_target (#task:2269: the
-    // daemon_delivery / agent_materialize / agent_profile_mcp_data_plane / runtime_control /
-    // scope_runtime_stop re-export shims) are each a thin re-export shim kept at the crate
-    // root while the real module lives at its physical_target. Keep that exception honest: a
-    // facade's ROOT file must carry only module docs and `use`/`pub use` re-exports — no
-    // production item (fn / struct / enum / impl / trait / const / static / inline mod). A
-    // real second implementation smuggled back to the root would fail here, so the
-    // coexistence allowance cannot hide a fork.
-    let map = load_map();
-    let root = rust_root();
-    let mut facades = 0usize;
-    for r in map["crate_roots"].as_array().expect("crate_roots array") {
-        if compatibility_facade_path(r).is_none() {
-            continue;
-        }
-        facades += 1;
-        let crate_name = as_str(r, "crate");
-        let module = as_str(r, "module");
-        let crate_src = root.join("crates").join(crate_name).join("src");
-        // A facade is a flat root file `<module>.rs` (a re-export shim never grows a dir).
-        let file = crate_src.join(format!("{module}.rs"));
+    for module in [
+        "agent_materialize",
+        "agent_profile_mcp_data_plane",
+        "daemon_delivery",
+        "runtime_control",
+        "scope_runtime_stop",
+    ] {
         assert!(
-            file.exists(),
-            "{crate_name}::{module}: a compatibility_facade must be a flat root file"
+            !module_exists_in(&server_src, module),
+            "backend-server::{module}: old root facade source returned"
         );
-        let parsed = syn::parse_file(&read(&file)).expect("a parseable facade file");
-        for item in &parsed.items {
-            assert!(
-                matches!(item, syn::Item::Use(_)),
-                "{crate_name}::{module}: a root compatibility facade may only re-export \
-                 (`use` / `pub use`); found a production item — the real module belongs at \
-                 its physical_target, not the root shim"
-            );
-        }
+        assert!(
+            !declarations.contains(module),
+            "backend-server::{module}: old root facade declaration returned"
+        );
     }
-    assert_eq!(
-        facades, 5,
-        "expected exactly the five #2269 daemon root compatibility facades, found {facades}"
-    );
 }
 
 #[test]
@@ -2633,21 +2465,7 @@ fn cp_inventories_are_a_root_coverage_compatibility_check_only() {
     // (its root namespace); everything else is a crate-root module already. A self-named
     // context's own `(crate, ns)` entry projects to itself, so it and its landed leaves fold
     // into the SAME single owning-root entry — the scaffold sees one seam root, not leaves.
-    let mut scanned_root_owners = project_to_root_owners(scanned_roots(), &namespaces);
-    // A root compatibility facade (#task:2269) is landed at its physical_target, so the
-    // scanned universe carries only the landed identity — but the thin re-export shim still
-    // physically occupies the crate root, and the CP inventories legitimately track it there
-    // (an ACCEPTED compatibility residual, not a second business unit). Add each facade's
-    // root name back to the projected owners so CP coverage stays exact without the scanner
-    // re-counting the shim as a residual business root.
-    for r in map["crate_roots"].as_array().expect("crate_roots array") {
-        if compatibility_facade_path(r).is_some() {
-            scanned_root_owners.insert((
-                as_str(r, "crate").to_owned(),
-                as_str(r, "module").to_owned(),
-            ));
-        }
-    }
+    let scanned_root_owners = project_to_root_owners(scanned_roots(), &namespaces);
     assert_eq!(
         cp_all,
         scanned_root_owners,

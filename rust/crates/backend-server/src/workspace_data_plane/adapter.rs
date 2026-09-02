@@ -19,7 +19,7 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::daemon_delivery::{
+use crate::application_orchestration::daemon_delivery::{
     CommandRefusal, HostDataPlaneAnswerMismatch, HostDataPlaneCustody, HostDataPlaneFailure,
     HostDataPlaneRequest, OwningHostDataPlane, command,
 };
@@ -69,7 +69,7 @@ pub struct ProductionWorkspaceDataPlane {
     timeout: Duration,
 }
 
-impl<C, D, H> crate::daemon_delivery::DaemonDeliveryRuntime<C, D, H> {
+impl<C, D, H> crate::application_orchestration::daemon_delivery::DaemonDeliveryRuntime<C, D, H> {
     pub fn workspace_data_plane(&self) -> ProductionWorkspaceDataPlane {
         ProductionWorkspaceDataPlane::new(self.owning_host_data_plane())
     }
@@ -214,7 +214,7 @@ fn fault(code: WorkspaceFsFaultCode) -> WorkspaceFsFault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon_delivery::DaemonRefusalCode;
+    use crate::application_orchestration::daemon_delivery::DaemonRefusalCode;
 
     #[test]
     fn every_transport_and_refusal_arm_maps_into_the_closed_product_taxonomy() {

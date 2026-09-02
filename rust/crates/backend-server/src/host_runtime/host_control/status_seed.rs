@@ -423,7 +423,7 @@ enum Admission {
 /// ```
 /// use silverhand_backend_core::foundation::identity::HostId;
 /// use silverhand_backend_server::{
-///     daemon_delivery::DaemonDeliveryController,
+///     application_orchestration::daemon_delivery::DaemonDeliveryController,
 ///     host_runtime::host_control::status_seed::{HostStatusSeeds, SeedFailure, SeedRead},
 /// };
 ///

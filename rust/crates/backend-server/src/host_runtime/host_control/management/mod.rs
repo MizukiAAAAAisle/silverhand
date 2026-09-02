@@ -21,7 +21,9 @@ use silverhand_backend_core::host_runtime::{
 };
 
 use crate::{
-    daemon_delivery::{DaemonConnectionControlHandle, OwningHostDataPlane},
+    application_orchestration::daemon_delivery::{
+        DaemonConnectionControlHandle, OwningHostDataPlane,
+    },
     foundation::clock::ProcessClock,
     host_runtime::host_control::{admission::HostAdmission, status_seed::HostStatusSeeds},
 };

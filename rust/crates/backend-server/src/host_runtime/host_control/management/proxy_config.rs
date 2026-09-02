@@ -14,7 +14,7 @@ use silverhand_backend_core::{
 };
 
 use crate::{
-    daemon_delivery::OwningHostDataPlane,
+    application_orchestration::daemon_delivery::OwningHostDataPlane,
     foundation::error,
     foundation::wire_admission::from_object_slice,
     foundation::wire_patch::PatchField,
@@ -151,7 +151,8 @@ impl IntoResponse for AdmitRefusal {
 fn resolve<R>(
     state: &ProxyState<R>,
     host: &HostId,
-) -> Result<crate::daemon_delivery::HostDataPlaneCustody, ResolveRefusal> {
+) -> Result<crate::application_orchestration::daemon_delivery::HostDataPlaneCustody, ResolveRefusal>
+{
     match state.data_plane.resolve(host) {
         Ok(Some(custody)) => Ok(custody),
         Ok(None) => Err(ResolveRefusal::Offline),

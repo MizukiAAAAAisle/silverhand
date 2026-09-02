@@ -99,7 +99,7 @@ impl<C, D, H> DaemonDeliveryRuntime<C, D, H> {
 
     pub(crate) fn clear_session_waiters(
         &self,
-    ) -> crate::runtime_control::RuntimeClearSessionWaiters {
+    ) -> crate::host_runtime::runtime_control::RuntimeClearSessionWaiters {
         self.runtime.clear_session_waiters()
     }
 

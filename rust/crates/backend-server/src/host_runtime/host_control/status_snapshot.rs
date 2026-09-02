@@ -34,8 +34,8 @@ use serde_json::{Value, json};
 use silverhand_backend_core::foundation::identity::{AgentId, DaemonInstanceId, HostId};
 
 #[cfg(test)]
-use crate::daemon_delivery::{CommandRefusal, DaemonRefusalCode};
-use crate::daemon_delivery::{
+use crate::application_orchestration::daemon_delivery::{CommandRefusal, DaemonRefusalCode};
+use crate::application_orchestration::daemon_delivery::{
     HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest, OwningHostDataPlane, command,
 };
 

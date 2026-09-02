@@ -41,6 +41,7 @@ use crate::{
     host_runtime::daemon_runtime_transport::{
         DeliveryTransport, DeliveryTransportError, StartTransport, StopTransport,
     },
+    host_runtime::runtime_control::RuntimeClearSessionWaiters,
     host_runtime::runtime_credential::{
         RuntimeCredentialAuthority, RuntimeStartFailure, RuntimeStopTransport,
     },
@@ -51,7 +52,6 @@ use crate::{
     },
     host_runtime::runtime_status_publisher::HubRuntimeStatusPublisher,
     host_runtime::scope_event_publishers::HubAgentPresenceChangedEdge,
-    runtime_control::RuntimeClearSessionWaiters,
     viewer_read_model::agent_presence_publisher::AgentPresencePublisher,
 };
 

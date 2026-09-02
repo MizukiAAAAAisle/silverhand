@@ -1016,7 +1016,7 @@ impl Error for HostDataPlaneFailure {}
 /// raw round trip remains crate-private so route schemas stay in typed adapters.
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::daemon_delivery::{HostDataPlaneRequest, HostDataPlaneCommandKind};
+/// use silverhand_backend_server::application_orchestration::daemon_delivery::{HostDataPlaneRequest, HostDataPlaneCommandKind};
 ///
 /// fn forge() -> HostDataPlaneRequest {
 ///     HostDataPlaneRequest {
@@ -1030,7 +1030,7 @@ impl Error for HostDataPlaneFailure {}
 /// ```
 ///
 /// ```compile_fail
-/// use silverhand_backend_server::daemon_delivery::OwningHostDataPlane;
+/// use silverhand_backend_server::application_orchestration::daemon_delivery::OwningHostDataPlane;
 ///
 /// // Names no crate-private type, so nothing here fails for a naming reason. The
 /// // round trip stays unreachable while ANY part of it — the parameter, the answer,
@@ -1044,7 +1044,9 @@ impl Error for HostDataPlaneFailure {}
 /// ```
 /// use silverhand_backend_core::foundation::identity::HostId;
 /// use silverhand_backend_server::{
-///     daemon_delivery::{DaemonDeliveryController, OwningHostDataPlane},
+///     application_orchestration::daemon_delivery::{
+///         DaemonDeliveryController, OwningHostDataPlane,
+///     },
 ///     host_runtime::host_control::runtime_catalog::{
 ///         self, RuntimeCatalogOutcome, RuntimeCatalogRequest,
 ///     },
@@ -1951,12 +1953,12 @@ mod tests {
             status_seed::DaemonCustody, status_snapshot::StatusSnapshotOutcome,
         },
         host_runtime::runtime_credential::RuntimeCredentialAuthority,
+        host_runtime::scope_runtime_stop::ProductionScopeRuntimeStop,
         host_runtime::{
             cascade_effects::{DaemonCascadeEffects, DaemonHostConnections},
             daemon_runtime_codecs::runtime_start as runtime_start_codec,
             rotate_token::{parse_rotation_ack, rotation_params},
         },
-        scope_runtime_stop::ProductionScopeRuntimeStop,
     };
 
     use super::*;
@@ -2180,7 +2182,7 @@ mod tests {
         };
 
         use crate::host_runtime::daemon_runtime_codecs::runtime_stop::RuntimeStopCommand;
-        use crate::scope_runtime_stop::{
+        use crate::host_runtime::scope_runtime_stop::{
             ProductionScopeRuntimeStop, ScopeRuntimeStopFailure, stop_captured,
         };
 
@@ -2881,8 +2883,10 @@ mod tests {
         use tower::ServiceExt;
 
         use crate::{
+            application_orchestration::daemon_delivery::{
+                DaemonDeliveryConfig, DaemonDeliveryRuntime,
+            },
             current_schema,
-            daemon_delivery::{DaemonDeliveryConfig, DaemonDeliveryRuntime},
             foundation::scope_event_transport::ScopeEventHub,
             host_runtime::runtime_credential::RuntimeCredentialAuthority,
             host_runtime::runtime_event_settlement::{
@@ -3197,11 +3201,11 @@ mod tests {
         let error = |code: &str| json!({ "code": code, "message": "why" });
         for admission in [
             command::rejects_every_capability_refusal as CapabilityRefusalAdmission,
-            crate::runtime_control::admits_runtime_refusal,
-            crate::agent_materialize::admits_agent_materialize_refusal,
-            crate::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,
-            crate::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal,
-            crate::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
+            crate::host_runtime::runtime_control::admits_runtime_refusal,
+            crate::host_runtime::agent_materialize::admits_agent_materialize_refusal,
+            crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,
+            crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal,
+            crate::identity_access::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
             crate::workspace_data_plane::admits_workspace_fs_refusal,
             crate::host_runtime::cascade_effects::admits_agent_files_purge_refusal,
         ] {
@@ -3235,7 +3239,7 @@ mod tests {
         ] {
             assert!(
                 CommandRefusal::decode(
-                    crate::runtime_control::admits_runtime_refusal,
+                    crate::host_runtime::runtime_control::admits_runtime_refusal,
                     &error(code),
                 )
                 .is_some()
@@ -3247,34 +3251,34 @@ mod tests {
         }
         assert!(matches!(
             CommandRefusal::decode(
-                crate::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,
+                crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,
                 &error("fs_unavailable"),
             ),
             Some(CommandRefusal::Capability(_))
         ));
         assert_eq!(
             CommandRefusal::decode(
-                crate::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,
+                crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,
                 &error("agent_deleting"),
             ),
             None
         );
         for (admission, code) in [
             (
-                crate::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal
+                crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal
                     as CapabilityRefusalAdmission,
                 "invalid_config",
             ),
             (
-                crate::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal,
+                crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal,
                 "agent_deleting",
             ),
             (
-                crate::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
+                crate::identity_access::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
                 "agent_deleting",
             ),
             (
-                crate::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
+                crate::identity_access::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
                 "fs_unavailable",
             ),
         ] {
@@ -3285,7 +3289,7 @@ mod tests {
         }
         assert_eq!(
             CommandRefusal::decode(
-                crate::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
+                crate::identity_access::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
                 &error("invalid_config"),
             ),
             None
@@ -3300,7 +3304,7 @@ mod tests {
         ] {
             assert!(matches!(
                 CommandRefusal::decode(
-                    crate::agent_materialize::admits_agent_materialize_refusal,
+                    crate::host_runtime::agent_materialize::admits_agent_materialize_refusal,
                     &error(code),
                 ),
                 Some(CommandRefusal::Capability(_))
@@ -3312,28 +3316,28 @@ mod tests {
         }
         assert_eq!(
             CommandRefusal::decode(
-                crate::runtime_control::admits_runtime_refusal,
+                crate::host_runtime::runtime_control::admits_runtime_refusal,
                 &json!({ "code": "internal_error" }),
             ),
             None
         );
         assert_eq!(
             CommandRefusal::decode(
-                crate::runtime_control::admits_runtime_refusal,
+                crate::host_runtime::runtime_control::admits_runtime_refusal,
                 &json!({ "code": "internal_error", "message": 7 })
             ),
             None
         );
         assert_eq!(
             CommandRefusal::decode(
-                crate::runtime_control::admits_runtime_refusal,
+                crate::host_runtime::runtime_control::admits_runtime_refusal,
                 &json!({ "code": "internal_error", "message": "why", "extra": true })
             ),
             None
         );
         assert_eq!(
             CommandRefusal::decode(
-                crate::runtime_control::admits_runtime_refusal,
+                crate::host_runtime::runtime_control::admits_runtime_refusal,
                 &json!("why"),
             ),
             None
@@ -3353,18 +3357,18 @@ mod tests {
             ),
             (
                 IssuedDaemonCommandKind::AgentMaterialize,
-                crate::agent_materialize::admits_agent_materialize_refusal,
-                &crate::agent_materialize::AGENT_MATERIALIZE_CAPABILITY_CODES,
+                crate::host_runtime::agent_materialize::admits_agent_materialize_refusal,
+                &crate::host_runtime::agent_materialize::AGENT_MATERIALIZE_CAPABILITY_CODES,
             ),
             (
                 IssuedDaemonCommandKind::AgentProfileMcpRead,
-                crate::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,
-                &crate::agent_profile_mcp_data_plane::PROFILE_MCP_READ_CAPABILITY_CODES,
+                crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,
+                &crate::identity_access::agent_profile_mcp_data_plane::PROFILE_MCP_READ_CAPABILITY_CODES,
             ),
             (
                 IssuedDaemonCommandKind::AgentProfileMcpWrite,
-                crate::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal,
-                &crate::agent_profile_mcp_data_plane::PROFILE_MCP_WRITE_CAPABILITY_CODES,
+                crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal,
+                &crate::identity_access::agent_profile_mcp_data_plane::PROFILE_MCP_WRITE_CAPABILITY_CODES,
             ),
             (
                 IssuedDaemonCommandKind::AgentWorkspaceFileRead,
@@ -3383,8 +3387,8 @@ mod tests {
             ),
             (
                 IssuedDaemonCommandKind::McpProbe,
-                crate::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
-                &crate::agent_profile_mcp_data_plane::MCP_PROBE_CAPABILITY_CODES,
+                crate::identity_access::agent_profile_mcp_data_plane::admits_mcp_probe_refusal,
+                &crate::identity_access::agent_profile_mcp_data_plane::MCP_PROBE_CAPABILITY_CODES,
             ),
             (
                 IssuedDaemonCommandKind::ProxyConfigGet,
@@ -3413,13 +3417,13 @@ mod tests {
             ),
             (
                 IssuedDaemonCommandKind::RuntimeDeliver,
-                crate::runtime_control::admits_runtime_refusal,
-                &crate::runtime_control::RUNTIME_CAPABILITY_CODES,
+                crate::host_runtime::runtime_control::admits_runtime_refusal,
+                &crate::host_runtime::runtime_control::RUNTIME_CAPABILITY_CODES,
             ),
             (
                 IssuedDaemonCommandKind::RuntimeStart,
-                crate::runtime_control::admits_runtime_refusal,
-                &crate::runtime_control::RUNTIME_CAPABILITY_CODES,
+                crate::host_runtime::runtime_control::admits_runtime_refusal,
+                &crate::host_runtime::runtime_control::RUNTIME_CAPABILITY_CODES,
             ),
             (
                 IssuedDaemonCommandKind::RuntimeStatus,
@@ -3551,7 +3555,7 @@ mod tests {
         ));
         assert_eq!(
             CommandRefusal::decode(
-                crate::runtime_control::admits_runtime_refusal,
+                crate::host_runtime::runtime_control::admits_runtime_refusal,
                 &error("forbidden_path"),
             ),
             None
@@ -3630,7 +3634,7 @@ mod tests {
         let plane = OwningHostDataPlane {
             registry: registry.clone(),
         };
-        let adapter = crate::agent_materialize::ProductionAgentMaterialize::new(
+        let adapter = crate::host_runtime::agent_materialize::ProductionAgentMaterialize::new(
             plane.clone(),
             Duration::from_secs(10),
         );
@@ -3676,7 +3680,7 @@ mod tests {
         let params =
             crate::application_orchestration::daemon_materialize_codec::encode(&target).unwrap();
         assert!(matches!(
-            crate::agent_materialize::materialize_captured(
+            crate::host_runtime::agent_materialize::materialize_captured(
                 &plane,
                 captured_a,
                 params,
@@ -3742,7 +3746,7 @@ mod tests {
         let plane = OwningHostDataPlane {
             registry: registry.clone(),
         };
-        let adapter = crate::agent_profile_mcp_data_plane::ProductionAgentProfileMcpDataPlane::new(
+        let adapter = crate::identity_access::agent_profile_mcp_data_plane::ProductionAgentProfileMcpDataPlane::new(
             McpPlacementRead {
                 fact: Some(mcp_placement("agent-a", "host-a", false)),
             },
@@ -3829,7 +3833,7 @@ mod tests {
         registry.remove(host_a.as_str(), &connection_a);
         let (_successor, mut successor_receive) =
             attach_for_command_test(&registry, &host_a, instance);
-        let failure = crate::agent_profile_mcp_data_plane::read_captured(
+        let failure = crate::identity_access::agent_profile_mcp_data_plane::read_captured(
             &plane,
             captured_a,
             &agent,
@@ -3861,7 +3865,7 @@ mod tests {
             &host,
             DaemonInstanceId::parse("instance-a").unwrap(),
         );
-        let adapter = crate::agent_profile_mcp_data_plane::ProductionAgentProfileMcpDataPlane::new(
+        let adapter = crate::identity_access::agent_profile_mcp_data_plane::ProductionAgentProfileMcpDataPlane::new(
             McpPlacementRead {
                 fact: Some(mcp_placement("agent-a", "host-a", false)),
             },
@@ -3932,7 +3936,7 @@ mod tests {
             (None, McpDataPlaneFaultCode::DaemonInternalError),
         ] {
             let adapter =
-                crate::agent_profile_mcp_data_plane::ProductionAgentProfileMcpDataPlane::new(
+                crate::identity_access::agent_profile_mcp_data_plane::ProductionAgentProfileMcpDataPlane::new(
                     McpPlacementRead { fact },
                     plane.clone(),
                 );
@@ -3967,7 +3971,7 @@ mod tests {
         let plane = OwningHostDataPlane {
             registry: registry.clone(),
         };
-        let adapter = crate::agent_materialize::ProductionAgentMaterialize::new(
+        let adapter = crate::host_runtime::agent_materialize::ProductionAgentMaterialize::new(
             plane.clone(),
             Duration::from_secs(10),
         );
@@ -3988,7 +3992,7 @@ mod tests {
         );
         assert!(matches!(
             adapter.materialize(captured_a, &target_b).await,
-            Err(crate::agent_materialize::AgentMaterializeFailure::TargetCrossedCustody)
+            Err(crate::host_runtime::agent_materialize::AgentMaterializeFailure::TargetCrossedCustody)
         ));
         assert!(matches!(
             receive_a.try_recv(),
@@ -4013,7 +4017,7 @@ mod tests {
         let captured_a = plane.resolve(&host).unwrap().unwrap();
         registry.remove(host.as_str(), &connection_a);
         let (_connection_b, mut receive_b) = attach_for_command_test(&registry, &host, instance);
-        let result = crate::runtime_control::clear_captured(
+        let result = crate::host_runtime::runtime_control::clear_captured(
             &plane,
             captured_a,
             &RuntimeScope::AgentSlot {
@@ -4027,7 +4031,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             result,
-            crate::runtime_control::ClearDispatchOutcome::AttachPending
+            crate::host_runtime::runtime_control::ClearDispatchOutcome::AttachPending
         ));
         assert!(matches!(
             receive_b.try_recv(),
@@ -4185,13 +4189,13 @@ mod tests {
     }
 
     struct ProductionClearFixture {
-        control: crate::runtime_control::ProductionRuntimeControl<
+        control: crate::host_runtime::runtime_control::ProductionRuntimeControl<
             ClearCustody,
             ClearSeat,
             ClearComputer,
         >,
         receive: mpsc::Receiver<ConnectionControl>,
-        waiters: crate::runtime_control::RuntimeClearSessionWaiters,
+        waiters: crate::host_runtime::runtime_control::RuntimeClearSessionWaiters,
         principal: RuntimePrincipal,
         actor: UserId,
         agent: AgentId,
@@ -4324,13 +4328,13 @@ mod tests {
             registry: registry.clone(),
         };
         let computers = ClearComputer(host);
-        let waiters = crate::runtime_control::RuntimeClearSessionWaiters::default();
+        let waiters = crate::host_runtime::runtime_control::RuntimeClearSessionWaiters::default();
         let stop = ProductionScopeRuntimeStop::new(
             computers.clone(),
             plane.clone(),
             Duration::from_secs(30),
         );
-        let control = crate::runtime_control::ProductionRuntimeControl::new(
+        let control = crate::host_runtime::runtime_control::ProductionRuntimeControl::new(
             RuntimeCredentialAuthority::production(ClearCustody),
             seats,
             computers,
@@ -4620,13 +4624,13 @@ mod tests {
                 DaemonInstanceId::parse("daemon-a").unwrap(),
             ),
         );
-        let control = crate::runtime_control::ProductionRuntimeControl::new(
+        let control = crate::host_runtime::runtime_control::ProductionRuntimeControl::new(
             credentials,
             seats,
             computers,
             plane,
             stop,
-            crate::runtime_control::RuntimeClearSessionWaiters::default(),
+            crate::host_runtime::runtime_control::RuntimeClearSessionWaiters::default(),
             Duration::from_secs(30),
         );
         let target = RuntimeStartTarget::new(UserId::parse("user-1").unwrap(), agent, conversation);

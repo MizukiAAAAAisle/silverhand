@@ -14,7 +14,7 @@ use silverhand_backend_core::{
 };
 
 use crate::{
-    daemon_delivery::{DaemonDeliveryController, DaemonRegistryError},
+    application_orchestration::daemon_delivery::{DaemonDeliveryController, DaemonRegistryError},
     foundation::daemon_transport::{DaemonConnectionAuthority, HostCloseReason},
     foundation::error,
     host_runtime::host_wire::{HostDto, host_wire},

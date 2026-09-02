@@ -57,7 +57,7 @@ use silverhand_backend_core::{
 };
 
 use crate::{
-    daemon_delivery::{
+    application_orchestration::daemon_delivery::{
         DaemonDeliveryController, HostDataPlaneRequest, OwningHostDataPlane, command,
     },
     foundation::error,

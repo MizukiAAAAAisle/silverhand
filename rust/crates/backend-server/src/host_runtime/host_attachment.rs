@@ -17,7 +17,7 @@ use silverhand_backend_core::{
     host_runtime::availability::HostAttachmentFacts,
 };
 
-use crate::daemon_delivery::DaemonDeliveryController;
+use crate::application_orchestration::daemon_delivery::DaemonDeliveryController;
 
 /// Whether the delivery transport holds an attachment for one host, read from the
 /// SAME registry the delivery dispatch gate consults so the read face and the

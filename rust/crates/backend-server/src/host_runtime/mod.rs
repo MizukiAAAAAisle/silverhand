@@ -1,7 +1,7 @@
 //! Host lifecycle routes and adapters.
 //!
-//! All eight production-settled targets now live under this namespace. Compatibility facades
-//! stay separately named at the crate root and are not business residuals.
+//! All eight production-settled targets now live only under this namespace; the temporary
+//! crate-root migration facades have been removed.
 //! The resolved `local_runtime_catalog` HTTP leaf reports this process's coordinate-free machine
 //! detection and remains distinct from the remote, daemon-coordinate-bound host-control catalog.
 

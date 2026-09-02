@@ -19,7 +19,7 @@ use silverhand_backend_core::{
 };
 
 use crate::{
-    daemon_delivery::OwningHostDataPlane,
+    application_orchestration::daemon_delivery::OwningHostDataPlane,
     host_runtime::host_control::runtime_catalog::{
         self, RuntimeAvailability, RuntimeCatalogOutcome, RuntimeCatalogRequest,
     },

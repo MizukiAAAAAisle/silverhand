@@ -17,7 +17,7 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::daemon_delivery::{
+use crate::application_orchestration::daemon_delivery::{
     CommandRefusal, HostDataPlaneAnswerMismatch, HostDataPlaneCustody, HostDataPlaneFailure,
     HostDataPlaneRequest, OwningHostDataPlane, command,
 };
@@ -80,7 +80,7 @@ pub struct ProductionAgentProfileMcpDataPlane<P> {
     probe_timeout: Duration,
 }
 
-impl<C, D, H> crate::daemon_delivery::DaemonDeliveryRuntime<C, D, H> {
+impl<C, D, H> crate::application_orchestration::daemon_delivery::DaemonDeliveryRuntime<C, D, H> {
     pub fn agent_profile_mcp_data_plane<P>(
         &self,
         placements: P,
@@ -305,7 +305,7 @@ fn fault(code: McpDataPlaneFaultCode) -> McpDataPlaneFault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon_delivery::DaemonRefusalCode;
+    use crate::application_orchestration::daemon_delivery::DaemonRefusalCode;
 
     #[test]
     fn every_transport_and_refusal_arm_maps_into_the_closed_product_taxonomy() {

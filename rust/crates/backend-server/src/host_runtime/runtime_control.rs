@@ -35,7 +35,7 @@ use silverhand_backend_core::{
 use tokio::sync::Notify;
 
 use crate::{
-    daemon_delivery::{
+    application_orchestration::daemon_delivery::{
         CommandRefusal, DaemonRefusalCode, HostDataPlaneAnswerMismatch, HostDataPlaneCustody,
         HostDataPlaneFailure, HostDataPlaneRequest, OwningHostDataPlane, command,
     },
@@ -46,7 +46,7 @@ use crate::{
         RuntimeCredentialAuthority, RuntimeDispatchFailure, RuntimeStartFailure,
         RuntimeStartHandoff, RuntimeStartTransport,
     },
-    scope_runtime_stop::{ProductionScopeRuntimeStop, ScopeRuntimeStopFailure},
+    host_runtime::scope_runtime_stop::{ProductionScopeRuntimeStop, ScopeRuntimeStopFailure},
 };
 
 const CLEAR_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -178,7 +178,7 @@ pub struct ProductionRuntimeControl<C, D, H> {
     timeout: Duration,
 }
 
-impl<C, D, H> crate::daemon_delivery::DaemonDeliveryRuntime<C, D, H>
+impl<C, D, H> crate::application_orchestration::daemon_delivery::DaemonDeliveryRuntime<C, D, H>
 where
     C: RuntimeCustodyPort,
     D: RuntimeDispatchReadPort + RuntimeControlSeatPort,

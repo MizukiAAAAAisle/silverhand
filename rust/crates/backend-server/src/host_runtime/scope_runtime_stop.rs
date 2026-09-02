@@ -20,7 +20,7 @@ use silverhand_backend_core::{
     },
 };
 
-use crate::daemon_delivery::{
+use crate::application_orchestration::daemon_delivery::{
     HostDataPlaneAnswerMismatch, HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest,
     OwningHostDataPlane, command,
 };
@@ -33,7 +33,7 @@ pub struct ProductionScopeRuntimeStop<H> {
     timeout: Duration,
 }
 
-impl<C, D, H> crate::daemon_delivery::DaemonDeliveryRuntime<C, D, H>
+impl<C, D, H> crate::application_orchestration::daemon_delivery::DaemonDeliveryRuntime<C, D, H>
 where
     H: ComputerReadModel,
 {

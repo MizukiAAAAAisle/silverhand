@@ -24,7 +24,7 @@ use silverhand_backend_core::{
 use silverhand_backend_filesystem::foundation::blob_store::{LocalBlobStore, LocalBlobStoreError};
 
 use crate::{
-    daemon_delivery::{
+    application_orchestration::daemon_delivery::{
         DaemonDeliveryController, HostDataPlaneCustody, HostDataPlaneFailure, HostDataPlaneRequest,
         OwningHostDataPlane, command,
     },
@@ -257,7 +257,7 @@ fn valid_agent_files_purge_result(result: &Value) -> bool {
 
 #[derive(Debug)]
 enum CascadeDaemonError {
-    Registry(crate::daemon_delivery::DaemonRegistryError),
+    Registry(crate::application_orchestration::daemon_delivery::DaemonRegistryError),
     NoCurrentDaemon,
     Command(HostDataPlaneFailure),
     Answer,

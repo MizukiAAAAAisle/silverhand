@@ -66,7 +66,7 @@ impl RuntimeStartTransport for StartTransport {
             .dispatch(
                 crate::foundation::daemon_command::runtime_start(
                     params,
-                    crate::runtime_control::admits_runtime_refusal,
+                    crate::host_runtime::runtime_control::admits_runtime_refusal,
                 ),
                 self.timeout,
             )
@@ -260,7 +260,7 @@ where
             .dispatch(
                 crate::foundation::daemon_command::runtime_deliver(
                     params,
-                    crate::runtime_control::admits_runtime_refusal,
+                    crate::host_runtime::runtime_control::admits_runtime_refusal,
                 ),
                 self.timeout,
             )

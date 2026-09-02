@@ -25,7 +25,7 @@ use axum::{
 use serde::Serialize;
 
 use crate::{
-    daemon_delivery::OUTBOUND_PROTOCOL_VERSION,
+    application_orchestration::daemon_delivery::OUTBOUND_PROTOCOL_VERSION,
     foundation::{
         bind_address_scope::BindAddressScope,
         scope_event_transport::{DESKTOP_SERVER_API_EPOCH, MINIMUM_CLIENT_API_EPOCH},

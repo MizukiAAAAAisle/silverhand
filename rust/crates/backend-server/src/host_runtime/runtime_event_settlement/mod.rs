@@ -2427,7 +2427,8 @@ impl RuntimeProductEvent {
                         "invalid parsed-event drop reason",
                     ));
                 }
-                if !crate::daemon_delivery::PARSED_EVENT_KINDS.contains(&event.parsed_kind.as_str())
+                if !crate::application_orchestration::daemon_delivery::PARSED_EVENT_KINDS
+                    .contains(&event.parsed_kind.as_str())
                 {
                     return Err(serde_json::Error::custom("invalid parsed-event kind"));
                 }

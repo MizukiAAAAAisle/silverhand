@@ -1817,8 +1817,7 @@
         "structural_role": "http"
       },
       "migration": {
-        "physical_target": "backend-server::host_runtime::agent_materialize",
-        "compatibility_facade": "backend-server::agent_materialize"
+        "physical_target": "backend-server::host_runtime::agent_materialize"
       }
     },
     {
@@ -1844,8 +1843,7 @@
         "structural_role": "http"
       },
       "migration": {
-        "physical_target": "backend-server::identity_access::agent_profile_mcp_data_plane",
-        "compatibility_facade": "backend-server::agent_profile_mcp_data_plane"
+        "physical_target": "backend-server::identity_access::agent_profile_mcp_data_plane"
       }
     },
     {
@@ -1923,10 +1921,9 @@
         "business_owner": "application_orchestration",
         "structural_role": "composition"
       },
-      "note": "#2269: compatibility-only facade. Sealed command/connection truth moved to foundation::daemon_{command,transport}; runtime adapters/codecs to host_runtime::{runtime_control,scope_runtime_stop,daemon_runtime_transport,daemon_runtime_codecs}; teardown/purge to host_runtime::cascade_effects; token rotation and host lifecycle projections to their host-runtime/host-control owners; materialize adapter to host_runtime::agent_materialize with its codec in application_orchestration; profile-MCP adapter/codec to identity_access; messaging effects to conversation_messaging::daemon_post_commit; workspace refusal/codec ownership remains workspace_data_plane.",
+      "note": "#2269/#2327: split resolved without a compatibility path. Sealed command/connection truth moved to foundation::daemon_{command,transport}; runtime adapters/codecs to host_runtime::{runtime_control,scope_runtime_stop,daemon_runtime_transport,daemon_runtime_codecs}; teardown/purge to host_runtime::cascade_effects; token rotation and host lifecycle projections to their host-runtime/host-control owners; materialize adapter to host_runtime::agent_materialize with its codec in application_orchestration; profile-MCP adapter/codec to identity_access; messaging effects to conversation_messaging::daemon_post_commit; workspace refusal/codec ownership remains workspace_data_plane.",
       "migration": {
-        "physical_target": "backend-server::application_orchestration::daemon_delivery",
-        "compatibility_facade": "backend-server::daemon_delivery"
+        "physical_target": "backend-server::application_orchestration::daemon_delivery"
       }
     },
     {
@@ -2082,8 +2079,7 @@
         "structural_role": "http"
       },
       "migration": {
-        "physical_target": "backend-server::host_runtime::runtime_control",
-        "compatibility_facade": "backend-server::runtime_control"
+        "physical_target": "backend-server::host_runtime::runtime_control"
       }
     },
     {
@@ -2109,8 +2105,7 @@
         "structural_role": "http"
       },
       "migration": {
-        "physical_target": "backend-server::host_runtime::scope_runtime_stop",
-        "compatibility_facade": "backend-server::scope_runtime_stop"
+        "physical_target": "backend-server::host_runtime::scope_runtime_stop"
       }
     },
     {

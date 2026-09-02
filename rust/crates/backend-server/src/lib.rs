@@ -2,18 +2,13 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 //! HTTP, WebSocket and wire projection boundary.
 
-pub mod agent_materialize;
-pub mod agent_profile_mcp_data_plane;
 pub mod application_orchestration;
 pub mod conversation_messaging;
-pub mod daemon_delivery;
 pub mod embedded_bootstrap;
 pub mod foundation;
 pub mod host_runtime;
 pub mod identity_access;
-pub mod runtime_control;
 pub mod scheduling;
-pub mod scope_runtime_stop;
 pub mod viewer_read_model;
 pub mod workspace_data_plane;
 

@@ -213,13 +213,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // and the organization map/gate is the authority for the leaf's owner/target inside
     // the namespace. Directory-shaped, so it also joins `DIRECTORY_NAMESPACES` below.
     ("backend-filesystem", "host_runtime"),
-    // #task:2231 — the production typed adapter for the accepted internal
-    // profile-MCP port, sharing the owning-host registry and exposing no raw
-    // dispatcher. Wired into the internal MCP routes by the #task:2234 integration (CP7b).
-    ("backend-server", "agent_profile_mcp_data_plane"),
-    // #task:2229 — the crate-root production `RuntimeControlPort` adapter plus the
-    // typed daemon codecs for agent materialize / runtime start / clear-session.
-    ("backend-server", "agent_materialize"),
+    // #task:2327 removed the temporary crate-root facades for profile-MCP,
+    // materialization, runtime control, and exact-seat stop. Their canonical leaves are
+    // covered by the `identity_access` / `host_runtime` owning-root entries below.
     // #task:2314 replaces the historical public-agent route umbrella with C5's real
     // scheduling owner root. The other eighteen former children are internal leaves of
     // already-accounted owner namespaces and add no flat CP tuples.
@@ -228,11 +224,8 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // identity_access/foundation; #task:2321 likewise relocates the process-operation
     // leaves beneath host_runtime/foundation. Nested leaves add no flat CP tuple;
     // composition behavior tests remain their mount authority.
-    // #task:2229 — the runtime start/stop/clear production capability. It owns
-    // exact-custody commands, the ephemeral clear waiter, and committed clear
-    // settlement; its route verticals are mounted by #task:2234 (CP4 clear/switch, CP5 stop).
-    ("backend-server", "runtime_control"),
-    ("backend-server", "scope_runtime_stop"),
+    // The runtime start/stop/clear production capability remains mounted by #task:2234
+    // (CP4 clear/switch, CP5 stop) through its canonical host-runtime leaves.
     // #task:2248 — the residual-wave route-family scaffold. Only two families are
     // genuinely NEW top-level bounded contexts and earn a crate root: the embedded
     // bootstrap (its own auth/token lifecycle) and the workspace data plane (a shared
@@ -382,10 +375,9 @@ const ROOT_MODULES_WE_DID_NOT_ADD: &[(&str, &str)] = &[
     // non-seam baseline. It carries no seam obligation, matching the two adapters it holds.
     ("backend-filesystem", "foundation"),
     ("backend-server", "current_schema"),
-    ("backend-server", "daemon_delivery"),
     // #task:2308 relocated the final `host_control` directory leaf beneath this owning root,
-    // closing the production-settled host-runtime axis at 8/8/0. Accepted compatibility facades
-    // remain separately named paths and are not business units.
+    // closing the production-settled host-runtime axis at 8/8/0. #task:2327 then removed
+    // the temporary root facades; this owning root now covers the canonical leaves alone.
     ("backend-server", "host_runtime"),
     ("backend-sqlite", "current_schema"),
     // #task:2294 relocated four low-fanout read adapters (`agent_availability_read`,
@@ -432,9 +424,8 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
     // `foundation::request_perimeter` into this single owning-root entry.
     ("backend-app", "foundation"),
     // #task:2305 relocated the final production leaf `workspace_rename_fanout` beneath
-    // this owning root, closing application orchestration at 3/3/0. The accepted flat
-    // `daemon_delivery` compatibility facade remains separately named and byte-frozen;
-    // this entry does not descend into either canonical child.
+    // this owning root, closing application orchestration at 3/3/0. #task:2327 removed
+    // the temporary flat daemon-delivery facade; this entry covers canonical children only.
     ("backend-server", "application_orchestration"),
     // #task:2304 relocated the complete mapped `messaging` directory leaf beneath the
     // existing dual-role context, closing production at 3/3/0. The directory remains one
@@ -446,9 +437,8 @@ const ORGANIZATION_ROOT_MODULES: &[(&str, &str)] = &[
     // relocation. This single owning-root entry covers production without descending.
     ("backend-server", "foundation"),
     // #task:2302 completed the production-settled identity/access relocation: the self-row
-    // plus thirteen independent leaves derive 14/14/0. The accepted named
-    // `agent_profile_mcp_data_plane` root facade remains a separate compatibility path, not
-    // a second business unit. This owning-root entry covers production without descending.
+    // plus thirteen independent leaves derive 14/14/0. #task:2327 removed the temporary
+    // profile-MCP root facade; this owning-root entry covers production without descending.
     ("backend-server", "identity_access"),
     ("backend-server", "viewer_read_model"),
 ];
