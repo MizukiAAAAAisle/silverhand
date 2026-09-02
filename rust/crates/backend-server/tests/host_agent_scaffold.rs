@@ -224,10 +224,9 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // scheduling owner root. The other eighteen former children are internal leaves of
     // already-accounted owner namespaces and add no flat CP tuples.
     ("backend-server", "scheduling"),
-    // #task:2226 — internal-agent route family, mounted at the app composition root by
-    // the #task:2234 integration (CP7a profile/avatar/peer-profile, CP7b MCP). Its MCP
-    // leaf consumes only the typed data-plane port; #task:2231 supplies that production face.
-    ("backend-server", "internal_agent"),
+    // #task:2317 relocated the internal self-profile and CLI observation faces beneath
+    // the already-accounted identity_access/foundation owner roots. Nested leaves add no
+    // flat CP tuple; composition behavior tests remain their mount authority.
     ("backend-server", "ops"),
     // #task:2229 — the runtime start/stop/clear production capability. It owns
     // exact-custody commands, the ephemeral clear waiter, and committed clear
@@ -245,8 +244,8 @@ const SEAM_ROOT_MODULES: &[(&str, &str)] = &[
     // The other residual route surfaces are NOT new crate roots: they are submodules of
     // the bounded contexts that own them. #task:2314 moved the public-agent leaves under
     // `identity_access`, `host_runtime`, `application_orchestration`, `viewer_read_model`
-    // and the new `scheduling` owner; `internal_agent::diagnostics` remains under its
-    // existing internal route family.
+    // and the new `scheduling` owner. #task:2317 likewise placed the internal self-profile
+    // and CLI observation faces directly beneath identity_access/foundation.
     ("backend-server", "embedded_bootstrap"),
     ("backend-server", "workspace_data_plane"),
     // #task:2296 established the backend-sqlite `identity_access` relocation namespace: a pure
@@ -466,7 +465,6 @@ const DIRECTORY_NAMESPACES: &[(&str, &str)] = &[
     // NOT directory-shaped and is absent here.
     ("backend-filesystem", "host_runtime"),
     ("backend-server", "scheduling"),
-    ("backend-server", "internal_agent"),
     ("backend-server", "ops"),
     // #task:2248 — the two residual-wave families that earn a new crate root
     // (embedded bootstrap, workspace data plane); directory-shaped so an

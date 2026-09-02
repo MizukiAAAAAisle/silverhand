@@ -1,12 +1,12 @@
 //! The internal agent-profile wire projection.
 //!
-//! One projector, shared by the self read (this checkpoint) and — when they
-//! land — the self write and the peer read. The product keeps a SINGLE profile
-//! shape across all three (`toAgentProfileDto`, `profile-routes.ts`): forking a
+//! One projector, shared by the self read, self write, and peer read. The product
+//! keeps a SINGLE profile shape across all three (`toAgentProfileDto`,
+//! `profile-routes.ts`): forking a
 //! narrower "peer" DTO would make one domain fact two contracts, and nothing in
 //! it is privileged — `id` buys no authority (every self route is token-pinned)
 //! and `avatar_url` is a derived, read-only route. So this lives here, private to
-//! the internal-agent module, and never becomes public API.
+//! the `identity_access` sibling set, and never becomes public API.
 
 use serde::Serialize;
 use silverhand_backend_core::identity_access::agent_profile_read::AgentProfileFact;

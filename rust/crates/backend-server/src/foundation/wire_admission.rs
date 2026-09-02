@@ -59,9 +59,9 @@ use serde::{Deserialize, Deserializer};
 use serde_json::json;
 use silverhand_backend_core::foundation::wire_text;
 
-use crate::{
-    foundation::wire_patch::PatchField,
-    internal_agent::cli_invoke::{CliInvokeResponseMeta, attach_response_meta},
+use crate::foundation::{
+    cli_invoke_observer::{CliInvokeResponseMeta, attach_response_meta},
+    wire_patch::PatchField,
 };
 
 /// The one terminal semantic-refusal string, shared with the sibling write faces and

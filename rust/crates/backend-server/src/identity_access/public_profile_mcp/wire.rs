@@ -1,6 +1,6 @@
 //! Crate-private shared HTTP-wire vocabulary for the agent profile-MCP routes.
 //!
-//! The self-scoped internal family (`internal_agent::profile_mcp`) and the public
+//! The self-scoped internal family (`identity_access::self_profile_mcp`) and the public
 //! management faces (`identity_access::public_profile_mcp`) speak the SAME wire: the probe request
 //! grammar and its one stateless rule, the probe-outcome projection, the data-plane
 //! fault→HTTP mapping, and the raw-config read body. This module is the single home for

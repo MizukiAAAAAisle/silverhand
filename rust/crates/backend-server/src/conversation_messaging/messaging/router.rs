@@ -52,7 +52,7 @@ use super::{
         missing_identifier,
     },
 };
-use crate::internal_agent::cli_invoke::CliInvokeRequestContext;
+use crate::foundation::cli_invoke_observer::CliInvokeRequestContext;
 
 /// Everything the doors need, supplied by whoever composes them.
 ///

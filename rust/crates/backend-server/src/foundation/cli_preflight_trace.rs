@@ -2,7 +2,7 @@
 //!
 //! ## Self-scoped, records through an injected port, no persistence of its own
 //!
-//! Like its `internal_agent` siblings this route sits behind the self-pin credential layer
+//! Like the C1 self-profile routes this route sits behind the self-pin credential layer
 //! ([`require_runtime_credential`](crate::host_runtime::runtime_credential::require_runtime_credential)):
 //! `{aid}` is bound to the caller's own agent before the handler runs, so the handler takes
 //! NO path param — the subject is `credential.agent()`, never a wire value, and the source

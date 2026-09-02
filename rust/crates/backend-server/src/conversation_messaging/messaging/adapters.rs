@@ -31,7 +31,7 @@ use super::{
     aftermath::SendAftermath,
     execute::{ResolvedSendContext, execute},
 };
-use crate::internal_agent::cli_invoke::CliInvokeRequestContext;
+use crate::foundation::cli_invoke_observer::CliInvokeRequestContext;
 
 /// The machinery a send needs whichever door it came through: where a body may
 /// address from, who may open a direct line, and the write unit itself.

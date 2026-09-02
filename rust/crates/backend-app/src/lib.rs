@@ -37,7 +37,7 @@ use silverhand_backend_filesystem::foundation::{
 };
 use silverhand_backend_filesystem::host_runtime::runtime_detection::MachineRuntimeDetector;
 #[cfg(test)]
-use silverhand_backend_server::internal_agent::cli_invoke::CLI_INVOKE_PRODUCTION_PERIMETER;
+use silverhand_backend_server::foundation::cli_invoke_observer::CLI_INVOKE_PRODUCTION_PERIMETER;
 use silverhand_backend_server::{
     application_orchestration::{
         agent_create, agent_delete, workspace_rename_fanout::WorkspaceRenameFanoutAdapter,
@@ -69,6 +69,8 @@ use silverhand_backend_server::{
     },
     embedded_bootstrap,
     foundation::{
+        cli_invoke_observer::audit_cli_invocations,
+        cli_preflight_trace::cli_trace_router,
         clock::SystemProcessClock,
         scope_event_transport::{
             AllowedOrigin, EventWebSocketConfig, EventWebSocketController, ScopeEventHub,
@@ -92,20 +94,16 @@ use silverhand_backend_server::{
         avatar_blob::SingleKindAvatarBlobs,
         human_auth::{self, HumanAuthDeps},
         password_hasher::SpawnBlockingHasher,
-        public_profile_mcp,
-        users::{self, UsersDeps},
-        workspace_detail, workspace_metadata_write, workspace_name_availability, workspaces,
-    },
-    internal_agent::{
-        cli_invoke::audit_cli_invocations,
-        diagnostics::cli_trace::cli_trace_router,
         peer_profile::{PeerProfilePorts, peer_profile_router},
-        profile::self_profile_router,
-        profile_mcp::profile_mcp_router,
-        profile_write::{
+        public_profile_mcp,
+        self_profile::self_profile_router,
+        self_profile_mcp::profile_mcp_router,
+        self_profile_write::{
             InternalAvatarWriteState, InternalProfileWriteState, internal_avatar_write_router,
             internal_profile_write_router,
         },
+        users::{self, UsersDeps},
+        workspace_detail, workspace_metadata_write, workspace_name_availability, workspaces,
     },
     ops::{
         bind_address::classify_bind_address_scope,

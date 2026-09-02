@@ -30,7 +30,7 @@ use silverhand_backend_core::{
     host_runtime::runtime_credential::RuntimePrincipal,
 };
 
-use crate::internal_agent::cli_invoke::CliInvokeRequestContext;
+use crate::foundation::cli_invoke_observer::CliInvokeRequestContext;
 
 use super::json_body::{BodyRead, payload_too_large, read_body};
 

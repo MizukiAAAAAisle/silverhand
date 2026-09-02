@@ -11,7 +11,7 @@
 //! composition-fault safe `500`, never a `401` (that verdict is the layer's).
 //!
 //! `POST /profile`'s body is decoded by the request-admission checkpoint
-//! ([`admit_profile_edit`](super::profile_write_admission::admit_profile_edit)) into a
+//! ([`admit_profile_edit`](super::self_profile_write_admission::admit_profile_edit)) into a
 //! fully-validated edit or a terminal refusal. The validated edit is mapped to the core's
 //! [`InternalProfileEdit`] and applied by [`update_internal_profile`] as ONE row
 //! unit-of-work firing EXACTLY ONE `agent_changed` announce; on success the response is
@@ -23,7 +23,7 @@
 //! ## The dedicated avatar pair echoes the FULL agent
 //!
 //! `POST /avatar` (a multipart file admitted by
-//! [`admit_avatar_upload`](super::profile_write_admission::admit_avatar_upload)) and
+//! [`admit_avatar_upload`](super::self_profile_write_admission::admit_avatar_upload)) and
 //! `DELETE /avatar` are avatar-ONLY edits (`display_name`/`description` are left
 //! untouched), applied through the SAME [`update_internal_profile`] row UoW. Their product
 //! success body is the FULL `AgentDto` `agentService` echoes — NOT the narrow profile DTO —
@@ -62,11 +62,11 @@ use silverhand_backend_core::{
 };
 
 use super::{
-    profile::SELF_PROFILE_PATH,
-    profile_write_admission::{
+    agent_profile_wire::{AgentProfileDto, agent_profile_dto},
+    self_profile::SELF_PROFILE_PATH,
+    self_profile_write_admission::{
         AvatarAction, ValidatedProfileEdit, admit_avatar_upload, admit_profile_edit,
     },
-    wire::{AgentProfileDto, agent_profile_dto},
 };
 use crate::{
     foundation::clock::ProcessClock,

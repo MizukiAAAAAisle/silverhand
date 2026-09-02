@@ -1891,6 +1891,141 @@ fn resolved_host_agent_split_is_exact_and_every_leaf_is_declared() {
 }
 
 #[test]
+fn resolved_internal_agent_split_is_exact_and_collision_free() {
+    let map = load_map();
+    let rows = map["resolved_splits"]
+        .as_array()
+        .expect("resolved_splits array");
+    let internal_rows: Vec<&Value> = rows
+        .iter()
+        .filter(|row| as_str(row, "source") == "backend-server::internal_agent")
+        .collect();
+    let expected: BTreeSet<(String, String, String, String)> = [
+        (
+            "wire",
+            "C1",
+            "wire",
+            "backend-server::identity_access::agent_profile_wire",
+        ),
+        (
+            "peer_profile",
+            "C1",
+            "http",
+            "backend-server::identity_access::peer_profile",
+        ),
+        (
+            "profile",
+            "C1",
+            "http",
+            "backend-server::identity_access::self_profile",
+        ),
+        (
+            "profile_mcp",
+            "C1",
+            "http",
+            "backend-server::identity_access::self_profile_mcp",
+        ),
+        (
+            "profile_write",
+            "C1",
+            "http",
+            "backend-server::identity_access::self_profile_write",
+        ),
+        (
+            "profile_write_admission",
+            "C1",
+            "wire",
+            "backend-server::identity_access::self_profile_write_admission",
+        ),
+        (
+            "cli_invoke",
+            "foundation",
+            "adapter",
+            "backend-server::foundation::cli_invoke_observer",
+        ),
+        (
+            "diagnostics",
+            "foundation",
+            "http",
+            "backend-server::foundation::cli_preflight_trace",
+        ),
+    ]
+    .into_iter()
+    .map(|(responsibility, owner, role, target)| {
+        (
+            responsibility.to_owned(),
+            owner.to_owned(),
+            role.to_owned(),
+            target.to_owned(),
+        )
+    })
+    .collect();
+    let actual: BTreeSet<(String, String, String, String)> = internal_rows
+        .iter()
+        .map(|row| {
+            assert_eq!(as_str(row, "kind"), "context_internal_leaf");
+            (
+                as_str(row, "responsibility").to_owned(),
+                as_str(row, "business_owner").to_owned(),
+                as_str(row, "structural_role").to_owned(),
+                as_str(row, "physical_target").to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected, "internal-agent resolved split drifted");
+    assert_eq!(
+        actual.len(),
+        internal_rows.len(),
+        "internal-agent responsibility duplicated"
+    );
+    assert!(
+        !scanned_roots().contains(&("backend-server".to_owned(), "internal_agent".to_owned())),
+        "the resolved internal_agent aggregation must no longer be a crate root"
+    );
+
+    let root = rust_root().join("crates/backend-server/src");
+    let identity_children: BTreeSet<String> =
+        module_declarations(&read(&root.join("identity_access/mod.rs")))
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+    assert!(identity_children.contains("agent_wire"));
+    assert!(identity_children.contains("agent_profile_wire"));
+    assert!(!identity_children.contains("wire"));
+
+    let open: BTreeSet<&str> = map["open_rulings"]
+        .as_array()
+        .expect("open_rulings array")
+        .iter()
+        .map(|value| value.as_str().expect("open ruling string"))
+        .collect();
+    assert!(!open.contains(
+        "backend-server::internal_agent split group 'internal_agent_profile' final leaf module name"
+    ));
+    assert!(!open.contains(
+        "backend-server::internal_agent split group 'cli_diagnostics' final leaf module name"
+    ));
+
+    // First falsifier: `agent_wire` is a real occupied sibling with a broader management
+    // DTO. Retargeting the narrow internal profile projection there must break exact
+    // equality instead of silently merging two wire contracts.
+    let mut occupied_wire_target = actual.clone();
+    occupied_wire_target.remove(&(
+        "wire".to_owned(),
+        "C1".to_owned(),
+        "wire".to_owned(),
+        "backend-server::identity_access::agent_profile_wire".to_owned(),
+    ));
+    occupied_wire_target.insert((
+        "wire".to_owned(),
+        "C1".to_owned(),
+        "wire".to_owned(),
+        "backend-server::identity_access::agent_wire".to_owned(),
+    ));
+    assert_ne!(occupied_wire_target, expected);
+}
+
+#[test]
 fn root_compatibility_facades_are_named_accepted_residuals_not_second_business_units() {
     // #task:2273 (Cindy point 5): a root compatibility facade must be REPORTED, not swallowed.
     // Each facade row is landed at its physical_target (its one business identity) AND its

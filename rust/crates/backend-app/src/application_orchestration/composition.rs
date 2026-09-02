@@ -597,7 +597,7 @@ pub(super) async fn compose_after_audit(
         notification_store,
         hub.notification_aftermath(),
     );
-    let internal_agent_products = self_profile_router(agent_profile_read.clone())
+    let self_profile_products = self_profile_router(agent_profile_read.clone())
         .merge(internal_profile_write_router(InternalProfileWriteState {
             writes: agent_profile_write.clone(),
             blobs: agent_avatar_blobs.clone(),
@@ -975,7 +975,7 @@ pub(super) async fn compose_after_audit(
             // nodes (no collision with the public `/api/agents/…` family), and the wrapping
             // layer below self-pins `{aid}` so a foreign or missing/invalid bearer is a uniform
             // 401 across every listed method.
-            .merge(internal_agent_products)
+            .merge(self_profile_products)
             // #2262: the 2 reaction + 4 attachment internal faces are inside the typed
             // `cli.invoke` middleware and, because runtime auth wraps that middleware
             // below, record exactly once only after a principal has authenticated.

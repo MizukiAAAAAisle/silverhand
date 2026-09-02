@@ -42,14 +42,14 @@
     "embedded_bootstrap": "self-declared top-level bounded context: choose/create bootstrap UoW + own auth/token lifecycle (incl token-file custody)"
   },
   "accounting": {
-    "production_roots": 146,
+    "production_roots": 145,
     "test_support_roots": 3,
-    "total_scanned": 149,
+    "total_scanned": 148,
     "per_crate": {
       "backend_app": 4,
       "backend_core": 63,
       "backend_filesystem": 3,
-      "backend_server": 42,
+      "backend_server": 41,
       "backend_sqlite": 37
     },
     "rule": "every scanned `mod` decl gets exactly one row; #[cfg(test)] rows carry target.structural_role=test_support in the map (no external whitelist)"
@@ -2035,49 +2035,6 @@
     },
     {
       "crate": "backend-server",
-      "module": "internal_agent",
-      "source_shape": "directory",
-      "needs_ruling": false,
-      "split_required": {
-        "kind": "directory_members",
-        "current_container": {
-          "structural_role": "http"
-        },
-        "groups": [
-          {
-            "group": "internal_agent_profile",
-            "business_owner": "C1",
-            "structural_role": "http",
-            "members": [
-              "wire",
-              "peer_profile",
-              "profile",
-              "profile_mcp",
-              "profile_write",
-              "profile_write_admission"
-            ],
-            "target_parent_namespace": "backend-server::identity_access",
-            "needs_ruling": true
-          },
-          {
-            "group": "cli_diagnostics",
-            "business_owner": "foundation",
-            "structural_role": "http",
-            "members": [
-              "cli_invoke",
-              "diagnostics"
-            ],
-            "target_parent_namespace": "backend-server::foundation",
-            "needs_ruling": true
-          }
-        ]
-      },
-      "migration": {
-        "split": true
-      }
-    },
-    {
-      "crate": "backend-server",
       "module": "messaging",
       "source_shape": "directory",
       "needs_ruling": false,
@@ -3115,8 +3072,6 @@
     }
   ],
   "open_rulings": [
-    "backend-server::internal_agent split group 'internal_agent_profile' final leaf module name",
-    "backend-server::internal_agent split group 'cli_diagnostics' final leaf module name",
     "backend-server::ops split group 'runtimes' final leaf module name",
     "backend-server::ops split group 'operational_composition' final leaf module name",
     "backend-sqlite::host_agent split group 'agent_provisioning_teardown_sagas' final leaf module name",
@@ -3395,6 +3350,70 @@
       "business_owner": "C5",
       "structural_role": "http",
       "physical_target": "backend-server::scheduling::schedule_management"
+    },
+    {
+      "source": "backend-server::internal_agent",
+      "responsibility": "wire",
+      "kind": "context_internal_leaf",
+      "business_owner": "C1",
+      "structural_role": "wire",
+      "physical_target": "backend-server::identity_access::agent_profile_wire"
+    },
+    {
+      "source": "backend-server::internal_agent",
+      "responsibility": "peer_profile",
+      "kind": "context_internal_leaf",
+      "business_owner": "C1",
+      "structural_role": "http",
+      "physical_target": "backend-server::identity_access::peer_profile"
+    },
+    {
+      "source": "backend-server::internal_agent",
+      "responsibility": "profile",
+      "kind": "context_internal_leaf",
+      "business_owner": "C1",
+      "structural_role": "http",
+      "physical_target": "backend-server::identity_access::self_profile"
+    },
+    {
+      "source": "backend-server::internal_agent",
+      "responsibility": "profile_mcp",
+      "kind": "context_internal_leaf",
+      "business_owner": "C1",
+      "structural_role": "http",
+      "physical_target": "backend-server::identity_access::self_profile_mcp"
+    },
+    {
+      "source": "backend-server::internal_agent",
+      "responsibility": "profile_write",
+      "kind": "context_internal_leaf",
+      "business_owner": "C1",
+      "structural_role": "http",
+      "physical_target": "backend-server::identity_access::self_profile_write"
+    },
+    {
+      "source": "backend-server::internal_agent",
+      "responsibility": "profile_write_admission",
+      "kind": "context_internal_leaf",
+      "business_owner": "C1",
+      "structural_role": "wire",
+      "physical_target": "backend-server::identity_access::self_profile_write_admission"
+    },
+    {
+      "source": "backend-server::internal_agent",
+      "responsibility": "cli_invoke",
+      "kind": "context_internal_leaf",
+      "business_owner": "foundation",
+      "structural_role": "adapter",
+      "physical_target": "backend-server::foundation::cli_invoke_observer"
+    },
+    {
+      "source": "backend-server::internal_agent",
+      "responsibility": "diagnostics",
+      "kind": "context_internal_leaf",
+      "business_owner": "foundation",
+      "structural_role": "http",
+      "physical_target": "backend-server::foundation::cli_preflight_trace"
     }
   ],
   "migration_ledger": {
