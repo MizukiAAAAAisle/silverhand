@@ -40,8 +40,8 @@ use silverhand_backend_filesystem::host_runtime::runtime_detection::MachineRunti
 use silverhand_backend_server::foundation::cli_invoke_observer::CLI_INVOKE_PRODUCTION_PERIMETER;
 use silverhand_backend_server::{
     application_orchestration::daemon_delivery::{
-        DaemonDeliveryController, DaemonDeliveryRuntime, DaemonHostConnections,
-        OnboardingDeliveryAdapter,
+        ConversationMessageDeliveryAdapter, DaemonDeliveryController, DaemonDeliveryRuntime,
+        DaemonHostConnections, OnboardingDeliveryAdapter,
     },
     application_orchestration::{
         agent_create, agent_delete, workspace_rename_fanout::WorkspaceRenameFanoutAdapter,
@@ -56,16 +56,26 @@ use silverhand_backend_server::{
                 agent_attachment_locate_router, agent_attachment_update_router,
                 agent_attachment_upload_router,
             },
-            attention_projection, channel_directory, channel_lifecycle,
+            attention_preference, attention_projection, channel_directory, channel_lifecycle,
             conversation_agent_activity, conversation_agent_directory, conversation_agent_runtime,
-            conversation_message_window, conversation_ref, conversation_threads,
-            conversation_unread, human_search, message_unread, notification, reaction, saved,
+            conversation_log_debug, conversation_message_window, conversation_ref,
+            conversation_threads, conversation_unread, human_search,
+            membership as conversation_membership, message_unread, notification, reaction,
+            runtime_control as conversation_runtime_control, saved,
             stale_message_resolution::{
                 TracingStaleMessageResolutionObserver, router as stale_message_resolution_router,
             },
             thread_follow,
         },
-        task::{TaskListState, task_list_router},
+        task::{
+            HumanClaimState, HumanCreateState, HumanEditState, HumanStatusState,
+            HumanTaskBoardState, HumanTaskPointState, PublishingTaskAftermath, TaskClaimState,
+            TaskCreateState, TaskDetailState, TaskEditState, TaskListState, TaskStatusUpdateState,
+            TaskUnclaimState, human_claim_router, human_create_router, human_edit_router,
+            human_status_router, human_task_board_router, human_task_point_router,
+            task_claim_router, task_create_router, task_detail_router, task_edit_router,
+            task_list_router, task_unclaim_router, task_update_status_router,
+        },
     },
     embedded_bootstrap,
     foundation::{
@@ -110,7 +120,16 @@ use silverhand_backend_server::{
         users::{self, UsersDeps},
         workspace_detail, workspace_metadata_write, workspace_name_availability, workspaces,
     },
-    scheduling::schedule_management::{schedule_cancel_router, schedule_list_router},
+    scheduling::{
+        schedule_cancel::route::{
+            ScheduleCancelState, schedule_cancel_router as internal_schedule_cancel_router,
+        },
+        schedule_create::route::{ScheduleCreateState, schedule_create_router},
+        schedule_list::route::{
+            ScheduleListState, schedule_list_router as internal_schedule_list_router,
+        },
+        schedule_management::{schedule_cancel_router, schedule_list_router},
+    },
     viewer_read_model::presence::{
         HubPresencePublisher, SystemDisconnectClock, compose_presence_vertical,
     },
@@ -120,8 +139,14 @@ use silverhand_backend_sqlite::{
     conversation_messaging::direct_pair_read::SqliteDirectPairReadModel,
     conversation_messaging::messaging::{
         HostEnvironment, MessagingStore,
-        schedule::{SqliteScheduleCancel, SqliteScheduleListRead},
-        task::SqliteTaskStore,
+        schedule::{
+            ProductionCronEvaluator, SqliteScheduleCancel, SqliteScheduleCreate,
+            SqliteScheduleListRead, SqliteScheduleStore,
+        },
+        task::{
+            SqliteTaskClaimWrite, SqliteTaskCreateWrite, SqliteTaskEditWrite,
+            SqliteTaskStatusWrite, SqliteTaskStore,
+        },
     },
     conversation_messaging::runtime_delivery::SqliteRuntimeDeliveryStore,
     embedded_bootstrap::SqliteEmbeddedBootstrap,
@@ -162,6 +187,7 @@ use tokio::{net::TcpListener, sync::oneshot};
 mod foundation;
 
 mod application_orchestration;
+pub use application_orchestration::conversation_debug_layer::production_json_layer;
 use application_orchestration::create_aftermath::CreateAftermath;
 
 const DATABASE_PATH_ENV: &str = "SILVERHAND_DATABASE_PATH";
@@ -679,7 +705,9 @@ async fn write_bootstrap_token_file(path: &Path, token: &str) -> std::io::Result
             && cleanup_error.kind() != std::io::ErrorKind::NotFound
         {
             tracing::warn!(
-                error = %cleanup_error,
+                error = silverhand_backend_server::foundation::safe_log_field::safe_display(
+                    &cleanup_error
+                ),
                 "embedded bootstrap: failed to remove a partial token temp file"
             );
         }
@@ -711,7 +739,8 @@ async fn remove_stale_bootstrap_token(path: &Path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 tracing::warn!(
-                    error = %error,
+                    error =
+                        silverhand_backend_server::foundation::safe_log_field::safe_display(&error),
                     "embedded bootstrap: failed to clear a stale token artifact"
                 );
             }

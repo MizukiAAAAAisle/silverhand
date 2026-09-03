@@ -78,7 +78,9 @@ async fn read<P: ConversationAgentActivityReadPort>(
         Ok(Err(refusal)) => return refusal_wire(refusal),
         Err(error) => {
             tracing::error!(
-                error_chain=%crate::foundation::error::describe(&error),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&error))
+                ),
                 "conversation-agent-activity admission failed"
             );
             return internal();
@@ -105,7 +107,9 @@ async fn read<P: ConversationAgentActivityReadPort>(
                 Ok(response) => response,
                 Err(error) => {
                     tracing::error!(
-                        error_chain=%crate::foundation::error::describe(&error),
+                        error_chain = crate::foundation::safe_log_field::safe_display(
+                            &(crate::foundation::error::describe(&error))
+                        ),
                         "conversation-agent-activity payload projection failed"
                     );
                     internal()
@@ -113,7 +117,9 @@ async fn read<P: ConversationAgentActivityReadPort>(
             },
             Err(error) => {
                 tracing::error!(
-                    error_chain=%crate::foundation::error::describe(&error),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&error))
+                    ),
                     "conversation-agent-activity identity seal failed"
                 );
                 internal()
@@ -122,7 +128,9 @@ async fn read<P: ConversationAgentActivityReadPort>(
         Ok(Err(refusal)) => refusal_wire(refusal),
         Err(error) => {
             tracing::error!(
-                error_chain=%crate::foundation::error::describe(&error),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&error))
+                ),
                 "conversation-agent-activity projection failed"
             );
             internal()

@@ -62,7 +62,12 @@ async fn list<R: ActivityReadModel>(
     match state.0.list_activity(&viewer, workspace.as_ref()).await {
         Ok(value) => activity_wire(&value),
         Err(error) => {
-            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"Activity projection failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&error))
+                ),
+                "Activity projection failed"
+            );
             internal()
         }
     }

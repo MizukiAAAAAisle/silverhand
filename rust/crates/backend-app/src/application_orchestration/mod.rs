@@ -2,12 +2,14 @@ mod audit;
 mod bind;
 mod bootstrap;
 mod composition;
+pub(crate) mod conversation_debug_layer;
 // #task:2288 — the create-aftermath post-commit effect, relocated under this dual-role
 // application-orchestration context. Its `CreateAftermath` type is consumed by the crate root,
 // so it is `pub(crate)`; colocation adds no facade and does not merge it into the composition
 // internals above.
 pub(crate) mod create_aftermath;
 mod finalize;
+mod lane_mounts;
 mod resources;
 
 use audit::AuditWriters;

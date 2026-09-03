@@ -93,7 +93,7 @@ impl ScopeEventHub {
             ProductEvent::ViewerWorkspacesChanged {
                 change: ViewerWorkspaceChange::Added,
                 workspace_id: workspace.as_str().to_owned(),
-                role: Some(role.as_str()),
+                role: Some(role.as_str().to_owned()),
             },
         )
     }

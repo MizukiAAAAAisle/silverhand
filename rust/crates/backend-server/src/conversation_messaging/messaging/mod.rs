@@ -27,6 +27,7 @@ pub(crate) mod ack;
 pub mod adapters;
 pub(crate) mod admission;
 pub mod aftermath;
+pub(crate) mod agent_capability_wire;
 pub(crate) mod agent_output;
 pub(crate) mod author_wire;
 pub mod collaboration;
@@ -38,6 +39,7 @@ pub(crate) mod references;
 pub mod router;
 pub(crate) mod send_request;
 mod target_observer;
+pub(crate) mod target_refusal_wire;
 pub mod task;
 pub(crate) mod unresolved_wire;
 

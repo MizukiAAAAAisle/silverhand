@@ -79,6 +79,24 @@ impl Capability {
             Self::ManageSchedules => "manage_schedules",
         }
     }
+
+    /// Decode the closed persisted/wire vocabulary.
+    pub fn parse(token: &str) -> Option<Self> {
+        Some(match token {
+            "read_messages" => Self::ReadMessages,
+            "send_messages" => Self::SendMessages,
+            "read_tasks" => Self::ReadTasks,
+            "create_tasks" => Self::CreateTasks,
+            "write_tasks" => Self::WriteTasks,
+            "read_attachments" => Self::ReadAttachments,
+            "upload_attachments" => Self::UploadAttachments,
+            "create_threads" => Self::CreateThreads,
+            "create_channels" => Self::CreateChannels,
+            "manage_conversation_members" => Self::ManageConversationMembers,
+            "manage_schedules" => Self::ManageSchedules,
+            _ => return None,
+        })
+    }
 }
 
 /// The capabilities granted to a *freshly created* agent membership. Passing

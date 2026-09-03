@@ -306,7 +306,8 @@ where
         }
         InternalProfileWriteOutcome::StorageFailed(failure) => {
             tracing::error!(
-                error_chain = %error::describe(&failure),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
                 "internal-avatar write: avatar blob storage failed"
             );
             return avatar_storage_failed();
@@ -388,7 +389,8 @@ where
         // `avatar_storage_failed` → 400), NOT a bare `500`. Zero write, zero announce.
         InternalProfileWriteOutcome::StorageFailed(failure) => {
             tracing::error!(
-                error_chain = %error::describe(&failure),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
                 "internal-profile write: avatar blob storage failed"
             );
             avatar_storage_failed()
@@ -439,7 +441,8 @@ where
                 ProfileReadFault::Source(violation) => violation,
             };
             tracing::error!(
-                error_chain = %error::describe(cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(cause))),
                 "internal-profile write: post-commit reproject failed"
             );
             internal_error()
@@ -508,7 +511,8 @@ fn note_announce(subject: &AgentId, announce: AgentChangedAnnounce) {
     if let AgentChangedAnnounce::Failed(failure) = announce {
         tracing::warn!(
             agent = subject.as_str(),
-            error_chain = %error::describe(&failure),
+            error_chain =
+                crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
             "internal-profile write committed but the agent_changed announce failed"
         );
     }
@@ -519,7 +523,8 @@ fn note_cleanup(subject: &AgentId, cleanup: BlobCleanup) {
     if let BlobCleanup::Failed(failure) = cleanup {
         tracing::warn!(
             agent = subject.as_str(),
-            error_chain = %error::describe(&failure),
+            error_chain =
+                crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
             "internal-profile write: best-effort avatar blob cleanup failed (possible orphan)"
         );
     }

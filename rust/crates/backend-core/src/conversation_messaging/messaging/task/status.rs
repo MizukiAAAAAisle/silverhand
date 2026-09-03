@@ -42,7 +42,8 @@
 //! caller's concern; this module is only the transition-legality and `closed_at`
 //! decision.
 
-use super::spec::TaskStatus;
+use super::spec::{Assignee, Creator, TaskStatus};
+use crate::foundation::identity::AgentId;
 
 impl TaskStatus {
     /// The `status`-verb transitions the AGENT door permits from `self` — the
@@ -156,6 +157,50 @@ fn change_to(target: TaskStatus, current_closed_at: Option<i64>, now: i64) -> Ta
         _ => None,
     };
     TaskStatusChange { target, closed_at }
+}
+
+/// Why the AGENT `status` verb refused a task whose row was just read under the
+/// write lock. The transition arm is the table gate; the authority arm is the
+/// assignee/creator-self-stale gate. Kept distinct so the adapter maps each to its
+/// own product code (`invalid_transition` / `not_assignee`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum AgentStatusRefusal {
+    #[error(transparent)]
+    Transition(#[from] StatusTransitionRefusal),
+    #[error(
+        "only the assignee (or the creator of an unassigned self-created task) may update status"
+    )]
+    NotAssignee,
+}
+
+/// The AGENT `status` decision over a task's CURRENT row facts, decided as a unit
+/// so a caller cannot authorize on one snapshot and transition on another. The
+/// facts MUST be the ones read under the write lock (the row the write will touch),
+/// because the whole point is that a concurrent claim/unclaim can move `assignee`
+/// without moving `status`: authorizing on a pre-lock snapshot would let a stale
+/// permission apply.
+///
+/// Permission mirrors `updateStatusAgent`: the actor is the assignee, OR the task
+/// is unassigned (BOTH assignee columns empty) AND its creator is this same agent —
+/// the creator-self-stale branch that lets an agent advance its own never-claimed
+/// task. A human assignee or a different creator is refused before the transition
+/// is even consulted.
+pub fn agent_status_write_decision(
+    actor: &AgentId,
+    current_status: TaskStatus,
+    assignee: &Assignee,
+    creator: &Creator,
+    current_closed_at: Option<i64>,
+    target: TaskStatus,
+    now: i64,
+) -> Result<TaskStatusChange, AgentStatusRefusal> {
+    let is_assignee_self = matches!(assignee, Assignee::Agent(agent) if agent == actor);
+    let is_creator_self_stale = matches!(assignee, Assignee::Unassigned)
+        && matches!(creator, Creator::Agent(agent) if agent == actor);
+    if !is_assignee_self && !is_creator_self_stale {
+        return Err(AgentStatusRefusal::NotAssignee);
+    }
+    agent_status_change(current_status, target, current_closed_at, now).map_err(Into::into)
 }
 
 #[cfg(test)]

@@ -46,7 +46,8 @@ where
         Ok(None) => return not_found(),
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "agent-audit subject floor read failed"
             );
             return internal_error();
@@ -62,7 +63,8 @@ where
         Ok(None) => return not_found(),
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "agent-audit chats read failed"
             );
             return internal_error();

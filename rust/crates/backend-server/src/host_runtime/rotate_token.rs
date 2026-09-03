@@ -299,7 +299,8 @@ async fn resolve_and_admit<M: ComputerReadModel>(
         Ok(record) => record,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "host rotate-token read failed"
             );
             return Err(ResolveRejection::Internal);
@@ -349,7 +350,8 @@ fn custody_error_response(error: HostTokenRotationError) -> Response {
         }
         other => {
             tracing::error!(
-                error_chain = %error::describe(&other),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&other))),
                 "host rotate-token failed"
             );
             internal_error()

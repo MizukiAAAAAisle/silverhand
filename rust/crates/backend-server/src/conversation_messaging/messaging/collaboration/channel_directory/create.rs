@@ -8,13 +8,14 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    body::Bytes,
-    extract::{Extension, Path, Request, State},
+    extract::{Extension, FromRequest, Path, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
 };
-use serde_json::{Map, Value, json};
+use garde::Validate;
+use serde::Deserialize;
+use serde_json::json;
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
         collaboration::channel_directory::{
@@ -22,15 +23,82 @@ use silverhand_backend_core::{
             HumanChannelCreatePort, HumanChannelCreateRefusal, HumanChannelCreateRequest,
             create_human_channel,
         },
-        conversation_title::{CanonicalConversationTitle, ConversationTitleIssue},
+        conversation_title::CanonicalConversationTitle,
     },
     foundation::identity::{UserId, WorkspaceId},
 };
 
 use super::{ACTIVE_PATH, error, identity_channel, internal};
-use crate::conversation_messaging::messaging::collaboration::json_body::{
-    BodyRead, payload_too_large, read_body,
-};
+use crate::foundation::wire_admission::ValidatedJson;
+use crate::foundation::wire_patch::RequiredPatchField;
+
+/// `POST` body — the reference `z.object({ title, member_agent_ids: array(string).default([]),
+/// member_user_ids: array(string).optional(), visibility: enum.optional() })` (NOT `.strict()`,
+/// unknown keys stripped). Serde owns the shape; the title's canonical grammar is a stateless
+/// garde delegate to `CanonicalConversationTitle::parse` (→ minimal 422); workspace existence,
+/// membership legality and title uniqueness stay the writer-reserved core authority.
+#[derive(Debug, Deserialize, Validate)]
+struct CreateChannelBody {
+    #[garde(custom(valid_channel_title))]
+    title: String,
+    #[serde(default)]
+    #[garde(skip)]
+    member_agent_ids: Vec<String>,
+    /// `z.array(z.string()).optional()` — OPTIONAL but NOT nullable: an absent key is legal
+    /// (→ `None`), but an explicit `null` is refused (optional ≠ nullable). `RequiredPatchField`
+    /// carries exactly that two-arm distinction, so `{"member_user_ids": null}` is a native
+    /// decode fault rather than silently `None`.
+    #[serde(default)]
+    #[garde(skip)]
+    member_user_ids: RequiredPatchField<Vec<String>>,
+    /// `ConversationVisibilitySchema.optional()` — optional but NOT nullable, same algebra as
+    /// `member_user_ids`: an explicit `null` is a native decode fault, not the server default.
+    #[serde(default)]
+    #[garde(skip)]
+    visibility: RequiredPatchField<WireChannelVisibility>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WireChannelVisibility {
+    Private,
+    Public,
+}
+
+impl From<WireChannelVisibility> for ChannelVisibility {
+    fn from(value: WireChannelVisibility) -> Self {
+        match value {
+            WireChannelVisibility::Private => ChannelVisibility::Private,
+            WireChannelVisibility::Public => ChannelVisibility::Public,
+        }
+    }
+}
+
+fn valid_channel_title(value: &str, _: &()) -> garde::Result {
+    CanonicalConversationTitle::parse(value)
+        .map(|_| ())
+        .map_err(|_| garde::Error::new("title is not a valid channel title"))
+}
+
+impl CreateChannelBody {
+    fn into_request(self) -> Result<HumanChannelCreateRequest, ()> {
+        let title = CanonicalConversationTitle::parse(&self.title).map_err(|_| ())?;
+        let member_user_ids = match self.member_user_ids {
+            RequiredPatchField::Missing => None,
+            RequiredPatchField::Value(users) => Some(users),
+        };
+        let visibility = match self.visibility {
+            RequiredPatchField::Missing => None,
+            RequiredPatchField::Value(visibility) => Some(ChannelVisibility::from(visibility)),
+        };
+        Ok(HumanChannelCreateRequest::new(
+            title,
+            self.member_agent_ids,
+            member_user_ids,
+            visibility,
+        ))
+    }
+}
 
 struct Inner<P, A> {
     port: P,
@@ -75,20 +143,18 @@ where
         return error(StatusCode::BAD_REQUEST, "workspace id required");
     };
 
-    // Hono maps JSON parse failure to `{}` before invoking the production Zod
-    // schema. Preserve that distinction from a valid non-object JSON value.
-    let body = match read_body(request).await {
-        BodyRead::Within(body) => body,
-        BodyRead::OverLimit => return payload_too_large(),
-        // TS `c.req.json().catch(() => ({}))` sends both malformed JSON and a
-        // transport read failure through the same empty-object schema input.
-        BodyRead::Unreadable => Bytes::new(),
+    // Body-first: the shared `ValidatedJson` extractor decodes and runs the title grammar
+    // before the persistence op receives a bounded typed request. Structural faults keep
+    // native 415/400/422; a title-rule failure collapses to the minimal 422. Workspace
+    // existence, governance, membership and title uniqueness remain the writer-reserved
+    // SQLite unit's authority (a value-first admission ordering, matching TS).
+    let body = match ValidatedJson::<CreateChannelBody>::from_request(request, &()).await {
+        Ok(ValidatedJson(body)) => body,
+        Err(rejection) => return rejection.into_response(),
     };
-    let value = serde_json::from_slice(&body).unwrap_or_else(|_| Value::Object(Map::new()));
-    drop(body);
-    let request = match parse_request(value) {
-        Ok(value) => value,
-        Err(issues) => return invalid(issues),
+    let request = match body.into_request() {
+        Ok(request) => request,
+        Err(()) => return crate::foundation::wire_admission::invalid_input(),
     };
     let requested_title = request.title().title().to_owned();
 
@@ -104,7 +170,9 @@ where
         Ok(Ok(execution)) => {
             if let Some(failure) = execution.publication_failure() {
                 tracing::error!(
-                    error_chain = %crate::foundation::error::describe(failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(failure))
+                    ),
                     "committed channel creation publication failed"
                 );
             }
@@ -113,167 +181,14 @@ where
         Ok(Err(reason)) => refusal(reason, &requested_title),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::foundation::error::describe(&failure),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&failure))
+                ),
                 "channel creation failed"
             );
             internal()
         }
     }
-}
-
-fn parse_request(value: Value) -> Result<HumanChannelCreateRequest, Vec<Value>> {
-    let Value::Object(mut object) = value else {
-        return Err(vec![invalid_type("object", received(&value), vec![])]);
-    };
-    let mut issues = Vec::new();
-
-    let title = match object.remove("title") {
-        None => {
-            issues.push(json!({
-                "code": "invalid_type", "expected": "string", "received": "undefined",
-                "path": ["title"], "message": "Required"
-            }));
-            None
-        }
-        Some(Value::String(raw)) => match CanonicalConversationTitle::parse(&raw) {
-            Ok(value) => Some(value),
-            Err(issue) => {
-                issues.push(title_issue(issue));
-                None
-            }
-        },
-        Some(value) => {
-            issues.push(invalid_type(
-                "string",
-                received(&value),
-                vec![json!("title")],
-            ));
-            None
-        }
-    };
-
-    let agents = string_array(
-        object.remove("member_agent_ids"),
-        "member_agent_ids",
-        true,
-        &mut issues,
-    );
-    let users = string_array(
-        object.remove("member_user_ids"),
-        "member_user_ids",
-        false,
-        &mut issues,
-    );
-    let visibility = match object.remove("visibility") {
-        None => None,
-        Some(Value::String(raw)) => match ChannelVisibility::parse(&raw) {
-            Ok(value) => Some(value),
-            Err(_) => {
-                issues.push(json!({
-                    "received": raw,
-                    "code": "invalid_enum_value",
-                    "options": ["private", "public"],
-                    "path": ["visibility"],
-                    "message": format!("Invalid enum value. Expected 'private' | 'public', received '{raw}'")
-                }));
-                None
-            }
-        },
-        Some(value) => {
-            let kind = received(&value);
-            issues.push(json!({
-                "expected": "'private' | 'public'", "received": kind,
-                "code": "invalid_type", "path": ["visibility"],
-                "message": format!("Expected 'private' | 'public', received {kind}")
-            }));
-            None
-        }
-    };
-
-    if !issues.is_empty() {
-        return Err(issues);
-    }
-    Ok(HumanChannelCreateRequest::new(
-        title.expect("title exists when issue set is empty"),
-        agents.unwrap_or_default(),
-        users,
-        visibility,
-    ))
-}
-
-fn string_array(
-    value: Option<Value>,
-    field: &'static str,
-    default_empty: bool,
-    issues: &mut Vec<Value>,
-) -> Option<Vec<String>> {
-    let Some(value) = value else {
-        return default_empty.then(Vec::new);
-    };
-    let Value::Array(values) = value else {
-        issues.push(invalid_type("array", received(&value), vec![json!(field)]));
-        return None;
-    };
-    let mut output = Vec::with_capacity(values.len());
-    for (index, value) in values.into_iter().enumerate() {
-        match value {
-            Value::String(value) => output.push(value),
-            value => issues.push(invalid_type(
-                "string",
-                received(&value),
-                vec![json!(field), json!(index)],
-            )),
-        }
-    }
-    Some(output)
-}
-
-fn invalid_type(expected: &str, received: &str, path: Vec<Value>) -> Value {
-    json!({
-        "code": "invalid_type", "expected": expected, "received": received,
-        "path": path, "message": format!("Expected {expected}, received {received}")
-    })
-}
-
-fn received(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-
-fn title_issue(issue: ConversationTitleIssue) -> Value {
-    match issue {
-        ConversationTitleIssue::Empty => json!({
-            "code": "too_small", "minimum": 1, "type": "string", "inclusive": true,
-            "message": "title must not be empty", "path": ["title"]
-        }),
-        ConversationTitleIssue::TooLong { code_points } => json!({
-            "code": "too_big", "maximum": 128, "type": "string", "inclusive": true,
-            "message": format!("title must be at most 128 characters (got {code_points})"),
-            "path": ["title"]
-        }),
-        ConversationTitleIssue::ForbiddenCodePoint { code_point, index } => json!({
-            "code": "custom",
-            "message": format!(
-                "title must not contain U+{code_point:04X} (position {}): invisible characters and multi-code-point emoji sequences are not addressable",
-                index + 1
-            ),
-            "path": ["title"]
-        }),
-    }
-}
-
-fn invalid(issues: Vec<Value>) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({"error":"invalid input", "issues":issues})),
-    )
-        .into_response()
 }
 
 fn refusal(refusal: HumanChannelCreateRefusal, requested_title: &str) -> Response {

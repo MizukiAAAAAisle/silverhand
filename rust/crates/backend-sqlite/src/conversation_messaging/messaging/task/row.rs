@@ -23,10 +23,10 @@
 //! Both gates turn a broken row into a safe-500 carrying the offending column.
 
 use silverhand_backend_core::conversation_messaging::messaging::task::{
-    BoardKey, TaskAggregate, TaskDisplaySidecars, TaskRow, TaskRowCorruption,
+    AgentEventNames, BoardKey, TaskAggregate, TaskDisplaySidecars, TaskRow, TaskRowCorruption,
 };
-use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-use sqlx::{Row, sqlite::SqliteRow};
+use silverhand_backend_core::foundation::{identity::AgentId, persistence::PersistenceFailure};
+use sqlx::{Row, Sqlite, Transaction, sqlite::SqliteRow};
 
 use super::{corrupt, driver};
 
@@ -117,6 +117,7 @@ fn row_local_field(reason: TaskRowCorruption) -> &'static str {
         E::Creator => "tasks.creator",
         E::Assignee => "tasks.assignee",
         E::LastEditor => "tasks.last_editor",
+        E::CreatedAt => "tasks.created_at",
         E::ClosedAt => "tasks.closed_at",
     }
 }
@@ -209,4 +210,23 @@ pub(super) fn decode_sidecars(row: &SqliteRow) -> Result<TaskDisplaySidecars, Pe
         creator_agent_name: row.try_get("creator_agent_name").map_err(driver)?,
         creator_user_name: row.try_get("creator_user_name").map_err(driver)?,
     })
+}
+
+/// Read the two task-event name projections for one exact agent inside the
+/// caller's transaction. Content uses `name`; metadata uses
+/// `display_name ?? name ?? id`.
+pub(super) async fn agent_event_names(
+    tx: &mut Transaction<'_, Sqlite>,
+    agent: &AgentId,
+) -> Result<Option<AgentEventNames>, PersistenceFailure> {
+    let row = sqlx::query("SELECT name, display_name FROM agents WHERE id = ?")
+        .bind(agent.as_str())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(driver)?;
+    Ok(row.map(|row| {
+        let handle: String = row.get("name");
+        let display: Option<String> = row.get("display_name");
+        AgentEventNames::new(handle.clone(), display.unwrap_or(handle))
+    }))
 }

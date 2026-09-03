@@ -235,7 +235,12 @@ where
         RuntimePrincipal::ConversationSlot { .. } => DirectPairAllocation::Forbidden,
     };
     let stream = address
-        .resolve(credential.agent(), request.target(), allocation)
+        .resolve(
+            credential.agent(),
+            request.target(),
+            allocation,
+            silverhand_backend_core::conversation_messaging::messaging::DeliveryIntent::Write,
+        )
         .await
         .map_err(|source| {
             AgentRefusal::Authority(crate::foundation::error::BoundaryFailure::new(source))
@@ -435,6 +440,7 @@ mod tests {
             _agent: &AgentId,
             _target: &str,
             _allocation: DirectPairAllocation,
+            _intent: silverhand_backend_core::conversation_messaging::messaging::DeliveryIntent,
         ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
             Ok(self.0.clone())
         }

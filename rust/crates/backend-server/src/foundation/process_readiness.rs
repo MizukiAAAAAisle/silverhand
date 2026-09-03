@@ -177,7 +177,10 @@ where
     // it below, so the boolean and the cause are the same answer rendered twice.
     let refusal = state.write_probe.probe_write().await.err().map(|cause| {
         let described = error::describe(&cause);
-        tracing::warn!(error_chain = %described, "readiness write probe was refused");
+        tracing::warn!(
+            error_chain = crate::foundation::safe_log_field::safe_display(&(described)),
+            "readiness write probe was refused"
+        );
         described
     });
 

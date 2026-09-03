@@ -182,7 +182,8 @@ where
         Ok(detail) => detail,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "agent-patch pre-write read failed"
             );
             return internal_error();
@@ -246,7 +247,10 @@ where
                 AgentProfileWriteError::Persistence(cause) => error::describe(cause),
                 AgentProfileWriteError::UntrustworthyWriteFact => err.to_string(),
             };
-            tracing::error!(error_chain = %leaked, "agent-patch write failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(&(leaked)),
+                "agent-patch write failed"
+            );
             return internal_error();
         }
     };
@@ -268,7 +272,8 @@ where
     if let AgentChangedAnnounce::Failed(failure) = announce {
         tracing::error!(
             agent_id = id.as_str(),
-            error_chain = %error::describe(&failure),
+            error_chain =
+                crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
             "agent-patch committed but the agent_changed announce failed"
         );
     }

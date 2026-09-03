@@ -161,7 +161,11 @@ where
             Json(UsersListResponse { users }).into_response()
         }
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "user directory read failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "user directory read failed"
+            );
             internal_error()
         }
     }
@@ -234,13 +238,18 @@ where
         // serve the stable, detail-free `avatar_storage_failed`.
         Ok(AvatarUploadOutcome::StorageFailed(failure)) => {
             tracing::error!(
-                error_chain = %error::describe(&failure),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
                 "avatar blob store put failed"
             );
             avatar_storage_failed()
         }
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "avatar upload failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "avatar upload failed"
+            );
             internal_error()
         }
     }
@@ -294,7 +303,11 @@ where
             internal_error()
         }
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "avatar clear failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "avatar clear failed"
+            );
             internal_error()
         }
     }
@@ -337,19 +350,25 @@ where
         Ok(AvatarFetchOutcome::StorageUnavailable { cause }) => {
             match &cause {
                 Some(failure) => tracing::error!(
-                    user_id = %user_id.as_str(),
-                    error_chain = %error::describe(failure),
+                    user_id = crate::foundation::safe_log_field::safe_display(&(user_id.as_str())),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(error::describe(failure))
+                    ),
                     "avatar blob read failed"
                 ),
                 None => tracing::error!(
-                    user_id = %user_id.as_str(),
+                    user_id = crate::foundation::safe_log_field::safe_display(&(user_id.as_str())),
                     "avatar row points at a missing blob"
                 ),
             }
             internal_error()
         }
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "avatar fetch failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "avatar fetch failed"
+            );
             internal_error()
         }
     }
@@ -447,7 +466,8 @@ fn avatar_committed_upload(committed: CommittedAvatar) -> Response {
 fn log_blob_cleanup(cleanup: &BlobCleanup, origin: &str) {
     if let BlobCleanup::Failed(failure) = cleanup {
         tracing::error!(
-            error_chain = %error::describe(failure),
+            error_chain =
+                crate::foundation::safe_log_field::safe_display(&(error::describe(failure))),
             origin,
             "avatar blob cleanup failed; a storage blob is orphaned"
         );
@@ -543,7 +563,7 @@ fn file_field_required() -> Response {
 /// persistence corruption, the crate's safe-500 seam, never a product 404.
 fn dangling_session(user_id: &UserId, origin: &str) -> Response {
     tracing::error!(
-        user_id = %user_id.as_str(),
+        user_id = crate::foundation::safe_log_field::safe_display(&(user_id.as_str())),
         origin,
         "an authenticated session resolves to no user row"
     );

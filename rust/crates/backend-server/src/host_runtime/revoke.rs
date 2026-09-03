@@ -118,7 +118,8 @@ where
         Ok(record) => record,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "host-revoke read failed"
             );
             return internal_error();
@@ -136,13 +137,17 @@ where
             // logged and the revoke still reports success.
             if let Some(failure) = &ended.availability_announcement_failure {
                 tracing::error!(
-                    error_chain = %error::describe(failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(error::describe(failure))
+                    ),
                     "host-revoke availability announce failed"
                 );
             }
             if let Some(failure) = &ended.daemon_disconnect_failure {
                 tracing::error!(
-                    error_chain = %error::describe(failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(error::describe(failure))
+                    ),
                     "host-revoke daemon disconnect failed"
                 );
             }
@@ -161,7 +166,8 @@ where
             .into_response(),
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "host-revoke failed"
             );
             internal_error()

@@ -141,6 +141,39 @@ fn channel() -> ConversationId {
     ConversationId::parse(CHANNEL).unwrap()
 }
 
+#[tokio::test]
+async fn target_refusal_observation_preserves_explicit_read_intent_and_forbidden_allocation() {
+    let fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let opened = Opened::default();
+    let refusals = Refusals::default();
+    let target = store.target_address(opened.clone(), refusals.clone());
+
+    assert_eq!(
+        target
+            .resolve(
+                &agent(),
+                "dm:@hidden",
+                DirectPairAllocation::Forbidden,
+                DeliveryIntent::Read,
+            )
+            .await
+            .unwrap(),
+        Err(AddressRefusal::Unresolved)
+    );
+    assert!(opened.0.lock().unwrap().is_empty());
+    assert_eq!(
+        refusals.0.lock().unwrap().as_slice(),
+        &[RefusalRecord {
+            refusal: AddressRefusal::Unresolved,
+            reason: TargetAddressOperatorReason::DirectPairNotFound,
+            address: "dm:@hidden".to_owned(),
+            principal: AGENT.to_owned(),
+            intent: DeliveryIntent::Read,
+        }]
+    );
+}
+
 async fn seed(db: &mut SqliteConnection) {
     sqlx::query(
         "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
@@ -244,6 +277,7 @@ async fn target_resolution_covers_all_grammar_arms_and_required_pair_announcemen
             &agent(),
             "#conv:conv000000000001/thread:root000000000001",
             DirectPairAllocation::Permitted,
+            DeliveryIntent::Write,
         )
         .await
         .unwrap()
@@ -256,6 +290,7 @@ async fn target_resolution_covers_all_grammar_arms_and_required_pair_announcemen
             &agent(),
             "#Product%20Space/General%20Chat",
             DirectPairAllocation::Permitted,
+            DeliveryIntent::Write,
         )
         .await
         .unwrap()
@@ -273,19 +308,34 @@ async fn target_resolution_covers_all_grammar_arms_and_required_pair_announcemen
         .await
         .unwrap();
     let folded = target
-        .resolve(&agent(), "#STRASSE/kelvin", DirectPairAllocation::Permitted)
+        .resolve(
+            &agent(),
+            "#STRASSE/kelvin",
+            DirectPairAllocation::Permitted,
+            DeliveryIntent::Write,
+        )
         .await
         .unwrap()
         .unwrap();
     assert_eq!(folded.conversation.as_str(), CHANNEL);
 
     let first = target
-        .resolve(&agent(), "dm:@peer", DirectPairAllocation::Permitted)
+        .resolve(
+            &agent(),
+            "dm:@peer",
+            DirectPairAllocation::Permitted,
+            DeliveryIntent::Write,
+        )
         .await
         .unwrap()
         .unwrap();
     let second = target
-        .resolve(&agent(), "dm:@peer", DirectPairAllocation::Permitted)
+        .resolve(
+            &agent(),
+            "dm:@peer",
+            DirectPairAllocation::Permitted,
+            DeliveryIntent::Write,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -294,14 +344,24 @@ async fn target_resolution_covers_all_grammar_arms_and_required_pair_announcemen
 
     assert_eq!(
         target
-            .resolve(&agent(), "dm:@hidden", DirectPairAllocation::Forbidden)
+            .resolve(
+                &agent(),
+                "dm:@hidden",
+                DirectPairAllocation::Forbidden,
+                DeliveryIntent::Write
+            )
             .await
             .unwrap(),
         Err(AddressRefusal::Unresolved)
     );
     assert_eq!(
         target
-            .resolve(&agent(), "not-an-address", DirectPairAllocation::Permitted)
+            .resolve(
+                &agent(),
+                "not-an-address",
+                DirectPairAllocation::Permitted,
+                DeliveryIntent::Write
+            )
             .await
             .unwrap(),
         Err(AddressRefusal::Malformed)
@@ -339,7 +399,12 @@ async fn a_thread_suffix_cannot_create_a_missing_direct_pair() {
 
     assert_eq!(
         target
-            .resolve(&agent(), address, DirectPairAllocation::Permitted)
+            .resolve(
+                &agent(),
+                address,
+                DirectPairAllocation::Permitted,
+                DeliveryIntent::Write
+            )
             .await
             .unwrap(),
         Err(AddressRefusal::Unresolved)
@@ -375,7 +440,12 @@ async fn an_existing_direct_pair_still_validates_its_thread_root() {
     let target = store.target_address(opened.clone(), refusals.clone());
 
     target
-        .resolve(&agent(), "dm:@peer", DirectPairAllocation::Permitted)
+        .resolve(
+            &agent(),
+            "dm:@peer",
+            DirectPairAllocation::Permitted,
+            DeliveryIntent::Write,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -385,6 +455,7 @@ async fn an_existing_direct_pair_still_validates_its_thread_root() {
                 &agent(),
                 "dm:@peer/thread:root000000000099",
                 DirectPairAllocation::Permitted,
+                DeliveryIntent::Write
             )
             .await
             .unwrap(),
@@ -422,6 +493,7 @@ async fn named_resolution_refuses_an_ambiguous_root_before_looking_at_titles() {
                 &agent(),
                 "#Product%20Space/General%20Chat",
                 DirectPairAllocation::Permitted,
+                DeliveryIntent::Write
             )
             .await
             .unwrap(),
@@ -462,6 +534,7 @@ async fn store_derived_conversation_ids_must_be_addressable() {
             &agent(),
             "#Product%20Space/Broken",
             DirectPairAllocation::Permitted,
+            DeliveryIntent::Write,
         )
         .await
         .unwrap_err();
@@ -484,7 +557,12 @@ async fn store_derived_conversation_ids_must_be_addressable() {
         .await
         .target_address(Opened::default(), Refusals::default());
     let error = target
-        .resolve(&agent(), "dm:@peer", DirectPairAllocation::Permitted)
+        .resolve(
+            &agent(),
+            "dm:@peer",
+            DirectPairAllocation::Permitted,
+            DeliveryIntent::Write,
+        )
         .await
         .unwrap_err();
     assert!(format_source_chain(&error).contains("conversations.id"));

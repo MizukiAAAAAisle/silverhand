@@ -88,6 +88,23 @@ pub(crate) enum RequiredPatchField<T> {
     Value(T),
 }
 
+impl<T> RequiredPatchField<T> {
+    /// Collapse the wire-only presence algebra only after decoding has proved that a
+    /// present key was non-null. Domain admission may then use ordinary `Option<T>`
+    /// without losing the structural missing/null distinction at the boundary.
+    pub(crate) fn into_option(self) -> Option<T> {
+        match self {
+            Self::Missing => None,
+            Self::Value(value) => Some(value),
+        }
+    }
+}
+
+/// Current TS selector handoff treats an empty workspace id/name as absent.
+pub fn empty_selector_as_none(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.is_empty())
+}
+
 impl<'de, T> Deserialize<'de> for RequiredPatchField<T>
 where
     T: Deserialize<'de>,

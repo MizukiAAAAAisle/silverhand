@@ -37,7 +37,7 @@ use crate::{
 };
 
 pub use crate::conversation_messaging::daemon_post_commit::{
-    DaemonDeliveryEffects, OnboardingDeliveryAdapter,
+    ConversationMessageDeliveryAdapter, DaemonDeliveryEffects, OnboardingDeliveryAdapter,
 };
 pub use crate::foundation::daemon_transport::{
     DaemonDeliveryBuildError, DaemonDeliveryConfig, DaemonRegistryError, HOST_PROTOCOL_VERSION,
@@ -370,7 +370,8 @@ impl DaemonProtocolAdmission for ProductionProtocolAdmission {
                 "refused daemon on incompatible wire protocol"
             ),
             Err(cause) => tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 host_id,
                 "host admission refusal could not be recorded"
             ),
@@ -380,7 +381,8 @@ impl DaemonProtocolAdmission for ProductionProtocolAdmission {
     fn attached(&self, host_id: &str) {
         if let Err(cause) = self.0.clear(host_id) {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 host_id,
                 "host admission refusal could not be cleared after attachment"
             );
@@ -432,8 +434,12 @@ where
                     Ok(SeedAttempt::Sealed) => {
                         if let Err(cause) = runtime.publish_host_connection_changed(&owner, &host) {
                             tracing::error!(
-                                error_chain = %error::describe(&cause),
-                                host_id = %host.as_str(),
+                                error_chain = crate::foundation::safe_log_field::safe_display(
+                                    &(error::describe(&cause))
+                                ),
+                                host_id = crate::foundation::safe_log_field::safe_display(
+                                    &(host.as_str())
+                                ),
                                 "host status seed landed but connection invalidation failed"
                             );
                         }
@@ -448,8 +454,11 @@ where
                     ) => break,
                     Err(cause) => {
                         tracing::error!(
-                            error_chain = %error::describe(&cause),
-                            host_id = %host.as_str(),
+                            error_chain = crate::foundation::safe_log_field::safe_display(
+                                &(error::describe(&cause))
+                            ),
+                            host_id =
+                                crate::foundation::safe_log_field::safe_display(&(host.as_str())),
                             "host status seed chain failed"
                         );
                         break;

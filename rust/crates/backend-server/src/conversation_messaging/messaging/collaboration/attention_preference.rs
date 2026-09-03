@@ -5,13 +5,14 @@ mod tests;
 
 use axum::{
     Json, Router,
-    body::to_bytes,
-    extract::{Extension, Path, Request, State},
+    extract::{Extension, FromRequest, Path, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, put},
 };
-use serde_json::{Map, Value, json};
+use garde::Validate;
+use serde::Deserialize;
+use serde_json::json;
 use silverhand_backend_core::{
     conversation_messaging::messaging::collaboration::attention_preference::{
         AttentionPreferenceAftermath, AttentionPreferencePort, ChannelAttentionAdmissionRefusal,
@@ -24,8 +25,48 @@ use silverhand_backend_core::{
 };
 use std::sync::Arc;
 
+use crate::foundation::wire_admission::ValidatedJson;
+
 pub const CHANNEL_PATH: &str = "/api/conversations/{id}/attention-preference";
 pub const WORKSPACE_PATH: &str = "/api/workspaces/{id}/attention-preference";
+
+/// `PUT` channel body — the reference `z.object({ mode: z.enum([...]) })` (NOT `.strict()`,
+/// so an unknown key is STRIPPED, not refused). Serde owns the shape and enum: an unknown
+/// value, wrong type, or missing key is a native decode fault; the shared [`ValidatedJson`]
+/// object-only floor rejects an array before it can bind positionally. There is no
+/// stateless rule, so every garde field is skipped. The wire enum is a thin server-side
+/// mirror of the core `ChannelAttentionMode` (core stays wire-free).
+#[derive(Debug, Deserialize, Validate)]
+struct ChannelPreferenceBody {
+    #[garde(skip)]
+    mode: WireChannelAttentionMode,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WireChannelAttentionMode {
+    All,
+    Mentions,
+    Mute,
+}
+
+impl From<WireChannelAttentionMode> for ChannelAttentionMode {
+    fn from(value: WireChannelAttentionMode) -> Self {
+        match value {
+            WireChannelAttentionMode::All => ChannelAttentionMode::All,
+            WireChannelAttentionMode::Mentions => ChannelAttentionMode::Mentions,
+            WireChannelAttentionMode::Mute => ChannelAttentionMode::Mute,
+        }
+    }
+}
+
+/// `PUT` workspace body — the reference `z.object({ muted: z.boolean() })` (NOT `.strict()`,
+/// unknown keys stripped). No stateless rule.
+#[derive(Debug, Deserialize, Validate)]
+struct WorkspacePreferenceBody {
+    #[garde(skip)]
+    muted: bool,
+}
 
 struct Inner<P, A> {
     port: P,
@@ -52,6 +93,22 @@ where
         .with_state(state)
 }
 
+/// Mutation-only registrar used by convergence mounts that own the two reviewed
+/// write faces but not the pre-existing workspace preference read. Keeping this
+/// split explicit prevents merging a multi-method leaf router from silently
+/// widening the mounted method+path set.
+pub fn write_router<P, A>(port: P, aftermath: A) -> Router
+where
+    P: AttentionPreferencePort + Send + Sync + 'static,
+    A: AttentionPreferenceAftermath + Send + Sync + 'static,
+{
+    let state = AttentionState(Arc::new(Inner { port, aftermath }));
+    Router::new()
+        .route(CHANNEL_PATH, put(set_channel::<P, A>))
+        .route(WORKSPACE_PATH, put(set_workspace::<P, A>))
+        .with_state(state)
+}
+
 async fn set_channel<P: AttentionPreferencePort, A: AttentionPreferenceAftermath>(
     State(state): State<AttentionState<P, A>>,
     principal: Option<Extension<UserId>>,
@@ -71,16 +128,23 @@ async fn set_channel<P: AttentionPreferencePort, A: AttentionPreferenceAftermath
         Ok(Ok(v)) => v,
         Ok(Err(r)) => return channel_admission_refusal(r),
         Err(e) => {
-            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"channel attention admission failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&e))
+                ),
+                "channel attention admission failed"
+            );
             return internal();
         }
     };
-    let value = read_json(request).await;
-    let mode = match parse_channel_body(&value) {
-        Ok(v) => v,
-        Err(issues) => return invalid(issues),
+    // Authority-first: access is resolved before the body is polled, so the body is never
+    // held across a SQLite writer reservation. The shared `ValidatedJson` extractor runs
+    // deferred (after admit): structural faults keep native 415/400/422, no leaf parser.
+    let value = match ValidatedJson::<ChannelPreferenceBody>::from_request(request, &()).await {
+        Ok(ValidatedJson(body)) => body,
+        Err(rejection) => return rejection.into_response(),
     };
-    drop(value);
+    let mode = ChannelAttentionMode::from(value.mode);
     match commit_channel_attention_preference(&state.0.port, &state.0.aftermath, target, mode).await
     {
         Ok(Ok(done)) => {
@@ -89,7 +153,12 @@ async fn set_channel<P: AttentionPreferencePort, A: AttentionPreferenceAftermath
         }
         Ok(Err(r)) => channel_write_refusal(r),
         Err(e) => {
-            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"channel attention write failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&e))
+                ),
+                "channel attention write failed"
+            );
             internal()
         }
     }
@@ -113,7 +182,12 @@ async fn get_workspace<P: AttentionPreferencePort, A: AttentionPreferenceAfterma
         }
         Ok(Err(r)) => workspace_read_refusal(r),
         Err(e) => {
-            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"workspace attention read failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&e))
+                ),
+                "workspace attention read failed"
+            );
             internal()
         }
     }
@@ -141,16 +215,19 @@ async fn set_workspace<P: AttentionPreferencePort, A: AttentionPreferenceAfterma
         Ok(Ok(v)) => v,
         Ok(Err(r)) => return workspace_admission_refusal(r),
         Err(e) => {
-            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"workspace attention admission failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&e))
+                ),
+                "workspace attention admission failed"
+            );
             return internal();
         }
     };
-    let value = read_json(request).await;
-    let muted = match parse_workspace_body(&value) {
-        Ok(v) => v,
-        Err(issues) => return invalid(issues),
+    let muted = match ValidatedJson::<WorkspacePreferenceBody>::from_request(request, &()).await {
+        Ok(ValidatedJson(body)) => body.muted,
+        Err(rejection) => return rejection.into_response(),
     };
-    drop(value);
     match commit_workspace_attention_preference(&state.0.port, &state.0.aftermath, target, muted)
         .await
     {
@@ -160,65 +237,17 @@ async fn set_workspace<P: AttentionPreferencePort, A: AttentionPreferenceAfterma
         }
         Ok(Err(r)) => workspace_write_refusal(r),
         Err(e) => {
-            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"workspace attention write failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&e))
+                ),
+                "workspace attention write failed"
+            );
             internal()
         }
     }
 }
 
-async fn read_json(request: Request) -> Value {
-    match to_bytes(request.into_body(), usize::MAX)
-        .await
-        .ok()
-        .and_then(|v| serde_json::from_slice(&v).ok())
-    {
-        Some(value) => value,
-        None => json!({}),
-    }
-}
-fn parse_channel_body(value: &Value) -> Result<ChannelAttentionMode, Vec<Value>> {
-    let object = root_object(value)?;
-    match object.get("mode"){
-        Some(Value::String(raw))=>ChannelAttentionMode::parse(raw).ok_or_else(||vec![json!({"received":raw,"code":"invalid_enum_value","options":["all","mentions","mute"],"path":["mode"],"message":format!("Invalid enum value. Expected 'all' | 'mentions' | 'mute', received '{raw}'")})]),
-        Some(value)=>Err(vec![type_issue("string",received(value),"mode")]),None=>Err(vec![type_issue("string","undefined","mode")])
-    }
-}
-fn parse_workspace_body(value: &Value) -> Result<bool, Vec<Value>> {
-    let object = root_object(value)?;
-    match object.get("muted") {
-        Some(Value::Bool(v)) => Ok(*v),
-        Some(value) => Err(vec![type_issue("boolean", received(value), "muted")]),
-        None => Err(vec![type_issue("boolean", "undefined", "muted")]),
-    }
-}
-fn root_object(value: &Value) -> Result<&Map<String, Value>, Vec<Value>> {
-    value.as_object().ok_or_else(||vec![json!({"code":"invalid_type","expected":"object","received":received(value),"path":[],"message":format!("Expected object, received {}",received(value))})])
-}
-fn received(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-fn type_issue(expected: &str, actual: &str, path: &str) -> Value {
-    let message = if actual == "undefined" {
-        "Required".to_owned()
-    } else {
-        format!("Expected {expected}, received {actual}")
-    };
-    json!({"code":"invalid_type","expected":expected,"received":actual,"path":[path],"message":message})
-}
-fn invalid(issues: Vec<Value>) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({"error":"invalid input","issues":issues})),
-    )
-        .into_response()
-}
 fn error(status: StatusCode, message: &'static str) -> Response {
     (status, Json(json!({"error":message}))).into_response()
 }
@@ -276,6 +305,11 @@ fn report_effect(
     error:Option<&silverhand_backend_core::conversation_messaging::messaging::collaboration::attention_preference::AttentionPreferenceEffectFailure>,
 ) {
     if let Some(error) = error {
-        tracing::error!(error_chain=%crate::foundation::error::describe(error),"attention preference effect failed");
+        tracing::error!(
+            error_chain = crate::foundation::safe_log_field::safe_display(
+                &(crate::foundation::error::describe(error))
+            ),
+            "attention preference effect failed"
+        );
     }
 }

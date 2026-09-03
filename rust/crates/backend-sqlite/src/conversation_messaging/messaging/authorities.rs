@@ -2,14 +2,16 @@ use std::collections::HashSet;
 use std::error::Error;
 
 use silverhand_backend_core::conversation_messaging::messaging::task::{
-    AgentBoardResolver, AgentReadableBoards, BoardKey, BoardResolution, BoardScopeRequest,
-    BoardScopeSource, PairKey, ReadableBoard, ResolvedBoard, TaskParticipationReads,
-    TaskReadCapability,
+    AgentBoardResolver, AgentDisplayNameReader, AgentEventNames, AgentReadableBoards, BoardKey,
+    BoardResolution, BoardScopeRequest, BoardScopeSource, PairKey, ReadableBoard, ResolvedBoard,
+    TaskByIdCapability, TaskId, TaskParticipationReads, TaskReadCapability, TaskWriteCapability,
+    TaskWriteDoorReads, WorkspaceMembership,
 };
 use silverhand_backend_core::identity_access::agent_peer_profile::{
     CallerConversationPlacement, CallerReadMessagesCapability, CallerWorkspaceHorizon,
     WorkspacePlacement,
 };
+use silverhand_backend_core::identity_access::workspace_name::CanonicalWorkspaceName;
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
         AddressRefusal, AddressedPrincipals, CapabilityDenied, ChannelAccess, ChannelAccessRefusal,
@@ -30,7 +32,8 @@ use thiserror::Error;
 
 use super::{
     ENDPOINT_KIND_AGENT, ENDPOINT_KIND_HUMAN, MessagingStore, MessagingStoreError,
-    PLACEMENT_DIRECT_PAIR, SELECT_AGENT_PARTICIPATING_SET, SELECT_USER_PARTICIPATES, driver,
+    PLACEMENT_DIRECT_PAIR, SELECT_AGENT_PARTICIPATES, SELECT_AGENT_PARTICIPATING_SET,
+    SELECT_USER_PARTICIPATES, driver,
 };
 
 const SELECT_DIRECT_PAIR_INITIATION_CANDIDATE: &str = "WITH candidate AS (\
@@ -274,6 +277,168 @@ impl<'connection> ConversationAuthorityReader<'connection> {
                 .map_err(driver)?,
         };
         Ok(found.is_some())
+    }
+}
+
+/// Three-valued workspace membership for a task-write door: `Absent` (no such
+/// workspace → 404), `NotMember` (present but the agent may not target it → 403),
+/// `Member`. Mirrors the read board's 404-vs-403 split.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AgentWorkspaceMembership {
+    Absent,
+    NotMember,
+    Member,
+}
+
+/// The connection-bound authority a task-WRITE door consults BEFORE the write
+/// transaction (matching TS, which resolves workspace membership + the
+/// `write_tasks`/`create_tasks`/`read_tasks` capability pre-tx). It reads the same
+/// `workspaces`/`workspace_members`/`workspace_agent_capabilities` tables the read
+/// board and send gate already own, through the shared parameterized
+/// [`capability_predicate`] — each task capability named by its own token, never
+/// borrowed. It touches no `tasks` row: authorization is a fact about the workspace,
+/// not the task.
+pub(crate) struct TaskWriteAuthorityReader<'connection> {
+    connection: &'connection mut SqliteConnection,
+}
+
+impl<'connection> TaskWriteAuthorityReader<'connection> {
+    pub(crate) fn new(connection: &'connection mut SqliteConnection) -> Self {
+        Self { connection }
+    }
+
+    /// Resolve the agent's membership of a workspace board (`Absent`/`NotMember`/
+    /// `Member`) — an agent-home workspace admits only its owner, every other its
+    /// `workspace_members` rows. The parity of `isAgentWorkspaceMember` folded with
+    /// the route's `workspaces.get` existence check into one read (no check-then-act
+    /// gap).
+    pub(crate) async fn agent_workspace_membership(
+        &mut self,
+        workspace: &WorkspaceId,
+        agent: &AgentId,
+    ) -> Result<AgentWorkspaceMembership, PersistenceFailure> {
+        let verdict: Option<i64> = sqlx::query_scalar(AGENT_WORKSPACE_MEMBERSHIP)
+            .bind(agent.as_str())
+            .bind(agent.as_str())
+            .bind(workspace.as_str())
+            .fetch_optional(&mut *self.connection)
+            .await
+            .map_err(driver)?;
+        Ok(match verdict {
+            None => AgentWorkspaceMembership::Absent,
+            Some(0) => AgentWorkspaceMembership::NotMember,
+            Some(_) => AgentWorkspaceMembership::Member,
+        })
+    }
+
+    async fn has_capability(
+        &mut self,
+        query: &'static str,
+        workspace: &WorkspaceId,
+        agent: &AgentId,
+    ) -> Result<bool, PersistenceFailure> {
+        let granted: Option<i64> = sqlx::query_scalar(query)
+            .bind(agent.as_str())
+            .bind(agent.as_str())
+            .bind(workspace.as_str())
+            .fetch_optional(&mut *self.connection)
+            .await
+            .map_err(driver)?;
+        Ok(matches!(granted, Some(1)))
+    }
+
+    /// `write_tasks` on a workspace board (owner arm ∨ explicit grant).
+    pub(crate) async fn may_write_tasks(
+        &mut self,
+        workspace: &WorkspaceId,
+        agent: &AgentId,
+    ) -> Result<bool, PersistenceFailure> {
+        self.has_capability(WRITE_TASKS_CAPABILITY, workspace, agent)
+            .await
+    }
+
+    /// `create_tasks` on a workspace board.
+    pub(crate) async fn may_create_tasks(
+        &mut self,
+        workspace: &WorkspaceId,
+        agent: &AgentId,
+    ) -> Result<bool, PersistenceFailure> {
+        self.has_capability(CREATE_TASKS_CAPABILITY, workspace, agent)
+            .await
+    }
+
+    /// `read_tasks` on a workspace board — the edit door needs it in addition to
+    /// `write_tasks`, because an edit returns the full task definition.
+    pub(crate) async fn may_read_tasks(
+        &mut self,
+        workspace: &WorkspaceId,
+        agent: &AgentId,
+    ) -> Result<bool, PersistenceFailure> {
+        self.has_capability(READ_TASKS_CAPABILITY_POINT, workspace, agent)
+            .await
+    }
+
+    /// The workspaces a canonical name resolves to, in the TS `findAllByName`
+    /// DETERMINISTIC order (agent-home workspaces after regular ones, then
+    /// `created_at ASC`) — the explicit `ORDER BY` never relies on SQLite's
+    /// undeclared row order. A regular workspace matches by `name_key`, an
+    /// agent-home one by its raw `name` (it has no `name_key`); the two branches
+    /// mirror the store shape. The caller decides ambiguity (`len > 1`) BEFORE any
+    /// membership read, so a candidate count cannot be rewritten by a later
+    /// authorization result.
+    pub(crate) async fn find_workspaces_by_name(
+        &mut self,
+        canonical: &CanonicalWorkspaceName,
+    ) -> Result<Vec<WorkspaceId>, PersistenceFailure> {
+        let rows = sqlx::query(FIND_WORKSPACES_BY_NAME)
+            .bind(canonical.key())
+            .bind(canonical.name())
+            .fetch_all(&mut *self.connection)
+            .await
+            .map_err(driver)?;
+        rows.into_iter()
+            .map(|row| {
+                let id: String = row.try_get("id").map_err(driver)?;
+                WorkspaceId::parse(id).map_err(|_| corrupt("workspaces.id"))
+            })
+            .collect()
+    }
+
+    /// The conversation's placement-derived board (`BoardKey`) for the no-selector
+    /// arm, via the shared [`CONVERSATION_BOARD_PARTS`] decode on this connection.
+    /// `None` = no such conversation (the caller answers "no nameable board"); a
+    /// present row's placement is the closed v76 set, so a missing/unparseable
+    /// coordinate on it is schema corruption (safe-500), never a denial.
+    pub(crate) async fn conversation_board(
+        &mut self,
+        conversation: &ConversationId,
+    ) -> Result<Option<BoardKey>, PersistenceFailure> {
+        let Some(row) = sqlx::query(CONVERSATION_BOARD_PARTS)
+            .bind(conversation.as_str())
+            .fetch_optional(&mut *self.connection)
+            .await
+            .map_err(driver)?
+        else {
+            return Ok(None);
+        };
+        let placement: String = row.try_get("placement_kind").map_err(driver)?;
+        let board = match placement.as_str() {
+            PLACEMENT_WORKSPACE => {
+                let workspace: Option<String> = row.try_get("workspace_id").map_err(driver)?;
+                let workspace = workspace.ok_or_else(|| corrupt("conversations.workspace_id"))?;
+                BoardKey::Workspace(
+                    WorkspaceId::parse(workspace)
+                        .map_err(|_| corrupt("conversations.workspace_id"))?,
+                )
+            }
+            PLACEMENT_DIRECT_PAIR => {
+                let pair: Option<String> = row.try_get("pair_key").map_err(driver)?;
+                let pair = pair.ok_or_else(|| corrupt("conversations.pair_key"))?;
+                BoardKey::Pair(PairKey::parse(pair).map_err(|_| corrupt("conversations.pair_key"))?)
+            }
+            _ => return Err(corrupt("conversations.placement_kind")),
+        };
+        Ok(Some(board))
     }
 }
 
@@ -709,6 +874,7 @@ where
         agent: &AgentId,
         target: &str,
         allocation: DirectPairAllocation,
+        intent: DeliveryIntent,
     ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
         match self.resolve_unobserved(agent, target, allocation).await? {
             Ok(stream) => Ok(Ok(stream)),
@@ -719,7 +885,7 @@ where
                         rejected.reason,
                         target,
                         agent.clone(),
-                        DeliveryIntent::Write,
+                        intent,
                     ))
                     .await
                     .map_err(TargetAddressStoreError::Observation)?;
@@ -969,16 +1135,29 @@ fn decode_name_segment(segment: &str, max: usize) -> Option<String> {
 // the `tasks` table. Nothing below touches `tasks`: an authorization is a fact
 // about the conversation and the workspace, never about the task row.
 
-/// The `read_tasks` capability predicate for a workspace `w` — the SAME `owner_agent_id
-/// OR workspace_agent_capabilities` shape [`SendCapability::may_send_messages`] answers
-/// for `send_messages`, with the capability token swapped. Kept as a macro so the ONE rule
-/// text composes into the set statement below rather than being reassembled at a call site;
-/// the two agent binds fill the owner arm and the capability `EXISTS`. Consulted only for a
+/// The workspace agent-capability predicate for a workspace `w`, parameterized by
+/// the capability TOKEN: `(w.owner_agent_id = ? OR EXISTS (a `workspace_agent_capabilities`
+/// grant of that token))`. This is the ONE shape [`SendCapability::may_send_messages`]
+/// answers for `send_messages`; the token is the only capability-specific literal, so
+/// every task capability names its own token rather than borrowing another's. The two
+/// agent binds fill the owner arm and the capability `EXISTS`. Consulted only for a
 /// workspace board — a direct-pair board has no capability axis.
+macro_rules! capability_predicate {
+    ($token:literal) => {
+        concat!(
+            "(w.owner_agent_id = ? OR EXISTS (SELECT 1 FROM workspace_agent_capabilities c \
+             WHERE c.workspace_id = w.id AND c.agent_id = ? AND c.capability = ",
+            "'",
+            $token,
+            "'))"
+        )
+    };
+}
+
+/// The `read_tasks` predicate — a named instance of the shared [`capability_predicate`].
 macro_rules! read_tasks_predicate {
     () => {
-        "(w.owner_agent_id = ? OR EXISTS (SELECT 1 FROM workspace_agent_capabilities c \
-         WHERE c.workspace_id = w.id AND c.agent_id = ? AND c.capability = 'read_tasks'))"
+        capability_predicate!("read_tasks")
     };
 }
 
@@ -1019,6 +1198,39 @@ const AGENT_READ_MESSAGES_CAPABILITY: &str = "SELECT CASE WHEN w.owner_agent_id 
      EXISTS (SELECT 1 FROM workspace_agent_capabilities c WHERE c.workspace_id = w.id \
      AND c.agent_id = ? AND c.capability = 'read_messages') THEN 1 ELSE 0 END \
      FROM workspaces w WHERE w.id = ?";
+
+/// The `write_tasks` / `create_tasks` / `read_tasks` capability POINT reads for a
+/// workspace `w`, each built from the shared [`capability_predicate`] with its own
+/// token so no task capability borrows another's name. Shape 1/0 (existence is the
+/// caller's separate membership read); a direct-pair board has no capability axis
+/// and never consults these. The two agent binds fill the owner arm and the grant
+/// `EXISTS`; the third bind is the workspace id.
+const WRITE_TASKS_CAPABILITY: &str = concat!(
+    "SELECT CASE WHEN ",
+    capability_predicate!("write_tasks"),
+    " THEN 1 ELSE 0 END FROM workspaces w WHERE w.id = ?"
+);
+const CREATE_TASKS_CAPABILITY: &str = concat!(
+    "SELECT CASE WHEN ",
+    capability_predicate!("create_tasks"),
+    " THEN 1 ELSE 0 END FROM workspaces w WHERE w.id = ?"
+);
+const READ_TASKS_CAPABILITY_POINT: &str = concat!(
+    "SELECT CASE WHEN ",
+    capability_predicate!("read_tasks"),
+    " THEN 1 ELSE 0 END FROM workspaces w WHERE w.id = ?"
+);
+
+/// Resolve a canonical workspace name to its board candidates, in the TS
+/// `findAllByName` deterministic order: a regular workspace (`owner_agent_id IS
+/// NULL`) matches `name_key`, an agent-home one (`owner_agent_id IS NOT NULL`)
+/// matches its raw `name`; the explicit `ORDER BY` puts regular workspaces first
+/// (`owner_agent_id IS NULL` → 0) then `created_at ASC`, so the candidate list is
+/// deterministic and never leans on SQLite's undeclared row order.
+const FIND_WORKSPACES_BY_NAME: &str = "SELECT w.id FROM workspaces w WHERE \
+     (w.owner_agent_id IS NULL AND w.name_key = ?) \
+     OR (w.owner_agent_id IS NOT NULL AND w.name = ?) \
+     ORDER BY CASE WHEN w.owner_agent_id IS NULL THEN 0 ELSE 1 END, w.created_at ASC";
 
 /// A conversation's placement-derived board coordinates: the placement kind and
 /// the id each placement derives its board from. Mirrors `boardOfConversation`'s
@@ -1111,6 +1323,154 @@ where
             .filter(|workspace| admitted.contains(workspace.as_str()))
             .cloned()
             .collect())
+    }
+}
+
+impl<E> TaskWriteDoorReads for MessagingStore<E>
+where
+    E: Send + Sync,
+{
+    async fn may_mutate_task_by_id(
+        &mut self,
+        task: &TaskId,
+        agent: &AgentId,
+        required: TaskByIdCapability,
+    ) -> Result<bool, PersistenceFailure> {
+        let mut tx = self.pool.begin().await.map_err(driver)?;
+        let conversation: Option<String> =
+            sqlx::query_scalar("SELECT conversation_id FROM tasks WHERE id = ?")
+                .bind(task.as_str())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(driver)?;
+        let Some(conversation) = conversation else {
+            return Ok(false);
+        };
+        let participates: Option<i64> = sqlx::query_scalar(SELECT_AGENT_PARTICIPATES)
+            .bind(&conversation)
+            .bind(agent.as_str())
+            .bind(agent.as_str())
+            .bind(agent.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(driver)?;
+        if participates.is_none() {
+            return Ok(false);
+        }
+        let placement: Option<(String, Option<String>)> =
+            sqlx::query_as("SELECT placement_kind,workspace_id FROM conversations WHERE id = ?")
+                .bind(&conversation)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(driver)?;
+        let Some((kind, workspace)) = placement else {
+            return Ok(false);
+        };
+        if kind == "direct_pair" {
+            return Ok(true);
+        }
+        let Some(workspace) = (kind == "workspace").then_some(workspace).flatten() else {
+            return Ok(false);
+        };
+        let workspace =
+            WorkspaceId::parse(workspace).map_err(|_| corrupt("conversations.workspace_id"))?;
+        let mut reader = TaskWriteAuthorityReader::new(&mut tx);
+        if !reader.may_write_tasks(&workspace, agent).await? {
+            return Ok(false);
+        }
+        if required == TaskByIdCapability::WriteAndRead
+            && !reader.may_read_tasks(&workspace, agent).await?
+        {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    async fn workspaces_named(
+        &mut self,
+        canonical: &CanonicalWorkspaceName,
+    ) -> Result<Vec<WorkspaceId>, PersistenceFailure> {
+        let mut connection = self.pool.acquire().await.map_err(driver)?;
+        TaskWriteAuthorityReader::new(&mut connection)
+            .find_workspaces_by_name(canonical)
+            .await
+    }
+
+    async fn conversation_board(
+        &mut self,
+        conversation: &ConversationId,
+    ) -> Result<Option<BoardKey>, PersistenceFailure> {
+        let mut connection = self.pool.acquire().await.map_err(driver)?;
+        TaskWriteAuthorityReader::new(&mut connection)
+            .conversation_board(conversation)
+            .await
+    }
+
+    async fn workspace_membership(
+        &mut self,
+        workspace: &WorkspaceId,
+        agent: &AgentId,
+    ) -> Result<WorkspaceMembership, PersistenceFailure> {
+        let mut connection = self.pool.acquire().await.map_err(driver)?;
+        let verdict = TaskWriteAuthorityReader::new(&mut connection)
+            .agent_workspace_membership(workspace, agent)
+            .await?;
+        Ok(match verdict {
+            AgentWorkspaceMembership::Absent => WorkspaceMembership::Absent,
+            AgentWorkspaceMembership::NotMember => WorkspaceMembership::NotMember,
+            AgentWorkspaceMembership::Member => WorkspaceMembership::Member,
+        })
+    }
+
+    async fn has_capability(
+        &mut self,
+        capability: TaskWriteCapability,
+        workspace: &WorkspaceId,
+        agent: &AgentId,
+    ) -> Result<bool, PersistenceFailure> {
+        let mut connection = self.pool.acquire().await.map_err(driver)?;
+        let mut reader = TaskWriteAuthorityReader::new(&mut connection);
+        match capability {
+            TaskWriteCapability::Create => reader.may_create_tasks(workspace, agent).await,
+            TaskWriteCapability::Write => reader.may_write_tasks(workspace, agent).await,
+            TaskWriteCapability::Read => reader.may_read_tasks(workspace, agent).await,
+        }
+    }
+}
+
+impl<E> AgentDisplayNameReader for MessagingStore<E>
+where
+    E: Send + Sync,
+{
+    async fn agent_display_name(
+        &self,
+        agent: &AgentId,
+    ) -> Result<Option<AgentEventNames>, PersistenceFailure> {
+        let row = sqlx::query("SELECT name, display_name FROM agents WHERE id = ?")
+            .bind(agent.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(driver)?;
+        Ok(row.map(|row| {
+            let handle: String = row.get("name");
+            let display: Option<String> = row.get("display_name");
+            AgentEventNames::new(handle.clone(), display.unwrap_or(handle))
+        }))
+    }
+}
+
+impl<E> silverhand_backend_core::conversation_messaging::messaging::task::AgentExistenceReader
+    for MessagingStore<E>
+where
+    E: Send + Sync,
+{
+    async fn agent_exists(&self, agent: &AgentId) -> Result<bool, PersistenceFailure> {
+        let present: Option<i64> = sqlx::query_scalar("SELECT 1 FROM agents WHERE id = ?")
+            .bind(agent.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(driver)?;
+        Ok(present.is_some())
     }
 }
 

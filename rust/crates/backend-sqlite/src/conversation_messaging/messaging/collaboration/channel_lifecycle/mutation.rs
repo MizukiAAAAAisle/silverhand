@@ -29,7 +29,7 @@ use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;
 
 use crate::conversation_messaging::messaging::{
-    MessagingStore, RESERVE_NEXT_SEQ, SELECT_LATEST_SEQ,
+    MessagingStore, RESERVE_NEXT_SEQ, SELECT_LATEST_SEQ, bump_stream_head_on,
 };
 
 use super::{ChannelLifecycleStoreError, load_channel_row, load_workspace_role};
@@ -425,6 +425,7 @@ where
         .bind(now)
         .execute(&mut *tx)
         .await?;
+        bump_stream_head_on(&mut tx, &conversation, None, seq).await?;
 
         assert_notice(&mut tx, &notice, &metadata).await?;
         let recipients = load_rename_recipients(&mut tx, &conversation).await?;

@@ -83,7 +83,8 @@ where
         Ok(verdict) => Json(NameAvailabilityDto::from(verdict)).into_response(),
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "name-availability probe failed"
             );
             (StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR_BODY).into_response()

@@ -188,7 +188,9 @@ where
         Ok(Err(StaleMessageResolutionAdmissionRefusal::Forbidden)) => return forbidden(),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::foundation::error::describe(&failure),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&failure))
+                ),
                 "stale-message resolution post authority failed"
             );
             return internal();
@@ -198,7 +200,9 @@ where
         Ok(bound) => bound,
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::foundation::error::describe(&failure),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&failure))
+                ),
                 "stale-message resolution admission identity seal failed"
             );
             return internal();
@@ -215,7 +219,9 @@ where
         Ok(Err(CapabilityDenied)) => return capability_denied(),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::foundation::error::describe(&failure),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&failure))
+                ),
                 "stale-message resolution capability authority failed"
             );
             return internal();

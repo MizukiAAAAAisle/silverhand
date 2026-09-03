@@ -24,6 +24,7 @@ pub(crate) mod error;
 pub(crate) mod multipart_transport;
 pub mod process_health;
 pub mod process_readiness;
+pub mod safe_log_field;
 pub mod scope_event_transport;
 pub(crate) mod scope_event_wire;
 pub mod server_info;

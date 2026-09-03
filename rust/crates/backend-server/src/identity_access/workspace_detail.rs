@@ -95,7 +95,8 @@ where
         Ok(detail) => detail,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "workspace-detail read failed"
             );
             return internal_error();
@@ -113,7 +114,8 @@ where
         }
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "workspace-detail read fact did not match the authenticated request"
             );
             internal_error()

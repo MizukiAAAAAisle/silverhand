@@ -210,7 +210,9 @@ impl From<HostInviteError> for BoundaryError {
 impl IntoResponse for BoundaryError {
     fn into_response(self) -> Response {
         tracing::error!(
-            error_chain = %error::describe(self.0.as_ref()),
+            error_chain = crate::foundation::safe_log_field::safe_display(
+                &(error::describe(self.0.as_ref()))
+            ),
             "create host invite failed"
         );
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()

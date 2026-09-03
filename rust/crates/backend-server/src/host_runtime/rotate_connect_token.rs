@@ -141,7 +141,8 @@ where
         Ok(record) => record,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "host connect-token rotate read failed"
             );
             return internal_error();
@@ -162,7 +163,9 @@ where
             // reports success.
             if let Some(failure) = &rotated.daemon_disconnect_failure {
                 tracing::error!(
-                    error_chain = %error::describe(failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(error::describe(failure))
+                    ),
                     "host connect-token rotate daemon disconnect failed"
                 );
             }
@@ -195,7 +198,8 @@ fn rotation_error_response(error: ConnectTokenRotationError) -> Response {
         }
         other => {
             tracing::error!(
-                error_chain = %error::describe(&other),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&other))),
                 "host connect-token rotate failed"
             );
             internal_error()

@@ -6,6 +6,7 @@ mod agent_enrollment;
 mod clock;
 mod governance;
 mod human_enrollment;
+mod membership;
 mod role;
 mod workspace_audience;
 
@@ -25,6 +26,16 @@ pub use human_enrollment::{
     HumanEnrollmentReadPort, HumanEnrollmentUnitOfWork, HumanUser, ViewerAnnounce,
     ViewerAnnounceFailure, ViewerWorkspacesChangedSink, WorkspaceUserMembership,
     add_workspace_human_member, human_enrollment_authorized,
+};
+pub use membership::{
+    AgentCapabilitySet, CapabilityReadOutcome, CapabilityReplaceOutcome,
+    CapabilityReplacePreflight, HumanRoleChange, HumanRoleChangeOutcome,
+    WorkspaceAgentRemovalOutcome, WorkspaceAgentRemovalPreflight, WorkspaceAgentRosterEntry,
+    WorkspaceCapabilityPort, WorkspaceHumanRemovalOutcome, WorkspaceHumanRosterEntry,
+    WorkspaceLeaveOutcome, WorkspaceMembershipAftermath, WorkspaceMembershipChanged,
+    WorkspaceMembershipPort, WorkspaceRoster, WorkspaceRosterRead,
+    WorkspaceViewerMembershipChangeKind, WorkspaceViewerMembershipChanged,
+    may_edit_agent_capabilities, role_meets,
 };
 pub use role::{WorkspaceRole, role_governs_workspace};
 pub use workspace_audience::WorkspaceHumanAudienceReadPort;

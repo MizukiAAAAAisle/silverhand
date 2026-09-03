@@ -63,9 +63,14 @@
 pub mod agent_list;
 pub mod aggregate;
 pub mod edit;
+pub mod event;
+pub mod human_board;
+pub mod point_detail;
 pub mod read;
 pub mod spec;
 pub mod status;
+pub mod write;
+pub mod write_door;
 
 pub use agent_list::{
     TaskCandidateFetch, TaskCandidateQuery, TaskListAccess, TaskListForbidden,
@@ -76,6 +81,21 @@ pub use aggregate::{
     SourceMessageId, TaskAggregate, TaskRow, TaskRowCorruption, ThreadRootId,
 };
 pub use edit::{EditPlan, TaskEditChange, plan_edit};
+pub use event::{
+    AgentEventNames, CreatePlacement, TaskEventAssignee, TaskEventFacts, TaskEventKind,
+    TaskEventMessage, TaskSystemActor, compose_claim_event, compose_create_event,
+    compose_edit_event, compose_status_event, compose_unclaim_event,
+};
+pub use human_board::{
+    HumanTaskBoardRead, TaskBoardAssigneeFilter, TaskBoardColumnPage, TaskBoardColumnRequest,
+    TaskBoardContainer, TaskBoardCounts, TaskBoardCreatorFilter, TaskBoardCursor, TaskBoardFacets,
+    TaskBoardFilters, TaskBoardPerson,
+};
+pub use point_detail::{
+    TaskAuthorizedPointRead, TaskConversationBoardRead, TaskEditorDisplay, TaskMessageRef,
+    TaskNavigation, TaskPointCandidate, TaskPointFetch, TaskPointSource, VisibleTaskPoint,
+    authorize_task_point, authorize_task_point_on,
+};
 pub use read::{
     AgentBoardResolver, AgentRead, AgentReadableBoards, AuthorizedAgentBoard, AuthorizedTaskBoards,
     BoardAuthorization, BoardResolution, BoardScopeRequest, BoardScopeSource, GlobalAgentRead,
@@ -83,7 +103,7 @@ pub use read::{
     TaskParticipationReads, TaskReadActor, TaskReadAddress, TaskReadCapability, TaskReadRequest,
     TaskSummarySource, VisibleTask, VisibleTaskListRow, authorize_agent_board,
     authorize_global_by_id, authorize_readable_agent_boards, authorize_task_list_boards,
-    list_visible_tasks, read_visible_task,
+    list_visible_tasks, read_visible_task, read_visible_task_on,
 };
 pub use spec::{
     Assignee, ContentTooLong, Creator, EmptyTaskId, InvalidTaskNumber, InvalidTitle,
@@ -91,5 +111,19 @@ pub use spec::{
     TaskTitle, UnknownTaskStatus,
 };
 pub use status::{
-    StatusTransitionRefusal, TaskStatusChange, agent_status_change, human_status_change,
+    AgentStatusRefusal, StatusTransitionRefusal, TaskStatusChange, agent_status_change,
+    agent_status_write_decision, human_status_change,
+};
+pub use write::{
+    AgentClaimOutcome, AgentStatusWriteOutcome, ExistingSourceTask, HumanClaimOutcome,
+    HumanStatusWriteOutcome, HumanTaskStatusWrite, TaskClaimWrite, TaskCommittedEventMessage,
+    TaskCreateAdmissionFailure, TaskCreateAdmissionReads, TaskCreateBatch,
+    TaskCreateConversationState, TaskCreateOutcome, TaskCreatePlan, TaskCreateSourceRef,
+    TaskCreateWrite, TaskCreatedWitness, TaskCreator, TaskEditSuccess, TaskEditWitness,
+    TaskEditWrite, TaskEditWriteOutcome, TaskEditor, TaskMutationWitness, TaskStatusWrite,
+    TaskWriteClock, UnclaimOutcome, admit_task_create,
+};
+pub use write_door::{
+    AgentDisplayNameReader, AgentExistenceReader, TaskByIdCapability, TaskNumberResolver,
+    TaskWriteCapability, TaskWriteDoorReads, WorkspaceMembership,
 };

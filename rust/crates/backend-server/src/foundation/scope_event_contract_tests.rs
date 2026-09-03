@@ -4418,6 +4418,32 @@ async fn reaction_aftermath_is_exactly_one_canonical_conversation_frame() {
     assert!(scope_events(&hub, EventScope::App).is_empty());
 }
 
+#[test]
+fn converged_task_changed_is_exactly_one_canonical_conversation_frame() {
+    let hub = ScopeEventHub::test("epoch-1");
+    let conversation = conversation();
+    let payload = json!({
+        "kind": "edit",
+        "conversation_id": conversation.as_str(),
+        "task_id": "task-1",
+        "title": "committed title",
+    });
+
+    hub.publish_task_changed_to_conversation(&conversation, payload.clone())
+        .unwrap();
+
+    let frames = scope_events(&hub, EventScope::Conversation(conversation.clone()));
+    assert_eq!(frames.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&frames[0]).unwrap(),
+        json!({"kind":"task_changed","payload":payload})
+    );
+    assert!(
+        scope_events(&hub, EventScope::ConversationSide(conversation)).is_empty(),
+        "task_changed advances the canonical message stream, never the cursor-inert side channel"
+    );
+}
+
 /// The closed set of product-event wire `kind`s this transport is allowed to emit.
 /// A `&str` set precisely because `kind` is a string at the wire boundary: nothing but
 /// an explicit enumeration can tell a renamed or newly-added kind from a supported one.
@@ -4436,6 +4462,10 @@ const SUPPORTED_EVENT_KINDS: &[&str] = &[
     "user_presence",
     "user_changed",
     "message",
+    "workspace_channels_changed",
+    "conversation_members_changed",
+    "attention_pref_changed",
+    "task_changed",
     "notification",
     "unread_updated",
     "attention_badge_updated",
@@ -4464,9 +4494,14 @@ fn wire_kind(event: &ProductEvent) -> &'static str {
         ProductEvent::UserPresence { .. } => "user_presence",
         ProductEvent::UserChanged { .. } => "user_changed",
         ProductEvent::Message(_) => "message",
+        ProductEvent::WorkspaceChannelsChanged { .. } => "workspace_channels_changed",
+        ProductEvent::ConversationMembersChanged { .. } => "conversation_members_changed",
+        ProductEvent::AttentionPrefChanged { .. } => "attention_pref_changed",
+        ProductEvent::TaskChanged(_) => "task_changed",
         ProductEvent::Notification(_) => "notification",
         ProductEvent::UnreadUpdated(_) => "unread_updated",
         ProductEvent::NotificationUnreadCleared { .. } => "unread_updated",
+        ProductEvent::NotificationDismissed { .. } => "unread_updated",
         ProductEvent::AttentionBadgeUpdated(_) => "attention_badge_updated",
         ProductEvent::ViewerWorkspacesChanged { .. } => "viewer_workspaces_changed",
         ProductEvent::SavedChanged(_) => "saved_changed",
@@ -4515,6 +4550,19 @@ fn the_supported_wire_kinds_are_a_closed_named_set() {
             user_id: "user-1".to_owned(),
         },
         ProductEvent::Message(json!({ "message": { "id": "m-1" } })),
+        ProductEvent::WorkspaceChannelsChanged {
+            workspace_id: "w-1".to_owned(),
+            channel_id: "c-1".to_owned(),
+        },
+        ProductEvent::ConversationMembersChanged {
+            conversation_id: "c-1".to_owned(),
+            workspace_id: "w-1".to_owned(),
+        },
+        ProductEvent::AttentionPrefChanged {
+            workspace_id: "w-1".to_owned(),
+            conversation_id: Some("c-1".to_owned()),
+        },
+        ProductEvent::TaskChanged(json!({ "task_id": "task-1" })),
         ProductEvent::Notification(NotificationEvent {
             kind: NotificationKind::MentionSelf,
             conversation_id: "c-1".to_owned(),
@@ -4531,6 +4579,9 @@ fn the_supported_wire_kinds_are_a_closed_named_set() {
         // wire kind with the enriched frame above but carries a different, thinner
         // payload; the serde-tag assertion below proves both map to the same kind.
         ProductEvent::NotificationUnreadCleared { marked: 3 },
+        ProductEvent::NotificationDismissed {
+            dismissed_notification_ids: vec!["notification-1".to_owned()],
+        },
         ProductEvent::AttentionBadgeUpdated(AttentionBadge {
             workspace_id: "w-1".to_owned(),
             badge_count: 1,
@@ -4538,7 +4589,7 @@ fn the_supported_wire_kinds_are_a_closed_named_set() {
         ProductEvent::ViewerWorkspacesChanged {
             change: ViewerWorkspaceChange::Added,
             workspace_id: "w-1".to_owned(),
-            role: Some(WorkspaceRole::Member.as_str()),
+            role: Some(WorkspaceRole::Member.as_str().to_owned()),
         },
         ProductEvent::ViewerWorkspacesChanged {
             change: ViewerWorkspaceChange::MetadataChanged,
@@ -5185,7 +5236,7 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
         [ProductEvent::ViewerWorkspacesChanged {
             change: ViewerWorkspaceChange::Added,
             workspace_id: "ws-foreign".to_owned(),
-            role: Some("member"),
+            role: Some("member".to_owned()),
         }]
     );
 

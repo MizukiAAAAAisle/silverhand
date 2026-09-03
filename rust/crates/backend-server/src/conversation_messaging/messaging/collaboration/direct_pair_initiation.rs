@@ -105,7 +105,9 @@ where
             }
             Err(failure) => {
                 tracing::error!(
-                    error_chain = %crate::foundation::error::describe(&failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&failure))
+                    ),
                     "direct-pair initiation authority failed"
                 );
                 return internal();
@@ -174,7 +176,9 @@ where
         Err(DirectPairFirstSendError::Send(failure)) => refused_send(&failure),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::foundation::error::describe(&failure),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&failure))
+                ),
                 "direct-pair initiation failed before first-message send completed"
             );
             internal()

@@ -52,7 +52,12 @@ async fn resolve<P: ConversationRefReadPort>(
         Ok(Ok(value)) => match value.bind(&conversation) {
             Ok(value) => success(&value),
             Err(error) => {
-                tracing::error!(error_chain=%crate::foundation::error::describe(&error),"conversation-ref identity seal failed");
+                tracing::error!(
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&error))
+                    ),
+                    "conversation-ref identity seal failed"
+                );
                 internal()
             }
         },
@@ -61,7 +66,12 @@ async fn resolve<P: ConversationRefReadPort>(
         }
         Ok(Err(ConversationRefRefusal::Forbidden)) => error(StatusCode::FORBIDDEN, "forbidden"),
         Err(error) => {
-            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"conversation-ref projection failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&error))
+                ),
+                "conversation-ref projection failed"
+            );
             internal()
         }
     }

@@ -109,7 +109,8 @@ async fn gate_agent_edit<D: AgentDetailReadModel>(
         Ok(detail) => detail,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "{route} gate read failed"
             );
             return Err(GateRefusal::Internal);

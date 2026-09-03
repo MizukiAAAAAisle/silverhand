@@ -197,7 +197,7 @@ impl CategorizedJsonlWriter {
                 self.dropped_lines.fetch_add(1, Ordering::Relaxed);
                 tracing::warn!(
                     target: DIAGNOSTIC_TARGET,
-                    file = %self.filename,
+                    file = self.filename.as_ref(),
                     "categorized audit writer queue is full; dropping this line as transient backpressure (writer stays healthy)"
                 );
             }
@@ -205,8 +205,8 @@ impl CategorizedJsonlWriter {
                 self.dropped_lines.fetch_add(1, Ordering::Relaxed);
                 tracing::warn!(
                     target: DIAGNOSTIC_TARGET,
-                    file = %self.filename,
-                    state = ?self.state(),
+                    file = self.filename.as_ref(),
+                    state = format!("{:?}", self.state()),
                     "categorized audit writer is closed; dropping this line"
                 );
             }
@@ -245,8 +245,8 @@ impl CategorizedJsonlWriter {
             self.health.store(FAILED_IO, Ordering::SeqCst);
             tracing::warn!(
                 target: DIAGNOSTIC_TARGET,
-                file = %self.filename,
-                error = %join_error,
+                file = self.filename.as_ref(),
+                error = join_error.to_string(),
                 "categorized audit writer task terminated abnormally; the writer is now failed"
             );
         }
@@ -336,8 +336,8 @@ fn report_durable_failure(filename: &Arc<str>, health: &Arc<AtomicU8>, error: &s
     health.store(FAILED_IO, Ordering::SeqCst);
     tracing::warn!(
         target: DIAGNOSTIC_TARGET,
-        file = %filename,
-        error = %error,
+        file = filename.as_ref(),
+        error = error.to_string(),
         "categorized audit writer write failed; the writer is now failed and will record nothing more"
     );
 }

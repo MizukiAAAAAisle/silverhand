@@ -68,7 +68,8 @@ where
         Ok(cold_read) => Json(WorkspaceColdReadResponse::from(&cold_read)).into_response(),
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "workspaces cold read failed"
             );
             (StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR_BODY).into_response()

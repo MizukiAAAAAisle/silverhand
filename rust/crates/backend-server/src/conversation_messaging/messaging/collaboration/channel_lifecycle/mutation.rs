@@ -8,12 +8,14 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Extension, Path, Request, State},
+    extract::{Extension, FromRequest, Path, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::patch,
 };
-use serde_json::{Map, Value, json};
+use garde::Validate;
+use serde::Deserialize;
+use serde_json::json;
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
         collaboration::{
@@ -26,16 +28,83 @@ use silverhand_backend_core::{
                 archive_channel, rename_channel, set_channel_visibility,
             },
         },
-        conversation_title::{CanonicalConversationTitle, ConversationTitleIssue},
+        conversation_title::CanonicalConversationTitle,
     },
     foundation::identity::{ConversationId, UserId},
 };
 
-use crate::conversation_messaging::messaging::collaboration::json_body::{
-    BodyRead, payload_too_large, read_body,
-};
+use crate::foundation::wire_admission::{ValidatedJson, invalid_input};
+use crate::foundation::wire_patch::RequiredPatchField;
 
 use super::{channel, error, internal};
+
+/// `PATCH /archive` body — `z.object({ archived: z.boolean() })` (NOT `.strict()`, strip).
+#[derive(Debug, Deserialize, Validate)]
+struct ArchiveBody {
+    #[garde(skip)]
+    archived: bool,
+}
+
+/// `PATCH /:id` body — `z.object({ title?, visibility? }).refine(exactly one)` (strip).
+/// Both fields are OPTIONAL but NOT nullable (`.optional()`, not `.nullable()`), so an
+/// explicit `null` is a native decode fault via `RequiredPatchField`, never merged with an
+/// absent key. Serde owns the field shapes; the title grammar is a garde delegate; the
+/// exactly-one invariant is a stateless refinement enforced in `TryFrom` (→ minimal 422).
+#[derive(Debug, Deserialize, Validate)]
+struct UpdateChannelBody {
+    #[serde(default)]
+    #[garde(custom(valid_channel_title))]
+    title: RequiredPatchField<String>,
+    #[serde(default)]
+    #[garde(skip)]
+    visibility: RequiredPatchField<WireChannelVisibility>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WireChannelVisibility {
+    Private,
+    Public,
+}
+
+impl From<WireChannelVisibility> for ChannelVisibility {
+    fn from(value: WireChannelVisibility) -> Self {
+        match value {
+            WireChannelVisibility::Private => ChannelVisibility::Private,
+            WireChannelVisibility::Public => ChannelVisibility::Public,
+        }
+    }
+}
+
+fn valid_channel_title(value: &RequiredPatchField<String>, _: &()) -> garde::Result {
+    match value {
+        RequiredPatchField::Missing => Ok(()),
+        RequiredPatchField::Value(raw) => CanonicalConversationTitle::parse(raw)
+            .map(|_| ())
+            .map_err(|_| garde::Error::new("title is not a valid channel title")),
+    }
+}
+
+enum ChannelUpdate {
+    Rename(CanonicalConversationTitle),
+    Visibility(ChannelVisibility),
+}
+
+impl TryFrom<UpdateChannelBody> for ChannelUpdate {
+    type Error = ();
+    fn try_from(body: UpdateChannelBody) -> Result<Self, ()> {
+        match (body.title, body.visibility) {
+            (RequiredPatchField::Value(title), RequiredPatchField::Missing) => Ok(
+                ChannelUpdate::Rename(CanonicalConversationTitle::parse(&title).map_err(|_| ())?),
+            ),
+            (RequiredPatchField::Missing, RequiredPatchField::Value(visibility)) => Ok(
+                ChannelUpdate::Visibility(ChannelVisibility::from(visibility)),
+            ),
+            // Neither or both — the reference's exactly-one `.refine()`.
+            _ => Err(()),
+        }
+    }
+}
 
 pub const CHANNEL_ARCHIVE_PATH: &str = "/api/channels/{id}/archive";
 
@@ -93,13 +162,12 @@ where
     if let Err(refusal) = admit(&state.0.port, &viewer, &conversation).await {
         return refusal.response();
     }
-    let value = match request_json(request).await {
-        Ok(value) => value,
-        Err(refusal) => return refusal.response(),
-    };
-    let archived = match parse_archive(value) {
-        Ok(value) => value,
-        Err(issues) => return invalid(issues),
+    // Authority-first: governance is admitted before the body is polled. The shared
+    // `ValidatedJson` extractor runs deferred: structural faults keep native 415/400/422,
+    // no leaf parser.
+    let archived = match ValidatedJson::<ArchiveBody>::from_request(request, &()).await {
+        Ok(ValidatedJson(body)) => body.archived,
+        Err(rejection) => return rejection.into_response(),
     };
 
     match archive_channel(
@@ -118,7 +186,9 @@ where
         Ok(Err(refusal)) => archive_refusal(refusal),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::foundation::error::describe(&failure),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&failure))
+                ),
                 "channel archive failed"
             );
             internal()
@@ -143,13 +213,16 @@ where
     if let Err(refusal) = admit(&state.0.port, &viewer, &conversation).await {
         return refusal.response();
     }
-    let value = match request_json(request).await {
-        Ok(value) => value,
-        Err(refusal) => return refusal.response(),
+    // Authority-first: governance is admitted before the body is polled. The shared
+    // `ValidatedJson` extractor decodes + runs the title grammar; the exactly-one
+    // `title|visibility` invariant is a request-local semantic refusal → minimal 422.
+    let body = match ValidatedJson::<UpdateChannelBody>::from_request(request, &()).await {
+        Ok(ValidatedJson(body)) => body,
+        Err(rejection) => return rejection.into_response(),
     };
-    let update = match parse_update(value) {
-        Ok(value) => value,
-        Err(issues) => return invalid(issues),
+    let update = match ChannelUpdate::try_from(body) {
+        Ok(update) => update,
+        Err(()) => return invalid_input(),
     };
 
     match update {
@@ -170,7 +243,9 @@ where
                 Ok(Err(refusal)) => visibility_refusal(refusal),
                 Err(failure) => {
                     tracing::error!(
-                        error_chain = %crate::foundation::error::describe(&failure),
+                        error_chain = crate::foundation::safe_log_field::safe_display(
+                            &(crate::foundation::error::describe(&failure))
+                        ),
                         "channel visibility mutation failed"
                     );
                     internal()
@@ -195,7 +270,9 @@ where
                 Ok(Err(refusal)) => rename_refusal(refusal, &requested),
                 Err(failure) => {
                     tracing::error!(
-                        error_chain = %crate::foundation::error::describe(&failure),
+                        error_chain = crate::foundation::safe_log_field::safe_display(
+                            &(crate::foundation::error::describe(&failure))
+                        ),
                         "channel rename failed"
                     );
                     internal()
@@ -244,7 +321,9 @@ async fn admit<P: ChannelMutationAdmissionPort>(
             .map(|_| ())
             .map_err(|failure| {
                 tracing::error!(
-                    error_chain = %crate::foundation::error::describe(&failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&failure))
+                    ),
                     "channel mutation admission identity seal failed"
                 );
                 AdmissionRefusal::Internal
@@ -253,7 +332,9 @@ async fn admit<P: ChannelMutationAdmissionPort>(
         Ok(Err(ChannelMutationAdmissionRefusal::Forbidden)) => Err(AdmissionRefusal::Forbidden),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::foundation::error::describe(&failure),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&failure))
+                ),
                 "channel mutation admission failed"
             );
             Err(AdmissionRefusal::Internal)
@@ -275,160 +356,6 @@ impl AdmissionRefusal {
             Self::Internal => internal(),
         }
     }
-}
-
-async fn request_json(request: Request) -> Result<Value, BodyRefusal> {
-    let body = match read_body(request).await {
-        BodyRead::Within(body) => body,
-        BodyRead::OverLimit => return Err(BodyRefusal::OverLimit),
-        BodyRead::Unreadable => return Ok(Value::Object(Map::new())),
-    };
-    let value = serde_json::from_slice(&body).unwrap_or_else(|_| Value::Object(Map::new()));
-    drop(body);
-    Ok(value)
-}
-
-enum BodyRefusal {
-    OverLimit,
-}
-
-impl BodyRefusal {
-    fn response(self) -> Response {
-        match self {
-            Self::OverLimit => payload_too_large(),
-        }
-    }
-}
-
-fn parse_archive(value: Value) -> Result<bool, Vec<Value>> {
-    let Value::Object(mut object) = value else {
-        return Err(vec![invalid_type("object", received(&value), vec![])]);
-    };
-    match object.remove("archived") {
-        Some(Value::Bool(value)) => Ok(value),
-        None => Err(vec![json!({
-            "code":"invalid_type", "expected":"boolean", "received":"undefined",
-            "path":["archived"], "message":"Required"
-        })]),
-        Some(value) => Err(vec![invalid_type(
-            "boolean",
-            received(&value),
-            vec![json!("archived")],
-        )]),
-    }
-}
-
-enum ChannelUpdate {
-    Rename(CanonicalConversationTitle),
-    Visibility(ChannelVisibility),
-}
-
-fn parse_update(value: Value) -> Result<ChannelUpdate, Vec<Value>> {
-    let Value::Object(mut object) = value else {
-        return Err(vec![invalid_type("object", received(&value), vec![])]);
-    };
-    let mut issues = Vec::new();
-    let title = match object.remove("title") {
-        None => None,
-        Some(Value::String(raw)) => match CanonicalConversationTitle::parse(&raw) {
-            Ok(value) => Some(value),
-            Err(issue) => {
-                issues.push(title_issue(issue));
-                None
-            }
-        },
-        Some(value) => {
-            issues.push(invalid_type(
-                "string",
-                received(&value),
-                vec![json!("title")],
-            ));
-            None
-        }
-    };
-    let visibility = match object.remove("visibility") {
-        None => None,
-        Some(Value::String(raw)) => match ChannelVisibility::parse(&raw) {
-            Ok(value) => Some(value),
-            Err(_) => {
-                issues.push(json!({
-                    "received": raw, "code":"invalid_enum_value",
-                    "options":["private","public"], "path":["visibility"],
-                    "message":format!("Invalid enum value. Expected 'private' | 'public', received '{raw}'")
-                }));
-                None
-            }
-        },
-        Some(value) => {
-            let kind = received(&value);
-            issues.push(json!({
-                "expected":"'private' | 'public'", "received":kind,
-                "code":"invalid_type", "path":["visibility"],
-                "message":format!("Expected 'private' | 'public', received {kind}")
-            }));
-            None
-        }
-    };
-    if !issues.is_empty() {
-        return Err(issues);
-    }
-    match (title, visibility) {
-        (Some(title), None) => Ok(ChannelUpdate::Rename(title)),
-        (None, Some(visibility)) => Ok(ChannelUpdate::Visibility(visibility)),
-        _ => Err(vec![json!({
-            "code":"custom",
-            "message":"exactly one of `title` or `visibility` must be provided",
-            "path":[],
-        })]),
-    }
-}
-
-fn invalid_type(expected: &str, received: &str, path: Vec<Value>) -> Value {
-    json!({
-        "code":"invalid_type", "expected":expected, "received":received,
-        "path":path, "message":format!("Expected {expected}, received {received}")
-    })
-}
-
-fn received(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-
-fn title_issue(issue: ConversationTitleIssue) -> Value {
-    match issue {
-        ConversationTitleIssue::Empty => json!({
-            "code":"too_small", "minimum":1, "type":"string", "inclusive":true,
-            "message":"title must not be empty", "path":["title"]
-        }),
-        ConversationTitleIssue::TooLong { code_points } => json!({
-            "code":"too_big", "maximum":128, "type":"string", "inclusive":true,
-            "message":format!("title must be at most 128 characters (got {code_points})"),
-            "path":["title"]
-        }),
-        ConversationTitleIssue::ForbiddenCodePoint { code_point, index } => json!({
-            "code":"custom",
-            "message":format!(
-                "title must not contain U+{code_point:04X} (position {}): invisible characters and multi-code-point emoji sequences are not addressable",
-                index + 1
-            ),
-            "path":["title"]
-        }),
-    }
-}
-
-fn invalid(issues: Vec<Value>) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({"error":"invalid input", "issues":issues})),
-    )
-        .into_response()
 }
 
 fn channel_success(
@@ -480,7 +407,9 @@ fn report_effect(
 ) {
     if let Some(failure) = failure {
         tracing::error!(
-            error_chain = %crate::foundation::error::describe(failure),
+            error_chain = crate::foundation::safe_log_field::safe_display(
+                &(crate::foundation::error::describe(failure))
+            ),
             operation,
             "committed channel mutation aftermath failed"
         );

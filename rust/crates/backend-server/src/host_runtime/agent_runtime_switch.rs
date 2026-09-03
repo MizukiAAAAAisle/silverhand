@@ -285,7 +285,8 @@ where
         Ok(detail) => detail,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "agent-runtime-switch pre-write read failed"
             );
             return internal_error();
@@ -375,7 +376,8 @@ where
     if let AgentChangedAnnounce::Failed(failure) = announce {
         tracing::error!(
             agent_id = committed.committed.agent_id().as_str(),
-            error_chain = %error::describe(&failure),
+            error_chain =
+                crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
             "agent-runtime-switch committed but the agent_changed announce failed"
         );
     }

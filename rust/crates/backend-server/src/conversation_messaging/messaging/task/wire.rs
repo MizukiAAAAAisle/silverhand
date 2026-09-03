@@ -17,7 +17,8 @@
 
 use serde::Serialize;
 use silverhand_backend_core::conversation_messaging::messaging::task::{
-    Assignee, BoardKey, Creator, TaskDisplaySidecars, TaskSummarySource,
+    Assignee, BoardKey, Creator, TaskDisplaySidecars, TaskEditorDisplay, TaskNavigation,
+    TaskPointSource, TaskSummarySource,
 };
 
 /// The list envelope: `{ "tasks": [...] }`, the shape the route answers a `200` with.
@@ -109,6 +110,56 @@ pub(crate) fn project_summary(
         created_at: task.created_at(),
         closed_at: task.closed_at(),
     })
+}
+
+pub(crate) fn project_detail(
+    source: TaskPointSource<'_>,
+) -> Result<serde_json::Value, ProjectionCorruption> {
+    let task = source.summary.task;
+    let mut value = serde_json::to_value(project_summary(source.summary)?)
+        .expect("typed task summary serializes");
+    let object = value
+        .as_object_mut()
+        .expect("typed task summary is an object");
+    object.insert("content".into(), serde_json::json!(task.content().as_str()));
+    object.insert(
+        "last_editor".into(),
+        source
+            .editor
+            .map_or(serde_json::Value::Null, |editor| match editor {
+                TaskEditorDisplay::Agent { id, name } => {
+                    serde_json::json!({"kind":"agent","id":id.as_str(),"name":name})
+                }
+                TaskEditorDisplay::User { id, name } => {
+                    serde_json::json!({"kind":"user","id":id.as_str(),"name":name})
+                }
+            }),
+    );
+    object.insert(
+        "last_edited_at".into(),
+        serde_json::json!(task.last_edit().map(|edit| edit.at)),
+    );
+    object.insert(
+        "source_message_id".into(),
+        serde_json::json!(task.source_message().map(|id| id.as_str())),
+    );
+    let nav = match source.nav {
+        TaskNavigation::Source(reference) => serde_json::json!({"kind":"source","ref":{
+            "conversation_id":reference.conversation_id.as_str(),
+            "thread_root_id":reference.thread_root_id.as_ref().map(|id|id.as_str()),
+            "message_id":reference.message_id.as_str(),
+        }}),
+        TaskNavigation::CreatedEvent(reference) => {
+            serde_json::json!({"kind":"created_event","ref":{
+                "conversation_id":reference.conversation_id.as_str(),
+                "thread_root_id":reference.thread_root_id.as_ref().map(|id|id.as_str()),
+                "message_id":reference.message_id.as_str(),
+            }})
+        }
+        TaskNavigation::Unavailable => serde_json::json!({"kind":"unavailable"}),
+    };
+    object.insert("nav".into(), nav);
+    Ok(value)
 }
 
 /// The board's own coordinate decides the arm; the workspace arm additionally REQUIRES the

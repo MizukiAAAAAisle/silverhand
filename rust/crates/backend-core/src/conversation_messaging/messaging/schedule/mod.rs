@@ -12,6 +12,7 @@
 //! separate modules; product create/list/cancel never depend on the timer.
 
 pub mod cancel;
+pub mod create;
 pub mod orchestrator;
 pub mod read;
 pub mod recurrence;
@@ -22,6 +23,12 @@ pub use cancel::{
     CancelDecision, CancelTarget, CapabilityVerdict, OwnerBind, ScheduleCancelFacts,
     ScheduleCancelOutcome, ScheduleCancelUnitOfWork, bind_owner, evaluate_cancel,
     evaluate_capability,
+};
+pub use create::{
+    OnceWhen, SCHEDULE_MAX_ACTIVE_PER_AGENT, SCHEDULE_MAX_DELAY_SECONDS,
+    SCHEDULE_MIN_DELAY_SECONDS, SCHEDULE_MIN_INTERVAL_SECONDS, ScheduleCreateCommittedEffect,
+    ScheduleCreateGuardError, ScheduleCreateOutcome, ScheduleCreatePlan, ScheduleCreateRequest,
+    ScheduleCreateStore, ScheduleSpecInput,
 };
 pub use orchestrator::{
     ClaimedSchedule, Clock, DeliveryMaterial, DueCandidate, EmptyScheduleId, InvalidDeliveryText,

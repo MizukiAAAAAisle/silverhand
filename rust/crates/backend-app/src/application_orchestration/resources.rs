@@ -13,6 +13,10 @@ pub(super) struct HostRuntimeResources {
 pub(super) struct MessagingResources {
     pub(super) store: MessagingStore,
     pub(super) task_store: SqliteTaskStore,
+    pub(super) task_status_write: SqliteTaskStatusWrite,
+    pub(super) task_claim_write: SqliteTaskClaimWrite,
+    pub(super) task_edit_write: SqliteTaskEditWrite,
+    pub(super) task_create_write: SqliteTaskCreateWrite,
     pub(super) scope_authority: SqliteEventScopeAuthority,
     pub(super) unread_read_model: SqliteUnreadReadModel,
     pub(super) direct_pair_read_model: SqliteDirectPairReadModel,
@@ -52,6 +56,8 @@ pub(super) struct PresenceResources {
 }
 
 pub(super) struct SchedulingResources {
+    pub(super) create: SqliteScheduleCreate,
+    pub(super) driver: SqliteScheduleStore,
     pub(super) list_read: SqliteScheduleListRead,
     pub(super) cancel: SqliteScheduleCancel,
 }
@@ -111,6 +117,26 @@ impl PassiveResources {
         let messaging_store =
             open("messaging", MessagingStore::open(&config.database_path)).await?;
         let task_store = open("task board", SqliteTaskStore::open(&config.database_path)).await?;
+        let task_status_write = open(
+            "task status write",
+            SqliteTaskStatusWrite::open(&config.database_path),
+        )
+        .await?;
+        let task_claim_write = open(
+            "task claim write",
+            SqliteTaskClaimWrite::open(&config.database_path),
+        )
+        .await?;
+        let task_edit_write = open(
+            "task edit write",
+            SqliteTaskEditWrite::open(&config.database_path),
+        )
+        .await?;
+        let task_create_write = open(
+            "task create write",
+            SqliteTaskCreateWrite::open(&config.database_path),
+        )
+        .await?;
         let custody_store = open(
             "runtime custody",
             SqliteRuntimeCustodyStore::open(&config.database_path),
@@ -247,6 +273,16 @@ impl PassiveResources {
             SqliteAgentAuditRead::open(&config.database_path),
         )
         .await?;
+        let schedule_create = open(
+            "agent schedule create",
+            SqliteScheduleCreate::open(&config.database_path),
+        )
+        .await?;
+        let schedule_driver = open(
+            "schedule fire driver",
+            SqliteScheduleStore::open(&config.database_path),
+        )
+        .await?;
         let schedule_list_read = open(
             "agent schedule list read",
             SqliteScheduleListRead::open(&config.database_path),
@@ -282,6 +318,10 @@ impl PassiveResources {
             messaging: MessagingResources {
                 store: messaging_store,
                 task_store,
+                task_status_write,
+                task_claim_write,
+                task_edit_write,
+                task_create_write,
                 scope_authority,
                 unread_read_model,
                 direct_pair_read_model,
@@ -316,6 +356,8 @@ impl PassiveResources {
                 last_seen_sink,
             },
             scheduling: SchedulingResources {
+                create: schedule_create,
+                driver: schedule_driver,
                 list_read: schedule_list_read,
                 cancel: schedule_cancel,
             },

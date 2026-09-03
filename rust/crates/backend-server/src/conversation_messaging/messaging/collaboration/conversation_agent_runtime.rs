@@ -55,7 +55,9 @@ async fn read<P: ConversationAgentRuntimeReadPort>(
             Ok(value) => success(&value),
             Err(error) => {
                 tracing::error!(
-                    error_chain=%crate::foundation::error::describe(&error),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&error))
+                    ),
                     "conversation-agent-runtime identity seal failed"
                 );
                 internal()
@@ -69,7 +71,9 @@ async fn read<P: ConversationAgentRuntimeReadPort>(
         }
         Err(error) => {
             tracing::error!(
-                error_chain=%crate::foundation::error::describe(&error),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&error))
+                ),
                 "conversation-agent-runtime projection failed"
             );
             internal()

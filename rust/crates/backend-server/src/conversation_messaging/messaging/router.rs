@@ -51,6 +51,7 @@ use super::{
         MESSAGE_SEND_MAX_BODY_BYTES, agent_content_too_large, human_content_too_large,
         missing_identifier,
     },
+    target_refusal_wire::TargetRefusalWire,
 };
 use crate::foundation::cli_invoke_observer::CliInvokeRequestContext;
 
@@ -256,30 +257,14 @@ fn gate_refusal(status: StatusCode, error: &'static str) -> Response {
 /// The AGENT door's ADDRESS refusals, which DO carry a code: an agent acts on which refusal it
 /// got, and the CLI turns each into a different instruction — rewrite the address, or stop and
 /// report.
-fn address_refusal(refusal: AddressRefusal) -> Response {
-    let (status, error, code) = match refusal {
-        AddressRefusal::Malformed => (
-            StatusCode::BAD_REQUEST,
-            "target is not an address",
-            "target_malformed",
-        ),
-        AddressRefusal::SelfPair => (
-            StatusCode::BAD_REQUEST,
-            "a direct message needs another participant",
-            "self_pair_not_addressable",
-        ),
-        AddressRefusal::Unresolved => (
-            StatusCode::NOT_FOUND,
-            "target names no stream you can use",
-            "target_unresolved",
-        ),
-        AddressRefusal::ThreadNotInTarget => (
-            StatusCode::NOT_FOUND,
-            "target names no reply cluster of that conversation",
-            "thread_not_in_target",
-        ),
+pub(crate) fn address_refusal(refusal: AddressRefusal) -> Response {
+    let refusal = match refusal {
+        AddressRefusal::Malformed => TargetRefusalWire::Malformed,
+        AddressRefusal::SelfPair => TargetRefusalWire::SelfPairNotAddressable,
+        AddressRefusal::Unresolved => TargetRefusalWire::Unresolved,
+        AddressRefusal::ThreadNotInTarget => TargetRefusalWire::ThreadNotInTarget,
     };
-    gate_code(status, error, code)
+    refusal.into_response()
 }
 
 /// A gate answer that names its reason with a code, which every agent-door refusal but the
@@ -324,7 +309,9 @@ fn internal(body: &'static str) -> Response {
 
 fn authority_failure(cause: &crate::foundation::error::BoundaryFailure) -> Response {
     tracing::error!(
-        error_chain = %crate::foundation::error::describe(cause),
+        error_chain = crate::foundation::safe_log_field::safe_display(
+            &(crate::foundation::error::describe(cause))
+        ),
         "message-send pre-send authority failed"
     );
     internal("Internal Server Error")

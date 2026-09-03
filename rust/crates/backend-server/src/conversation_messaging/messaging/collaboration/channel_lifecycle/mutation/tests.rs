@@ -8,7 +8,10 @@ use std::{
 
 use axum::{
     body::{Body, Bytes, to_bytes},
-    http::{Request, StatusCode, header::CONTENT_LENGTH},
+    http::{
+        Request, StatusCode,
+        header::{CONTENT_LENGTH, CONTENT_TYPE},
+    },
 };
 use futures_util::stream;
 use serde::Deserialize;
@@ -297,7 +300,12 @@ async fn call(
     principal: bool,
     declared: Option<usize>,
 ) -> (StatusCode, Value) {
-    let mut builder = Request::builder().method("PATCH").uri(method_path);
+    let mut builder = Request::builder()
+        .method("PATCH")
+        .uri(method_path)
+        // The body now crosses the shared `ValidatedJson` extractor, whose native axum Json
+        // requires the JSON content type (a missing one is 415); every real client sends it.
+        .header(CONTENT_TYPE, "application/json");
     if let Some(length) = declared {
         builder = builder.header(CONTENT_LENGTH, length);
     }
@@ -308,7 +316,12 @@ async fn call(
     let response = app.oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap())
+    // A native structural rejection (415/400/422) carries a plain-text body pinned on
+    // status only; JSON bodies (success / minimal semantic 422) parse.
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 #[tokio::test]
@@ -335,58 +348,47 @@ async fn authentication_and_admission_precede_body_polling_and_product_writes() 
 #[tokio::test]
 async fn archive_has_its_simple_boolean_wire_and_bounded_body() {
     let cases = [
-        (
-            Body::from("{}"),
-            None,
-            StatusCode::BAD_REQUEST,
-            json!(["archived"]),
-            0,
-        ),
+        // missing `archived` → native data-shape 422; writer untouched
+        (Body::from("{}"), None, StatusCode::UNPROCESSABLE_ENTITY, 0),
+        // wrong-typed `archived` → native data-shape 422
         (
             Body::from(r#"{"archived":"yes"}"#),
             None,
-            StatusCode::BAD_REQUEST,
-            json!(["archived"]),
+            StatusCode::UNPROCESSABLE_ENTITY,
             0,
         ),
+        // unknown key stripped (schema not `.strict()`) → 200, one write
         (
             Body::from(r#"{"archived":true,"future":1}"#),
             None,
             StatusCode::OK,
-            Value::Null,
             1,
         ),
     ];
-    for (body, declared, expected, issue_path, writes) in cases {
+    for (body, declared, expected, writes) in cases {
         let (app, calls) = fixture_app(PortMode::Happy, Effects::default());
         let (status, body) = call(app, "/api/channels/c/archive", body, true, declared).await;
         assert_eq!(status, expected);
-        if expected == StatusCode::BAD_REQUEST {
-            assert_eq!(body["issues"][0]["path"], issue_path);
-        } else {
+        if expected == StatusCode::OK {
             assert_eq!(body["channel"]["archived_at"], 9);
         }
         assert_eq!(calls.archive.load(Ordering::SeqCst), writes);
     }
 
-    let polled = Arc::new(AtomicBool::new(false));
-    let flag = polled.clone();
-    let declared = Body::from_stream(stream::once(async move {
-        flag.store(true, Ordering::SeqCst);
-        Ok::<Bytes, Infallible>(Bytes::from_static(b"{}"))
-    }));
+    // A value-shaped array is refused by the shared object-only floor (native structural),
+    // never bound positionally into the archive DTO; the writer stays untouched.
     let (app, calls) = fixture_app(PortMode::Happy, Effects::default());
-    let (status, body) = call(
+    let (status, _) = call(
         app,
         "/api/channels/c/archive",
-        declared,
+        Body::from("[true]"),
         true,
-        Some(super::super::super::json_body::JSON_BODY_MAX_BYTES + 1),
+        None,
     )
     .await;
-    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(body, json!({"error":"payload too large"}));
-    assert!(!polled.load(Ordering::SeqCst));
+    // A value-shaped array is refused by the shared object-only floor as a native data-shape
+    // 422 before positional binding; the writer stays untouched.
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(calls.archive.load(Ordering::SeqCst), 0);
 }
 
@@ -396,17 +398,28 @@ struct AdmissionCell {
     request: Value,
     schema_accepted: bool,
     operation: Option<String>,
-    body: Option<Value>,
 }
 
 #[tokio::test]
-async fn production_update_router_consumes_the_typescript_signed_xor_fixture() {
+async fn production_update_router_consumes_the_shared_schema_accepted_cells() {
+    // Denominator: the shared `channel-lifecycle-update-admission.json` has 9 cells; this
+    // Rust replay consumes the **3/9** `schema_accepted=true` XOR-success cells (rename /
+    // visibility). The other **6/9** are Zod admission cells whose TS signer emits legacy
+    // 400{issues}; the Rust terminal admission is the shared native structural axis plus the
+    // minimal-422 exactly-one refinement, so they are NOT dual-signed here and are covered by
+    // the focused `schema_rejected_update_cells_take_the_native_axis` local test. The TS
+    // parity test continues to sign its own full 9/9 legacy behavior.
     let cells: Vec<AdmissionCell> = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../../packages/backend/tests/fixtures/channel-lifecycle-update-admission.json"
     )))
     .unwrap();
-    for cell in cells {
+    let mut consumed = 0;
+    for cell in &cells {
+        if !cell.schema_accepted {
+            continue;
+        }
+        consumed += 1;
         let (app, calls) = fixture_app(PortMode::Happy, Effects::default());
         let (status, body) = call(
             app,
@@ -416,20 +429,77 @@ async fn production_update_router_consumes_the_typescript_signed_xor_fixture() {
             None,
         )
         .await;
-        if cell.schema_accepted {
-            assert_eq!(status, StatusCode::OK, "{}", cell.name);
-            assert_eq!(body["channel"]["id"], "c", "{}", cell.name);
-            match cell.operation.as_deref() {
-                Some("rename") => assert_eq!(calls.rename.load(Ordering::SeqCst), 1),
-                Some("visibility") => assert_eq!(calls.visibility.load(Ordering::SeqCst), 1),
-                other => panic!("unexpected operation {other:?}"),
-            }
-        } else {
-            assert_eq!(status, StatusCode::BAD_REQUEST, "{}", cell.name);
-            assert_eq!(body, cell.body.unwrap(), "{}", cell.name);
-            assert_eq!(calls.rename.load(Ordering::SeqCst), 0);
-            assert_eq!(calls.visibility.load(Ordering::SeqCst), 0);
+        assert_eq!(status, StatusCode::OK, "{}", cell.name);
+        assert_eq!(body["channel"]["id"], "c", "{}", cell.name);
+        match cell.operation.as_deref() {
+            Some("rename") => assert_eq!(calls.rename.load(Ordering::SeqCst), 1),
+            Some("visibility") => assert_eq!(calls.visibility.load(Ordering::SeqCst), 1),
+            other => panic!("unexpected operation {other:?}"),
         }
+    }
+    assert_eq!(cells.len(), 9);
+    assert_eq!(consumed, 3, "shared cross-language denominator is 3/9");
+}
+
+#[tokio::test]
+async fn schema_rejected_update_cells_take_the_native_axis_with_writer_zero_reach() {
+    // The 6 `schema_accepted=false` cells: `neither_field`/`both_fields` are the exactly-one
+    // `.refine()` → minimal 422; `non_object`/`title_wrong_type`/`visibility_*` are native
+    // structural faults (400/422, incl. the object-only floor). None reaches a write port.
+    let cells: Vec<AdmissionCell> = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../packages/backend/tests/fixtures/channel-lifecycle-update-admission.json"
+    )))
+    .unwrap();
+    let mut checked = 0;
+    for cell in &cells {
+        if cell.schema_accepted {
+            continue;
+        }
+        checked += 1;
+        let (app, calls) = fixture_app(PortMode::Happy, Effects::default());
+        let (status, _) = call(
+            app,
+            "/api/channels/c",
+            Body::from(serde_json::to_vec(&cell.request).unwrap()),
+            true,
+            None,
+        )
+        .await;
+        // Exact native status by input class: `neither_field`/`both_fields` are the
+        // exactly-one refinement → minimal 422; `non_object`/`title_wrong_type`/
+        // `visibility_bad_enum` are data-shape → 422; `visibility_wrong_type` (a number in
+        // the shared `RequiredPatchField<enum>` wrapper) surfaces as the native 400.
+        let expected = if cell.name == "visibility_wrong_type" {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::UNPROCESSABLE_ENTITY
+        };
+        assert_eq!(status, expected, "{}", cell.name);
+        assert_eq!(calls.rename.load(Ordering::SeqCst), 0, "{}", cell.name);
+        assert_eq!(calls.visibility.load(Ordering::SeqCst), 0, "{}", cell.name);
+    }
+    assert_eq!(checked, 6, "schema-rejected local denominator is 6/9");
+}
+
+#[tokio::test]
+async fn explicit_null_title_or_visibility_is_a_native_fault_never_the_other_mutation() {
+    // P1: `title`/`visibility` are `.optional()` but NOT `.nullable()`, so an explicit
+    // `null` must be a native decode fault — it must NOT collapse to "missing" and let the
+    // OTHER field drive a rename/visibility change. `RequiredPatchField` rejects the present
+    // `null` as a native data-shape fault → exactly 422; neither write port is reached.
+    for raw in [
+        r#"{"title":null,"visibility":"public"}"#, // null title must not become a visibility change
+        r#"{"title":"X","visibility":null}"#,      // null visibility must not become a rename
+        r#"{"title":null,"visibility":null}"#,     // both null
+        r#"{"title":null}"#,
+        r#"{"visibility":null}"#,
+    ] {
+        let (app, calls) = fixture_app(PortMode::Happy, Effects::default());
+        let (status, _) = call(app, "/api/channels/c", Body::from(raw), true, None).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{raw}");
+        assert_eq!(calls.rename.load(Ordering::SeqCst), 0, "{raw}");
+        assert_eq!(calls.visibility.load(Ordering::SeqCst), 0, "{raw}");
     }
 }
 

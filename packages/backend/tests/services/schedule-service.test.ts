@@ -1,5 +1,6 @@
 import { fixedWorkspaceName } from '@silverhand/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import cronParity from '../../../shared/tests/fixtures/schedule-cron-production-parity.json' with { type: 'json' };
 import {
   fixedConversationTitle,
   readScheduleFireMetadata,
@@ -1391,6 +1392,46 @@ describe('ScheduleService dispose', () => {
 // ── Review fixes (Cindy r1) ───────────────────────────────────────
 
 describe('ScheduleService — cron 5-field strictness', () => {
+  it('signs the shared production cron grammar, timezone, DST, and no-future corpus', () => {
+    expect(cronParity.authority).toEqual({
+      signer: 'packages/backend ScheduleService.create',
+      engine: 'cron-parser@4.9.0',
+      consumer: 'rust backend-sqlite ProductionCronEvaluator',
+    });
+    expect(cronParity.cases).toHaveLength(32);
+    expect(new Set(cronParity.cases.map((entry) => entry.name)).size).toBe(32);
+    for (const entry of cronParity.cases) {
+      const f = setup();
+      f.setNow(entry.after);
+      try {
+        const schedule = f.service.create(
+          {
+            title: 'Cron parity',
+            message: entry.name,
+            spec: {
+              kind: 'cron',
+              expression: entry.expression,
+              timezone: entry.timezone,
+            },
+            max_occurrences: 1,
+          },
+          f.ownerAgentId,
+          f.homeDmId,
+        );
+        expect(entry.expected.kind, entry.name).toBe('next');
+        if (entry.expected.kind === 'next') {
+          expect(schedule.next_fire_at, entry.name).toBe(entry.expected.instant);
+        }
+      } catch (error) {
+        expect(entry.expected.kind, entry.name).toBe('error');
+        if (entry.expected.kind === 'error') {
+          expect(error, entry.name).toBeInstanceOf(ScheduleError);
+          expect((error as ScheduleError).code, entry.name).toBe(entry.expected.code);
+        }
+      }
+    }
+  });
+
   it('rejects 6-field (seconds) cron expressions at create time', () => {
     const f = setup();
     let err: ScheduleError | undefined;

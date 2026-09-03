@@ -73,13 +73,23 @@ where
         Ok(Ok(value)) => match value.bind(&viewer, &workspace) {
             Ok(value) => active_success(&value),
             Err(error) => {
-                tracing::error!(error_chain=%crate::foundation::error::describe(&error),"active channel-directory identity seal failed");
+                tracing::error!(
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&error))
+                    ),
+                    "active channel-directory identity seal failed"
+                );
                 internal()
             }
         },
         Ok(Err(refusal)) => workspace_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"active channel-directory read failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&error))
+                ),
+                "active channel-directory read failed"
+            );
             internal()
         }
     }
@@ -104,13 +114,23 @@ where
         Ok(Ok(value)) => match value.bind(&viewer, &workspace) {
             Ok(value) => workspace_archived_success(&value),
             Err(error) => {
-                tracing::error!(error_chain=%crate::foundation::error::describe(&error),"archived channel-directory identity seal failed");
+                tracing::error!(
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&error))
+                    ),
+                    "archived channel-directory identity seal failed"
+                );
                 internal()
             }
         },
         Ok(Err(refusal)) => workspace_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"archived channel-directory read failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&error))
+                ),
+                "archived channel-directory read failed"
+            );
             internal()
         }
     }
@@ -142,7 +162,12 @@ where
         Ok(Ok(value)) => match value.bind(&viewer, workspace.as_ref()) {
             Ok(value) => global_archived_success(&value),
             Err(error) => {
-                tracing::error!(error_chain=%crate::foundation::error::describe(&error),"global archived-channel identity seal failed");
+                tracing::error!(
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&error))
+                    ),
+                    "global archived-channel identity seal failed"
+                );
                 internal()
             }
         },
@@ -153,7 +178,12 @@ where
             error(StatusCode::FORBIDDEN, "forbidden")
         }
         Err(error) => {
-            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"global archived-channel read failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&error))
+                ),
+                "global archived-channel read failed"
+            );
             internal()
         }
     }

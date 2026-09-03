@@ -281,7 +281,11 @@ where
         Ok(Signup::HandleTaken) => handle_taken(),
         Ok(Signup::AuthFailed) => auth_failed(),
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "signup flow failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "signup flow failed"
+            );
             internal_error()
         }
     }
@@ -328,7 +332,11 @@ where
         Ok(Login::Authenticated { user, secret }) => session_response(secret, &user),
         Ok(Login::AuthFailed) => auth_failed(),
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "login flow failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "login flow failed"
+            );
             internal_error()
         }
     }
@@ -371,7 +379,11 @@ where
         Ok(true) => logout_ok(),
         Ok(false) => unauthorized(),
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "session revoke failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "session revoke failed"
+            );
             internal_error()
         }
     }
@@ -410,13 +422,17 @@ where
         // corruption, the safe-500 seam, never a product 404.
         Ok(None) => {
             tracing::error!(
-                user_id = %user_id.as_str(),
+                user_id = crate::foundation::safe_log_field::safe_display(&(user_id.as_str())),
                 "an authenticated session resolves to no user row"
             );
             internal_error()
         }
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "read self profile failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "read self profile failed"
+            );
             internal_error()
         }
     }
@@ -476,13 +492,17 @@ where
         // As with GET, a dangling session pointer is corruption → safe-500.
         Ok(UserProfileUpdate::NoSuchUser) => {
             tracing::error!(
-                user_id = %user_id.as_str(),
+                user_id = crate::foundation::safe_log_field::safe_display(&(user_id.as_str())),
                 "an authenticated session resolves to no user row on profile write"
             );
             internal_error()
         }
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "self profile write failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "self profile write failed"
+            );
             internal_error()
         }
     }
@@ -762,7 +782,8 @@ fn internal_error() -> Response {
 pub(crate) fn log_lost_announce(announce: &UserChangedAnnounce, origin: &str) {
     if let UserChangedAnnounce::Failed(failure) = announce {
         tracing::error!(
-            error_chain = %error::describe(failure),
+            error_chain =
+                crate::foundation::safe_log_field::safe_display(&(error::describe(failure))),
             origin,
             "user_changed announce could not be delivered; \
              affected readers stay stale until they refetch"

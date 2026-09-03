@@ -400,7 +400,8 @@ where
         Ok(outcome) => outcome,
         Err(fault) => {
             tracing::error!(
-                error_chain = %error::describe(&fault),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&fault))),
                 "agent-create unit of work faulted"
             );
             return internal_error();
@@ -428,14 +429,14 @@ where
             {
                 tracing::error!(
                     agent_id = agent_id.as_str(),
-                    error_chain = %error::describe(&failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
                     "agent-create direct-pairs edge failed"
                 );
             }
             if let Err(failure) = sink.agent_changed(&agent_id).await {
                 tracing::error!(
                     agent_id = agent_id.as_str(),
-                    error_chain = %error::describe(&failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
                     "agent-create agent_changed announce failed"
                 );
             }
@@ -458,7 +459,7 @@ where
                     {
                         tracing::error!(
                             agent_id = agent_id.as_str(),
-                            error_chain = %error::describe(&failure),
+                            error_chain = crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
                             "agent-create onboarding delivery failed"
                         );
                     }
@@ -471,7 +472,7 @@ where
                     if let Err(failure) = runtime_start.start(&destination, &agent_id).await {
                         tracing::error!(
                             agent_id = agent_id.as_str(),
-                            error_chain = %error::describe(&failure),
+                            error_chain = crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
                             "agent-create runtime start failed"
                         );
                     }

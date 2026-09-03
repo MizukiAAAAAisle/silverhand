@@ -661,8 +661,8 @@ where
         let connection_id = generation.connection_id.clone();
         let Some(delay) = self.retry_delays.get(index).copied() else {
             tracing::warn!(
-                host_id = %host.as_str(),
-                connection_id = %connection_id,
+                host_id = crate::foundation::safe_log_field::safe_display(&(host.as_str())),
+                connection_id = crate::foundation::safe_log_field::safe_display(&(connection_id)),
                 attempts = index,
                 "agent deletion retry ladder exhausted for this host connection generation; awaiting a reconnect"
             );
@@ -709,16 +709,26 @@ where
             }
             ResumeOutcome::Superseded => {
                 tracing::info!(
-                    agent_id = %attempt.agent_id().as_str(),
-                    host_id = %attempt.host_id().as_str(),
+                    agent_id = crate::foundation::safe_log_field::safe_display(
+                        &(attempt.agent_id().as_str())
+                    ),
+                    host_id = crate::foundation::safe_log_field::safe_display(
+                        &(attempt.host_id().as_str())
+                    ),
                     "agent deletion attempt superseded; the marker moved on, dropping this token"
                 );
             }
             ResumeOutcome::Faulted(failure) => {
                 tracing::error!(
-                    agent_id = %attempt.agent_id().as_str(),
-                    host_id = %attempt.host_id().as_str(),
-                    error_chain = %error::describe(failure),
+                    agent_id = crate::foundation::safe_log_field::safe_display(
+                        &(attempt.agent_id().as_str())
+                    ),
+                    host_id = crate::foundation::safe_log_field::safe_display(
+                        &(attempt.host_id().as_str())
+                    ),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(error::describe(failure))
+                    ),
                     "agent deletion hit an internal contract fault; dropping the in-memory token, the durable marker stays for a later boot"
                 );
             }
@@ -728,8 +738,10 @@ where
     /// Emit the log line when a captured generation was no longer live at bind time.
     fn log_stale(&self, attempt: &AgentDeletionAttempt) {
         tracing::info!(
-            agent_id = %attempt.agent_id().as_str(),
-            host_id = %attempt.host_id().as_str(),
+            agent_id =
+                crate::foundation::safe_log_field::safe_display(&(attempt.agent_id().as_str())),
+            host_id =
+                crate::foundation::safe_log_field::safe_display(&(attempt.host_id().as_str())),
             "agent deletion could not fence the captured daemon generation; it was superseded, re-driving on the live one or awaiting a reconnect"
         );
     }
@@ -737,15 +749,17 @@ where
     fn log_completed(&self, attempt: &AgentDeletionAttempt, residue: &[ResidueFault]) {
         for fault in residue {
             tracing::warn!(
-                agent_id = %fault.agent.as_str(),
+                agent_id = crate::foundation::safe_log_field::safe_display(&(fault.agent.as_str())),
                 effect = ?fault.effect,
-                error_chain = %error::describe(&fault.failure),
+                error_chain = crate::foundation::safe_log_field::safe_display(&(error::describe(&fault.failure))),
                 "agent deletion committed but a post-commit effect failed; carried, never rolled back"
             );
         }
         tracing::info!(
-            agent_id = %attempt.agent_id().as_str(),
-            host_id = %attempt.host_id().as_str(),
+            agent_id =
+                crate::foundation::safe_log_field::safe_display(&(attempt.agent_id().as_str())),
+            host_id =
+                crate::foundation::safe_log_field::safe_display(&(attempt.host_id().as_str())),
             deletion_started_at = attempt.deletion_started_at(),
             "agent deletion completed"
         );
@@ -757,9 +771,11 @@ where
             RetryReason::Persistence(failure) => error::describe(failure),
         };
         tracing::warn!(
-            agent_id = %attempt.agent_id().as_str(),
-            host_id = %attempt.host_id().as_str(),
-            error_chain = %chain,
+            agent_id =
+                crate::foundation::safe_log_field::safe_display(&(attempt.agent_id().as_str())),
+            host_id =
+                crate::foundation::safe_log_field::safe_display(&(attempt.host_id().as_str())),
+            error_chain = crate::foundation::safe_log_field::safe_display(&(chain)),
             "agent deletion could not complete this attempt; retaining the durable marker and retrying"
         );
     }

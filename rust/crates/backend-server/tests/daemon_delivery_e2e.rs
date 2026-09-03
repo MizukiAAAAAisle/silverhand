@@ -1637,6 +1637,49 @@ async fn a_real_send_commits_the_witness_the_daemon_then_claims() {
     fixture.server.abort();
 }
 
+/// Adjacent negative for the production custody seam: dispatching a message that
+/// has no committed inbox witness must stop at `NoPending`. In particular, an
+/// attached daemon must not receive a fabricated `runtime_deliver` command.
+#[tokio::test]
+async fn delivery_without_committed_inbox_custody_emits_no_runtime_deliver() {
+    let fixture = fixture_without_seeded_inbox("no-pending-no-deliver.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+
+    let effects = fixture.effects.clone();
+    let delivery = tokio::spawn(async move {
+        MainDelivery::deliver_to(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &created_message(),
+        )
+        .await
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), delivery)
+        .await
+        .expect("NoPending delivery must resolve without waiting on the daemon")
+        .unwrap()
+        .unwrap();
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), socket.next())
+            .await
+            .is_err(),
+        "NoPending must emit no runtime_deliver command"
+    );
+    let mut db = open(&fixture.path).await;
+    let inboxes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversation_inboxes")
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(inboxes, 0);
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
 async fn open(path: &std::path::Path) -> SqliteConnection {
     SqliteConnection::connect_with(
         &SqliteConnectOptions::new()

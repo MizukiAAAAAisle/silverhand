@@ -87,8 +87,10 @@ async fn call(app: Router, method: Method, path: &str, body: &str) -> (u16, serd
     request.extensions_mut().insert(UserId::parse("u").unwrap());
     let response = app.oneshot(request).await.unwrap();
     let status = response.status().as_u16();
-    let body =
-        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    // A native structural rejection (415/400/422) carries a plain-text body pinned on
+    // status only; JSON bodies (our own {error} refusals / success) parse.
+    let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
     (status, body)
 }
 
@@ -146,15 +148,17 @@ async fn failing_clock_cannot_preempt_target_access_kind_or_body_refusals() {
             r#"{"muted":"yes"}"#,
         ),
     ] {
-        let (status, wire) = call(
+        let (status, _wire) = call(
             attention_preference::router(store.clone(), Effects),
             Method::PUT,
             path,
             body,
         )
         .await;
-        assert_eq!(status, 400);
-        assert_eq!(wire["error"], "invalid input");
+        // A wrong-typed body value that survives to the shared extractor after admit is a
+        // native data-shape 422 (native body text not pinned); the failing clock is never
+        // consulted (writer/effect zero-reach).
+        assert_eq!(status, 422);
         assert_eq!(calls.load(Ordering::SeqCst), 0, "{path}");
     }
     let (status, wire) = call(

@@ -9,7 +9,8 @@ use silverhand_backend_core::{
         },
         mention_cc::CommittedMentionCopy,
         post_commit::{
-            EffectFailure, IdleStart, MainDelivery, ReplyDelivery, RuntimeDelivery, RuntimeStart,
+            EffectFailure, IdleStart, LiveMessageInboxEnsure, MainDelivery, ReplyDelivery,
+            RuntimeDelivery, RuntimeStart, SealedMessageInboxEnsure,
         },
     },
     conversation_messaging::runtime_delivery::{RuntimeDispatchReadPort, RuntimeInboxCustodyPort},
@@ -17,6 +18,29 @@ use silverhand_backend_core::{
     host_runtime::custody::HostCredentialLookup,
     host_runtime::runtime_event::DaemonEventDurablePort,
 };
+
+/// Narrow production delivery face for converged effects that already own an
+/// immutable conversation coordinate (membership notices, task events, channel
+/// rename notices, and schedule wakes).  Unlike [`RuntimeDelivery`], this is not
+/// tied to a mention-copy DTO; unlike the owning runtime, it exposes no start,
+/// custody, or settlement authority.
+pub trait LiveConversationRuntimeDelivery: Clone + Send + Sync + 'static {
+    fn deliver_to_live_recipient(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        message: &MessageId,
+    ) -> impl std::future::Future<Output = Result<(), EffectFailure>> + Send;
+}
+
+pub trait SealedConversationRuntimeDelivery: Clone + Send + Sync + 'static {
+    fn deliver_to_sealed_recipient(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        message: &MessageId,
+    ) -> impl std::future::Future<Output = Result<(), EffectFailure>> + Send;
+}
 
 use crate::application_orchestration::daemon_delivery::DaemonDeliveryRuntime;
 
@@ -93,6 +117,60 @@ where
             .deliver(conversation, agent)
             .await
             .map_err(EffectFailure::from_source)
+    }
+}
+
+#[derive(Clone)]
+pub struct ConversationMessageDeliveryAdapter<Ensure, C, D, H> {
+    ensure: Ensure,
+    effects: DaemonDeliveryEffects<C, D, H>,
+}
+
+impl<Ensure, C, D, H> ConversationMessageDeliveryAdapter<Ensure, C, D, H> {
+    pub fn new(ensure: Ensure, effects: DaemonDeliveryEffects<C, D, H>) -> Self {
+        Self { ensure, effects }
+    }
+}
+
+impl<Ensure, C, D, H> LiveConversationRuntimeDelivery
+    for ConversationMessageDeliveryAdapter<Ensure, C, D, H>
+where
+    Ensure: LiveMessageInboxEnsure,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
+    H: HostCredentialLookup,
+{
+    async fn deliver_to_live_recipient(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        message: &MessageId,
+    ) -> Result<(), EffectFailure> {
+        self.ensure
+            .ensure_for_live_recipient(conversation, agent, message)
+            .await?;
+        self.effects.wake(conversation, agent).await
+    }
+}
+
+impl<Ensure, C, D, H> SealedConversationRuntimeDelivery
+    for ConversationMessageDeliveryAdapter<Ensure, C, D, H>
+where
+    Ensure: SealedMessageInboxEnsure,
+    C: silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPort,
+    D: RuntimeDispatchReadPort + RuntimeInboxCustodyPort + DaemonEventDurablePort,
+    H: HostCredentialLookup,
+{
+    async fn deliver_to_sealed_recipient(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        message: &MessageId,
+    ) -> Result<(), EffectFailure> {
+        self.ensure
+            .ensure_for_sealed_recipient(conversation, agent, message)
+            .await?;
+        self.effects.wake(conversation, agent).await
     }
 }
 

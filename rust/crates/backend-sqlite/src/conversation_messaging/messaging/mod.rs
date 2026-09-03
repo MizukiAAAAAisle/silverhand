@@ -19,6 +19,9 @@ use std::{
 use std::collections::HashSet;
 
 use silverhand_backend_core::application_orchestration::agent_creation::OnboardingInboxEnsure;
+use silverhand_backend_core::conversation_messaging::messaging::post_commit::{
+    LiveMessageInboxEnsure, SealedMessageInboxEnsure,
+};
 use silverhand_backend_core::conversation_messaging::messaging::{
     self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationRefusal,
     CreatedMessage, DirectPairEndpoints, DirectPairMint, DirectPairMinted, DirectPairOpenedPort,
@@ -102,7 +105,7 @@ macro_rules! agent_participation_predicate {
 // enumeration, so it cannot stand in for the list read — only the shared predicate can.
 pub(crate) use agent_participation_predicate;
 
-const SELECT_AGENT_PARTICIPATES: &str = concat!(
+pub(crate) const SELECT_AGENT_PARTICIPATES: &str = concat!(
     "SELECT 1 FROM conversations c WHERE c.id = ? AND ",
     agent_participation_predicate!()
 );
@@ -136,7 +139,7 @@ pub(crate) const SELECT_START_DISPATCH_SPEC: &str = concat!(
 );
 /// The human arm carries two facts for a channel — the seat AND workspace
 /// membership — so a seat that outlived a workspace removal admits nobody.
-const SELECT_USER_PARTICIPATES: &str = "SELECT 1 FROM conversations c WHERE c.id = ? AND \
+pub(crate) const SELECT_USER_PARTICIPATES: &str = "SELECT 1 FROM conversations c WHERE c.id = ? AND \
      ((c.placement_kind = 'workspace' AND EXISTS (SELECT 1 FROM conversation_users cu WHERE \
      cu.conversation_id = c.id AND cu.user_id = ?) AND EXISTS (SELECT 1 FROM workspace_users wu \
      WHERE wu.workspace_id = c.workspace_id AND wu.user_id = ?)) OR (c.placement_kind = \
@@ -309,7 +312,7 @@ const RESERVE_NEXT_SEQ: &str =
     "UPDATE conversations SET latest_message_seq = latest_message_seq + 1 WHERE id = ?";
 const SELECT_LATEST_SEQ: &str = "SELECT latest_message_seq FROM conversations WHERE id = ?";
 
-const INSERT_MESSAGE: &str = "INSERT INTO messages (id, conversation_id, from_kind, from_agent_id, \
+pub(crate) const INSERT_MESSAGE: &str = "INSERT INTO messages (id, conversation_id, from_kind, from_agent_id, \
      from_user_id, content, metadata, seq, created_at, thread_root_id, author_id, author_name, \
      author_display_name, cc_source_message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
@@ -366,7 +369,7 @@ const THREAD_REPLIERS_FOR_ROOT: &str = "SELECT from_kind, from_agent_id, from_us
 
 const FROM_KIND_USER: &str = "user";
 const FROM_KIND_AGENT: &str = "agent";
-const FROM_KIND_SYSTEM: &str = "system";
+pub(crate) const FROM_KIND_SYSTEM: &str = "system";
 const PRINCIPAL_KIND_HUMAN: &str = "human";
 const PRINCIPAL_KIND_AGENT: &str = "agent";
 const FOLLOWER_SOURCE_REPLY: &str = "reply";
@@ -419,6 +422,15 @@ pub struct MessagingStore<E = HostEnvironment> {
 /// insert — in one transaction, so it never parallel-copies the send path's SQL.
 #[derive(Clone)]
 pub struct SqliteOnboardingInboxEnsure<E = HostEnvironment> {
+    pool: SqlitePool,
+    environment: E,
+}
+
+/// Message-generic form of the same idempotent inbox authority. It shares the
+/// store pool, clock, witness reads, and `ENSURE_INBOX_DELIVERY` statement; only
+/// the onboarding-only subtype witness is intentionally absent.
+#[derive(Clone)]
+pub struct SqliteCommittedMessageInboxEnsure<E = HostEnvironment> {
     pool: SqlitePool,
     environment: E,
 }
@@ -476,6 +488,52 @@ where
     }
 }
 
+impl<E> LiveMessageInboxEnsure for SqliteCommittedMessageInboxEnsure<E>
+where
+    E: SendClock + Clone + Send + Sync + 'static,
+{
+    async fn ensure_for_live_recipient(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        message: &MessageId,
+    ) -> Result<(), EffectFailure> {
+        ensure_inbox_delivery(
+            &self.pool,
+            &self.environment,
+            conversation,
+            agent,
+            message,
+            InboxRecipientAuthority::LiveParticipation,
+        )
+        .await
+        .map_err(EffectFailure::from_source)
+    }
+}
+
+impl<E> SealedMessageInboxEnsure for SqliteCommittedMessageInboxEnsure<E>
+where
+    E: SendClock + Clone + Send + Sync + 'static,
+{
+    async fn ensure_for_sealed_recipient(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        message: &MessageId,
+    ) -> Result<(), EffectFailure> {
+        ensure_inbox_delivery(
+            &self.pool,
+            &self.environment,
+            conversation,
+            agent,
+            message,
+            InboxRecipientAuthority::SealedByCommit,
+        )
+        .await
+        .map_err(EffectFailure::from_source)
+    }
+}
+
 impl<E: SendClock> SqliteOnboardingInboxEnsure<E> {
     async fn ensure_inner(
         &self,
@@ -483,26 +541,54 @@ impl<E: SendClock> SqliteOnboardingInboxEnsure<E> {
         agent: &AgentId,
         onboarding_message: &MessageId,
     ) -> Result<(), OnboardingInboxEnsureError> {
-        // Stamp with the store's own clock, ahead of opening the transaction.
-        let now = self.environment.now_unix_ms()?;
-        // One transaction so the two witness reads and the insert see a single, consistent
-        // snapshot — a participation revoked mid-flight cannot slip a row past the gate.
-        let mut tx = self.pool.begin().await?;
+        ensure_inbox_delivery(
+            &self.pool,
+            &self.environment,
+            conversation,
+            agent,
+            onboarding_message,
+            InboxRecipientAuthority::Onboarding,
+        )
+        .await
+    }
+}
 
-        // Witness 1 — the message belongs to THIS conversation AND is a genuine onboarding
-        // system message. One read returns the two discriminating columns; the shape is judged
-        // by the domain's ONE recognizer over the ONE metadata decode, so this narrow door
-        // cannot be tricked into enqueuing an ordinary same-conversation message a participant
-        // happened to send. A row absent from the conversation and a row of the wrong shape are
-        // named apart in the fault.
-        let message = sqlx::query(SELECT_ONBOARDING_MESSAGE_SHAPE_IN_CONVERSATION)
-            .bind(conversation.as_str())
-            .bind(onboarding_message.as_str())
-            .fetch_optional(&mut *tx)
-            .await?;
-        let Some(message) = message else {
-            return Err(DeliveryWitnessMismatch::Message.into());
-        };
+#[derive(Clone, Copy)]
+enum InboxRecipientAuthority {
+    Onboarding,
+    LiveParticipation,
+    SealedByCommit,
+}
+
+async fn ensure_inbox_delivery<E: SendClock>(
+    pool: &SqlitePool,
+    environment: &E,
+    conversation: &ConversationId,
+    agent: &AgentId,
+    message_id: &MessageId,
+    authority: InboxRecipientAuthority,
+) -> Result<(), OnboardingInboxEnsureError> {
+    // Stamp with the store's own clock, ahead of opening the transaction.
+    let now = environment.now_unix_ms()?;
+    // One transaction so the two witness reads and the insert see a single, consistent
+    // snapshot — a participation revoked mid-flight cannot slip a row past the gate.
+    let mut tx = pool.begin().await?;
+
+    // Witness 1 — the message belongs to THIS conversation AND is a genuine onboarding
+    // system message. One read returns the two discriminating columns; the shape is judged
+    // by the domain's ONE recognizer over the ONE metadata decode, so this narrow door
+    // cannot be tricked into enqueuing an ordinary same-conversation message a participant
+    // happened to send. A row absent from the conversation and a row of the wrong shape are
+    // named apart in the fault.
+    let message = sqlx::query(SELECT_ONBOARDING_MESSAGE_SHAPE_IN_CONVERSATION)
+        .bind(conversation.as_str())
+        .bind(message_id.as_str())
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(message) = message else {
+        return Err(DeliveryWitnessMismatch::Message.into());
+    };
+    if matches!(authority, InboxRecipientAuthority::Onboarding) {
         let from_kind: String = message.try_get("from_kind")?;
         let metadata: Option<String> = message.try_get("metadata")?;
         let digest = decode_onboarding_metadata_digest(metadata.as_deref());
@@ -511,10 +597,12 @@ impl<E: SendClock> SqliteOnboardingInboxEnsure<E> {
                 reason: mismatch.reason(),
             },
         )?;
+    }
 
-        // Witness 2 — the agent is a current participant of that conversation, via the ONE
-        // canonical participation predicate the send path's `is_agent_participant` uses
-        // (roster row for a workspace placement, or a direct-pair endpoint).
+    // Witness 2 — the agent is a current participant of that conversation, via the ONE
+    // canonical participation predicate the send path's `is_agent_participant` uses
+    // (roster row for a workspace placement, or a direct-pair endpoint).
+    if !matches!(authority, InboxRecipientAuthority::SealedByCommit) {
         let participates: Option<i64> = sqlx::query_scalar(SELECT_AGENT_PARTICIPATES)
             .bind(conversation.as_str())
             .bind(agent.as_str())
@@ -525,22 +613,22 @@ impl<E: SendClock> SqliteOnboardingInboxEnsure<E> {
         if participates.is_none() {
             return Err(DeliveryWitnessMismatch::Participation.into());
         }
-
-        // The witnesses hold: enqueue the durable turn. The SAME idempotent writer the send
-        // fan-out uses — a re-run (echo) conflicts on the unique delivery index and writes
-        // nothing new.
-        sqlx::query(ENSURE_INBOX_DELIVERY)
-            .bind(conversation.as_str())
-            .bind(agent.as_str())
-            .bind(onboarding_message.as_str())
-            .bind(DELIVERY_KIND_TURN)
-            .bind(now)
-            .execute(&mut *tx)
-            .await?;
-
-        tx.commit().await?;
-        Ok(())
     }
+
+    // The witnesses hold: enqueue the durable turn. The SAME idempotent writer the send
+    // fan-out uses — a re-run (echo) conflicts on the unique delivery index and writes
+    // nothing new.
+    sqlx::query(ENSURE_INBOX_DELIVERY)
+        .bind(conversation.as_str())
+        .bind(agent.as_str())
+        .bind(message_id.as_str())
+        .bind(DELIVERY_KIND_TURN)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Startup and driver failures, surfaced only to the composition root that opens
@@ -601,6 +689,33 @@ impl<E> MessagingStore<E> {
     {
         SqliteTargetAddress::new(self.clone(), opened, refusals)
     }
+
+    /// Preflight the schedule consumer's `manage_schedules` capability against
+    /// the resolved conversation placement. The create writer repeats this under
+    /// its reserved lock; this read exists only to preserve route refusal order.
+    pub async fn may_manage_schedules(
+        &self,
+        agent: &AgentId,
+        conversation: &ConversationId,
+    ) -> Result<bool, PersistenceFailure> {
+        let value: Option<i64> = sqlx::query_scalar(
+            "SELECT CASE WHEN c.placement_kind='direct_pair' THEN 1 \
+             WHEN c.placement_kind='workspace' AND EXISTS(SELECT 1 FROM workspace_members wm \
+             WHERE wm.workspace_id=c.workspace_id AND wm.agent_id=?) AND (EXISTS(SELECT 1 FROM \
+             workspaces w WHERE w.id=c.workspace_id AND w.owner_agent_id=?) OR EXISTS(SELECT 1 \
+             FROM workspace_agent_capabilities cap WHERE cap.workspace_id=c.workspace_id AND \
+             cap.agent_id=? AND cap.capability='manage_schedules')) THEN 1 ELSE 0 END \
+             FROM conversations c WHERE c.id=?",
+        )
+        .bind(agent.as_str())
+        .bind(agent.as_str())
+        .bind(agent.as_str())
+        .bind(conversation.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(driver)?;
+        Ok(value == Some(1))
+    }
     /// Opens an existing product database with injected host capabilities. A
     /// missing file is a failure rather than an empty database.
     pub async fn open_with(
@@ -629,6 +744,16 @@ impl<E> MessagingStore<E> {
         E: Clone,
     {
         SqliteOnboardingInboxEnsure {
+            pool: self.pool.clone(),
+            environment: self.environment.clone(),
+        }
+    }
+
+    pub fn committed_message_inbox_ensure(&self) -> SqliteCommittedMessageInboxEnsure<E>
+    where
+        E: Clone,
+    {
+        SqliteCommittedMessageInboxEnsure {
             pool: self.pool.clone(),
             environment: self.environment.clone(),
         }
@@ -3231,6 +3356,68 @@ mod tests {
                     None
                 ),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn committed_system_message_ensure_reuses_the_same_custody_writer_without_onboarding_gate()
+     {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ensure-committed.sqlite");
+        let store = seed_onboarding_ensure_graph(&path).await;
+        let ensure = store.committed_message_inbox_ensure();
+
+        ensure
+            .ensure_for_live_recipient(&conv("conv-ws"), &agent("agent-ws"), &msg("msg-wrongsub"))
+            .await
+            .unwrap();
+        ensure
+            .ensure_for_live_recipient(&conv("conv-ws"), &agent("agent-ws"), &msg("msg-wrongsub"))
+            .await
+            .unwrap();
+        let rows: Vec<(String, String, String)> =
+            sqlx::query_as("SELECT conversation_id,agent_id,message_id FROM conversation_inboxes")
+                .fetch_all(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            rows,
+            vec![(
+                "conv-ws".to_owned(),
+                "agent-ws".to_owned(),
+                "msg-wrongsub".to_owned(),
+            )],
+            "the generic committed-message authority is idempotent and preserves the exact message coordinate"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_and_sealed_recipient_authorities_diverge_after_membership_revoke() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ensure-authority.sqlite");
+        let store = seed_onboarding_ensure_graph(&path).await;
+        let ensure = store.committed_message_inbox_ensure();
+        sqlx::query(
+            "DELETE FROM conversation_agents WHERE conversation_id='conv-ws' AND agent_id='agent-ws'",
+        )
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+        ensure
+            .ensure_for_live_recipient(&conv("conv-ws"), &agent("agent-ws"), &msg("msg-wrongsub"))
+            .await
+            .unwrap_err();
+        assert_eq!(inbox_row_count(&store).await, 0);
+
+        ensure
+            .ensure_for_sealed_recipient(&conv("conv-ws"), &agent("agent-ws"), &msg("msg-wrongsub"))
+            .await
+            .unwrap();
+        assert_eq!(
+            inbox_row_count(&store).await,
+            1,
+            "a writer-sealed recipient remains deliverable after the commit boundary"
         );
     }
 

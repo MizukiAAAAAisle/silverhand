@@ -143,7 +143,7 @@ pub async fn fence_message_send_body(request: Request, next: Next) -> Response {
 /// input, which is the very conflation this lane exists to avoid.
 fn unreadable_body(cause: &axum::Error) -> Response {
     tracing::error!(
-        error_chain = %error::describe(cause),
+        error_chain = crate::foundation::safe_log_field::safe_display(&(error::describe(cause))),
         "message-send request body could not be read"
     );
     (

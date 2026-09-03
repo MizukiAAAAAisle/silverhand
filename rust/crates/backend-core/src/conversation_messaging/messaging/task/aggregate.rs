@@ -58,7 +58,10 @@
 //! place coordinate) — this decoder is stricter by design, asserting what TS
 //! leaves to the database.
 
-use crate::foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId};
+use crate::foundation::{
+    identity::{AgentId, ConversationId, UserId, WorkspaceId},
+    wire_number::JsSafeInteger,
+};
 
 use super::spec::{Assignee, Creator, TaskContent, TaskId, TaskNumber, TaskStatus, TaskTitle};
 
@@ -211,6 +214,8 @@ pub enum TaskRowCorruption {
     Assignee,
     #[error("stored tasks last_editor_* columns violate the all-null-or-complete triple")]
     LastEditor,
+    #[error("stored tasks.created_at is outside the JavaScript safe-integer range")]
+    CreatedAt,
     #[error("stored tasks.closed_at disagrees with the closed-status biconditional")]
     ClosedAt,
 }
@@ -480,6 +485,13 @@ impl TaskAggregate {
         let content = TaskContent::parse(row.content).map_err(|_| E::Content)?;
 
         let status = TaskStatus::parse(&row.status).map_err(|_| E::Status)?;
+        // Every task timestamp crosses a JSON-number boundary. Reject persisted
+        // values a JavaScript consumer cannot represent exactly rather than
+        // silently rounding the committed fact on the wire.
+        JsSafeInteger::new(row.created_at).map_err(|_| E::CreatedAt)?;
+        if row.closed_at.map(JsSafeInteger::new).transpose().is_err() {
+            return Err(E::ClosedAt);
+        }
         // `(status = 'closed') = (closed_at IS NOT NULL)` (schema-current.sql):
         // closed carries an instant; every other status carries none. Neither the
         // orphan instant nor the un-stamped close is a legal row.
@@ -614,6 +626,7 @@ fn decode_last_edit(
     match (kind, id, at) {
         (None, None, None) => Ok(None),
         (Some(kind), Some(id), Some(at)) => {
+            JsSafeInteger::new(at).map_err(|_| TaskRowCorruption::LastEditor)?;
             let editor = match kind.as_str() {
                 "agent" => LastEditor::Agent(
                     AgentId::parse(id).map_err(|_| TaskRowCorruption::LastEditor)?,
@@ -710,6 +723,24 @@ mod tests {
             mutate(&mut row);
             assert_eq!(decode(row), Err(expected));
         }
+    }
+
+    #[test]
+    fn every_projected_timestamp_must_be_exact_as_a_javascript_number() {
+        let mut created = valid_row();
+        created.created_at = JsSafeInteger::MAX + 1;
+        assert_eq!(decode(created), Err(TaskRowCorruption::CreatedAt));
+
+        let mut edited = valid_row();
+        edited.last_editor_kind = Some("user".into());
+        edited.last_editor_id = Some("user_1".into());
+        edited.last_edited_at = Some(JsSafeInteger::MAX + 1);
+        assert_eq!(decode(edited), Err(TaskRowCorruption::LastEditor));
+
+        let mut closed = valid_row();
+        closed.status = "closed".into();
+        closed.closed_at = Some(JsSafeInteger::MAX + 1);
+        assert_eq!(decode(closed), Err(TaskRowCorruption::ClosedAt));
     }
 
     #[test]

@@ -156,7 +156,11 @@ where
     let outcome = match state.operation.execute(command).await {
         Ok(outcome) => outcome,
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "host update failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "host update failed"
+            );
             return internal_error();
         }
     };
@@ -167,10 +171,18 @@ where
                 // The database commit already happened. Returning a request failure
                 // would invite a retry that duplicates the mutation; carry the residue
                 // to operators and return the committed result.
-                tracing::error!(error_chain = %error::describe(&cause), host_id = %computer.as_str(), "host label committed but agent refresh announcement failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    host_id = crate::foundation::safe_log_field::safe_display(&(computer.as_str())),
+                    "host label committed but agent refresh announcement failed"
+                );
             }
             if !computer_times_are_js_safe(&record) {
-                tracing::error!(host_id = %computer.as_str(), "updated host timestamps are not JS-safe");
+                tracing::error!(
+                    host_id = crate::foundation::safe_log_field::safe_display(&(computer.as_str())),
+                    "updated host timestamps are not JS-safe"
+                );
                 return internal_error();
             }
             Json(UpdateResponse {

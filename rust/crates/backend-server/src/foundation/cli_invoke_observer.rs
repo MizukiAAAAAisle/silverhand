@@ -64,6 +64,28 @@ pub const CLI_INVOKE_PRODUCTION_PERIMETER: &[(CliInvokeMethod, &str)] = &[
         "/internal/agents/{aid}/profile/mcp/probe",
     ),
     (CliInvokeMethod::Post, CLI_TRACE_PATH),
+    (CliInvokeMethod::Post, "/internal/agents/{aid}/members"),
+    (CliInvokeMethod::Post, "/internal/agents/{aid}/tasks/create"),
+    (CliInvokeMethod::Post, "/internal/agents/{aid}/tasks/claim"),
+    (
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/tasks/unclaim",
+    ),
+    (
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/tasks/update-status",
+    ),
+    (CliInvokeMethod::Post, "/internal/agents/{aid}/tasks/edit"),
+    (CliInvokeMethod::Get, "/internal/agents/{aid}/tasks/detail"),
+    (CliInvokeMethod::Post, "/internal/agents/{aid}/schedules"),
+    (
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/schedules/list",
+    ),
+    (
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/schedules/cancel",
+    ),
 ];
 
 #[derive(Clone, Copy)]
@@ -203,6 +225,86 @@ const ROUTES: &[RouteDescriptor] = &[
         "profile",
         "mcp probe",
         "profile/mcp/probe",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/members",
+        "member",
+        "add",
+        "members",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/tasks/create",
+        "task",
+        "create",
+        "tasks/create",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/tasks/claim",
+        "task",
+        "claim",
+        "tasks/claim",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/tasks/unclaim",
+        "task",
+        "unclaim",
+        "tasks/unclaim",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/tasks/update-status",
+        "task",
+        "update status",
+        "tasks/update-status",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/tasks/edit",
+        "task",
+        "edit",
+        "tasks/edit",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Get,
+        "/internal/agents/{aid}/tasks/detail",
+        "task",
+        "detail",
+        "tasks/detail",
+        TASK_QUERY_KEYS,
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/schedules",
+        "schedule",
+        "create",
+        "schedules",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/schedules/list",
+        "schedule",
+        "list",
+        "schedules/list",
+        &[],
+    ),
+    route(
+        CliInvokeMethod::Post,
+        "/internal/agents/{aid}/schedules/cancel",
+        "schedule",
+        "cancel",
+        "schedules/cancel",
         &[],
     ),
 ];
@@ -603,7 +705,7 @@ mod tests {
                 left.path
             );
         }
-        assert_eq!(ROUTES.len(), 15);
+        assert_eq!(ROUTES.len(), 25);
         let mut accounted: Vec<_> = ROUTES
             .iter()
             .map(|route| (route.method, route.path))

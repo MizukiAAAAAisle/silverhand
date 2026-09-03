@@ -1277,7 +1277,9 @@ async fn daemon_websocket(
         Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(cause.as_ref()),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(error::describe(cause.as_ref()))
+                ),
                 "daemon host credential authentication failed"
             );
             return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
@@ -1434,7 +1436,7 @@ async fn connection(
                         Ok(false) => break,
                         Err(cause) => {
                             tracing::error!(
-                                error_chain = %error::describe(&cause),
+                                error_chain = crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                                 "daemon attachment registry failed after hydration"
                             );
                             let _ = socket.send(Message::Close(Some(CloseFrame {
@@ -1447,7 +1449,7 @@ async fn connection(
                 }
                 ConnectionInput::Control(ConnectionControl::Hydrated(Err(cause))) => {
                     tracing::error!(
-                        error_chain = %error::describe(cause.as_ref()),
+                        error_chain = crate::foundation::safe_log_field::safe_display(&(error::describe(cause.as_ref()))),
                         "daemon runtime hydration failed"
                     );
                     let _ = socket.send(Message::Close(Some(CloseFrame {
@@ -1541,7 +1543,7 @@ async fn connection(
                             });
                         }
                         Ok(DaemonFrame::ShuttingDown(frame)) => {
-                            tracing::warn!(reason = %frame.reason, "daemon announced shutdown");
+                            tracing::warn!(reason = crate::foundation::safe_log_field::safe_display(&(frame.reason)), "daemon announced shutdown");
                             let _ = socket.send(Message::Close(Some(CloseFrame {
                                 code: 1001,
                                 reason: "daemon_shutting_down".into(),

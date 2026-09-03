@@ -136,8 +136,10 @@ where
                 // or published, so an illegal stamp reaches neither side. The
                 // dropped connection is already evicted above, so no ghost remains.
                 tracing::error!(
-                    user_id = %user_id.as_str(),
-                    error_chain = %error::describe(&out_of_range),
+                    user_id = crate::foundation::safe_log_field::safe_display(&(user_id.as_str())),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(error::describe(&out_of_range))
+                    ),
                     "presence: disconnect clock is not a wire-safe last_seen_at; no offline scheduled"
                 );
                 return;
@@ -179,9 +181,10 @@ where
             tracked.pending.remove(&owner);
             if let Err(error) = persisted {
                 tracing::warn!(
-                    user_id = %owner.as_str(),
+                    user_id = crate::foundation::safe_log_field::safe_display(&(owner.as_str())),
                     last_seen_at = schedule.disconnected_at().get(),
-                    error_chain = %error::describe(&error),
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&error))),
                     "presence: failed to persist last_seen_at"
                 );
             }
@@ -237,7 +240,8 @@ where
     fn announce(&self, fact: PresenceFact) {
         if let Err(error) = self.facts.publish(fact) {
             tracing::warn!(
-                error_chain = %error::describe(&error),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&error))),
                 "presence: failed to publish a presence fact"
             );
         }

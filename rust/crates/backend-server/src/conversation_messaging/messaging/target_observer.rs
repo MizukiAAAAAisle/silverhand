@@ -24,7 +24,8 @@ impl TargetAddressRefusalPort for TargetAddressRefusalLog {
             operator_reason = report.reason().as_str(),
             intent = intent_name(report.intent()),
             principal_id = report.principal().as_str(),
-            address_hash = %hash_address(report.address()),
+            address_hash =
+                crate::foundation::safe_log_field::safe_display(&(hash_address(report.address()))),
             "delivery target refused"
         );
         Ok(())
@@ -35,6 +36,7 @@ fn intent_name(
     intent: silverhand_backend_core::conversation_messaging::messaging::DeliveryIntent,
 ) -> &'static str {
     match intent {
+        silverhand_backend_core::conversation_messaging::messaging::DeliveryIntent::Read => "read",
         silverhand_backend_core::conversation_messaging::messaging::DeliveryIntent::Write => {
             "write"
         }

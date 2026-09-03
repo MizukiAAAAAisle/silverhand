@@ -129,6 +129,14 @@ impl ScopeEventHub {
         HubThreadFollowUnread::new(HubUnreadPublisher::new(self.clone(), unread_read_model))
     }
 
+    /// A narrow unread refresh publisher for effects that mutate read-visible
+    /// conversation state outside the ordinary send pipeline (observation,
+    /// archive, task and schedule system messages).  Audience and counts remain
+    /// owned by the injected read model; the adapter only routes its sealed facts.
+    pub fn unread_publisher<R>(&self, unread_read_model: R) -> HubUnreadPublisher<R> {
+        HubUnreadPublisher::new(self.clone(), unread_read_model)
+    }
+
     /// Builds the notification-clear aftermath over this hub. Its constructor stays
     /// private so the public seam cannot be rebound to a different transport.
     ///
@@ -172,7 +180,139 @@ impl ScopeEventHub {
         HubReactionPublisher(self.clone())
     }
 
-    pub(crate) fn publish_direct_pairs_changed(
+    /// Product-owned invalidations used by the converged conversation, membership,
+    /// task, and schedule lanes.  These methods deliberately keep `ProductEvent`
+    /// crate-private: composition can name each effect it owes, but cannot publish an
+    /// arbitrary event or choose an untyped scope.
+    pub fn publish_workspace_channels_changed(
+        &self,
+        workspace: &WorkspaceId,
+        conversation: &ConversationId,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Workspace(workspace.clone()),
+            ProductEvent::WorkspaceChannelsChanged {
+                workspace_id: workspace.as_str().to_owned(),
+                channel_id: conversation.as_str().to_owned(),
+            },
+        )
+    }
+
+    pub fn publish_conversation_members_changed(
+        &self,
+        conversation: &ConversationId,
+        workspace: &WorkspaceId,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::ConversationSide(conversation.clone()),
+            ProductEvent::ConversationMembersChanged {
+                conversation_id: conversation.as_str().to_owned(),
+                workspace_id: workspace.as_str().to_owned(),
+            },
+        )
+    }
+
+    pub fn publish_attention_preference_changed(
+        &self,
+        viewer: &UserId,
+        workspace: &WorkspaceId,
+        conversation: Option<&ConversationId>,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::AttentionPrefChanged {
+                workspace_id: workspace.as_str().to_owned(),
+                conversation_id: conversation.map(|id| id.as_str().to_owned()),
+            },
+        )
+    }
+
+    pub fn publish_attention_badge(
+        &self,
+        viewer: &UserId,
+        workspace: &WorkspaceId,
+        badge_count: i64,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::AttentionBadgeUpdated(AttentionBadge {
+                workspace_id: workspace.as_str().to_owned(),
+                badge_count,
+            }),
+        )
+    }
+
+    pub fn publish_notification_dismissals(
+        &self,
+        viewer: &UserId,
+        dismissed_notification_ids: Vec<String>,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::NotificationDismissed {
+                dismissed_notification_ids,
+            },
+        )
+    }
+
+    pub fn publish_task_changed_to_conversation(
+        &self,
+        conversation: &ConversationId,
+        payload: serde_json::Value,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Conversation(conversation.clone()),
+            ProductEvent::TaskChanged(payload),
+        )
+    }
+
+    pub fn publish_task_changed_to_viewer(
+        &self,
+        viewer: &UserId,
+        payload: serde_json::Value,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::TaskChanged(payload),
+        )
+    }
+
+    pub fn publish_system_message(
+        &self,
+        conversation: &ConversationId,
+        message: serde_json::Value,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Conversation(conversation.clone()),
+            ProductEvent::Message(json!({ "message": message })),
+        )
+    }
+
+    pub fn publish_viewer_workspace_membership_changed(
+        &self,
+        viewer: &UserId,
+        workspace: &WorkspaceId,
+        change: &str,
+        role: Option<&str>,
+    ) -> Result<(), ScopeEventHubError> {
+        use crate::foundation::scope_event_wire::ViewerWorkspaceChange;
+        let change = match change {
+            "added" => ViewerWorkspaceChange::Added,
+            "role_changed" => ViewerWorkspaceChange::RoleChanged,
+            "removed" => ViewerWorkspaceChange::Removed,
+            _ => return Err(ScopeEventHubError::RegistryPoisoned),
+        };
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::ViewerWorkspacesChanged {
+                change,
+                workspace_id: workspace.as_str().to_owned(),
+                role: role.map(str::to_owned),
+            },
+        )
+    }
+
+    pub fn publish_direct_pairs_changed(
         &self,
         viewer: &UserId,
         conversation: &ConversationId,

@@ -51,7 +51,7 @@ const JSON_FIXTURE = fileURLToPath(
 );
 const RUST_FIXTURE = fileURLToPath(
   new URL(
-    '../../../../rust/crates/backend-core/src/messaging/schedule/recurrence_ts_fixture.rs',
+    '../../../../rust/crates/backend-core/src/conversation_messaging/messaging/schedule/recurrence_ts_fixture.rs',
     import.meta.url,
   ),
 );

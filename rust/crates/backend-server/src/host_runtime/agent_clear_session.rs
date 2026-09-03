@@ -124,7 +124,8 @@ where
         Ok(detail) => detail,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "agent-clear-session gate read failed"
             );
             return internal_error();
@@ -165,7 +166,8 @@ where
         Ok(Err(ClearSessionRefusal::Provider(refusal))) => provider_refusal(refusal, &agent),
         Err(failure) => {
             tracing::error!(
-                error_chain = %error::describe(&failure),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
                 "agent runtime clear-session failed"
             );
             internal_error()

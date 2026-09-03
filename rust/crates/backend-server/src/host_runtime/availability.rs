@@ -102,7 +102,8 @@ where
         Ok(view) => view,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "availability agent-view read failed"
             );
             return internal_error();
@@ -161,14 +162,16 @@ where
         }
         Err(AvailabilityReadError::Fetch(cause)) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "availability fact read failed"
             );
             internal_error()
         }
         Err(AvailabilityReadError::Mismatch(mismatch)) => {
             tracing::error!(
-                error_chain = %error::describe(&mismatch),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&mismatch))),
                 "availability facts described the wrong row"
             );
             internal_error()

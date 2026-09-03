@@ -222,6 +222,103 @@ async fn seed_human(path: &Path) {
     pool.close().await;
 }
 
+async fn seed_runtime_agent(path: &Path, agent_id: &str) {
+    let pool = SqlitePoolOptions::new()
+        .connect(path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO hosts (id, name, kind, created_at, user_id) \
+         VALUES ('h-registry-probe', 'host-registry-probe', 'remote', 1, 'user-1')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, \
+         created_by_user_id, materialization_status, session_scope) \
+         VALUES (?, 'registry-probe', 'qoder', 'h-registry-probe', 1, 1, \
+         'user-1', 'active', 'agent')",
+    )
+    .bind(agent_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT OR IGNORE INTO host_credentials \
+         (id,host_id,token_hash,kind,expires_at,consumed_at,revoked_at) \
+         VALUES('cred-registry-probe','h-registry-probe',?,'long_lived',NULL,NULL,NULL)",
+    )
+    .bind(HOST_TOKEN_HASH)
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+}
+
+async fn mint_runtime_bearer(app: &PreparedApp, agent_id: &str) -> String {
+    mint_runtime_bearer_for(app, agent_id, CONVERSATION_ID).await
+}
+
+async fn mint_runtime_bearer_for(
+    app: &PreparedApp,
+    agent_id: &str,
+    conversation_id: &str,
+) -> String {
+    mint_runtime_bearer_from(&app.test_runtime_credentials, agent_id, conversation_id).await
+}
+
+async fn mint_runtime_bearer_from(
+    credentials: &silverhand_backend_server::host_runtime::runtime_credential::RuntimeCredentialAuthority<
+        silverhand_backend_sqlite::host_runtime::runtime_credential::SqliteRuntimeCustodyStore,
+    >,
+    agent_id: &str,
+    conversation_id: &str,
+) -> String {
+    use std::{
+        convert::Infallible,
+        future::Future,
+        sync::{Arc, Mutex},
+    };
+
+    use silverhand_backend_core::{
+        foundation::identity::{ConversationId, DaemonInstanceId},
+        host_runtime::runtime_credential::RuntimeScope,
+    };
+    use silverhand_backend_server::host_runtime::runtime_credential::{
+        RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport,
+    };
+
+    #[derive(Clone, Default)]
+    struct CapturingStart(Arc<Mutex<Option<String>>>);
+
+    impl RuntimeStartTransport for CapturingStart {
+        type Error = Infallible;
+
+        fn dispatch(
+            &self,
+            handoff: &RuntimeStartHandoff,
+        ) -> impl Future<Output = Result<(), RuntimeDispatchFailure<Self::Error>>> + Send {
+            *self.0.lock().unwrap() = Some(handoff.daemon_auth_token().to_owned());
+            std::future::ready(Ok(()))
+        }
+    }
+
+    let transport = CapturingStart::default();
+    credentials
+        .dispatch_start(
+            RuntimeScope::AgentSlot {
+                agent: AgentId::parse(agent_id).unwrap(),
+            },
+            DaemonInstanceId::parse("daemon-registry-probe").unwrap(),
+            ConversationId::parse(conversation_id).unwrap(),
+            &transport,
+        )
+        .await
+        .unwrap();
+    format!("Bearer {}", transport.0.lock().unwrap().clone().unwrap())
+}
+
 async fn seed_workspace_conversation(path: &Path) {
     let pool = SqlitePoolOptions::new()
         .connect(path.to_str().unwrap())
@@ -2571,7 +2668,7 @@ async fn the_composition_mounts_stale_message_resolution_behind_the_runtime_peri
 /// doors + the #2223 CP4 directory/avatar doors + the #2223 CP5 host residual doors +
 /// the #2234 CP1 host-management doors + the #2234 CP2 public-agent write doors + the
 /// #2234 CP3 public agent-DELETE door + the #2257 residual wave) as
-/// one hundred and three entries — eighty-one behind the human
+/// one hundred and fifty entries — one hundred and twelve behind the human
 /// session perimeter (including #2218's authenticated `/api/runtimes`, the three #2219
 /// host custody/credential doors, the four #2223 CP5 host residual doors: detail,
 /// revoke, connect-token rotate and delete, the six #2234 CP1 host-management doors:
@@ -2587,15 +2684,15 @@ async fn the_composition_mounts_stale_message_resolution_behind_the_runtime_peri
 /// handler's own status (never the perimeter's bodiless `401`), and never the `404`
 /// fallback. Removing any mounted route's
 /// `.merge(...)` from `prepare()` flips its entry to `404` and reddens this gate.
-/// The tables are named consts with per-table `assert_eq!(len)` (81 human / 12 runtime
+/// The tables are named consts with per-table `assert_eq!(len)` (112 human / 28 runtime
 /// / 2 WebSocket / 7 anonymous / 1 connect-info-gated) so a mis-added or mis-deleted
 /// row reddens the count directly.
 ///
 /// This is a PRESENCE ledger, not a closed universe: black-box probing cannot
 /// prove "no further route was silently added" (axum exposes no route
 /// introspection), so this gate makes no such claim; the length asserts guard the
-/// table rows against mis-add/mis-delete, they make no closed-universe claim (that is
-/// gate 2's property). A new registrar mounted into
+/// table rows against mis-add/mis-delete, they make no closed-universe claim (the live
+/// canonical-registry reconciliation below owns that property). A new registrar mounted into
 /// `prepare()` MUST add its route here (and, if in the #2195 lane, move it from
 /// residual to landed in gate 2). Each door's per-path method surface and adapter
 /// wiring stays pinned by that route's own mount/unit test — the composed `.layer`
@@ -2612,10 +2709,10 @@ async fn the_composition_mounts_every_declared_route() {
     let router = app.router;
     let unauthorized = r#"{"error":"unauthorized"}"#;
 
-    // The eighty-one human-perimeter product doors. Anonymous (no bearer) → the human
+    // The 112 human-perimeter product doors. Anonymous (no bearer) → the human
     // session perimeter's `401` envelope, never a `404`: each path IS mounted and
     // guarded. (`.layer` runs the perimeter for any matched human route.)
-    const HUMAN_PERIMETER_DOORS: [(&str, &str); 81] = [
+    const HUMAN_PERIMETER_DOORS: [(&str, &str); 112] = [
         ("POST", "/api/hosts"),
         // #2219 CP4 host-custody batch B — the three perimeter-guarded custody doors.
         // `GET /api/hosts` shares the path node with the invite POST above, so its anon
@@ -2787,15 +2884,73 @@ async fn the_composition_mounts_every_declared_route() {
         ("GET", "/api/agents/agent-1/workspace/file"),
         ("GET", "/api/agents/agent-1/profile/mcp"),
         ("POST", "/api/agents/agent-1/profile/mcp/probe"),
+        // #2338: conversation-control mutations/debug (the four directory/detail
+        // reads already appear above), workspace/conversation membership, and the
+        // ten public task faces.
+        ("POST", "/api/attention/observe"),
+        (
+            "PUT",
+            "/api/conversations/conv000000000001/attention-preference",
+        ),
+        (
+            "PUT",
+            "/api/workspaces/workspace0000001/attention-preference",
+        ),
+        ("POST", "/api/workspaces/workspace0000001/channels"),
+        ("PATCH", "/api/channels/conv000000000001/archive"),
+        ("PATCH", "/api/channels/conv000000000001"),
+        ("GET", "/api/conversations/conv000000000001/log-debug"),
+        ("POST", "/api/conversations/conv000000000001/log-debug"),
+        ("GET", "/api/workspaces/workspace0000001/members"),
+        (
+            "PATCH",
+            "/api/workspaces/workspace0000001/members/users/user-1/role",
+        ),
+        ("DELETE", "/api/workspaces/workspace0000001/members/agent-1"),
+        (
+            "DELETE",
+            "/api/workspaces/workspace0000001/members/users/user-1",
+        ),
+        ("POST", "/api/workspaces/workspace0000001/leave"),
+        (
+            "GET",
+            "/api/workspaces/workspace0000001/agents/agent-1/capabilities",
+        ),
+        (
+            "PUT",
+            "/api/workspaces/workspace0000001/agents/agent-1/capabilities",
+        ),
+        ("GET", "/api/conversations/conv000000000001/members"),
+        ("POST", "/api/conversations/conv000000000001/members"),
+        ("POST", "/api/channels/conv000000000001/join"),
+        ("POST", "/api/channels/conv000000000001/leave"),
+        (
+            "DELETE",
+            "/api/conversations/conv000000000001/members/agents/agent-1",
+        ),
+        (
+            "DELETE",
+            "/api/conversations/conv000000000001/members/users/user-1",
+        ),
+        ("POST", "/api/tasks"),
+        ("POST", "/api/tasks/task-1/claim"),
+        ("POST", "/api/tasks/task-1/unclaim"),
+        ("POST", "/api/tasks/task-1/status"),
+        ("POST", "/api/tasks/task-1/edit"),
+        ("GET", "/api/tasks/board/column"),
+        ("GET", "/api/tasks/board/counts"),
+        ("GET", "/api/tasks/board/facets"),
+        ("GET", "/api/tasks/by-number"),
+        ("GET", "/api/tasks/task-1"),
     ];
-    assert_eq!(HUMAN_PERIMETER_DOORS.len(), 81);
+    assert_eq!(HUMAN_PERIMETER_DOORS.len(), 112);
     for (method, path) in HUMAN_PERIMETER_DOORS {
         let (status, body) = request(&router, method, path, None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
         assert_eq!(body, unauthorized, "{method} {path}");
     }
 
-    // The runtime-perimeter internal doors. Anonymous → the runtime credential
+    // The 28 runtime-perimeter internal doors. Anonymous → the runtime credential
     // perimeter's `401` on the matched route, never `404`. The original three (#2226-era
     // send/tasks/stale), the #2234 CP7a self-scope profile family (`/profile` GET+POST,
     // `/avatar` POST+DELETE, `/peer-profile` GET), the #2234 CP7b profile-MCP family
@@ -2803,7 +2958,7 @@ async fn the_composition_mounts_every_declared_route() {
     // cli-trace door, and #2262's six reaction/attachment doors. All eighteen ride the
     // ONE `require_runtime_credential` layer, so anon
     // on any listed method is the same bodiless 401.
-    assert_eq!(CLI_INVOKE_PRODUCTION_PERIMETER.len(), 18);
+    assert_eq!(CLI_INVOKE_PRODUCTION_PERIMETER.len(), 28);
     for (method, path_template) in CLI_INVOKE_PRODUCTION_PERIMETER {
         let path = path_template.replace("{aid}", "agent-1");
         let method = (*method).as_str();
@@ -2926,6 +3081,916 @@ async fn the_composition_mounts_every_declared_route() {
             "{method} {path} must be absent"
         );
     }
+}
+
+/// #2338's reviewed input denominator, expressed once as exact method+path
+/// identities and driven through the final composed app. The set is the exact
+/// canonical union recorded by the three reviewed leaf summaries; count alone
+/// can never substitute unrelated, already-mounted routes.
+#[tokio::test]
+async fn the_three_reviewed_lanes_mount_exactly_forty_five_routes() {
+    const ROUTES: &[(&str, &str)] = &[
+        ("POST", "/api/attention/observe"),
+        ("PUT", "/api/conversations/c/attention-preference"),
+        ("PUT", "/api/workspaces/w/attention-preference"),
+        ("GET", "/api/workspaces/w/attention-preference"),
+        ("POST", "/api/workspaces/w/channels"),
+        ("PATCH", "/api/channels/c/archive"),
+        ("PATCH", "/api/channels/c"),
+        ("POST", "/api/channels/c/agents/a/start"),
+        ("POST", "/api/channels/c/agents/a/stop"),
+        ("POST", "/api/channels/c/agents/a/clear-session"),
+        ("GET", "/api/conversations/c/log-debug"),
+        ("POST", "/api/conversations/c/log-debug"),
+        ("GET", "/api/workspaces/w/members"),
+        ("PATCH", "/api/workspaces/w/members/users/u/role"),
+        ("DELETE", "/api/workspaces/w/members/a"),
+        ("DELETE", "/api/workspaces/w/members/users/u"),
+        ("POST", "/api/workspaces/w/leave"),
+        ("GET", "/api/workspaces/w/agents/a/capabilities"),
+        ("PUT", "/api/workspaces/w/agents/a/capabilities"),
+        ("GET", "/api/conversations/c/members"),
+        ("POST", "/api/conversations/c/members"),
+        ("POST", "/api/channels/c/join"),
+        ("POST", "/api/channels/c/leave"),
+        ("DELETE", "/api/conversations/c/members/agents/a"),
+        ("DELETE", "/api/conversations/c/members/users/u"),
+        ("POST", "/internal/agents/a/members"),
+        ("POST", "/api/tasks"),
+        ("POST", "/api/tasks/t/claim"),
+        ("POST", "/api/tasks/t/unclaim"),
+        ("POST", "/api/tasks/t/status"),
+        ("POST", "/api/tasks/t/edit"),
+        ("GET", "/api/tasks/board/column"),
+        ("GET", "/api/tasks/board/counts"),
+        ("GET", "/api/tasks/board/facets"),
+        ("GET", "/api/tasks/by-number"),
+        ("GET", "/api/tasks/t"),
+        ("POST", "/internal/agents/a/tasks/create"),
+        ("POST", "/internal/agents/a/tasks/claim"),
+        ("POST", "/internal/agents/a/tasks/unclaim"),
+        ("POST", "/internal/agents/a/tasks/update-status"),
+        ("POST", "/internal/agents/a/tasks/edit"),
+        ("GET", "/internal/agents/a/tasks/detail"),
+        ("POST", "/internal/agents/a/schedules"),
+        ("POST", "/internal/agents/a/schedules/list"),
+        ("POST", "/internal/agents/a/schedules/cancel"),
+    ];
+    assert_eq!(ROUTES.len(), 45);
+    assert_eq!(
+        ROUTES
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        45,
+        "lane route identities must be unique"
+    );
+    let fixture = fixture(true).await;
+    seed_human(&fixture.path).await;
+    seed_runtime_agent(&fixture.path, "a").await;
+    let app = prepare(&config(fixture.path.clone())).await.unwrap();
+    let runtime_bearer = mint_runtime_bearer(&app, "a").await;
+    let human_bearer = format!("Bearer {TOKEN}");
+    for (method, path) in ROUTES {
+        let (anonymous_status, anonymous_body) = request(&app.router, method, path, None).await;
+        assert_eq!(
+            anonymous_status,
+            StatusCode::UNAUTHORIZED,
+            "canonical lane route {method} {path} must hit the protected perimeter, not top-level 404: {anonymous_body}"
+        );
+        let bearer = if path.starts_with("/internal/") {
+            &runtime_bearer
+        } else {
+            &human_bearer
+        };
+        let (status, body) = request(&app.router, method, path, Some(bearer)).await;
+        assert_ne!(
+            status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "composed lane method {method} {path} is not registered: {body}"
+        );
+        assert_ne!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "valid credential did not cross the perimeter for {method} {path}: {body}"
+        );
+    }
+}
+
+/// The canonical TypeScript registry remains the route-universe authority while the
+/// final composed Rust app is the mount authority.  This gate deduplicates the former
+/// by exact method+path identity, concretizes each parameter, and then probes the
+/// latter through its real perimeter.  A matched protected route is `401`; a residual
+/// route is `404`.  Embedded bootstrap is the sole extractor-gated exception, whose
+/// mounted node is witnessed by an unlisted GET returning `405`.
+#[tokio::test]
+async fn the_live_registry_closes_at_one_hundred_sixty_six_mounted_and_fifteen_residual() {
+    const EXPECTED_RESIDUAL: [&str; 15] = [
+        "DELETE /api/channels/:id/star",
+        "DELETE /api/workspaces/:id",
+        "GET /api/favorites",
+        "GET /internal/agents/:aid/list-channels",
+        "GET /internal/agents/:aid/list-workspaces",
+        "POST /api/channels/:id/star",
+        "POST /api/sort/touch",
+        "POST /api/workspaces",
+        "POST /internal/agents/:aid/create-channel",
+        "POST /internal/agents/:aid/follow-thread",
+        "POST /internal/agents/:aid/read-history",
+        "POST /internal/agents/:aid/search-messages",
+        "POST /internal/agents/:aid/unfollow-thread",
+        "PUT /api/sort/mode",
+        "PUT /api/sort/order",
+    ];
+    let rows: Vec<String> = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../packages/backend/tests/routes/endpoint-registry-snapshot.json"
+    )))
+    .unwrap();
+    assert_eq!(rows.len(), 184, "canonical registration-row denominator");
+    let registry: std::collections::BTreeSet<String> = rows.into_iter().collect();
+    assert_eq!(registry.len(), 181, "deduplicated method+path denominator");
+
+    let fixture = fixture(true).await;
+    seed_human(&fixture.path).await;
+    seed_runtime_agent(&fixture.path, "registry-probe").await;
+    let app = prepare(&config(fixture.path.clone())).await.unwrap();
+    let runtime_bearer = mint_runtime_bearer(&app, "registry-probe").await;
+    let human_bearer = format!("Bearer {TOKEN}");
+    let mut mounted = std::collections::BTreeSet::new();
+    let mut residual = std::collections::BTreeSet::new();
+    for identity in &registry {
+        let (method, template) = identity.split_once(' ').unwrap();
+        let path = template
+            .split('/')
+            .map(|segment| {
+                if segment.starts_with(':') {
+                    "registry-probe"
+                } else {
+                    segment
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        let is_embedded_bootstrap = identity == "POST /auth/embedded-bootstrap";
+        let anonymous_status = if is_embedded_bootstrap {
+            request(&app.router, "GET", &path, None).await.0
+        } else {
+            request(&app.router, method, &path, None).await.0
+        };
+        let is_mounted = if is_embedded_bootstrap {
+            anonymous_status == StatusCode::METHOD_NOT_ALLOWED
+        } else if anonymous_status == StatusCode::NOT_FOUND {
+            false
+        } else {
+            let bearer = if path.starts_with("/internal/") {
+                &runtime_bearer
+            } else {
+                &human_bearer
+            };
+            let authenticated_status = request(&app.router, method, &path, Some(bearer)).await.0;
+            authenticated_status != StatusCode::METHOD_NOT_ALLOWED
+        };
+        if is_mounted {
+            mounted.insert(identity.clone());
+        } else {
+            residual.insert(identity.clone());
+        }
+    }
+
+    assert_eq!(
+        mounted.len(),
+        166,
+        "mounted identities; residual={residual:#?}"
+    );
+    assert_eq!(residual.len(), 15, "residual identities={residual:#?}");
+    assert_eq!(
+        residual,
+        EXPECTED_RESIDUAL.into_iter().map(str::to_owned).collect(),
+        "the residual ledger must change with the live composed-app result"
+    );
+    assert!(mounted.is_disjoint(&residual));
+    assert_eq!(mounted.len() + residual.len(), registry.len());
+}
+
+/// Production schedule-driver proof: `prepare` owns a live driver, which claims a
+/// due row, writes the immutable schedule-fire message and owner inbox delivery through
+/// the real SQLite adapter, then settles the occurrence. A no-op committed effect, a
+/// test-only driver, or an unstarted driver leaves the row pending and this gate red.
+#[tokio::test]
+async fn the_composed_schedule_driver_delivers_and_settles_a_due_occurrence() {
+    let fixture = fixture(true).await;
+    seed_human(&fixture.path).await;
+    seed_runtime_agent(&fixture.path, "schedule-owner").await;
+    seed_workspace_conversation(&fixture.path).await;
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,created_by_user_id,materialization_status,session_scope) \
+         VALUES('schedule-peer','schedule-peer','qoder','h-registry-probe',1,1,'user-1','active','agent')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES(?,?,1)",
+    )
+    .bind(CONVERSATION_ID)
+    .bind("schedule-owner")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES(?,?,1)")
+        .bind(WORKSPACE_ID)
+        .bind("schedule-owner")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO workspace_agent_capabilities(workspace_id,agent_id,capability) VALUES(?,?,'manage_schedules')")
+        .bind(WORKSPACE_ID)
+        .bind("schedule-owner")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO workspaces(id,name,owner_agent_id,created_at,updated_at) VALUES \
+           ('home-schedule-owner','Owner Home','schedule-owner',1,1); \
+         INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at) VALUES \
+           ('home-dm-schedule-owner','home-schedule-owner','workspace','fixed','Onboarding','onboarding','idle','private',1,1); \
+         INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES \
+           ('home-dm-schedule-owner','schedule-owner',1);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES(?,?,1)",
+    )
+    .bind(CONVERSATION_ID)
+    .bind("schedule-peer")
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES(?,?,1)")
+        .bind(WORKSPACE_ID)
+        .bind("schedule-peer")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO workspace_agent_capabilities(workspace_id,agent_id,capability) VALUES(?,?,'send_messages')")
+        .bind(WORKSPACE_ID)
+        .bind("schedule-peer")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO schedules(id,owner_agent_id,target_conversation_id,title,message,spec_json,\
+         next_fire_at,status,fired_count,max_occurrences,until_at,consecutive_failure_count,\
+         created_at,updated_at) VALUES('schedule-due','schedule-owner',?,'Digest','wake now',\
+         '{\"kind\":\"once\",\"fire_at\":1}',9000000000000000,'pending',0,NULL,NULL,0,1,1)",
+    )
+    .bind(CONVERSATION_ID)
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    let app = prepare(&config(fixture.path.clone())).await.unwrap();
+    let runtime_credentials = app.test_runtime_credentials.clone();
+    let router = app.router.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let running = tokio::spawn(serve(listener, app, async move {
+        let _ = shutdown_rx.await;
+        Ok::<(), std::io::Error>(())
+    }));
+    let delivery_daemon = AttachedDeliveryDaemon::connect(address).await;
+    let runtime_bearer =
+        mint_runtime_bearer_from(&runtime_credentials, "schedule-owner", CONVERSATION_ID).await;
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE schedules SET next_fire_at=1 WHERE id='schedule-due'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let fire_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        + 60_000;
+    let (rearm_status, rearm_body) = json_request_with_body(
+        &router,
+        "POST",
+        "/internal/agents/schedule-owner/schedules",
+        Some(&runtime_bearer),
+        Body::from(format!(
+            r##"{{"target_conversation":"#conv:{CONVERSATION_ID}","title":"Rearm","message":"later","spec":{{"kind":"once","fire_at":{fire_at}}}}}"##
+        )),
+    )
+    .await;
+    assert_eq!(rearm_status, StatusCode::OK, "{rearm_body}");
+    let (status, messages, owner_inboxes, peer_inboxes): (String, i64, i64, i64) = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        async {
+            loop {
+                let status: String =
+                    sqlx::query_scalar("SELECT status FROM schedules WHERE id='schedule-due'")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                let messages: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM messages WHERE conversation_id=? \
+                     AND json_extract(metadata,'$.subtype')='schedule_fire' \
+                     AND json_extract(metadata,'$.schedule_id')='schedule-due'",
+                )
+                .bind(CONVERSATION_ID)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                let inboxes: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM conversation_inboxes ci JOIN messages m ON m.id=ci.message_id \
+                     WHERE ci.conversation_id=? AND ci.agent_id='schedule-owner' \
+                     AND json_extract(m.metadata,'$.schedule_id')='schedule-due'",
+                )
+                .bind(CONVERSATION_ID)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                let peer_inboxes: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM conversation_inboxes ci JOIN messages m ON m.id=ci.message_id \
+                     WHERE ci.conversation_id=? AND ci.agent_id='schedule-peer' \
+                     AND json_extract(m.metadata,'$.schedule_id')='schedule-due'",
+                )
+                .bind(CONVERSATION_ID)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                if status != "pending" && status != "firing" {
+                    break (status, messages, inboxes, peer_inboxes);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        },
+    )
+    .await
+    .expect("production schedule driver did not settle the due occurrence");
+    assert!(status == "done" || status == "failed", "{status}");
+    assert_eq!(
+        messages, 1,
+        "one claimed occurrence writes one wake message"
+    );
+    assert_eq!(
+        owner_inboxes, 1,
+        "the wake is durably addressed only to its owner"
+    );
+    assert_eq!(
+        peer_inboxes, 0,
+        "a freshness-exempt wake must not address another target participant"
+    );
+    let head_before_send: Option<i64> = sqlx::query_scalar(
+        "SELECT latest_seq FROM conversation_stream_heads WHERE conversation_id=? AND thread_root_id IS NULL",
+    )
+    .bind(CONVERSATION_ID)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        head_before_send, None,
+        "schedule_fire is freshness-exempt and must not advance the target stream head"
+    );
+    delivery_daemon.wait_for_deliveries(1).await;
+    let message_id: String = sqlx::query_scalar(
+        "SELECT id FROM messages WHERE conversation_id=? \
+         AND json_extract(metadata,'$.schedule_id')='schedule-due'",
+    )
+    .bind(CONVERSATION_ID)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        delivery_daemon
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|command| command["params"]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains(&message_id))),
+        "ordinary schedule wake must claim and dispatch its exact committed inbox message"
+    );
+    pool.close().await;
+    delivery_daemon.close().await;
+    shutdown_tx.send(()).unwrap();
+    running.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn dead_schedule_target_notifies_the_owner_home_and_keeps_original_failure() {
+    let fixture = fixture(true).await;
+    seed_human(&fixture.path).await;
+    seed_runtime_agent(&fixture.path, "dead-target-owner").await;
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,created_by_user_id,materialization_status,session_scope) VALUES \
+           ('no-home-owner','no-home-owner','qoder','h-registry-probe',1,1,'user-1','active','agent'); \
+         INSERT INTO workspaces(id,name,owner_agent_id,created_at,updated_at) VALUES \
+           ('home-dead-target','Home','dead-target-owner',1,1); \
+         INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at) VALUES \
+           ('homedmdeadtarget','home-dead-target','workspace','fixed','Onboarding','onboarding','idle','private',1,1); \
+         INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES \
+           ('homedmdeadtarget','dead-target-owner',1); \
+         INSERT INTO workspaces(id,name,name_key,owner_user_id,created_at,updated_at) VALUES \
+           ('wsdeadrearm00001','Rearm Space','rearm space','user-1',1,1); \
+         INSERT INTO workspace_users(workspace_id,user_id,joined_at,role) VALUES \
+           ('wsdeadrearm00001','user-1',1,'owner'); \
+         INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at) VALUES \
+           ('convdeadrearm001','wsdeadrearm00001','workspace','open','Rearm','rearm','idle','private',1,1); \
+         INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES \
+           ('convdeadrearm001','dead-target-owner',1); \
+         INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES \
+           ('wsdeadrearm00001','dead-target-owner',1); \
+         INSERT INTO workspace_agent_capabilities(workspace_id,agent_id,capability) VALUES \
+           ('wsdeadrearm00001','dead-target-owner','manage_schedules'); \
+         INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,closed_at,created_at,updated_at) VALUES \
+           ('closed-target','home-dead-target','workspace','open','Closed','closed','idle','private',2,1,1), \
+           ('left-target','home-dead-target','workspace','open','Left','left','idle','private',NULL,1,1); \
+         INSERT INTO schedules(id,owner_agent_id,target_conversation_id,title,message,spec_json,next_fire_at,status,fired_count,max_occurrences,until_at,consecutive_failure_count,created_at,updated_at) VALUES \
+           ('schedule-dead','dead-target-owner','missing-target','Missing','wake now','{\"kind\":\"once\",\"fire_at\":1}',9000000000000000,'pending',0,NULL,NULL,0,1,1), \
+           ('schedule-closed','dead-target-owner','closed-target','Closed','wake now','{\"kind\":\"once\",\"fire_at\":1}',9000000000000000,'pending',0,NULL,NULL,0,1,1), \
+           ('schedule-left','dead-target-owner','left-target','Left','wake now','{\"kind\":\"once\",\"fire_at\":1}',9000000000000000,'pending',0,NULL,NULL,0,1,1), \
+           ('schedule-no-home','no-home-owner','missing-target','No Home','wake now','{\"kind\":\"once\",\"fire_at\":1}',9000000000000000,'pending',0,NULL,NULL,0,1,1);",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    let app = prepare(&config(fixture.path.clone())).await.unwrap();
+    let runtime_credentials = app.test_runtime_credentials.clone();
+    let router = app.router.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let running = tokio::spawn(serve(listener, app, async move {
+        let _ = shutdown_rx.await;
+        Ok::<(), std::io::Error>(())
+    }));
+    let delivery_daemon = AttachedDeliveryDaemon::connect(address).await;
+    let runtime_bearer = mint_runtime_bearer_from(
+        &runtime_credentials,
+        "dead-target-owner",
+        "convdeadrearm001",
+    )
+    .await;
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE schedules SET next_fire_at=1 WHERE id LIKE 'schedule-%'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let fire_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        + 60_000;
+    let (rearm_status, rearm_body) = json_request_with_body(
+        &router,
+        "POST",
+        "/internal/agents/dead-target-owner/schedules",
+        Some(&runtime_bearer),
+        Body::from(format!(
+            r##"{{"target_conversation":"#conv:convdeadrearm001","title":"Rearm","message":"later","spec":{{"kind":"once","fire_at":{fire_at}}}}}"##
+        )),
+    )
+    .await;
+    assert_eq!(rearm_status, StatusCode::OK, "{rearm_body}");
+    let (failures, notice_count, inbox_count): (String, i64, i64) = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        async {
+            loop {
+                let failed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schedules WHERE id IN ('schedule-dead','schedule-closed','schedule-left','schedule-no-home') AND status='failed'")
+                    .fetch_one(&pool).await.unwrap();
+                if failed == 4 {
+                    let failure: String = sqlx::query_scalar("SELECT group_concat(failure_reason,'|') FROM (SELECT failure_reason FROM schedules WHERE id IN ('schedule-dead','schedule-closed','schedule-left') ORDER BY id)")
+                        .fetch_one(&pool).await.unwrap();
+                    let notices: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE conversation_id='homedmdeadtarget' AND content LIKE 'Schedule % could not fire:%'")
+                        .fetch_one(&pool).await.unwrap();
+                    let inboxes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversation_inboxes ci JOIN messages m ON m.id=ci.message_id WHERE ci.conversation_id='homedmdeadtarget' AND ci.agent_id='dead-target-owner' AND m.content LIKE 'Schedule % could not fire:%'")
+                        .fetch_one(&pool).await.unwrap();
+                    break (failure, notices, inboxes);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        },
+    ).await.expect("dead-target schedule did not settle");
+    assert_eq!(
+        failures,
+        "target_conversation_unavailable: closed-target (closed)|target_conversation_unavailable: missing-target (missing)|target_conversation_unavailable: left-target (owner not participant)"
+    );
+    let list_bearer = mint_runtime_bearer_from(
+        &runtime_credentials,
+        "dead-target-owner",
+        "convdeadrearm001",
+    )
+    .await;
+    let (list_status, list_body) = json_request_with_body(
+        &router,
+        "POST",
+        "/internal/agents/dead-target-owner/schedules/list",
+        Some(&list_bearer),
+        Body::from("{}"),
+    )
+    .await;
+    assert_eq!(list_status, StatusCode::OK, "{list_body}");
+    for reason in [
+        "target_conversation_unavailable: missing-target (missing)",
+        "target_conversation_unavailable: closed-target (closed)",
+        "target_conversation_unavailable: left-target (owner not participant)",
+    ] {
+        assert!(
+            list_body.contains(reason),
+            "schedule list must expose the canonical settlement reason {reason}: {list_body}"
+        );
+    }
+    assert_eq!(notice_count, 3);
+    assert_eq!(inbox_count, 3);
+    delivery_daemon.wait_for_deliveries(3).await;
+    let notice_ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM messages WHERE conversation_id='homedmdeadtarget' \
+         AND content LIKE 'Schedule % could not fire:%' ORDER BY seq",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(notice_ids.len(), 3);
+    for message_id in notice_ids {
+        assert!(
+            delivery_daemon
+                .seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|command| command["params"]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains(&message_id))),
+            "dead-target notice {message_id} must be claimed by a real runtime_deliver"
+        );
+    }
+    pool.close().await;
+    delivery_daemon.close().await;
+    shutdown_tx.send(()).unwrap();
+    running.await.unwrap().unwrap();
+}
+
+/// A committed task mutation crosses the composition-owned effect adapter with its
+/// immutable post-image: one system-message frame followed by one `task_changed` on
+/// the canonical conversation stream, plus one live-participant viewer fan-out. The
+/// cursor-inert conversation-side stream must remain untouched.
+#[tokio::test]
+async fn the_composed_task_create_publishes_committed_payload_on_canonical_and_live_viewer_scopes()
+{
+    let fixture = fixture(true).await;
+    seed_human(&fixture.path).await;
+    seed_runtime_agent(&fixture.path, "task-recipient").await;
+    seed_workspace_conversation(&fixture.path).await;
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES(?,?,1)",
+    )
+    .bind(CONVERSATION_ID)
+    .bind("task-recipient")
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+    let app = prepare(&config(fixture.path.clone())).await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let running = tokio::spawn(serve(listener, app, async move {
+        let _ = shutdown_rx.await;
+        Ok::<(), std::io::Error>(())
+    }));
+    let mut conversation =
+        subscribe_event_scope(address, &format!("conversation:{CONVERSATION_ID}"), 0).await;
+    let mut viewer = subscribe_own_viewer(address).await;
+    let delivery_daemon = AttachedDeliveryDaemon::connect(address).await;
+    let bearer = format!("Bearer {TOKEN}");
+
+    let response = http_over_tcp(
+        address,
+        "POST",
+        "/api/tasks",
+        Some(&bearer),
+        &format!(r#"{{"title":"Committed title","conversation_id":"{CONVERSATION_ID}"}}"#),
+    )
+    .await;
+    assert!(
+        response.starts_with("HTTP/1.1 201 Created\r\n"),
+        "{response}"
+    );
+    let created = http_json_body(&response);
+    let task_id = created["task"]["id"].as_str().unwrap();
+    let task_number = created["task"]["task_number"].as_i64().unwrap();
+
+    let message = next_socket_json(&mut conversation).await;
+    assert_eq!(message["kind"], "message");
+    assert_eq!(message["scope"], format!("conversation:{CONVERSATION_ID}"));
+    let canonical = next_socket_json(&mut conversation).await;
+    assert_eq!(canonical["kind"], "task_changed");
+    assert_eq!(canonical["payload"]["task_id"], task_id);
+    assert_eq!(canonical["payload"]["task_number"], task_number);
+    assert_eq!(canonical["payload"]["title"], "Committed title");
+    assert_eq!(canonical["payload"]["conversation_id"], CONVERSATION_ID);
+    let viewer_frame = loop {
+        let frame = next_socket_json(&mut viewer).await;
+        if frame["kind"] == "task_changed" {
+            break frame;
+        }
+    };
+    assert_eq!(viewer_frame["kind"], "task_changed");
+    assert_eq!(viewer_frame["payload"], canonical["payload"]);
+    delivery_daemon.wait_for_deliveries(1).await;
+    assert_eq!(
+        fresh_scope_high_water(address, &format!("conversation:{CONVERSATION_ID}")).await,
+        2,
+        "one committed event message and one task_changed advance the canonical stream"
+    );
+    assert_eq!(
+        fresh_scope_high_water(address, &format!("conversation-side:{CONVERSATION_ID}")).await,
+        0,
+        "task_changed never enters the cursor-inert side stream"
+    );
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    let addressed: Vec<String> = sqlx::query_scalar(
+        "SELECT ci.message_id FROM conversation_inboxes ci JOIN messages m ON m.id=ci.message_id \
+         WHERE ci.conversation_id=? AND ci.agent_id='task-recipient' \
+         AND json_extract(m.metadata,'$.task_id')=?",
+    )
+    .bind(CONVERSATION_ID)
+    .bind(task_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        addressed.len(),
+        1,
+        "the daemon wake is preceded by custody for the same committed task event"
+    );
+    assert!(
+        delivery_daemon
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|command| command["params"]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains(&addressed[0]))),
+        "the real runtime_deliver must claim the custody row for the committed task message"
+    );
+    pool.close().await;
+
+    conversation.close(None).await.unwrap();
+    viewer.close(None).await.unwrap();
+    delivery_daemon.close().await;
+    shutdown_tx.send(()).unwrap();
+    running.await.unwrap().unwrap();
+}
+
+/// Conversation-membership effects are wired to the same production hub as the
+/// final app: a fresh public self-join emits exactly the roster invalidation on the
+/// cursor-inert conversation-side scope, then the channel-list invalidation on the
+/// workspace scope. No shaped/no-op aftermath can satisfy both subscriptions.
+#[tokio::test]
+async fn the_composed_membership_join_publishes_both_production_invalidations() {
+    const PUBLIC_CHANNEL: &str = "conversation-public-join";
+    let fixture = fixture(true).await;
+    seed_human(&fixture.path).await;
+    seed_workspace_conversation(&fixture.path).await;
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,\
+         status,visibility,created_at,updated_at) VALUES(?,?,'workspace','open','Public',\
+         'public','idle','public',1,1)",
+    )
+    .bind(PUBLIC_CHANNEL)
+    .bind(WORKSPACE_ID)
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+
+    let app = prepare(&config(fixture.path.clone())).await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let running = tokio::spawn(serve(listener, app, async move {
+        let _ = shutdown_rx.await;
+        Ok::<(), std::io::Error>(())
+    }));
+    let mut workspace =
+        subscribe_event_scope(address, &format!("workspace:{WORKSPACE_ID}"), 0).await;
+    let bearer = format!("Bearer {TOKEN}");
+    let response = http_over_tcp(
+        address,
+        "POST",
+        &format!("/api/channels/{PUBLIC_CHANNEL}/join"),
+        Some(&bearer),
+        "",
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+
+    assert_eq!(
+        fresh_scope_high_water(address, &format!("conversation-side:{PUBLIC_CHANNEL}")).await,
+        1,
+        "the fresh join publishes exactly one roster invalidation"
+    );
+    let mut side =
+        subscribe_event_scope(address, &format!("conversation-side:{PUBLIC_CHANNEL}"), 1).await;
+    let channels = next_socket_json(&mut workspace).await;
+    assert_eq!(channels["kind"], "workspace_channels_changed");
+    assert_eq!(channels["payload"]["workspace_id"], WORKSPACE_ID);
+    assert_eq!(channels["payload"]["channel_id"], PUBLIC_CHANNEL);
+
+    side.close(None).await.unwrap();
+    workspace.close(None).await.unwrap();
+    shutdown_tx.send(()).unwrap();
+    running.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn membership_notice_and_channel_rename_create_real_runtime_inbox_custody() {
+    let fixture = fixture(true).await;
+    seed_human(&fixture.path).await;
+    seed_runtime_agent(&fixture.path, "lane-recipient").await;
+    seed_channel_directory(&fixture.path).await;
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES(?,?,1)")
+        .bind(WORKSPACE_ID)
+        .bind("lane-recipient")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let app = prepare(&config(fixture.path.clone())).await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let running = tokio::spawn(serve(listener, app, async move {
+        let _ = shutdown_rx.await;
+        Ok::<(), std::io::Error>(())
+    }));
+    let delivery_daemon = AttachedDeliveryDaemon::connect(address).await;
+    let bearer = format!("Bearer {TOKEN}");
+    let response = http_over_tcp(
+        address,
+        "POST",
+        &format!("/api/conversations/{CONVERSATION_ID}/members"),
+        Some(&bearer),
+        r#"{"kind":"agent","agent_id":"lane-recipient"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    let response = http_over_tcp(
+        address,
+        "PATCH",
+        &format!("/api/channels/{CONVERSATION_ID}"),
+        Some(&bearer),
+        r#"{"title":"Renamed"}"#,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    delivery_daemon.wait_for_deliveries(2).await;
+
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT json_extract(m.metadata,'$.subtype'),ci.message_id \
+         FROM conversation_inboxes ci JOIN messages m ON m.id=ci.message_id \
+         WHERE ci.conversation_id=? AND ci.agent_id='lane-recipient' \
+         AND json_extract(m.metadata,'$.subtype') IN ('conversation_member_added','rename') \
+         ORDER BY m.seq",
+    )
+    .bind(CONVERSATION_ID)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows.len(),
+        2,
+        "membership and rename must each custody their own committed system message: {rows:?}"
+    );
+    assert_ne!(rows[0].1, rows[1].1);
+    for (_, message) in &rows {
+        assert!(
+            delivery_daemon
+                .seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|command| command["params"]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains(message))),
+            "the real daemon dispatch must claim the exact membership/rename custody {message}"
+        );
+    }
+    let (latest_message_seq, main_head): (i64, i64) = sqlx::query_as(
+        "SELECT c.latest_message_seq,h.latest_seq FROM conversations c \
+         JOIN conversation_stream_heads h ON h.conversation_id=c.id \
+           AND h.thread_root_id IS NULL WHERE c.id=?",
+    )
+    .bind(CONVERSATION_ID)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(latest_message_seq, 2);
+    assert_eq!(
+        main_head, latest_message_seq,
+        "membership and rename notices are both visible to mainline observe/window readers"
+    );
+    pool.close().await;
+    delivery_daemon.close().await;
+    shutdown_tx.send(()).unwrap();
+    running.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn membership_notice_head_failure_rolls_back_member_message_and_head() {
+    let fixture = fixture(true).await;
+    seed_human(&fixture.path).await;
+    seed_runtime_agent(&fixture.path, "rollback-recipient").await;
+    seed_channel_directory(&fixture.path).await;
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES(?,?,1)")
+        .bind(WORKSPACE_ID)
+        .bind("rollback-recipient")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER reject_membership_head BEFORE INSERT ON conversation_stream_heads \
+         BEGIN SELECT RAISE(ABORT,'head rejected'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = prepare(&config(fixture.path.clone())).await.unwrap();
+    let bearer = format!("Bearer {TOKEN}");
+    let (status, _) = json_request_with_body(
+        &app.router,
+        "POST",
+        &format!("/api/conversations/{CONVERSATION_ID}/members"),
+        Some(&bearer),
+        Body::from(r#"{"kind":"agent","agent_id":"rollback-recipient"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let (member, message, head): (i64, i64, i64) = sqlx::query_as(
+        "SELECT \
+           (SELECT COUNT(*) FROM conversation_agents WHERE conversation_id=? AND agent_id='rollback-recipient'), \
+           (SELECT COUNT(*) FROM messages WHERE conversation_id=?), \
+           (SELECT COUNT(*) FROM conversation_stream_heads WHERE conversation_id=?)",
+    )
+    .bind(CONVERSATION_ID)
+    .bind(CONVERSATION_ID)
+    .bind(CONVERSATION_ID)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((member, message, head), (0, 0, 0));
+    pool.close().await;
+    app.close_connections().await;
 }
 
 /// Seed one message authored by `user-1` in `CONVERSATION_ID` (a valid thread root:
@@ -3438,9 +4503,9 @@ async fn mounted_attachment_update_is_cursor_inert_and_reuses_the_one_blob_root(
 /// landed is disjoint from residual and from connect-info-gated, and the union is
 /// exactly `72`. This is NOT the canonical global endpoint inventory: the unchanged TS
 /// snapshot contains 184 registration rows collapsing to 181 unique method+path keys.
-/// The accepted #2257 global identity was 103 mounted + 78 residual; #2262 adds exactly
-/// 18 previously-residual keys, so the global identity is now
-/// `181 = 121 mounted + 60 residual`. This narrower gate extends #2257's 54-key
+/// The accepted #2257 global identity was 103 mounted + 78 residual; #2262 added
+/// 18 previously-residual keys, and #2338's live registry reconciliation now closes at
+/// `181 = 166 mounted + 15 residual`. This narrower gate extends #2257's 54-key
 /// migration-tracked subset by those same 18 notification/reaction/attachment keys.
 /// Source registration counts are intentionally not used inside this subset: shared
 /// path nodes contribute one key per method, and a duplicate registrar cannot inflate
@@ -3497,7 +4562,7 @@ async fn mounted_attachment_update_is_cursor_inert_and_reuses_the_one_blob_root(
 ///   that to `404` and reddens this gate.
 /// * 0 RESIDUAL rows remain INSIDE THIS 72-key migration-tracked subset — every face
 ///   this subset declares is mounted through #2262. The canonical 181-key inventory
-///   still has 60 residual routes outside this subset. The loop
+///   now has 15 residual routes outside this subset. The loop
 ///   stays as the mount-residual RED tripwire: a row re-added here that is actually
 ///   mounted fails its anon-`404` assertion.
 /// * 0 METHOD-SHADOW residual rows remain inside this subset: `POST /api/agents` was
@@ -3697,7 +4762,7 @@ async fn the_migration_tracked_route_subset_stays_closed_at_seventy_two() {
     const CONNECT_INFO_GATED: &[(&str, &str)] = &[("POST", "/auth/embedded-bootstrap")];
     // 0 RESIDUAL rows remain INSIDE THIS 72-key migration-tracked subset: every face
     // the subset declares is mounted through #2262. This is not a global claim: the
-    // unchanged 181-key canonical inventory still has 60 residual routes. A residual
+    // 181-key canonical inventory now has 15 residual routes. A residual
     // row re-added to this subset must answer anon 404, and mounting it must move the
     // row to LANDED (or CONNECT_INFO_GATED) — this is the subset mount-residual RED
     // tripwire.
@@ -3779,7 +4844,7 @@ async fn the_migration_tracked_route_subset_stays_closed_at_seventy_two() {
     );
 
     // ── 0 CLEAN RESIDUAL inside the migration-tracked subset; this does not describe
-    // the canonical inventory's 60 residual routes. Every subset residual-wave face is
+    // the canonical inventory's 15 residual routes. Every subset residual-wave face is
     // mounted through #2262. The loop is kept as the subset mount-residual RED tripwire:
     // a row re-added to CLEAN_RESIDUAL that is actually mounted would fail its anon-404
     // assertion. ──
@@ -9491,6 +10556,123 @@ where
     }
 }
 
+struct AttachedDeliveryDaemon {
+    stop: std::sync::Arc<tokio::sync::Notify>,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl AttachedDeliveryDaemon {
+    async fn connect(address: std::net::SocketAddr) -> Self {
+        let mut request = format!("ws://{address}{HOST_WEBSOCKET_PATH}")
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+            format!("Bearer {HOST_TOKEN}").parse().unwrap(),
+        );
+        let (mut socket, _) = connect_async(request).await.unwrap();
+        socket
+            .send(ClientMessage::Text(
+                serde_json::json!({
+                    "direction": "daemon_to_server",
+                    "type": "event",
+                    "kind": "ready",
+                    "protocol_version": OUTBOUND_PROTOCOL_VERSION,
+                    "daemon_version": "test",
+                    "daemon_id": "daemon-lane-delivery",
+                    "instance_id": "instance-lane-delivery",
+                    "host_descriptor": { "name": "Lane delivery host", "kind": "remote" },
+                    "capabilities": [],
+                    "daemon_pid": 7,
+                    "started_at": 100,
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+        let attached = std::sync::Arc::new(tokio::sync::Notify::new());
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let task = tokio::spawn(service_lane_delivery_commands(
+            socket,
+            stop.clone(),
+            attached.clone(),
+            seen.clone(),
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(5), attached.notified())
+            .await
+            .expect("delivery daemon must attach before a post-commit effect runs");
+        Self { stop, seen, task }
+    }
+
+    async fn wait_for_deliveries(&self, expected: usize) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if count_kind(&self.seen, "runtime_deliver") >= expected {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("expected {expected} real runtime_deliver commands"));
+    }
+
+    async fn close(self) {
+        self.stop.notify_one();
+        self.task.await.unwrap();
+    }
+}
+
+async fn service_lane_delivery_commands<S>(
+    mut socket: tokio_tungstenite::WebSocketStream<S>,
+    stop: std::sync::Arc<tokio::sync::Notify>,
+    attached: std::sync::Arc<tokio::sync::Notify>,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    loop {
+        tokio::select! {
+            () = stop.notified() => break,
+            command = next_daemon_json(&mut socket) => {
+                let result = match command["kind"].as_str() {
+                    Some("runtime_status") => serde_json::json!({ "runtimes": [] }),
+                    Some("host_status") => {
+                        attached.notify_one();
+                        serde_json::json!({
+                            "os": "linux", "daemon_pid": 1,
+                            "daemon_version": "0.0.0-test", "started_at": 0,
+                            "uptime_ms": 0, "active_agent_ids": [],
+                        })
+                    }
+                    Some("host_runtime_catalog") => serde_json::json!({
+                        "runtimes": [], "detected_at": 1_700_000_000_000_i64,
+                    }),
+                    Some("runtime_deliver") => {
+                        seen.lock().unwrap().push(command.clone());
+                        serde_json::json!({
+                            "disposition": "admitted", "pid": 1, "started_at": 1,
+                        })
+                    }
+                    Some("runtime_start") => {
+                        seen.lock().unwrap().push(command.clone());
+                        serde_json::json!({ "started": true, "pid": 1, "started_at": 1 })
+                    }
+                    other => panic!("unexpected lane delivery command: {other:?}"),
+                };
+                socket.send(ClientMessage::Text(serde_json::json!({
+                    "direction": "daemon_to_server", "type": "command_response",
+                    "id": command["id"], "kind": command["kind"], "result": result,
+                }).to_string().into())).await.unwrap();
+            }
+        }
+    }
+    socket.close(None).await.unwrap();
+}
+
 async fn next_socket_json<S>(
     socket: &mut tokio_tungstenite::WebSocketStream<S>,
 ) -> serde_json::Value
@@ -9753,5 +10935,524 @@ mod presence_composition {
         split_feed.on_connect(&viewer, "conn-1");
         let split_router = user_presence_http::router(cold, route_registry);
         assert_eq!(presence_of(&split_router, &viewer).await, "offline");
+    }
+}
+
+// ── #task:2334 P1b: the task-mutation aftermath boundary is constructible here ──
+//
+// The acceptance for the public aftermath boundary is that backend-app, from its
+// NORMAL dependencies, can compile-level CONSTRUCT and CALL every task-write router
+// with the production `PublishingTaskAftermath` — no crate-private trait it cannot
+// name, no "composition later supplies". This mounts all eight write routers over
+// real SQLite write stores + a `PublishingTaskAftermath` built here and drives one
+// request through each. It is a construction/reachability proof: a no-credential (or
+// no-session) request exercises the composition/identity gate, which needs no seed —
+// the per-face behavior is covered by the server-crate route tests.
+mod task_write_router_construction {
+    use super::*;
+    use silverhand_backend_core::conversation_messaging::messaging::task::{
+        ExistingSourceTask, SourceMessageId, TaskConversationBoardRead, TaskCreateAdmissionReads,
+        TaskCreateConversationState, TaskCreateSourceRef, TaskParticipationReads,
+    };
+    use silverhand_backend_core::foundation::identity::{AgentId, ConversationId};
+    use silverhand_backend_server::conversation_messaging::messaging::task::{
+        HumanClaimState, HumanConversationPost, HumanCreateState, HumanEditState, HumanStatusState,
+        HumanTaskBoardState, HumanTaskPointState, PublishingTaskAftermath, ResolvedTaskTarget,
+        TaskAftermathTrigger, TaskClaimState, TaskCreateState, TaskCreateTargetResolver,
+        TaskDetailState, TaskEditState, TaskEffectExecute, TaskStatusUpdateState,
+        TaskTargetRefusal, TaskUnclaimState, human_claim_router, human_create_router,
+        human_edit_router, human_status_router, human_task_board_router, human_task_point_router,
+        task_claim_router, task_create_router, task_detail_router, task_edit_router,
+        task_unclaim_router, task_update_status_router,
+    };
+    use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
+    use silverhand_backend_sqlite::conversation_messaging::messaging::task::{
+        SqliteTaskClaimWrite, SqliteTaskCreateWrite, SqliteTaskEditWrite, SqliteTaskStatusWrite,
+        SqliteTaskStore,
+    };
+
+    /// A composition-authored production publish sink. backend-app owns this: it names
+    /// the public complete-effect port and could back it with the event hub, board
+    /// patches, participant wake and audit executors.
+    struct CompositionPublish;
+    impl TaskEffectExecute for CompositionPublish {
+        async fn execute_task_effects(&self, trigger: &TaskAftermathTrigger) -> Vec<String> {
+            if trigger.plan().publish_event() {
+                // The production composition can publish the immutable committed
+                // post-image directly; it needs no live message lookup by id.
+                let committed = &trigger.committed().event_message;
+                let _publish = (
+                    committed.id.as_str(),
+                    committed.conversation_id.as_str(),
+                    committed.thread_root_id.as_ref().map(|root| root.as_str()),
+                    committed.message.content.as_str(),
+                    committed.message.metadata.as_str(),
+                    committed.seq,
+                    committed.created_at,
+                );
+            }
+            if trigger.plan().cross_operation_audit() {
+                // Cross-op coordinates are request/commit snapshots too. A
+                // production executor does not look either conversation up after
+                // the task and its event have committed.
+                let audit = trigger
+                    .cross_operation_audit()
+                    .expect("an enabled audit leg owns its immutable coordinates");
+                let _audit = (
+                    audit.source().conversation_id().as_str(),
+                    audit.source().workspace_id().map(|id| id.as_str()),
+                    audit.owner_conversation_id().as_str(),
+                    audit.owner_workspace_id().map(|id| id.as_str()),
+                );
+            }
+            Vec::new()
+        }
+    }
+
+    /// Composition-authored narrow ports for the create faces. backend-app names them
+    /// (they are public) and would delegate the resolver to #2333's canonical
+    /// TargetAddress::resolve + the post/board reads to MessagingStore.
+    struct CompositionResolver;
+    impl TaskCreateTargetResolver for CompositionResolver {
+        type Error = std::convert::Infallible;
+        async fn resolve(
+            &self,
+            _agent: &AgentId,
+            _address: &str,
+            _allocation: silverhand_backend_server::conversation_messaging::messaging::task::TaskCreatePairAllocation,
+            _intent: silverhand_backend_server::conversation_messaging::messaging::task::TaskCreateTargetIntent,
+        ) -> Result<Result<ResolvedTaskTarget, TaskTargetRefusal>, Self::Error> {
+            Ok(Err(TaskTargetRefusal::Unresolved))
+        }
+    }
+    struct CompositionPost;
+    impl HumanConversationPost for CompositionPost {
+        async fn can_post(
+            &self,
+            _u: &silverhand_backend_core::foundation::identity::UserId,
+            _c: &ConversationId,
+        ) -> Result<bool, silverhand_backend_core::foundation::persistence::PersistenceFailure>
+        {
+            Ok(false)
+        }
+    }
+    /// A composition board reader over the real MessagingStore door — backend-app
+    /// owns this thin adapter (the store answers `conversation_board`).
+    #[derive(Clone)]
+    struct CompositionBoards(MessagingStore);
+    impl TaskConversationBoardRead for CompositionBoards {
+        async fn conversation_board(
+            &self,
+            conversation: &ConversationId,
+        ) -> Result<
+            Option<silverhand_backend_core::conversation_messaging::messaging::task::BoardKey>,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
+        > {
+            use silverhand_backend_core::conversation_messaging::messaging::task::TaskWriteDoorReads;
+            let mut door = self.0.clone();
+            door.conversation_board(conversation).await
+        }
+    }
+    impl TaskCreateAdmissionReads for CompositionBoards {
+        async fn agent_exists(
+            &self,
+            agent: &AgentId,
+        ) -> Result<bool, silverhand_backend_core::foundation::persistence::PersistenceFailure>
+        {
+            self.0.agent_exists(agent).await
+        }
+
+        async fn conversation_state(
+            &self,
+            conversation: &ConversationId,
+        ) -> Result<
+            Option<TaskCreateConversationState>,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
+        > {
+            self.0.conversation_state(conversation).await
+        }
+
+        async fn source_message(
+            &self,
+            source: &SourceMessageId,
+        ) -> Result<
+            Option<TaskCreateSourceRef>,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
+        > {
+            self.0.source_message(source).await
+        }
+
+        async fn task_for_source(
+            &self,
+            source: &SourceMessageId,
+        ) -> Result<
+            Option<ExistingSourceTask>,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
+        > {
+            self.0.task_for_source(source).await
+        }
+    }
+    impl TaskParticipationReads for CompositionBoards {
+        async fn is_agent_participant(
+            &mut self,
+            conversation: &ConversationId,
+            agent: &AgentId,
+        ) -> Result<bool, silverhand_backend_core::foundation::persistence::PersistenceFailure>
+        {
+            self.0.is_agent_participant(conversation, agent).await
+        }
+
+        async fn is_user_participant(
+            &mut self,
+            conversation: &ConversationId,
+            user: &silverhand_backend_core::foundation::identity::UserId,
+        ) -> Result<bool, silverhand_backend_core::foundation::persistence::PersistenceFailure>
+        {
+            self.0.is_user_participant(conversation, user).await
+        }
+
+        async fn agent_participating_conversations(
+            &mut self,
+            agent: &AgentId,
+            conversations: &[ConversationId],
+        ) -> Result<
+            std::collections::HashSet<ConversationId>,
+            silverhand_backend_core::foundation::persistence::PersistenceFailure,
+        > {
+            self.0
+                .agent_participating_conversations(agent, conversations)
+                .await
+        }
+    }
+
+    async fn schema_db() -> (TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("task-write.sqlite");
+        current_schema::create_current_schema(&path)
+            .await
+            .close()
+            .await
+            .unwrap();
+        (dir, path)
+    }
+
+    async fn oneshot_no_credential(
+        router: &Router,
+        method: &str,
+        uri: &str,
+        body: &str,
+    ) -> StatusCode {
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn all_sixteen_task_routers_are_constructible_and_callable_from_backend_app() {
+        let (_dir, path) = schema_db().await;
+        // The real production write stores + the shared door/name authority, opened
+        // from backend-app's normal deps exactly as composition would.
+        let door = MessagingStore::open(&path).await.unwrap();
+        let numbers = SqliteTaskStore::open(&path).await.unwrap();
+        let status_write = SqliteTaskStatusWrite::open(&path).await.unwrap();
+        let claim_write = SqliteTaskClaimWrite::open(&path).await.unwrap();
+        let edit_write = SqliteTaskEditWrite::open(&path).await.unwrap();
+        let create_write = SqliteTaskCreateWrite::open(&path).await.unwrap();
+
+        // Every router constructs with the PUBLIC production aftermath — the point of
+        // the proof: `PublishingTaskAftermath::new` is nameable + buildable here.
+        let internal_status = task_update_status_router(TaskStatusUpdateState {
+            door: door.clone(),
+            numbers: numbers.clone(),
+            write: status_write.clone(),
+            names: door.clone(),
+            aftermath: PublishingTaskAftermath::new(CompositionPublish),
+        });
+        let internal_claim = task_claim_router(TaskClaimState {
+            door: door.clone(),
+            numbers: numbers.clone(),
+            write: claim_write.clone(),
+            names: door.clone(),
+            aftermath: PublishingTaskAftermath::new(CompositionPublish),
+        });
+        let internal_unclaim = task_unclaim_router(TaskUnclaimState {
+            door: door.clone(),
+            numbers: numbers.clone(),
+            write: claim_write.clone(),
+            aftermath: PublishingTaskAftermath::new(CompositionPublish),
+        });
+        let internal_edit = task_edit_router(TaskEditState {
+            door: door.clone(),
+            numbers: numbers.clone(),
+            write: edit_write.clone(),
+            names: door.clone(),
+            aftermath: PublishingTaskAftermath::new(CompositionPublish),
+        });
+        let public_status = human_status_router(HumanStatusState {
+            write: status_write.clone(),
+            aftermath: PublishingTaskAftermath::new(CompositionPublish),
+        });
+        let public_claim = human_claim_router(HumanClaimState {
+            write: claim_write.clone(),
+            aftermath: PublishingTaskAftermath::new(CompositionPublish),
+            assignees: door.clone(),
+        });
+        let public_edit = human_edit_router(HumanEditState {
+            write: edit_write.clone(),
+            aftermath: PublishingTaskAftermath::new(CompositionPublish),
+        });
+        // The two create faces reach the SAME public aftermath boundary (true 10/10):
+        // internal via the narrow TaskCreateTargetResolver, human via post + boards.
+        let internal_create = task_create_router(TaskCreateState {
+            resolver: CompositionResolver,
+            door: door.clone(),
+            write: create_write.clone(),
+            names: door.clone(),
+            aftermath: PublishingTaskAftermath::new(CompositionPublish),
+        });
+        let public_create = human_create_router(HumanCreateState {
+            post: CompositionPost,
+            boards: CompositionBoards(door.clone()),
+            write: create_write.clone(),
+            aftermath: PublishingTaskAftermath::new(CompositionPublish),
+        });
+        let public_board = human_task_board_router(HumanTaskBoardState {
+            read: numbers.clone(),
+        });
+        let public_point = human_task_point_router(HumanTaskPointState {
+            read: numbers.clone(),
+        });
+        let internal_detail = task_detail_router(TaskDetailState {
+            boards: door.clone(),
+            read: numbers.clone(),
+        });
+
+        // Call every router. Internal faces without a runtime credential are the
+        // composition-500 (the credential middleware would run in the real perimeter);
+        // public faces without a session are likewise composition-500. Either way the
+        // router is REACHED and answers — proving construct + call, not behavior.
+        assert_eq!(
+            oneshot_no_credential(
+                &internal_status,
+                "POST",
+                "/internal/agents/a/tasks/update-status",
+                r#"{"task_id":"t","status":"done"}"#
+            )
+            .await,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+        for (router, uri) in [
+            (&public_board, "/api/tasks/board/column?status=todo"),
+            (&public_board, "/api/tasks/board/counts"),
+            (&public_board, "/api/tasks/board/facets"),
+            (
+                &public_point,
+                "/api/tasks/by-number?conversation_id=c&task_number=1",
+            ),
+            (&public_point, "/api/tasks/t"),
+            (
+                &internal_detail,
+                "/internal/agents/a/tasks/detail?task_id=t",
+            ),
+        ] {
+            assert_eq!(
+                oneshot_no_credential(router, "GET", uri, "").await,
+                StatusCode::INTERNAL_SERVER_ERROR,
+            );
+        }
+        assert_eq!(
+            oneshot_no_credential(
+                &internal_claim,
+                "POST",
+                "/internal/agents/a/tasks/claim",
+                r#"{"task_ids":["t"]}"#
+            )
+            .await,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+        assert_eq!(
+            oneshot_no_credential(
+                &internal_unclaim,
+                "POST",
+                "/internal/agents/a/tasks/unclaim",
+                r#"{"task_id":"t"}"#
+            )
+            .await,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+        assert_eq!(
+            oneshot_no_credential(
+                &internal_edit,
+                "POST",
+                "/internal/agents/a/tasks/edit",
+                r#"{"task_id":"t","title":"x"}"#
+            )
+            .await,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+        // The claim router also serves unclaim on the public side; both are on the
+        // one HumanClaimState router.
+        assert_eq!(
+            oneshot_no_credential(
+                &public_status,
+                "POST",
+                "/api/tasks/t/status",
+                r#"{"status":"done"}"#
+            )
+            .await,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+        assert_eq!(
+            oneshot_no_credential(
+                &public_claim,
+                "POST",
+                "/api/tasks/t/claim",
+                r#"{"agent_id":"a"}"#
+            )
+            .await,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+        assert_eq!(
+            oneshot_no_credential(&public_claim, "POST", "/api/tasks/t/unclaim", "").await,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+        assert_eq!(
+            oneshot_no_credential(
+                &public_edit,
+                "POST",
+                "/api/tasks/t/edit",
+                r#"{"title":"x"}"#
+            )
+            .await,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+        // The two create faces — the true 10/10 aftermath denominator. Internal
+        // without a credential is composition-500; human without a session likewise.
+        assert_eq!(
+            oneshot_no_credential(
+                &internal_create,
+                "POST",
+                "/internal/agents/a/tasks/create",
+                r##"{"tasks":[{"title":"x"}],"target":"#general"}"##
+            )
+            .await,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+        assert_eq!(
+            oneshot_no_credential(
+                &public_create,
+                "POST",
+                "/api/tasks",
+                r#"{"title":"x","conversation_id":"c-1"}"#
+            )
+            .await,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+    }
+}
+
+/// Schedule create has two implementation-owned production inputs that cannot be
+/// invented by the mount: the reserved SQLite writer and the cron/IANA evaluator.
+/// This proof constructs and calls the real route from backend-app's normal
+/// dependencies, so a test-only `NoCron` cannot accidentally satisfy composition.
+mod schedule_create_router_construction {
+    use super::*;
+    use silverhand_backend_core::conversation_messaging::messaging::schedule::ScheduleCreateCommittedEffect;
+    use silverhand_backend_core::foundation::{
+        identity::{AgentId, ConversationId},
+        persistence::PersistenceFailure,
+    };
+    use silverhand_backend_server::scheduling::schedule_create::{
+        ports::{
+            ResolvedScheduleTarget, ScheduleCapabilityDenied, ScheduleManageCapability,
+            ScheduleTargetAllocation, ScheduleTargetIntent, ScheduleTargetRefusal,
+            ScheduleTargetResolver,
+        },
+        route::{ScheduleCreateState, schedule_create_router},
+    };
+    use silverhand_backend_sqlite::conversation_messaging::messaging::schedule::{
+        ProductionCronEvaluator, SqliteScheduleCreate,
+    };
+
+    struct CompositionScheduleResolver;
+    impl ScheduleTargetResolver for CompositionScheduleResolver {
+        type Error = std::convert::Infallible;
+
+        async fn resolve(
+            &self,
+            _agent: &AgentId,
+            _address: &str,
+            _allocation: ScheduleTargetAllocation,
+            _intent: ScheduleTargetIntent,
+        ) -> Result<Result<ResolvedScheduleTarget, ScheduleTargetRefusal>, Self::Error> {
+            Ok(Err(ScheduleTargetRefusal::Unresolved))
+        }
+    }
+
+    struct CompositionScheduleCapability;
+    impl ScheduleManageCapability for CompositionScheduleCapability {
+        type Error = std::convert::Infallible;
+
+        async fn may_manage_schedules(
+            &self,
+            _agent: &AgentId,
+            _destination: &ConversationId,
+        ) -> Result<Result<(), ScheduleCapabilityDenied>, Self::Error> {
+            Ok(Err(ScheduleCapabilityDenied))
+        }
+    }
+
+    struct CompositionTimerEffect;
+    impl ScheduleCreateCommittedEffect for CompositionTimerEffect {
+        async fn rearm_near_timer(&self) -> Result<(), PersistenceFailure> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn schedule_create_constructs_with_the_real_sqlite_writer_and_cron_evaluator() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("schedule-create.sqlite");
+        current_schema::create_current_schema(&path)
+            .await
+            .close()
+            .await
+            .unwrap();
+
+        let router = schedule_create_router(ScheduleCreateState {
+            resolver: CompositionScheduleResolver,
+            capability: CompositionScheduleCapability,
+            store: SqliteScheduleCreate::open(&path).await.unwrap(),
+            cron: ProductionCronEvaluator,
+            committed_effect: CompositionTimerEffect,
+        });
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/internal/agents/a/schedules")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r##"{"target_conversation":"#general","title":"x","message":"m","spec":{"kind":"cron","expression":"0 9 * * *","timezone":"UTC"}}"##,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // No runtime credential is the composition fault. The important proof is
+        // that the route is callable with the real production cron implementation.
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

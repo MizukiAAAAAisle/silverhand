@@ -7,7 +7,7 @@ import { validateReactionEmoji } from '../src/api/reactions.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RUST_RANGES = resolve(
   HERE,
-  '../../../rust/crates/backend-core/src/messaging/collaboration/reaction/emoji_ranges.rs',
+  '../../../rust/crates/backend-core/src/conversation_messaging/messaging/collaboration/reaction/emoji_ranges.rs',
 );
 
 type Range = readonly [number, number];

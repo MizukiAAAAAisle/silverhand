@@ -29,6 +29,7 @@
 //! refusals (`400`/`403`/`404`) are not failures and are returned directly.
 
 pub mod wire;
+pub mod workspace_membership;
 
 use axum::{
     Extension, Json, Router,
@@ -291,7 +292,8 @@ where
                 // The only case that leaves a client stale: render the whole cause
                 // chain exactly once, here, and nowhere else.
                 ViewerAnnounce::Failed(cause) => tracing::error!(
-                    error_chain = %error::describe(&cause),
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                     "the new workspace membership was committed but its viewer announce was lost"
                 ),
                 // Both silent. `NotOwed` is silent BY CONSTRUCTION: a re-enrollment
@@ -357,7 +359,8 @@ impl IntoResponse for AccessError {
                 tracing::error!("workspace member route reached without its human principal fact")
             }
             AccessError::Persistence(cause) => tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "request failed at the persistence boundary"
             ),
         }

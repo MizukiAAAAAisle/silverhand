@@ -237,6 +237,11 @@ impl AuthorizedAgentBoard {
     fn board(&self) -> &BoardKey {
         &self.1
     }
+
+    /// The server-side lookup coordinate this subject-bound authority resolved.
+    pub fn coordinate(&self) -> &BoardKey {
+        &self.1
+    }
 }
 
 /// The typed corruption a subject-confused board-scope authority raises: it answered
@@ -653,6 +658,10 @@ impl VisibleTask {
     pub fn for_viewer(&self, viewer: &ReadViewer) -> Option<&TaskAggregate> {
         (self.viewer == *viewer).then_some(&self.task)
     }
+
+    pub(crate) fn into_parts(self) -> (ReadViewer, TaskAggregate) {
+        (self.viewer, self.task)
+    }
 }
 
 /// Returns the read-authorized `task` iff `request`'s actor may see it, otherwise
@@ -696,6 +705,69 @@ where
         viewer: request.actor.viewer(),
         task,
     }))
+}
+
+/// Snapshot-oriented sibling of [`read_visible_task`] for an adapter whose
+/// participation and capability reads share one connection-bound authority.
+pub async fn read_visible_task_on<A>(
+    request: &TaskReadRequest,
+    task: TaskAggregate,
+    authority: &mut A,
+) -> Result<Option<VisibleTask>, PersistenceFailure>
+where
+    A: TaskParticipationReads + TaskReadCapability,
+{
+    if !request.address.names(&task) {
+        return Err(PersistenceFailure::from_source(AddressIdentityViolation));
+    }
+    let authorized = match &request.actor {
+        TaskReadActor::User(user) => {
+            authority
+                .is_user_participant(task.conversation_id(), user)
+                .await?
+        }
+        TaskReadActor::Agent(read) => {
+            authorize_agent_read_on(read, &request.address, &task, authority).await?
+        }
+    };
+    Ok(authorized.then_some(VisibleTask {
+        viewer: request.actor.viewer(),
+        task,
+    }))
+}
+
+async fn authorize_agent_read_on<A>(
+    read: &AgentRead,
+    address: &TaskReadAddress,
+    task: &TaskAggregate,
+    authority: &mut A,
+) -> Result<bool, PersistenceFailure>
+where
+    A: TaskParticipationReads + TaskReadCapability,
+{
+    let agent = read.agent();
+    if let AgentRead::GlobalById(global) = read
+        && !matches!(address, TaskReadAddress::ById(id) if id == global.requested())
+    {
+        return Err(PersistenceFailure::from_source(AddressProvenanceViolation));
+    }
+    if let AgentRead::BoardScoped(board) = read
+        && task.board() != board.board()
+    {
+        return Ok(false);
+    }
+    if !authority
+        .is_agent_participant(task.conversation_id(), agent)
+        .await?
+    {
+        return Ok(false);
+    }
+    if let Some(workspace) = task.board().workspace_id()
+        && !authority.may_read_tasks(agent, workspace).await?
+    {
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 /// The agent-only gates, ANDed in a load-bearing order after the actor-independent
@@ -957,6 +1029,7 @@ where
 /// direct-pair board projects `None` (its sentinel storage title never enters a read
 /// model), so a workspace board whose `channel_name` is `None` is a corrupt row the
 /// projector rejects rather than inventing a place.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskDisplaySidecars {
     /// The conversation title for a workspace board; `None` for a direct-pair board.
     pub channel_name: Option<String>,

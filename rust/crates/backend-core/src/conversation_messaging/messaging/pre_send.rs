@@ -79,6 +79,7 @@ impl TargetAddressOperatorReason {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeliveryIntent {
+    Read,
     Write,
 }
 
@@ -168,6 +169,7 @@ pub trait TargetAddress {
         agent: &AgentId,
         target: &str,
         allocation: DirectPairAllocation,
+        intent: DeliveryIntent,
     ) -> impl Future<Output = Result<Result<ResolvedStream, AddressRefusal>, Self::Error>> + Send;
 }
 

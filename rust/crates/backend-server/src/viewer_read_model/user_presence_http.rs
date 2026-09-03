@@ -81,7 +81,8 @@ where
         Ok(facts) => facts,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "presence cold read failed"
             );
             return (StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR_BODY).into_response();
@@ -94,7 +95,8 @@ where
         }
         Err(violation) => {
             tracing::error!(
-                error_chain = %error::describe(&violation),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&violation))),
                 "presence snapshot violated its closed contract"
             );
             (StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR_BODY).into_response()

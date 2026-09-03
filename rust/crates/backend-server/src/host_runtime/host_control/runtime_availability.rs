@@ -53,7 +53,7 @@ impl RuntimeAvailabilityProbe for DataPlaneRuntimeAvailabilityProbe {
             Ok(None) => return Err(RuntimeAvailabilityProbeFault::AttachPending),
             Err(cause) => {
                 tracing::error!(
-                    error = %cause,
+                    error = crate::foundation::safe_log_field::safe_display(&(cause)),
                     "runtime-switch availability probe: data plane resolve failed"
                 );
                 return Err(RuntimeAvailabilityProbeFault::DaemonInternalError);

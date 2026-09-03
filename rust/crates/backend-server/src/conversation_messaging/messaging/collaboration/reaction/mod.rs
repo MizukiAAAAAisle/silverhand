@@ -334,7 +334,9 @@ where
         Ok(Ok(execution)) => {
             if let Some(failure) = execution.publication_failure() {
                 tracing::error!(
-                    error_chain = %crate::foundation::error::describe(failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(failure))
+                    ),
                     "reaction publication failed"
                 );
             }
@@ -342,7 +344,12 @@ where
         }
         Ok(Err(refusal)) => mutation_refusal(refusal),
         Err(error) => {
-            tracing::error!(error_chain = %crate::foundation::error::describe(&error), "reaction mutation failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&error))
+                ),
+                "reaction mutation failed"
+            );
             internal_error_response()
         }
     }
@@ -375,7 +382,12 @@ where
         Ok(Ok(detail)) => detail_success(&detail),
         Ok(Err(_)) => not_found(),
         Err(error) => {
-            tracing::error!(error_chain = %crate::foundation::error::describe(&error), "reaction detail read failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&error))
+                ),
+                "reaction detail read failed"
+            );
             internal_error_response()
         }
     }

@@ -110,7 +110,11 @@ where
     let record = match state.computers.read_computer(host.clone()).await {
         Ok(record) => record,
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "host-proxy-config read failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "host-proxy-config read failed"
+            );
             return Err(AdmitRefusal::Internal);
         }
     };
@@ -157,7 +161,10 @@ fn resolve<R>(
         Ok(Some(custody)) => Ok(custody),
         Ok(None) => Err(ResolveRefusal::Offline),
         Err(cause) => {
-            tracing::error!(error = %cause, "owning-host data plane resolve failed");
+            tracing::error!(
+                error = crate::foundation::safe_log_field::safe_display(&(cause)),
+                "owning-host data plane resolve failed"
+            );
             Err(ResolveRefusal::Internal)
         }
     }

@@ -40,11 +40,20 @@ use thiserror::Error;
 // fire-path store and reuse only its row-decode boundary (`decode_spec`,
 // `corrupt`, `driver`) — never its claim/settlement CAS.
 pub mod cancel;
+pub mod create;
+mod cron;
 pub mod list_read;
 mod product;
+mod wake;
 
 pub use cancel::SqliteScheduleCancel;
+pub use create::SqliteScheduleCreate;
+pub use cron::ProductionCronEvaluator;
 pub use list_read::SqliteScheduleListRead;
+pub use wake::{
+    CommittedScheduleWake, ScheduleWakePlacement, ScheduleWakeTargetUnavailable,
+    ScheduleWakeWriteError, SqliteScheduleWakeWrite,
+};
 
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -155,6 +164,10 @@ pub enum ScheduleStoreError {
     /// column so an operator can find it.
     #[error("stored schedule column {field} is outside the domain contract")]
     Corrupt { field: &'static str },
+    /// The OS entropy source failed while minting a new schedule id. Surfaced to
+    /// the caller as a `PersistenceFailure`; the create wrote nothing.
+    #[error("secure random source failed")]
+    Entropy(#[source] getrandom::Error),
 }
 
 fn driver(error: sqlx::Error) -> PersistenceFailure {
@@ -256,6 +269,49 @@ impl<K> SqliteScheduleStore<K> {
 }
 
 impl<K: Clock + Send + Sync> SqliteScheduleStore<K> {
+    /// Returns a bounded occurrence-identity snapshot for every pending row due
+    /// at `now`.  The subsequent claim CAS re-binds all three coordinates, so a
+    /// concurrent cancel/rearm turns a stale candidate into a clean claim loss.
+    pub async fn due_candidates(
+        &self,
+        now: i64,
+        limit: i64,
+    ) -> Result<Vec<DueCandidate>, PersistenceFailure> {
+        let rows = sqlx::query(
+            "SELECT id,fired_count,next_fire_at FROM schedules \
+             WHERE status='pending' AND next_fire_at<=? \
+             ORDER BY next_fire_at ASC,id ASC LIMIT ?",
+        )
+        .bind(now)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(driver)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(DueCandidate {
+                    id: ScheduleId::parse(row.try_get::<String, _>("id").map_err(driver)?)
+                        .map_err(|_| corrupt("schedules.id"))?,
+                    expected_fired_count: FiredCount::new(
+                        row.try_get("fired_count").map_err(driver)?,
+                    )
+                    .map_err(|_| corrupt("schedules.fired_count"))?,
+                    expected_next_fire_at: row.try_get("next_fire_at").map_err(driver)?,
+                })
+            })
+            .collect()
+    }
+
+    /// Earliest pending instant, used only to tighten the next wake-up.  The
+    /// periodic sweep remains the durable backstop and the claim CAS remains the
+    /// occurrence authority.
+    pub async fn next_pending_fire_at(&self) -> Result<Option<i64>, PersistenceFailure> {
+        sqlx::query_scalar("SELECT MIN(next_fire_at) FROM schedules WHERE status='pending'")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(driver)
+    }
+
     /// Resets every row a prior process left `firing` back to `pending`, returning
     /// how many were recovered. Called once at boot, before the sweep begins — see
     /// [`RESET_STALE_FIRING`]. Not part of the fire-path [`ScheduleStore`] trait:

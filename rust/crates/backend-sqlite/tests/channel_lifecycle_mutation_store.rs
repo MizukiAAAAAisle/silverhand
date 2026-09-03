@@ -444,6 +444,17 @@ async fn rename_commits_exact_notice_recipients_and_rolls_back_corrupt_readback(
     assert_eq!(message.get::<String, _>("content"), notice.content());
     assert_eq!(message.get::<i64, _>("seq"), 1);
     assert_eq!(message.get::<i64, _>("created_at"), 77);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT latest_seq FROM conversation_stream_heads \
+             WHERE conversation_id='c' AND thread_root_id IS NULL",
+        )
+        .fetch_one(&mut db)
+        .await
+        .unwrap(),
+        notice.seq().get(),
+        "the committed rename notice advances the main read-model head"
+    );
     let metadata: serde_json::Value =
         serde_json::from_str(&message.get::<String, _>("metadata")).unwrap();
     assert_eq!(
@@ -475,6 +486,17 @@ async fn rename_commits_exact_notice_recipients_and_rolls_back_corrupt_readback(
     assert_eq!(row.get::<String, _>("title"), "general");
     assert_eq!(row.get::<String, _>("title_key"), "general");
     assert_eq!(row.get::<i64, _>("latest_message_seq"), 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT latest_seq FROM conversation_stream_heads \
+             WHERE conversation_id='c' AND thread_root_id IS NULL",
+        )
+        .fetch_one(&mut db)
+        .await
+        .unwrap(),
+        1,
+        "a rolled-back rename notice leaves the prior stream head unchanged"
+    );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM messages WHERE conversation_id='c'")
             .fetch_one(&mut db)

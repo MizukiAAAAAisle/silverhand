@@ -193,7 +193,8 @@ where
         AgentAvatarUploadOutcome::Rejected(rejection) => avatar_rejected(rejection),
         AgentAvatarUploadOutcome::StorageFailed(failure) => {
             tracing::error!(
-                error_chain = %error::describe(&failure),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
                 "agent-avatar blob store put failed"
             );
             avatar_storage_failed()
@@ -203,7 +204,8 @@ where
             orphan_cleanup,
         } => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "agent-avatar upload write faulted before a durable commit"
             );
             log_blob_cleanup(
@@ -258,7 +260,8 @@ where
             Ok(outcome) => outcome,
             Err(cause) => {
                 tracing::error!(
-                    error_chain = %error::describe(&cause),
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                     "agent-avatar clear write failed"
                 );
                 return internal_error();
@@ -315,7 +318,8 @@ where
         Ok(detail) => detail,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "agent-avatar write pre-gate read failed"
             );
             return Some(internal_error());
@@ -361,7 +365,8 @@ where
 fn log_lost_announce(announce: &AgentChangedAnnounce, origin: &str) {
     if let AgentChangedAnnounce::Failed(failure) = announce {
         tracing::error!(
-            error_chain = %error::describe(failure),
+            error_chain =
+                crate::foundation::safe_log_field::safe_display(&(error::describe(failure))),
             origin,
             "agent-avatar write committed but the agent_changed announce failed"
         );
@@ -373,7 +378,8 @@ fn log_lost_announce(announce: &AgentChangedAnnounce, origin: &str) {
 fn log_blob_cleanup(cleanup: &BlobCleanup, origin: &str) {
     if let BlobCleanup::Failed(failure) = cleanup {
         tracing::error!(
-            error_chain = %error::describe(failure),
+            error_chain =
+                crate::foundation::safe_log_field::safe_display(&(error::describe(failure))),
             origin,
             "agent-avatar blob cleanup failed; a storage blob is orphaned"
         );

@@ -40,6 +40,19 @@ pub(crate) enum ProductEvent {
         last_seen_at: Option<i64>,
     },
     Message(Value),
+    WorkspaceChannelsChanged {
+        workspace_id: String,
+        channel_id: String,
+    },
+    ConversationMembersChanged {
+        conversation_id: String,
+        workspace_id: String,
+    },
+    AttentionPrefChanged {
+        workspace_id: String,
+        conversation_id: Option<String>,
+    },
+    TaskChanged(Value),
     Notification(NotificationEvent),
     UnreadUpdated(UnreadUpdated),
     #[serde(rename = "unread_updated")]
@@ -47,11 +60,15 @@ pub(crate) enum ProductEvent {
         marked: u64,
     },
     AttentionBadgeUpdated(AttentionBadge),
+    #[serde(rename = "unread_updated")]
+    NotificationDismissed {
+        dismissed_notification_ids: Vec<String>,
+    },
     ViewerWorkspacesChanged {
         change: ViewerWorkspaceChange,
         workspace_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        role: Option<&'static str>,
+        role: Option<String>,
     },
     SavedChanged(Value),
     MessageReactionChanged(Value),
@@ -66,6 +83,8 @@ pub(crate) enum ProductEvent {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ViewerWorkspaceChange {
     Added,
+    RoleChanged,
+    Removed,
     MetadataChanged,
 }
 
@@ -117,7 +136,7 @@ mod tests {
         let typed = ProductEvent::ViewerWorkspacesChanged {
             change: ViewerWorkspaceChange::Added,
             workspace_id: "workspace-1".to_owned(),
-            role: Some("member"),
+            role: Some("member".to_owned()),
         };
         assert_eq!(
             serde_json::to_value(typed).unwrap(),

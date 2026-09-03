@@ -142,7 +142,7 @@ async fn remove_token_file(path: &std::path::Path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
             tracing::warn!(
-                error = %error,
+                error = crate::foundation::safe_log_field::safe_display(&(error)),
                 "embedded bootstrap: failed to remove consumed token file"
             );
         }

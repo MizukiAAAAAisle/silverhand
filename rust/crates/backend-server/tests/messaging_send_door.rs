@@ -128,6 +128,7 @@ impl TargetAddress for Address {
         _agent: &AgentId,
         _target: &str,
         _allocation: DirectPairAllocation,
+        _intent: silverhand_backend_core::conversation_messaging::messaging::DeliveryIntent,
     ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
         tokio::task::yield_now().await;
         self.calls.record();

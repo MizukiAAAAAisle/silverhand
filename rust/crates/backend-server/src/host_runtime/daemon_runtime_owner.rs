@@ -639,21 +639,33 @@ where
         let principal = match event.principal(daemon.clone()) {
             Ok(principal) => principal,
             Err(cause) => {
-                tracing::error!(error_chain = %error::describe(&cause), "daemon delivery event identity decode failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    "daemon delivery event identity decode failed"
+                );
                 return;
             }
         };
         let owner = match DeliveryLeaseOwner::parse(connection_id.to_owned()) {
             Ok(owner) => owner,
             Err(cause) => {
-                tracing::error!(error_chain = %error::describe(&cause), "daemon delivery owner decode failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    "daemon delivery owner decode failed"
+                );
                 return;
             }
         };
         let conversation = match event.conversation() {
             Ok(conversation) => conversation,
             Err(cause) => {
-                tracing::error!(error_chain = %error::describe(&cause), "daemon delivery conversation decode failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    "daemon delivery conversation decode failed"
+                );
                 return;
             }
         };
@@ -665,7 +677,11 @@ where
         {
             Ok(ids) => ids,
             Err(cause) => {
-                tracing::error!(error_chain = %error::describe(&cause), "daemon delivery ids decode failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    "daemon delivery ids decode failed"
+                );
                 return;
             }
         };
@@ -694,7 +710,11 @@ where
                 .await
         };
         if let Err(cause) = result {
-            tracing::error!(error_chain = %error::describe(&cause), "daemon delivery settlement failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "daemon delivery settlement failed"
+            );
         }
     }
 
@@ -708,21 +728,33 @@ where
         let principal = match event.principal(daemon.clone()) {
             Ok(principal) => principal,
             Err(cause) => {
-                tracing::error!(error_chain = %error::describe(&cause), "daemon consumed event identity decode failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    "daemon consumed event identity decode failed"
+                );
                 return;
             }
         };
         let owner = match DeliveryLeaseOwner::parse(connection_id.to_owned()) {
             Ok(owner) => owner,
             Err(cause) => {
-                tracing::error!(error_chain = %error::describe(&cause), "daemon consumed event owner decode failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    "daemon consumed event owner decode failed"
+                );
                 return;
             }
         };
         let conversation = match event.conversation() {
             Ok(conversation) => conversation,
             Err(cause) => {
-                tracing::error!(error_chain = %error::describe(&cause), "daemon consumed event conversation decode failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    "daemon consumed event conversation decode failed"
+                );
                 return;
             }
         };
@@ -735,7 +767,11 @@ where
         {
             Ok(ids) => ids,
             Err(cause) => {
-                tracing::error!(error_chain = %error::describe(&cause), "daemon consumed event ids decode failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    "daemon consumed event ids decode failed"
+                );
                 return;
             }
         };
@@ -768,11 +804,11 @@ where
                         activity_id,
                     )
                 {
-                    tracing::error!(error_chain = %error::describe(&cause), "daemon consumed live projection failed after durable commit");
+                    tracing::error!(error_chain = crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))), "daemon consumed live projection failed after durable commit");
                 }
             }
             Ok(_) => {}
-            Err(cause) => tracing::error!(error_chain = %error::describe(&cause), "daemon consumed durable commit failed"),
+            Err(cause) => tracing::error!(error_chain = crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))), "daemon consumed durable commit failed"),
         }
     }
 
@@ -786,14 +822,22 @@ where
         let principal = match event.principal(daemon.clone()) {
             Ok(principal) => principal,
             Err(cause) => {
-                tracing::error!(error_chain = %error::describe(&cause), "daemon runtime exit identity decode failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    "daemon runtime exit identity decode failed"
+                );
                 return;
             }
         };
         let conversation = match event.conversation() {
             Ok(conversation) => conversation,
             Err(cause) => {
-                tracing::error!(error_chain = %error::describe(&cause), "daemon runtime exit coordinate decode failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    "daemon runtime exit coordinate decode failed"
+                );
                 return;
             }
         };
@@ -807,7 +851,12 @@ where
         ) {
             Ok(commit) => commit,
             Err(cause) => {
-                tracing::error!(error_chain = %error::describe(&cause), observed_at = event.ts, "daemon runtime exit preparation failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    observed_at = event.ts,
+                    "daemon runtime exit preparation failed"
+                );
                 return;
             }
         };
@@ -833,7 +882,13 @@ where
                 ) {
                     Ok(Some(effect)) => {
                         if let Err(cause) = self.events.publish_exit(&effect) {
-                            tracing::error!(error_chain = %error::describe(&cause), observed_at = event.ts, "daemon runtime exit live projection failed after durable commit");
+                            tracing::error!(
+                                error_chain = crate::foundation::safe_log_field::safe_display(
+                                    &(error::describe(&cause))
+                                ),
+                                observed_at = event.ts,
+                                "daemon runtime exit live projection failed after durable commit"
+                            );
                         }
                         if effect.should_respawn() {
                             let owner = self.clone();
@@ -842,19 +897,37 @@ where
                             let observed_at = event.ts;
                             tokio::spawn(async move {
                                 if let Err(cause) = owner.deliver(&conversation, &agent).await {
-                                    tracing::error!(error_chain = %error::describe(&cause), observed_at, "daemon runtime exit pending-inbox respawn failed");
+                                    tracing::error!(
+                                        error_chain =
+                                            crate::foundation::safe_log_field::safe_display(
+                                                &(error::describe(&cause))
+                                            ),
+                                        observed_at,
+                                        "daemon runtime exit pending-inbox respawn failed"
+                                    );
                                 }
                             });
                         }
                     }
                     Ok(None) => {}
                     Err(cause) => {
-                        tracing::error!(error_chain = %error::describe(&cause), observed_at = event.ts, "daemon runtime exit process-state cleanup failed after durable commit")
+                        tracing::error!(
+                            error_chain = crate::foundation::safe_log_field::safe_display(
+                                &(error::describe(&cause))
+                            ),
+                            observed_at = event.ts,
+                            "daemon runtime exit process-state cleanup failed after durable commit"
+                        )
                     }
                 }
             }
             Err(cause) => {
-                tracing::error!(error_chain = %error::describe(&cause), observed_at = event.ts, "daemon runtime exit durable commit failed")
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    observed_at = event.ts,
+                    "daemon runtime exit durable commit failed"
+                )
             }
         }
     }
@@ -880,10 +953,20 @@ where
                 let owner = self.clone();
                 tokio::spawn(async move {
                     if let Err(cause) = owner.deliver(&conversation, &agent).await {
-                        tracing::error!(error_chain = %error::describe(&cause), "daemon runtime drain effect failed");
+                        tracing::error!(
+                            error_chain = crate::foundation::safe_log_field::safe_display(
+                                &(error::describe(&cause))
+                            ),
+                            "daemon runtime drain effect failed"
+                        );
                     }
                     if let Some(cause) = post_commit_failure {
-                        tracing::error!(error_chain = %error::describe(&cause), "daemon runtime live projection failed after durable commit");
+                        tracing::error!(
+                            error_chain = crate::foundation::safe_log_field::safe_display(
+                                &(error::describe(&cause))
+                            ),
+                            "daemon runtime live projection failed after durable commit"
+                        );
                     }
                 });
                 DaemonRuntimeEventDisposition::Continue
@@ -893,7 +976,11 @@ where
                 DaemonRuntimeEventDisposition::Continue
             }
             Err(cause) => {
-                tracing::error!(error_chain = %error::describe(&cause), "daemon runtime event owner failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    "daemon runtime event owner failed"
+                );
                 DaemonRuntimeEventDisposition::Close {
                     code: 1011,
                     reason: "runtime_event_owner_failed",
@@ -970,7 +1057,11 @@ where
 
     fn detached(&self, host_id: &str, daemon: &DaemonInstanceId, connection_id: &str) {
         if let Err(cause) = self.events.detach_daemon(host_id, daemon, connection_id) {
-            tracing::error!(error_chain = %error::describe(&cause), "daemon disconnect runtime projection cleanup failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "daemon disconnect runtime projection cleanup failed"
+            );
         }
     }
 
@@ -982,7 +1073,11 @@ where
             if let Ok(owner) = DeliveryLeaseOwner::parse(connection_id.to_owned())
                 && let Err(cause) = self.data.release_owner(owner).await
             {
-                tracing::error!(error_chain = %error::describe(&cause), "daemon disconnect inbox lease release failed");
+                tracing::error!(
+                    error_chain =
+                        crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                    "daemon disconnect inbox lease release failed"
+                );
             }
         })
     }

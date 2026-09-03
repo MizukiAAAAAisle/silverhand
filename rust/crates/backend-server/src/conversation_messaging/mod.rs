@@ -5,6 +5,7 @@
 //! directory's internal ownership or visibility.
 
 pub(crate) mod daemon_post_commit;
+pub use daemon_post_commit::{LiveConversationRuntimeDelivery, SealedConversationRuntimeDelivery};
 pub mod direct_pairs;
 pub mod messaging;
 pub mod runtime_activity_publisher;

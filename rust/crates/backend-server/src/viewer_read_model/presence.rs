@@ -158,8 +158,10 @@ where
             Ok(now) => self.timers.on_disconnect(viewer, connection_id, now),
             Err(error) => {
                 tracing::error!(
-                    user_id = %viewer.as_str(),
-                    error_chain = %crate::foundation::error::describe(&error),
+                    user_id = crate::foundation::safe_log_field::safe_display(&(viewer.as_str())),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&error))
+                    ),
                     "presence: disconnect wall clock unavailable; evicting the connection without an offline instant"
                 );
                 self.timers.evict(viewer, connection_id);

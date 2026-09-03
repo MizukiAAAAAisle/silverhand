@@ -31,7 +31,7 @@ import { TASK_TITLE_MAX_LEN, TaskTitleSchema } from '@silverhand/shared';
  */
 
 const FIXTURE_URL = new URL(
-  '../../../../rust/crates/backend-core/src/messaging/task/fixtures/task_title_parity.json',
+  '../../../../rust/crates/backend-core/src/conversation_messaging/messaging/task/fixtures/task_title_parity.json',
   import.meta.url,
 );
 

@@ -66,7 +66,11 @@ where
     let facts = match state.stored.read_host_status(&host).await {
         Ok(facts) => facts,
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "host-status stored read failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "host-status stored read failed"
+            );
             return internal_error();
         }
     };
@@ -74,7 +78,10 @@ where
         Ok(Some(visible)) => visible,
         Ok(None) => return not_found(),
         Err(cause) => {
-            tracing::error!(error = %cause, "host-status facts were cross-wired");
+            tracing::error!(
+                error = crate::foundation::safe_log_field::safe_display(&(cause)),
+                "host-status facts were cross-wired"
+            );
             return internal_error();
         }
     };
@@ -83,7 +90,10 @@ where
         .last_seen_at
         .is_some_and(|value| !js_safe_integer(value))
     {
-        tracing::error!(host_id = %host.as_str(), "host last-seen timestamp is not JS-safe");
+        tracing::error!(
+            host_id = crate::foundation::safe_log_field::safe_display(&(host.as_str())),
+            "host last-seen timestamp is not JS-safe"
+        );
         return internal_error();
     }
     if computer.revoked_at.is_some() {
@@ -98,13 +108,19 @@ where
     let refusal = match state.admission.refusal(&host) {
         Ok(refusal) => refusal,
         Err(cause) => {
-            tracing::error!(error = %cause, "host admission refusal read failed");
+            tracing::error!(
+                error = crate::foundation::safe_log_field::safe_display(&(cause)),
+                "host admission refusal read failed"
+            );
             return internal_error();
         }
     };
     if let Some(refusal) = refusal {
         if !js_safe_integer(refusal.observed_at) {
-            tracing::error!(host_id = %host.as_str(), "host admission timestamp is not JS-safe");
+            tracing::error!(
+                host_id = crate::foundation::safe_log_field::safe_display(&(host.as_str())),
+                "host admission timestamp is not JS-safe"
+            );
             return internal_error();
         }
         return Json(StatusResponse::Disconnected {
@@ -140,7 +156,10 @@ where
             available(&host, visible.agents(), computer.last_seen_at, seed)
         }
         Err(cause) => {
-            tracing::error!(error = %cause, "host status seed read failed");
+            tracing::error!(
+                error = crate::foundation::safe_log_field::safe_display(&(cause)),
+                "host status seed read failed"
+            );
             internal_error()
         }
     }
@@ -156,7 +175,10 @@ fn available(
         .into_iter()
         .all(js_safe_integer)
     {
-        tracing::error!(host_id = %host.as_str(), "host status snapshot is not JS-safe");
+        tracing::error!(
+            host_id = crate::foundation::safe_log_field::safe_display(&(host.as_str())),
+            "host status snapshot is not JS-safe"
+        );
         return internal_error();
     }
     Json(StatusResponse::Available {

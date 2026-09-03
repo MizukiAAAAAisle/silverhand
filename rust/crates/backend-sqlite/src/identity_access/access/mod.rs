@@ -47,6 +47,8 @@ use sqlx::{
 };
 use thiserror::Error;
 
+mod membership;
+
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);

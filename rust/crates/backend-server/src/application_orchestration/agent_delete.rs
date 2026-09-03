@@ -238,7 +238,8 @@ where
         Ok(detail) => detail,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "agent-delete gate read failed"
             );
             return internal_error();
@@ -315,7 +316,8 @@ where
         Ok(commit) => commit,
         Err(failure) => {
             tracing::error!(
-                error_chain = %error::describe(&failure),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
                 "agent-delete row-only teardown failed"
             );
             return internal_error();
@@ -362,7 +364,9 @@ where
             if let Err(failure) = inner.residue.agent_deleted(committed).await {
                 tracing::error!(
                     agent_id = committed.as_str(),
-                    error_chain = %error::describe(&failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(error::describe(&failure))
+                    ),
                     "agent-delete row-only committed but the deletion announce failed"
                 );
             }
@@ -397,7 +401,8 @@ where
         Ok(begun) => begun,
         Err(failure) => {
             tracing::error!(
-                error_chain = %error::describe(&failure),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&failure))),
                 "agent-delete begin failed"
             );
             return internal_error();
@@ -432,7 +437,9 @@ where
             if let Err(failure) = inner.availability.agent_availability_changed(agent).await {
                 tracing::error!(
                     agent_id = agent.as_str(),
-                    error_chain = %error::describe(&failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(error::describe(&failure))
+                    ),
                     "agent-delete began but the availability edge failed"
                 );
             }

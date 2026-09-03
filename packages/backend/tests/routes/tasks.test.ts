@@ -11,6 +11,7 @@ import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { configureDatabaseObservation } from '../../src/observability/observed-statement.js';
 import { AGENT_CAPABILITIES } from '@silverhand/shared';
+import canonicalization from '../../../shared/tests/fixtures/task-schedule-wire-canonicalization.json' with { type: 'json' };
 
 /** A well-formed conversation address that names nothing: 16 chars of the id
  *  domain, so it reaches the RESOLVER (a shorter fixture-shaped id would be
@@ -1493,6 +1494,17 @@ describe('Task create/edit/detail routes', () => {
         taskNumber: created.tasks[0].task_number,
       };
     };
+
+    it('accepts exactly the shared canonical base-10 task-number corpus', async () => {
+      t = buildTestApp();
+      const h = http(t);
+      for (const entry of canonicalization.canonical_query) {
+        const res = await h.get(
+          `/api/tasks/by-number?conversation_id=zzzzzzzzzzzzzzzz&task_number=${encodeURIComponent(entry.raw)}`,
+        );
+        expect(res.status, entry.raw).toBe(entry.accepted ? 404 : 400);
+      }
+    });
 
     it('resolves the business key to that one task', async () => {
       t = buildTestApp();

@@ -115,7 +115,8 @@ where
         Ok(detail) => detail,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "agent-avatar detail read failed"
             );
             return internal_error();
@@ -159,14 +160,16 @@ where
         Ok(AgentAvatarFetchOutcome::NotFound) => avatar_not_found(),
         Ok(AgentAvatarFetchOutcome::StorageUnavailable { cause }) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "agent-avatar blob unavailable (dangling pointer or read fault)"
             );
             internal_error()
         }
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "agent-avatar serve-ref read or source-bind failed"
             );
             internal_error()

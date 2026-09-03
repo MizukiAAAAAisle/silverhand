@@ -232,7 +232,9 @@ fn told(status: StatusCode, error: &'static str, code: &'static str) -> Response
 /// nothing about our internals is theirs to read.
 fn ours(cause: &SendMessageError) -> Response {
     tracing::error!(
-        error_chain = %crate::foundation::error::describe(cause),
+        error_chain = crate::foundation::safe_log_field::safe_display(
+            &(crate::foundation::error::describe(cause))
+        ),
         "message-send failed"
     );
     (

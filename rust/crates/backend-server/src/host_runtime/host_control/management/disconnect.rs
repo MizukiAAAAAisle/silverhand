@@ -91,7 +91,11 @@ where
     let record = match state.computers.read_computer(host.clone()).await {
         Ok(record) => record,
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "host-disconnect read failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "host-disconnect read failed"
+            );
             return internal_error();
         }
     };
@@ -113,13 +117,20 @@ where
         return coded("host is not active", "host_not_active", 409);
     }
     if !computer_times_are_js_safe(record) {
-        tracing::error!(host_id = %host.as_str(), "host timestamps are not JS-safe");
+        tracing::error!(
+            host_id = crate::foundation::safe_log_field::safe_display(&(host.as_str())),
+            "host timestamps are not JS-safe"
+        );
         return internal_error();
     }
     let disconnected = match state.connections.disconnect_user_managed(&host) {
         Ok(disconnected) => disconnected,
         Err(cause) => {
-            tracing::warn!(error = %cause, host_id = %host.as_str(), "user-managed disconnect failed");
+            tracing::warn!(
+                error = crate::foundation::safe_log_field::safe_display(&(cause)),
+                host_id = crate::foundation::safe_log_field::safe_display(&(host.as_str())),
+                "user-managed disconnect failed"
+            );
             return coded("disconnect failed", "disconnect_failed", 502);
         }
     };

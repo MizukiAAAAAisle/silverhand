@@ -55,7 +55,9 @@ async fn read<P: ConversationAgentDirectoryReadPort>(
             Ok(value) => success(&value),
             Err(error) => {
                 tracing::error!(
-                    error_chain=%crate::foundation::error::describe(&error),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&error))
+                    ),
                     "conversation-agent-directory identity seal failed"
                 );
                 internal()
@@ -69,7 +71,9 @@ async fn read<P: ConversationAgentDirectoryReadPort>(
         }
         Err(error) => {
             tracing::error!(
-                error_chain=%crate::foundation::error::describe(&error),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&error))
+                ),
                 "conversation-agent-directory projection failed"
             );
             internal()

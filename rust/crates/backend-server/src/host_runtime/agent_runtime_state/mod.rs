@@ -140,7 +140,8 @@ where
         Ok(None) => return not_found(),
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "runtime-state snapshot read failed"
             );
             return internal_error();
@@ -178,7 +179,8 @@ where
         Ok(focus) => focus,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "runtime-state live focus resolution failed"
             );
             return internal_error();

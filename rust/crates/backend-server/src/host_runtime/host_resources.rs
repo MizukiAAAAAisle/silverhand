@@ -87,7 +87,8 @@ where
         Ok(facts) => facts,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "host-resources read failed"
             );
             return internal_error();
@@ -101,7 +102,8 @@ where
         // lane's safe 500 rather than a plausible 404.
         Err(mismatch) => {
             tracing::error!(
-                error_chain = %error::describe(&mismatch),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&mismatch))),
                 "host-resources facts did not describe the requested computer"
             );
             return internal_error();

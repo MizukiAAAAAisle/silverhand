@@ -208,7 +208,11 @@ where
         }
         Ok(EmbeddedBootstrap::Ambiguous) => ambiguous_user(),
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "embedded bootstrap flow failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "embedded bootstrap flow failed"
+            );
             internal_error()
         }
     }

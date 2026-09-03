@@ -58,6 +58,11 @@ impl WorkspaceRole {
     pub fn meets_floor(self, min_role: WorkspaceRole) -> bool {
         self.rank() >= min_role.rank()
     }
+
+    /// Whether this role strictly outranks another member on the governance axis.
+    pub fn outranks(self, other: WorkspaceRole) -> bool {
+        self.rank() > other.rank()
+    }
 }
 
 /// The governance predicate: may the holder of this role write the things that

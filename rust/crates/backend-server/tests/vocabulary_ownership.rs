@@ -734,7 +734,7 @@ fn the_declaration_reader_follows_rust_declaration_grammar() {
 /// Which production sources the reader cannot parse as modules, pinned by name.
 ///
 /// A parse failure is handled conservatively one function up, but "conservatively" is
-/// only true while the failures are the two generated `include!` fragments: if a real
+/// only true while the failures are the three generated `include!` fragments: if a real
 /// module ever stopped parsing — new syntax, an older parser — it would take the same
 /// path with far more to hide. Pinning the set turns that into a red gate and a name to
 /// answer instead of a silent narrowing.
@@ -750,9 +750,10 @@ fn the_only_sources_that_are_not_modules_are_named() {
         vec![
             "crates/backend-core/src/conversation_messaging/messaging/schedule/recurrence_ts_fixture.rs".to_owned(),
             "crates/backend-core/src/conversation_messaging/messaging/schedule/settlement_ts_fixture.rs".to_owned(),
+            "crates/backend-core/src/conversation_messaging/messaging/task/event_ts_fixture.rs".to_owned(),
         ],
         "these sources are read by identifier rather than by declaration, so the set \
-         has to stay the two TS-signed expression fixtures"
+         has to stay the three TS-signed expression fixtures"
     );
 }
 

@@ -59,6 +59,7 @@ impl TargetAddress for Target {
         _agent: &AgentId,
         target: &str,
         _allocation: DirectPairAllocation,
+        _intent: silverhand_backend_core::conversation_messaging::messaging::DeliveryIntent,
     ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
         Ok(if target == "#target" {
             Ok(ResolvedStream {

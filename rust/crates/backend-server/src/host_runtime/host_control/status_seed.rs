@@ -733,8 +733,11 @@ impl HostStatusSeeds {
                         // count these before deciding whether a slow recovery is
                         // warranted.
                         tracing::warn!(
-                            host_id = %host.as_str(),
-                            daemon_instance = %instance.as_str(),
+                            host_id =
+                                crate::foundation::safe_log_field::safe_display(&(host.as_str())),
+                            daemon_instance = crate::foundation::safe_log_field::safe_display(
+                                &(instance.as_str())
+                            ),
                             attempts,
                             "host status seed retries exhausted; the custody stays unseeded for the rest of this connection generation"
                         );

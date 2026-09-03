@@ -1,5 +1,5 @@
 use super::resources::*;
-use super::{audit::AuditFacades, finalize::FinalAssembly};
+use super::{audit::AuditFacades, finalize::FinalAssembly, lane_mounts::*};
 use crate::*;
 
 pub(super) async fn compose_after_audit(
@@ -24,6 +24,10 @@ pub(super) async fn compose_after_audit(
             MessagingResources {
                 store: messaging_store,
                 task_store,
+                task_status_write,
+                task_claim_write,
+                task_edit_write,
+                task_create_write,
                 scope_authority,
                 unread_read_model,
                 direct_pair_read_model,
@@ -63,6 +67,8 @@ pub(super) async fn compose_after_audit(
             },
         scheduling:
             SchedulingResources {
+                create: schedule_create,
+                driver: schedule_driver,
                 list_read: schedule_list_read,
                 cancel: schedule_cancel,
             },
@@ -119,6 +125,7 @@ pub(super) async fn compose_after_audit(
     let embedded_bootstrap_sessions = session_store.clone();
     let sessions =
         HumanSessionAuthenticator::new(session_store, SystemSessionClock, SessionTtl::default());
+    let membership_runtime_seats = delivery_store.clone();
     let runtime_credentials = RuntimeCredentialAuthority::production(custody_store);
     let daemon_runtime = DaemonDeliveryRuntime::production(
         runtime_credentials.clone(),
@@ -194,6 +201,7 @@ pub(super) async fn compose_after_audit(
     // viewer summary, per-conversation).
     let message_unread_read = messaging_store.message_unread();
     let attention_projection_read = messaging_store.attention_projection();
+    let lane_attention_projection = attention_projection_read.clone();
     // #2217: the two viewer-owned message-state lanes ride the SAME `MessagingStore`
     // (each `&self` builder clones only the shared pool, no second authority), captured
     // before `write_doors` moves the store below. `saved` serves both the read and the
@@ -206,6 +214,7 @@ pub(super) async fn compose_after_audit(
     // before `write_doors` moves the store below. The adapter that wraps this with the
     // daemon delivery effect and the hub publication is assembled just before the merge.
     let workspace_rename_messaging = messaging_store.workspace_rename_messaging();
+    let lane_agent_audience = workspace_rename_messaging.clone();
     // `/readyz`'s live write probe rides the SAME `MessagingStore` pool handle the send
     // door holds — it does NOT reopen SQLite by path. Captured before `write_doors`
     // moves the store below. The probe is the one thing readiness cannot answer from
@@ -218,6 +227,24 @@ pub(super) async fn compose_after_audit(
     // it never parallel-copies the send fan-out's SQL. Captured here as a shared-pool handle
     // before `write_doors` moves the store below.
     let agent_create_onboarding_ensure = messaging_store.onboarding_inbox_ensure();
+    let lane_committed_message_ensure = messaging_store.committed_message_inbox_ensure();
+    let lane_observation = messaging_store.observation();
+    let lane_attention_preferences = messaging_store.attention_preferences();
+    let lane_channel_create = messaging_store.channel_directory_create();
+    let lane_channel_mutation = messaging_store.channel_lifecycle_mutation();
+    let lane_log_debug_admission = LogDebugAdmission(messaging_store.conversation_participation());
+    let lane_task_boards = TaskBoards(messaging_store.clone());
+    let lane_task_door = messaging_store.clone();
+    let lane_human_post = HumanPost(messaging_store.clone());
+    let lane_conversation_membership = messaging_store.clone();
+    let lane_target_address = target_address.clone();
+    let lane_task_target =
+        CanonicalTaskTarget::new(target_address.clone(), lane_task_boards.clone());
+    let lane_schedule_target = CanonicalScheduleTarget(target_address.clone());
+    let lane_schedule_capability = ScheduleCapability(messaging_store.clone());
+    let lane_unread = unread_read_model.clone();
+    let lane_schedule_unread = unread_read_model.clone();
+    let lane_schedule_wake_write = messaging_store.schedule_wake_write();
     // The thread-follow post-commit unread axis binds the SAME two authorities the
     // messaging aftermath's unread publisher binds — this `hub` and this `unread_read_model`
     // (cloned as a shared-pool handle, no second audience authority) — before the messaging
@@ -234,6 +261,35 @@ pub(super) async fn compose_after_audit(
         messaging_store.clone(),
         unread_read_model,
     );
+    let lane_delivery = ConversationMessageDeliveryAdapter::new(
+        lane_committed_message_ensure,
+        daemon_runtime.effects(),
+    );
+    let lane_effects = LaneEffects::new(
+        hub.clone(),
+        lane_unread,
+        lane_attention_projection,
+        lane_agent_audience,
+        lane_delivery.clone(),
+        ProductionMembershipRuntimeStop::new(
+            membership_runtime_seats,
+            daemon_runtime.scope_runtime_stop(),
+        ),
+    );
+    let schedule_driver_handle = ScheduleDriverHandle::start(
+        schedule_driver,
+        ProductionScheduleWake::new(
+            lane_schedule_wake_write,
+            hub.clone(),
+            lane_schedule_unread,
+            lane_delivery,
+        ),
+    )
+    .await
+    .map_err(|source| StartupError::Composition {
+        name: "schedule fire driver",
+        source: Box::new(source),
+    })?;
     // Wave 3A checkpoint A6 (#2203) + #2205: every authenticated write door — the two
     // ordinary sends and the human direct-pair initiation — rides the SAME
     // `MessagingStore`, in every write role it needs: channel access, send capability,
@@ -629,8 +685,122 @@ pub(super) async fn compose_after_audit(
         // registry (via `daemon_runtime`'s owning-host data plane) for the exact-custody wire —
         // never a second placement store or a second registry.
         .merge(profile_mcp_router(mcp_data_plane.clone()));
+    let lane_human_products = activity::observe::router(lane_observation, lane_effects.clone())
+        .merge(attention_preference::router(
+            lane_attention_preferences,
+            lane_effects.clone(),
+        ))
+        .merge(channel_directory::create_router(
+            lane_channel_create,
+            lane_effects.clone(),
+        ))
+        .merge(channel_lifecycle::mutation_router(
+            lane_channel_mutation,
+            lane_effects.clone(),
+        ))
+        .merge(conversation_log_debug::router(
+            lane_log_debug_admission,
+            conversation_log_debug::ProductionConversationLogDebugControl::process(),
+            SystemProcessClock,
+        ))
+        .merge(conversation_runtime_control::router(
+            agent_clear_session_admission.clone(),
+            runtime_control.clone(),
+        ))
+        .merge(access::workspace_membership::router(
+            access_store.clone(),
+            lane_effects.clone(),
+        ))
+        .merge(conversation_membership::public_router(
+            lane_conversation_membership.clone(),
+            SystemEnrollmentClock,
+            lane_effects.clone(),
+        ))
+        .merge(human_status_router(HumanStatusState {
+            write: task_status_write.clone(),
+            aftermath: PublishingTaskAftermath::new(lane_effects.clone()),
+        }))
+        .merge(human_claim_router(HumanClaimState {
+            write: task_claim_write.clone(),
+            aftermath: PublishingTaskAftermath::new(lane_effects.clone()),
+            assignees: lane_task_door.clone(),
+        }))
+        .merge(human_edit_router(HumanEditState {
+            write: task_edit_write.clone(),
+            aftermath: PublishingTaskAftermath::new(lane_effects.clone()),
+        }))
+        .merge(human_create_router(HumanCreateState {
+            post: lane_human_post,
+            boards: lane_task_boards.clone(),
+            write: task_create_write.clone(),
+            aftermath: PublishingTaskAftermath::new(lane_effects.clone()),
+        }))
+        .merge(human_task_board_router(HumanTaskBoardState {
+            read: task_store.clone(),
+        }))
+        .merge(human_task_point_router(HumanTaskPointState {
+            read: task_store.clone(),
+        }));
+    let lane_agent_products = conversation_membership::internal_router(
+        lane_conversation_membership,
+        lane_target_address,
+        SystemEnrollmentClock,
+        lane_effects.clone(),
+    )
+    .merge(task_update_status_router(TaskStatusUpdateState {
+        door: lane_task_door.clone(),
+        numbers: task_store.clone(),
+        write: task_status_write,
+        names: lane_task_door.clone(),
+        aftermath: PublishingTaskAftermath::new(lane_effects.clone()),
+    }))
+    .merge(task_claim_router(TaskClaimState {
+        door: lane_task_door.clone(),
+        numbers: task_store.clone(),
+        write: task_claim_write.clone(),
+        names: lane_task_door.clone(),
+        aftermath: PublishingTaskAftermath::new(lane_effects.clone()),
+    }))
+    .merge(task_unclaim_router(TaskUnclaimState {
+        door: lane_task_door.clone(),
+        numbers: task_store.clone(),
+        write: task_claim_write,
+        aftermath: PublishingTaskAftermath::new(lane_effects.clone()),
+    }))
+    .merge(task_edit_router(TaskEditState {
+        door: lane_task_door.clone(),
+        numbers: task_store.clone(),
+        write: task_edit_write,
+        names: lane_task_door.clone(),
+        aftermath: PublishingTaskAftermath::new(lane_effects.clone()),
+    }))
+    .merge(task_create_router(TaskCreateState {
+        resolver: lane_task_target,
+        door: lane_task_door.clone(),
+        write: task_create_write,
+        names: lane_task_door.clone(),
+        aftermath: PublishingTaskAftermath::new(lane_effects.clone()),
+    }))
+    .merge(task_detail_router(TaskDetailState {
+        boards: lane_task_door,
+        read: task_store.clone(),
+    }))
+    .merge(internal_schedule_list_router(ScheduleListState {
+        list_reads: schedule_list_read.clone(),
+    }))
+    .merge(internal_schedule_cancel_router(ScheduleCancelState {
+        cancel: schedule_cancel.clone(),
+    }))
+    .merge(schedule_create_router(ScheduleCreateState {
+        resolver: lane_schedule_target,
+        capability: lane_schedule_capability,
+        store: schedule_create,
+        cron: ProductionCronEvaluator,
+        committed_effect: schedule_driver_handle,
+    }));
     let human_products = require_human_session(
         host.merge(human_writes)
+            .merge(lane_human_products)
             // Wave 3A checkpoint A6 (#2203): `POST /api/agents/{id}/direct-messages`, the
             // human direct-pair initiation write door, is not merged here — it arrives
             // inside `human_writes`, bound to the aftermath by the seam above. Its
@@ -962,6 +1132,7 @@ pub(super) async fn compose_after_audit(
     // excluded from invoke counting. Both share the ONE owner closed by PreparedApp.
     let observed_agent_products = audit_cli_invocations(
         agent_writes
+            .merge(lane_agent_products)
             .merge(task_list_router(TaskListState {
                 boards: task_list_boards,
                 fetch: task_store,

@@ -217,6 +217,7 @@ impl TargetAddress for ResolvesToChannel {
         _agent: &AgentId,
         target: &str,
         _allocation: DirectPairAllocation,
+        _intent: silverhand_backend_core::conversation_messaging::messaging::DeliveryIntent,
     ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
         Ok(Ok(ResolvedStream {
             conversation: ConversationId::parse(CHANNEL_ID).unwrap(),

@@ -22,6 +22,7 @@ import {
 } from '../utils/app.js';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
 import { AGENT_CAPABILITIES } from '@silverhand/shared';
+import canonicalization from '../../../shared/tests/fixtures/task-schedule-wire-canonicalization.json' with { type: 'json' };
 
 interface Setup {
   workspaceId: string;
@@ -106,6 +107,22 @@ describe('P0-g task identity (#task:2018) — phase 1, conversation frame', () =
   afterEach(() => {
     t?.cleanup();
     t = null;
+  });
+
+  it('internal detail accepts exactly the shared canonical base-10 task-number corpus', async () => {
+    t = buildTestApp();
+    const { onboardingId, agentIds } = await setup(t);
+    const h = http(t);
+    const base = conversationSlotTestPath(
+      `/internal/agents/${agentIds.alice}/tasks`,
+      onboardingId,
+    );
+    for (const entry of canonicalization.canonical_query) {
+      const res = await h.get(
+        `${base}/detail?task_number=${encodeURIComponent(entry.raw)}`,
+      );
+      expect(res.status, entry.raw).toBe(entry.accepted ? 404 : 400);
+    }
   });
 
   it('detail --id succeeds on the ambient board and equals the by-number read field-for-field', async () => {

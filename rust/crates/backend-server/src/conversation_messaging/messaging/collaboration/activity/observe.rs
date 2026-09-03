@@ -2,13 +2,14 @@
 
 use axum::{
     Json, Router,
-    body::to_bytes,
-    extract::{Extension, Request, State},
+    extract::{Extension, FromRequest, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
 };
-use serde_json::{Map, Value, json};
+use garde::Validate;
+use serde::Deserialize;
+use serde_json::json;
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
         MessageSeq, NotificationId, ThreadRootId,
@@ -21,7 +22,139 @@ use silverhand_backend_core::{
 };
 use std::sync::Arc;
 
+use crate::foundation::wire_admission::ValidatedJson;
+use crate::foundation::wire_patch::RequiredNullable;
+
 pub const OBSERVE_PATH: &str = "/api/attention/observe";
+
+/// `POST` body — the reference `z.object({ sources: z.array(ObserveSource).min(1).max(1000) })`.
+/// Serde owns the discriminated-union shape; the `.min(1)/.max(1000)` array bound is a
+/// stateless garde rule (a request-local semantic refusal → minimal 422). The per-source
+/// identity/root/position legality stays in the core `observe` use case, gated per source
+/// AFTER decode, so an unknown conversation refuses 404/403 rather than 422.
+#[derive(Debug, Deserialize, Validate)]
+struct ObserveBatchRaw {
+    #[garde(length(min = 1, max = 1000), dive)]
+    sources: Vec<ObserveSourceRaw>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ObserveSourceRaw {
+    Stream {
+        #[garde(length(min = 1))]
+        conversation_id: String,
+        /// Required-and-nullable (`z.string().min(1).nullable()`): the key MUST be present,
+        /// `null` = mainline, a non-empty id = that reply-cluster. `deserialize_present`
+        /// (no `#[serde(default)]`) makes an ABSENT key a native `missing field` fault
+        /// rather than silently mainline.
+        #[serde(deserialize_with = "RequiredNullable::deserialize_present")]
+        #[garde(skip)]
+        thread_root_id: RequiredNullable<String>,
+        #[garde(dive)]
+        position: StreamPositionRaw,
+    },
+    Notification {
+        #[garde(length(min = 1))]
+        notification_id: String,
+    },
+}
+
+#[derive(Debug, Deserialize, Validate)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum StreamPositionRaw {
+    AtSeq {
+        /// `z.number().int().nonnegative()`. A non-integer or negative value is a native
+        /// data fault; a nonneg integer at or beyond the SQLite i64 ceiling is still a
+        /// valid ECMAScript integer and reaches the authority as `BeyondPersistedRange`
+        /// (→ `position_future`), so the wire keeps it as `f64` and the domain mapping
+        /// lives in `TryFrom` rather than being rejected structurally.
+        #[garde(custom(nonnegative_integer))]
+        seq: f64,
+    },
+    StreamHead,
+}
+
+fn nonnegative_integer(value: &f64, _: &()) -> garde::Result {
+    // A finite value must be a non-negative integer. The `is_finite()` arm is a DEFENSIVE
+    // type invariant only: in practice serde_json rejects a non-finite JSON literal
+    // (`1e400` → out-of-range) at the `Json`/`ValidatedJson` decode step (native 400) before
+    // this garde rule runs, so it never carries the primary rejection for those inputs — the
+    // observe admission-only test proves the two overflow cells land on the native 400 axis,
+    // not a garde 422. This arm exists so a +inf could never silently reach the domain if a
+    // future decode path admitted one.
+    if !value.is_finite() || value.fract() != 0.0 || *value < 0.0 {
+        return Err(garde::Error::new(
+            "seq must be a finite non-negative integer",
+        ));
+    }
+    Ok(())
+}
+
+/// i64 exclusive ceiling — a nonneg integer at/above this is a valid ECMAScript integer
+/// beyond SQLite's ordinal range; it reaches the authority as `BeyondPersistedRange`.
+const I64_EXCLUSIVE_CEILING: f64 = 9_223_372_036_854_775_808.0;
+
+impl TryFrom<StreamPositionRaw> for StreamPosition {
+    type Error = ();
+    fn try_from(raw: StreamPositionRaw) -> Result<Self, ()> {
+        Ok(match raw {
+            StreamPositionRaw::StreamHead => StreamPosition::StreamHead,
+            StreamPositionRaw::AtSeq { seq } => {
+                let observed = if seq >= I64_EXCLUSIVE_CEILING {
+                    ObservedSeq::BeyondPersistedRange
+                } else {
+                    ObservedSeq::Persisted(MessageSeq::try_from(seq as i64).map_err(|_| ())?)
+                };
+                StreamPosition::AtSeq(observed)
+            }
+        })
+    }
+}
+
+impl TryFrom<ObserveSourceRaw> for ObserveSource {
+    type Error = ();
+    fn try_from(raw: ObserveSourceRaw) -> Result<Self, ()> {
+        Ok(match raw {
+            ObserveSourceRaw::Notification { notification_id } => {
+                ObserveSource::Notification(NotificationId::parse(notification_id).map_err(|_| ())?)
+            }
+            ObserveSourceRaw::Stream {
+                conversation_id,
+                thread_root_id,
+                position,
+            } => {
+                let thread_root = match thread_root_id {
+                    RequiredNullable::Null => None,
+                    RequiredNullable::Value(id) if !id.is_empty() => {
+                        Some(ThreadRootId::parse(id).map_err(|_| ())?)
+                    }
+                    // A present-but-empty string fails the `.min(1)` half — treated as a
+                    // semantic refusal here (garde cannot dive through the newtype), so an
+                    // empty thread_root_id is rejected rather than read as mainline.
+                    RequiredNullable::Value(_) => return Err(()),
+                };
+                ObserveSource::Stream {
+                    conversation: ConversationId::parse(conversation_id).map_err(|_| ())?,
+                    thread_root,
+                    position: StreamPosition::try_from(position)?,
+                }
+            }
+        })
+    }
+}
+
+impl TryFrom<ObserveBatchRaw> for ObserveBatch {
+    type Error = ();
+    fn try_from(raw: ObserveBatchRaw) -> Result<Self, ()> {
+        let sources = raw
+            .sources
+            .into_iter()
+            .map(ObserveSource::try_from)
+            .collect::<Result<Vec<_>, ()>>()?;
+        ObserveBatch::new(sources).map_err(|_| ())
+    }
+}
 
 struct Inner<P, A> {
     port: P,
@@ -47,251 +180,49 @@ where
 async fn observe_route<P: ObservationPort, A: ObservationAftermath>(
     State(state): State<ObserveState<P, A>>,
     principal: Option<Extension<UserId>>,
-    request: Request,
+    request: axum::extract::Request,
 ) -> Response {
     let Some(Extension(viewer)) = principal else {
         tracing::error!("Activity observe route reached without its human principal fact");
         return internal();
     };
-    let value = read_json(request).await;
-    let batch = match parse_batch(&value) {
-        Ok(batch) => batch,
-        Err(issues) => return invalid(issues),
+    // Base gate is the human principal only; the body crosses the shared `ValidatedJson`
+    // extractor next (structural faults keep native 415/400/422, the array bound is a garde
+    // rule → minimal 422). Per-source identity/root/position legality is decided in the
+    // core `observe` use case AFTER decode, so an unknown/forbidden source refuses 404/403
+    // rather than 422 — hence the domain mapping stays a `TryFrom` yielding the minimal
+    // semantic 422 only for a request-local shape it cannot represent.
+    let raw = match ValidatedJson::<ObserveBatchRaw>::from_request(request, &()).await {
+        Ok(ValidatedJson(raw)) => raw,
+        Err(rejection) => return rejection.into_response(),
     };
-    drop(value);
+    let batch = match ObserveBatch::try_from(raw) {
+        Ok(batch) => batch,
+        Err(()) => return crate::foundation::wire_admission::invalid_input(),
+    };
     match observe(&state.0.port, &state.0.aftermath, viewer, batch).await {
         Ok(Ok(done)) => {
             if let Some(error) = done.first_failure() {
-                tracing::error!(error_chain=%crate::foundation::error::describe(error),"Activity observe effect failed");
+                tracing::error!(
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(error))
+                    ),
+                    "Activity observe effect failed"
+                );
             }
             Json(json!({"changed":done.committed().changed_anything()})).into_response()
         }
         Ok(Err(refusal)) => refusal_response(refusal),
         Err(error) => {
-            tracing::error!(error_chain=%crate::foundation::error::describe(&error),"Activity observe failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&error))
+                ),
+                "Activity observe failed"
+            );
             internal()
         }
     }
-}
-
-async fn read_json(request: Request) -> Value {
-    match to_bytes(request.into_body(), usize::MAX)
-        .await
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-    {
-        Some(value) => value,
-        None => json!({}),
-    }
-}
-
-fn parse_batch(value: &Value) -> Result<ObserveBatch, Vec<Value>> {
-    let object = root_object(value)?;
-    let Some(sources) = object.get("sources") else {
-        return Err(vec![type_issue(
-            "array",
-            "undefined",
-            vec![json!("sources")],
-        )]);
-    };
-    let Some(sources) = sources.as_array() else {
-        return Err(vec![type_issue(
-            "array",
-            received(sources),
-            vec![json!("sources")],
-        )]);
-    };
-    if sources.is_empty() {
-        return Err(vec![json!({
-            "code":"too_small","minimum":1,"type":"array","inclusive":true,"exact":false,
-            "message":"Array must contain at least 1 element(s)","path":["sources"]
-        })]);
-    }
-    if sources.len() > 1_000 {
-        return Err(vec![json!({
-            "code":"too_big","maximum":1000,"type":"array","inclusive":true,"exact":false,
-            "message":"Array must contain at most 1000 element(s)","path":["sources"]
-        })]);
-    }
-    let mut parsed = Vec::with_capacity(sources.len());
-    let mut issues = Vec::new();
-    for (index, source) in sources.iter().enumerate() {
-        match parse_source(source, index) {
-            Ok(source) => parsed.push(source),
-            Err(mut source_issues) => issues.append(&mut source_issues),
-        }
-    }
-    if !issues.is_empty() {
-        return Err(issues);
-    }
-    ObserveBatch::new(parsed).map_err(|_| unreachable!())
-}
-
-fn parse_source(value: &Value, index: usize) -> Result<ObserveSource, Vec<Value>> {
-    let path = |field: &str| vec![json!("sources"), json!(index), json!(field)];
-    let object = match value.as_object() {
-        Some(object) => object,
-        None => {
-            return Err(vec![type_issue(
-                "object",
-                received(value),
-                vec![json!("sources"), json!(index)],
-            )]);
-        }
-    };
-    match object.get("kind").and_then(Value::as_str) {
-        Some("notification") => {
-            let notification = required_nonempty_string(object, "notification_id", path)?;
-            Ok(ObserveSource::Notification(
-                NotificationId::parse(notification).unwrap(),
-            ))
-        }
-        Some("stream") => {
-            let conversation = required_nonempty_string(object, "conversation_id", path)?;
-            let thread_root = match object.get("thread_root_id") {
-                Some(Value::Null) => None,
-                Some(Value::String(value)) if !value.is_empty() => {
-                    Some(ThreadRootId::parse(value.clone()).unwrap())
-                }
-                Some(Value::String(_)) => {
-                    return Err(vec![string_min_issue(vec![
-                        json!("sources"),
-                        json!(index),
-                        json!("thread_root_id"),
-                    ])]);
-                }
-                Some(value) => {
-                    return Err(vec![type_issue(
-                        "string",
-                        received(value),
-                        vec![json!("sources"), json!(index), json!("thread_root_id")],
-                    )]);
-                }
-                None => {
-                    return Err(vec![type_issue(
-                        "string",
-                        "undefined",
-                        vec![json!("sources"), json!(index), json!("thread_root_id")],
-                    )]);
-                }
-            };
-            let position = parse_position(object.get("position"), index)?;
-            Ok(ObserveSource::Stream {
-                conversation: ConversationId::parse(conversation).unwrap(),
-                thread_root,
-                position,
-            })
-        }
-        received_kind => Err(vec![json!({
-            "code":"invalid_union_discriminator","options":["stream","notification"],
-            "path":["sources",index,"kind"],
-            "message":format!("Invalid discriminator value. Expected 'stream' | 'notification'{}",
-                received_kind.map_or(String::new(), |value| format!(", received '{value}'")))
-        })]),
-    }
-}
-
-fn parse_position(value: Option<&Value>, index: usize) -> Result<StreamPosition, Vec<Value>> {
-    let base = vec![json!("sources"), json!(index), json!("position")];
-    let Some(value) = value else {
-        return Err(vec![type_issue("object", "undefined", base)]);
-    };
-    let Some(object) = value.as_object() else {
-        return Err(vec![type_issue("object", received(value), base)]);
-    };
-    match object.get("kind").and_then(Value::as_str) {
-        Some("stream_head") => Ok(StreamPosition::StreamHead),
-        Some("at_seq") => {
-            let mut path = base;
-            path.push(json!("seq"));
-            let Some(value) = object.get("seq") else {
-                return Err(vec![type_issue("number", "undefined", path)]);
-            };
-            let Some(number) = value.as_f64() else {
-                return Err(vec![type_issue("number", received(value), path)]);
-            };
-            if number.fract() != 0.0 {
-                return Err(vec![type_issue("integer", "float", path)]);
-            }
-            if number < 0.0 {
-                return Err(vec![
-                    json!({"code":"too_small","minimum":0,"type":"number","inclusive":true,"exact":false,
-                    "message":"Number must be greater than or equal to 0","path":path}),
-                ]);
-            }
-            const I64_EXCLUSIVE_CEILING: f64 = 9_223_372_036_854_775_808.0;
-            let seq = if number >= I64_EXCLUSIVE_CEILING {
-                ObservedSeq::BeyondPersistedRange
-            } else {
-                ObservedSeq::Persisted(MessageSeq::try_from(number as i64).map_err(|_| {
-                vec![json!({"code":"too_small","minimum":0,"type":"number","inclusive":true,"exact":false,
-                    "message":"Number must be greater than or equal to 0","path":path})]
-                })?)
-            };
-            Ok(StreamPosition::AtSeq(seq))
-        }
-        received_kind => {
-            let mut path = base;
-            path.push(json!("kind"));
-            Err(vec![json!({
-                "code":"invalid_union_discriminator","options":["at_seq","stream_head"],"path":path,
-                "message":format!("Invalid discriminator value. Expected 'at_seq' | 'stream_head'{}",
-                    received_kind.map_or(String::new(), |value| format!(", received '{value}'")))
-            })])
-        }
-    }
-}
-
-fn required_nonempty_string(
-    object: &Map<String, Value>,
-    field: &str,
-    path: impl Fn(&str) -> Vec<Value>,
-) -> Result<String, Vec<Value>> {
-    match object.get(field) {
-        Some(Value::String(value)) if !value.is_empty() => Ok(value.clone()),
-        Some(Value::String(_)) => Err(vec![string_min_issue(path(field))]),
-        Some(value) => Err(vec![type_issue("string", received(value), path(field))]),
-        None => Err(vec![type_issue("string", "undefined", path(field))]),
-    }
-}
-
-fn string_min_issue(path: Vec<Value>) -> Value {
-    json!({"code":"too_small","minimum":1,"type":"string","inclusive":true,"exact":false,
-        "message":"String must contain at least 1 character(s)","path":path})
-}
-
-fn root_object(value: &Value) -> Result<&Map<String, Value>, Vec<Value>> {
-    value
-        .as_object()
-        .ok_or_else(|| vec![type_issue("object", received(value), Vec::new())])
-}
-
-fn received(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
-}
-
-fn type_issue(expected: &str, actual: &str, path: Vec<Value>) -> Value {
-    let message = if actual == "undefined" {
-        "Required".to_owned()
-    } else {
-        format!("Expected {expected}, received {actual}")
-    };
-    json!({"code":"invalid_type","expected":expected,"received":actual,"path":path,"message":message})
-}
-
-fn invalid(_: Vec<Value>) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({"error":"invalid input"})),
-    )
-        .into_response()
 }
 
 fn refusal_response(refusal: ObserveRefusal) -> Response {
@@ -336,21 +267,42 @@ fn internal() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
     use axum::{
         body::{Body, to_bytes},
         http::Request,
     };
     use silverhand_backend_core::conversation_messaging::messaging::collaboration::activity::observe::{
-        CommittedObservation, ObservationEffectFailure, ObservedConversation,
+        CommittedObservation, ObservationChanges, ObservationEffectFailure, ObservedConversation,
     };
     use silverhand_backend_sqlite::conversation_messaging::messaging::MessagingStore;
     use sqlx::{Connection, Executor, Row, SqliteConnection, sqlite::SqliteConnectOptions};
     use std::{
         io::{self, Write},
-        sync::Mutex,
+        sync::{Mutex, atomic::{AtomicUsize, Ordering}},
     };
     use tower::ServiceExt;
     use tracing_subscriber::fmt::MakeWriter;
+
+    /// Wraps a real `ObservationPort` and counts how many times `observe` is invoked, so a
+    /// test can prove the port itself is (or is not) reached — distinct from aftermath
+    /// zero-reach. Delegates unchanged when reached, so a success positive control still
+    /// commits through the real store.
+    struct CountingObservationPort<P> {
+        inner: P,
+        calls: Arc<AtomicUsize>,
+    }
+    impl<P: ObservationPort + Send + Sync> ObservationPort for CountingObservationPort<P> {
+        type Error = P::Error;
+        async fn observe(
+            &self,
+            viewer: UserId,
+            batch: ObserveBatch,
+        ) -> Result<Result<ObservationChanges, ObserveRefusal>, Self::Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.observe(viewer, batch).await
+        }
+    }
 
     #[derive(Clone, Default)]
     struct Effects(Arc<Mutex<Vec<&'static str>>>);
@@ -510,9 +462,10 @@ mod tests {
         }
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let body =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        // A native axum structural rejection (415/400/422) carries a plain-text body pinned
+        // on status only; a JSON body (success or minimal semantic 422) parses.
+        let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
         (status, body)
     }
 
@@ -610,10 +563,15 @@ mod tests {
         let missing = call(app.clone(), json!({"sources":[]}), false).await;
         assert_eq!(missing.0, StatusCode::INTERNAL_SERVER_ERROR);
 
+        // An empty `sources` array fails the `.min(1)` garde rule — a request-local
+        // semantic refusal → shared minimal 422 (no re-rendered issue schema).
         let invalid = call(app.clone(), json!({"sources":[]}), true).await;
-        assert_eq!(invalid.0, StatusCode::BAD_REQUEST);
-        assert_eq!(invalid.1["error"], "invalid input");
+        assert_eq!(invalid.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(invalid.1, json!({"error":"invalid input"}));
 
+        // `position_future` is a DOMAIN refusal decided by the core use case AFTER a
+        // well-formed body is admitted — it keeps its product 400 + code, not a body-shape
+        // status. This proves per-source legality is not folded into body admission.
         let future = call(
             app,
             json!({"sources":[{
@@ -644,12 +602,26 @@ mod tests {
 
     #[tokio::test]
     async fn production_router_consumes_the_ts_signed_observe_wire() {
+        // Denominator: the shared `activity-observe-wire.json` has 19 cells; this Rust
+        // replay consumes the **11/19** that are genuine cross-language business/wire
+        // contracts. The other **8/19** are marked `ts_authority="admission_only"` — pure
+        // Zod-schema admission cells (missing/empty/wrong-typed sources, empty ids,
+        // fractional/negative/overflow seq) whose TS signer emits the legacy 400{issues};
+        // the Rust terminal admission is the shared native structural axis (400/422), so
+        // those are NOT dual-signed here and are covered by the focused local
+        // `admission_only_cells_take_the_native_structural_axis` test. The TS parity test
+        // continues to sign its own full 19/19 legacy behavior.
         let fixture: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../../packages/backend/tests/fixtures/activity-observe-wire.json"
         )))
         .unwrap();
+        let mut consumed = 0;
         for case in fixture.as_array().unwrap() {
+            if case.get("ts_authority").and_then(Value::as_str) == Some("admission_only") {
+                continue;
+            }
+            consumed += 1;
             let (_dir, _path, store) = fixture_store().await;
             let app = router(store.observation(), Effects::default());
             let raw = case["request_json"]
@@ -666,5 +638,86 @@ mod tests {
             assert_eq!(body, case["body"], "{}", case["name"]);
         }
         assert_eq!(fixture.as_array().unwrap().len(), 19);
+        assert_eq!(consumed, 11, "shared cross-language denominator is 11/19");
+    }
+
+    #[tokio::test]
+    async fn all_eight_admission_only_cells_refuse_on_the_native_axis_before_the_observation_port()
+    {
+        // Mechanically cover EXACTLY the 8/19 `ts_authority="admission_only"` cells of the
+        // shared fixture. Each is a body-admission fault that refuses on the native axis with
+        // an EXACT per-cell status (six data-shape/stateless → 422; the two non-finite
+        // `1e400`/`-1e400` seq literals → native 400, rejected by serde at the `Json` decode
+        // step, NOT the garde `is_finite` arm). Crucially the request never reaches the
+        // `ObservationPort` (proven by a counting port whose counter stays 0) NOR the
+        // aftermath (Effects empty). A success positive control below proves the counter
+        // does increment when a well-formed batch is admitted.
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../packages/backend/tests/fixtures/activity-observe-wire.json"
+        )))
+        .unwrap();
+        let mut checked = 0;
+        for case in fixture.as_array().unwrap() {
+            if case.get("ts_authority").and_then(Value::as_str) != Some("admission_only") {
+                continue;
+            }
+            checked += 1;
+            let (_dir, _path, store) = fixture_store().await;
+            let effects = Effects::default();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let port = CountingObservationPort {
+                inner: store.observation(),
+                calls: calls.clone(),
+            };
+            let app = router(port, effects.clone());
+            let raw = case["request_json"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| serde_json::to_string(&case["request"]).unwrap());
+            let (status, _) = call_raw(app, raw, true).await;
+            let name = case["name"].as_str().unwrap();
+            let expected = match name {
+                "positive_json_number_overflow_is_rejected"
+                | "negative_json_number_overflow_is_rejected" => StatusCode::BAD_REQUEST,
+                "missing_sources"
+                | "empty_sources"
+                | "empty_notification_id"
+                | "wrong_sources_type"
+                | "fractional_seq_is_rejected"
+                | "negative_fraction_is_rejected" => StatusCode::UNPROCESSABLE_ENTITY,
+                other => panic!("unexpected admission_only cell {other}"),
+            };
+            assert_eq!(status, expected, "{name}");
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "{name}: ObservationPort must be zero-reach"
+            );
+            assert!(
+                effects.0.lock().unwrap().is_empty(),
+                "{name}: observation aftermath must be zero-reach"
+            );
+        }
+        assert_eq!(checked, 8, "admission-only local denominator is 8/19");
+
+        // Positive control: a well-formed batch is admitted and DOES reach the counting
+        // ObservationPort exactly once — so the zero-reach assertions above are meaningful,
+        // not vacuously true because the port is never called.
+        let (_dir, _path, store) = fixture_store().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let port = CountingObservationPort {
+            inner: store.observation(),
+            calls: calls.clone(),
+        };
+        let app = router(port, Effects::default());
+        let raw = r#"{"sources":[{"kind":"notification","notification_id":"n2"}]}"#.to_owned();
+        let (status, _) = call_raw(app, raw, true).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a well-formed batch must reach the ObservationPort exactly once"
+        );
     }
 }

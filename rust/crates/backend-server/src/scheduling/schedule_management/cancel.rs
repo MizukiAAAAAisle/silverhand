@@ -126,7 +126,9 @@ where
         ),
         Err(cause) => {
             tracing::error!(
-                error_chain = %crate::foundation::error::describe(&cause),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&cause))
+                ),
                 "agent-schedule-cancel unit of work failed"
             );
             super::internal_error()

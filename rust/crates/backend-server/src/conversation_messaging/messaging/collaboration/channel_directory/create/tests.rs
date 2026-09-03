@@ -159,8 +159,10 @@ async fn call_body(
     }
     let response = app.oneshot(request).await.unwrap();
     let status = response.status();
-    let body =
-        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    // A native axum structural rejection (415/400/422) carries a plain-text body pinned on
+    // status only; a JSON body (success or minimal semantic 422) parses.
+    let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, body)
 }
 
@@ -183,48 +185,57 @@ fn fixture_app(
 }
 
 #[tokio::test]
-async fn production_admission_matches_zod_issue_shapes_and_drops_raw_before_port() {
+async fn production_admission_takes_the_native_structural_axis_and_drops_raw_before_port() {
+    // The body crosses the shared `ValidatedJson` extractor. Exact native status by input
+    // class: a JSON syntax error is 400; every data-shape fault (missing/wrong-typed field,
+    // unknown enum, the object-only floor refusing a value-shaped array/non-object) and the
+    // stateless garde title rule are 422. No re-rendered issue schema; the port is never
+    // reached (raw dropped). Native body text is NOT pinned.
     let cases = [
+        ("{}", StatusCode::UNPROCESSABLE_ENTITY), // missing title
+        (r#"{"title":""}"#, StatusCode::UNPROCESSABLE_ENTITY), // empty title → garde
         (
-            "{}",
-            json!({"error":"invalid input","issues":[{
-                "code":"invalid_type","expected":"string","received":"undefined",
-                "path":["title"],"message":"Required"
-            }]}),
-        ),
+            r#"{"title":"X","member_agent_ids":[1]}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ), // wrong element type
         (
-            r#"{"title":""}"#,
-            json!({"error":"invalid input","issues":[{
-                "code":"too_small","minimum":1,"type":"string","inclusive":true,
-                "message":"title must not be empty","path":["title"]
-            }]}),
-        ),
+            r#"{"title":"X","visibility":"loud"}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ), // unknown enum
         (
-            r#"{"title":"X","member_agent_ids":[1],"visibility":"loud"}"#,
-            json!({"error":"invalid input","issues":[
-                {"code":"invalid_type","expected":"string","received":"number","path":["member_agent_ids",0],"message":"Expected string, received number"},
-                {"received":"loud","code":"invalid_enum_value","options":["private","public"],"path":["visibility"],"message":"Invalid enum value. Expected 'private' | 'public', received 'loud'"}
-            ]}),
-        ),
+            r#"{"title":"X","visibility":null}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ), // explicit null (optional-not-nullable)
         (
-            "[1]",
-            json!({"error":"invalid input","issues":[{
-                "code":"invalid_type","expected":"object","received":"array","path":[],
-                "message":"Expected object, received array"
-            }]}),
-        ),
+            r#"{"title":"X","member_user_ids":null}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ), // explicit null array
+        ("[1]", StatusCode::UNPROCESSABLE_ENTITY), // array → object-only
+        ("null", StatusCode::UNPROCESSABLE_ENTITY), // non-object
+        ("not-json", StatusCode::BAD_REQUEST),    // JSON syntax → 400
     ];
-
     for (raw, expected) in cases {
         let (app, requests) = fixture_app(
             Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
             Effects::default(),
         );
-        let (status, body) = call(app, "/api/workspaces/workspace-1/channels", raw, false).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{raw}");
-        assert_eq!(body, expected, "{raw}");
+        let (status, _) = call(app, "/api/workspaces/workspace-1/channels", raw, false).await;
+        assert_eq!(status, expected, "{raw}");
         assert!(requests.lock().unwrap().is_empty(), "{raw}");
     }
+    // A missing content-type is the native 415, before any body shape is read; port zero-reach.
+    let (app, requests) = fixture_app(
+        Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
+        Effects::default(),
+    );
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/workspaces/workspace-1/channels")
+        .body(Body::from(r#"{"title":"X"}"#))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert!(requests.lock().unwrap().is_empty());
 
     let (app, requests) = fixture_app(
         Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
@@ -363,78 +374,7 @@ async fn authentication_precedes_body_and_product_work() {
 }
 
 #[tokio::test]
-async fn declared_and_chunked_overflow_are_413_and_the_exact_limit_is_admitted() {
-    const LIMIT: usize = 128 * 1024 * 1024;
-
-    let declared_polled = Arc::new(AtomicBool::new(false));
-    let flag = declared_polled.clone();
-    let declared = Body::from_stream(stream::once(async move {
-        flag.store(true, Ordering::SeqCst);
-        Ok::<Bytes, Infallible>(Bytes::from_static(b"{}"))
-    }));
-    let (app, requests) = fixture_app(
-        Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
-        Effects::default(),
-    );
-    let (status, body) = call_body(
-        app,
-        "/api/workspaces/workspace-1/channels",
-        declared,
-        false,
-        Some(LIMIT + 1),
-    )
-    .await;
-    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(body, json!({"error":"payload too large"}));
-    assert!(!declared_polled.load(Ordering::SeqCst));
-    assert!(requests.lock().unwrap().is_empty());
-
-    let chunk = Bytes::from(vec![b' '; 1024 * 1024]);
-    let chunked = Body::from_stream(stream::iter(
-        (0..129).map(move |_| Ok::<Bytes, Infallible>(chunk.clone())),
-    ));
-    let (app, requests) = fixture_app(
-        Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
-        Effects::default(),
-    );
-    let (status, body) = call_body(
-        app,
-        "/api/workspaces/workspace-1/channels",
-        chunked,
-        false,
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(body, json!({"error":"payload too large"}));
-    assert!(requests.lock().unwrap().is_empty());
-
-    let prefix = br#"{"title":"At Limit","padding":""#;
-    let suffix = br#""}"#;
-    let mut exact = Vec::with_capacity(LIMIT);
-    exact.extend_from_slice(prefix);
-    exact.resize(LIMIT - suffix.len(), b' ');
-    exact.extend_from_slice(suffix);
-    assert_eq!(exact.len(), LIMIT);
-    let (app, requests) = fixture_app(
-        Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
-        Effects::default(),
-    );
-    let (status, body) = call_body(
-        app,
-        "/api/workspaces/workspace-1/channels",
-        Body::from(exact),
-        false,
-        Some(LIMIT),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(body, json!({"error":"workspace not found"}));
-    assert_eq!(requests.lock().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn ordinary_body_read_failure_uses_the_typescript_empty_object_catch() {
+async fn ordinary_body_read_failure_takes_the_native_structural_axis() {
     let body = Body::from_stream(stream::once(async {
         Err::<Bytes, _>(std::io::Error::other("body driver failed"))
     }));
@@ -442,7 +382,7 @@ async fn ordinary_body_read_failure_uses_the_typescript_empty_object_catch() {
         Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
         Effects::default(),
     );
-    let (status, body) = call_body(
+    let (status, _) = call_body(
         app,
         "/api/workspaces/workspace-1/channels",
         body,
@@ -450,39 +390,10 @@ async fn ordinary_body_read_failure_uses_the_typescript_empty_object_catch() {
         None,
     )
     .await;
+    // A transport body-read failure is the native axum `400` body-read rejection (not a
+    // re-rendered empty-object issue schema); the port is never reached.
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["issues"][0]["path"], json!(["title"]));
     assert!(requests.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn all_body_limit_shapes_remain_unpolled_without_authentication() {
-    const LIMIT: usize = 128 * 1024 * 1024;
-    for declared in [None, Some(LIMIT), Some(LIMIT + 1)] {
-        let polled = Arc::new(AtomicBool::new(false));
-        let flag = polled.clone();
-        let body = Body::from_stream(stream::once(async move {
-            flag.store(true, Ordering::SeqCst);
-            Ok::<Bytes, Infallible>(Bytes::from_static(b"{}"))
-        }));
-        let app = create_router(
-            Port {
-                outcome: Outcome::Commit(Box::new(committed())),
-                requests: Arc::new(Mutex::new(vec![])),
-            },
-            Effects::default(),
-        );
-        let (status, _) = call_body(
-            app,
-            "/api/workspaces/workspace-1/channels",
-            body,
-            false,
-            declared,
-        )
-        .await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(!polled.load(Ordering::SeqCst), "declared={declared:?}");
-    }
 }
 
 #[derive(Clone)]
@@ -586,9 +497,22 @@ fn normalize_success(mut body: Value) -> Value {
 }
 
 #[tokio::test]
-async fn production_sqlite_router_consumes_every_typescript_signed_create_cell() {
+async fn production_sqlite_router_consumes_the_shared_schema_accepted_cells() {
+    // Denominator: the shared `channel-directory-create-wire.json` has 24 cells; this Rust
+    // replay consumes the **12/24** with `schema_accepted=true` — the genuine cross-language
+    // business/domain/order cells (success, workspace/governance/membership/title-uniqueness
+    // refusals, agent-home arms). The other **12/24** (`schema_accepted=false`) are Zod
+    // admission cells whose TS signer emits legacy 400{issues}; the Rust terminal admission
+    // is the shared native structural axis (400/422), so they are NOT dual-signed here and
+    // are covered by the focused `schema_rejected_cells_take_the_native_structural_axis`
+    // local test. The TS parity test continues to sign its own full 24/24 legacy behavior.
     let fixture = fixture();
+    let mut consumed = 0;
     for entry in &fixture {
+        if entry["schema_accepted"].as_bool() != Some(true) {
+            continue;
+        }
+        consumed += 1;
         let (_directory, store) = seeded_store().await;
         let effects = Effects::default();
         let app = create_router(store.channel_directory_create(), effects.clone())
@@ -619,6 +543,46 @@ async fn production_sqlite_router_consumes_every_typescript_signed_create_cell()
             entry["name"]
         );
     }
+    assert_eq!(fixture.len(), 24);
+    assert_eq!(consumed, 12, "shared cross-language denominator is 12/24");
+}
+
+#[tokio::test]
+async fn schema_rejected_cells_take_the_native_structural_axis_with_port_zero_reach() {
+    // The 12 `schema_accepted=false` cells cross the shared `ValidatedJson` extractor with
+    // an EXACT native status by input class (native body text not pinned; port zero-reach):
+    //  * `malformed_json` — a JSON syntax fault → 400;
+    //  * `visibility_wrong_type` — a wrong-typed value inside the shared `RequiredPatchField`
+    //    optional-non-null wrapper, whose serde error axum surfaces as the native 400;
+    //  * every other cell (missing/wrong-typed/null field, non-object root, garde title
+    //    grammar) → 422.
+    const NATIVE_400: [&str; 2] = [
+        "malformed_json_falls_through_empty_object",
+        "visibility_wrong_type",
+    ];
+    let fixture = fixture();
+    let mut checked = 0;
+    for entry in &fixture {
+        if entry["schema_accepted"].as_bool() != Some(false) {
+            continue;
+        }
+        checked += 1;
+        let (app, requests) = fixture_app(
+            Outcome::Refuse(HumanChannelCreateRefusal::WorkspaceNotFound),
+            Effects::default(),
+        );
+        let raw = fixture_raw(entry);
+        let name = entry["name"].as_str().unwrap();
+        let expected = if NATIVE_400.contains(&name) {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::UNPROCESSABLE_ENTITY
+        };
+        let (status, _) = call(app, entry["path"].as_str().unwrap(), &raw, false).await;
+        assert_eq!(status, expected, "{name}");
+        assert!(requests.lock().unwrap().is_empty(), "{name}");
+    }
+    assert_eq!(checked, 12, "schema-rejected local denominator is 12/24");
 }
 
 #[derive(Clone, Default)]

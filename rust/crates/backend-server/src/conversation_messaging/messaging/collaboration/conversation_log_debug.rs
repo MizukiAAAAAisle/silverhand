@@ -1,24 +1,44 @@
 //! Authenticated backend-local per-conversation log-debug windows.
 //!
-//! The public route deliberately has no daemon command or domain unit of work.
+//! The public route deliberately has no daemon command or durable unit of work.
 //! Strict conversation participation is admitted before the body is polled;
-//! the only mutation is the server process's local log-control window. The
+//! the only mutation is the server process's shared log-control window, consumed
+//! directly by the process tracing layer. The
 //! POST response retains `daemonSynced: true` solely as a legacy compatibility
 //! field after the production daemon mirror was retired.
 
-use std::{error::Error, future::Future, sync::Arc};
+use std::{
+    collections::HashMap,
+    error::Error,
+    future::Future,
+    sync::{Arc, Mutex, OnceLock},
+};
 
 use axum::{
     Json, Router,
-    extract::{Extension, Path, Request, State},
+    extract::{Extension, FromRequest, Path, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
 };
-use serde_json::{Map, Value, json};
+use garde::Validate;
+use serde::Deserialize;
+use serde_json::{Value, json};
 use silverhand_backend_core::foundation::identity::{ConversationId, UserId};
 
-use super::json_body::{BodyRead, payload_too_large, read_body};
+use crate::foundation::wire_admission::ValidatedJson;
+
+/// `POST` body — the reference `z.object({ enabled: z.boolean() }).strict()`.
+/// Serde owns the shape: `deny_unknown_fields` is the `.strict()` half, a wrong-typed
+/// or missing `enabled` is a native decode fault, and the shared [`ValidatedJson`]
+/// extractor's object-only floor rejects a value-shaped array before it can bind
+/// positionally. There is no stateless rule, so every garde field is skipped.
+#[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+struct LogDebugBody {
+    #[garde(skip)]
+    enabled: bool,
+}
 
 pub const CONVERSATION_LOG_DEBUG_PATH: &str = "/api/conversations/{id}/log-debug";
 const TEMP_CONVERSATION_DEBUG_WINDOW_MS: i64 = 10 * 60 * 1_000;
@@ -133,13 +153,83 @@ impl std::fmt::Display for InvalidConversationLogDebugExpiration {
 impl Error for InvalidConversationLogDebugExpiration {}
 
 pub trait ConversationLogDebugControl {
-    fn status(&self, conversation: &ConversationId) -> ConversationLogDebugControlFact;
+    fn status(&self, conversation: &ConversationId, now: i64) -> ConversationLogDebugControlFact;
     fn enable(
         &self,
         conversation: &ConversationId,
         expires_at: i64,
     ) -> ConversationLogDebugControlFact;
     fn disable(&self, conversation: &ConversationId) -> ConversationLogDebugControlFact;
+}
+
+/// Process-owned production control for the temporary per-conversation logging
+/// switch. The state is intentionally ephemeral (the TS authority is an in-memory
+/// expiry map too) and all router clones share one locked map.
+#[derive(Clone, Default)]
+pub struct ProductionConversationLogDebugControl {
+    statuses: Arc<Mutex<HashMap<ConversationId, ConversationLogDebugStatus>>>,
+}
+
+impl ProductionConversationLogDebugControl {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The one process-owned control consumed by both the HTTP route and the
+    /// tracing decision layer. Calling this never creates a route-local mirror.
+    pub fn process() -> Self {
+        static PROCESS: OnceLock<ProductionConversationLogDebugControl> = OnceLock::new();
+        PROCESS.get_or_init(Self::new).clone()
+    }
+
+    pub fn is_enabled_at(&self, conversation: &ConversationId, now: i64) -> bool {
+        self.status(conversation, now).status.is_enabled()
+    }
+}
+
+impl ConversationLogDebugControl for ProductionConversationLogDebugControl {
+    fn status(&self, conversation: &ConversationId, now: i64) -> ConversationLogDebugControlFact {
+        let mut statuses = self
+            .statuses
+            .lock()
+            .expect("conversation log-debug control lock poisoned");
+        let status = statuses.get(conversation).copied().unwrap_or_default();
+        let status = if status
+            .expires_at()
+            .is_some_and(|expires_at| now >= expires_at)
+        {
+            statuses.remove(conversation);
+            ConversationLogDebugStatus::disabled()
+        } else {
+            status
+        };
+        ConversationLogDebugControlFact::observed(conversation.clone(), status)
+    }
+
+    fn enable(
+        &self,
+        conversation: &ConversationId,
+        expires_at: i64,
+    ) -> ConversationLogDebugControlFact {
+        let status = ConversationLogDebugStatus::enabled(expires_at)
+            .expect("route validates the wire-safe log-debug expiration");
+        self.statuses
+            .lock()
+            .expect("conversation log-debug control lock poisoned")
+            .insert(conversation.clone(), status);
+        ConversationLogDebugControlFact::observed(conversation.clone(), status)
+    }
+
+    fn disable(&self, conversation: &ConversationId) -> ConversationLogDebugControlFact {
+        self.statuses
+            .lock()
+            .expect("conversation log-debug control lock poisoned")
+            .remove(conversation);
+        ConversationLogDebugControlFact::observed(
+            conversation.clone(),
+            ConversationLogDebugStatus::disabled(),
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -273,6 +363,15 @@ pub trait ConversationLogDebugClock {
     fn now_unix_ms(&self) -> Result<i64, Self::Error>;
 }
 
+impl ConversationLogDebugClock for crate::foundation::clock::SystemProcessClock {
+    type Error = std::convert::Infallible;
+
+    fn now_unix_ms(&self) -> Result<i64, Self::Error> {
+        use crate::foundation::clock::ProcessClock;
+        Ok(self.now_unix_millis())
+    }
+}
+
 struct Inner<P, C, K> {
     admission: P,
     control: C,
@@ -313,7 +412,7 @@ async fn read<P, C, K>(
 where
     P: ConversationLogDebugAdmissionPort + Send + Sync + 'static,
     C: ConversationLogDebugControl + Send + Sync + 'static,
-    K: Send + Sync + 'static,
+    K: ConversationLogDebugClock + Send + Sync + 'static,
 {
     let (viewer, conversation) = match request_coordinates(principal, raw_conversation) {
         Ok(value) => value,
@@ -322,16 +421,30 @@ where
     if let Err(response) = admit(&state.0.admission, &viewer, &conversation).await {
         return *response;
     }
+    let now = match state.0.clock.now_unix_ms() {
+        Ok(now) => now,
+        Err(failure) => {
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&failure))
+                ),
+                "conversation log-debug clock failed"
+            );
+            return internal();
+        }
+    };
     match state
         .0
         .control
-        .status(&conversation)
+        .status(&conversation, now)
         .bind_read(&conversation)
     {
         Ok(fact) => status_response(&fact, false),
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::foundation::error::describe(&failure),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&failure))
+                ),
                 "conversation log-debug local status identity seal failed"
             );
             internal()
@@ -357,13 +470,14 @@ where
     if let Err(response) = admit(&state.0.admission, &viewer, &conversation).await {
         return *response;
     }
-    let value = match request_json(request).await {
-        Ok(value) => value,
-        Err(response) => return *response,
-    };
-    let enabled = match parse_enabled(value) {
-        Ok(value) => value,
-        Err(issues) => return invalid(issues),
+    // Authority-first: participation is admitted before the body is polled, so the body
+    // is never held across a reservation. The shared `ValidatedJson` extractor is invoked
+    // deferred (after admit): structural faults keep their native Axum 415/400/422 and a
+    // stateless rule failure collapses to the minimal 422 — no leaf parser, no re-rendered
+    // issue schema.
+    let enabled = match ValidatedJson::<LogDebugBody>::from_request(request, &()).await {
+        Ok(ValidatedJson(body)) => body.enabled,
+        Err(rejection) => return rejection.into_response(),
     };
 
     let status = if enabled {
@@ -371,7 +485,9 @@ where
             Ok(now) => now,
             Err(failure) => {
                 tracing::error!(
-                    error_chain = %crate::foundation::error::describe(&failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&failure))
+                    ),
                     "conversation log-debug clock failed"
                 );
                 return internal();
@@ -397,7 +513,9 @@ where
             Ok(fact) => fact,
             Err(failure) => {
                 tracing::error!(
-                    error_chain = %crate::foundation::error::describe(&failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&failure))
+                    ),
                     "conversation log-debug local enable seal failed"
                 );
                 return internal();
@@ -414,7 +532,9 @@ where
             Ok(fact) => fact,
             Err(failure) => {
                 tracing::error!(
-                    error_chain = %crate::foundation::error::describe(&failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&failure))
+                    ),
                     "conversation log-debug local disable seal failed"
                 );
                 return internal();
@@ -462,7 +582,9 @@ async fn admit<P: ConversationLogDebugAdmissionPort>(
             .map(|_| ())
             .map_err(|failure| {
                 tracing::error!(
-                    error_chain = %crate::foundation::error::describe(&failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&failure))
+                    ),
                     "conversation log-debug admission identity seal failed"
                 );
                 Box::new(internal())
@@ -476,82 +598,13 @@ async fn admit<P: ConversationLogDebugAdmissionPort>(
         }
         Err(failure) => {
             tracing::error!(
-                error_chain = %crate::foundation::error::describe(&failure),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&failure))
+                ),
                 "conversation log-debug admission failed"
             );
             Err(Box::new(internal()))
         }
-    }
-}
-
-async fn request_json(request: Request) -> Result<Value, Box<Response>> {
-    let body = match read_body(request).await {
-        BodyRead::Within(body) => body,
-        BodyRead::OverLimit => return Err(Box::new(payload_too_large())),
-        BodyRead::Unreadable => return Ok(Value::Object(Map::new())),
-    };
-    let value = serde_json::from_slice(&body).unwrap_or_else(|_| Value::Object(Map::new()));
-    drop(body);
-    Ok(value)
-}
-
-fn parse_enabled(value: Value) -> Result<bool, Vec<Value>> {
-    let Value::Object(mut object) = value else {
-        return Err(vec![invalid_type("object", received(&value), vec![])]);
-    };
-    let mut issues = Vec::new();
-    let enabled = match object.remove("enabled") {
-        Some(Value::Bool(value)) => Some(value),
-        None => {
-            issues.push(json!({
-                "code":"invalid_type", "expected":"boolean", "received":"undefined",
-                "path":["enabled"], "message":"Required"
-            }));
-            None
-        }
-        Some(value) => {
-            issues.push(invalid_type(
-                "boolean",
-                received(&value),
-                vec![json!("enabled")],
-            ));
-            None
-        }
-    };
-    if !object.is_empty() {
-        let keys = object.keys().cloned().collect::<Vec<_>>();
-        let quoted = keys
-            .iter()
-            .map(|key| format!("'{key}'"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        issues.push(json!({
-            "code":"unrecognized_keys", "keys":keys, "path":[],
-            "message":format!("Unrecognized key(s) in object: {quoted}")
-        }));
-    }
-    if issues.is_empty() {
-        Ok(enabled.expect("an issue-free input has a boolean enabled field"))
-    } else {
-        Err(issues)
-    }
-}
-
-fn invalid_type(expected: &str, received: &str, path: Vec<Value>) -> Value {
-    json!({
-        "code":"invalid_type", "expected":expected, "received":received,
-        "path":path, "message":format!("Expected {expected}, received {received}")
-    })
-}
-
-fn received(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
     }
 }
 
@@ -569,14 +622,6 @@ fn status_response(
         value["daemonSynced"] = Value::Bool(true);
     }
     Json(value).into_response()
-}
-
-fn invalid(issues: Vec<Value>) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({"error":"invalid input", "issues":issues})),
-    )
-        .into_response()
 }
 
 fn error(status: StatusCode, message: &'static str) -> Response {

@@ -155,19 +155,21 @@ where
             for residue in &deleted.residue {
                 tracing::warn!(
                     effect = ?residue.effect,
-                    agent = %residue.agent.as_str(),
-                    error_chain = %error::describe(&residue.failure),
+                    agent = crate::foundation::safe_log_field::safe_display(&(residue.agent.as_str())),
+                    error_chain = crate::foundation::safe_log_field::safe_display(&(error::describe(&residue.failure))),
                     "delete-computer cascade left residue (continuing)"
                 );
             }
             if let Some(failure) = &deleted.daemon_disconnect_failure {
                 tracing::warn!(
-                    error_chain = %error::describe(failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(error::describe(failure))
+                    ),
                     "delete-computer daemon disconnect failed (non-blocking)"
                 );
             }
             tracing::info!(
-                host_id = %host_id_echo,
+                host_id = crate::foundation::safe_log_field::safe_display(&(host_id_echo)),
                 cascaded_agents = deleted.cascade.deleted_agents().count(),
                 residue = deleted.residue.len(),
                 "user-managed computer deleted with its dependents"
@@ -269,7 +271,8 @@ fn delete_error_response(error: DeleteComputerError) -> Response {
         DeleteComputerError::Refused(refusal) => refusal_response(&refusal),
         other => {
             tracing::error!(
-                error_chain = %error::describe(&other),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&other))),
                 "host-delete failed"
             );
             internal_error()

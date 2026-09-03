@@ -509,9 +509,13 @@ where
                     .await?;
                 tracing::info!(
                     runtime_event = "runtime_output",
-                    conversation_id = %event.coordinate.conversation_id,
-                    agent_id = %event.coordinate.agent_id,
-                    stream = %event.stream,
+                    conversation_id = crate::foundation::safe_log_field::safe_display(
+                        &(event.coordinate.conversation_id)
+                    ),
+                    agent_id = crate::foundation::safe_log_field::safe_display(
+                        &(event.coordinate.agent_id)
+                    ),
+                    stream = crate::foundation::safe_log_field::safe_display(&(event.stream)),
                     chunk_bytes = event.chunk.len(),
                     observed_at = event.ts,
                     "daemon runtime output"
@@ -682,21 +686,51 @@ where
                 let _admission = self
                     .current_admission(host_id, daemon, event.coordinate.scope()?)
                     .await?;
-                tracing::warn!(runtime_event = "runtime_output_dropped", conversation_id = %event.coordinate.conversation_id, agent_id = %event.coordinate.agent_id, dropped_count = event.dropped_count, bytes_dropped = event.bytes_dropped, since_ts = event.since_ts, "daemon runtime output dropped");
+                tracing::warn!(
+                    runtime_event = "runtime_output_dropped",
+                    conversation_id = crate::foundation::safe_log_field::safe_display(
+                        &(event.coordinate.conversation_id)
+                    ),
+                    agent_id = crate::foundation::safe_log_field::safe_display(
+                        &(event.coordinate.agent_id)
+                    ),
+                    dropped_count = event.dropped_count,
+                    bytes_dropped = event.bytes_dropped,
+                    since_ts = event.since_ts,
+                    "daemon runtime output dropped"
+                );
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::OutputPaused(event) => {
                 let _admission = self
                     .current_admission(host_id, daemon, event.coordinate.scope()?)
                     .await?;
-                tracing::info!(runtime_event = "runtime_output_paused", conversation_id = %event.coordinate.conversation_id, agent_id = %event.coordinate.agent_id, "daemon runtime output paused");
+                tracing::info!(
+                    runtime_event = "runtime_output_paused",
+                    conversation_id = crate::foundation::safe_log_field::safe_display(
+                        &(event.coordinate.conversation_id)
+                    ),
+                    agent_id = crate::foundation::safe_log_field::safe_display(
+                        &(event.coordinate.agent_id)
+                    ),
+                    "daemon runtime output paused"
+                );
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::OutputResumed(event) => {
                 let _admission = self
                     .current_admission(host_id, daemon, event.coordinate.scope()?)
                     .await?;
-                tracing::info!(runtime_event = "runtime_output_resumed", conversation_id = %event.coordinate.conversation_id, agent_id = %event.coordinate.agent_id, "daemon runtime output resumed");
+                tracing::info!(
+                    runtime_event = "runtime_output_resumed",
+                    conversation_id = crate::foundation::safe_log_field::safe_display(
+                        &(event.coordinate.conversation_id)
+                    ),
+                    agent_id = crate::foundation::safe_log_field::safe_display(
+                        &(event.coordinate.agent_id)
+                    ),
+                    "daemon runtime output resumed"
+                );
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::Parsed(event) => self.handle_parsed(host_id, daemon, event).await,

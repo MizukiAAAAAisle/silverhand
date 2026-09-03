@@ -12,8 +12,10 @@
 use silverhand_backend_core::conversation_messaging::messaging::task::{TaskAggregate, TaskId};
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
 
+use sqlx::Row as _;
+
 use super::row::{SELECT_TASK_ROW, decode_row, seal_board_against_conversation};
-use super::{SqliteTaskStore, driver};
+use super::{SqliteTaskStore, corrupt, driver};
 
 impl SqliteTaskStore {
     /// The committed task fact for `id`, or `None` when no such row exists. The row
@@ -43,6 +45,46 @@ impl SqliteTaskStore {
         let aggregate = decode_row(&row)?;
         seal_board_against_conversation(&row, &aggregate)?;
         Ok(Some(aggregate))
+    }
+
+    /// Resolve a task's canonical id from its per-board `(board_key, task_number)`
+    /// business key — the coordinate a task-write by-number arm carries. The
+    /// `UNIQUE(board_key, task_number)` index makes this a point read: `Some(id)` or
+    /// `None`. It returns ONLY the id (not the aggregate), because the by-number arm
+    /// re-drives the write against the canonical id and the write UoW re-reads the
+    /// decision-relevant columns under its own lock; a full projection here would be
+    /// a second read the write does not trust.
+    pub async fn resolve_id_by_number(
+        &self,
+        board_key: &str,
+        task_number: i64,
+    ) -> Result<Option<TaskId>, PersistenceFailure> {
+        let row = sqlx::query("SELECT id FROM tasks WHERE board_key = ? AND task_number = ?")
+            .bind(board_key)
+            .bind(task_number)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(driver)?;
+        let Some(row) = row else { return Ok(None) };
+        let id: String = row.try_get("id").map_err(driver)?;
+        Ok(Some(TaskId::parse(id).map_err(|_| corrupt("tasks.id"))?))
+    }
+}
+
+/// The production binding of the core [`TaskNumberResolver`] port: the by-number →
+/// canonical-id read the internal write faces make before their write. The core
+/// trait lives in `task::write_door`, so this impl for the store is orphan-rule
+/// legal here (exactly like `TaskWriteDoorReads`); it delegates to the inherent
+/// `resolve_id_by_number` above.
+impl silverhand_backend_core::conversation_messaging::messaging::task::TaskNumberResolver
+    for SqliteTaskStore
+{
+    async fn resolve_id_by_number(
+        &self,
+        board_key: &str,
+        task_number: i64,
+    ) -> Result<Option<TaskId>, PersistenceFailure> {
+        SqliteTaskStore::resolve_id_by_number(self, board_key, task_number).await
     }
 }
 
@@ -298,6 +340,40 @@ mod tests {
                 .await
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_id_by_number_finds_the_task_on_its_board() {
+        let (_dir, _path, store) = store_with_workspace_task().await;
+        // The seeded task is #1 on the `ws:ws-1` board.
+        let resolved = store
+            .resolve_id_by_number("ws:ws-1", 1)
+            .await
+            .unwrap()
+            .expect("the board's task #1 resolves");
+        assert_eq!(resolved.as_str(), "task-1");
+    }
+
+    #[tokio::test]
+    async fn resolve_id_by_number_is_none_for_an_unallocated_number_or_wrong_board() {
+        let (_dir, _path, store) = store_with_workspace_task().await;
+        // A number never allocated on the board.
+        assert!(
+            store
+                .resolve_id_by_number("ws:ws-1", 999)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // The right number on a DIFFERENT board resolves nothing (the key is
+        // per-board, not global).
+        assert!(
+            store
+                .resolve_id_by_number("ws:ws-2", 1)
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 }

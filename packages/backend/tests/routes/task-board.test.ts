@@ -10,6 +10,7 @@
 // through the real routes, because membership is exactly what the viewer gate
 // reads.
 import { afterEach, describe, expect, it } from 'vitest';
+import canonicalization from '../../../shared/tests/fixtures/task-schedule-wire-canonicalization.json' with { type: 'json' };
 import {
   encodeUserPrincipalHeader,
   TASK_BOARD_MAX_LIMIT,
@@ -19,6 +20,7 @@ import {
   TaskStatusSchema,
   X_SILVERHAND_PRINCIPAL_HEADER,
   type TaskStatus,
+  type TaskBoardPersonOption,
   type TaskSummaryDto,
 } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
@@ -26,7 +28,10 @@ import {
   decodeTaskBoardCursor,
   encodeTaskBoardCursor,
 } from '../../src/services/task/board.js';
-import { taskBoardColumnQuery } from '../../src/repos/task-board-read-model.js';
+import {
+  compareTaskBoardPersonOption,
+  taskBoardColumnQuery,
+} from '../../src/repos/task-board-read-model.js';
 
 interface Place {
   workspaceId: string;
@@ -185,6 +190,17 @@ describe('task board cursor codec', () => {
     expect(decodeTaskBoardCursor(encodeTaskBoardCursor(cursor))).toEqual(cursor);
   });
 
+  it('never emits a cursor its canonical decoder would reject', () => {
+    for (const cursor of [
+      { taskNumber: 0, taskId: 'task-7' },
+      { taskNumber: -1, taskId: 'task-7' },
+      { taskNumber: Number.MAX_SAFE_INTEGER + 1, taskId: 'task-7' },
+      { taskNumber: 7, taskId: '' },
+    ]) {
+      expect(() => encodeTaskBoardCursor(cursor)).toThrow(RangeError);
+    }
+  });
+
   it('rejects anything that is not a well-formed position', () => {
     const b64 = (v: unknown) =>
       Buffer.from(JSON.stringify(v), 'utf8').toString('base64url');
@@ -199,6 +215,20 @@ describe('task board cursor codec', () => {
     expect(decodeTaskBoardCursor(b64([1, '']))).toBeNull();
     expect(decodeTaskBoardCursor(b64([1, 2]))).toBeNull();
   });
+
+  it('consumes the shared canonical-unpadded cursor corpus', () => {
+    for (const entry of canonicalization.cursor) {
+      expect(decodeTaskBoardCursor(entry.raw) !== null, entry.name).toBe(entry.accepted);
+    }
+  });
+});
+
+describe('task board facet order', () => {
+  it('consumes the shared UTF-8 byte total-order fixture', () => {
+    const input = canonicalization.facet_order.input as TaskBoardPersonOption[];
+    expect([...input].sort(compareTaskBoardPersonOption))
+      .toEqual(canonicalization.facet_order.expected);
+  });
 });
 
 describe('GET /api/tasks/board/column', () => {
@@ -206,6 +236,18 @@ describe('GET /api/tasks/board/column', () => {
   afterEach(() => {
     t?.cleanup();
     t = null;
+  });
+
+  it('accepts only canonical base-10 limits and applies the route maximum', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    for (const entry of canonicalization.canonical_query) {
+      const res = await http(t).get(
+        `/api/tasks/board/column?status=todo&limit=${encodeURIComponent(entry.raw)}`,
+      );
+      const accepted =
+        entry.accepted && entry.value !== undefined && entry.value <= TASK_BOARD_MAX_LIMIT;
+      expect(res.status, entry.raw).toBe(accepted ? 200 : 400);
+    }
   });
 
   it('pages one status column by keyset, newest-first, ending exactly', async () => {

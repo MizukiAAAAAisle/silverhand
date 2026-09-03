@@ -126,7 +126,8 @@ where
         Ok(detail) => detail,
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "agent-stop gate read failed"
             );
             return internal_error();
@@ -184,7 +185,8 @@ where
         }
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "agent-stop seat snapshot read failed"
             );
             internal_error()
@@ -207,7 +209,7 @@ fn stop_response(agent: &AgentId, stopped: u32, failures: Vec<BulkStopSeatFailur
             agent_id = agent.as_str(),
             conversation_id = conversation,
             generation = failure.generation.as_i64(),
-            cause = %fault_label(&failure.cause),
+            cause = crate::foundation::safe_log_field::safe_display(&(fault_label(&failure.cause))),
             "agent-stop: a runtime seat did not stop"
         );
     }

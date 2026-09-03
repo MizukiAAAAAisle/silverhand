@@ -67,8 +67,13 @@ impl AuditWriters {
                 cli.close().await;
                 if cli.state() == WriterState::Failed {
                     tracing::warn!(
-                        original = %crate::describe(&original),
-                        cli = ?cli.state(),
+                        original =
+                            silverhand_backend_server::foundation::safe_log_field::safe_display(
+                                &crate::describe(&original)
+                            ),
+                        cli = silverhand_backend_server::foundation::safe_log_field::safe_display(
+                            &format!("{:?}", cli.state())
+                        ),
                         "backend startup audit rollback observed a failed CLI writer"
                     );
                 }
@@ -96,9 +101,15 @@ impl AuditWriters {
         };
         if outcome.cli == WriterState::Failed || outcome.agent == WriterState::Failed {
             tracing::warn!(
-                original = %crate::describe(&original),
-                cli = ?outcome.cli,
-                agent = ?outcome.agent,
+                original = silverhand_backend_server::foundation::safe_log_field::safe_display(
+                    &crate::describe(&original)
+                ),
+                cli = silverhand_backend_server::foundation::safe_log_field::safe_display(
+                    &format!("{:?}", outcome.cli)
+                ),
+                agent = silverhand_backend_server::foundation::safe_log_field::safe_display(
+                    &format!("{:?}", outcome.agent)
+                ),
                 "backend startup audit rollback observed writer failure"
             );
         }

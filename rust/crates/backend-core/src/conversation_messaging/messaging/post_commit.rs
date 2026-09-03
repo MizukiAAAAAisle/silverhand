@@ -394,6 +394,31 @@ pub trait RuntimeDelivery {
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 
+/// Ensures durable inbox custody for a recipient selected from effect-time live
+/// participation. Membership and task aftermath deliberately use this fresh
+/// gate so a recipient revoked after commit receives nothing.
+pub trait LiveMessageInboxEnsure: Clone + Send + Sync + 'static {
+    fn ensure_for_live_recipient(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        message: &MessageId,
+    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+}
+
+/// Ensures durable inbox custody for a recipient already sealed by the commit.
+/// Rename witnesses own their recipient set; schedule writers own their exact
+/// inbox row. Neither may be re-authorized against mutable post-commit roster
+/// state before dispatch.
+pub trait SealedMessageInboxEnsure: Clone + Send + Sync + 'static {
+    fn ensure_for_sealed_recipient(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        message: &MessageId,
+    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+}
+
 /// The durable record that a person was named in a message they can see.
 ///
 /// This is a WRITE, after the send committed and in a transaction of its own, so it

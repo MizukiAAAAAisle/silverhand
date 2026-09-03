@@ -227,9 +227,19 @@ export class SqliteTaskBoardReadModel implements TaskBoardReadModelPort {
   }
 }
 
-/** Menu order — by display name, matching what the surfaces render today. */
+/** Portable total order: raw UTF-8 bytes of `(name,type,id)`. Natural-language
+ * collation depends on host locale/ICU and therefore cannot be a wire contract. */
 function sortByName(rows: PersonRow[]): TaskBoardPersonOption[] {
   return [...rows]
     .map(r => ({ type: r.type, id: r.id, name: r.name }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort(compareTaskBoardPersonOption);
+}
+
+export function compareTaskBoardPersonOption(
+  a: TaskBoardPersonOption,
+  b: TaskBoardPersonOption,
+): number {
+  return Buffer.compare(Buffer.from(a.name), Buffer.from(b.name)) ||
+    Buffer.compare(Buffer.from(a.type), Buffer.from(b.type)) ||
+    Buffer.compare(Buffer.from(a.id), Buffer.from(b.id));
 }

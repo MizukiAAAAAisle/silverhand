@@ -66,7 +66,9 @@ async fn search<P: HumanSearchReadPort>(
                 Ok(response) => response,
                 Err(error) => {
                     tracing::error!(
-                        error_chain=%crate::foundation::error::describe(&error),
+                        error_chain = crate::foundation::safe_log_field::safe_display(
+                            &(crate::foundation::error::describe(&error))
+                        ),
                         "human-search wire projection failed"
                     );
                     internal()
@@ -74,7 +76,9 @@ async fn search<P: HumanSearchReadPort>(
             },
             Err(error) => {
                 tracing::error!(
-                    error_chain=%crate::foundation::error::describe(&error),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(&error))
+                    ),
                     "human-search identity seal failed"
                 );
                 internal()
@@ -83,7 +87,9 @@ async fn search<P: HumanSearchReadPort>(
         Ok(Err(refusal)) => refusal_wire(refusal),
         Err(error) => {
             tracing::error!(
-                error_chain=%crate::foundation::error::describe(&error),
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&error))
+                ),
                 "human-search projection failed"
             );
             internal()

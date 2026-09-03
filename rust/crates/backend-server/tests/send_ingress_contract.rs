@@ -131,6 +131,7 @@ impl TargetAddress for RecordingAddress {
         _agent: &AgentId,
         target: &str,
         _allocation: DirectPairAllocation,
+        _intent: silverhand_backend_core::conversation_messaging::messaging::DeliveryIntent,
     ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
         *self.0.lock().unwrap() = Some(target.to_owned());
         Ok(Ok(ResolvedStream {

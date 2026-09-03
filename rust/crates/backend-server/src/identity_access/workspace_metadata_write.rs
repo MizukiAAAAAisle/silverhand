@@ -355,7 +355,9 @@ where
             // downgrade of the committed 200.
             if let WorkspaceMetadataAnnounce::Failed(failure) = &announce {
                 tracing::error!(
-                    error_chain = %error::describe(failure),
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(error::describe(failure))
+                    ),
                     "workspace metadata_changed viewer hint could not be delivered; \
                      affected readers stay stale until they refetch"
                 );
@@ -373,16 +375,21 @@ where
             // downgrades. The address-reassignment audit is logged off the same gate.
             if let Some(change) = &name_change {
                 tracing::info!(
-                    workspace = %workspace_id.as_str(),
+                    workspace =
+                        crate::foundation::safe_log_field::safe_display(&(workspace_id.as_str())),
                     action = "rename",
-                    old_key = %change.old_key,
-                    new_key = %change.new_key,
+                    old_key = crate::foundation::safe_log_field::safe_display(&(change.old_key)),
+                    new_key = crate::foundation::safe_log_field::safe_display(&(change.new_key)),
                     "workspace address reassigned"
                 );
                 if let Err(failure) = state.fanout.fan_out_rename(&workspace_id, change).await {
                     tracing::error!(
-                        error_chain = %error::describe(&failure),
-                        workspace = %workspace_id.as_str(),
+                        error_chain = crate::foundation::safe_log_field::safe_display(
+                            &(error::describe(&failure))
+                        ),
+                        workspace = crate::foundation::safe_log_field::safe_display(
+                            &(workspace_id.as_str())
+                        ),
                         "workspace rename fan-out was incomplete; the first failing leg's \
                          cause is retained — some channels or agents may not have received \
                          the rename system message"
@@ -394,7 +401,8 @@ where
         }
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "workspace metadata write failed"
             );
             internal_error()
@@ -454,7 +462,8 @@ where
         Ok(WorkspaceArchiveUpdate::Committed(committed)) => ok_workspace(committed.face()),
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "workspace archive write failed"
             );
             internal_error()
@@ -481,7 +490,8 @@ where
         Ok(facts) => Ok(governance_floor_verdict(principal, facts, min_role)),
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "workspace governance facts read failed"
             );
             Err(())

@@ -61,7 +61,11 @@ where
     let record = match state.computers.read_computer(host.clone()).await {
         Ok(record) => record,
         Err(cause) => {
-            tracing::error!(error_chain = %error::describe(&cause), "host-runtime-catalog read failed");
+            tracing::error!(
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
+                "host-runtime-catalog read failed"
+            );
             return internal_error();
         }
     };
@@ -78,7 +82,10 @@ where
         Ok(Some(custody)) => custody,
         Ok(None) => return coded("computer is offline", "computer_offline", 503),
         Err(cause) => {
-            tracing::error!(error = %cause, "owning-host data plane resolve failed");
+            tracing::error!(
+                error = crate::foundation::safe_log_field::safe_display(&(cause)),
+                "owning-host data plane resolve failed"
+            );
             return coded("daemon request failed", "daemon_internal_error", 502);
         }
     };

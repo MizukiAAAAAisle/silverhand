@@ -822,7 +822,8 @@ where
         Ok(None) => unauthorized(),
         Err(cause) => {
             tracing::error!(
-                error_chain = %error::describe(&cause),
+                error_chain =
+                    crate::foundation::safe_log_field::safe_display(&(error::describe(&cause))),
                 "runtime credential authentication failed"
             );
             (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
@@ -836,6 +837,57 @@ fn unauthorized() -> Response {
         Json(serde_json::json!({ "error": "unauthorized" })),
     )
         .into_response()
+}
+
+/// Why the runtime-actor binding refused, kept as a cheap descriptor rather than an
+/// eagerly-built [`Response`] so the `Result` stays small; the call site renders it.
+///
+/// The credential is the ACTOR AUTHORITY; the path `{aid}` only equality-binds
+/// against it and never selects the actor. A mismatch is the perimeter's exact
+/// `401`, and a missing credential is a composition fault (`500`) — the internal
+/// door was mounted without its authenticator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RuntimeActorBindingRefusal {
+    /// No `RuntimePrincipal` in the request — the credential middleware did not run.
+    MissingCredential,
+    /// The credential's agent is not the path `{aid}`.
+    AgentMismatch,
+}
+
+impl RuntimeActorBindingRefusal {
+    pub(crate) fn into_response(self) -> Response {
+        match self {
+            Self::MissingCredential => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+            }
+            Self::AgentMismatch => unauthorized(),
+        }
+    }
+}
+
+/// The ONE runtime-credential / path-agent binding every internal agent-owned face
+/// shares (scheduling create/list/cancel + task internal create/claim/unclaim/
+/// update-status/edit — 8 consumers). Runs BEFORE body, selector, capability, and
+/// store, so a credential for agent A presented on agent B's path (`{aid}`) never
+/// reaches any of them.
+///
+/// It returns the WHOLE authenticated [`RuntimePrincipal`], not a flattened
+/// [`AgentId`]: a task face must still branch on agent-slot vs conversation-slot,
+/// and the schedule faces read only `.agent()`. The credential is the actor
+/// authority; the path `{aid}` is only equality-checked against it. This is the
+/// server-side defensive replay of the TS perimeter's `agent_mismatch` → `401`,
+/// idempotent with any composition middleware that already bound `{aid}`.
+pub(crate) fn bind_runtime_actor<'principal>(
+    principal: Option<&'principal RuntimePrincipal>,
+    route_aid: &str,
+) -> Result<&'principal RuntimePrincipal, RuntimeActorBindingRefusal> {
+    let Some(principal) = principal else {
+        return Err(RuntimeActorBindingRefusal::MissingCredential);
+    };
+    if principal.agent().as_str() != route_aid {
+        return Err(RuntimeActorBindingRefusal::AgentMismatch);
+    }
+    Ok(principal)
 }
 
 #[cfg(test)]

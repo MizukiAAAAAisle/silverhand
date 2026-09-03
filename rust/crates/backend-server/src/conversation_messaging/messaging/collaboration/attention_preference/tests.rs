@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::{Value, json};
 use axum::{
     body::{Body, Bytes, to_bytes},
     http::{Method, Request},
@@ -242,8 +243,10 @@ async fn call_body(
     }
     let response = app.oneshot(request).await.unwrap();
     let status = response.status();
-    let body =
-        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    // A native axum structural rejection (415/400/422) carries a plain-text body pinned on
+    // status only; a JSON body (success or minimal semantic 422) parses.
+    let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, body)
 }
 
@@ -293,7 +296,7 @@ async fn admission_precedes_body_and_oversized_invalid_body_never_reaches_writer
         flag.store(true, Ordering::SeqCst);
         Ok::<Bytes, Infallible>(Bytes::from(raw))
     }));
-    let (status, body) = call_body(
+    let (status, _) = call_body(
         router(ports.clone(), Effects::default()),
         Method::PUT,
         "/api/conversations/c/attention-preference",
@@ -301,8 +304,121 @@ async fn admission_precedes_body_and_oversized_invalid_body_never_reaches_writer
         true,
     )
     .await;
+    // A large but well-formed-shape body with an invalid enum value is a native data-shape
+    // 422 (native body text not pinned); it is polled only after admit and never reaches
+    // the writer.
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(ports.body_polled.load(Ordering::SeqCst));
+    assert_eq!(*ports.calls.lock().unwrap(), ["admit-channel:c"]);
+}
+
+#[tokio::test]
+async fn non_admissible_channel_and_workspace_bodies_keep_the_native_structural_axis_after_admit() {
+    // The closed body crosses the shared `ValidatedJson` extractor AFTER admit. These are
+    // all data-shape faults (missing/wrong-typed key, unknown enum value, a value-shaped
+    // ARRAY the object-only floor refuses, null) → native 422. There is no stateless garde
+    // rule, so nothing re-renders an issue schema. The writer is never reached beyond the
+    // pre-body admit (authority zero-reach). Native body text is NOT pinned.
+    for (path, admit_call, raw) in [
+        (
+            "/api/conversations/c/attention-preference",
+            "admit-channel:c",
+            "{}",
+        ),
+        (
+            "/api/conversations/c/attention-preference",
+            "admit-channel:c",
+            r#"{"mode":"loud"}"#,
+        ),
+        (
+            "/api/conversations/c/attention-preference",
+            "admit-channel:c",
+            r#"{"mode":true}"#,
+        ),
+        (
+            "/api/conversations/c/attention-preference",
+            "admit-channel:c",
+            r#"{"mode":null}"#,
+        ),
+        (
+            "/api/conversations/c/attention-preference",
+            "admit-channel:c",
+            r#"["all"]"#,
+        ),
+        (
+            "/api/conversations/c/attention-preference",
+            "admit-channel:c",
+            "null",
+        ),
+        (
+            "/api/workspaces/w/attention-preference",
+            "admit-workspace:w",
+            "{}",
+        ),
+        (
+            "/api/workspaces/w/attention-preference",
+            "admit-workspace:w",
+            r#"{"muted":"yes"}"#,
+        ),
+        (
+            "/api/workspaces/w/attention-preference",
+            "admit-workspace:w",
+            r#"{"muted":null}"#,
+        ),
+        (
+            "/api/workspaces/w/attention-preference",
+            "admit-workspace:w",
+            "[true]",
+        ),
+    ] {
+        let ports = Ports::default();
+        let (status, _) = call(
+            router(ports.clone(), Effects::default()),
+            Method::PUT,
+            path,
+            raw,
+            true,
+        )
+        .await;
+        // Exact native status by input class (native body text not pinned; writer
+        // zero-reach): a non-string primitive supplied to the string-enum `mode` field
+        // (`{"mode":true}`, `{"mode":null}`) is the native axum `400`; every other data-shape
+        // fault (missing/unknown-enum/wrong-typed `muted`/null-in-`muted`, and the object-only
+        // floor refusing an array or non-object) is `422`.
+        let expected = if raw == r#"{"mode":true}"# || raw == r#"{"mode":null}"# {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::UNPROCESSABLE_ENTITY
+        };
+        assert_eq!(status, expected, "{path} {raw}");
+        assert_eq!(*ports.calls.lock().unwrap(), [admit_call], "{path} {raw}");
+    }
+    // A JSON syntax error keeps the native 400 (distinct from the 422 data-shape axis),
+    // still after admit, still writer zero-reach.
+    let ports = Ports::default();
+    let (status, _) = call(
+        router(ports.clone(), Effects::default()),
+        Method::PUT,
+        "/api/conversations/c/attention-preference",
+        "not-json",
+        true,
+    )
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"], "invalid input");
+    assert_eq!(*ports.calls.lock().unwrap(), ["admit-channel:c"]);
+    // A missing content-type is the native 415 from the extractor, after admit.
+    let ports = Ports::default();
+    let request = Request::builder()
+        .method(Method::PUT)
+        .uri("/api/conversations/c/attention-preference")
+        .extension(UserId::parse("u").unwrap())
+        .body(Body::from(r#"{"mode":"all"}"#))
+        .unwrap();
+    let response = router(ports.clone(), Effects::default())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(*ports.calls.lock().unwrap(), ["admit-channel:c"]);
 }
 
@@ -367,15 +483,32 @@ async fn authentication_refusal_reaches_no_port_and_does_not_poll_body() {
 }
 
 #[tokio::test]
-async fn production_router_consumes_the_ts_signed_three_route_closed_set() {
+async fn production_router_consumes_the_ts_signed_shared_cells() {
+    // Denominator: the shared `attention-preference-wire.json` has 8 cells; this Rust
+    // replay consumes the **6/8** that are genuinely dual-signed cross-language contracts —
+    // the success/read/strip cells plus the two authority-BEFORE-body ORDER discriminators
+    // (`channel_missing_precedes_invalid` 404, `workspace_missing_precedes_invalid` 403,
+    // where a missing target refuses before the body is even examined). The remaining
+    // **2/8** are pure body-invalid cells (`channel_invalid_enum`, `workspace_missing_boolean`)
+    // whose TS signer still emits the legacy `400 {error, issues}`; the Rust terminal
+    // admission is the shared native structural axis (422), so those are NOT dual-signed
+    // here — they are covered by the focused local structural-axis test above. The TS
+    // parity test continues to sign its own full 8/8 legacy behavior.
+    const BODY_INVALID_SKIPPED: [&str; 2] = ["channel_invalid_enum", "workspace_missing_boolean"];
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../../packages/backend/tests/fixtures/attention-preference-wire.json"
     )))
     .unwrap();
     let mut surfaces = std::collections::BTreeSet::new();
+    let mut consumed = 0;
     for entry in fixture.as_array().unwrap() {
+        let name = entry["name"].as_str().unwrap();
         surfaces.insert(entry["surface"].as_str().unwrap());
+        if BODY_INVALID_SKIPPED.contains(&name) {
+            continue;
+        }
+        consumed += 1;
         let method = match entry["method"].as_str().unwrap() {
             "GET" => Method::GET,
             "PUT" => Method::PUT,
@@ -403,4 +536,5 @@ async fn production_router_consumes_the_ts_signed_three_route_closed_set() {
         std::collections::BTreeSet::from(["channel_put", "workspace_get", "workspace_put"])
     );
     assert_eq!(fixture.as_array().unwrap().len(), 8);
+    assert_eq!(consumed, 6, "shared cross-language denominator is 6/8");
 }

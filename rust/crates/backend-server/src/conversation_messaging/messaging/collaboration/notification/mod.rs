@@ -154,7 +154,12 @@ async fn list<R: NotificationReadPort, C: NotificationClearPort, A: Notification
                 .into_response()
         }
         Err(e) => {
-            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"notification list failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&e))
+                ),
+                "notification list failed"
+            );
             internal()
         }
     }
@@ -166,7 +171,7 @@ async fn unread<R: NotificationReadPort, C: NotificationClearPort, A: Notificati
     let Some(viewer) = viewer(principal) else {
         return internal();
     };
-    match s.0.reads.unread_summary(&viewer).await{Ok(v)=>Json(json!({"total":v.total,"by_workspace":v.by_workspace.iter().map(|(k,v)|(k.as_str(),v)).collect::<HashMap<_,_>>(),"latest_by_workspace":v.latest_by_workspace.iter().map(|(k,v)|(k.as_str(),json!({"conversation_id":v.conversation.as_str(),"message_id":v.message.as_str(),"thread_root_id":v.thread_root.as_ref().map(|x|x.as_str())}))).collect::<HashMap<_,_>>() })).into_response(),Err(e)=>{tracing::error!(error_chain=%crate::foundation::error::describe(&e),"notification summary failed");internal()}}
+    match s.0.reads.unread_summary(&viewer).await{Ok(v)=>Json(json!({"total":v.total,"by_workspace":v.by_workspace.iter().map(|(k,v)|(k.as_str(),v)).collect::<HashMap<_,_>>(),"latest_by_workspace":v.latest_by_workspace.iter().map(|(k,v)|(k.as_str(),json!({"conversation_id":v.conversation.as_str(),"message_id":v.message.as_str(),"thread_root_id":v.thread_root.as_ref().map(|x|x.as_str())}))).collect::<HashMap<_,_>>() })).into_response(),Err(e)=>{tracing::error!(error_chain=crate::foundation::safe_log_field::safe_display(&(crate::foundation::error::describe(&e))),"notification summary failed");internal()}}
 }
 async fn clear<R: NotificationReadPort, C: NotificationClearPort, A: NotificationAftermath>(
     State(s): State<NotificationState<R, C, A>>,
@@ -196,12 +201,22 @@ async fn clear<R: NotificationReadPort, C: NotificationClearPort, A: Notificatio
     match clear_notifications(&s.0.clears, &s.0.aftermath, viewer, selector).await {
         Ok(done) => {
             if let Some(e) = done.first_failure() {
-                tracing::error!(error_chain=%crate::foundation::error::describe(e),"notification clear effect failed");
+                tracing::error!(
+                    error_chain = crate::foundation::safe_log_field::safe_display(
+                        &(crate::foundation::error::describe(e))
+                    ),
+                    "notification clear effect failed"
+                );
             }
             Json(json!({"marked":done.committed().marked()})).into_response()
         }
         Err(e) => {
-            tracing::error!(error_chain=%crate::foundation::error::describe(&e),"notification clear failed");
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(
+                    &(crate::foundation::error::describe(&e))
+                ),
+                "notification clear failed"
+            );
             internal()
         }
     }
