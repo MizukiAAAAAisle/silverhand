@@ -92,6 +92,28 @@ impl OnboardingSystemMessage {
         }
     }
 
+    /// Build the intent to greet a member agent in a newly-created workspace's
+    /// Onboarding channel. Names the recipient and every OTHER member agent with
+    /// canonical reference tokens (never the plain `@name` alias, which addresses
+    /// nobody), the workspace name in inline code, and the fixed role/L2 guidance —
+    /// the reference `onboardingBody`. The body is rendered through the one canonical
+    /// renderer; the caller controls only WHERE it lands, the minted id, and the clock.
+    pub fn workspace_onboarding(
+        conversation: ConversationId,
+        id: MessageId,
+        workspace_name: &str,
+        recipient_handle: &ParticipantHandle,
+        others: &[WorkspaceOnboardingPeer],
+        created_at_ms: i64,
+    ) -> Self {
+        Self {
+            conversation,
+            id,
+            content: render_workspace_onboarding_body(workspace_name, recipient_handle, others),
+            created_at_ms,
+        }
+    }
+
     pub fn conversation(&self) -> &ConversationId {
         &self.conversation
     }
@@ -106,6 +128,32 @@ impl OnboardingSystemMessage {
 
     pub fn created_at_ms(&self) -> i64 {
         self.created_at_ms
+    }
+
+    /// Re-stamp the message's `created_at` with the WRITER's post-lock instant (Cindy
+    /// R4 #1). The onboarding-message clock authority lives in the append writer, not
+    /// the route: the route builds the message shape with a placeholder timestamp, and
+    /// the writer samples ONCE after it holds the `BEGIN IMMEDIATE` lock + validated
+    /// the stream facts, then stamps that single instant into BOTH the inserted row and
+    /// the sealed after-image it verifies. Consumes and returns self so the stamped
+    /// value is the only one that ever reaches the insert/seal.
+    #[must_use]
+    pub fn stamped_at(mut self, created_at_ms: i64) -> Self {
+        self.created_at_ms = created_at_ms;
+        self
+    }
+
+    /// Re-bind the message's id with the WRITER's minted id (Cindy R5 #3). The
+    /// onboarding-message id authority lives in the append writer, not the route: the
+    /// route builds the message shape with a PLACEHOLDER id, and the writer mints the
+    /// real id inside the same UoW that reserves the seq / inserts the row / bumps the
+    /// head, so a route-side pre-mint can never race ahead of the append's stream
+    /// gates. Consumes and returns self so the minted id is the only one that reaches
+    /// the insert/seal and the committed target.
+    #[must_use]
+    pub fn with_id(mut self, id: MessageId) -> Self {
+        self.id = id;
+        self
     }
 
     /// The metadata discriminator this message carries. Fixed, so the persistence
@@ -131,6 +179,31 @@ impl OnboardingSystemMessage {
         &self,
         witness: OnboardingWriteWitness,
     ) -> Result<OnboardingWritten, OnboardingWriteMismatch> {
+        self.check_written(&witness)?;
+        Ok(OnboardingWritten {
+            conversation: self.conversation.clone(),
+            id: self.id.clone(),
+        })
+    }
+
+    /// The fail-closed verification a WRITE ADAPTER (across the crate boundary) runs:
+    /// the same re-derivation as [`OnboardingSystemMessage::seal_written`], but it
+    /// returns only the verdict — it never mints the [`OnboardingWritten`] fact, which
+    /// stays core-only. The onboarding writer calls this on the after-image it read
+    /// back inside its own transaction; a mislabelled / misplaced / re-authored /
+    /// non-head insert returns `Err`, so the writer aborts the transaction and the
+    /// message is never delivered.
+    pub fn verify_written(
+        &self,
+        witness: &OnboardingWriteWitness,
+    ) -> Result<(), OnboardingWriteMismatch> {
+        self.check_written(witness)
+    }
+
+    fn check_written(
+        &self,
+        witness: &OnboardingWriteWitness,
+    ) -> Result<(), OnboardingWriteMismatch> {
         if witness.id != self.id.as_str() {
             return Err(OnboardingWriteMismatch {
                 reason: "written id differs from the minted id",
@@ -194,10 +267,7 @@ impl OnboardingSystemMessage {
                 reason: "written message is not at the head of its stream",
             });
         }
-        Ok(OnboardingWritten {
-            conversation: self.conversation.clone(),
-            id: self.id.clone(),
-        })
+        Ok(())
     }
 }
 
@@ -349,6 +419,54 @@ fn render_direct_line_body(
 /// Only the agent is named — its home DM has no second human participant. `system_prompt.md`,
 /// `MEMORY.md` and `notes/` are code-spanned so a Markdown reader renders the file names as
 /// literal text rather than prose.
+/// One OTHER member agent named in a workspace-onboarding body: its handle (for the
+/// canonical reference token) and its runtime kind (shown in parentheses).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkspaceOnboardingPeer {
+    pub handle: ParticipantHandle,
+    pub runtime: String,
+}
+
+/// The workspace-onboarding body, verbatim from the reference `onboardingBody`:
+/// the recipient's canonical reference token, the workspace name in inline code, the
+/// peer roster (or the "only agent" line), and the fixed role/L2 guidance.
+fn render_workspace_onboarding_body(
+    workspace_name: &str,
+    recipient_handle: &ParticipantHandle,
+    others: &[WorkspaceOnboardingPeer],
+) -> String {
+    let recipient = format_reference_token(PrincipalKind::Agent, recipient_handle);
+    let workspace = super::markdown::inline_code(workspace_name);
+    let others_line = if others.is_empty() {
+        "You're the only agent here right now.".to_owned()
+    } else {
+        let list = others
+            .iter()
+            .map(|peer| {
+                format!(
+                    "- {} ({})",
+                    format_reference_token(PrincipalKind::Agent, &peer.handle),
+                    peer.runtime
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("Other agents in this workspace:\n{list}")
+    };
+    // The reference `onboardingBody` leaves `L1 system_prompt.md` as BARE text (no
+    // code span), unlike the DM greeting — only the workspace name is inline-coded.
+    format!(
+        "You ({recipient}) just joined workspace {workspace}.\n{others_line}\n\nYour role \
+         contract is auto-loaded above (sourced from L1 system_prompt.md, shared across every \
+         workspace), and this workspace's MEMORY.md is auto-loaded as Active Workspace \
+         Memory.\nSend one short greeting introducing yourself by your global role. Write \
+         global identity / role / working-style guidance to L1 system_prompt.md. Use this \
+         workspace's L2 only for durable, workspace-specific knowledge absent from the \
+         codebase, task board, and channel/thread history. Do not mention internal file paths \
+         to the user unless they ask."
+    )
+}
+
 fn render_dm_body(agent_name: &ParticipantHandle) -> String {
     let agent = format_reference_token(PrincipalKind::Agent, agent_name);
     let system_prompt = super::markdown::inline_code("system_prompt.md");

@@ -447,6 +447,96 @@ pub enum ThreadUnfollowExecutionError<E: Error + 'static> {
     Identity(#[from] ThreadFollowIdentityMismatch),
 }
 
+/// The committed outcome of an internal agent follow/unfollow: the canonical thread
+/// root the operation resolved to, and whether the follower set actually changed
+/// (`false` = already following / not following — idempotent no-op). Mirrors the
+/// reference `{ threadRootId, changed }`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentThreadFollowChange {
+    pub thread_root: ThreadRootId,
+    pub changed: bool,
+}
+
+/// Why an agent follow/unfollow refused, decided IN the reserved writer transaction
+/// (Cindy #5/#8): the gates are fresh-replayed in the reference anti-oracle ORDER —
+/// root existence, THEN participation, THEN `read_messages` capability — so no gate
+/// leaks information a prior one should have hidden. The route may hold a lock-outside
+/// hint for the same order, but the writer is the final authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentThreadFollowRefusal {
+    /// The root message id names no message in its conversation — the reference `404
+    /// reply_target_not_found`.
+    RootNotFound,
+    /// The agent is not a live participant of the conversation (workspace roster edge
+    /// or direct-pair endpoint), or does not exist — refused BEFORE the capability
+    /// gate so a non-participant cannot probe capability (`404`, anti-oracle).
+    NotParticipant,
+    /// The agent lacks `read_messages` on the conversation's workspace — `403
+    /// capability_denied` (a direct pair has no capability axis).
+    CapabilityDenied,
+    /// The reserved-writer clock produced a domain-invalid instant (negative or beyond
+    /// the JS-safe integer domain) — the write fails closed rather than poison the
+    /// `followed_at` read face (#53).
+    InvalidClock,
+}
+
+/// Locates a root message's conversation + workspace for the agent follow/unfollow
+/// route's pre-write gates: a missing message is the reference `404
+/// reply_target_not_found`; the workspace (`None` for a workspace-less direct pair)
+/// is the coordinate the `read_messages` capability check needs.
+pub struct RootMessageLocation {
+    pub conversation: ConversationId,
+    pub workspace: Option<crate::foundation::identity::WorkspaceId>,
+}
+
+/// Reads a root message's conversation + workspace, or `None` when the id names no
+/// message. The follow/unfollow route uses it for the `reply_target_not_found` 404
+/// and to derive the workspace for the `read_messages` capability check.
+pub trait RootMessageLocate {
+    fn locate_root_message(
+        &self,
+        message_id: &str,
+    ) -> impl core::future::Future<
+        Output = Result<
+            Option<RootMessageLocation>,
+            crate::foundation::persistence::PersistenceFailure,
+        >,
+    > + Send;
+}
+
+/// The internal agent thread-follow write authority. `follow` resolves the
+/// canonical root from the root message, gates the agent's live participation, then
+/// upserts an `agent` follower row and — only on a NEW insert — backfills the prior
+/// thread context (root + replies with `seq < now`) into the agent's
+/// `conversation_inboxes` as `observe` deliveries (idempotent, skips the agent's own
+/// messages, complete/no cap). `unfollow` removes the follower row (no backfill
+/// retraction — it only stops FUTURE delivery). Both are idempotent.
+pub trait AgentThreadFollowWrite {
+    fn follow(
+        &self,
+        agent: AgentId,
+        conversation: ConversationId,
+        root_message: ThreadRootId,
+    ) -> impl core::future::Future<
+        Output = Result<
+            Result<AgentThreadFollowChange, AgentThreadFollowRefusal>,
+            crate::foundation::persistence::PersistenceFailure,
+        >,
+    > + Send;
+
+    fn unfollow(
+        &self,
+        agent: AgentId,
+        conversation: ConversationId,
+        root_message: ThreadRootId,
+    ) -> impl core::future::Future<
+        Output = Result<
+            Result<AgentThreadFollowChange, AgentThreadFollowRefusal>,
+            crate::foundation::persistence::PersistenceFailure,
+        >,
+    > + Send;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

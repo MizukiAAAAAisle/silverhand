@@ -96,12 +96,21 @@ pub fn mint_conversation_id(
     ConversationId::parse(mint_identity(entropy)?).map_err(EnvironmentUnavailable::from_source)
 }
 
+/// Mints a fresh workspace identity in the base64url form every core id uses. The
+/// workspace-create saga holds id minting (like the agent-create reserve), turning
+/// fresh entropy into the new row's identity.
+pub fn mint_workspace_id(
+    entropy: &impl SendEntropy,
+) -> Result<crate::foundation::identity::WorkspaceId, EnvironmentUnavailable> {
+    crate::foundation::identity::WorkspaceId::parse(mint_identity(entropy)?)
+        .map_err(EnvironmentUnavailable::from_source)
+}
+
 /// Mints a fresh agent identity in the same base64url form every core id uses.
 ///
 /// The create write path holds id minting rather than the persistence adapter: the
-/// reserve takes an already-minted [`AgentId`], so the use case is the one place
-/// that turns fresh entropy into the row's identity. Mirrors the TypeScript
-/// `createAgentId()` the reserve used to call internally.
+/// use case is the one place that turns fresh entropy into the row's identity.
+/// Mirrors the TypeScript `createAgentId()` the reserve used to call internally.
 pub fn mint_agent_id(entropy: &impl SendEntropy) -> Result<AgentId, EnvironmentUnavailable> {
     AgentId::parse(mint_identity(entropy)?).map_err(EnvironmentUnavailable::from_source)
 }

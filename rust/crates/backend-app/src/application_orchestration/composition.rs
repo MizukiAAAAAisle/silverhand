@@ -126,6 +126,10 @@ pub(super) async fn compose_after_audit(
     let sessions =
         HumanSessionAuthenticator::new(session_store, SystemSessionClock, SessionTtl::default());
     let membership_runtime_seats = delivery_store.clone();
+    // Phase B (#2341): a second shared-pool seat handle for the workspace-delete
+    // aftermath's runtime stop — the SAME `RuntimeControlSeatPort` the membership
+    // runtime stop reads, cloned before `daemon_runtime` moves the original.
+    let workspace_delete_runtime_seats = delivery_store.clone();
     let runtime_credentials = RuntimeCredentialAuthority::production(custody_store);
     let daemon_runtime = DaemonDeliveryRuntime::production(
         runtime_credentials.clone(),
@@ -215,6 +219,9 @@ pub(super) async fn compose_after_audit(
     // daemon delivery effect and the hub publication is assembled just before the merge.
     let workspace_rename_messaging = messaging_store.workspace_rename_messaging();
     let lane_agent_audience = workspace_rename_messaging.clone();
+    // Channel-fork aftermath re-reads the LIVE conversation roster at effect time
+    // (Cindy R5 #1) via the same `ConversationAgentsReadPort` the rename lane uses.
+    let channel_fork_agent_audience = workspace_rename_messaging.clone();
     // `/readyz`'s live write probe rides the SAME `MessagingStore` pool handle the send
     // door holds — it does NOT reopen SQLite by path. Captured before `write_doors`
     // moves the store below. The probe is the one thing readiness cannot answer from
@@ -307,6 +314,61 @@ pub(super) async fn compose_after_audit(
     // cross-workspace horizon, and the `read_messages` capability through the same authority,
     // never a second store minted for the internal family.
     let peer_profile_caller = messaging_store.clone();
+    // Phase A (#2341): the six viewer-sort / favorite faces ride the SAME
+    // `MessagingStore` — each `&self` builder clones only the shared pool, never a
+    // second authority. Captured before `write_doors` moves the store below. The
+    // star router's channel-home read + the ONE transactional sort-mutation writer
+    // (which re-resolves list membership/visibility/star-exclusion UNDER its own
+    // write lock, writes, and returns the committed post-image), the favorites read
+    // model. No pre-lock authority witness escapes into a route.
+    let sort_channel_home = messaging_store.viewer_sort();
+    let sort_star_writer = messaging_store.viewer_sort();
+    let sort_mutation_writer = messaging_store.viewer_sort();
+    let sort_favorites = messaging_store.favorites();
+    // Phase B (#2341): the workspace-delete write authority — the ONE `BEGIN
+    // IMMEDIATE` that reads the subject under the lock, decides, captures the
+    // teardown plan, and cascades the row. A shared-pool clone of this store.
+    let workspace_delete_writes = messaging_store.workspace_deletion();
+    // Phase B create (#2341): `POST /api/workspaces` saga handles. Durable create
+    // writer + member-display read are shared-pool clones of the ONE messaging
+    // store; the name gate reuses the SAME `SqliteRegularWorkspaceNamespace` the
+    // name-availability probe consumes (cloned before that mount moves it); the
+    // ownership gate + per-agent enrollment reuse the ONE `SqliteAccessStore`; ids
+    // are minted from the process `HostEnvironment`; the onboarding aftermath reuses
+    // the SAME ensure-then-wake `OnboardingDeliveryAdapter` + daemon runtime-start
+    // the agent-create saga uses — never a second delivery/start authority.
+    let workspace_create_writer = messaging_store.workspace_creation();
+    let workspace_create_onboarding_ensure = messaging_store.onboarding_inbox_ensure();
+    // Phase C (#2341): the agent workspace-list read for `GET
+    // /internal/agents/{aid}/list-workspaces` — a shared-pool clone of the ONE store.
+    let agent_list_workspaces_read = messaging_store.agent_workspace_list();
+    // Phase C (#2341): `GET /internal/agents/{aid}/list-channels` — the visible-channel
+    // read + the caller peer-profile authorities (placement/horizon/read_messages), all
+    // shared-pool clones of the ONE messaging store.
+    let agent_list_channels_read = messaging_store.agent_channel_list();
+    // Phase D (#2341): the agent thread-follow/unfollow routes — the ONE
+    // `thread_follow` store serves both `RootMessageLocate` and
+    // `AgentThreadFollowWrite`; the `read_messages` capability is the ONE store.
+    let agent_thread_follow_locate = messaging_store.thread_follow();
+    let agent_thread_follow_writer = messaging_store.thread_follow();
+    // Phase C (#2341): `POST /internal/agents/{aid}/search-messages` — the LIKE search
+    // read + the same peer-profile placement/horizon/read_messages authorities.
+    let agent_search_read = messaging_store.agent_search();
+    // Phase C (#2341): `POST /internal/agents/{aid}/read-history` — the windowed read
+    // + its workspace resolver (both the ONE agent-read-history store), the target
+    // address resolver (the ONE `target_address`), and the read_messages capability.
+    let agent_read_history_read = messaging_store.agent_read_history();
+    let agent_read_history_target = target_address.clone();
+    // Phase D (#2341): `POST /internal/agents/{aid}/create-channel` fork saga — the
+    // fork writer + source placement + create_channels capability, all the ONE store;
+    // the target resolver is the ONE `target_address`; the aftermath is `lane_effects`.
+    let agent_create_channel_writer = messaging_store.channel_fork();
+    let agent_create_channel_placement = messaging_store.clone();
+    let agent_create_channel_target = target_address.clone();
+    // The create-channel awaited aftermath (#40) delivers the sealed context/prompt
+    // seeds and starts member runtimes; it reuses the SAME durable inbox-ensure +
+    // daemon delivery/start seams as workspace-create onboarding (fresh cheap handles).
+    let agent_create_channel_message_ensure = messaging_store.committed_message_inbox_ensure();
     let (human_writes, agent_writes) = aftermath.write_doors(messaging_store, target_address);
 
     let host = host_runtime::router(
@@ -464,6 +526,9 @@ pub(super) async fn compose_after_audit(
     // paths hold — a clone shares its pool — so the MCP placement lookup is the same durable
     // authority, never a second store.
     let agent_mcp_placement = host_agent_store.clone();
+    // The list-workspaces `agent_workspace_index` probe resolves the agent's host via
+    // the SAME placement authority (#2341 #1/#33); a clone shares the pool.
+    let agent_dir_placement = host_agent_store.clone();
     // The create saga's remaining two read ports, captured before their originals are moved
     // downstream: the computer read model is the SAME ONE `SqliteHostRuntimeStore`
     // (`host_store`) host-detail/revoke read, and the handle namespace is the SAME ONE
@@ -608,6 +673,9 @@ pub(super) async fn compose_after_audit(
     // shared placement authority and the one live daemon registry — never a second data
     // plane. It is `Clone` (shares the placement handle + registry accessor).
     let mcp_data_plane = daemon_runtime.agent_profile_mcp_data_plane(agent_mcp_placement);
+    // The real `agent_workspace_index` probe (#2341 #1/#33): reuses the ONE
+    // OwningHostDataPlane transport; replaces the retired Null production mount.
+    let agent_dir_probe = daemon_runtime.agent_dir_probe(agent_dir_placement);
     // #2262: assemble the split-perimeter reaction and attachment families before the
     // shared handles they borrow are moved into their public siblings. Both reaction
     // routers share the ONE SQLite mutation/read authority and the real `ScopeEventHub`
@@ -1051,6 +1119,64 @@ pub(super) async fn compose_after_audit(
                 conversation_message_window_read,
             ))
             .merge(human_search::router(human_search_read))
+            // Phase A (#2341): the six viewer-sort / favorite faces, behind this
+            // same human perimeter. All ride the ONE messaging store: the star
+            // router resolves the channel home + `channels:<ws>` active directory
+            // and writes/echoes through the sort authority; the touch/mode/order
+            // router resolves list membership through the ONE `resolveListGroups`
+            // resolver (which composes the channel-directory + favorites +
+            // visible-workspaces reads) and writes/echoes through the same sort
+            // authority; favorites GET reads the favorites projection. No second
+            // sort store, resolver, or permission model.
+            .merge(star_router(ChannelStarState {
+                homes: sort_channel_home,
+                writer: sort_star_writer,
+            }))
+            .merge(sort_mutation_router(SortMutationState {
+                writer: sort_mutation_writer,
+            }))
+            .merge(favorites_router(FavoritesState {
+                reads: sort_favorites,
+            }))
+            // Phase B (#2341): `DELETE /api/workspaces/{id}` accumulates onto the
+            // `/api/workspaces/{id}` node the GET detail + PATCH metadata already
+            // own (disjoint methods merge). Its write authority is the ONE
+            // `BEGIN IMMEDIATE` delete over this store; its post-commit aftermath is
+            // the SHARED `lane_effects` (runtime stop per torn-down conversation's
+            // seats + `viewer_workspaces_changed { removed }` fan-out), never a
+            // second effect owner.
+            .merge(workspace_delete_router(WorkspaceDeleteState {
+                writes: workspace_delete_writes,
+                aftermath: ProductionWorkspaceDeletionAftermath::new(
+                    hub.clone(),
+                    daemon_runtime.conversation_run_terminalizer(),
+                    ProductionMembershipRuntimeStop::new(
+                        workspace_delete_runtime_seats,
+                        daemon_runtime.scope_runtime_stop(),
+                    ),
+                    create_aftermath.clone(),
+                    blob_store.clone(),
+                ),
+            }))
+            // Phase B create (#2341): `POST /api/workspaces` accumulates onto the
+            // `/api/workspaces` node the GET list owns (disjoint methods merge). The
+            // saga reuses the SAME name namespace (409 gate), access store (ownership
+            // 403 gate + per-agent enrollment), durable create writer + member-display
+            // read, process entropy for id minting, and the SAME onboarding
+            // deliver+start the agent-create saga uses — never a second authority.
+            .merge(workspace_create_router(WorkspaceCreateState {
+                writer: workspace_create_writer,
+                entropy: HostEnvironment,
+                clock: SystemCreationClock,
+                aftermath: ProductionWorkspaceCreationAftermath::new(
+                    OnboardingDeliveryAdapter::new(
+                        workspace_create_onboarding_ensure,
+                        daemon_runtime.effects(),
+                    ),
+                    daemon_runtime.effects(),
+                    create_aftermath.clone(),
+                ),
+            }))
             // Unread/attention read lane, Wave 3A checkpoint A4. One `message_unread`
             // handle serves all three unread roll-up doors; `attention_projection` serves
             // the two tiered-attention doors.
@@ -1158,7 +1284,65 @@ pub(super) async fn compose_after_audit(
             // behind the SAME runtime-credential perimeter, recording each typed preflight
             // failure through the required audit sink exactly once. The route and the
             // PreparedApp-held original share (via `Arc`) the SAME writer task.
-            .merge(cli_trace_router(audit.cli_preflight.clone())),
+            .merge(cli_trace_router(audit.cli_preflight.clone()))
+            // Phase C (#2341): `GET /internal/agents/{aid}/list-workspaces`, behind the
+            // SAME runtime-credential perimeter (the layer self-pins `{aid}`). The
+            // workspace facts ride the ONE messaging store's agent-workspace-list read;
+            // the per-workspace `agent_dir` is the REAL daemon `agent_workspace_index`
+            // probe over the ONE OwningHostDataPlane transport (#2341 #1/#33): a
+            // transport/host/malformed fault is a whole-response typed failure, an id
+            // the daemon leaves unresolved degrades per-entry to `null`.
+            .merge(agent_list_workspaces_router(AgentListWorkspacesState {
+                reads: agent_list_workspaces_read,
+                dirs: agent_dir_probe,
+            }))
+            // Phase C (#2341): `GET /internal/agents/{aid}/list-channels`, same runtime
+            // perimeter. The visible-channel read + the caller placement/horizon/
+            // read_messages authorities are all the ONE messaging store.
+            .merge(agent_list_channels_router(AgentListChannelsState {
+                reads: agent_list_channels_read,
+            }))
+            // Phase D (#2341): `POST /internal/agents/{aid}/follow-thread` +
+            // `.../unfollow-thread`, same runtime perimeter. The ONE `thread_follow`
+            // store serves the root-message locate + the agent follow/unfollow write
+            // (upsert `thread_followers` + on-insert `observe` inbox backfill); the
+            // `read_messages` capability is the ONE messaging store.
+            .merge(agent_thread_follow_router(AgentThreadFollowState {
+                locate: agent_thread_follow_locate,
+                writer: agent_thread_follow_writer,
+            }))
+            // Phase C (#2341): `POST /internal/agents/{aid}/search-messages`, same
+            // runtime perimeter. LIKE search read + peer-profile authorities.
+            .merge(agent_search_router(AgentSearchState {
+                reads: agent_search_read,
+            }))
+            // Phase C (#2341): `POST /internal/agents/{aid}/read-history`, same runtime
+            // perimeter. Target-address resolve (message_history read intent) + workspace
+            // resolver + read_messages capability + the windowed read.
+            .merge(agent_read_history_router(AgentReadHistoryState {
+                resolver: agent_read_history_target,
+                reads: agent_read_history_read,
+            }))
+            // Phase D (#2341): `POST /internal/agents/{aid}/create-channel` fork saga,
+            // same runtime perimeter. Target resolve (fork source, thread-suffix
+            // refused) + source workspace + create_channels cap + the ONE fork writer
+            // (canonical seed messages) + `lane_effects` workspace_channels_changed.
+            .merge(agent_create_channel_router(AgentCreateChannelState {
+                resolver: agent_create_channel_target,
+                placement: agent_create_channel_placement,
+                writer: agent_create_channel_writer,
+                entropy: HostEnvironment,
+                clock: SystemCreationClock,
+                aftermath: ProductionChannelForkAftermath::new(
+                    hub.clone(),
+                    ConversationMessageDeliveryAdapter::new(
+                        agent_create_channel_message_ensure,
+                        daemon_runtime.effects(),
+                    ),
+                    daemon_runtime.effects(),
+                    channel_fork_agent_audience,
+                ),
+            })),
         audit.cli_invoke,
     );
     let agent_products = require_runtime_credential(observed_agent_products, runtime_credentials);

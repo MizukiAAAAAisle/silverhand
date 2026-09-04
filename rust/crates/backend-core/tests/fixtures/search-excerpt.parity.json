@@ -1,0 +1,12 @@
+{
+  "note": "searchExcerptFor outcomes signed by the real TS producer (search-excerpt-rust-parity.test.ts). Each cell: content + query, and the { excerpt, match_offset } the producer emits under the pinned full fold + minimal-complete-original-scalar span map. The Rust search_excerpt_for replays this, so the two fold-span implementations cannot diverge (Cindy R4 #4). Short inputs so the whole compact string is the excerpt (no window affixes).",
+  "cells": [
+    { "label": "expanding-ss-vs-eszett", "content": "straße", "query": "SS", "excerpt": "straße", "match_offset": 4 },
+    { "label": "match-mid-expansion-covers-whole-scalar", "content": "ßa", "query": "sa", "excerpt": "ßa", "match_offset": 0 },
+    { "label": "capital-dotted-i-fold", "content": "İx", "query": "i\u0307x", "excerpt": "İx", "match_offset": 0 },
+    { "label": "greek-sigma-fold", "content": "ΣΟΦΟΣ", "query": "σοφος", "excerpt": "ΣΟΦΟΣ", "match_offset": 0 },
+    { "label": "final-sigma-variant", "content": "σοφός", "query": "ΣΟΦΌΣ", "excerpt": "σοφός", "match_offset": 0 },
+    { "label": "no-match-leading-window", "content": "plain text", "query": "zzz", "excerpt": "plain text", "match_offset": 0 },
+    { "label": "ascii-mid", "content": "the quick brown", "query": "quick", "excerpt": "the quick brown", "match_offset": 4 }
+  ]
+}

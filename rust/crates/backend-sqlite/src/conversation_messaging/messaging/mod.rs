@@ -415,6 +415,15 @@ pub struct MessagingStore<E = HostEnvironment> {
     environment: E,
 }
 
+impl<E> MessagingStore<E> {
+    /// The shared connection pool, for a sibling read-model adapter in another
+    /// crate module to derive its own shared-pool clone (never a second
+    /// connection authority). Crate-visible: only in-crate adapters may take it.
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+}
+
 /// The post-commit onboarding inbox-ensure authority (built by
 /// [`MessagingStore::onboarding_inbox_ensure`]). It holds the store's shared pool and clock
 /// and implements [`OnboardingInboxEnsure`] by composing three EXISTING statements — the

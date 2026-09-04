@@ -2,10 +2,14 @@
 
 // INTEGRATION SEAM: thin capability registration; no adapter logic belongs here.
 pub mod activity;
+pub mod agent_channel_list;
+pub mod agent_read_history;
+pub mod agent_search;
 pub mod attachment;
 pub mod attention_preference;
 pub mod attention_projection;
 pub mod channel_directory;
+pub mod channel_fork;
 pub mod channel_lifecycle;
 pub mod conversation_agent_activity;
 pub mod conversation_agent_directory;

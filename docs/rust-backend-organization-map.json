@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Rust backend module organization map (#task:2265). Machine-readable classification authority consumed by the organization gates. Two axes: business_owner + structural_role. Every crate-root scanned is a row with independently-derived source_shape (file|directory|hybrid) and a STRICT tagged union: exactly one of target:{business_owner,structural_role} (settled) or split_required (residual). split_required is a kind-tagged object: directory_members (groups with members[] closed against the directory mod decls), file_responsibilities (logical grouping of a single large file, no child modules), or hybrid (a <m>.rs main body plus <m>/ production children — both child_groups closed against codec decls AND a non-empty file_responsibilities). This JSON is the ONLY classification authority the gates read; do not copy target allowlists elsewhere. `resolved_splits` records completed split responsibilities at their real final leaves and is closed against the source tree by the gate. The 33-table half is closed against the replayed final schema; the non-table half is an OPEN presence ledger. impl_status (rust_writer_known | ts_only | no_known_writer) reflects AUDITED KNOWN writers — human-audited (path,function) evidence, not an exhaustive static proof; the gate does not run a SQL analyzer (see writers_note). Consumes the frozen #2267 (scope_events) and #2268 (daemon_delivery/daemon_events) owner splits. See docs/rust-backend-ddd-context-map-v1.md for the DDD rationale (that document links here for ownership; this JSON is authoritative).",
+  "note": "Rust backend module organization map (#task:2265). Machine-readable classification authority consumed by the organization gates. Two axes: business_owner + structural_role. Every crate-root scanned is a row with independently-derived source_shape (file|directory|hybrid) and a STRICT tagged union: exactly one of target:{business_owner,structural_role} (settled) or split_required (residual). split_required is a kind-tagged object: directory_members (groups with members[] closed against the directory mod decls), file_responsibilities (logical grouping of a single large file, no child modules), or hybrid (a <m>.rs main body plus <m>/ production children — both child_groups closed against codec decls AND a non-empty file_responsibilities). This JSON is the ONLY classification authority the gates read; do not copy target allowlists elsewhere. A settled leaf is classified by its business ownership and structural role; it may have LANDED there by relocation (a former crate-root module moved to its owner namespace) OR have been BORN-AT-TARGET (a net-new #2341 migration feature module created directly under its owner namespace, marked `migration.born_at_target: true`, with no crate-root origin and no `resolved_splits` entry). Both are proven to physically reside at exactly their `physical_target` by the same mechanical landed-location check; `base_commit` remains the map's relocation-era origin, not a claim that born-at-target modules ever lived at the crate root. `resolved_splits` records completed split responsibilities at their real final leaves and is closed against the source tree by the gate. The 33-table half is closed against the replayed final schema; the non-table half is an OPEN presence ledger. impl_status (rust_writer_known | ts_only | no_known_writer) reflects AUDITED KNOWN writers — human-audited (path,function) evidence, not an exhaustive static proof; the gate does not run a SQL analyzer (see writers_note). Consumes the frozen #2267 (scope_events) and #2268 (daemon_delivery/daemon_events) owner splits. See docs/rust-backend-ddd-context-map-v1.md for the DDD rationale (that document links here for ownership; this JSON is authoritative).",
   "axes": {
     "business_owner": [
       "C1",
@@ -42,15 +42,15 @@
     "embedded_bootstrap": "self-declared top-level bounded context: choose/create bootstrap UoW + own auth/token lifecycle (incl token-file custody)"
   },
   "accounting": {
-    "production_roots": 146,
+    "production_roots": 156,
     "test_support_roots": 3,
-    "total_scanned": 149,
+    "total_scanned": 159,
     "per_crate": {
       "backend_app": 4,
-      "backend_core": 63,
+      "backend_core": 68,
       "backend_filesystem": 3,
       "backend_server": 40,
-      "backend_sqlite": 39
+      "backend_sqlite": 44
     },
     "rule": "every scanned `mod` decl gets exactly one row; #[cfg(test)] rows carry target.structural_role=test_support in the map (no external whitelist)"
   },
@@ -182,12 +182,12 @@
       "needs_ruling": false,
       "audited_rust_writers": [
         {
-          "function": "attempt",
-          "path": "rust/crates/backend-sqlite/src/embedded_bootstrap/adapter.rs"
-        },
-        {
           "function": "write_conversation_graph_on",
           "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
+        },
+        {
+          "function": "attempt",
+          "path": "rust/crates/backend-sqlite/src/embedded_bootstrap/adapter.rs"
         },
         {
           "function": "write_archived",
@@ -196,6 +196,14 @@
         {
           "function": "write_metadata",
           "path": "rust/crates/backend-sqlite/src/identity_access/workspace_metadata_write.rs"
+        },
+        {
+          "function": "provision_workspace",
+          "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
+        },
+        {
+          "function": "delete_workspace",
+          "path": "rust/crates/backend-sqlite/src/identity_access/workspace_deletion.rs"
         }
       ],
       "audited_ts_writers": [
@@ -214,16 +222,20 @@
       "needs_ruling": false,
       "audited_rust_writers": [
         {
-          "function": "enroll_human_transaction",
-          "path": "rust/crates/backend-sqlite/src/identity_access/access/mod.rs"
+          "function": "write_conversation_graph_on",
+          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
         },
         {
           "function": "attempt",
           "path": "rust/crates/backend-sqlite/src/embedded_bootstrap/adapter.rs"
         },
         {
-          "function": "write_conversation_graph_on",
-          "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
+          "function": "enroll_human_transaction",
+          "path": "rust/crates/backend-sqlite/src/identity_access/access/mod.rs"
+        },
+        {
+          "function": "provision_workspace",
+          "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
       ],
       "audited_ts_writers": [
@@ -243,6 +255,10 @@
         {
           "function": "enroll_agent_transaction",
           "path": "rust/crates/backend-sqlite/src/identity_access/access/mod.rs"
+        },
+        {
+          "function": "provision_workspace",
+          "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
       ],
       "audited_ts_writers": [
@@ -262,6 +278,10 @@
         {
           "function": "enroll_agent_transaction",
           "path": "rust/crates/backend-sqlite/src/identity_access/access/mod.rs"
+        },
+        {
+          "function": "provision_workspace",
+          "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
       ],
       "audited_ts_writers": [
@@ -480,6 +500,10 @@
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_directory/create.rs"
         },
         {
+          "function": "fork_channel",
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_fork.rs"
+        },
+        {
           "function": "archive_inner",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_lifecycle/mutation.rs"
         },
@@ -506,6 +530,10 @@
         {
           "function": "settle_clear_bound",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
+        },
+        {
+          "function": "provision_workspace",
+          "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
       ],
       "audited_ts_writers": [
@@ -523,6 +551,10 @@
       "invariant": "message insert + seq allocation",
       "needs_ruling": false,
       "audited_rust_writers": [
+        {
+          "function": "append_seed_message",
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_fork.rs"
+        },
         {
           "function": "rename_inner",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_lifecycle/mutation.rs"
@@ -546,6 +578,10 @@
         {
           "function": "settle_clear_bound",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
+        },
+        {
+          "function": "append_agent_onboarding_message",
+          "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
       ],
       "audited_ts_writers": [
@@ -633,7 +669,15 @@
       "needs_ruling": false,
       "audited_rust_writers": [
         {
+          "function": "follow",
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/thread_follow.rs"
+        },
+        {
           "function": "follow_inner",
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/thread_follow.rs"
+        },
+        {
+          "function": "unfollow",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/thread_follow.rs"
         },
         {
@@ -683,8 +727,8 @@
       "needs_ruling": false,
       "audited_rust_writers": [
         {
-          "function": "reclaim_transition_inboxes",
-          "path": "rust/crates/backend-sqlite/src/host_runtime/runtime_transition.rs"
+          "function": "follow",
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/thread_follow.rs"
         },
         {
           "function": "ensure_delivery",
@@ -705,6 +749,10 @@
         {
           "function": "release_owner",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/runtime_delivery.rs"
+        },
+        {
+          "function": "reclaim_transition_inboxes",
+          "path": "rust/crates/backend-sqlite/src/host_runtime/runtime_transition.rs"
         }
       ],
       "audited_ts_writers": [
@@ -757,16 +805,24 @@
       "needs_ruling": false,
       "audited_rust_writers": [
         {
-          "function": "attempt",
-          "path": "rust/crates/backend-sqlite/src/embedded_bootstrap/adapter.rs"
-        },
-        {
           "function": "write_conversation_graph_on",
           "path": "rust/crates/backend-sqlite/src/application_orchestration/agent_materialization.rs"
         },
         {
           "function": "insert_user_raw",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_directory/create.rs"
+        },
+        {
+          "function": "fork_channel",
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_fork.rs"
+        },
+        {
+          "function": "attempt",
+          "path": "rust/crates/backend-sqlite/src/embedded_bootstrap/adapter.rs"
+        },
+        {
+          "function": "provision_workspace",
+          "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
       ],
       "audited_ts_writers": [
@@ -790,6 +846,14 @@
         {
           "function": "create_inner",
           "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_directory/create.rs"
+        },
+        {
+          "function": "fork_channel",
+          "path": "rust/crates/backend-sqlite/src/conversation_messaging/messaging/collaboration/channel_fork.rs"
+        },
+        {
+          "function": "provision_workspace",
+          "path": "rust/crates/backend-sqlite/src/identity_access/workspace_creation.rs"
         }
       ],
       "audited_ts_writers": [
@@ -931,10 +995,15 @@
         "business_owner": "viewer_read_model",
         "structural_role": "read_model"
       },
-      "impl_status": "ts_only",
+      "impl_status": "rust_writer_known",
       "invariant": "viewer list order",
       "needs_ruling": false,
-      "audited_rust_writers": [],
+      "audited_rust_writers": [
+        {
+          "function": "apply_sort_mutation",
+          "path": "rust/crates/backend-sqlite/src/viewer_read_model/viewer_sort.rs"
+        }
+      ],
       "audited_ts_writers": [
         "packages/backend/src/repos/sort-repo.ts"
       ]
@@ -945,10 +1014,15 @@
         "business_owner": "viewer_read_model",
         "structural_role": "read_model"
       },
-      "impl_status": "ts_only",
+      "impl_status": "rust_writer_known",
       "invariant": "viewer list mode",
       "needs_ruling": false,
-      "audited_rust_writers": [],
+      "audited_rust_writers": [
+        {
+          "function": "apply_sort_mutation",
+          "path": "rust/crates/backend-sqlite/src/viewer_read_model/viewer_sort.rs"
+        }
+      ],
       "audited_ts_writers": [
         "packages/backend/src/repos/sort-repo.ts"
       ]
@@ -2918,6 +2992,146 @@
       },
       "migration": {
         "physical_target": "backend-server::application_orchestration"
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "workspace_creation",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::workspace_creation",
+        "born_at_target": true
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "workspace_deletion",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "application"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::workspace_deletion",
+        "born_at_target": true
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "agent_workspace_list",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::identity_access::agent_workspace_list",
+        "born_at_target": true
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "favorites",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "read_model"
+      },
+      "migration": {
+        "physical_target": "backend-core::viewer_read_model::favorites",
+        "born_at_target": true
+      }
+    },
+    {
+      "crate": "backend-core",
+      "module": "viewer_sort_state",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "domain"
+      },
+      "migration": {
+        "physical_target": "backend-core::viewer_read_model::viewer_sort_state",
+        "born_at_target": true
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "workspace_creation",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::workspace_creation",
+        "born_at_target": true
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "workspace_deletion",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::workspace_deletion",
+        "born_at_target": true
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "agent_workspace_list",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "C1",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::identity_access::agent_workspace_list",
+        "born_at_target": true
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "favorites",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::viewer_read_model::favorites",
+        "born_at_target": true
+      }
+    },
+    {
+      "crate": "backend-sqlite",
+      "module": "viewer_sort",
+      "source_shape": "file",
+      "needs_ruling": false,
+      "target": {
+        "business_owner": "viewer_read_model",
+        "structural_role": "adapter"
+      },
+      "migration": {
+        "physical_target": "backend-sqlite::viewer_read_model::viewer_sort",
+        "born_at_target": true
       }
     }
   ],

@@ -112,7 +112,7 @@ pub use fact::{
 pub use freshness::StaleRefusal;
 pub use identity::{
     AttachmentId, EmptyIdentifier, InvalidSeq, MessageId, MessageSeq, NotificationId, ThreadRootId,
-    mint_agent_id, mint_conversation_id,
+    mint_agent_id, mint_conversation_id, mint_workspace_id,
 };
 pub use pre_send::{
     AddressRefusal, CapabilityDenied, ChannelAccess, ChannelAccessRefusal, DeliveryIntent,

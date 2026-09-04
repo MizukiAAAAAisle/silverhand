@@ -56,6 +56,7 @@ pub mod rotate_token;
 pub mod runtime_control;
 pub mod runtime_credential;
 pub(crate) mod runtime_event_settlement;
+pub use runtime_event_settlement::{ConversationRunTerminalizeError, ConversationRunTerminalizer};
 pub mod runtime_status_publisher;
 pub mod scope_event_publishers;
 pub mod scope_runtime_stop;

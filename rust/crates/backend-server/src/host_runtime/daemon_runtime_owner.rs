@@ -435,6 +435,14 @@ impl<C, D> DaemonRuntimeOwner<C, D> {
         self.events.conversation_run_states(conversation)
     }
 
+    /// A cloneable handle for the workspace-delete bulk `conversation_closed`
+    /// terminalization (Cindy #44), sharing the ONE run-state projection authority.
+    pub(crate) fn conversation_run_terminalizer(
+        &self,
+    ) -> crate::host_runtime::runtime_event_settlement::ConversationRunTerminalizer {
+        self.events.conversation_run_terminalizer()
+    }
+
     #[cfg(test)]
     pub(crate) async fn hydrate_run_states_for_test(
         &self,

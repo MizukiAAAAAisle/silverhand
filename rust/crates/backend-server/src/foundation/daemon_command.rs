@@ -24,6 +24,7 @@ pub(crate) enum IssuedDaemonCommandKind {
     AgentProfileMcpRead,
     AgentProfileMcpWrite,
     AgentWorkspaceFileRead,
+    AgentWorkspaceIndex,
     AgentWorkspaceTree,
     HostStatus,
     McpProbe,
@@ -39,12 +40,13 @@ pub(crate) enum IssuedDaemonCommandKind {
 }
 
 impl IssuedDaemonCommandKind {
-    pub(crate) const ALL: [Self; 17] = [
+    pub(crate) const ALL: [Self; 18] = [
         Self::AgentFilesPurge,
         Self::AgentMaterialize,
         Self::AgentProfileMcpRead,
         Self::AgentProfileMcpWrite,
         Self::AgentWorkspaceFileRead,
+        Self::AgentWorkspaceIndex,
         Self::AgentWorkspaceTree,
         Self::HostStatus,
         Self::McpProbe,
@@ -66,6 +68,7 @@ impl IssuedDaemonCommandKind {
             Self::AgentProfileMcpRead => "agent_profile_mcp_read",
             Self::AgentProfileMcpWrite => "agent_profile_mcp_write",
             Self::AgentWorkspaceFileRead => "agent_workspace_file_read",
+            Self::AgentWorkspaceIndex => "agent_workspace_index",
             Self::AgentWorkspaceTree => "agent_workspace_tree",
             Self::HostStatus => "host_status",
             Self::McpProbe => "mcp_probe",
@@ -149,6 +152,7 @@ capability_command!(agent_materialize, AgentMaterialize);
 capability_command!(agent_profile_mcp_read, AgentProfileMcpRead);
 capability_command!(agent_profile_mcp_write, AgentProfileMcpWrite);
 capability_command!(agent_workspace_file_read, AgentWorkspaceFileRead);
+capability_command!(agent_workspace_index, AgentWorkspaceIndex);
 capability_command!(agent_workspace_tree, AgentWorkspaceTree);
 generic_command!(host_status, HostStatus);
 capability_command!(mcp_probe, McpProbe);

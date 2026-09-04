@@ -1199,6 +1199,11 @@ const AGENT_READ_MESSAGES_CAPABILITY: &str = "SELECT CASE WHEN w.owner_agent_id 
      AND c.agent_id = ? AND c.capability = 'read_messages') THEN 1 ELSE 0 END \
      FROM workspaces w WHERE w.id = ?";
 
+const AGENT_CREATE_CHANNELS_CAPABILITY: &str = "SELECT CASE WHEN w.owner_agent_id = ? OR \
+     EXISTS (SELECT 1 FROM workspace_agent_capabilities c WHERE c.workspace_id = w.id \
+     AND c.agent_id = ? AND c.capability = 'create_channels') THEN 1 ELSE 0 END \
+     FROM workspaces w WHERE w.id = ?";
+
 /// The `write_tasks` / `create_tasks` / `read_tasks` capability POINT reads for a
 /// workspace `w`, each built from the shared [`capability_predicate`] with its own
 /// token so no task capability borrows another's name. Shape 1/0 (existence is the
@@ -1753,6 +1758,27 @@ where
         workspace: &WorkspaceId,
     ) -> Result<bool, PersistenceFailure> {
         let granted: Option<i64> = sqlx::query_scalar(AGENT_READ_MESSAGES_CAPABILITY)
+            .bind(agent.as_str())
+            .bind(agent.as_str())
+            .bind(workspace.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(driver)?;
+        Ok(granted.is_some_and(|allowed| allowed != 0))
+    }
+}
+
+impl<E> silverhand_backend_core::conversation_messaging::messaging::collaboration::channel_fork::CreateChannelsCapability
+    for MessagingStore<E>
+where
+    E: Send + Sync,
+{
+    async fn may_create_channels(
+        &self,
+        agent: &AgentId,
+        workspace: &WorkspaceId,
+    ) -> Result<bool, PersistenceFailure> {
+        let granted: Option<i64> = sqlx::query_scalar(AGENT_CREATE_CHANNELS_CAPABILITY)
             .bind(agent.as_str())
             .bind(agent.as_str())
             .bind(workspace.as_str())

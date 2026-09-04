@@ -113,6 +113,24 @@ impl ScopeEventHub {
         )
     }
 
+    /// `viewer_workspaces_changed { change: 'removed' }` — the per-viewer hint the
+    /// workspace-delete aftermath fans out to every captured member so their rail
+    /// drops the removed workspace.
+    pub(crate) fn publish_viewer_workspaces_removed(
+        &self,
+        viewer: &UserId,
+        workspace: &WorkspaceId,
+    ) -> Result<(), ScopeEventHubError> {
+        self.publish(
+            EventScope::Viewer(viewer.clone()),
+            ProductEvent::ViewerWorkspacesChanged {
+                change: ViewerWorkspaceChange::Removed,
+                workspace_id: workspace.as_str().to_owned(),
+                role: None,
+            },
+        )
+    }
+
     pub(crate) fn publish_user_changed(&self, user_id: &UserId) -> Result<(), ScopeEventHubError> {
         self.publish(
             EventScope::App,
@@ -144,6 +162,21 @@ impl ViewerWorkspacesChangedSink for HubWorkspaceMembershipPublisher {
     ) -> Result<(), ViewerAnnounceFailure> {
         self.0
             .publish_viewer_added_to_workspace(user_id, workspace_id, role)
+            .map_err(ViewerAnnounceFailure::from_source)
+    }
+}
+
+impl HubWorkspaceMembershipPublisher {
+    /// Fan out `viewer_workspaces_changed { removed }` to one member. The
+    /// workspace-delete aftermath calls this per captured viewer; a failure is
+    /// the transport error, which the aftermath logs without aborting the rest.
+    pub fn publish_workspace_removed(
+        &self,
+        viewer: &UserId,
+        workspace_id: &WorkspaceId,
+    ) -> Result<(), ViewerAnnounceFailure> {
+        self.0
+            .publish_viewer_workspaces_removed(viewer, workspace_id)
             .map_err(ViewerAnnounceFailure::from_source)
     }
 }

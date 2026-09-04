@@ -194,6 +194,16 @@ impl<P> RuntimeEventSettlement<P> {
         }
     }
 
+    /// A cloneable handle onto the run-state projection for the workspace-delete
+    /// bulk `conversation_closed` terminalization (Cindy #44) — the SAME run map +
+    /// conversation projection, never a second store.
+    pub(crate) fn conversation_run_terminalizer(&self) -> ConversationRunTerminalizer {
+        ConversationRunTerminalizer {
+            state: Arc::clone(&self.state),
+            conversation_projection: Arc::clone(&self.conversation_projection),
+        }
+    }
+
     pub(crate) fn publish_host_connection_changed(
         &self,
         owner: &silverhand_backend_core::foundation::identity::UserId,
@@ -319,6 +329,89 @@ impl HostRuntimeActivity for HostRuntimeActivitySource {
                     && activity.connection_id == custody.connection_id
             })
             .map(|activity| activity.active_agents.clone()))
+    }
+}
+
+/// A cloneable, durable-generic-free handle onto the run-state projection for the
+/// bulk `conversation_closed` terminalization the workspace-delete aftermath drives
+/// (Cindy #44). It shares the ONE in-memory run map + the ONE conversation
+/// projection with the runtime-event owner, so it is the SAME authority — never a
+/// second run-state store.
+#[derive(Clone)]
+pub struct ConversationRunTerminalizer {
+    state: Arc<Mutex<RuntimeOwnerState>>,
+    conversation_projection: Arc<dyn ConversationRuntimeProjectionPort>,
+}
+
+/// The public best-effort failure of the workspace-delete `conversation_closed`
+/// terminalization (Cindy #44): the run map lock was poisoned, or at least one
+/// per-run `agent_activity` publish failed. The aftermath observes it and logs; it
+/// never rewrites the 204 or aborts the sibling teardown legs.
+#[derive(Debug)]
+pub struct ConversationRunTerminalizeError;
+
+impl fmt::Display for ConversationRunTerminalizeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("workspace-delete conversation_closed terminalization failed")
+    }
+}
+
+impl Error for ConversationRunTerminalizeError {}
+
+impl ConversationRunTerminalizer {
+    /// Terminalize every non-terminal ConversationSlot run whose source conversation
+    /// is in `conversations` to `conversation_closed`, publishing EXACTLY ONE
+    /// `agent_activity` per terminalized run. AgentSlot runs (no source conversation)
+    /// are EXCLUDED. An already-terminal run is left untouched (no duplicate event).
+    /// Publishing runs after the lock is released; a per-run publish failure is
+    /// observable and does not abort the others.
+    pub fn terminalize_conversations_closed(
+        &self,
+        conversations: &std::collections::HashSet<ConversationId>,
+    ) -> Result<(), ConversationRunTerminalizeError> {
+        let mut announcements: Vec<(ConversationId, AgentRunStateWire)> = Vec::new();
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| ConversationRunTerminalizeError)?;
+            let now = presence_now();
+            for (admission, run_state) in state.runs.iter_mut() {
+                let Some(source) = admission.principal().source() else {
+                    continue;
+                };
+                if !conversations.contains(source) {
+                    continue;
+                }
+                if run_state.terminal_reason.is_some() {
+                    continue;
+                }
+                run_state.terminal_reason = Some(AgentRunTerminalReason::ConversationClosed);
+                run_state.status = AgentRunStatus::Idle;
+                run_state.updated_at = serde_json::Number::from(now);
+                announcements.push((source.clone(), run_state.clone()));
+            }
+        }
+        let mut failed = false;
+        for (conversation, run_state) in announcements {
+            if let Err(cause) = self.conversation_projection.publish(
+                ConversationRuntimeProjectionFact::AgentActivity {
+                    conversation,
+                    state: run_state,
+                },
+            ) {
+                tracing::warn!(
+                    error = crate::foundation::safe_log_field::safe_display(&cause),
+                    "workspace-delete conversation_closed projection publish failed"
+                );
+                failed = true;
+            }
+        }
+        if failed {
+            Err(ConversationRunTerminalizeError)
+        } else {
+            Ok(())
+        }
     }
 }
 

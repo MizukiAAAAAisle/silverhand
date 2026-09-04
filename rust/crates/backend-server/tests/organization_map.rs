@@ -407,8 +407,12 @@ fn namespace_role(
 
 /// The keys a namespace directory contributes to the universe, and which of its `mod.rs`
 /// children are unaccounted — the PURE decision at the heart of #task:2272's P0. A namespace
-/// can be BOTH a self-named context (keyed `(crate, ns)`) AND a relocation container (each
-/// landed leaf keyed `(crate, ns::leaf)`); the two are not exclusive.
+/// can be BOTH a self-named context (keyed `(crate, ns)`) AND a business-leaf container (each
+/// landed leaf keyed `(crate, ns::leaf)`); the two are not exclusive. A landed leaf is a
+/// classified business unit that physically resides at its owner namespace — whether it moved
+/// there by relocation or was born-at-target (a net-new #2341 migration feature module); the
+/// PURE-container scan does not distinguish the two (`resolve_settled_location` proves physical
+/// residence for both).
 ///
 /// Returns `(keys, unaccounted_children)`. A child is accounted iff it is a landed leaf OR —
 /// when the namespace has a self-named context row — ANY other child (absorbed as an
@@ -418,7 +422,7 @@ fn namespace_role(
 /// context is illegal (that is intentionally left to the context's own decomposition, not
 /// re-inventoried here). It therefore closes ONLY the PURE-CONTAINER case: a namespace with
 /// no self row must have every child be a landed leaf, so a stray module there is red. What
-/// guards a real relocated leaf against going missing or coexisting at two paths is the
+/// guards a real landed leaf against going missing or coexisting at two paths is the
 /// settled-row `resolve_settled_location` check, not this child scan.
 fn namespace_universe_keys(
     krate: &str,
@@ -525,8 +529,9 @@ fn scanned_crate_roots() -> HashMap<(String, String), bool> {
             assert!(
                 unaccounted.is_empty(),
                 "{krate}: `{module}/mod.rs` declares {unaccounted:?} in a PURE container \
-                 (no self-named context row), which are not landed relocation leaves (settled \
-                 rows targeting `{krate}::{module}::<leaf>`) — unclassified"
+                 (no self-named context row), which are not classified business leaves (settled \
+                 rows targeting `{krate}::{module}::<leaf>`, landed by relocation OR born-at-target) \
+                 — unclassified"
             );
             for key in keys {
                 let cfg = key.1 == module && cfg_test; // only the self-row carries lib.rs cfg
@@ -983,16 +988,133 @@ fn table_rows_carry_a_settled_target_and_audited_writer_evidence() {
             let rel = as_str(w, "path");
             assert_writer_path_is_production(rel, &context, "audited_rust_writers");
             // the recorded function name is non-empty evidence.
+            let function = as_str(w, "function");
             assert!(
-                !as_str(w, "function").is_empty(),
+                !function.is_empty(),
                 "{context}: audited_rust_writers entry `{rel}` has an empty function"
             );
+            // The recorded function must actually EXIST at that path (Cindy R3-next
+            // #12): a stale entry naming a deleted function must fail, not stay green.
+            // A cheap symbol-existence set-diff against the file text — the function's
+            // `fn <name>` definition must be present.
+            assert_writer_function_exists(rel, function, &context);
         }
         for w in t["audited_ts_writers"].as_array().into_iter().flatten() {
             let rel = w.as_str().expect("ts writer path string");
             assert_writer_path_is_production(rel, &context, "audited_ts_writers");
         }
     }
+}
+
+/// A recorded writer function must physically exist as a PRODUCTION definition at its
+/// recorded path (Cindy R3-next #12 / R4 P2): a `fn <name>` must appear on a
+/// non-comment line that is NOT inside a `#[cfg(test)]` module, so a stale ledger
+/// entry cannot stay green merely because the name appears in a comment or a test-only
+/// helper. Heuristic (not a full parser): strip `//` line comments; track the brace
+/// depth of any `#[cfg(test)]`-attributed `mod` and ignore `fn` matches within it.
+fn assert_writer_function_exists(rel: &str, function: &str, context: &str) {
+    let text = std::fs::read_to_string(repo_root().join(rel))
+        .unwrap_or_else(|_| panic!("{context}: cannot read recorded writer path `{rel}`"));
+    assert!(
+        writer_function_is_defined_in_production(&text, function),
+        "{context}: recorded audited_rust_writers function `{function}` has no PRODUCTION `fn` \
+         definition in `{rel}` (a comment or a #[cfg(test)] helper does not count — stale/renamed \
+         ledger entry)"
+    );
+}
+
+/// Whether `function` has a PRODUCTION `fn <function>` definition in `text` — a
+/// non-comment line outside any `#[cfg(test)]` module. Extracted so the guard's
+/// comment/test-cfg exclusion is itself testable (Cindy R4 P2 counter-control).
+fn writer_function_is_defined_in_production(text: &str, function: &str) -> bool {
+    let matches_fn = |code: &str| -> bool {
+        let needle = format!("fn {function}");
+        let Some(idx) = code.find(&needle) else {
+            return false;
+        };
+        let after = code[idx + needle.len()..].chars().next();
+        !matches!(after, Some(c) if c.is_alphanumeric() || c == '_')
+    };
+
+    let mut in_test_mod_depth: Option<i32> = None;
+    let mut depth: i32 = 0;
+    let mut pending_cfg_test = false;
+    let mut found_production = false;
+
+    for raw_line in text.lines() {
+        let code = match raw_line.find("//") {
+            Some(i) => &raw_line[..i],
+            None => raw_line,
+        };
+        let trimmed = code.trim();
+
+        let is_cfg_test_line = trimmed.contains("#[cfg(test)]");
+        let opens_mod = pending_cfg_test && trimmed.starts_with("mod ") && code.contains('{');
+        if opens_mod {
+            in_test_mod_depth = Some(depth);
+            pending_cfg_test = false;
+        } else if pending_cfg_test && !is_cfg_test_line && !trimmed.is_empty() {
+            // The cfg(test) attribute applied to something other than a `mod` (e.g. a
+            // single test fn) — not a whole test region; stop waiting. (The
+            // `#[cfg(test)]` line itself must NOT clear the pending flag.)
+            pending_cfg_test = false;
+        }
+        if is_cfg_test_line {
+            pending_cfg_test = true;
+        }
+
+        if in_test_mod_depth.is_none() && matches_fn(code) {
+            found_production = true;
+        }
+
+        depth += code.matches('{').count() as i32;
+        depth -= code.matches('}').count() as i32;
+        // Entering the mod added its own brace; the region closes when depth returns
+        // to the level it opened at.
+        if let Some(open_depth) = in_test_mod_depth
+            && !opens_mod
+            && depth <= open_depth
+        {
+            in_test_mod_depth = None;
+        }
+    }
+    found_production
+}
+
+#[test]
+fn writer_existence_guard_ignores_comments_and_test_cfg_functions() {
+    // Cindy R4 P2 counter-control: a name that appears ONLY in a comment or ONLY in a
+    // `#[cfg(test)]` module must NOT satisfy the guard; a real production fn does.
+    assert!(writer_function_is_defined_in_production(
+        "pub fn provision_workspace() {}",
+        "provision_workspace"
+    ));
+    assert!(
+        !writer_function_is_defined_in_production(
+            "// calls fn provision_workspace here\n",
+            "provision_workspace"
+        ),
+        "a comment mention must not count"
+    );
+    assert!(
+        !writer_function_is_defined_in_production(
+            "#[cfg(test)]\nmod tests {\n    fn provision_workspace() {}\n}\n",
+            "provision_workspace"
+        ),
+        "a test-cfg helper must not count"
+    );
+    // A production fn PLUS a test helper of the same name still passes on the
+    // production one.
+    assert!(writer_function_is_defined_in_production(
+        "fn provision_workspace() {}\n#[cfg(test)]\nmod tests {\n    fn provision_workspace() {}\n}\n",
+        "provision_workspace"
+    ));
+    // Prefix collision: `fn provision_workspace_inner` must not satisfy a request for
+    // `provision_workspace`.
+    assert!(!writer_function_is_defined_in_production(
+        "fn provision_workspace_inner() {}",
+        "provision_workspace"
+    ));
 }
 
 /// A recorded writer path must exist relative to the repo root and be a production source

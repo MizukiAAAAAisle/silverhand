@@ -51,6 +51,11 @@ use silverhand_backend_server::{
         TargetAddressRefusalLog,
         collaboration::{
             activity,
+            agent_channel_list::{AgentListChannelsState, agent_list_channels_router},
+            agent_create_channel::{AgentCreateChannelState, agent_create_channel_router},
+            agent_read_history::{AgentReadHistoryState, agent_read_history_router},
+            agent_search::{AgentSearchState, agent_search_router},
+            agent_thread_follow::{AgentThreadFollowState, agent_thread_follow_router},
             attachment::{
                 self, HostAttachmentEnvironment, agent_attachment_download_router,
                 agent_attachment_locate_router, agent_attachment_update_router,
@@ -104,6 +109,7 @@ use silverhand_backend_server::{
     },
     identity_access::{
         access, agent_audit, agent_avatar, agent_avatar_write, agent_detail, agent_list,
+        agent_list_workspaces::{AgentListWorkspacesState, agent_list_workspaces_router},
         agent_name_availability, agent_patch,
         auth::{PublicJsonUnauthorized, require_human_session},
         avatar_blob::SingleKindAvatarBlobs,
@@ -118,6 +124,8 @@ use silverhand_backend_server::{
             internal_profile_write_router,
         },
         users::{self, UsersDeps},
+        workspace_creation::{WorkspaceCreateState, workspace_create_router},
+        workspace_deletion::{WorkspaceDeleteState, workspace_delete_router},
         workspace_detail, workspace_metadata_write, workspace_name_availability, workspaces,
     },
     scheduling::{
@@ -132,6 +140,10 @@ use silverhand_backend_server::{
     },
     viewer_read_model::presence::{
         HubPresencePublisher, SystemDisconnectClock, compose_presence_vertical,
+    },
+    viewer_read_model::viewer_sort::{
+        ChannelStarState, FavoritesState, SortMutationState, favorites_router,
+        sort_mutation_router, star_router,
     },
     workspace_data_plane,
 };

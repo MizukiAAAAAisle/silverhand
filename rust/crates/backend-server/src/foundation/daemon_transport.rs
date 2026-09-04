@@ -811,33 +811,58 @@ pub(crate) enum CommandRefusal {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CapabilityRefusal {
     code: Box<str>,
+    /// The daemon's own `message` string. Retained (not discarded) so a consumer that
+    /// mirrors TS `mapDataPlaneError` can surface the daemon's message rather than a
+    /// canned one (Cindy #5). Callers that prefer a product-authored message simply
+    /// ignore it.
+    message: Box<str>,
 }
 
 impl CapabilityRefusal {
     pub(crate) fn code(&self) -> &str {
         &self.code
     }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 impl CommandRefusal {
     fn decode(capability_refusal: CapabilityRefusalAdmission, value: &Value) -> Option<Self> {
         let object = value.as_object()?;
-        if object.len() != 2 || object.get("message").and_then(Value::as_str).is_none() {
+        let message = object.get("message").and_then(Value::as_str);
+        if object.len() != 2 || message.is_none() {
             return None;
         }
+        let message = message?;
         let code = object.get("code").and_then(Value::as_str)?;
         if let Some(code) = DaemonRefusalCode::parse(code) {
             return Some(Self::Response(code));
         }
         if capability_refusal(code) {
-            return Some(Self::Capability(CapabilityRefusal { code: code.into() }));
+            return Some(Self::Capability(CapabilityRefusal {
+                code: code.into(),
+                message: message.into(),
+            }));
         }
         None
     }
 
     #[cfg(test)]
     pub(crate) fn capability(code: &str) -> Self {
-        Self::Capability(CapabilityRefusal { code: code.into() })
+        Self::Capability(CapabilityRefusal {
+            code: code.into(),
+            message: "daemon capability refusal".into(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn capability_with_message(code: &str, message: &str) -> Self {
+        Self::Capability(CapabilityRefusal {
+            code: code.into(),
+            message: message.into(),
+        })
     }
 }
 
@@ -3347,11 +3372,11 @@ mod tests {
     }
 
     #[test]
-    fn refusal_matrix_is_exact_for_all_seventeen_issued_kinds() {
+    fn refusal_matrix_is_exact_for_all_eighteen_issued_kinds() {
         use std::collections::BTreeSet;
 
         let empty: &[&str] = &[];
-        let matrix: [(IssuedDaemonCommandKind, CapabilityRefusalAdmission, &[&str]); 17] = [
+        let matrix: [(IssuedDaemonCommandKind, CapabilityRefusalAdmission, &[&str]); 18] = [
             (
                 IssuedDaemonCommandKind::AgentFilesPurge,
                 crate::host_runtime::cascade_effects::admits_agent_files_purge_refusal,
@@ -3371,6 +3396,14 @@ mod tests {
                 IssuedDaemonCommandKind::AgentProfileMcpWrite,
                 crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_write_refusal,
                 &crate::identity_access::agent_profile_mcp_data_plane::PROFILE_MCP_WRITE_CAPABILITY_CODES,
+            ),
+            (
+                // The agent-workspace-index dispatch (#2341 list-workspaces daemon
+                // probe) admits the `registry_unavailable` capability refusal (#7);
+                // any other code stays foreign and fails closed.
+                IssuedDaemonCommandKind::AgentWorkspaceIndex,
+                crate::identity_access::agent_workspace_index_probe::admits_agent_workspace_index_refusal,
+                &crate::identity_access::agent_workspace_index_probe::AGENT_WORKSPACE_INDEX_CAPABILITY_CODES,
             ),
             (
                 IssuedDaemonCommandKind::AgentWorkspaceFileRead,

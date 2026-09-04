@@ -1331,6 +1331,411 @@ where
     }
 }
 
+/// The workspace-delete post-commit aftermath. It consumes the committed teardown
+/// plan and never live-re-reads an audience the FK cascade has already erased:
+/// the seats, blobs, and viewer members were all captured in the writer
+/// transaction. It stops each captured conversation-scoped seat (resolving its live
+/// host/generation by scope — the seat registry is in-memory, not cascade-affected),
+/// best-effort deletes every captured attachment blob from the ONE blob store, and
+/// fans out `viewer_workspaces_changed { removed }`. A single failed leg is logged
+/// and never aborts the others — the 204 is already sealed.
+#[derive(Clone)]
+pub(super) struct ProductionWorkspaceDeletionAftermath<S, B, T, X> {
+    hub: ScopeEventHub,
+    terminalizer: T,
+    runtime_stop: S,
+    dispatch: X,
+    blobs: B,
+}
+
+impl<S, B, T, X> ProductionWorkspaceDeletionAftermath<S, B, T, X> {
+    pub(super) fn new(
+        hub: ScopeEventHub,
+        terminalizer: T,
+        runtime_stop: S,
+        dispatch: X,
+        blobs: B,
+    ) -> Self {
+        Self {
+            hub,
+            terminalizer,
+            runtime_stop,
+            dispatch,
+            blobs,
+        }
+    }
+}
+
+/// Bridge the concrete run-state terminalizer handle to the deletion aftermath's
+/// narrow port lives in backend-server (orphan rule). See
+/// `identity_access::workspace_deletion`.
+impl<S, B, T, X>
+    silverhand_backend_server::identity_access::workspace_deletion::WorkspaceDeletionAftermath
+    for ProductionWorkspaceDeletionAftermath<S, B, T, X>
+where
+    S: MembershipRuntimeStop + Clone + Send + Sync + 'static,
+    B: silverhand_backend_core::foundation::blob_store::BlobStore,
+    T: silverhand_backend_server::identity_access::workspace_deletion::ConversationRunTerminalization,
+    X: silverhand_backend_server::application_orchestration::agent_create::AftermathDispatch,
+{
+    async fn terminalize_and_sweep(
+        &self,
+        plan: &silverhand_backend_core::identity_access::workspace_deletion::WorkspaceTeardownPlan,
+    ) {
+        // Runs ONLY after phase 2 returned `Committed` (Cindy #2): this call is the
+        // authoritative deleter, so the destructive legs cannot affect a workspace it
+        // does not own. Order mirrors TS `stopWorkspaceRuntime` then blob sweep:
+        // (1) #44: terminalize the torn-down conversations' ConversationSlot runs to
+        //     `conversation_closed` via the run-state projection authority, ONE
+        //     `agent_activity` per run — a viewer sees the runs close immediately,
+        //     not on the daemon's own later `runtime_exit`. Best-effort.
+        // (2) #13: hand each daemon hard-stop to the owned executor DETACHED (a slow
+        //     or never-resolving stop never gates the 204 or the blob sweep). This
+        //     matches TS's `void stopWorkspaceRuntime(...)` detach.
+        // (3) AWAIT the blob sweep over the captured refs. NB: the committed cascade
+        //     (phase 2) already ran, so a mid-sweep crash leaves GC-able orphan blobs
+        //     (a storage-GC concern) — deliberately traded for the #2 invariant that
+        //     no destructive effect ever precedes the fresh committed authorization.
+        // Terminalize over EVERY captured workspace conversation (Cindy R3-next #2),
+        // NOT a seat-derived set: a conversation whose roster is gone but whose run
+        // map still has a live ConversationSlot run must still be closed.
+        let conversations: std::collections::HashSet<ConversationId> =
+            plan.conversation_ids.iter().cloned().collect();
+        if !conversations.is_empty()
+            && self
+                .terminalizer
+                .terminalize_conversations_closed(&conversations)
+                .is_err()
+        {
+            tracing::warn!(
+                workspace_id = plan.workspace.as_str(),
+                "workspace-delete conversation_closed terminalization failed"
+            );
+        }
+        // Detached hard-stops (#13): each seat's stop is an owned, tracked leg; a
+        // failure is observed inside the leg and never blocks the 204/blob/viewer.
+        for seat in &plan.runtime_seats {
+            let runtime_stop = self.runtime_stop.clone();
+            let conversation = seat.conversation.clone();
+            let agent = seat.agent.clone();
+            self.dispatch.dispatch(Box::pin(async move {
+                if let Err(error) = runtime_stop.stop(&conversation, &agent).await {
+                    tracing::warn!(
+                        error = silverhand_backend_server::foundation::safe_log_field::safe_display(
+                            &error
+                        ),
+                        conversation_id = conversation.as_str(),
+                        agent_id = agent.as_str(),
+                        "workspace-delete runtime stop failed"
+                    );
+                }
+            }));
+        }
+        // Blob sweep: best-effort delete every captured attachment blob, over the
+        // refs captured in phase 1 (the committed cascade already ran; see the #2
+        // trade-off note above).
+        for blob in &plan.blobs {
+            if let Err(error) = self.blobs.delete(blob).await {
+                tracing::warn!(
+                    error =
+                        silverhand_backend_server::foundation::safe_log_field::safe_display(&error),
+                    workspace_id = plan.workspace.as_str(),
+                    "workspace-delete attachment blob sweep failed"
+                );
+            }
+        }
+    }
+
+    async fn announce_removed(
+        &self,
+        plan: &silverhand_backend_core::identity_access::workspace_deletion::WorkspaceTeardownPlan,
+    ) {
+        // Runs AFTER the row cascade: `viewer_workspaces_changed { removed }` per
+        // captured member. A per-viewer failure is observable and does not abort the
+        // rest; the 204 is already sealed.
+        let publisher = self.hub.workspace_membership_publisher();
+        for viewer in &plan.viewer_members {
+            if let Err(error) = publisher.publish_workspace_removed(viewer, &plan.workspace) {
+                tracing::warn!(
+                    error =
+                        silverhand_backend_server::foundation::safe_log_field::safe_display(&error),
+                    workspace_id = plan.workspace.as_str(),
+                    "workspace-delete viewer fan-out failed"
+                );
+            }
+        }
+    }
+}
+
+/// The production workspace-create onboarding aftermath: per agent, deliver the
+/// onboarding message (awaited — the reference's critical leg), then hand a DETACHED
+/// start leg to the owned effect executor (`AftermathDispatch`) and return
+/// immediately. A slow/never-resolving start can never gate the `201` or the next
+/// agent; a deliver failure returns `Err` so the route answers 500 and truncates.
+#[derive(Clone)]
+pub(super) struct ProductionWorkspaceCreationAftermath<OD, RS, X> {
+    deliver: OD,
+    start: RS,
+    dispatch: X,
+}
+
+impl<OD, RS, X> ProductionWorkspaceCreationAftermath<OD, RS, X> {
+    pub(super) fn new(deliver: OD, start: RS, dispatch: X) -> Self {
+        Self {
+            deliver,
+            start,
+            dispatch,
+        }
+    }
+}
+
+impl<OD, RS, X>
+    silverhand_backend_server::identity_access::workspace_creation::WorkspaceCreationAftermath
+    for ProductionWorkspaceCreationAftermath<OD, RS, X>
+where
+    OD: silverhand_backend_server::application_orchestration::agent_create::OnboardingDelivery,
+    RS: silverhand_backend_core::conversation_messaging::messaging::post_commit::RuntimeStart
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    X: silverhand_backend_server::application_orchestration::agent_create::AftermathDispatch,
+{
+    async fn deliver(
+        &self,
+        target: &silverhand_backend_core::identity_access::workspace_creation::WorkspaceOnboardingTarget,
+        onboarding_message: &silverhand_backend_core::conversation_messaging::messaging::MessageId,
+    ) -> Result<
+        (),
+        silverhand_backend_server::identity_access::workspace_creation::OnboardingDeliverFailed,
+    > {
+        self.deliver
+            .deliver(&target.conversation, &target.agent, onboarding_message)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    error = silverhand_backend_server::foundation::safe_log_field::safe_display(&error),
+                    conversation_id = target.conversation.as_str(),
+                    agent_id = target.agent.as_str(),
+                    "workspace-create onboarding deliver failed"
+                );
+                silverhand_backend_server::identity_access::workspace_creation::OnboardingDeliverFailed
+            })
+    }
+
+    fn start(
+        &self,
+        target: &silverhand_backend_core::identity_access::workspace_creation::WorkspaceOnboardingTarget,
+    ) {
+        // Fire-and-forget through the OWNED executor (not a bare `tokio::spawn`): the
+        // leg is tracked and cancellation-completed at shutdown. `start` returns the
+        // instant the leg is dispatched, so a slow start never gates the 201 or the
+        // next agent; the start's own failure is logged inside the leg.
+        let start = self.start.clone();
+        let conversation = target.conversation.clone();
+        let agent = target.agent.clone();
+        self.dispatch.dispatch(Box::pin(async move {
+            if let Err(error) =
+                silverhand_backend_core::conversation_messaging::messaging::post_commit::RuntimeStart::start(&start, &conversation, &agent).await
+            {
+                tracing::warn!(
+                    error = silverhand_backend_server::foundation::safe_log_field::safe_display(&error),
+                    conversation_id = conversation.as_str(),
+                    agent_id = agent.as_str(),
+                    "workspace-create onboarding start failed"
+                );
+            }
+        }));
+    }
+}
+
+/// The production create-channel fork aftermath: over the committed sealed
+/// post-images, in STRICT order and each AWAITED before the route returns 200 —
+/// (1) SYNC publish `workspace_channels_changed`, then (2) deliver the context seed
+/// to the acting agent, (3) distribute the prompt to the OTHER member agents, and
+/// (4) start ALL member runtimes. Delivery goes through the GENERIC committed-message
+/// delivery authority (`LiveConversationRuntimeDelivery` over
+/// `committed_message_inbox_ensure`), NOT the onboarding-only inbox-ensure whose shape
+/// gate would reject a non-onboarding seed and leave the recipients with no inbox
+/// custody + no daemon wake (Cindy R3-next #1). The two seeds are already-committed
+/// channel messages, so delivery is `deliver_to_live_recipient` (live participation),
+/// not a sealed custody. The delivery/start AUDIENCE is the LIVE conversation roster
+/// re-read at each effect point (prompt after the context deliver, start after the
+/// prompt — Cindy R5 #1), NOT the committed fork roster: a recipient that left/joined
+/// between commit and effect is excluded/included. Every leg after the publish is
+/// best-effort: its failure is observed and logged but never rewrites the sealed 200
+/// and never blocks a sibling leg. Unlike workspace-create (whose start is DETACHED
+/// via `AftermathDispatch`), create-channel's start is an AWAITED best-effort gate — it
+/// completes before the 200, matching TS `startAgentsBestEffort` inside the awaited
+/// createChannel path (#40). The seed message payload/coordinates come from the
+/// committed fork (no route-minted ids); only the audience is a live reread.
+#[derive(Clone)]
+pub(super) struct ProductionChannelForkAftermath<D, RS, G> {
+    hub: ScopeEventHub,
+    delivery: D,
+    start: RS,
+    roster: G,
+}
+
+impl<D, RS, G> ProductionChannelForkAftermath<D, RS, G> {
+    pub(super) fn new(hub: ScopeEventHub, delivery: D, start: RS, roster: G) -> Self {
+        Self {
+            hub,
+            delivery,
+            start,
+            roster,
+        }
+    }
+}
+
+impl<D, RS, G>
+    silverhand_backend_server::conversation_messaging::messaging::collaboration::agent_create_channel::ChannelForkAftermath
+    for ProductionChannelForkAftermath<D, RS, G>
+where
+    D: silverhand_backend_server::conversation_messaging::LiveConversationRuntimeDelivery
+        + Send
+        + Sync
+        + 'static,
+    RS: silverhand_backend_core::conversation_messaging::messaging::post_commit::RuntimeStart
+        + Send
+        + Sync
+        + 'static,
+    G: silverhand_backend_core::conversation_messaging::messaging::collaboration::workspace_rename_messaging::ConversationAgentsReadPort
+        + Send
+        + Sync
+        + 'static,
+{
+    async fn channel_forked(
+        &self,
+        workspace: &WorkspaceId,
+        committed: &silverhand_backend_core::conversation_messaging::messaging::collaboration::channel_fork::CommittedChannelFork,
+    ) {
+        use silverhand_backend_server::foundation::safe_log_field::safe_display;
+
+        let channel = &committed.channel;
+
+        // (1) SYNC invalidation: the new channel joins the workspace's channel set.
+        // A publish failure is observable; it never rewrites the sealed 200.
+        if let Err(error) = self
+            .hub
+            .publish_workspace_channels_changed(workspace, channel)
+        {
+            tracing::warn!(
+                error = safe_display(&error),
+                workspace_id = workspace.as_str(),
+                conversation_id = channel.as_str(),
+                "channel-fork workspace_channels_changed publish failed"
+            );
+        }
+
+        // (2) Deliver the context seed to the ACTING agent (awaited best-effort). The
+        // actor is the creator; delivery ensures its durable inbox custody for the
+        // committed context message + wakes it.
+        if let Err(error) = self
+            .delivery
+            .deliver_to_live_recipient(channel, &committed.actor_agent, &committed.context_message.id)
+            .await
+        {
+            tracing::warn!(
+                error = safe_display(&error),
+                conversation_id = channel.as_str(),
+                agent_id = committed.actor_agent.as_str(),
+                "channel-fork context deliver to actor failed"
+            );
+        }
+
+        // (3) Distribute the prompt to the OTHER member agents — the audience is the
+        // LIVE roster re-read at effect time (Cindy R5 #1), NOT the committed set: TS
+        // calls `listAgents(channel)` after the context deliver, so an agent that LEFT
+        // between commit and now is not prompted and one that JOINED is. The committed
+        // roster is only the creation fact. A read failure logs and skips this leg (the
+        // committed roster is not a safe fallback — it would resurrect the stale set).
+        match self.roster.agent_ids(channel).await {
+            Ok(prompt_audience) => {
+                for agent in &prompt_audience {
+                    if agent == &committed.actor_agent {
+                        continue;
+                    }
+                    if let Err(error) = self
+                        .delivery
+                        .deliver_to_live_recipient(channel, agent, &committed.prompt_message.id)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = safe_display(&error),
+                            conversation_id = channel.as_str(),
+                            agent_id = agent.as_str(),
+                            "channel-fork prompt distribution failed"
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = safe_display(&error),
+                    conversation_id = channel.as_str(),
+                    "channel-fork prompt-audience live roster read failed"
+                );
+            }
+        }
+
+        // (4) Start ALL member runtimes — again the LIVE roster re-read AFTER the prompt
+        // (Cindy R5 #1): TS calls `listAgents(channel)` a second time for the start
+        // audience, so a left agent is never started and a joined one is. Awaited
+        // best-effort gate before the 200; one start's failure does not block the rest.
+        match self.roster.agent_ids(channel).await {
+            Ok(start_audience) => {
+                for agent in &start_audience {
+                    if let Err(error) =
+                        silverhand_backend_core::conversation_messaging::messaging::post_commit::RuntimeStart::start(
+                            &self.start, channel, agent,
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            error = safe_display(&error),
+                            conversation_id = channel.as_str(),
+                            agent_id = agent.as_str(),
+                            "channel-fork runtime start failed"
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = safe_display(&error),
+                    conversation_id = channel.as_str(),
+                    "channel-fork start-audience live roster read failed"
+                );
+            }
+        }
+    }
+}
+
+/// The reserved process clock for the create saga's row stamps.
+#[derive(Clone, Copy)]
+pub(super) struct SystemCreationClock;
+
+impl silverhand_backend_core::identity_access::workspace_creation::WorkspaceProvisionClock
+    for SystemCreationClock
+{
+    fn now_ms(&self) -> i64 {
+        // The one process wall-clock owner, mirroring every other signed-millis
+        // consumer; `SystemProcessClock` reads it once per call.
+        use silverhand_backend_server::foundation::clock::ProcessClock;
+        silverhand_backend_server::foundation::clock::SystemProcessClock.now_unix_millis()
+    }
+}
+
+impl silverhand_backend_core::conversation_messaging::messaging::collaboration::channel_fork::ChannelForkClock
+    for SystemCreationClock
+{
+    fn now_ms(&self) -> i64 {
+        use silverhand_backend_server::foundation::clock::ProcessClock;
+        silverhand_backend_server::foundation::clock::SystemProcessClock.now_unix_millis()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1482,5 +1887,552 @@ mod tests {
             assert!(task_message(&trigger).is_err());
         }
         assert_eq!(delivery.0.load(Ordering::SeqCst), 4);
+    }
+
+    // ── Phase B P0: workspace-delete aftermath consumes the committed plan ────────
+    use silverhand_backend_core::{
+        foundation::blob_store::{BlobNamespace, BlobStore},
+        identity_access::workspace_deletion::{WorkspaceRuntimeSeat, WorkspaceTeardownPlan},
+    };
+    use silverhand_backend_server::identity_access::workspace_deletion::WorkspaceDeletionAftermath;
+
+    /// A runtime stop that records every `(conversation, agent)` it is asked to stop
+    /// and fails for one configured seat — proving a single failed leg is observable
+    /// and does not abort the remaining seats/blobs/viewers.
+    #[derive(Clone)]
+    struct RecordingStop {
+        stopped: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        fail_agent: Option<String>,
+    }
+
+    impl MembershipRuntimeStop for RecordingStop {
+        type Error = LaneEffectError;
+        async fn stop(
+            &self,
+            conversation: &ConversationId,
+            agent: &AgentId,
+        ) -> Result<(), Self::Error> {
+            self.stopped
+                .lock()
+                .unwrap()
+                .push((conversation.as_str().to_owned(), agent.as_str().to_owned()));
+            if self.fail_agent.as_deref() == Some(agent.as_str()) {
+                return Err(LaneEffectError("configured seat failure".into()));
+            }
+            Ok(())
+        }
+    }
+
+    /// A run-state terminalizer stub that records the conversation set it was asked
+    /// to close.
+    #[derive(Clone, Default)]
+    struct RecordingTerminalizer {
+        closed: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl silverhand_backend_server::identity_access::workspace_deletion::ConversationRunTerminalization
+        for RecordingTerminalizer
+    {
+        fn terminalize_conversations_closed(
+            &self,
+            conversations: &std::collections::HashSet<ConversationId>,
+        ) -> Result<
+            (),
+            silverhand_backend_server::identity_access::workspace_deletion::ConversationRunTerminalizeError,
+        > {
+            let mut seen: Vec<String> =
+                conversations.iter().map(|c| c.as_str().to_owned()).collect();
+            seen.sort();
+            *self.closed.lock().unwrap() = seen;
+            Ok(())
+        }
+    }
+
+    /// An `AftermathDispatch` stub that collects the detached legs so the test can
+    /// drive them to completion deterministically (production hands them to the owned
+    /// executor).
+    #[derive(Clone, Default)]
+    struct CollectingDispatch {
+        legs: Arc<
+            std::sync::Mutex<
+                Vec<
+                    silverhand_backend_server::application_orchestration::agent_create::AftermathLeg,
+                >,
+            >,
+        >,
+    }
+
+    impl silverhand_backend_server::application_orchestration::agent_create::AftermathDispatch
+        for CollectingDispatch
+    {
+        fn dispatch(
+            &self,
+            leg: silverhand_backend_server::application_orchestration::agent_create::AftermathLeg,
+        ) {
+            self.legs.lock().unwrap().push(leg);
+        }
+    }
+
+    #[tokio::test]
+    async fn workspace_delete_aftermath_stops_captured_seats_and_sweeps_blobs_without_rereading() {
+        // A real local blob store with two live blobs; the plan references both.
+        let dir = tempfile::tempdir().unwrap();
+        let blobs =
+            silverhand_backend_filesystem::foundation::blob_store::LocalBlobStore::open(dir.path())
+                .await
+                .unwrap();
+        let namespace = BlobNamespace::from_segments(["attachments"]).unwrap();
+        let kept = blobs
+            .put(&namespace, "text/plain", b"one".to_vec())
+            .await
+            .unwrap();
+        let swept = blobs
+            .put(&namespace, "text/plain", b"two".to_vec())
+            .await
+            .unwrap();
+        // Prove both files exist before the sweep.
+        assert!(matches!(
+            blobs.read(&kept).await.unwrap(),
+            silverhand_backend_core::foundation::blob_store::BlobReadOutcome::Found(_)
+        ));
+        assert!(matches!(
+            blobs.read(&swept).await.unwrap(),
+            silverhand_backend_core::foundation::blob_store::BlobReadOutcome::Found(_)
+        ));
+
+        let stopped = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stop = RecordingStop {
+            stopped: Arc::clone(&stopped),
+            // The FIRST captured seat fails; the second must still be attempted.
+            fail_agent: Some("agent-1".to_owned()),
+        };
+        let terminalizer = RecordingTerminalizer::default();
+        let dispatch = CollectingDispatch::default();
+        let aftermath = ProductionWorkspaceDeletionAftermath::new(
+            ScopeEventHub::production().unwrap(),
+            terminalizer.clone(),
+            stop,
+            dispatch.clone(),
+            blobs.clone(),
+        );
+
+        let plan = WorkspaceTeardownPlan {
+            runtime_seats: vec![
+                WorkspaceRuntimeSeat {
+                    conversation: ConversationId::parse("conv-a").unwrap(),
+                    agent: AgentId::parse("agent-1").unwrap(),
+                },
+                WorkspaceRuntimeSeat {
+                    conversation: ConversationId::parse("conv-b").unwrap(),
+                    agent: AgentId::parse("agent-2").unwrap(),
+                },
+            ],
+            blobs: vec![kept.clone(), swept.clone()],
+            // conv-c has NO routed seat (its roster is gone) but IS a workspace
+            // conversation — the independently-captured set must still terminalize it
+            // (Cindy R3-next #2).
+            conversation_ids: vec![
+                ConversationId::parse("conv-a").unwrap(),
+                ConversationId::parse("conv-b").unwrap(),
+                ConversationId::parse("conv-c").unwrap(),
+            ],
+            viewer_members: vec![UserId::parse("user-1").unwrap()],
+            workspace: WorkspaceId::parse("ws-1").unwrap(),
+        };
+
+        aftermath.terminalize_and_sweep(&plan).await;
+        aftermath.announce_removed(&plan).await;
+
+        // #44/#2: the run-state projection was asked to close EVERY captured workspace
+        // conversation — including conv-c which has NO routed seat (roster gone) — not
+        // just the seat-derived set.
+        assert_eq!(
+            terminalizer.closed.lock().unwrap().clone(),
+            vec![
+                "conv-a".to_owned(),
+                "conv-b".to_owned(),
+                "conv-c".to_owned()
+            ],
+        );
+
+        // #13: the hard-stops are DETACHED legs handed to the owned executor — drive
+        // the collected legs to completion (production's task tracker does this).
+        let legs = {
+            let mut guard = dispatch.legs.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
+        assert_eq!(legs.len(), 2, "both seats' stops were dispatched detached");
+        for leg in legs {
+            leg.await;
+        }
+
+        // Both captured seats were attempted — the first seat's failure did NOT abort
+        // the second. The audience came from the committed plan, never a post-cascade
+        // reread. Detached order is not contractual, so assert as a set.
+        let mut seats = stopped.lock().unwrap().clone();
+        seats.sort();
+        assert_eq!(
+            seats,
+            vec![
+                ("conv-a".to_owned(), "agent-1".to_owned()),
+                ("conv-b".to_owned(), "agent-2".to_owned()),
+            ]
+        );
+        // Both blobs were swept from the one blob store — physical files gone.
+        assert!(matches!(
+            blobs.read(&kept).await.unwrap(),
+            silverhand_backend_core::foundation::blob_store::BlobReadOutcome::Missing
+        ));
+        assert!(matches!(
+            blobs.read(&swept).await.unwrap(),
+            silverhand_backend_core::foundation::blob_store::BlobReadOutcome::Missing
+        ));
+    }
+
+    // ===================================================================
+    // #40 create-channel awaited aftermath: deliver(context→actor) →
+    // distribute(prompt→others) → start(all), each awaited best-effort.
+    // ===================================================================
+
+    #[derive(Clone, Default)]
+    struct RecordingDelivery {
+        // (agent, message_id) pairs, in the order deliver was invoked.
+        calls: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        // Agents whose deliver returns Err (to prove non-blocking).
+        fail_agent: Option<String>,
+    }
+
+    impl silverhand_backend_server::conversation_messaging::LiveConversationRuntimeDelivery
+        for RecordingDelivery
+    {
+        async fn deliver_to_live_recipient(
+            &self,
+            _conversation: &ConversationId,
+            agent: &AgentId,
+            message: &MessageId,
+        ) -> Result<(), EffectFailure> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((agent.as_str().to_owned(), message.as_str().to_owned()));
+            if self.fail_agent.as_deref() == Some(agent.as_str()) {
+                return Err(EffectFailure::from_source(std::io::Error::other("boom")));
+            }
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingStart {
+        starts: Arc<std::sync::Mutex<Vec<String>>>,
+        fail_agent: Option<String>,
+    }
+
+    impl silverhand_backend_core::conversation_messaging::messaging::post_commit::RuntimeStart
+        for RecordingStart
+    {
+        async fn start(
+            &self,
+            _conversation: &ConversationId,
+            agent: &AgentId,
+        ) -> Result<(), EffectFailure> {
+            self.starts.lock().unwrap().push(agent.as_str().to_owned());
+            if self.fail_agent.as_deref() == Some(agent.as_str()) {
+                return Err(EffectFailure::from_source(std::io::Error::other("boom")));
+            }
+            Ok(())
+        }
+    }
+
+    // A `ConversationAgentsReadPort` whose successive `agent_ids` calls return the
+    // QUEUED live-roster snapshots in order — modelling a roster that mutates
+    // between the prompt read and the start read (Cindy R5 #1). When the queue is
+    // exhausted it yields an empty live roster (NOT a resurrected committed set);
+    // `fail` forces Err on every read to prove the committed roster is not a fallback.
+    #[derive(Clone)]
+    struct RecordingAgents {
+        // conversation log so a test can prove the reads happened + how many.
+        reads: Arc<std::sync::Mutex<Vec<String>>>,
+        // FIFO of roster snapshots — one dequeued per `agent_ids` call.
+        snapshots: Arc<std::sync::Mutex<std::collections::VecDeque<Vec<String>>>>,
+        fail: bool,
+    }
+
+    impl RecordingAgents {
+        fn with(snapshots: Vec<Vec<&str>>) -> Self {
+            Self {
+                reads: Arc::default(),
+                snapshots: Arc::new(std::sync::Mutex::new(
+                    snapshots
+                        .into_iter()
+                        .map(|s| s.into_iter().map(str::to_owned).collect())
+                        .collect(),
+                )),
+                fail: false,
+            }
+        }
+    }
+
+    impl silverhand_backend_core::conversation_messaging::messaging::collaboration::workspace_rename_messaging::ConversationAgentsReadPort
+        for RecordingAgents
+    {
+        type Error = std::io::Error;
+
+        async fn agent_ids(
+            &self,
+            conversation: &ConversationId,
+        ) -> Result<Vec<AgentId>, Self::Error> {
+            self.reads
+                .lock()
+                .unwrap()
+                .push(conversation.as_str().to_owned());
+            if self.fail {
+                return Err(std::io::Error::other("roster read boom"));
+            }
+            let snapshot = self.snapshots.lock().unwrap().pop_front();
+            match snapshot {
+                Some(ids) => Ok(ids
+                    .into_iter()
+                    .map(|id| AgentId::parse(&id).unwrap())
+                    .collect()),
+                None => Ok(vec![]),
+            }
+        }
+    }
+
+    fn committed_fork(
+        channel: &str,
+        actor: &str,
+        others: &[&str],
+    ) -> silverhand_backend_core::conversation_messaging::messaging::collaboration::channel_fork::CommittedChannelFork{
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::channel_fork::{
+            CommittedChannelFork, SealedSeedMessage,
+        };
+        let chan = ConversationId::parse(channel).unwrap();
+        let mut agents = vec![AgentId::parse(actor).unwrap()];
+        agents.extend(others.iter().map(|a| AgentId::parse(*a).unwrap()));
+        CommittedChannelFork {
+            channel: chan.clone(),
+            actor_agent: AgentId::parse(actor).unwrap(),
+            context_message: SealedSeedMessage {
+                id: MessageId::parse("msg-context").unwrap(),
+                conversation: chan.clone(),
+                seq: 1,
+                content: "ctx".into(),
+            },
+            prompt_message: SealedSeedMessage {
+                id: MessageId::parse("msg-prompt").unwrap(),
+                conversation: chan,
+                seq: 2,
+                content: "prompt".into(),
+            },
+            member_agents: agents,
+            member_users: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn channel_fork_aftermath_delivers_context_to_actor_prompt_to_others_and_starts_all() {
+        use silverhand_backend_server::conversation_messaging::messaging::collaboration::agent_create_channel::ChannelForkAftermath;
+
+        let delivery = RecordingDelivery::default();
+        let start = RecordingStart::default();
+        let hub = ScopeEventHub::production().unwrap();
+        // Live roster is unchanged from the committed set across both reads.
+        let roster = RecordingAgents::with(vec![
+            vec!["agent-actor", "agent-b", "agent-c"],
+            vec!["agent-actor", "agent-b", "agent-c"],
+        ]);
+        let aftermath = ProductionChannelForkAftermath::new(
+            hub,
+            delivery.clone(),
+            start.clone(),
+            roster.clone(),
+        );
+
+        let committed = committed_fork("conv-chan", "agent-actor", &["agent-b", "agent-c"]);
+        let workspace = WorkspaceId::parse("ws-1").unwrap();
+        aftermath.channel_forked(&workspace, &committed).await;
+
+        // The live roster was read exactly TWICE (once for the prompt audience after
+        // the context deliver, once for the start audience after the prompt) — the two
+        // `listAgents` calls the production TS makes, not the committed set.
+        assert_eq!(
+            roster.reads.lock().unwrap().clone(),
+            vec!["conv-chan".to_owned(), "conv-chan".to_owned()],
+        );
+
+        // Context seed → actor first; prompt → each OTHER agent (never the actor).
+        let calls = delivery.calls.lock().unwrap().clone();
+        assert_eq!(
+            calls,
+            vec![
+                ("agent-actor".to_owned(), "msg-context".to_owned()),
+                ("agent-b".to_owned(), "msg-prompt".to_owned()),
+                ("agent-c".to_owned(), "msg-prompt".to_owned()),
+            ],
+            "context goes to the actor, prompt is distributed to the OTHER members only, in order"
+        );
+
+        // Start-all covers every member agent (including the actor).
+        let starts = start.starts.lock().unwrap().clone();
+        assert_eq!(
+            starts,
+            vec![
+                "agent-actor".to_owned(),
+                "agent-b".to_owned(),
+                "agent-c".to_owned()
+            ],
+            "every member runtime is started"
+        );
+    }
+
+    #[tokio::test]
+    async fn channel_fork_aftermath_one_leg_failure_does_not_block_siblings() {
+        use silverhand_backend_server::conversation_messaging::messaging::collaboration::agent_create_channel::ChannelForkAftermath;
+
+        // The actor's context deliver fails AND agent-b's start fails: the remaining
+        // deliver + start legs must still all run (best-effort, non-blocking).
+        let delivery = RecordingDelivery {
+            calls: Arc::default(),
+            fail_agent: Some("agent-actor".to_owned()),
+        };
+        let start = RecordingStart {
+            starts: Arc::default(),
+            fail_agent: Some("agent-b".to_owned()),
+        };
+        let hub = ScopeEventHub::production().unwrap();
+        // Live roster unchanged (both reads return the full committed set); this test
+        // isolates best-effort non-blocking, not the roster axis.
+        let roster = RecordingAgents::with(vec![
+            vec!["agent-actor", "agent-b", "agent-c"],
+            vec!["agent-actor", "agent-b", "agent-c"],
+        ]);
+        let aftermath =
+            ProductionChannelForkAftermath::new(hub, delivery.clone(), start.clone(), roster);
+
+        let committed = committed_fork("conv-chan", "agent-actor", &["agent-b", "agent-c"]);
+        let workspace = WorkspaceId::parse("ws-1").unwrap();
+        aftermath.channel_forked(&workspace, &committed).await;
+
+        // A failed context deliver to the actor did NOT abort the prompt distribution.
+        let delivered_agents: Vec<String> = delivery
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(a, _)| a.clone())
+            .collect();
+        assert_eq!(
+            delivered_agents,
+            vec!["agent-actor", "agent-b", "agent-c"],
+            "a failed leg is observed but the remaining deliver legs still run"
+        );
+        // A failed start for agent-b did NOT abort agent-c's start.
+        assert_eq!(
+            start.starts.lock().unwrap().clone(),
+            vec!["agent-actor", "agent-b", "agent-c"],
+            "a failed start is observed but the remaining start legs still run"
+        );
+    }
+
+    // ===================================================================
+    // Cindy R5 #1 latch: the prompt audience and the start audience are each
+    // the LIVE roster re-read at their own effect point, NOT the committed set.
+    // A member that LEFT between commit and the prompt read is neither prompted
+    // nor started; a member that JOINED is. Because the start read happens AFTER
+    // the prompt, a change landing in that window is reflected in start only.
+    // If either phase iterated `committed.member_agents`, this fails by name.
+    // ===================================================================
+    #[tokio::test]
+    async fn channel_fork_prompt_and_start_each_use_their_own_live_roster_not_committed() {
+        use silverhand_backend_server::conversation_messaging::messaging::collaboration::agent_create_channel::ChannelForkAftermath;
+
+        let delivery = RecordingDelivery::default();
+        let start = RecordingStart::default();
+        let hub = ScopeEventHub::production().unwrap();
+
+        // Committed creation fact = {actor, b, c}. But by the time the aftermath runs:
+        //   • prompt read (1st): agent-b LEFT, agent-d JOINED  → live {actor, c, d}
+        //   • start  read (2nd): agent-c also LEFT             → live {actor, d}
+        // committed b must never be prompted or started (stale); joined d must be both.
+        let roster = RecordingAgents::with(vec![
+            vec!["agent-actor", "agent-c", "agent-d"],
+            vec!["agent-actor", "agent-d"],
+        ]);
+        let aftermath = ProductionChannelForkAftermath::new(
+            hub,
+            delivery.clone(),
+            start.clone(),
+            roster.clone(),
+        );
+
+        let committed = committed_fork("conv-chan", "agent-actor", &["agent-b", "agent-c"]);
+        let workspace = WorkspaceId::parse("ws-1").unwrap();
+        aftermath.channel_forked(&workspace, &committed).await;
+
+        // Prompt distribution used the FIRST live read (minus the actor): c + d, NOT the
+        // committed b. Context still goes to the actor first (unconditional creator leg).
+        let calls = delivery.calls.lock().unwrap().clone();
+        assert_eq!(
+            calls,
+            vec![
+                ("agent-actor".to_owned(), "msg-context".to_owned()),
+                ("agent-c".to_owned(), "msg-prompt".to_owned()),
+                ("agent-d".to_owned(), "msg-prompt".to_owned()),
+            ],
+            "prompt audience = live roster at the first read (joined d in, left b out), never committed b"
+        );
+
+        // Start used the SECOND live read: actor + d only. Left c (gone after the prompt
+        // read) is NOT started; committed b is never started.
+        assert_eq!(
+            start.starts.lock().unwrap().clone(),
+            vec!["agent-actor".to_owned(), "agent-d".to_owned()],
+            "start audience = live roster at the second read, never the committed set"
+        );
+
+        // Both reads were against the channel, in order.
+        assert_eq!(
+            roster.reads.lock().unwrap().clone(),
+            vec!["conv-chan".to_owned(), "conv-chan".to_owned()],
+        );
+    }
+
+    // ===================================================================
+    // Cindy R5 #1 fallback ban: if the live roster read FAILS, that phase is
+    // skipped — the committed set is NOT resurrected as a fallback (which would
+    // prompt/start a stale roster). A roster read error logs and drops the leg.
+    // ===================================================================
+    #[tokio::test]
+    async fn channel_fork_roster_read_failure_does_not_fall_back_to_committed() {
+        use silverhand_backend_server::conversation_messaging::messaging::collaboration::agent_create_channel::ChannelForkAftermath;
+
+        let delivery = RecordingDelivery::default();
+        let start = RecordingStart::default();
+        let hub = ScopeEventHub::production().unwrap();
+        let roster = RecordingAgents {
+            reads: Arc::default(),
+            snapshots: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+            fail: true,
+        };
+        let aftermath =
+            ProductionChannelForkAftermath::new(hub, delivery.clone(), start.clone(), roster);
+
+        let committed = committed_fork("conv-chan", "agent-actor", &["agent-b", "agent-c"]);
+        let workspace = WorkspaceId::parse("ws-1").unwrap();
+        aftermath.channel_forked(&workspace, &committed).await;
+
+        // Only the unconditional actor context deliver ran; NO prompt was distributed to
+        // the committed b/c (no fallback), and NO runtime was started from committed.
+        assert_eq!(
+            delivery.calls.lock().unwrap().clone(),
+            vec![("agent-actor".to_owned(), "msg-context".to_owned())],
+            "a failed prompt-audience read drops the prompt leg — committed roster is not a fallback"
+        );
+        assert!(
+            start.starts.lock().unwrap().is_empty(),
+            "a failed start-audience read starts nobody — committed roster is not a fallback"
+        );
     }
 }

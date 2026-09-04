@@ -3185,24 +3185,8 @@ async fn the_three_reviewed_lanes_mount_exactly_forty_five_routes() {
 /// route is `404`.  Embedded bootstrap is the sole extractor-gated exception, whose
 /// mounted node is witnessed by an unlisted GET returning `405`.
 #[tokio::test]
-async fn the_live_registry_closes_at_one_hundred_sixty_six_mounted_and_fifteen_residual() {
-    const EXPECTED_RESIDUAL: [&str; 15] = [
-        "DELETE /api/channels/:id/star",
-        "DELETE /api/workspaces/:id",
-        "GET /api/favorites",
-        "GET /internal/agents/:aid/list-channels",
-        "GET /internal/agents/:aid/list-workspaces",
-        "POST /api/channels/:id/star",
-        "POST /api/sort/touch",
-        "POST /api/workspaces",
-        "POST /internal/agents/:aid/create-channel",
-        "POST /internal/agents/:aid/follow-thread",
-        "POST /internal/agents/:aid/read-history",
-        "POST /internal/agents/:aid/search-messages",
-        "POST /internal/agents/:aid/unfollow-thread",
-        "PUT /api/sort/mode",
-        "PUT /api/sort/order",
-    ];
+async fn the_live_registry_closes_at_one_hundred_eighty_one_mounted_and_zero_residual() {
+    const EXPECTED_RESIDUAL: [&str; 0] = [];
     let rows: Vec<String> = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../../packages/backend/tests/routes/endpoint-registry-snapshot.json"
@@ -3261,10 +3245,10 @@ async fn the_live_registry_closes_at_one_hundred_sixty_six_mounted_and_fifteen_r
 
     assert_eq!(
         mounted.len(),
-        166,
+        181,
         "mounted identities; residual={residual:#?}"
     );
-    assert_eq!(residual.len(), 15, "residual identities={residual:#?}");
+    assert_eq!(residual.len(), 0, "residual identities={residual:#?}");
     assert_eq!(
         residual,
         EXPECTED_RESIDUAL.into_iter().map(str::to_owned).collect(),
@@ -4504,9 +4488,12 @@ async fn mounted_attachment_update_is_cursor_inert_and_reuses_the_one_blob_root(
 /// exactly `72`. This is NOT the canonical global endpoint inventory: the unchanged TS
 /// snapshot contains 184 registration rows collapsing to 181 unique method+path keys.
 /// The accepted #2257 global identity was 103 mounted + 78 residual; #2262 added
-/// 18 previously-residual keys, and #2338's live registry reconciliation now closes at
-/// `181 = 166 mounted + 15 residual`. This narrower gate extends #2257's 54-key
-/// migration-tracked subset by those same 18 notification/reaction/attachment keys.
+/// 18 previously-residual keys, and after #2341's final wave the live registry
+/// reconciliation now closes the canonical inventory at `181 = 181 mounted + 0
+/// residual`. This narrower gate extends #2257's 54-key
+/// migration-tracked subset by those same 18 notification/reaction/attachment keys;
+/// it remains a HISTORICAL migration subset (72 keys), NOT the canonical inventory,
+/// so its own accounting is independent of the now-closed global 181/0.
 /// Source registration counts are intentionally not used inside this subset: shared
 /// path nodes contribute one key per method, and a duplicate registrar cannot inflate
 /// the mounted identity. Deleting a row, or copying one between tables, breaks the
@@ -4562,7 +4549,8 @@ async fn mounted_attachment_update_is_cursor_inert_and_reuses_the_one_blob_root(
 ///   that to `404` and reddens this gate.
 /// * 0 RESIDUAL rows remain INSIDE THIS 72-key migration-tracked subset — every face
 ///   this subset declares is mounted through #2262. The canonical 181-key inventory
-///   now has 15 residual routes outside this subset. The loop
+///   is itself now fully mounted (181/0 after #2341); this 72-key subset stays a
+///   historical migration slice and is not the canonical inventory. The loop
 ///   stays as the mount-residual RED tripwire: a row re-added here that is actually
 ///   mounted fails its anon-`404` assertion.
 /// * 0 METHOD-SHADOW residual rows remain inside this subset: `POST /api/agents` was
@@ -4762,7 +4750,8 @@ async fn the_migration_tracked_route_subset_stays_closed_at_seventy_two() {
     const CONNECT_INFO_GATED: &[(&str, &str)] = &[("POST", "/auth/embedded-bootstrap")];
     // 0 RESIDUAL rows remain INSIDE THIS 72-key migration-tracked subset: every face
     // the subset declares is mounted through #2262. This is not a global claim: the
-    // 181-key canonical inventory now has 15 residual routes. A residual
+    // 181-key canonical inventory is itself now fully mounted (181/0 after #2341); this
+    // subset is a historical migration slice, not the canonical inventory. A residual
     // row re-added to this subset must answer anon 404, and mounting it must move the
     // row to LANDED (or CONNECT_INFO_GATED) — this is the subset mount-residual RED
     // tripwire.
@@ -4843,8 +4832,9 @@ async fn the_migration_tracked_route_subset_stays_closed_at_seventy_two() {
         "anon resolve reaches its own handler, not the perimeter"
     );
 
-    // ── 0 CLEAN RESIDUAL inside the migration-tracked subset; this does not describe
-    // the canonical inventory's 15 residual routes. Every subset residual-wave face is
+    // ── 0 CLEAN RESIDUAL inside the migration-tracked subset; this subset is not the
+    // canonical inventory (which is itself now fully mounted, 181/0 after #2341). Every
+    // subset residual-wave face is
     // mounted through #2262. The loop is kept as the subset mount-residual RED tripwire:
     // a row re-added to CLEAN_RESIDUAL that is actually mounted would fail its anon-404
     // assertion. ──

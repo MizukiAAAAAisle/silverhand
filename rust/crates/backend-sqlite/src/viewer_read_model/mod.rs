@@ -10,6 +10,8 @@
 //! (`user_presence_last_seen`, implementing the core `LastSeenSink` port) remain three
 //! independent responsibilities with their own SQL and transaction boundaries.
 
+pub mod favorites;
 pub mod unread_read;
 pub mod user_presence_cold_read;
 pub mod user_presence_last_seen;
+pub mod viewer_sort;

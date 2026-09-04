@@ -15,8 +15,10 @@
 //! authoritative presence fact. Composition must not wire the read and event to
 //! independent projections of the same state.
 
+pub mod favorites;
 pub mod presence;
 pub mod presence_grace;
 pub mod user_presence_cold_read;
 pub mod user_presence_last_seen;
+pub mod viewer_sort_state;
 pub mod viewer_workspace_sort;

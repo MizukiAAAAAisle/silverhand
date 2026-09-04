@@ -325,6 +325,38 @@ async fn load_workspace_rows(
         .collect()
 }
 
+/// The `channels:<ws>` list's live visible membership, resolved tx-bound so a
+/// caller (the viewer-sort mutation writer) can re-derive it UNDER its own write
+/// lock instead of trusting a stale pre-lock witness. It reuses the SAME
+/// `load_workspace` / `viewer_is_workspace_member` / `load_workspace_rows` SQL the
+/// pooled `active` read uses and applies the identical visibility filter, so the
+/// two never diverge. Returns the visible conversation ids (the sort group) or the
+/// existence/visibility refusal.
+pub(crate) async fn resolve_active_channel_membership(
+    tx: &mut Transaction<'_, Sqlite>,
+    viewer: &UserId,
+    workspace: &WorkspaceId,
+) -> Result<Result<Vec<ConversationId>, WorkspaceDirectoryRefusal>, ChannelDirectoryStoreError> {
+    let Some(workspace_fact) = load_workspace(tx, viewer, workspace).await? else {
+        return Ok(Err(WorkspaceDirectoryRefusal::NotFound));
+    };
+    if !viewer_is_workspace_member(tx, viewer, &workspace_fact.id).await? {
+        return Ok(Err(WorkspaceDirectoryRefusal::Forbidden));
+    }
+    let rows = load_workspace_rows(tx, viewer, &workspace_fact, false).await?;
+    let visible = rows
+        .into_iter()
+        .filter(|row| match &workspace_fact.kind {
+            DirectoryWorkspaceKind::Regular => {
+                row.is_member() || row.visibility() == ChannelVisibility::Public
+            }
+            DirectoryWorkspaceKind::AgentHome(_) => row.is_member(),
+        })
+        .map(|row| row.conversation().clone())
+        .collect();
+    Ok(Ok(visible))
+}
+
 fn decode_channel(
     row: &SqliteRow,
     viewer: &UserId,

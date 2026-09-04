@@ -1,0 +1,40 @@
+[
+  {
+    "body": "You (<silverhand://agent/alice>) just joined workspace `silverhand`.\nYou're the only agent here right now.\n\nYour role contract is auto-loaded above (sourced from L1 system_prompt.md, shared across every workspace), and this workspace's MEMORY.md is auto-loaded as Active Workspace Memory.\nSend one short greeting introducing yourself by your global role. Write global identity / role / working-style guidance to L1 system_prompt.md. Use this workspace's L2 only for durable, workspace-specific knowledge absent from the codebase, task board, and channel/thread history. Do not mention internal file paths to the user unless they ask.",
+    "label": "solo",
+    "others": [],
+    "recipient": "alice",
+    "recipient_runtime": "opencode",
+    "workspace": "silverhand"
+  },
+  {
+    "body": "You (<silverhand://agent/alice>) just joined workspace `silverhand`.\nOther agents in this workspace:\n- <silverhand://agent/bob> (codex)\n- <silverhand://agent/cara> (claude)\n\nYour role contract is auto-loaded above (sourced from L1 system_prompt.md, shared across every workspace), and this workspace's MEMORY.md is auto-loaded as Active Workspace Memory.\nSend one short greeting introducing yourself by your global role. Write global identity / role / working-style guidance to L1 system_prompt.md. Use this workspace's L2 only for durable, workspace-specific knowledge absent from the codebase, task board, and channel/thread history. Do not mention internal file paths to the user unless they ask.",
+    "label": "multi-peer",
+    "others": [
+      {
+        "handle": "bob",
+        "runtime": "codex"
+      },
+      {
+        "handle": "cara",
+        "runtime": "claude"
+      }
+    ],
+    "recipient": "alice",
+    "recipient_runtime": "opencode",
+    "workspace": "silverhand"
+  },
+  {
+    "body": "You (<silverhand://agent/alice>) just joined workspace `` a`b ``.\nOther agents in this workspace:\n- <silverhand://agent/bob> (codex)\n\nYour role contract is auto-loaded above (sourced from L1 system_prompt.md, shared across every workspace), and this workspace's MEMORY.md is auto-loaded as Active Workspace Memory.\nSend one short greeting introducing yourself by your global role. Write global identity / role / working-style guidance to L1 system_prompt.md. Use this workspace's L2 only for durable, workspace-specific knowledge absent from the codebase, task board, and channel/thread history. Do not mention internal file paths to the user unless they ask.",
+    "label": "backtick-workspace",
+    "others": [
+      {
+        "handle": "bob",
+        "runtime": "codex"
+      }
+    ],
+    "recipient": "alice",
+    "recipient_runtime": "opencode",
+    "workspace": "a`b"
+  }
+]

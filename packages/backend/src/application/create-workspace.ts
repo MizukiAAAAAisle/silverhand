@@ -229,7 +229,7 @@ export async function createWorkspace(
  * Onboarding system-message body for a newly-created workspace member. Moved
  * verbatim from the route (`onboardingBody`); pure (AgentDto → string).
  */
-function onboardingBody(
+export function onboardingBody(
   workspaceName: string,
   recipient: AgentDto,
   others: AgentDto[],

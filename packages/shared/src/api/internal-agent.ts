@@ -222,12 +222,27 @@ export type ThreadCloseOpenTaskDetail = z.infer<
 
 const ReadHistoryOptionalSeqSchema = z.preprocess(
   value => (value === '' || value === undefined ? undefined : value),
-  z.coerce.number().int().nonnegative().optional(),
+  // #task:2341: sequence numbers are JS-safe integers on BOTH wires — a coerced
+  // value beyond MAX_SAFE_INTEGER is rejected (not silently rounded), matching the
+  // Rust `CoercedNumber` gate so the accepted value is byte-identical.
+  z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .refine(Number.isSafeInteger, { message: 'must be a safe integer' })
+    .optional(),
 );
 
 const ReadHistoryOptionalLimitSchema = z.preprocess(
   value => (value === '' || value === undefined ? undefined : value),
-  z.coerce.number().int().positive().max(100).optional().default(50),
+  z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(100)
+    .refine(Number.isSafeInteger, { message: 'must be a safe integer' })
+    .optional()
+    .default(50),
 );
 
 /** read_history target — RETIRED by #task:2021 P4-4. The read door now takes the
@@ -517,7 +532,14 @@ export type AgentSearchMessagesScope = z.infer<
 
 const AgentSearchMessagesLimitSchema = z.preprocess(
   value => (value === '' || value === undefined ? undefined : value),
-  z.coerce.number().int().positive().max(100).optional().default(50),
+  z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(100)
+    .refine(Number.isSafeInteger, { message: 'must be a safe integer' })
+    .optional()
+    .default(50),
 );
 
 export const AgentSearchMessagesInputSchema = z

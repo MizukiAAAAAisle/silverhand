@@ -29,4 +29,5 @@ pub mod scope_event_transport;
 pub(crate) mod scope_event_wire;
 pub mod server_info;
 pub(crate) mod wire_admission;
+pub(crate) mod wire_coerce;
 pub(crate) mod wire_patch;

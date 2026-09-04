@@ -549,10 +549,301 @@ async fn direct_pair_live_agent_rows(
     .await
 }
 
+impl<E> silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::RootMessageLocate
+    for SqliteThreadFollow<E>
+where
+    E: Send + Sync,
+{
+    async fn locate_root_message(
+        &self,
+        message_id: &str,
+    ) -> Result<
+        Option<silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::RootMessageLocation>,
+        silverhand_backend_core::foundation::persistence::PersistenceFailure,
+    > {
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::RootMessageLocation;
+        let Some(row) = sqlx::query(
+            "SELECT m.conversation_id AS conversation_id, c.workspace_id AS workspace_id \
+               FROM messages m JOIN conversations c ON c.id = m.conversation_id \
+              WHERE m.id = ?",
+        )
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(ThreadFollowStoreError::from)?
+        else {
+            return Ok(None);
+        };
+        let conversation = ConversationId::parse(
+            row.try_get::<String, _>("conversation_id").map_err(ThreadFollowStoreError::from)?,
+        )
+        .map_err(|_| silverhand_backend_core::foundation::persistence::PersistenceFailure::from_source(
+            ThreadFollowStoreError::MalformedIdentity,
+        ))?;
+        let workspace = match row
+            .try_get::<Option<String>, _>("workspace_id")
+            .map_err(ThreadFollowStoreError::from)?
+        {
+            None => None,
+            Some(raw) => Some(
+                silverhand_backend_core::foundation::identity::WorkspaceId::parse(raw).map_err(|_| {
+                    silverhand_backend_core::foundation::persistence::PersistenceFailure::from_source(
+                        ThreadFollowStoreError::MalformedIdentity,
+                    )
+                })?,
+            ),
+        };
+        Ok(Some(RootMessageLocation { conversation, workspace }))
+    }
+}
+
+impl<E> silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::AgentThreadFollowWrite
+    for SqliteThreadFollow<E>
+where
+    E: silverhand_backend_core::conversation_messaging::messaging::environment::SendClock
+        + Clone
+        + Send
+        + Sync,
+{
+    async fn follow(
+        &self,
+        agent: silverhand_backend_core::foundation::identity::AgentId,
+        conversation: ConversationId,
+        root_message: ThreadRootId,
+    ) -> Result<
+        Result<
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::AgentThreadFollowChange,
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::AgentThreadFollowRefusal,
+        >,
+        silverhand_backend_core::foundation::persistence::PersistenceFailure,
+    > {
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::{
+            AgentThreadFollowChange, AgentThreadFollowRefusal,
+        };
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(ThreadFollowStoreError::from)?;
+        let Some(root) = resolve_root(&mut tx, &conversation, &root_message).await? else {
+            tx.rollback().await.map_err(ThreadFollowStoreError::from)?;
+            return Ok(Err(AgentThreadFollowRefusal::RootNotFound));
+        };
+        // Anti-oracle ORDER (Cindy #8): participation BEFORE capability.
+        match agent_follow_gates(&mut tx, &conversation, &agent).await? {
+            Ok(()) => {}
+            Err(refusal) => {
+                tx.rollback().await.map_err(ThreadFollowStoreError::from)?;
+                return Ok(Err(refusal));
+            }
+        }
+        // Reserved-writer clock, validated through the shared FollowedAt value object
+        // (#53): a domain-invalid instant fails closed, no follower/inbox write.
+        let now = self.environment.now_unix_ms().map_err(|error| {
+            silverhand_backend_core::foundation::persistence::PersistenceFailure::from_source(
+                ThreadFollowStoreError::from(error),
+            )
+        })?;
+        let Ok(followed_at_value) =
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::FollowedAt::new(now)
+        else {
+            tx.rollback().await.map_err(ThreadFollowStoreError::from)?;
+            return Ok(Err(AgentThreadFollowRefusal::InvalidClock));
+        };
+        let followed_at = followed_at_value.get();
+        let inserted = sqlx::query(
+            "INSERT INTO thread_followers \
+             (thread_root_id,conversation_id,principal_kind,principal_id,followed_at,source) \
+             VALUES(?,?,'agent',?,?,'manual') \
+             ON CONFLICT(thread_root_id,principal_kind,principal_id) DO NOTHING",
+        )
+        .bind(root.id.as_str())
+        .bind(conversation.as_str())
+        .bind(agent.as_str())
+        .bind(followed_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(ThreadFollowStoreError::from)?
+        .rows_affected()
+            == 1;
+        if inserted {
+            // Backfill the prior thread context — the root + all replies (the thread
+            // cluster: id=root OR thread_root_id=root) — into the agent's inbox as
+            // `observe` deliveries. Idempotent on (conversation, agent, message), skips
+            // the agent's own messages. Complete (no cap), ordered by seq.
+            sqlx::query(
+                "INSERT INTO conversation_inboxes \
+                   (conversation_id, agent_id, message_id, delivered_at, created_at, delivery_kind) \
+                 SELECT m.conversation_id, ?, m.id, NULL, ?, 'observe' \
+                   FROM messages m \
+                  WHERE m.conversation_id = ? \
+                    AND (m.id = ? OR m.thread_root_id = ?) \
+                    AND NOT (m.from_kind = 'agent' AND m.from_agent_id = ?) \
+                    AND NOT EXISTS (SELECT 1 FROM conversation_inboxes ci \
+                                     WHERE ci.conversation_id = m.conversation_id \
+                                       AND ci.agent_id = ? AND ci.message_id = m.id) \
+                  ORDER BY m.seq ASC",
+            )
+            .bind(agent.as_str())
+            .bind(followed_at)
+            .bind(conversation.as_str())
+            .bind(root.id.as_str())
+            .bind(root.id.as_str())
+            .bind(agent.as_str())
+            .bind(agent.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(ThreadFollowStoreError::from)?;
+        }
+        tx.commit().await.map_err(ThreadFollowStoreError::from)?;
+        Ok(Ok(AgentThreadFollowChange {
+            thread_root: root.id,
+            changed: inserted,
+        }))
+    }
+
+    async fn unfollow(
+        &self,
+        agent: silverhand_backend_core::foundation::identity::AgentId,
+        conversation: ConversationId,
+        root_message: ThreadRootId,
+    ) -> Result<
+        Result<
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::AgentThreadFollowChange,
+            silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::AgentThreadFollowRefusal,
+        >,
+        silverhand_backend_core::foundation::persistence::PersistenceFailure,
+    > {
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::{
+            AgentThreadFollowChange, AgentThreadFollowRefusal,
+        };
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(ThreadFollowStoreError::from)?;
+        let Some(root) = resolve_root(&mut tx, &conversation, &root_message).await? else {
+            tx.rollback().await.map_err(ThreadFollowStoreError::from)?;
+            return Ok(Err(AgentThreadFollowRefusal::RootNotFound));
+        };
+        // Unfollow re-verifies the same gates in the anti-oracle order (Cindy #5/#8):
+        // a lock-outside hint is never the authority.
+        match agent_follow_gates(&mut tx, &conversation, &agent).await? {
+            Ok(()) => {}
+            Err(refusal) => {
+                tx.rollback().await.map_err(ThreadFollowStoreError::from)?;
+                return Ok(Err(refusal));
+            }
+        }
+        // Unfollow only stops FUTURE delivery — the already-delivered backfill is NOT
+        // retracted. A single delete; idempotent (`changed=false` when not following).
+        let removed = sqlx::query(
+            "DELETE FROM thread_followers \
+             WHERE thread_root_id=? AND principal_kind='agent' AND principal_id=?",
+        )
+        .bind(root.id.as_str())
+        .bind(agent.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(ThreadFollowStoreError::from)?
+        .rows_affected()
+            == 1;
+        tx.commit().await.map_err(ThreadFollowStoreError::from)?;
+        Ok(Ok(AgentThreadFollowChange {
+            thread_root: root.id,
+            changed: removed,
+        }))
+    }
+}
+
+/// The agent follow/unfollow gates fresh-replayed in the reserved writer, in the
+/// anti-oracle ORDER (Cindy #5/#8): live participation (workspace roster edge OR
+/// direct-pair agent endpoint) FIRST, THEN `read_messages` capability on the
+/// conversation's workspace (a direct pair has no capability axis — participation is
+/// the whole gate). A non-participant is refused before it can probe capability.
+async fn agent_follow_gates(
+    tx: &mut Transaction<'_, Sqlite>,
+    conversation: &ConversationId,
+    agent: &silverhand_backend_core::foundation::identity::AgentId,
+) -> Result<
+    Result<(), silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::AgentThreadFollowRefusal>,
+    silverhand_backend_core::foundation::persistence::PersistenceFailure,
+>{
+    use silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::AgentThreadFollowRefusal;
+    // Placement + workspace of the conversation.
+    let Some(row) = sqlx::query(
+        "SELECT placement_kind, workspace_id, endpoint_a_kind, endpoint_a_id, endpoint_a_deleted_at, \
+         endpoint_b_kind, endpoint_b_id, endpoint_b_deleted_at FROM conversations WHERE id = ?",
+    )
+    .bind(conversation.as_str())
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(ThreadFollowStoreError::from)?
+    else {
+        // No such conversation → the agent cannot participate.
+        return Ok(Err(AgentThreadFollowRefusal::NotParticipant));
+    };
+    let placement: String = row
+        .try_get("placement_kind")
+        .map_err(ThreadFollowStoreError::from)?;
+    let participates = if placement == "direct_pair" {
+        let mut ok = false;
+        for (kind_col, id_col, del_col) in [
+            ("endpoint_a_kind", "endpoint_a_id", "endpoint_a_deleted_at"),
+            ("endpoint_b_kind", "endpoint_b_id", "endpoint_b_deleted_at"),
+        ] {
+            let kind: Option<String> = row
+                .try_get(kind_col)
+                .map_err(ThreadFollowStoreError::from)?;
+            let id: Option<String> = row.try_get(id_col).map_err(ThreadFollowStoreError::from)?;
+            let deleted: Option<i64> =
+                row.try_get(del_col).map_err(ThreadFollowStoreError::from)?;
+            if kind.as_deref() == Some("agent")
+                && id.as_deref() == Some(agent.as_str())
+                && deleted.is_none()
+            {
+                ok = true;
+            }
+        }
+        ok
+    } else {
+        // Workspace placement: a live conversation_agents edge to an existing agent.
+        let hit: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM conversation_agents ca JOIN agents a ON a.id=ca.agent_id \
+             WHERE ca.conversation_id=? AND ca.agent_id=?)",
+        )
+        .bind(conversation.as_str())
+        .bind(agent.as_str())
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(ThreadFollowStoreError::from)?;
+        hit == 1
+    };
+    if !participates {
+        return Ok(Err(AgentThreadFollowRefusal::NotParticipant));
+    }
+    // Capability (workspace placement only).
+    let workspace: Option<String> = row
+        .try_get("workspace_id")
+        .map_err(ThreadFollowStoreError::from)?;
+    if let Some(workspace) = workspace {
+        let granted: Option<i64> = sqlx::query_scalar(
+            "SELECT CASE WHEN w.owner_agent_id = ? OR EXISTS (SELECT 1 FROM \
+             workspace_agent_capabilities c WHERE c.workspace_id = w.id AND c.agent_id = ? \
+             AND c.capability = 'read_messages') THEN 1 ELSE 0 END FROM workspaces w WHERE w.id = ?",
+        )
+        .bind(agent.as_str())
+        .bind(agent.as_str())
+        .bind(workspace.as_str())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(ThreadFollowStoreError::from)?;
+        if !granted.is_some_and(|allowed| allowed != 0) {
+            return Ok(Err(AgentThreadFollowRefusal::CapabilityDenied));
+        }
+    }
+    Ok(Ok(()))
+}
+
 #[cfg(test)]
 mod tests {
     use silverhand_backend_core::foundation::identity::WorkspaceId;
-    use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
+    use sqlx::{
+        Connection, Executor, SqliteConnection,
+        sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    };
 
     use super::*;
 
@@ -624,5 +915,144 @@ mod tests {
         assert_eq!(live.len(), 32);
         assert_eq!(LIVE_PARTICIPATION_STATEMENTS.load(Ordering::SeqCst), 1);
         tx.commit().await.unwrap();
+    }
+
+    const FOLLOW_SCHEMA: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+    ));
+
+    // ws channel `chan` (agent-a member+cap; agent-c member no-cap; agent-x nonmember),
+    // one root message `m1`.
+    const FOLLOW_SEED: &str = "\
+INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('u1','u','U',1,1); \
+INSERT INTO hosts(id,name,kind,created_at) VALUES('h1','H','local',1); \
+INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,created_by_user_id) VALUES('agent-a','alice','claude','h1',1,1,'u1'); \
+INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,created_by_user_id) VALUES('agent-c','dave','codex','h1',1,1,'u1'); \
+INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,created_by_user_id) VALUES('agent-x','carol','codex','h1',1,1,'u1'); \
+INSERT INTO workspaces(id,name,name_key,owner_agent_id,created_at,updated_at) VALUES('ws','Team','fteam',NULL,1,1); \
+INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES('ws','agent-a',1); \
+INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES('ws','agent-c',1); \
+INSERT INTO workspace_agent_capabilities(workspace_id,agent_id,capability) VALUES('ws','agent-a','read_messages'); \
+INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at) VALUES('chan','ws','workspace','open','Chan','fchan','idle','private',1,1); \
+INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('chan','agent-a',1); \
+INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('chan','agent-c',1); \
+INSERT INTO messages(id,conversation_id,from_kind,from_agent_id,content,seq,created_at) VALUES('m1','chan','agent','agent-a','root',1,10);";
+
+    async fn follow_store() -> (
+        tempfile::TempDir,
+        MessagingStore<crate::conversation_messaging::messaging::HostEnvironment>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent-follow.sqlite");
+        let mut db = SqliteConnection::connect_with(
+            &SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true)
+                .foreign_keys(true),
+        )
+        .await
+        .unwrap();
+        db.execute(sqlx::raw_sql(FOLLOW_SCHEMA)).await.unwrap();
+        db.execute(sqlx::raw_sql(FOLLOW_SEED)).await.unwrap();
+        db.close().await.unwrap();
+        let store = MessagingStore::open(&path).await.unwrap();
+        (dir, store)
+    }
+    fn ag(id: &str) -> AgentId {
+        AgentId::parse(id).unwrap()
+    }
+    fn cv(id: &str) -> ConversationId {
+        ConversationId::parse(id).unwrap()
+    }
+    fn rt(id: &str) -> ThreadRootId {
+        ThreadRootId::parse(id).unwrap()
+    }
+
+    #[tokio::test]
+    async fn agent_follow_backfills_then_revoke_flips_the_next_follow_closed() {
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::{
+            AgentThreadFollowWrite, AgentThreadFollowRefusal,
+        };
+        let (dir, store) = follow_store().await;
+        let follow = store.thread_follow();
+        // agent-a (member + cap) follows → changed, and backfills the root into inbox.
+        let change = AgentThreadFollowWrite::follow(&follow, ag("agent-a"), cv("chan"), rt("m1"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(change.changed);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(dir.path().join("agent-follow.sqlite"))
+                    .foreign_keys(true),
+            )
+            .await
+            .unwrap();
+        // The follower row exists after a successful follow.
+        let followers_now: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM thread_followers WHERE principal_kind='agent' AND principal_id='agent-a'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(followers_now, 1, "follow inserted the follower row");
+        // Revoke read_messages (a competing writer). A brand-new agent-c that IS a
+        // member but now needs cap is refused — proving the writer replays capability
+        // in-snapshot rather than caching the earlier authorized read (#5).
+        sqlx::query("DELETE FROM workspace_agent_capabilities WHERE workspace_id='ws' AND agent_id='agent-a'")
+            .execute(&pool).await.unwrap();
+        assert!(matches!(
+            AgentThreadFollowWrite::follow(&follow, ag("agent-a"), cv("chan"), rt("m1"))
+                .await
+                .unwrap(),
+            Err(AgentThreadFollowRefusal::CapabilityDenied)
+        ));
+        // agent-c (member, never had cap) also refused — no follower row for it.
+        assert!(matches!(
+            AgentThreadFollowWrite::follow(&follow, ag("agent-c"), cv("chan"), rt("m1"))
+                .await
+                .unwrap(),
+            Err(AgentThreadFollowRefusal::CapabilityDenied)
+        ));
+        let c_followers: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM thread_followers WHERE principal_id='agent-c'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            c_followers, 0,
+            "a capability-denied follow writes no follower row"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_follow_refusal_order_and_gates() {
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::{
+            AgentThreadFollowWrite, AgentThreadFollowRefusal,
+        };
+        let (_dir, store) = follow_store().await;
+        let follow = store.thread_follow();
+        // nonparticipant (agent-x) → NotParticipant BEFORE capability (#8).
+        assert!(matches!(
+            AgentThreadFollowWrite::follow(&follow, ag("agent-x"), cv("chan"), rt("m1"))
+                .await
+                .unwrap(),
+            Err(AgentThreadFollowRefusal::NotParticipant)
+        ));
+        // participant without cap (agent-c) → CapabilityDenied.
+        assert!(matches!(
+            AgentThreadFollowWrite::follow(&follow, ag("agent-c"), cv("chan"), rt("m1"))
+                .await
+                .unwrap(),
+            Err(AgentThreadFollowRefusal::CapabilityDenied)
+        ));
+        // unknown root → RootNotFound.
+        assert!(matches!(
+            AgentThreadFollowWrite::follow(&follow, ag("agent-a"), cv("chan"), rt("nope"))
+                .await
+                .unwrap(),
+            Err(AgentThreadFollowRefusal::RootNotFound)
+        ));
     }
 }

@@ -138,6 +138,65 @@ pub fn fold_name_key(raw: &str) -> String {
     folded.nfc().collect()
 }
 
+/// Unicode 16 FULL case fold ONLY — NO normalization (Cindy #49). This is the exact
+/// isomorph of TS `unicode-case-fold.ts::foldCase`: the same pinned `CASE_FOLD`
+/// table [`fold_name_key`] uses, but WITHOUT the trailing NFC, so it preserves the
+/// un-normalized `toLocaleLowerCase`-equivalent semantics needed by case-insensitive
+/// text MATCHING (search candidate selection + excerpt) where a folded-unit →
+/// original-UTF-16-span mapping must stay derivable per code point. Do NOT use
+/// [`fold_name_key`] for matching — its NFC can compose across code points and break
+/// the span map.
+///
+/// Returns the folded string AND, for each ORIGINAL `char` (in order), the number of
+/// UTF-16 code units its fold produced — so a matcher can map a folded-offset back to
+/// the original text's UTF-16 offset without `from_utf16_lossy`.
+pub fn fold_case_only_with_spans(raw: &str) -> (String, Vec<FoldSpan>) {
+    let mut folded = String::with_capacity(raw.len());
+    let mut spans = Vec::new();
+    for character in raw.chars() {
+        let original_utf16 = character.len_utf16() as u32;
+        let folded_str =
+            match pinned_unicode::CASE_FOLD.binary_search_by_key(&character, |(key, _)| *key) {
+                Ok(index) => pinned_unicode::CASE_FOLD[index].1,
+                Err(_) => {
+                    // No fold row: the char folds to itself. Push it and record its own
+                    // UTF-16 width on both sides.
+                    let start = folded.len();
+                    folded.push(character);
+                    let folded_utf16 = folded[start..].encode_utf16().count() as u32;
+                    spans.push(FoldSpan {
+                        original_utf16,
+                        folded_utf16,
+                    });
+                    continue;
+                }
+            };
+        let folded_utf16 = folded_str.encode_utf16().count() as u32;
+        folded.push_str(folded_str);
+        spans.push(FoldSpan {
+            original_utf16,
+            folded_utf16,
+        });
+    }
+    (folded, spans)
+}
+
+/// One original code point's contribution to a full case fold: how many UTF-16 code
+/// units it occupied in the ORIGINAL text and how many its fold produced. A full fold
+/// can EXPAND (e.g. `ß` → `ss`), so the two differ; the running sums let a matcher
+/// translate a folded UTF-16 offset back to the original UTF-16 offset.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FoldSpan {
+    pub original_utf16: u32,
+    pub folded_utf16: u32,
+}
+
+/// Convenience: the full case fold ONLY (no NFC), discarding the span map — for
+/// callers that only need the folded haystack/needle for a contains check.
+pub fn fold_case_only(raw: &str) -> String {
+    fold_case_only_with_spans(raw).0
+}
+
 /// Whether a persisted/display name is already in NFC.
 ///
 /// Address decoders use this check without importing a second normalization engine
@@ -201,6 +260,50 @@ pub fn is_ecmascript_trim_whitespace(character: char) -> bool {
                 | '\u{000A}'
                 | '\u{000D}'
     )
+}
+
+/// Collapse every run of ECMAScript `\s` whitespace to a single space and trim the
+/// ends — the ONE production authority mirroring TS `content.replace(/\s+/g, ' ')
+/// .trim()` (Cindy #22). Uses `is_ecmascript_trim_whitespace`, NOT Rust's
+/// `char::is_whitespace()`, so U+FEFF collapses (JS `\s` includes it) and U+0085 NEL
+/// does NOT (JS `\s` excludes it) — both the read-history snippet and the search
+/// excerpt share this exact set.
+pub fn collapse_ecmascript_whitespace(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut in_ws = false;
+    for ch in content.chars() {
+        if is_ecmascript_trim_whitespace(ch) {
+            in_ws = true;
+        } else {
+            if in_ws && !out.is_empty() {
+                out.push(' ');
+            }
+            in_ws = false;
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Truncate an already-compacted string to at most `max` UTF-16 code units, mirroring
+/// TS `s.length <= max ? s : s.slice(0, max - 1) + '…'` but SCALAR-SAFE (Cindy #27): a
+/// cut that would land inside a surrogate pair shrinks inward by one unit so the
+/// ellipsis never replaces half a pair with U+FFFD. `max` must be ≥ 1.
+pub fn truncate_utf16_scalar_safe(compact: &str, max: usize) -> String {
+    let units: Vec<u16> = compact.encode_utf16().collect();
+    if units.len() <= max {
+        return compact.to_owned();
+    }
+    // Keep `max - 1` units for the body, then append the one-unit ellipsis. If the
+    // body would end on a high surrogate (lead half of a pair), drop it (shrink
+    // inward) so we never split the pair.
+    let mut end = max - 1;
+    if end > 0 && (0xD800..=0xDBFF).contains(&units[end - 1]) {
+        end -= 1;
+    }
+    let mut truncated = String::from_utf16_lossy(&units[..end]);
+    truncated.push('…');
+    truncated
 }
 
 #[cfg(test)]

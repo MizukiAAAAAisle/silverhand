@@ -2,6 +2,11 @@
 
 // INTEGRATION SEAM: thin capability registration; no route logic belongs here.
 pub mod activity;
+pub mod agent_channel_list;
+pub mod agent_create_channel;
+pub mod agent_read_history;
+pub mod agent_search;
+pub mod agent_thread_follow;
 pub mod attachment;
 pub mod attention_preference;
 pub mod attention_projection;
