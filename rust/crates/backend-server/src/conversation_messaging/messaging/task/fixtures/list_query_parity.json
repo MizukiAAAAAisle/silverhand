@@ -1,0 +1,272 @@
+{
+  "task_number": [
+    {
+      "name": "canonical",
+      "raw": "190",
+      "refinement": false,
+      "ts_accepts": true,
+      "ts_value": 190,
+      "rust_refinement": false
+    },
+    {
+      "name": "canonical_large",
+      "raw": "500",
+      "refinement": false,
+      "ts_accepts": true,
+      "ts_value": 500,
+      "rust_refinement": false
+    },
+    {
+      "name": "zero_is_not_positive",
+      "raw": "0",
+      "refinement": false,
+      "ts_accepts": false,
+      "ts_value": null,
+      "rust_refinement": false
+    },
+    {
+      "name": "negative_is_not_positive",
+      "raw": "-3",
+      "refinement": false,
+      "ts_accepts": false,
+      "ts_value": null,
+      "rust_refinement": false
+    },
+    {
+      "name": "fraction_is_not_an_integer",
+      "raw": "1.5",
+      "refinement": false,
+      "ts_accepts": false,
+      "ts_value": null,
+      "rust_refinement": false
+    },
+    {
+      "name": "letters_are_not_a_number",
+      "raw": "x",
+      "refinement": false,
+      "ts_accepts": false,
+      "ts_value": null,
+      "rust_refinement": false
+    },
+    {
+      "name": "empty_is_not_a_number",
+      "raw": "",
+      "refinement": false,
+      "ts_accepts": false,
+      "ts_value": null,
+      "rust_refinement": false
+    },
+    {
+      "name": "trailing_point_zero",
+      "raw": "190.0",
+      "refinement": true,
+      "ts_accepts": true,
+      "ts_value": 190,
+      "rust_refinement": true
+    },
+    {
+      "name": "hexadecimal",
+      "raw": "0x10",
+      "refinement": true,
+      "ts_accepts": true,
+      "ts_value": 16,
+      "rust_refinement": true
+    },
+    {
+      "name": "surrounding_space",
+      "raw": " 190 ",
+      "refinement": true,
+      "ts_accepts": true,
+      "ts_value": 190,
+      "rust_refinement": true
+    },
+    {
+      "name": "scientific_notation",
+      "raw": "1e2",
+      "refinement": true,
+      "ts_accepts": true,
+      "ts_value": 100,
+      "rust_refinement": true
+    },
+    {
+      "name": "max_safe_integer",
+      "raw": "9007199254740991",
+      "refinement": false,
+      "ts_accepts": true,
+      "ts_value": 9007199254740991,
+      "rust_refinement": false
+    },
+    {
+      "name": "max_safe_plus_one",
+      "raw": "9007199254740992",
+      "refinement": true,
+      "ts_accepts": true,
+      "ts_value": 9007199254740992,
+      "rust_refinement": true
+    },
+    {
+      "name": "precision_loss_rounds_down",
+      "raw": "9007199254740993",
+      "refinement": true,
+      "ts_accepts": true,
+      "ts_value": 9007199254740992,
+      "rust_refinement": true
+    },
+    {
+      "name": "i64_max",
+      "raw": "9223372036854775807",
+      "refinement": true,
+      "ts_accepts": true,
+      "ts_value": 9223372036854776000,
+      "rust_refinement": true
+    },
+    {
+      "name": "i64_max_plus_one",
+      "raw": "9223372036854775808",
+      "refinement": true,
+      "ts_accepts": true,
+      "ts_value": 9223372036854776000,
+      "rust_refinement": true
+    }
+  ],
+  "limit": [
+    {
+      "name": "canonical",
+      "raw": "190",
+      "refinement": false,
+      "ts_accepts": true,
+      "ts_value": 190,
+      "rust_refinement": false
+    },
+    {
+      "name": "canonical_large",
+      "raw": "500",
+      "refinement": false,
+      "ts_accepts": true,
+      "ts_value": 500,
+      "rust_refinement": false
+    },
+    {
+      "name": "zero_is_not_positive",
+      "raw": "0",
+      "refinement": false,
+      "ts_accepts": false,
+      "ts_value": null,
+      "rust_refinement": false
+    },
+    {
+      "name": "negative_is_not_positive",
+      "raw": "-3",
+      "refinement": false,
+      "ts_accepts": false,
+      "ts_value": null,
+      "rust_refinement": false
+    },
+    {
+      "name": "fraction_is_not_an_integer",
+      "raw": "1.5",
+      "refinement": false,
+      "ts_accepts": false,
+      "ts_value": null,
+      "rust_refinement": false
+    },
+    {
+      "name": "letters_are_not_a_number",
+      "raw": "x",
+      "refinement": false,
+      "ts_accepts": false,
+      "ts_value": null,
+      "rust_refinement": false
+    },
+    {
+      "name": "trailing_point_zero",
+      "raw": "190.0",
+      "refinement": true,
+      "ts_accepts": true,
+      "ts_value": 190,
+      "rust_refinement": true
+    },
+    {
+      "name": "hexadecimal",
+      "raw": "0x10",
+      "refinement": true,
+      "ts_accepts": true,
+      "ts_value": 16,
+      "rust_refinement": true
+    },
+    {
+      "name": "surrounding_space",
+      "raw": " 190 ",
+      "refinement": true,
+      "ts_accepts": true,
+      "ts_value": 190,
+      "rust_refinement": true
+    },
+    {
+      "name": "scientific_notation",
+      "raw": "1e2",
+      "refinement": true,
+      "ts_accepts": true,
+      "ts_value": 100,
+      "rust_refinement": true
+    },
+    {
+      "name": "at_the_cap",
+      "raw": "500",
+      "refinement": false,
+      "ts_accepts": true,
+      "ts_value": 500,
+      "rust_refinement": false
+    },
+    {
+      "name": "one_past_the_cap",
+      "raw": "501",
+      "refinement": false,
+      "ts_accepts": false,
+      "ts_value": null,
+      "rust_refinement": false
+    }
+  ],
+  "status": [
+    {
+      "name": "todo",
+      "raw": "todo",
+      "ts_accepts": true
+    },
+    {
+      "name": "in_progress",
+      "raw": "in_progress",
+      "ts_accepts": true
+    },
+    {
+      "name": "in_review",
+      "raw": "in_review",
+      "ts_accepts": true
+    },
+    {
+      "name": "done",
+      "raw": "done",
+      "ts_accepts": true
+    },
+    {
+      "name": "closed",
+      "raw": "closed",
+      "ts_accepts": true
+    },
+    {
+      "name": "unknown_token",
+      "raw": "frozen",
+      "ts_accepts": false
+    },
+    {
+      "name": "wrong_case",
+      "raw": "In_Progress",
+      "ts_accepts": false
+    },
+    {
+      "name": "cancelled_is_not_a_member",
+      "raw": "cancelled",
+      "ts_accepts": false
+    }
+  ]
+}

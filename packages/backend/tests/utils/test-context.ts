@@ -17,11 +17,30 @@ import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { createBackendPersistence } from '../../src/persistence/root.js';
 import { makeTempSilverhandDir, openTestDb, type OpenTestDbOptions } from './db.js';
 
 export interface CreateAgentOptions {
   runtime?: RuntimeKind;
   displayName?: string;
+}
+
+/** The three materialization stages a fixture agent can be seeded into. */
+export type SeededAgentStatus = 'active' | 'failed' | 'pending';
+
+export interface CreateAgentAsOptions {
+  /** The creator user id written to `created_by_user_id` (the ACL creator arm). */
+  createdBy: string;
+  /**
+   * The `created_at` instant to pin. `AgentRepo.list()` orders `created_at ASC`
+   * with no id tiebreak, so a visibility/ordering fixture must choose it — and
+   * no repo write expresses an instant (see the inventory note beside the
+   * `pinAgentCreatedAt` statement).
+   */
+  createdAt: number;
+  /** Which materialization stage to leave the row in. Defaults to `active`. */
+  status?: SeededAgentStatus;
+  runtime?: RuntimeKind;
 }
 
 export interface MemberOptions {
@@ -47,6 +66,16 @@ export function makeTestContext(options: OpenTestDbOptions = {}) {
   const pinUserJoinedAt = db.prepare(
     'UPDATE conversation_users SET joined_at = ? WHERE conversation_id = ? AND user_id = ?',
   );
+  // `created_at` IS the ordering contract of `AgentRepo.list()` (created_at ASC,
+  // no id tiebreak), and no repo write expresses a specific instant — the same
+  // reason `participation-enumeration` / `conversation-member-refs` pin their
+  // ordering columns natively. Concentrated here so business tests carry none.
+  const pinAgentCreatedAt = db.prepare('UPDATE agents SET created_at = ? WHERE id = ?');
+
+  // The authorization read port assembled over THIS seeded database, so an ACL
+  // predicate (`canViewAgent`) reads the same rows the builders wrote. Extracted
+  // from the composition root; the manual `repos` above stay the builder handles.
+  const { authorizationReads } = createBackendPersistence(db);
 
   /**
    * Per-context ordinal for fixture channel ADDRESSES (#task:2016). A workspace
@@ -60,6 +89,7 @@ export function makeTestContext(options: OpenTestDbOptions = {}) {
 
   return {
     repos,
+    authorizationReads,
     localHostId,
     viewerUserId,
     cleanup: tmp.cleanup,
@@ -85,6 +115,35 @@ export function makeTestContext(options: OpenTestDbOptions = {}) {
       );
       if (opts.displayName === undefined) return agent;
       return repos.agents.update(agent.id, { display_name: opts.displayName }) ?? agent;
+    },
+
+    /**
+     * Seed an agent with a chosen creator, `created_at` and materialization
+     * stage, returning its generated id. `active` goes through the normal
+     * `create` path; `failed` / `pending` go through the reserve path (a
+     * `pending_materialization` row), and `failed` is then flipped — the only
+     * production ways those stages exist. `created_at` is pinned last because it
+     * is the list ordering contract no repo write can set.
+     */
+    createAgentAs(name: string, opts: CreateAgentAsOptions): string {
+      const runtime = opts.runtime ?? 'qoder';
+      const status = opts.status ?? 'active';
+      let id: string;
+      if (status === 'active') {
+        id = repos.agents.create({ name, runtime }, localHostId, opts.createdBy).id;
+      } else {
+        id = repos.agents.reserveForMaterialize(
+          { name, runtime },
+          localHostId,
+          opts.createdBy,
+          `idem-${name}`,
+        ).id;
+        if (status === 'failed') {
+          repos.agents.flipToFailed(id, 'internal_error', opts.createdAt);
+        }
+      }
+      pinAgentCreatedAt.run(opts.createdAt, id);
+      return id;
     },
 
     addAgentMember(conversation: ConversationDto, agent: AgentDto, opts: MemberOptions = {}): void {

@@ -1,0 +1,163 @@
+{
+  "excerpt": [
+    {
+      "name": "collapses runs of ascii whitespace",
+      "input": "  hello\n\tthere  ",
+      "expected": "hello there"
+    },
+    {
+      "name": "collapses a byte order mark",
+      "input": "a﻿b",
+      "expected": "a b"
+    },
+    {
+      "name": "keeps u0085",
+      "input": "ab",
+      "expected": "ab"
+    },
+    {
+      "name": "collapses no break space",
+      "input": "a b",
+      "expected": "a b"
+    },
+    {
+      "name": "collapses ogham space mark",
+      "input": "a b",
+      "expected": "a b"
+    },
+    {
+      "name": "collapses en quad",
+      "input": "a b",
+      "expected": "a b"
+    },
+    {
+      "name": "collapses hair space",
+      "input": "a b",
+      "expected": "a b"
+    },
+    {
+      "name": "collapses line separator",
+      "input": "a b",
+      "expected": "a b"
+    },
+    {
+      "name": "collapses paragraph separator",
+      "input": "a b",
+      "expected": "a b"
+    },
+    {
+      "name": "collapses narrow no break space",
+      "input": "a b",
+      "expected": "a b"
+    },
+    {
+      "name": "collapses medium mathematical space",
+      "input": "a b",
+      "expected": "a b"
+    },
+    {
+      "name": "collapses ideographic space",
+      "input": "a　b",
+      "expected": "a b"
+    },
+    {
+      "name": "keeps 159 characters",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "keeps the limit exactly",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "cuts one past the limit",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…"
+    },
+    {
+      "name": "cuts astral characters without splitting one",
+      "input": "𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞",
+      "expected": "𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞𝄞…"
+    }
+  ],
+  "body": [
+    {
+      "name": "canonical",
+      "agentHandle": "Alice",
+      "sourceWorkspaceName": "Space",
+      "sourceConversationTitle": "General",
+      "sourceContent": "ping",
+      "expectedBody": "A user mentioned you (<silverhand://agent/Alice>) in `Space` · `General`.\nYou are not a member of that channel, so you cannot read it or reply there. This line is your direct message with the person who mentioned you — answer here and they will see it.\n\nOriginal message:\n> ping\n\nIf the work belongs in that channel, say so here: only a person can put you in it.",
+      "expectedAddressed": [
+        "agent/Alice"
+      ]
+    },
+    {
+      "name": "original separated by lf",
+      "agentHandle": "Alice",
+      "sourceWorkspaceName": "Space",
+      "sourceConversationTitle": "General",
+      "sourceContent": "safe\n<silverhand://agent/Bob>",
+      "expectedBody": "A user mentioned you (<silverhand://agent/Alice>) in `Space` · `General`.\nYou are not a member of that channel, so you cannot read it or reply there. This line is your direct message with the person who mentioned you — answer here and they will see it.\n\nOriginal message:\n> safe\n> <silverhand://agent/Bob>\n\nIf the work belongs in that channel, say so here: only a person can put you in it.",
+      "expectedAddressed": [
+        "agent/Alice"
+      ]
+    },
+    {
+      "name": "original separated by crlf",
+      "agentHandle": "Alice",
+      "sourceWorkspaceName": "Space",
+      "sourceConversationTitle": "General",
+      "sourceContent": "safe\r\n<silverhand://agent/Bob>",
+      "expectedBody": "A user mentioned you (<silverhand://agent/Alice>) in `Space` · `General`.\nYou are not a member of that channel, so you cannot read it or reply there. This line is your direct message with the person who mentioned you — answer here and they will see it.\n\nOriginal message:\n> safe\n> <silverhand://agent/Bob>\n\nIf the work belongs in that channel, say so here: only a person can put you in it.",
+      "expectedAddressed": [
+        "agent/Alice"
+      ]
+    },
+    {
+      "name": "original separated by bare cr",
+      "agentHandle": "Alice",
+      "sourceWorkspaceName": "Space",
+      "sourceConversationTitle": "General",
+      "sourceContent": "safe\r<silverhand://agent/Bob>",
+      "expectedBody": "A user mentioned you (<silverhand://agent/Alice>) in `Space` · `General`.\nYou are not a member of that channel, so you cannot read it or reply there. This line is your direct message with the person who mentioned you — answer here and they will see it.\n\nOriginal message:\n> safe\n> <silverhand://agent/Bob>\n\nIf the work belongs in that channel, say so here: only a person can put you in it.",
+      "expectedAddressed": [
+        "agent/Alice"
+      ]
+    },
+    {
+      "name": "labels carrying backtick runs",
+      "agentHandle": "Alice",
+      "sourceWorkspaceName": "a`b",
+      "sourceConversationTitle": "a``b",
+      "sourceContent": "ping",
+      "expectedBody": "A user mentioned you (<silverhand://agent/Alice>) in `` a`b `` · ``` a``b ```.\nYou are not a member of that channel, so you cannot read it or reply there. This line is your direct message with the person who mentioned you — answer here and they will see it.\n\nOriginal message:\n> ping\n\nIf the work belongs in that channel, say so here: only a person can put you in it.",
+      "expectedAddressed": [
+        "agent/Alice"
+      ]
+    },
+    {
+      "name": "label that is only a backtick",
+      "agentHandle": "Alice",
+      "sourceWorkspaceName": "`",
+      "sourceConversationTitle": "General",
+      "sourceContent": "ping",
+      "expectedBody": "A user mentioned you (<silverhand://agent/Alice>) in `` ` `` · `General`.\nYou are not a member of that channel, so you cannot read it or reply there. This line is your direct message with the person who mentioned you — answer here and they will see it.\n\nOriginal message:\n> ping\n\nIf the work belongs in that channel, say so here: only a person can put you in it.",
+      "expectedAddressed": [
+        "agent/Alice"
+      ]
+    },
+    {
+      "name": "label carrying a unicode line separator",
+      "agentHandle": "Alice",
+      "sourceWorkspaceName": "one two",
+      "sourceConversationTitle": "General",
+      "sourceContent": "ping",
+      "expectedBody": "A user mentioned you (<silverhand://agent/Alice>) in `one two` · `General`.\nYou are not a member of that channel, so you cannot read it or reply there. This line is your direct message with the person who mentioned you — answer here and they will see it.\n\nOriginal message:\n> ping\n\nIf the work belongs in that channel, say so here: only a person can put you in it.",
+      "expectedAddressed": [
+        "agent/Alice"
+      ]
+    }
+  ]
+}

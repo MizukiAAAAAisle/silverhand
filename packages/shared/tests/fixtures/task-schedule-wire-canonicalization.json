@@ -1,0 +1,48 @@
+{
+  "facet_order": {
+    "input": [
+      { "name": "ä", "type": "user", "id": "u-z" },
+      { "name": "a", "type": "user", "id": "u-b" },
+      { "name": "a", "type": "agent", "id": "a-b" },
+      { "name": "z", "type": "agent", "id": "a-z" },
+      { "name": "a", "type": "agent", "id": "a-a" }
+    ],
+    "expected": [
+      { "name": "a", "type": "agent", "id": "a-a" },
+      { "name": "a", "type": "agent", "id": "a-b" },
+      { "name": "a", "type": "user", "id": "u-b" },
+      { "name": "z", "type": "agent", "id": "a-z" },
+      { "name": "ä", "type": "user", "id": "u-z" }
+    ]
+  },
+  "positive_js_safe": [
+    { "name": "one", "value": 1, "accepted": true },
+    { "name": "safe ceiling", "value": 9007199254740991, "accepted": true },
+    { "name": "zero", "value": 0, "accepted": false },
+    { "name": "negative", "value": -1, "accepted": false },
+    { "name": "fraction", "value": 1.5, "accepted": false },
+    { "name": "past safe ceiling", "value": 9007199254740992, "accepted": false }
+  ],
+  "canonical_query": [
+    { "raw": "1", "accepted": true, "value": 1 },
+    { "raw": "200", "accepted": true, "value": 200 },
+    { "raw": "9007199254740991", "accepted": true, "value": 9007199254740991 },
+    { "raw": "0", "accepted": false },
+    { "raw": "01", "accepted": false },
+    { "raw": "+7", "accepted": false },
+    { "raw": "-1", "accepted": false },
+    { "raw": " 7", "accepted": false },
+    { "raw": "7 ", "accepted": false },
+    { "raw": "1e2", "accepted": false },
+    { "raw": "0x10", "accepted": false },
+    { "raw": "9007199254740992", "accepted": false }
+  ],
+  "cursor": [
+    { "name": "canonical", "raw": "WzcsInRhc2stNyJd", "accepted": true },
+    { "name": "padded", "raw": "WzcsInRhc2stNyJd=", "accepted": false },
+    { "name": "zero number", "raw": "WzAsInRhc2stNyJd", "accepted": false },
+    { "name": "negative number", "raw": "Wy0xLCJ0YXNrLTciXQ", "accepted": false },
+    { "name": "unsafe number", "raw": "WzkwMDcxOTkyNTQ3NDA5OTIsInRhc2stNyJd", "accepted": false },
+    { "name": "empty id", "raw": "WzcsIiJd", "accepted": false }
+  ]
+}

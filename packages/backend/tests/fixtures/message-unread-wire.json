@@ -1,0 +1,12 @@
+[
+  {"name":"workspace_rollup","surface":"workspace","setup":"workspace_member","path":"/api/workspaces/w/message-unread","status":200,"body":{"by_conversation":{"c":2,"c2":1},"latest_by_conversation":{"c":{"conversation_id":"c","message_id":"reply-2","seq":7,"thread_root_id":"root"},"c2":{"conversation_id":"c2","message_id":"c2-message","seq":1,"thread_root_id":null}},"total":3}},
+  {"name":"workspace_missing","surface":"workspace","setup":"missing_workspace","path":"/api/workspaces/w/message-unread","status":404,"body":{"error":"workspace not found"}},
+  {"name":"workspace_forbidden","surface":"workspace","setup":"workspace_forbidden","path":"/api/workspaces/w/message-unread","status":403,"body":{"error":"forbidden"}},
+  {"name":"summary_rollup","surface":"summary","setup":"workspace_member","path":"/api/message-unread-summary","status":200,"body":{"by_workspace":{"w":3}}},
+  {"name":"summary_empty","surface":"summary","setup":"summary_empty","path":"/api/message-unread-summary","status":200,"body":{"by_workspace":{}}},
+  {"name":"conversation_rollup","surface":"conversation","setup":"workspace_member","path":"/api/channels/c/message-unread","status":200,"body":{"by_conversation":{"c":2},"latest_by_conversation":{"c":{"conversation_id":"c","message_id":"reply-2","seq":7,"thread_root_id":"root"}},"total":2}},
+  {"name":"archived_conversation_rollup_is_zero","surface":"conversation","setup":"archived_workspace_member","path":"/api/channels/c/message-unread","status":200,"body":{"by_conversation":{"c":0},"latest_by_conversation":{},"total":0}},
+  {"name":"public_nonmember_has_no_widen","surface":"conversation","setup":"public_workspace_nonmember","path":"/api/channels/c/message-unread","status":403,"body":{"error":"forbidden"}},
+  {"name":"direct_pair_endpoint","surface":"conversation","setup":"direct_pair_endpoint","path":"/api/channels/c/message-unread","status":200,"body":{"by_conversation":{"c":2},"latest_by_conversation":{"c":{"conversation_id":"c","message_id":"reply-2","seq":7,"thread_root_id":"root"}},"total":2}},
+  {"name":"conversation_missing","surface":"conversation","setup":"missing_conversation","path":"/api/channels/c/message-unread","status":404,"body":{"error":"channel not found"}}
+]

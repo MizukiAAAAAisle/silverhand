@@ -1,0 +1,18 @@
+{
+  "name": "silverhand-rust-zod-proof",
+  "private": true,
+  "scripts": {
+    "generate": "ts-to-zod --all",
+    "build": "tsc -p ./tsconfig.json",
+    "verify": "node ./dist/verify.js",
+    "test": "pnpm run generate && pnpm run build && pnpm run verify"
+  },
+  "dependencies": {
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "ts-to-zod": "3.15.0",
+    "typescript": "5.9.2"
+  }
+}

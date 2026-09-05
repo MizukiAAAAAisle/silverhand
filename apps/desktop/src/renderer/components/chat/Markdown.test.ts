@@ -1265,6 +1265,46 @@ describe('Markdown canonical references (#task:2000)', () => {
       expect(html).not.toContain('data-mention-kind=');
       expect(html).not.toContain('<a ');
     });
+
+    it(`chips a reference in a body that begins with a BOM (${branch})`, () => {
+      // The DISPLAY half of a shared-authority defect (#task:2172). The Markdown
+      // parser drops one leading U+FEFF and reports its offsets against the
+      // remainder, while `remarkRefs` slices the document it was handed — so every
+      // autolink in a BOM-prefixed body failed the syntax test and nothing was
+      // stamped. Silent, and the same predicate decides addressing, so a message
+      // pasted out of a file rendered as bare text AND woke nobody.
+      //
+      // The correction lives in shared's `isAutolink`, which now owns the coordinate
+      // adjustment, so this passes with no renderer change: one authority, and the
+      // fanout and the chip cannot disagree about a body's bytes again.
+      for (const body of [
+        '\ufeff<silverhand://agent/Alice>',
+        '\ufeffcc <silverhand://agent/Alice> please',
+        // Every link in the document was affected, not only one against the prefix.
+        '\ufeffline one\n\nline two <silverhand://agent/Alice>',
+      ]) {
+        const html = renderRef(body, interactive);
+
+        expect(html, body).toContain('data-mention-kind="agent"');
+        expect(html, body).toContain('Alice L');
+        expect(html, body).not.toContain('silverhand://');
+      }
+    });
+
+    it(`still refuses a labelled link in a body that begins with a BOM (${branch})`, () => {
+      // The prefix is a coordinate origin, not a licence: what the syntax test
+      // admits is unchanged, so the spelling that must never look addressed still
+      // does not chip, and its authored label just renders.
+      const html = renderRef(
+        '\ufeff[Alice](silverhand://human/shiki) wrote it',
+        interactive,
+      );
+
+      expect(html).toContain('Alice');
+      expect(html).not.toContain('data-mention-kind=');
+      expect(html).not.toContain('silverhand://');
+      expect(html).not.toContain('<a ');
+    });
   }
 
   it('leaves an external link clickable on the live path', () => {

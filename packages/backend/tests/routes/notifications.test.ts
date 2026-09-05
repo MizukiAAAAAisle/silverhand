@@ -94,6 +94,22 @@ describe('Notifications routes — characterization (P15 prep)', () => {
     expect(limited.notifications).toHaveLength(1);
   });
 
+  it('GET /api/notifications has a total order at a same-millisecond limit boundary', async () => {
+    t = buildTestApp();
+    const { workspaceId } = await createWs('n-list-tie');
+    const low = seed(workspaceId);
+    const high = seed(workspaceId);
+    setId(low.id, LOW_ID);
+    setId(high.id, HIGH_ID);
+    sameCreatedAt([LOW_ID, HIGH_ID]);
+    for (let i = 0; i < 3; i++) {
+      const one = await http(t).json<{ notifications: { id: string }[] }>(
+        http(t).get('/api/notifications?limit=1'),
+      );
+      expect(one.notifications.map(n => n.id)).toEqual([HIGH_ID]);
+    }
+  });
+
   it('GET /api/notifications exposes reply-cluster roots for message-anchored notifications', async () => {
     t = buildTestApp();
     const { workspaceId, conversationId } = await createWs('n-thread-list');

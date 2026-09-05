@@ -21,6 +21,7 @@ export * from './conversation-title-audit.js';
 export * from './conversation-placement.js';
 export * from './delivery-reach.js';
 export * from './delivery-target.js';
+export * from './daemon-admission.generated.js';
 export * from './desktop-server-api-epoch.js';
 export * from './display-name-charset.js';
 export * from './handle.js';

@@ -1,0 +1,228 @@
+[
+  {
+    "name": "start_success",
+    "route": "start",
+    "setup": "normal",
+    "provider": "success",
+    "body": null,
+    "expected_status": 200,
+    "expected_body": { "ok": true }
+  },
+  {
+    "name": "hard_stop_success",
+    "route": "hard_stop",
+    "setup": "normal",
+    "provider": "success",
+    "body": { "mode": "hard" },
+    "expected_status": 200,
+    "expected_body": { "ok": true }
+  },
+  {
+    "name": "clear_session_success",
+    "route": "clear_session",
+    "setup": "normal",
+    "provider": "success",
+    "body": null,
+    "expected_status": 200,
+    "expected_body": {
+      "ok": true,
+      "prev_cli_session_id": "cli-previous",
+      "was_running": true
+    }
+  },
+  {
+    "name": "conversation_not_found_precedes_legacy_body",
+    "route": "hard_stop",
+    "setup": "missing_conversation",
+    "provider": "success",
+    "body": { "mode": "soft" },
+    "expected_status": 404,
+    "expected_body": { "error": "channel not found" }
+  },
+  {
+    "name": "agent_not_found",
+    "route": "start",
+    "setup": "missing_agent",
+    "provider": "success",
+    "body": null,
+    "expected_status": 404,
+    "expected_body": { "error": "agent not found" }
+  },
+  {
+    "name": "agent_not_member",
+    "route": "start",
+    "setup": "unseated_agent",
+    "provider": "success",
+    "body": null,
+    "expected_status": 400,
+    "expected_body": { "error": "agent is not a member of this conversation" }
+  },
+  {
+    "name": "non_creator_forbidden",
+    "route": "start",
+    "setup": "non_creator",
+    "provider": "success",
+    "body": null,
+    "expected_status": 403,
+    "expected_body": { "error": "forbidden" }
+  },
+  {
+    "name": "legacy_soft_stop",
+    "route": "hard_stop",
+    "setup": "normal",
+    "provider": "success",
+    "body": { "mode": "soft" },
+    "expected_status": 400,
+    "expected_body": { "error": "soft stop was removed; only hard stop is supported" }
+  },
+  {
+    "name": "host_missing",
+    "route": "start",
+    "setup": "normal",
+    "provider": "placement_host_missing",
+    "body": null,
+    "expected_status": 404,
+    "expected_body": { "error": "daemon host was not found", "code": "host_missing" }
+  },
+  {
+    "name": "host_not_owned",
+    "route": "start",
+    "setup": "normal",
+    "provider": "placement_host_not_owned",
+    "body": null,
+    "expected_status": 403,
+    "expected_body": { "error": "daemon host is not owned by this user", "code": "host_not_owned" }
+  },
+  {
+    "name": "host_pending_attach",
+    "route": "start",
+    "setup": "normal",
+    "provider": "placement_host_pending_attach",
+    "body": null,
+    "expected_status": 409,
+    "expected_body": { "error": "daemon host is pending attachment", "code": "host_pending_attach" }
+  },
+  {
+    "name": "host_runtime_disabled",
+    "route": "start",
+    "setup": "normal",
+    "provider": "placement_host_runtime_disabled",
+    "body": null,
+    "expected_status": 409,
+    "expected_body": { "error": "daemon-host runtime is disabled", "code": "host_runtime_disabled" }
+  },
+  {
+    "name": "host_revoked",
+    "route": "start",
+    "setup": "normal",
+    "provider": "placement_host_revoked",
+    "body": null,
+    "expected_status": 409,
+    "expected_body": { "error": "daemon host has been revoked", "code": "host_revoked" }
+  },
+  {
+    "name": "local_host_unbound",
+    "route": "start",
+    "setup": "normal",
+    "provider": "placement_local_host_unbound",
+    "body": null,
+    "expected_status": 409,
+    "expected_body": { "error": "no local daemon host is bound", "code": "local_host_unbound" }
+  },
+  {
+    "name": "local_host_ambiguous",
+    "route": "start",
+    "setup": "normal",
+    "provider": "placement_local_host_ambiguous",
+    "body": null,
+    "expected_status": 409,
+    "expected_body": { "error": "multiple local daemon hosts are available", "code": "local_host_ambiguous" }
+  },
+  {
+    "name": "host_attach_pending",
+    "route": "start",
+    "setup": "normal",
+    "provider": "placement_host_attach_pending",
+    "body": null,
+    "expected_status": 503,
+    "expected_body": { "error": "daemon host is not currently attached; retry in a moment", "code": "host_attach_pending" }
+  },
+  {
+    "name": "workspace_not_provisioned",
+    "route": "start",
+    "setup": "normal",
+    "provider": "start_workspace_not_provisioned",
+    "body": null,
+    "expected_status": 502,
+    "expected_body": { "error": "workspace is not provisioned on the daemon host", "code": "workspace_not_provisioned" }
+  },
+  {
+    "name": "workspace_bundle_missing",
+    "route": "start",
+    "setup": "normal",
+    "provider": "start_workspace_bundle_missing",
+    "body": null,
+    "expected_status": 409,
+    "expected_body": { "error": "workspace bundle is missing on the daemon host", "code": "workspace_bundle_missing" }
+  },
+  {
+    "name": "registry_unavailable",
+    "route": "start",
+    "setup": "normal",
+    "provider": "start_registry_unavailable",
+    "body": null,
+    "expected_status": 502,
+    "expected_body": { "error": "daemon runtime registry is unavailable", "code": "registry_unavailable" }
+  },
+  {
+    "name": "shutting_down",
+    "route": "start",
+    "setup": "normal",
+    "provider": "start_shutting_down",
+    "body": null,
+    "expected_status": 503,
+    "expected_body": { "error": "daemon host is shutting down", "code": "shutting_down" }
+  },
+  {
+    "name": "hard_stop_host_attach_pending",
+    "route": "hard_stop",
+    "setup": "normal",
+    "provider": "placement_host_attach_pending",
+    "body": null,
+    "expected_status": 503,
+    "expected_body": { "error": "daemon host is not currently attached; retry in a moment", "code": "host_attach_pending" }
+  },
+  {
+    "name": "clear_session_host_attach_pending",
+    "route": "clear_session",
+    "setup": "normal",
+    "provider": "placement_host_attach_pending",
+    "body": null,
+    "expected_status": 503,
+    "expected_body": { "error": "daemon host is not currently attached; retry in a moment", "code": "host_attach_pending" }
+  },
+  {
+    "name": "clear_session_timeout",
+    "route": "clear_session",
+    "setup": "normal",
+    "provider": "clear_timeout",
+    "body": null,
+    "expected_status": 503,
+    "expected_body": {
+      "error": "clear-session for {conversation_id}/{agent_id} timed out waiting for runtime_exit projection landed",
+      "code": "clear_session_timeout"
+    }
+  },
+  {
+    "name": "clear_session_in_progress",
+    "route": "clear_session",
+    "setup": "normal",
+    "provider": "clear_in_progress",
+    "body": null,
+    "expected_status": 409,
+    "expected_body": {
+      "error": "clear-session is already in progress for {conversation_id}/{agent_id}",
+      "code": "clear_session_in_progress"
+    }
+  }
+]

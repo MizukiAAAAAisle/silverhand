@@ -26,14 +26,21 @@ const allowedBackendImports = [
   // zero-runtime guarantee — second occurrence allowed for the
   // second consumer file.
   'HostWsAttachment',
+  // #task:2343: the embedded arm runs the canonical TS migrator + backup + FK/integrity
+  // and FULLY closes the DB before spawning the out-of-process Rust backend (no
+  // dual-open). This is the ONLY backend runtime symbol the embedded boot path imports;
+  // it opens+migrates+closes and returns nothing, so no backend serving surface crosses.
+  'migrateAndCloseForEmbeddedHandoff',
 ].sort();
 
 const allowedServerImports = [
   'CategorizedLoggers',
   'FileLogger',
-  'RunningBackend',
+  // #task:2343: the embedded migrate setting resolver. `startEmbeddedSilverhandServer`
+  // and the in-process `RunningBackend` are GONE from the desktop embedded arm — the
+  // backend is out-of-process (Rust), so no in-process server surface is imported.
   'createCategorizedLoggers',
-  'startEmbeddedSilverhandServer',
+  'resolveEmbeddedMigrationEnv',
 ].sort();
 
 const cataloguedIpcHandlers = [
@@ -211,6 +218,39 @@ describe('desktop protocol purity catalogue', () => {
     expect(stub).not.toMatch(/@silverhand\/server|@silverhand\/backend/);
     expect(stub).toMatch(/startEmbeddedSilverhandServer/);
     expect(stub).toMatch(/remote-only/);
+  });
+
+  it('#task:2343 P0-10: remote-only build aliases the embedded-launcher seam to a stub with no embedded value imports', () => {
+    // The construction seam: `index.ts` reaches ALL embedded runtime (migrator, Rust
+    // launcher, sidecar verifier) ONLY through `./embedded-launcher.js`, which the
+    // remote-only build aliases to `embedded-launcher.remote-only.ts`. That stub must NOT
+    // statically import `@silverhand/backend` (→ `better-sqlite3`) or bring the launcher/
+    // sidecar VALUE modules into the graph — its only cross-module references are
+    // type-only. This is what makes the remote-only bundle scan (no
+    // launcher/sidecar/migrator/better-sqlite3) hold at construction, not by a runtime flag.
+    const config = readFileSync(
+      join(desktopRoot, 'electron.vite.config.ts'),
+      'utf8',
+    );
+    const seamStub = readFileSync(
+      join(mainRoot, 'embedded-launcher.remote-only.ts'),
+      'utf8',
+    );
+    expect(config).toMatch(/embedded-launcher\.js/);
+    expect(config).toMatch(/embedded-launcher\.remote-only\.ts/);
+    // The stub carries NO value import of the embedded packages/modules — only `import
+    // type` is allowed (erased at build). Assert there is no non-type import of the
+    // forbidden specifiers.
+    expect(seamStub).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+'@silverhand\/backend'/m);
+    expect(seamStub).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+'@silverhand\/server'/m);
+    // Real index.ts imports the embedded runtime through the seam, not the value modules
+    // directly (the only remaining `embedded-rust-backend`/`rust-backend-sidecar` mentions
+    // in index.ts must be `import type`).
+    const indexSrc = readFileSync(join(mainRoot, 'index.ts'), 'utf8');
+    expect(indexSrc).toMatch(/from '\.\/embedded-launcher\.js'/);
+    expect(indexSrc).not.toMatch(
+      /^import\s+\{[^}]*\}\s+from\s+'\.\/rust-backend-sidecar\.js'/m,
+    );
   });
 
   it('remote-only package config excludes embedded backend/native runtime packages', () => {
@@ -393,20 +433,17 @@ describe('desktop protocol purity catalogue', () => {
     expect(inlineMints).toEqual([]);
     expect(
       readFileSync(join(mainRoot, 'index.ts'), 'utf8'),
-    ).toMatch(/describeLocalHostWsAttachment\(\{\s*\n?\s*backendKind:/);
+    ).toMatch(/describeLocalHostWsAttachment\(\{\s*\n?\s*hasLocalRegistryObserver:/);
   });
 
-  it('keeps main getEmbeddedHostWsController() call sites catalogued with remote-arm degrade semantics (#task:1133)', () => {
-    // `getEmbeddedHostWsController()` returns null on the remote arm (no
-    // in-process WS attachment registry). Every call site is an
-    // observe/degrade path that handles the null arm (watchdog stays
-    // un-armed; status comes from a renderer poll / typed claim error
-    // instead of registry observation). The count is pinned so a NEW
-    // consumer forces the author to confirm + document the remote-arm
-    // degrade before it lands — the same review the #task:1132 class needs.
-    // Catalogued sites in main/index.ts: local-host attach snapshot,
-    // attach-watchdog arm, host_outbound_attach watchdog, save-URL verify
-    // watchdog, profile phase-2 watchdog, shutdown detach.
+  it('no longer has any getEmbeddedHostWsController() call site — the in-process registry observer is gone (#task:2343)', () => {
+    // #task:2343: with the out-of-process Rust embedded backend there is no in-process WS
+    // attachment registry to observe. The `getEmbeddedHostWsController` accessor and all
+    // its consumers were DELETED (not left as a forever-null compat shell); attachment
+    // observability is now the explicit `hasLocalRegistryObserver()` CAPABILITY (always
+    // false), and attach/reload/detach run the daemon generation-bound `/ws/host` flow.
+    // So there must be ZERO call sites — a re-introduction forces re-review of the whole
+    // observer model.
     const callSites = sourceFiles(mainRoot, new Set(['.ts'])).flatMap(source =>
       [
         ...stripComments(source.content).matchAll(
@@ -415,6 +452,43 @@ describe('desktop protocol purity catalogue', () => {
       ].map(() => source.path),
     );
 
-    expect(callSites.length).toBe(6);
+    expect(callSites.length).toBe(0);
+  });
+
+  it('#task:2343 P1-18: the dead in-process/outbound-socket concepts are DELETED, not left as forever-dead shells', () => {
+    // With the out-of-process Rust embedded backend these lost their last legitimate
+    // caller and were removed (not left as residual): the deployment-arm discriminant
+    // helper `requireBackendKind`, the in-process CLI launcher `resolveSilverhandCliLauncher`,
+    // and the local-outbound-frame-socket concept (`DaemonPaths.localOutboundSocketPath`
+    // field + `localOutboundSocketPathForStartupPlan`). The daemon still receives an
+    // explicit `localOutboundSocketPath: null` spawn option — that is the PROOF of
+    // no-fallback, not a live use — so we pin the DEAD identifiers to zero, allowing the
+    // single `localOutboundSocketPath: null` no-fallback assertion.
+    const deadIdentifiers = [
+      /\brequireBackendKind\b/g,
+      /\bresolveSilverhandCliLauncher\b/g,
+      /\blocalOutboundSocketPathForStartupPlan\b/g,
+    ];
+    for (const pattern of deadIdentifiers) {
+      const hits = sourceFiles(mainRoot, new Set(['.ts'])).flatMap(source =>
+        [...stripComments(source.content).matchAll(pattern)].map(() => source.path),
+      );
+      expect({ pattern: pattern.source, hits }).toEqual({
+        pattern: pattern.source,
+        hits: [],
+      });
+    }
+
+    // The ONLY surviving `localOutboundSocketPath` mention in main source is the
+    // no-fallback spawn option pinned to `null` (the daemon-arm proof for #task:2343 P1-19);
+    // there is no `DaemonPaths` field / assignment reintroducing the concept.
+    const outboundMentions = sourceFiles(mainRoot, new Set(['.ts'])).flatMap(source =>
+      [...stripComments(source.content).matchAll(/localOutboundSocketPath[^\n]*/g)].map(
+        m => ({ path: source.path, text: m[0].trim() }),
+      ),
+    );
+    for (const mention of outboundMentions) {
+      expect(mention.text).toMatch(/localOutboundSocketPath:\s*null/);
+    }
   });
 });

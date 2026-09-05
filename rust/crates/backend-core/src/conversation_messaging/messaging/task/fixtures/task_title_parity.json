@@ -1,0 +1,283 @@
+{
+  "ecmascript_whitespace_code_points": [
+    9,
+    10,
+    11,
+    12,
+    13,
+    32,
+    160,
+    5760,
+    8192,
+    8193,
+    8194,
+    8195,
+    8196,
+    8197,
+    8198,
+    8199,
+    8200,
+    8201,
+    8202,
+    8232,
+    8233,
+    8239,
+    8287,
+    12288,
+    65279
+  ],
+  "titles": [
+    {
+      "name": "plain",
+      "raw": "hello world",
+      "canonical": "hello world",
+      "refusal": null
+    },
+    {
+      "name": "trim_and_collapse",
+      "raw": "  hello   world  ",
+      "canonical": "hello world",
+      "refusal": null
+    },
+    {
+      "name": "crlf_run_is_one_space",
+      "raw": "a\r\nb",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "empty",
+      "raw": "",
+      "canonical": null,
+      "refusal": "empty"
+    },
+    {
+      "name": "all_whitespace_mixed",
+      "raw": " \t\r\n　﻿",
+      "canonical": null,
+      "refusal": "empty"
+    },
+    {
+      "name": "nel_is_preserved_at_both_ends",
+      "raw": "ab",
+      "canonical": "ab",
+      "refusal": null
+    },
+    {
+      "name": "nel_only_is_a_valid_title",
+      "raw": "",
+      "canonical": "",
+      "refusal": null
+    },
+    {
+      "name": "mvs_is_preserved_at_both_ends",
+      "raw": "᠎a᠎᠎b᠎",
+      "canonical": "᠎a᠎᠎b᠎",
+      "refusal": null
+    },
+    {
+      "name": "non_member_adjacent_to_member",
+      "raw": "a b",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "cap_exactly_at_limit",
+      "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "canonical": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "refusal": null
+    },
+    {
+      "name": "cap_one_over_limit",
+      "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "canonical": null,
+      "refusal": "too_long"
+    },
+    {
+      "name": "raw_huge_but_canonical_tiny",
+      "raw": "a                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        b",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "raw_over_limit_but_canonical_exactly_at_limit",
+      "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa   b",
+      "canonical": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa b",
+      "refusal": null
+    },
+    {
+      "name": "astral_exactly_at_limit",
+      "raw": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "canonical": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "refusal": null
+    },
+    {
+      "name": "astral_one_scalar_over_limit",
+      "raw": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "canonical": null,
+      "refusal": "too_long"
+    },
+    {
+      "name": "astral_tips_a_mixed_title_over",
+      "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
+      "canonical": null,
+      "refusal": "too_long"
+    },
+    {
+      "name": "astral_lands_a_mixed_title_exactly_at_limit",
+      "raw": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
+      "canonical": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀",
+      "refusal": null
+    },
+    {
+      "name": "member_u0009_trims_and_collapses",
+      "raw": "\ta\t\tb\t",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u000a_trims_and_collapses",
+      "raw": "\na\n\nb\n",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u000b_trims_and_collapses",
+      "raw": "\u000ba\u000b\u000bb\u000b",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u000c_trims_and_collapses",
+      "raw": "\fa\f\fb\f",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u000d_trims_and_collapses",
+      "raw": "\ra\r\rb\r",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u0020_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u00a0_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u1680_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u2000_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u2001_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u2002_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u2003_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u2004_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u2005_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u2006_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u2007_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u2008_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u2009_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u200a_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u2028_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u2029_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u202f_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u205f_trims_and_collapses",
+      "raw": " a  b ",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_u3000_trims_and_collapses",
+      "raw": "　a　　b　",
+      "canonical": "a b",
+      "refusal": null
+    },
+    {
+      "name": "member_ufeff_trims_and_collapses",
+      "raw": "﻿a﻿﻿b﻿",
+      "canonical": "a b",
+      "refusal": null
+    }
+  ]
+}

@@ -318,7 +318,10 @@ export function createWorkspaceMembershipApp(
     const body = await c.req.json().catch(() => ({}));
     const parsed = AddWorkspaceMemberInputSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+      // The rejection body for this endpoint is the stable `{ error }` shape:
+      // raw validator diagnostics are not part of its response, so the Zod
+      // `issues` are deliberately not surfaced here.
+      return c.json({ error: 'invalid input' }, 400);
     }
     if ('kind' in parsed.data && parsed.data.kind === 'human') {
       // Human add stays ADMIN-gated: inviting a person is governance over the

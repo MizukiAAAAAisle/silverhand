@@ -14,15 +14,14 @@
  *     list, so `tailSeq` is unchanged and this returns null (no mark);
  *   - re-marks across a channel switch (the `channelId` differs).
  *
- * Returns the new mark to record + mutate, or `null` to skip.
+ * Returns the new snapshot to observe, or `null` to skip. Record it only on success.
  *
- * #task:1267 §3.5: `seq` here is a LOCAL MessageSeq gate — it decides WHETHER to
- * fire the mark, but the mark itself resolves to the server stream head (no
- * seq), so this is NOT a MessageSeq → ReadSeq conversion. Branding it MessageSeq
- * keeps the `prev.seq === tailSeq` compare a same-stream (same channel)
- * MessageSeq↔MessageSeq comparison; do NOT mint a ReadSeq here.
+ * Keep the visible ordinal as MessageSeq throughout recovery. The existing
+ * streamSourceAtSeq builder is the sole MessageSeq → ReadSeq bridge; retries
+ * must not resolve a newer, unseen server head.
  */
 import type { MessageSeq } from '@silverhand/shared';
+import { ApiError } from './api';
 
 export interface TailReadMark {
   channelId: string;
@@ -39,4 +38,32 @@ export function nextTailReadMark(
   if (tailSeq === null || !isAtTail || hasNewerLiveGap) return null;
   if (prev && prev.channelId === channelId && prev.seq === tailSeq) return null;
   return { channelId, seq: tailSeq };
+}
+
+/** One visible-tail observation, with bounded recovery for the SAME snapshot.
+ * The effect owner cancels this on loss of visibility/membership or tail change.
+ * Completion is recorded only after the server acknowledges the write. */
+export function observeVisibleTail(
+  mark: TailReadMark,
+  observe: (mark: TailReadMark) => Promise<unknown>,
+  acknowledged: (mark: TailReadMark) => void,
+): () => void {
+  const delays = [250, 750, 1_500];
+  let cancelled = false;
+  let attempts = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const attempt = async (): Promise<void> => {
+    try {
+      await observe(mark);
+      if (!cancelled) acknowledged(mark);
+    } catch (error) {
+      const transient = error instanceof ApiError
+        ? error.status === 0 || error.status === 429 || error.status >= 500
+        : error instanceof TypeError; // fetch/network failure
+      if (cancelled || !transient || attempts >= delays.length) return;
+      timer = setTimeout(() => { void attempt(); }, delays[attempts++]);
+    }
+  };
+  void attempt();
+  return () => { cancelled = true; clearTimeout(timer); };
 }

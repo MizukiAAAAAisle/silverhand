@@ -1,8 +1,11 @@
+import { BACKEND_ADMISSION } from '../backend-admission.generated.js';
+import { DAEMON_ADMISSION } from '../daemon-admission.generated.js';
+
 export const apiPaths = {
   health: '/api/health',
   serverInfo: '/api/server/info',
   runtimes: '/api/runtimes',
-  eventWebSocket: '/api/ws/events',
+  eventWebSocket: BACKEND_ADMISSION.eventWebSocketPath,
   presence: '/api/presence',
 
   // hosts
@@ -10,7 +13,7 @@ export const apiPaths = {
   /** D2 daemon-outbound WebSocket endpoint. The bundled desktop daemon
    *  presents `Authorization: Bearer <host_token>` during upgrade;
    *  this is host-token auth, not a user-session route. */
-  hostConnect: '/api/hosts/connect',
+  hostConnect: DAEMON_ADMISSION.hostWebSocketPath,
   /** Resolve a reveal-once user-managed connect token to the server-side host
    *  id. The id is not present in the copied command; the daemon calls this
    *  with `Authorization: Bearer <connect-token>` before opening the outbound

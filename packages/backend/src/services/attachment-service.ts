@@ -529,14 +529,23 @@ function randomBlobId(): string {
 const FILENAME_MAX = 255;
 
 function sanitizeFilename(raw: string): string | null {
-  // Strip path separators and control chars; cap at FILENAME_MAX bytes.
+  // Strip path separators and ASCII C0 controls, then cap at FILENAME_MAX
+  // UTF-16 units without manufacturing an isolated surrogate at the boundary.
   const cleaned = raw
     .replace(/[\\/]/g, '_')
     .replace(/[\x00-\x1f]+/g, '')
-    .trim()
-    .slice(0, FILENAME_MAX);
+    .trim();
   if (!cleaned) return null;
-  return cleaned;
+
+  let units = 0;
+  let truncated = '';
+  for (const character of cleaned) {
+    const next = units + character.length;
+    if (next > FILENAME_MAX) break;
+    truncated += character;
+    units = next;
+  }
+  return truncated;
 }
 
 /**

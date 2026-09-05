@@ -1,5 +1,6 @@
 import { fixedWorkspaceName } from '@silverhand/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import cronParity from '../../../shared/tests/fixtures/schedule-cron-production-parity.json' with { type: 'json' };
 import {
   fixedConversationTitle,
   readScheduleFireMetadata,
@@ -1391,6 +1392,46 @@ describe('ScheduleService dispose', () => {
 // ── Review fixes (Cindy r1) ───────────────────────────────────────
 
 describe('ScheduleService — cron 5-field strictness', () => {
+  it('signs the shared production cron grammar, timezone, DST, and no-future corpus', () => {
+    expect(cronParity.authority).toEqual({
+      signer: 'packages/backend ScheduleService.create',
+      engine: 'cron-parser@4.9.0',
+      consumer: 'rust backend-sqlite ProductionCronEvaluator',
+    });
+    expect(cronParity.cases).toHaveLength(32);
+    expect(new Set(cronParity.cases.map((entry) => entry.name)).size).toBe(32);
+    for (const entry of cronParity.cases) {
+      const f = setup();
+      f.setNow(entry.after);
+      try {
+        const schedule = f.service.create(
+          {
+            title: 'Cron parity',
+            message: entry.name,
+            spec: {
+              kind: 'cron',
+              expression: entry.expression,
+              timezone: entry.timezone,
+            },
+            max_occurrences: 1,
+          },
+          f.ownerAgentId,
+          f.homeDmId,
+        );
+        expect(entry.expected.kind, entry.name).toBe('next');
+        if (entry.expected.kind === 'next') {
+          expect(schedule.next_fire_at, entry.name).toBe(entry.expected.instant);
+        }
+      } catch (error) {
+        expect(entry.expected.kind, entry.name).toBe('error');
+        if (entry.expected.kind === 'error') {
+          expect(error, entry.name).toBeInstanceOf(ScheduleError);
+          expect((error as ScheduleError).code, entry.name).toBe(entry.expected.code);
+        }
+      }
+    }
+  });
+
   it('rejects 6-field (seconds) cron expressions at create time', () => {
     const f = setup();
     let err: ScheduleError | undefined;
@@ -1740,13 +1781,63 @@ describe('ScheduleService — cron|interval fire failure does NOT terminate the 
     // Plan window genuinely closed — no future fire is possible
     // regardless of the failure history. Goes `done`, not `failed`.
     expect(after.status).toBe('done');
-    // markDone increments fired_count; we accept that on the failure
-    // until_at-exhausted path the row reads as if the last fire
-    // succeeded (UI: `last_failure_*` is null because markDone path
-    // doesn't update them; the error trace lives only in the logger).
-    // If we ever want permanent observability for this branch, add the
-    // failure metric writes to markDone's UPDATE.
-    expect(after.fired_count).toBe(1);
+    // But the last fire FAILED, so the row records it honestly (via
+    // markPlanEndedAfterFailure, NOT markDone): the occurrence is not
+    // counted, and the fire-level failure is preserved for observability.
+    expect(after.fired_count).toBe(0);
+    expect(after.last_failure_reason).toBe('runtime down');
+    expect(after.last_failure_at).not.toBeNull();
+    expect(after.consecutive_failure_count).toBe(1);
+    // last_fired_at stays null — no fire ever delivered.
+    expect(after.last_fired_at).toBeNull();
+  });
+
+  it('plan-end-after-failure preserves the prior successful occurrence facts', async () => {
+    const f = setup();
+    // The core contract is NOT "the row happens to read zero" — it is that a
+    // failed terminal fire must not REWRITE occurrence facts a prior success
+    // already established. So we succeed once first (non-zero fired_count +
+    // a concrete last_fired_at), THEN fail the final tick past until_at.
+    let shouldFail = false;
+    f.fake.start = async () => {
+      if (shouldFail) throw new Error('final tick down');
+    };
+    const T0 = currentNow;
+    const s = f.service.create(
+      {
+        title: 'succeed then last-gasp fail',
+        message: 'm',
+        spec: { kind: 'interval', every_seconds: 60 },
+        // Fire 1 @ T0+60s rearms to T0+120s (≤ until); fire 2 @ T0+120s
+        // fails and its next tick T0+180s overruns until → plan-end.
+        until_at: T0 + 150_000,
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    // Fire 1: succeeds → fired_count=1, last_fired_at pinned to this instant.
+    const fire1At = s.next_fire_at;
+    f.setNow(fire1At);
+    await f.service.tick();
+    let row = f.schedules.get(s.id)!;
+    expect(row.status).toBe('pending');
+    expect(row.fired_count).toBe(1);
+    expect(row.last_fired_at).toBe(fire1At);
+    // Fire 2: fails, next tick past until_at → markPlanEndedAfterFailure.
+    shouldFail = true;
+    f.setNow(row.next_fire_at);
+    await f.service.tick();
+    row = f.schedules.get(s.id)!;
+    expect(row.status).toBe('done');
+    // The prior success facts are preserved VERBATIM — not reset to 0/NULL.
+    // (Falsifier: adding `fired_count=0, last_fired_at=NULL` to the
+    // markPlanEndedAfterFailure UPDATE turns these two assertions red.)
+    expect(row.fired_count).toBe(1);
+    expect(row.last_fired_at).toBe(fire1At);
+    // …while the failed final fire is recorded honestly.
+    expect(row.last_failure_reason).toBe('final tick down');
+    expect(row.last_failure_at).not.toBeNull();
+    expect(row.consecutive_failure_count).toBe(1);
   });
 
   it('cancel race during a cron fire failure still wins over markFireFailed', async () => {
@@ -1789,6 +1880,46 @@ describe('ScheduleService — cron|interval fire failure does NOT terminate the 
     expect(after.status).toBe('cancelled');
     expect(after.consecutive_failure_count).toBe(0);
     expect(after.last_failure_reason).toBeNull();
+  });
+
+  it('cancel race during a plan-end-after-failure fire still wins over markPlanEndedAfterFailure', async () => {
+    const f = setup();
+    const failureMessage = 'runtime down';
+    // Same shape as the until_at plan-end test (fire fails, next tick past
+    // until → the terminal write is markPlanEndedAfterFailure), but a cancel
+    // races in during delivery. The new CAS arm's `status='firing'` predicate
+    // must let cancel win. (Falsifier: dropping that predicate from
+    // markPlanEndedAfterFailure makes this test red — the row would be
+    // overwritten to `done` with the failure fields set.)
+    const T0 = currentNow;
+    let scheduleId = '';
+    const s = f.service.create(
+      {
+        title: 'cancel races plan-end',
+        message: 'm',
+        spec: { kind: 'interval', every_seconds: 60 },
+        until_at: T0 + 90_000, // first fire @ +60s, next tick @ +120s > until
+      },
+      f.ownerAgentId,
+      f.homeDmId,
+    );
+    scheduleId = s.id;
+    f.fake.start = async () => {
+      // After tryClaim → status='firing'; cancel transitions firing→cancelled
+      // before the (would-be) plan-end write.
+      f.service.cancel(scheduleId, f.ownerAgentId);
+      throw new Error(failureMessage);
+    };
+    f.setNow(s.next_fire_at);
+    await f.service.tick();
+    const after = f.schedules.get(s.id)!;
+    // Cancel won: terminal state is `cancelled`, not `done`, and the failure
+    // fields/counts were never written (the plan-end UPDATE saw no firing row).
+    expect(after.status).toBe('cancelled');
+    expect(after.fired_count).toBe(0);
+    expect(after.last_failure_reason).toBeNull();
+    expect(after.last_failure_at).toBeNull();
+    expect(after.consecutive_failure_count).toBe(0);
   });
 });
 

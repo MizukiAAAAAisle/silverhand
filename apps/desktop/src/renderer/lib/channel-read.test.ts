@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { nextTailReadMark, type TailReadMark } from './channel-read';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { nextTailReadMark, observeVisibleTail, type TailReadMark } from './channel-read';
 import { decodeMessageSeq } from '@silverhand/shared';
+import { ApiError } from './api';
 
 // #task:1255 P1c / #task:1244 — ChannelView's read-cursor advancement moved off
 // frame arrival onto the mainline cache. These cases pin the read-inert
@@ -10,6 +11,75 @@ import { decodeMessageSeq } from '@silverhand/shared';
 // #task:1267 §3.5: tailSeq / TailReadMark.seq are a local MessageSeq gate; decode
 // fixture literals through the shared decoder (no cast).
 const s = (n: number) => decodeMessageSeq(n);
+
+describe('visible tail observation recovery', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const mark: TailReadMark = { channelId: 'c1', seq: s(22) };
+  const locked = new ApiError(500, 'Internal Server Error', 'database is locked');
+
+  it('retries the SAME seen seq without a new message and records only acknowledged completion', async () => {
+    vi.useFakeTimers();
+    const observe = vi.fn().mockRejectedValueOnce(locked).mockResolvedValue(undefined);
+    const acknowledged = vi.fn();
+    observeVisibleTail(mark, observe, acknowledged);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(acknowledged).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(observe.mock.calls).toEqual([[mark], [mark]]);
+    expect(acknowledged).toHaveBeenCalledExactlyOnceWith(mark);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('bounds persistent transient failures and does not mark them complete', async () => {
+    vi.useFakeTimers();
+    const observe = vi.fn().mockRejectedValue(locked);
+    const acknowledged = vi.fn();
+    observeVisibleTail(mark, observe, acknowledged);
+    await vi.runAllTimersAsync();
+    expect(observe).toHaveBeenCalledTimes(4);
+    expect(acknowledged).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([401, 403, 404, 422])('does not retry permanent refusal %s', async status => {
+    vi.useFakeTimers();
+    const observe = vi.fn().mockRejectedValue(new ApiError(status, 'refused', ''));
+    const acknowledged = vi.fn();
+    observeVisibleTail(mark, observe, acknowledged);
+    await vi.runAllTimersAsync();
+    expect(observe).toHaveBeenCalledOnce();
+    expect(acknowledged).not.toHaveBeenCalled();
+  });
+
+  it('leaving the tail cancels retry; revisiting the SAME tail starts again', async () => {
+    vi.useFakeTimers();
+    const observe = vi.fn().mockRejectedValueOnce(locked).mockResolvedValue(undefined);
+    let previous: TailReadMark | null = null;
+    const acknowledge = (value: TailReadMark) => { previous = value; };
+    const cancel = observeVisibleTail(mark, observe, acknowledge);
+    await vi.advanceTimersByTimeAsync(0);
+    cancel();
+    await vi.runAllTimersAsync();
+    expect(observe).toHaveBeenCalledOnce();
+    const same = nextTailReadMark(previous, mark.channelId, mark.seq, true, false);
+    expect(same).toEqual(mark);
+    observeVisibleTail(same!, observe, acknowledge);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(previous).toEqual(mark);
+    expect(observe).toHaveBeenCalledTimes(2);
+  });
+
+  it('late response after channel change cannot acknowledge the new view', async () => {
+    let resolve!: () => void;
+    const pending = new Promise<void>(yes => { resolve = yes; });
+    const acknowledged = vi.fn();
+    const cancel = observeVisibleTail(mark, () => pending, acknowledged);
+    cancel();
+    resolve();
+    await pending;
+    expect(acknowledged).not.toHaveBeenCalled();
+  });
+});
 
 describe('nextTailReadMark', () => {
   it('marks once when a mainline row appends at tail', () => {

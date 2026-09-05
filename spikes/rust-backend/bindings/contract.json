@@ -1,0 +1,9 @@
+{
+  "http": {
+    "createMessage": "/api/messages"
+  },
+  "version": 1,
+  "webSocket": {
+    "events": "/api/ws/events"
+  }
+}

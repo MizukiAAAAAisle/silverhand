@@ -1,0 +1,111 @@
+[
+  {
+    "name": "named_arms_take_the_cap_while_message_total_stays_honest",
+    "query": "?q=cap-needle&limit=2",
+    "status": 200,
+    "body": {
+      "query": { "q": "cap-needle", "stream": "all", "order": "recency_desc", "limit": 2 },
+      "results": [
+        {
+          "type": "workspace",
+          "workspace": {
+            "id": "w",
+            "name": "cap-needle workspace",
+            "owner_agent_id": null,
+            "description": "cap discovery",
+            "archived_at": null,
+            "created_at": 1,
+            "updated_at": 2
+          }
+        },
+        {
+          "type": "conversation",
+          "conversation": {
+            "id": "c",
+            "title": "Cap-Needle Channel",
+            "roster_policy": "open",
+            "channel_id": "c",
+            "closed_at": null,
+            "created_at": 1,
+            "placement_kind": "workspace",
+            "workspace": { "id": "w", "name": "cap-needle workspace", "owner_agent_id": null }
+          }
+        }
+      ],
+      "total": 3,
+      "truncated": true
+    }
+  },
+  {
+    "name": "direct_pair_message_survives_the_workspace_left_join",
+    "query": "?q=dm-needle&conversation_id=pair",
+    "status": 200,
+    "body": {
+      "query": { "q": "dm-needle", "stream": "all", "conversation_id": "pair", "order": "recency_desc", "limit": 80 },
+      "results": [{
+        "type": "message",
+        "conversation": {
+          "id": "pair", "title": "", "roster_policy": "fixed", "channel_id": "pair",
+          "closed_at": null, "created_at": 1, "placement_kind": "direct_pair"
+        },
+        "message": {
+          "id": "pair-message", "conversation_id": "pair", "from_kind": "system",
+          "from_agent_id": null, "from_user_id": null, "author": null,
+          "content": "dm-needle", "metadata": null, "attachments": null, "reactions": null,
+          "seq": 1, "created_at": 30, "thread_root_id": null, "linked_task": null
+        }
+      }],
+      "total": 1,
+      "truncated": false
+    }
+  },
+  {
+    "name": "reply_anchor_is_published_as_the_actual_thread_root",
+    "query": "?q=thread-needle&conversation_id=c&stream=thread&thread_root_id=thread-reply&order=seq_asc",
+    "status": 200,
+    "body": {
+      "query": { "q": "thread-needle", "stream": "thread", "conversation_id": "c", "thread_root_id": "thread-root", "order": "seq_asc", "limit": 80 },
+      "results": [{
+        "type": "message",
+        "conversation": {
+          "id": "c", "title": "Cap-Needle Channel", "roster_policy": "open", "channel_id": "c",
+          "closed_at": null, "created_at": 1, "placement_kind": "workspace",
+          "workspace": { "id": "w", "name": "cap-needle workspace", "owner_agent_id": null }
+        },
+        "message": {
+          "id": "thread-reply", "conversation_id": "c", "from_kind": "system",
+          "from_agent_id": null, "from_user_id": null, "author": null,
+          "content": "thread-needle", "metadata": null, "attachments": null, "reactions": null,
+          "seq": 5, "created_at": 21, "thread_root_id": "thread-root", "linked_task": null
+        }
+      }],
+      "total": 1,
+      "truncated": false
+    }
+  },
+  {
+    "name": "deleted_sender_filter_uses_the_immutable_author_snapshot",
+    "query": "?q=deleted-needle&user_id=gone",
+    "status": 200,
+    "body": {
+      "query": { "q": "deleted-needle", "stream": "all", "user_id": "gone", "order": "recency_desc", "limit": 80 },
+      "results": [{
+        "type": "message",
+        "conversation": {
+          "id": "c", "title": "Cap-Needle Channel", "roster_policy": "open", "channel_id": "c",
+          "closed_at": null, "created_at": 1, "placement_kind": "workspace",
+          "workspace": { "id": "w", "name": "cap-needle workspace", "owner_agent_id": null }
+        },
+        "message": {
+          "id": "deleted-message", "conversation_id": "c", "from_kind": "user",
+          "from_agent_id": null, "from_user_id": null,
+          "author": { "status": "deleted", "kind": "user", "id": "gone", "name": "gone", "display_name": "Gone", "avatar_url": null },
+          "content": "deleted-needle", "metadata": null, "attachments": null, "reactions": null,
+          "seq": 6, "created_at": 22, "thread_root_id": null, "linked_task": null
+        }
+      }],
+      "total": 1,
+      "truncated": false
+    }
+  }
+]

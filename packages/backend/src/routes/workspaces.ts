@@ -29,8 +29,6 @@ import {
   inlineCode,
   systemSubtype,
   type NameAvailabilityDto,
-  type ViewerWorkspaceDto,
-  type Workspace,
 } from '@silverhand/shared';
 import { isAgentHomeWorkspace } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
@@ -51,41 +49,14 @@ import {
 } from '../observability/workspace-address-log.js';
 import { createWorkspace } from '../application/create-workspace.js';
 import { deleteWorkspace } from '../application/delete-workspace.js';
+import {
+  buildWorkspaceColdReadEnvelope,
+  toViewerWorkspace,
+} from '../application/workspace-cold-read.js';
 import { isWorkspaceNameAvailable } from '../application/name-availability.js';
 import { publishViewerWorkspacesChanged } from '../application/viewer-workspaces.js';
 import { AgentHomeChannelError } from '../services/channel-service.js';
 import { channelServiceErrorResponse } from './responses.js';
-
-/**
- * Domain `Workspace` → the human viewer's published face (#task:2069).
- *
- * THIS is the boundary the workspace context never had: before it, the repo's
- * domain object was handed to `c.json` verbatim, so the stored container word
- * reached the desktop and the renderer decoded it locally
- * (`features/workspaces/hooks.ts`). There was no seam to convert the word at —
- * hence the debt, not a decision.
- *
- * Every field is copied explicitly. A spread would republish whatever the domain
- * shape gains next, which is how the two jobs got fused in the first place.
- */
-function toViewerWorkspace(workspace: Workspace): ViewerWorkspaceDto {
-  return {
-    id: workspace.id,
-    name: workspace.name,
-    description: workspace.description,
-    // Every remaining field is a COPY. The one projection this function used to
-    // perform — stored container kind → published word — went out with the word
-    // itself (#task:2075): the wire carries `owner_agent_id`, the relation the
-    // word restated, and the renderer asks `isAgentHomeWorkspace*`.
-    owner_agent_id: workspace.owner_agent_id,
-    owner_user_id: workspace.owner_user_id,
-    dm_channel_id: workspace.dm_channel_id,
-    dm_channel_ids: workspace.dm_channel_ids,
-    archived_at: workspace.archived_at,
-    created_at: workspace.created_at,
-    updated_at: workspace.updated_at,
-  };
-}
 
 export interface WorkspacesRouteDeps {
   ctx: BackendContext;
@@ -104,20 +75,16 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
 
   app.get(apiPaths.workspaces, c => {
     const principal = getUserPrincipal(c);
-    const visible = workspaces
-      .list()
-      .filter(workspace => canViewWorkspace(ctx, principal, workspace.id));
-    return c.json({
-      workspaces: visible.map(toViewerWorkspace),
-      // Filter sort entries to the live SORTABLE set so neither a stale
-      // entity_id (removed/non-member) nor an out-of-scope archived workspace
-      // leaks on the wire — archived is shown in its own rail group, not sorted.
-      viewer_sort: sort.getState(
+    return c.json(
+      buildWorkspaceColdReadEnvelope(
+        {
+          workspaces,
+          sort,
+          canViewWorkspace: id => canViewWorkspace(ctx, principal, id),
+        },
         principal.userId,
-        'workspaces',
-        visible.filter(w => w.archived_at == null).map(w => w.id),
       ),
-    });
+    );
   });
 
   // GET /api/workspaces/name-availability?name= — create-form onBlur uniqueness

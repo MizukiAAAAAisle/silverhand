@@ -103,6 +103,12 @@ function placeFromRow(row: JoinedRow): SavedPlace {
 }
 
 function rowToDto(row: JoinedRow, author: MessageAuthorDto | null): SavedMessageDto {
+  if (row.conversation_id !== row.m_conversation_id) {
+    throw new Error(
+      `saved row ${row.id} points at conversation ${row.conversation_id}, ` +
+        `but message ${row.m_id} belongs to ${row.m_conversation_id}`,
+    );
+  }
   return {
     id: row.id,
     saved_at: row.saved_at,
@@ -232,8 +238,8 @@ export class SavedMessageRepo {
 
   /**
    * The viewer's saved messages, newest-saved first. Filters (`workspaceId` /
-   * `since`) are applied in the WHERE clause — BEFORE `ORDER BY saved_at DESC
-   * LIMIT` — so they narrow the whole saved history, not just the capped window
+   * `since`) are applied in the WHERE clause — BEFORE `ORDER BY saved_at DESC,
+   * id DESC LIMIT` — so they narrow the whole saved history, not just the capped window
    * a client would otherwise filter (#task:1258, mirrors archived-channels).
    * `since` is `saved_at >= since` (save-time window, epoch ms).
    *
@@ -292,7 +298,7 @@ export class SavedMessageRepo {
       .prepare<(string | number)[], JoinedRow>(
         `${SELECT_JOINED}
          WHERE ${conds.join('\n           AND ')}
-         ORDER BY sm.saved_at DESC
+         ORDER BY sm.saved_at DESC, sm.id DESC
          LIMIT ?`,
       )
       .all(...params);
@@ -303,14 +309,18 @@ export class SavedMessageRepo {
 
   /** Returns the existing row when the message was already saved
    *  (UNIQUE(user_id, message_id) makes this idempotent on the client). */
-  save(messageId: string, userId: string): SavedMessageDto | null {
+  saveCommitted(
+    messageId: string,
+    userId: string,
+  ): { saved: SavedMessageDto; changed: boolean } | null {
     // Resolve the canonical conversation + placement from the message; workspace
     // is no longer copied onto the saved row (v81 dropped `workspace_id` — it is
     // derived from `conv.workspace_id` at read). INSERT OR IGNORE keeps save()
     // idempotent (returns the existing row on duplicate).
+    const participation = userParticipates('conv', userId);
     const ctx = this.db
       .prepare<
-        [string],
+        string[],
         {
           conversation_id: string;
           placement_kind: ConversationPlacementKind;
@@ -321,9 +331,10 @@ export class SavedMessageRepo {
            conv.placement_kind AS placement_kind
          FROM messages m
          JOIN conversations conv ON conv.id = m.conversation_id
-         WHERE m.id = ?`,
+         WHERE m.id = ?
+           AND ${participation.sql}`,
       )
-      .get(messageId);
+      .get(messageId, ...participation.params);
     if (!ctx) return null;
     // Placement (§4.1): Saved is a HUMAN artifact, so it can only exist for a
     // placement a human participates in — a `workspace` channel or a
@@ -340,7 +351,7 @@ export class SavedMessageRepo {
     }
     const id = newId();
     const now = Date.now();
-    this.db
+    const result = this.db
       .prepare(
         `INSERT OR IGNORE INTO saved_messages
          (id, user_id, message_id, conversation_id, saved_at)
@@ -353,7 +364,14 @@ export class SavedMessageRepo {
         ctx.conversation_id,
         now,
       );
-    return this.getByMessageIdForUser(messageId, userId);
+    const saved = this.getByMessageIdForUser(messageId, userId);
+    return saved ? { saved, changed: result.changes === 1 } : null;
+  }
+
+  /** Row-only compatibility for repository consumers. It uses the same write
+   *  authority; product routes use `saveCommitted` to also receive disposition. */
+  save(messageId: string, userId: string): SavedMessageDto | null {
+    return this.saveCommitted(messageId, userId)?.saved ?? null;
   }
 
   /** Fetch-by-(message,user) used ONLY as `save()`'s post-write echo, behind the
@@ -376,11 +394,15 @@ export class SavedMessageRepo {
   }
 
   /** Returns true when a row was deleted; false when nothing to unsave. */
-  remove(messageId: string, userId: string): boolean {
+  removeCommitted(messageId: string, userId: string): { changed: boolean } {
     const result = this.db
       .prepare('DELETE FROM saved_messages WHERE message_id = ? AND user_id = ?')
       .run(messageId, userId);
-    return result.changes > 0;
+    return { changed: result.changes > 0 };
+  }
+
+  remove(messageId: string, userId: string): boolean {
+    return this.removeCommitted(messageId, userId).changed;
   }
 
   /** Bulk lookup so MessageList can mark which messages are saved

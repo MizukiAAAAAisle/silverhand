@@ -1,0 +1,11 @@
+[
+  {"name":"member_active_open","setup":"member_active_open","status":200,"body":{"ref":{"id":"c","placement_kind":"workspace","roster_policy":"open","title":"General","workspace_id":"w","closed_at":null,"archived_at":null}}},
+  {"name":"public_workspace_nonmember","setup":"public_workspace_nonmember","status":200,"body":{"ref":{"id":"c","placement_kind":"workspace","roster_policy":"open","title":"General","workspace_id":"w","closed_at":null,"archived_at":null}}},
+  {"name":"private_workspace_nonmember","setup":"private_workspace_nonmember","status":403,"body":{"error":"forbidden"}},
+  {"name":"archived_public_nonmember","setup":"archived_public_nonmember","status":403,"body":{"error":"forbidden"}},
+  {"name":"fixed_workspace_nonmember","setup":"fixed_workspace_nonmember","status":403,"body":{"error":"forbidden"}},
+  {"name":"archived_member","setup":"archived_member","status":200,"body":{"ref":{"id":"c","placement_kind":"workspace","roster_policy":"open","title":"General","workspace_id":"w","closed_at":null,"archived_at":9}}},
+  {"name":"missing_conversation","setup":"missing_conversation","status":404,"body":{"error":"conversation not found"}},
+  {"name":"readable_direct_pair_is_unnameable","setup":"direct_pair_endpoint","status":404,"body":{"error":"conversation not found"}},
+  {"name":"direct_pair_nonendpoint_is_forbidden_first","setup":"direct_pair_nonendpoint","status":403,"body":{"error":"forbidden"}}
+]

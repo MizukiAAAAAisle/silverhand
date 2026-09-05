@@ -4054,6 +4054,50 @@ export const migrations: Migration[] = [
       ALTER TABLE messages DROP COLUMN task_last_edited_at;
     `,
   },
+  {
+    version: 88,
+    name: 'workspaces_drop_retired_rail_sort_scopes',
+    // #task:2190 — migrate the workspace rail's sort-mode rows to the current
+    // two-group scope vocabulary by physically deleting the two retired kinds.
+    //
+    // History: the workspace rail once stored a single flat mode under the
+    // list-wide sentinel scope `''` (and, at one point, a `'pinned'` group).
+    // v48 folded EVERY `user_list_sort_mode` row to `scope=''` when it introduced
+    // the scope column, and its comment even called the resulting
+    // `workspaces`/`''` row a harmless orphan. v86 then split the rail into two
+    // hard groups — `'regular'` and `'agent_space'` — and only remapped the
+    // `'dm'` legacy value, deliberately leaving the older `''`/`'pinned'` rows in
+    // place. Real databases created before v48 therefore still carry
+    // `workspaces` rows at `scope IN ('', 'pinned')`.
+    //
+    // Those two kinds are no longer legal on this rail: the current model has
+    // exactly two groups and no flat/pinned scope. The Rust cold-read reader
+    // (and the product's own two-group semantics) treat any `workspaces` scope
+    // outside `{regular, agent_space}` as corruption and fail closed — which
+    // would safe-500 a legitimately-upgraded user whose only "fault" is a
+    // pre-v48 provenance. A retired feature migrates to its terminal state; it
+    // is not preserved 1:1. The terminal state for these rows is "gone": a mode
+    // row is a pure viewer preference with no downstream fact, so dropping it
+    // simply returns that group to its default, exactly as a user who never set
+    // a mode.
+    //
+    // Boundary, deliberately narrow:
+    //   - ONLY `list_key = 'workspaces'` rows at `scope IN ('', 'pinned')` go.
+    //   - Other lists' legitimate `scope = ''` (channel rails `channels:*`,
+    //     favorites) are the flat-list sentinel and MUST survive verbatim.
+    //   - Any OTHER unknown `workspaces` scope is NOT swallowed here: it is left
+    //     for the strict reader to fail closed on, because this migration only
+    //     retires the two kinds we can prove are historical, not "anything the
+    //     reader dislikes".
+    //
+    // Pure data DELETE: no DDL, so the schema snapshot is byte-identical and this
+    // runs with `foreign_keys = ON` like every other non-rebuild migration.
+    up: `
+      DELETE FROM user_list_sort_mode
+       WHERE list_key = 'workspaces'
+         AND scope IN ('', 'pinned');
+    `,
+  },
 ];
 
 /**

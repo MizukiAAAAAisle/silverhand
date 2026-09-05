@@ -1,0 +1,120 @@
+[
+  {
+    "name": "target_not_visible",
+    "target": "agent-hidden",
+    "request": {"content":"hello"},
+    "schema_accepted": true,
+    "status": 404,
+    "body": {"error":"not found"}
+  },
+  {
+    "name": "target_visible_but_conversation_scoped",
+    "target": "agent-frame",
+    "request": {"content":"hello"},
+    "schema_accepted": true,
+    "status": 403,
+    "body": {"error":"forbidden"}
+  },
+  {
+    "name": "missing_content",
+    "target": "agent-1",
+    "request": {},
+    "schema_accepted": false,
+    "admission_only": true,
+    "status": 400,
+    "body": {"error":"invalid input","issues":[{"code":"invalid_type","path":["content"]}]}
+  },
+  {
+    "name": "non_object_root",
+    "target": "agent-1",
+    "request": [],
+    "schema_accepted": false,
+    "admission_only": true,
+    "status": 400,
+    "body": {"error":"invalid input","issues":[{"code":"invalid_type","path":[]}]}
+  },
+  {
+    "name": "content_wrong_type",
+    "target": "agent-1",
+    "request": {"content":7},
+    "schema_accepted": false,
+    "admission_only": true,
+    "status": 400,
+    "body": {"error":"invalid input","issues":[{"code":"invalid_type","path":["content"]}]}
+  },
+  {
+    "name": "empty_payload",
+    "target": "agent-1",
+    "request": {"content":""},
+    "schema_accepted": false,
+    "admission_only": true,
+    "status": 400,
+    "body": {"error":"invalid input","issues":[{"code":"custom","path":["content"],"message":"message must include text or at least one attachment"}]}
+  },
+  {
+    "name": "malformed_json_falls_through_empty_object",
+    "target": "agent-1",
+    "request_case": "malformed_json",
+    "schema_accepted": false,
+    "admission_only": true,
+    "status": 400,
+    "body_case": "missing_content"
+  },
+  {
+    "name": "reply_target_is_rejected_before_mint",
+    "target": "agent-1",
+    "request": {"content":"hello","reply_to_message_id":"root"},
+    "schema_accepted": true,
+    "status": 400,
+    "body": {"error":"cannot open a direct-message line into a reply cluster","code":"reply_to_unsupported"}
+  },
+  {
+    "name": "content_over_limit_is_rejected_before_mint",
+    "target": "agent-1",
+    "request_case": "content_over_limit",
+    "schema_accepted": true,
+    "status": 413,
+    "body": {"error":"message content exceeds 64KiB limit","code":"content_too_large","max_bytes":65536,"actual_bytes":65537}
+  },
+  {
+    "name": "send_refusal_keeps_minted_pair",
+    "target": "agent-1",
+    "request": {"content":"hello","attachment_ids":["missing"]},
+    "schema_accepted": true,
+    "status": 400,
+    "body": {"error":"attachment does not belong to this channel","code":"attachment_outside_channel","attachment_id":"missing"}
+  },
+  {
+    "name": "unknown_keys_are_stripped",
+    "target": "agent-1",
+    "request": {"content":"hello","unknown":{"smuggled":true}},
+    "schema_accepted": true,
+    "status": 201,
+    "body_case": "created"
+  },
+  {
+    "name": "created",
+    "target": "agent-1",
+    "request": {"content":"hello"},
+    "schema_accepted": true,
+    "status": 201,
+    "body": {
+      "message": {
+        "id":"message",
+        "conversation_id":"pair",
+        "from_kind":"user",
+        "from_agent_id":null,
+        "from_user_id":"local",
+        "author":{"status":"active","kind":"user","id":"local","name":"local-test","display_name":"Local Test User","avatar_url":null,"runtime":null},
+        "content":"hello",
+        "metadata":null,
+        "attachments":null,
+        "reactions":null,
+        "seq":1,
+        "created_at":77,
+        "thread_root_id":null,
+        "linked_task":null
+      }
+    }
+  }
+]

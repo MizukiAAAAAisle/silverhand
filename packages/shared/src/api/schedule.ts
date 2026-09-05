@@ -1,6 +1,7 @@
 // AUTO-SPLIT from the former monolithic api/dto.ts (#task:963).
 // Bounded context: schedule. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
+import { PositiveJsSafeIntegerSchema } from './wire-number.js';
 
 //
 // Agent-owned cron-like scheduler. A schedule is a self-driven
@@ -47,14 +48,14 @@ export type ScheduleStatus = z.infer<typeof ScheduleStatusSchema>;
 
 export const ScheduleSpecOnceSchema = z.object({
   kind: z.literal('once'),
-  fire_at: z.number().int().positive(),
+  fire_at: PositiveJsSafeIntegerSchema,
 });
 export type ScheduleSpecOnce = z.infer<typeof ScheduleSpecOnceSchema>;
 
 export const ScheduleSpecIntervalSchema = z.object({
   kind: z.literal('interval'),
-  every_seconds: z.number().int().min(SCHEDULE_MIN_INTERVAL_SECONDS),
-  start_at: z.number().int().positive().optional(),
+  every_seconds: PositiveJsSafeIntegerSchema.min(SCHEDULE_MIN_INTERVAL_SECONDS),
+  start_at: PositiveJsSafeIntegerSchema.optional(),
 });
 export type ScheduleSpecInterval = z.infer<typeof ScheduleSpecIntervalSchema>;
 
@@ -137,8 +138,8 @@ export type ScheduleDto = z.infer<typeof ScheduleDtoSchema>;
 // a `once` spec.
 export const ScheduleCreateOnceInputSchema = z.object({
   kind: z.literal('once'),
-  fire_at: z.number().int().positive().optional(),
-  delay_seconds: z.number().int().positive().optional(),
+  fire_at: PositiveJsSafeIntegerSchema.optional(),
+  delay_seconds: PositiveJsSafeIntegerSchema.optional(),
 });
 export type ScheduleCreateOnceInput = z.infer<
   typeof ScheduleCreateOnceInputSchema
@@ -163,9 +164,9 @@ const scheduleDefinitionShape = {
     ScheduleSpecCronSchema,
   ]),
   /** Optional epoch-ms termination for repeat specs. REJECTED on `once`. */
-  until_at: z.number().int().positive().optional(),
+  until_at: PositiveJsSafeIntegerSchema.optional(),
   /** Optional max-fire-count cap for repeat specs. REJECTED on `once`. */
-  max_occurrences: z.number().int().positive().optional(),
+  max_occurrences: PositiveJsSafeIntegerSchema.optional(),
   /** Required `true` for repeat specs without `until_at`/`max_occurrences`.
    *  REJECTED on `once` (one-shots fire exactly once and don't need
    *  a "no upper bound" opt-in). */

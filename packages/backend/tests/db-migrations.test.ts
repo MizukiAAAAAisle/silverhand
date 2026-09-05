@@ -3432,6 +3432,117 @@ describe('v86 user_list_sort_mode_rail_scope_agent_space (#task:2045 Delta 4)', 
   });
 });
 
+describe('v88 workspaces_drop_retired_rail_sort_scopes (#task:2190)', () => {
+  function wsModes(
+    db: Database.Database,
+  ): Array<{ scope: string; mode: string }> {
+    return db
+      .prepare<[], { scope: string; mode: string }>(
+        `SELECT scope, mode FROM user_list_sort_mode
+          WHERE user_id = 'u1' AND list_key = 'workspaces' ORDER BY scope`,
+      )
+      .all();
+  }
+
+  it('drops only the retired workspaces scopes and keeps legal current scopes, other lists, and unknown scopes verbatim', () => {
+    // A real pre-v48 provenance: the viewer once held a single flat workspaces
+    // mode (no scope column) and a flat channels mode. v48 folds both to the
+    // list-wide sentinel scope ''. The workspaces '' row is exactly the orphan
+    // that v86 left behind and the strict reader now fails closed on.
+    const db = openDbAt(47);
+    try {
+      const now = 1_700_000_000_000;
+      db.prepare(
+        `INSERT INTO users (id, name, display_name, created_at, updated_at)
+         VALUES ('u1', 'viewer', 'Viewer', ?, ?)`,
+      ).run(now, now);
+      db.prepare(
+        `INSERT INTO user_list_sort_mode (user_id, list_key, mode, updated_at)
+         VALUES ('u1', 'workspaces', 'manual', ?)`,
+      ).run(now);
+      db.prepare(
+        `INSERT INTO user_list_sort_mode (user_id, list_key, mode, updated_at)
+         VALUES ('u1', 'channels:ws1', 'recent', ?)`,
+      ).run(now);
+
+      // v48 introduces the scope column and folds both rows to scope ''.
+      applyMigrationsThrough(db, 85);
+      expect(wsModes(db)).toEqual([{ scope: '', mode: 'manual' }]);
+
+      // Over the following releases the viewer accumulated per-group modes: the
+      // retired 'pinned' group, a legacy 'dm' group (v86 remaps it to
+      // 'agent_space'), a current 'regular' group, and — to prove the DELETE is
+      // narrow — some OTHER unknown scope this migration must NOT swallow.
+      db.prepare(
+        `INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at)
+         VALUES ('u1', 'workspaces', 'pinned', 'manual', ?),
+                ('u1', 'workspaces', 'dm', 'recent', ?),
+                ('u1', 'workspaces', 'regular', 'recent', ?),
+                ('u1', 'workspaces', 'mystery', 'manual', ?)`,
+      ).run(now, now, now, now);
+
+      applyMigrationsThrough(db, CURRENT_MIGRATION_STEP);
+      expect(
+        db.prepare(`SELECT version FROM _migrations WHERE version = 88`).get(),
+      ).toBeDefined();
+
+      // The two retired kinds ('' and 'pinned') are gone. The legal current
+      // scopes survive verbatim: 'regular' as written, and 'agent_space' as v86
+      // remapped it from 'dm'. The unknown 'mystery' scope is left for the
+      // strict reader to fail closed on — this migration does not swallow it.
+      expect(wsModes(db)).toEqual([
+        { scope: 'agent_space', mode: 'recent' },
+        { scope: 'mystery', mode: 'manual' },
+        { scope: 'regular', mode: 'recent' },
+      ]);
+
+      // A different list's legitimate flat sentinel '' is untouched.
+      expect(
+        db
+          .prepare<[], { scope: string; mode: string }>(
+            `SELECT scope, mode FROM user_list_sort_mode
+              WHERE user_id = 'u1' AND list_key = 'channels:ws1'`,
+          )
+          .all(),
+      ).toEqual([{ scope: '', mode: 'recent' }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('is idempotent on replay and a no-op on a DB with only legal current scopes', () => {
+    const db = openDbAt(88);
+    try {
+      const now = 1_700_000_000_000;
+      db.exec(`
+        INSERT INTO users (id, name, display_name, created_at, updated_at)
+          VALUES ('u1', 'viewer', 'Viewer', ${now}, ${now});
+        INSERT INTO user_list_sort_mode (user_id, list_key, scope, mode, updated_at)
+          VALUES ('u1', 'workspaces', 'regular', 'recent', ${now}),
+                 ('u1', 'workspaces', 'agent_space', 'manual', ${now}),
+                 ('u1', 'channels:ws1', '', 'manual', ${now});
+      `);
+      const before = wsModes(db);
+
+      const v88 = migrations.find(m => m.version === 88)!;
+      db.exec(v88.up);
+      db.exec(v88.up);
+
+      expect(wsModes(db)).toEqual(before);
+      expect(
+        db
+          .prepare<[], { scope: string; mode: string }>(
+            `SELECT scope, mode FROM user_list_sort_mode
+              WHERE user_id = 'u1' AND list_key = 'channels:ws1'`,
+          )
+          .all(),
+      ).toEqual([{ scope: '', mode: 'manual' }]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe('schema epoch reporting and ledger prefix enforcement (#task:2103)', () => {
   const SYNTHETIC_PLAN_FLOOR = MIN_SUPPORTED_MIGRATION_STEP;
 

@@ -20,6 +20,7 @@
 #   --allow-insecure-remote  bake acceptance for non-loopback http:// remote URLs
 #   --minify                 minify shipped JS bundles (default for release packages)
 #   --no-minify              keep shipped JS readable (default with --dir)
+#   --output-dir <name>      separate artifact directory under apps/desktop
 
 set -euo pipefail
 
@@ -33,6 +34,7 @@ DIR_ONLY=0
 REMOTE_ONLY=0
 ALLOW_INSECURE_REMOTE="${SILVERHAND_ALLOW_INSECURE_REMOTE:-0}"
 SERVER_URL=""
+OUTPUT_DIR=""
 
 parse_minify_flag() {
   local raw="$1"
@@ -56,6 +58,14 @@ while [[ $# -gt 0 ]]; do
     --remote-only)
       REMOTE_ONLY=1
       shift
+      ;;
+    --output-dir)
+      if [[ $# -lt 2 || ! "$2" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+        echo "[package] --output-dir requires a simple directory name" >&2
+        exit 2
+      fi
+      OUTPUT_DIR="$2"
+      shift 2
       ;;
     --allow-insecure-remote)
       ALLOW_INSECURE_REMOTE=1
@@ -82,7 +92,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      echo "Usage: $0 [--dir] [--remote-only --server-url <origin>] [--allow-insecure-remote] [--minify|--no-minify]"
+      echo "Usage: $0 [--dir] [--output-dir <name>] [--remote-only --server-url <origin>] [--allow-insecure-remote] [--minify|--no-minify]"
       exit 0
       ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -164,6 +174,15 @@ export SILVERHAND_DESKTOP_REMOTE_ONLY="$REMOTE_ONLY"
 export SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE="$ALLOW_INSECURE_REMOTE"
 export SILVERHAND_DESKTOP_DEFAULT_SERVER_URL="$SERVER_URL"
 export SILVERHAND_MINIFY="$MINIFY"
+
+if [[ "$(node -p 'process.platform + ":" + process.arch')" != "darwin:arm64" ]]; then
+  echo "[package] this Desktop package requires a darwin arm64 host" >&2
+  exit 2
+fi
+if [[ -n "${SILVERHAND_RUST_TARGET:-}" && "$SILVERHAND_RUST_TARGET" != "aarch64-apple-darwin" ]]; then
+  echo "[package] SILVERHAND_RUST_TARGET must match the Desktop host aarch64-apple-darwin" >&2
+  exit 2
+fi
 
 # electron-builder downloads the per-arch Electron zip from GitHub
 # releases by default; from CN networks that connection EOFs partway
@@ -328,6 +347,60 @@ if [[ "$REMOTE_ONLY" == "1" ]]; then
   BUILDER_CONFIG="electron-builder.remote-only.yml"
   ARTIFACT_OUTPUT_DIR="release-remote-server"
 
+  # #task:2343 — a remote-only build ships NO embedded Rust backend sidecar. The
+  # remote-only electron-builder config excludes it; we also skip building it here.
+  echo "[package] remote-only: skipping embedded Rust backend sidecar build"
+else
+  # #task:2343 — build the PREBUILT Rust backend sidecar + its manifest for the embedded
+  # build. Cargo is invoked HERE at package time only — NEVER at app runtime. The manifest
+  # pins the executable + target + SHA-256 the launcher verifies before spawn (the
+  # artifact-identity gate; the launcher matches manifest.target against the Electron
+  # platform+arch, not merely arch). electron-builder ships the staged sidecar + manifest
+  # to `resources/silverhand-backend/` via extraResources.
+  #
+  # This task builds+verifies ONLY the current Desktop HOST target (shiki: no cross-compile
+  # / ECS in #2343 — a Linux/ECS target comes later, separately). The manifest.target is
+  # the host desktop target derived from the Electron platform+arch (the SAME value the
+  # launcher's verifySidecar requires), so the manifest is not a recomputed host triple but
+  # the declared desktop target; the launcher rejects any other.
+  DESKTOP_ARCH="$(node -p 'process.arch')"
+  BACKEND_TARGET="aarch64-apple-darwin"
+  echo "[package] building embedded Rust backend sidecar (cargo build --release, host target $BACKEND_TARGET)"
+  ( cd "$ROOT_DIR/rust" && cargo build --release --bin silverhand-backend --target "$BACKEND_TARGET" )
+  SIDECAR_SRC="$ROOT_DIR/rust/target/$BACKEND_TARGET/release/silverhand-backend"
+  if [[ ! -x "$SIDECAR_SRC" ]]; then
+    echo "[package] embedded Rust backend sidecar not found at $SIDECAR_SRC" >&2
+    exit 1
+  fi
+  SIDECAR_STAGE="$ROOT_DIR/rust/target/release"
+  mkdir -p "$SIDECAR_STAGE"
+  SIDECAR_BIN="$SIDECAR_STAGE/silverhand-backend"
+  cp "$SIDECAR_SRC" "$SIDECAR_BIN"
+  codesign --force --sign - "$SIDECAR_BIN"
+  SIDECAR_SHA256="$(shasum -a 256 "$SIDECAR_BIN" | awk '{print $1}')"
+  cat > "$SIDECAR_STAGE/silverhand-backend.manifest.json" <<MANIFEST
+{
+  "executable": "silverhand-backend",
+  "target": "$BACKEND_TARGET",
+  "arch": "$DESKTOP_ARCH",
+  "sha256": "$SIDECAR_SHA256"
+}
+MANIFEST
+  echo "[package] embedded Rust backend sidecar target=$BACKEND_TARGET sha256=${SIDECAR_SHA256:0:12} manifest written"
+
+  # #task:2343 — real-process smoke against the just-built sidecar: migrate+close an
+  # ISOLATED (workspace-local gitignored) SILVERHAND_DIR, spawn the binary, verify the
+  # bound frame / readyz / server-info / a mounted route / event WS / clean shutdown, plus
+  # the bad-config failure arm. Runs at PACKAGE time (not runtime) via the tsx in
+  # packages/cli. Fails the package on any regression.
+  echo "[package] embedded Rust backend real-process smoke"
+  NODE_ABI="$(node -p 'process.versions.modules')"
+  ensure_binding "$NODE_ABI" "pnpm rebuild better-sqlite3" "package smoke (node)" 1
+  ( cd "$ROOT_DIR" && ./packages/cli/node_modules/.bin/tsx scripts/smoke-embedded-rust-backend.mts )
+  ensure_binding "$ELECTRON_ABI" "pnpm --filter @silverhand/desktop exec electron-rebuild -f -w better-sqlite3" "package (electron)"
+fi
+
+if [[ "$REMOTE_ONLY" == "1" ]]; then
   # #task:1530 — the remote-only manifest ships via a `from: package.json` rename-
   # copy that electron-builder's extraMetadata does NOT rewrite (it only touches
   # the main apps/desktop/package.json). So the ONLY way the remote-only runtime
@@ -350,13 +423,17 @@ if [[ "$REMOTE_ONLY" == "1" ]]; then
   echo "[package] generated remote-only manifest @ version $CANONICAL_VERSION"
 fi
 
+if [[ -n "$OUTPUT_DIR" ]]; then
+  ARTIFACT_OUTPUT_DIR="$OUTPUT_DIR"
+fi
+
 if [[ "$DIR_ONLY" == "1" ]]; then
   echo "[package] running electron-builder --dir"
-  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --dir --config "$BUILDER_CONFIG" )
+  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --dir --config "$BUILDER_CONFIG" --config.directories.output="$ARTIFACT_OUTPUT_DIR" )
 else
   stage_dmgbuild_bundle
   echo "[package] running electron-builder"
-  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --config "$BUILDER_CONFIG" )
+  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --config "$BUILDER_CONFIG" --config.directories.output="$ARTIFACT_OUTPUT_DIR" )
 fi
 
 verify_packaged_better_sqlite3() {
@@ -506,6 +583,9 @@ verify_packaged_app_version "$PACKAGED_APP_PATH" "$CANONICAL_VERSION"
 
 if [[ "$REMOTE_ONLY" != "1" ]]; then
   verify_packaged_better_sqlite3 "$PACKAGED_APP_PATH" "$ELECTRON_ABI"
+  ensure_binding "$NODE_ABI" "pnpm rebuild better-sqlite3" "packaged sidecar smoke (node)" 1
+  ./packages/cli/node_modules/.bin/tsx scripts/smoke-embedded-rust-backend.mts "$PACKAGED_APP_PATH/Contents/Resources"
+  ensure_binding "$ELECTRON_ABI" "pnpm --filter @silverhand/desktop exec electron-rebuild -f -w better-sqlite3" "package restore (electron)"
 fi
 
 # This must remain the final package smoke. afterPack verifies the signature at

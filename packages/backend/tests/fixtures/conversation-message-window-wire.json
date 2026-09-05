@@ -1,0 +1,267 @@
+[
+  {
+    "name": "participating_latest",
+    "query": "?limit=2",
+    "status": 200,
+    "body": {
+      "messages": [
+        {
+          "id": "root-1",
+          "conversation_id": "c",
+          "from_kind": "user",
+          "from_agent_id": null,
+          "from_user_id": "local",
+          "author": {
+            "kind": "user",
+            "status": "active",
+            "id": "local",
+            "name": "local-test",
+            "display_name": "Local Test User",
+            "avatar_url": null,
+            "runtime": null
+          },
+          "content": "root one",
+          "metadata": null,
+          "attachments": null,
+          "reactions": null,
+          "seq": 1,
+          "created_at": 10,
+          "thread_root_id": null,
+          "linked_task": null
+        },
+        {
+          "id": "root-2",
+          "conversation_id": "c",
+          "from_kind": "user",
+          "from_agent_id": null,
+          "from_user_id": "local",
+          "author": {
+            "kind": "user",
+            "status": "active",
+            "id": "local",
+            "name": "local-test",
+            "display_name": "Local Test User",
+            "avatar_url": null,
+            "runtime": null
+          },
+          "content": "root two",
+          "metadata": null,
+          "attachments": null,
+          "reactions": [
+            {
+              "emoji": "👍",
+              "count": 2,
+              "viewer_reacted": true
+            }
+          ],
+          "seq": 2,
+          "created_at": 20,
+          "thread_root_id": null,
+          "linked_task": {
+            "task_id": "task-1",
+            "task_number": 1,
+            "title": "Linked task",
+            "status": "todo",
+            "assignee": null
+          }
+        }
+      ],
+      "reply_counts_by_root": {
+        "root-1": 2,
+        "root-2": 0
+      },
+      "has_more_before": false,
+      "has_more_after": false,
+      "stream_head_seq": 2,
+      "reply_summaries_by_root": {
+        "root-1": {
+          "reply_count": 2,
+          "last_reply_at": 50,
+          "repliers": [
+            {
+              "kind": "user",
+              "status": "active",
+              "id": "reply-b",
+              "name": "reply-b",
+              "display_name": "Reply B",
+              "avatar_url": null,
+              "runtime": null
+            },
+            {
+              "kind": "user",
+              "status": "active",
+              "id": "reply-a",
+              "name": "reply-a",
+              "display_name": "Reply A",
+              "avatar_url": null,
+              "runtime": null
+            }
+          ],
+          "replier_total": 2
+        }
+      },
+      "reply_previews_by_root": {
+        "root-1": [
+          {
+            "message_id": "reply-1",
+            "seq": 3,
+            "author": {
+              "kind": "user",
+              "status": "active",
+              "id": "reply-a",
+              "name": "reply-a",
+              "display_name": "Reply A",
+              "avatar_url": null,
+              "runtime": null
+            },
+            "preview": "first reply",
+            "attachment_count": 0,
+            "first_attachment_label": null
+          },
+          {
+            "message_id": "reply-2",
+            "seq": 5,
+            "author": {
+              "kind": "user",
+              "status": "active",
+              "id": "reply-b",
+              "name": "reply-b",
+              "display_name": "Reply B",
+              "avatar_url": null,
+              "runtime": null
+            },
+            "preview": "second reply",
+            "attachment_count": 1,
+            "first_attachment_label": "File #2"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "participating_thread_around",
+    "query": "?limit=3&thread_root_id=reply-1&around_message_id=reply-2",
+    "status": 200,
+    "body": {
+      "messages": [
+        {
+          "id": "reply-system",
+          "conversation_id": "c",
+          "from_kind": "system",
+          "from_agent_id": null,
+          "from_user_id": null,
+          "author": null,
+          "content": "system reply",
+          "metadata": null,
+          "attachments": null,
+          "reactions": null,
+          "seq": 4,
+          "created_at": 40,
+          "thread_root_id": "root-1",
+          "linked_task": null
+        },
+        {
+          "id": "reply-2",
+          "conversation_id": "c",
+          "from_kind": "user",
+          "from_agent_id": null,
+          "from_user_id": "reply-b",
+          "author": {
+            "kind": "user",
+            "status": "active",
+            "id": "reply-b",
+            "name": "reply-b",
+            "display_name": "Reply B",
+            "avatar_url": null,
+            "runtime": null
+          },
+          "content": "second reply",
+          "metadata": {
+            "attachments": [
+              {
+                "id": "att-2",
+                "filename": "note.txt",
+                "size": 4,
+                "content_type": "text/plain",
+                "label": "File #2"
+              }
+            ]
+          },
+          "attachments": [
+            {
+              "id": "att-2",
+              "filename": "note.txt",
+              "size": 4,
+              "content_type": "text/plain",
+              "label": "File #2"
+            }
+          ],
+          "reactions": null,
+          "seq": 5,
+          "created_at": 50,
+          "thread_root_id": "root-1",
+          "linked_task": null
+        }
+      ],
+      "reply_counts_by_root": {},
+      "has_more_before": true,
+      "has_more_after": false,
+      "stream_head_seq": 5,
+      "reply_summaries_by_root": {},
+      "reply_previews_by_root": {}
+    }
+  },
+  {
+    "name": "public_after_neutralizes_viewer_reaction",
+    "query": "?limit=1&after_seq=1",
+    "status": 200,
+    "body": {
+      "messages": [
+        {
+          "id": "root-2",
+          "conversation_id": "c",
+          "from_kind": "user",
+          "from_agent_id": null,
+          "from_user_id": "local",
+          "author": {
+            "kind": "user",
+            "status": "active",
+            "id": "local",
+            "name": "local-test",
+            "display_name": "Local Test User",
+            "avatar_url": null,
+            "runtime": null
+          },
+          "content": "root two",
+          "metadata": null,
+          "attachments": null,
+          "reactions": [
+            {
+              "emoji": "👍",
+              "count": 2,
+              "viewer_reacted": false
+            }
+          ],
+          "seq": 2,
+          "created_at": 20,
+          "thread_root_id": null,
+          "linked_task": {
+            "task_id": "task-1",
+            "task_number": 1,
+            "title": "Linked task",
+            "status": "todo",
+            "assignee": null
+          }
+        }
+      ],
+      "reply_counts_by_root": {
+        "root-2": 0
+      },
+      "has_more_before": true,
+      "has_more_after": false,
+      "stream_head_seq": 2,
+      "reply_summaries_by_root": {},
+      "reply_previews_by_root": {}
+    }
+  }
+]

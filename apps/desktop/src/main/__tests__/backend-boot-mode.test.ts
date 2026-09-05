@@ -28,7 +28,6 @@ import { describe, expect, it } from 'vitest';
 import {
   decideBackendBootMode,
   evaluateProfileCommitGuard,
-  localOutboundSocketPathForStartupPlan,
   planBackendStartup,
   ProfileUnusableError,
   type BackendBootMode,
@@ -464,45 +463,5 @@ describe('planBackendStartup (D4.a 5d adapter — pure decision → plan convert
       classifyMessage: 'oops',
     };
     expect(() => planBackendStartup(decision)).not.toThrow();
-  });
-});
-
-describe('localOutboundSocketPathForStartupPlan', () => {
-  const socketPath = '/tmp/silverhand/daemon-outbound.sock';
-
-  it('enables the local outbound transport only for an embedded backend', () => {
-    expect(
-      localOutboundSocketPathForStartupPlan(
-        { mode: 'embedded', embeddedReason: 'no_profile' },
-        socketPath,
-      ),
-    ).toBe(socketPath);
-  });
-
-  it('does not let a remote desktop advertise the embedded transport', () => {
-    expect(
-      localOutboundSocketPathForStartupPlan(
-        {
-          mode: 'remote',
-          serverUrl: 'https://backend.example.test',
-          insecure: false,
-        },
-        socketPath,
-      ),
-    ).toBeNull();
-  });
-
-  it('keeps the refused arm side-effect free', () => {
-    expect(
-      localOutboundSocketPathForStartupPlan(
-        {
-          mode: 'refuse',
-          reason: 'profile_invalid',
-          profileUrl: 'http://backend.example.test',
-          classifyMessage: 'invalid profile',
-        },
-        socketPath,
-      ),
-    ).toBeNull();
   });
 });

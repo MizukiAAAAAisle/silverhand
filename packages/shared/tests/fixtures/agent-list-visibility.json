@@ -1,0 +1,112 @@
+{
+  "_comment": [
+    "Shared TS<->Rust set-signer for the GET /api/agents list face (#task:2195, batch 5).",
+    "This is a STRUCTURED DOMAIN seed, not an executable SQL script: it names domain",
+    "entities and their relationships with symbolic refs, and each side resolves those",
+    "refs to its own concrete ids. The TS half builds the world through the repository /",
+    "test-context builders (zero native SQL in the business test) and signs the expected",
+    "sets with the real agents.list() + canViewAgent; the Rust half builds a current-schema",
+    "fixture from the SAME structured facts. Both sides share ONE set of product facts +",
+    "expected ordered id sets, but NOT a database dialect.",
+    "",
+    "One world holds every ACL arm so overlap and viewer-relativity are real, not isolated",
+    "per case. Each case pins the ORDERED visible-agent-id set (as refs) a viewer sees under",
+    "a (scope, stage-flags) intent — the load-bearing signal of the cold-read + core",
+    "`visible_agents` projector. The per-agent DTO projection is NOT re-checked here; GET",
+    "/api/agents/:id already signs that.",
+    "",
+    "`agents[].created_at` is the ORDER contract of AgentRepo.list() (created_at ASC, no id",
+    "tiebreak), so the ascending values below fix the asserted order; each side pins it.",
+    "Agents (ref -> creator, created_at, status):",
+    "  a-creator   viewer  100 active   -- creator arm only (no pair, no shared ws)",
+    "  a-pair      other   200 active   -- direct-pair arm with viewer only",
+    "  a-workspace other   300 active   -- shared-workspace arm with viewer only",
+    "  a-overlap   viewer  400 active   -- creator AND direct-pair with viewer (overlap)",
+    "  a-none      other   500 active   -- invisible to viewer (visible to its creator)",
+    "  a-failed    viewer  600 failed   -- creator arm, hidden by default stage set",
+    "  a-pending   viewer  700 pending  -- creator arm, hidden by default stage set"
+  ],
+  "humans": ["viewer", "other", "stranger"],
+  "agents": [
+    { "ref": "a-creator", "creator": "viewer", "created_at": 100, "status": "active" },
+    { "ref": "a-pair", "creator": "other", "created_at": 200, "status": "active" },
+    { "ref": "a-workspace", "creator": "other", "created_at": 300, "status": "active" },
+    { "ref": "a-overlap", "creator": "viewer", "created_at": 400, "status": "active" },
+    { "ref": "a-none", "creator": "other", "created_at": 500, "status": "active" },
+    { "ref": "a-failed", "creator": "viewer", "created_at": 600, "status": "failed" },
+    { "ref": "a-pending", "creator": "viewer", "created_at": 700, "status": "pending" }
+  ],
+  "direct_pairs": [
+    { "agent": "a-pair", "human": "viewer" },
+    { "agent": "a-overlap", "human": "viewer" }
+  ],
+  "workspaces": [
+    { "ref": "w-shared", "agent_members": ["a-workspace"], "human_users": ["viewer"] }
+  ],
+  "cases": [
+    {
+      "name": "default_view_spans_creator_pair_workspace_overlap",
+      "viewer": "viewer",
+      "scope": "all",
+      "include_failed": false,
+      "include_pending": false,
+      "expected_agent_ids": ["a-creator", "a-pair", "a-workspace", "a-overlap"]
+    },
+    {
+      "name": "include_failed_reveals_the_owned_failed_row",
+      "viewer": "viewer",
+      "scope": "all",
+      "include_failed": true,
+      "include_pending": false,
+      "expected_agent_ids": ["a-creator", "a-pair", "a-workspace", "a-overlap", "a-failed"]
+    },
+    {
+      "name": "include_pending_reveals_the_owned_pending_row",
+      "viewer": "viewer",
+      "scope": "all",
+      "include_failed": false,
+      "include_pending": true,
+      "expected_agent_ids": ["a-creator", "a-pair", "a-workspace", "a-overlap", "a-pending"]
+    },
+    {
+      "name": "management_view_shows_all_three_stages",
+      "viewer": "viewer",
+      "scope": "all",
+      "include_failed": true,
+      "include_pending": true,
+      "expected_agent_ids": ["a-creator", "a-pair", "a-workspace", "a-overlap", "a-failed", "a-pending"]
+    },
+    {
+      "name": "owned_narrows_to_the_viewers_own_active_agents",
+      "viewer": "viewer",
+      "scope": "owned",
+      "include_failed": false,
+      "include_pending": false,
+      "expected_agent_ids": ["a-creator", "a-overlap"]
+    },
+    {
+      "name": "owned_composes_with_the_failed_widener",
+      "viewer": "viewer",
+      "scope": "owned",
+      "include_failed": true,
+      "include_pending": false,
+      "expected_agent_ids": ["a-creator", "a-overlap", "a-failed"]
+    },
+    {
+      "name": "visibility_is_viewer_relative",
+      "viewer": "other",
+      "scope": "all",
+      "include_failed": false,
+      "include_pending": false,
+      "expected_agent_ids": ["a-pair", "a-workspace", "a-none"]
+    },
+    {
+      "name": "a_viewer_in_no_arm_sees_nothing",
+      "viewer": "stranger",
+      "scope": "all",
+      "include_failed": false,
+      "include_pending": false,
+      "expected_agent_ids": []
+    }
+  ]
+}

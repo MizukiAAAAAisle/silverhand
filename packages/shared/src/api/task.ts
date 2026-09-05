@@ -7,6 +7,10 @@ import {
   type TaskStatus,
 } from '../db/schema.js';
 import { AgentCapabilitySchema } from './workspace.js';
+import {
+  CanonicalPositiveIntegerQuerySchema,
+  PositiveJsSafeIntegerSchema,
+} from './wire-number.js';
 
 // ── Task title / content input spec (single source of truth) ──────────
 // Both create and edit — across all three entry points (agent CLI, human
@@ -380,12 +384,9 @@ export const TaskBoardColumnQuerySchema = z
     /** Opaque keyset cursor from a previous response's `next_cursor`.
      *  Omitted = first window. */
     cursor: z.string().min(1).optional(),
-    limit: z.coerce
-      .number()
-      .int()
-      .positive()
-      .max(TASK_BOARD_MAX_LIMIT)
-      .optional(),
+    limit: CanonicalPositiveIntegerQuerySchema.pipe(
+      z.number().max(TASK_BOARD_MAX_LIMIT),
+    ).optional(),
   })
   .superRefine(refineTaskBoardPersonAxes);
 export type TaskBoardColumnQuery = z.infer<typeof TaskBoardColumnQuerySchema>;
@@ -416,7 +417,7 @@ export type TaskBoardCountsQuery = z.infer<typeof TaskBoardCountsQuerySchema>;
  */
 export const TaskByNumberQuerySchema = z.object({
   conversation_id: z.string().min(1),
-  task_number: z.coerce.number().int().positive(),
+  task_number: CanonicalPositiveIntegerQuerySchema,
 });
 export type TaskByNumberQuery = z.infer<typeof TaskByNumberQuerySchema>;
 
@@ -672,7 +673,7 @@ export const ClaimTasksInputSchema = z
   .object({
     /** Local-number batch: resolved on ONE explicit board (the workspace
      *  selector below, or the caller's ambient workspace). */
-    task_numbers: z.array(z.number()).min(1).optional(),
+    task_numbers: z.array(PositiveJsSafeIntegerSchema).min(1).optional(),
     /** Global-identity batch (`tasks.id`, agent-scoped-session-v1 §4.5).
      *  EXACTLY ONE of `task_numbers` / `task_ids` per call — a mixed batch
      *  would need a board coordinate for the numbers while the ids forbid
@@ -754,7 +755,7 @@ export type ClaimTasksResult = z.infer<typeof ClaimTasksResultSchema>;
 // POST /internal/agent/:aid/tasks/unclaim
 export const UnclaimTaskInputSchema = z
   .object({
-    task_number: z.number().int().positive().optional(),
+    task_number: PositiveJsSafeIntegerSchema.optional(),
     /** Global-identity selector (`tasks.id`) — exactly one of `task_number` /
      *  `task_id`. No workspace selector may accompany it (the id already
      *  determines its board). */
@@ -778,7 +779,7 @@ export type UnclaimTaskInput = z.infer<typeof UnclaimTaskInputSchema>;
 // POST /internal/agent/:aid/tasks/update-status
 export const UpdateTaskStatusInputSchema = z
   .object({
-    task_number: z.number().int().positive().optional(),
+    task_number: PositiveJsSafeIntegerSchema.optional(),
     /** Global-identity selector — see UnclaimTaskInputSchema. */
     task_id: z.string().min(1).optional(),
     status: TaskStatusSchema,
@@ -867,7 +868,7 @@ export type HumanClaimTaskInput = z.infer<typeof HumanClaimTaskInputSchema>;
 // POST /internal/agent/:aid/tasks/edit — agent CLI `task edit`
 export const EditTaskInputSchema = z
   .object({
-    task_number: z.number().int().positive().optional(),
+    task_number: PositiveJsSafeIntegerSchema.optional(),
     /** Global-identity selector — see UnclaimTaskInputSchema. */
     task_id: z.string().min(1).optional(),
     title: TaskTitleSchema.optional(),

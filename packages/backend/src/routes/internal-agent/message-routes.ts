@@ -20,14 +20,10 @@ import {
   AgentReadHistoryInputSchema,
   AgentResolveStaleMessageInputSchema,
   AgentSearchMessagesInputSchema,
-  AgentSendMessageInputSchema,
   normalizeAttachmentRefs,
-  MAX_MESSAGE_CONTENT_BYTES,
-  MAX_MESSAGE_CONTENT_LABEL,
   MESSAGE_SEND_MAX_BODY_BYTES,
-  messageContentByteLength,
-  messageContentExceedsLimit,
 } from '@silverhand/shared';
+import { UNREADABLE_SEND_BODY, admitAgentSend } from '../send-ingress.js';
 import type { InternalRouteDeps } from './deps.js';
 import { requireAgentConversationCapability } from './capability-scope.js';
 import { resolveDeliveryTargetForRoute } from './delivery-target.js';
@@ -69,30 +65,24 @@ export function registerMessageRoutes(
       body = await c.req.json();
     } catch (err) {
       if (err instanceof Error && err.name === 'BodyLimitError') throw err;
-      body = {};
+      body = UNREADABLE_SEND_BODY;
     }
-    const parsed = AgentSendMessageInputSchema.safeParse(body);
-    if (!parsed.success) {
-      ctx.logger.warn(
-        { agentId: aid, issues: parsed.error.issues },
-        'internal: agent send-message rejected (invalid input)',
-      );
-      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    // The ingress decision is shared with the human door and with the Rust parity oracle
+    // (`routes/send-ingress`); what stays here is this door's own report of it.
+    const admission = admitAgentSend(body);
+    if (admission.refusal) {
+      if (admission.refusal.status === 400) {
+        ctx.logger.warn(
+          { agentId: aid, issues: admission.refusal.body.issues },
+          'internal: agent send-message rejected (invalid input)',
+        );
+      }
+      return c.json(admission.refusal.body, admission.refusal.status);
     }
-    if (messageContentExceedsLimit(parsed.data.content)) {
-      return c.json(
-        {
-          error: `message content exceeds ${MAX_MESSAGE_CONTENT_LABEL} limit; send it as an attachment instead`,
-          code: 'content_too_large',
-          max_bytes: MAX_MESSAGE_CONTENT_BYTES,
-          actual_bytes: messageContentByteLength(parsed.data.content),
-        },
-        413,
-      );
-    }
+    const input = admission.admitted;
     const principal = getAgentPrincipal(c);
     const resolved = resolveDeliveryTargetForRoute(c, deps, {
-      address: parsed.data.target,
+      address: input.target,
       operation: 'message_send',
       intent: 'write',
       now: Date.now(),
@@ -114,23 +104,23 @@ export function registerMessageRoutes(
         conversations.getIdentity(resolved.target.stream.conversationId));
       if (denied) return denied;
     }
-    if (parsed.data.stale_event_id !== undefined) {
+    if (input.stale_event_id !== undefined) {
       c.set(
         'cliStaleResolutionReason',
-        parsed.data.stale_resolution_reason
-        ?? (parsed.data.freshness_bypass ? 'force_send' : 'unattributed'),
+        input.stale_resolution_reason
+        ?? (input.freshness_bypass ? 'force_send' : 'unattributed'),
       );
     }
     try {
       const result = await ctx.conversationMessageService.sendMessage({
         conversationId: targetPrincipal.conversationId,
         actor: targetPrincipal,
-        content: parsed.data.content,
-        attachmentRefs: normalizeAttachmentRefs(parsed.data.attachment_ids),
+        content: input.content,
+        attachmentRefs: normalizeAttachmentRefs(input.attachment_ids),
         destination: { kind: 'stream', stream: resolved.target.stream },
-        staleEventId: parsed.data.stale_event_id,
-        staleResolutionReason: parsed.data.stale_resolution_reason,
-        freshnessBypass: parsed.data.freshness_bypass ?? false,
+        staleEventId: input.stale_event_id,
+        staleResolutionReason: input.stale_resolution_reason,
+        freshnessBypass: input.freshness_bypass ?? false,
       });
       return c.json({
         message_id: result.committed.message.id,

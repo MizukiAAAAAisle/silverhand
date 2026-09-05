@@ -20,6 +20,7 @@ import {
   ListTasksQuerySchema,
   UnclaimTaskInputSchema,
   UpdateTaskStatusInputSchema,
+  CanonicalPositiveIntegerQuerySchema,
 } from '@silverhand/shared';
 import { isAgentHomeWorkspace, isAgentHomeWorkspaceOf } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
@@ -476,10 +477,11 @@ export function registerTaskRoutes(
       if (!detail) return c.json({ error: 'task not found', code: 'not_found' }, 404);
       return c.json({ task: detail });
     }
-    const taskNumber = taskNumberRaw ? Number(taskNumberRaw) : NaN;
-    if (!Number.isInteger(taskNumber) || taskNumber <= 0) {
+    const parsedTaskNumber = CanonicalPositiveIntegerQuerySchema.safeParse(taskNumberRaw);
+    if (!parsedTaskNumber.success) {
       return c.json({ error: 'task_number required', code: 'invalid_input' }, 400);
     }
+    const taskNumber = parsedTaskNumber.data;
     const principal = getAgentPrincipal(c);
     // The agent selects a task by its per-workspace number. Resolve + authorize
     // the target workspace (selector, default = current conversation's

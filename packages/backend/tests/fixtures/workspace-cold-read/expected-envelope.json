@@ -1,0 +1,48 @@
+{
+  "workspaces": [
+    {
+      "id": "ws-archived",
+      "name": "Archived",
+      "description": "gone",
+      "owner_agent_id": null,
+      "owner_user_id": "user-1",
+      "dm_channel_id": null,
+      "dm_channel_ids": [],
+      "archived_at": 999,
+      "created_at": 1,
+      "updated_at": 400
+    },
+    {
+      "id": "ws-regular",
+      "name": "Regular",
+      "description": null,
+      "owner_agent_id": null,
+      "owner_user_id": "user-1",
+      "dm_channel_id": null,
+      "dm_channel_ids": [],
+      "archived_at": null,
+      "created_at": 1,
+      "updated_at": 300
+    },
+    {
+      "id": "ws-agent",
+      "name": "Agent Home",
+      "description": null,
+      "owner_agent_id": "agent-1",
+      "owner_user_id": null,
+      "dm_channel_id": "conv-onboarding",
+      "dm_channel_ids": ["conv-onboarding", "conv-dm"],
+      "archived_at": null,
+      "created_at": 1,
+      "updated_at": 200
+    }
+  ],
+  "viewer_sort": {
+    "list_key": "workspaces",
+    "modes": { "agent_space": "manual", "regular": "recent" },
+    "entries": [
+      { "entity_id": "ws-regular", "rank": 1, "last_accessed_at": 50, "starred_at": null },
+      { "entity_id": "ws-agent", "rank": 2, "last_accessed_at": null, "starred_at": 70 }
+    ]
+  }
+}

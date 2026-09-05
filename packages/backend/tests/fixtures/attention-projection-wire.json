@@ -1,0 +1,155 @@
+[
+  {
+    "name": "empty badge rollup",
+    "surface": "badges",
+    "setup": "empty",
+    "method": "GET",
+    "path": "/api/attention/badges",
+    "status": 200,
+    "body": { "by_workspace": {}, "total": 0, "muted_workspace_ids": [] }
+  },
+  {
+    "name": "tiered badge rollup",
+    "surface": "badges",
+    "setup": "tiered",
+    "method": "GET",
+    "path": "/api/attention/badges",
+    "status": 200,
+    "body": {
+      "by_workspace": { "w": 1 },
+      "total": 1,
+      "muted_workspace_ids": ["w"]
+    }
+  },
+  {
+    "name": "unmuted badge partitions positional and directed terms",
+    "surface": "badges",
+    "setup": "tiered_unmuted",
+    "method": "GET",
+    "path": "/api/attention/badges",
+    "status": 200,
+    "body": {
+      "by_workspace": { "w": 2 },
+      "total": 2,
+      "muted_workspace_ids": []
+    }
+  },
+  {
+    "name": "modes requires workspace query",
+    "surface": "modes",
+    "setup": "empty",
+    "method": "GET",
+    "path": "/api/attention/modes",
+    "status": 400,
+    "body": { "error": "workspace_id required" }
+  },
+  {
+    "name": "modes rejects empty workspace query",
+    "surface": "modes",
+    "setup": "empty",
+    "method": "GET",
+    "path": "/api/attention/modes?workspace_id=",
+    "status": 400,
+    "body": { "error": "workspace_id required" }
+  },
+  {
+    "name": "modes preserves nonempty whitespace workspace coordinate",
+    "surface": "modes",
+    "setup": "empty",
+    "method": "GET",
+    "path": "/api/attention/modes?workspace_id=%20",
+    "status": 403,
+    "body": { "error": "forbidden" }
+  },
+  {
+    "name": "modes hides missing workspace",
+    "surface": "modes",
+    "setup": "empty",
+    "method": "GET",
+    "path": "/api/attention/modes?workspace_id=missing",
+    "status": 403,
+    "body": { "error": "forbidden" }
+  },
+  {
+    "name": "modes uses the first repeated workspace query value",
+    "surface": "modes",
+    "setup": "tiered",
+    "method": "GET",
+    "path": "/api/attention/modes?workspace_id=missing&workspace_id=w",
+    "status": 403,
+    "body": { "error": "forbidden" }
+  },
+  {
+    "name": "modes rejects nonmember workspace",
+    "surface": "modes",
+    "setup": "nonmember",
+    "method": "GET",
+    "path": "/api/attention/modes?workspace_id=w",
+    "status": 403,
+    "body": { "error": "forbidden" }
+  },
+  {
+    "name": "modes projects stable tier order and directed dedupe",
+    "surface": "modes",
+    "setup": "tiered",
+    "method": "GET",
+    "path": "/api/attention/modes?workspace_id=w",
+    "status": 200,
+    "body": {
+      "workspace_id": "w",
+      "muted": true,
+      "channels": [
+        {
+          "conversation_id": "c-a",
+          "mode": "mentions",
+          "effective_mode": "mute",
+          "directed_unread_count": 1
+        },
+        {
+          "conversation_id": "c-c",
+          "mode": "mute",
+          "effective_mode": "mute",
+          "directed_unread_count": 0
+        },
+        {
+          "conversation_id": "c-b",
+          "mode": "all",
+          "effective_mode": "mute",
+          "directed_unread_count": 0
+        }
+      ]
+    }
+  },
+  {
+    "name": "modes resolves each unmuted stored tier",
+    "surface": "modes",
+    "setup": "tiered_unmuted",
+    "method": "GET",
+    "path": "/api/attention/modes?workspace_id=w",
+    "status": 200,
+    "body": {
+      "workspace_id": "w",
+      "muted": false,
+      "channels": [
+        {
+          "conversation_id": "c-a",
+          "mode": "mentions",
+          "effective_mode": "mentions",
+          "directed_unread_count": 1
+        },
+        {
+          "conversation_id": "c-c",
+          "mode": "mute",
+          "effective_mode": "mute",
+          "directed_unread_count": 0
+        },
+        {
+          "conversation_id": "c-b",
+          "mode": "all",
+          "effective_mode": "all",
+          "directed_unread_count": 0
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,191 @@
+{
+  "valid": [
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "ready",
+      "protocol_version": 10, "daemon_version": "test", "daemon_id": "local",
+      "instance_id": "instance-1", "host_descriptor": { "name": "local", "kind": "local" },
+      "capabilities": [], "daemon_pid": 123, "started_at": 1700000000000
+    },
+    { "direction": "daemon_to_server", "type": "event", "kind": "shutting_down", "reason": "requested" },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_state",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1,
+      "state": { "runId": "run-1", "agentId": "agent-1", "conversationId": "conversation0001", "status": "thinking", "startedAt": 1, "updatedAt": 2, "lastActivityAt": 2, "futureNestedField": true },
+      "ts": 2
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_output",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "stream": "stdout", "chunk": "hello", "ts": 3
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_exit",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "code": 0, "intentional": true, "ts": 4
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_ready_for_drain",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "ts": 5
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_delivery_consumed",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "delivery_ids": [1], "ts": 6
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_delivery_failed",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "delivery_ids": [1], "reason": "write_failed", "ts": 7
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_init_timeout",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1,
+      "timeout_reason": "silence", "elapsed_ms": 10, "timeout_ms": 20, "retrying": true, "retry_attempt": 0, "max_retries": 2, "cooldown_until": 30, "ts": 8
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_init_retrying",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "retry_attempt": 1, "max_retries": 2, "delay_ms": 5, "ts": 9
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_init_cooldown",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "cooldown_until": 30, "attempts_exhausted": 2, "ts": 10
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_compaction_stale",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "elapsed_ms": 100, "ts": 11
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_output_dropped",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "dropped_count": 2, "bytes_dropped": 100, "since_ts": 11
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_output_paused",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1"
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_output_resumed",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1"
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_parsed_event",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1,
+      "parsed": { "kind": "tool_output", "name": "Bash", "toolCallId": "tool-1", "outcome": "success" }, "ts": 12
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_parsed_event_dropped",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "parsed_kind": "text", "encoded_bytes": 65537, "reason": "frame_too_large", "ts": 13
+    },
+    {
+      "direction": "daemon_to_server", "type": "event", "kind": "runtime_message_stale",
+      "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
+      "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "ts": 14
+    }
+  ],
+  "parsedValid": [
+    { "kind": "session_init", "sessionId": "session-1" },
+    { "kind": "thinking", "text": "thinking" },
+    { "kind": "text", "text": "answer" },
+    { "kind": "tool_call", "name": "Bash", "input": {}, "toolCallId": "tool-1" },
+    { "kind": "tool_call_input", "toolCallId": "tool-1", "input": { "cmd": "true" } },
+    { "kind": "tool_output", "name": "Bash", "toolCallId": "tool-1", "outcome": "success" },
+    { "kind": "turn_end", "sessionId": "session-1" },
+    { "kind": "compaction_started" },
+    { "kind": "compaction_finished" },
+    { "kind": "input_lifecycle", "commandUuid": "command-1", "state": "queued" },
+    { "kind": "api_response", "status": "waiting", "message": "queued" },
+    { "kind": "error", "message": "failed", "code": "thread_not_found", "fatal": true },
+    { "kind": "unknown", "raw": "opaque" }
+  ],
+  "runState": {
+    "valid": [
+      {
+        "name": "empty_run_id_and_stripped_future_field",
+        "state": {
+          "runId": "", "agentId": "agent-1", "conversationId": "conversation0001",
+          "status": "thinking", "startedAt": 1, "updatedAt": 2, "lastActivityAt": 2,
+          "futureNestedField": true
+        },
+        "canonical": {
+          "runId": "", "agentId": "agent-1", "conversationId": "conversation0001",
+          "status": "thinking", "startedAt": 1, "updatedAt": 2, "lastActivityAt": 2
+        }
+      },
+      {
+        "name": "all_optional_fields_present",
+        "state": {
+          "runId": "run-2", "agentId": "agent-1", "conversationId": "conversation0001",
+          "status": "failed", "startedAt": 1, "updatedAt": 3, "lastActivityAt": 2,
+          "terminalReason": "crashed", "activitySnippet": "stopped",
+          "activitySnippetKind": "text", "toolCallCounts": { "Bash": 1 },
+          "compacting": false, "compactingSince": 2, "compactionStale": true,
+          "detail": "diagnostic"
+        },
+        "canonical": {
+          "runId": "run-2", "agentId": "agent-1", "conversationId": "conversation0001",
+          "status": "failed", "startedAt": 1, "updatedAt": 3, "lastActivityAt": 2,
+          "terminalReason": "crashed", "activitySnippet": "stopped",
+          "activitySnippetKind": "text", "toolCallCounts": { "Bash": 1 },
+          "compacting": false, "compactingSince": 2, "compactionStale": true,
+          "detail": "diagnostic"
+        }
+      },
+      {
+        "name": "authenticated_hydrate_and_egress",
+        "state": {
+          "runId": "hydrated-run", "agentId": "agent-delivery",
+          "conversationId": "conversation0001", "status": "waiting",
+          "startedAt": 10, "updatedAt": 11, "lastActivityAt": 11
+        },
+        "canonical": {
+          "runId": "hydrated-run", "agentId": "agent-delivery",
+          "conversationId": "conversation0001", "status": "waiting",
+          "startedAt": 10, "updatedAt": 11, "lastActivityAt": 11
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "name": "optional_detail_must_be_omitted_not_null",
+        "state": {
+          "runId": "run-3", "agentId": "agent-1", "conversationId": "conversation0001",
+          "status": "thinking", "startedAt": 1, "updatedAt": 2, "lastActivityAt": 2,
+          "detail": null
+        }
+      }
+    ]
+  },
+  "invalid": [
+    { "name": "ready_extra_key", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "ready", "protocol_version": 10, "daemon_version": "test", "daemon_id": "local", "instance_id": "instance-1", "host_descriptor": { "name": "local", "kind": "local" }, "capabilities": [], "daemon_pid": 123, "started_at": 1, "extra": true } },
+    { "name": "shutting_down_wrong_reason", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "shutting_down", "reason": 1 } },
+    { "name": "state_invalid_status", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_state", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "state": { "runId": "run-1", "agentId": "agent-1", "conversationId": "conversation0001", "status": "running", "startedAt": 1, "updatedAt": 2, "lastActivityAt": 2 }, "ts": 2 } },
+    { "name": "state_outer_coordinate_mismatch", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_state", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "state": { "runId": "run-1", "agentId": "agent-2", "conversationId": "conversation0001", "status": "thinking", "startedAt": 1, "updatedAt": 2, "lastActivityAt": 2 }, "ts": 2 } },
+    { "name": "output_invalid_stream", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_output", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "stream": "combined", "chunk": "hello", "ts": 3 } },
+    { "name": "exit_missing_code", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_exit", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "intentional": true, "ts": 4 } },
+    { "name": "drain_zero_generation", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_ready_for_drain", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 0, "ts": 5 } },
+    { "name": "consumed_empty_ids", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_delivery_consumed", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "delivery_ids": [], "ts": 6 } },
+    { "name": "failed_invalid_reason", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_delivery_failed", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "delivery_ids": [1], "reason": "unknown", "ts": 7 } },
+    { "name": "timeout_negative_elapsed", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_init_timeout", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "timeout_reason": "silence", "elapsed_ms": -1, "timeout_ms": 20, "retrying": false, "retry_attempt": 0, "max_retries": 2, "ts": 8 } },
+    { "name": "timeout_null_optional", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_init_timeout", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "timeout_reason": "silence", "elapsed_ms": 1, "timeout_ms": 20, "retrying": false, "retry_attempt": 0, "max_retries": 2, "cooldown_until": null, "ts": 8 } },
+    { "name": "retrying_zero_attempt", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_init_retrying", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "retry_attempt": 0, "max_retries": 2, "delay_ms": 5, "ts": 9 } },
+    { "name": "cooldown_zero_until", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_init_cooldown", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "cooldown_until": 0, "attempts_exhausted": 2, "ts": 10 } },
+    { "name": "compaction_negative_elapsed", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_compaction_stale", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "elapsed_ms": -1, "ts": 11 } },
+    { "name": "dropped_negative_count", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_output_dropped", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "dropped_count": -1, "bytes_dropped": 100, "since_ts": 11 } },
+    { "name": "paused_extra_key", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_output_paused", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "ts": 1 } },
+    { "name": "resumed_missing_agent", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_output_resumed", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001" } },
+    { "name": "parsed_invalid_outcome", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_parsed_event", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "parsed": { "kind": "tool_output", "outcome": "ok" }, "ts": 12 } },
+    { "name": "parsed_null_optional_name", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_parsed_event", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "parsed": { "kind": "tool_output", "name": null, "outcome": "completed" }, "ts": 12 } },
+    { "name": "parsed_drop_invalid_reason", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_parsed_event_dropped", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "parsed_kind": "text", "encoded_bytes": 1, "reason": "too_large", "ts": 13 } },
+    { "name": "stale_zero_generation", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_message_stale", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 0, "ts": 14 } }
+  ]
+}

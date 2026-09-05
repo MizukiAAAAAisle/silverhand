@@ -1,0 +1,10 @@
+[
+  {"name":"state_normalizes_reply","setup":"state_member","method":"GET","path":"/api/channels/c/threads/reply/followers","status":200,"body":{"thread_root_id":"root","viewer_following":true,"follower_agent_ids":["agent-a","agent-b"]}},
+  {"name":"missing_conversation_precedes_root","setup":"missing_conversation","method":"GET","path":"/api/channels/c/threads/missing/followers","status":404,"body":{"error":"channel not found"}},
+  {"name":"strict_nonmember_has_no_public_widen","setup":"forbidden","method":"GET","path":"/api/channels/c/threads/root/followers","status":403,"body":{"error":"forbidden"}},
+  {"name":"missing_root","setup":"normal","method":"GET","path":"/api/channels/c/threads/missing/followers","status":404,"body":{"error":"thread root message not found in conversation","code":"reply_target_not_found"}},
+  {"name":"follow_new","setup":"normal","method":"POST","path":"/api/channels/c/threads/reply/follow","status":200,"body":{"thread_root_id":"root","changed":true,"viewer_following":true}},
+  {"name":"follow_idempotent","setup":"following","method":"POST","path":"/api/channels/c/threads/root/follow","status":200,"body":{"thread_root_id":"root","changed":false,"viewer_following":true}},
+  {"name":"unfollow_existing","setup":"following","method":"DELETE","path":"/api/channels/c/threads/reply/follow","status":200,"body":{"thread_root_id":"root","changed":true,"viewer_following":false}},
+  {"name":"unfollow_idempotent","setup":"normal","method":"DELETE","path":"/api/channels/c/threads/root/follow","status":200,"body":{"thread_root_id":"root","changed":false,"viewer_following":false}}
+]

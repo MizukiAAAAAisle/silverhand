@@ -1,0 +1,100 @@
+{
+  "cases": [
+    {
+      "name": "human_workspace_task_attachments",
+      "header": {
+        "messageId": "msg-human",
+        "sender": { "kind": "human", "handle": "shiki" },
+        "target": "#Silverhand/Runtime%20work",
+        "timestamp": "2026-08-24T08:00:01+08:00",
+        "task": { "number": 2185, "status": "in_progress" }
+      },
+      "content": "Please inspect both files.",
+      "attachments": [
+        { "id": "image-1", "filename": "screen shot.png", "size": 12, "content_type": "image/png", "label": "Image #2" },
+        { "id": "file-1", "filename": "quote\".txt", "size": 7, "content_type": "text/plain" }
+      ],
+      "fromKind": "user",
+      "references": [],
+      "recipientAgentName": "Toby",
+      "expectedBody": "[msg_id=msg-human sender=@shiki type=human target=#Silverhand/Runtime%20work time=2026-08-24T08:00:01+08:00 task=#2185 status=in_progress]\nPlease inspect both files.\n\n[2 attachments — the label (e.g. `Image #1`) is how the sender refers to each; use `silverhand file view --attachment-id <id>` with each id below to read them]\n  - Image #2 — id=image-1 filename=\"screen shot.png\" content_type=image/png size=12\n  - File #1 — id=file-1 filename=\"quote\\\".txt\" content_type=text/plain size=7",
+      "expectedInstruction": "user_for_recipient"
+    },
+    {
+      "name": "agent_direct_pair_thread_mention",
+      "header": {
+        "messageId": "msg-agent",
+        "sender": { "kind": "agent", "handle": "Alice", "computer": "computer-a" },
+        "target": "dm:@Toby/thread:aBcDeFgHiJkLmN_P",
+        "timestamp": "2026-08-24T08:01:02+08:00",
+        "task": null
+      },
+      "content": "<silverhand://agent/Toby> please review.",
+      "attachments": [],
+      "fromKind": "agent",
+      "references": [{ "kind": "agent", "handle": "Toby" }],
+      "recipientAgentName": "Toby",
+      "expectedBody": "[msg_id=msg-agent sender=@Alice type=agent computer=computer-a target=dm:@Toby/thread:aBcDeFgHiJkLmN_P time=2026-08-24T08:01:02+08:00]\n<silverhand://agent/Toby> please review.",
+      "expectedInstruction": "non_system_mention"
+    },
+    {
+      "name": "system_id_fallback",
+      "header": {
+        "messageId": "msg-system",
+        "sender": { "kind": "system" },
+        "target": "#conv:aBcDeFgHiJkLmN_P",
+        "timestamp": "2026-08-24T08:02:03+08:00",
+        "task": null
+      },
+      "content": "maintenance complete",
+      "attachments": null,
+      "fromKind": "system",
+      "references": [],
+      "expectedBody": "[msg_id=msg-system sender=system type=system target=#conv:aBcDeFgHiJkLmN_P time=2026-08-24T08:02:03+08:00]\nmaintenance complete",
+      "expectedInstruction": "system"
+    }
+  ],
+  "instructionCases": [
+    {
+      "name": "human_without_references_addresses_the_recipient",
+      "fromKind": "user",
+      "content": "Please take a look.",
+      "references": [],
+      "recipientAgentName": "Toby",
+      "expectedInstruction": "user_for_recipient"
+    },
+    {
+      "name": "human_addressing_someone_else_does_not_address_the_recipient",
+      "fromKind": "user",
+      "content": "<silverhand://agent/Alice> please take a look.",
+      "references": [{ "kind": "agent", "handle": "Alice" }],
+      "recipientAgentName": "Toby",
+      "expectedInstruction": "user_for_other"
+    },
+    {
+      "name": "agent_addressing_the_recipient_is_a_mention",
+      "fromKind": "agent",
+      "content": "<silverhand://agent/Toby> please take a look.",
+      "references": [{ "kind": "agent", "handle": "Toby" }],
+      "recipientAgentName": "Toby",
+      "expectedInstruction": "non_system_mention"
+    },
+    {
+      "name": "agent_addressing_someone_else_is_other",
+      "fromKind": "agent",
+      "content": "<silverhand://agent/Alice> please take a look.",
+      "references": [{ "kind": "agent", "handle": "Alice" }],
+      "recipientAgentName": "Toby",
+      "expectedInstruction": "other"
+    },
+    {
+      "name": "system_is_always_system",
+      "fromKind": "system",
+      "content": "<silverhand://agent/Toby> maintenance complete.",
+      "references": [{ "kind": "agent", "handle": "Toby" }],
+      "recipientAgentName": "Toby",
+      "expectedInstruction": "system"
+    }
+  ],
+  "expectedBatch": "You have 3 messages waiting since you were last active (oldest first):\n\n[msg_id=msg-human sender=@shiki type=human target=#Silverhand/Runtime%20work time=2026-08-24T08:00:01+08:00 task=#2185 status=in_progress]\nPlease inspect both files.\n\n[2 attachments — the label (e.g. `Image #1`) is how the sender refers to each; use `silverhand file view --attachment-id <id>` with each id below to read them]\n  - Image #2 — id=image-1 filename=\"screen shot.png\" content_type=image/png size=12\n  - File #1 — id=file-1 filename=\"quote\\\".txt\" content_type=text/plain size=7\n\n---\n\n[msg_id=msg-agent sender=@Alice type=agent computer=computer-a target=dm:@Toby/thread:aBcDeFgHiJkLmN_P time=2026-08-24T08:01:02+08:00]\n<silverhand://agent/Toby> please review.\n\n---\n\n[msg_id=msg-system sender=system type=system target=#conv:aBcDeFgHiJkLmN_P time=2026-08-24T08:02:03+08:00]\nmaintenance complete\n\nRespond as appropriate — call `silverhand message send` with a brief reply, progress update, blocker question, or final summary before stopping. Complete ALL your work before stopping."
+}

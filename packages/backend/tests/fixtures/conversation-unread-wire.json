@@ -1,0 +1,9 @@
+[
+  {"name":"workspace_member","setup":"workspace_member","status":200,"body":{"mainline":{"unread_count":1,"first_unread_message_id":"root","first_unread_seq":4},"threads":{"root":{"unread_count":1,"first_unread_message_id":"reply-2","first_unread_seq":7}},"followed_thread_unread":true}},
+  {"name":"archived_workspace_member_keeps_sparse_history","setup":"archived_workspace_member","status":200,"body":{"mainline":{"unread_count":1,"first_unread_message_id":"root","first_unread_seq":4},"threads":{"root":{"unread_count":1,"first_unread_message_id":"reply-2","first_unread_seq":7}},"followed_thread_unread":false}},
+  {"name":"public_workspace_nonmember_has_no_widen","setup":"public_workspace_nonmember","status":403,"body":{"error":"forbidden"}},
+  {"name":"private_workspace_nonmember","setup":"private_workspace_nonmember","status":403,"body":{"error":"forbidden"}},
+  {"name":"direct_pair_endpoint","setup":"direct_pair_endpoint","status":200,"body":{"mainline":{"unread_count":1,"first_unread_message_id":"root","first_unread_seq":4},"threads":{"root":{"unread_count":1,"first_unread_message_id":"reply-2","first_unread_seq":7}},"followed_thread_unread":true}},
+  {"name":"direct_pair_nonendpoint","setup":"direct_pair_nonendpoint","status":403,"body":{"error":"forbidden"}},
+  {"name":"missing_conversation","setup":"missing_conversation","status":404,"body":{"error":"channel not found"}}
+]

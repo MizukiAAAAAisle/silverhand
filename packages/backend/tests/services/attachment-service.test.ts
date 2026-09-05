@@ -104,6 +104,39 @@ describe('AttachmentService.upload', () => {
     }
   });
 
+  it('sanitizes filenames on the real upload path without splitting an astral scalar', async () => {
+    const { service, channel, cleanup } = bootstrap();
+    try {
+      const upload = async (filename: string): Promise<string> => {
+        const dto = await service.upload({
+          sourceConversationId: channel.id,
+          filename,
+          contentType: 'text/plain',
+          buffer: Buffer.from('x'),
+          createdByKind: 'user',
+          createdById: 'local',
+        });
+        return dto.filename;
+      };
+
+      expect(await upload('\uFEFFalpha/\x00\u0085\\beta\uFEFF')).toBe(
+        'alpha_\u0085_beta',
+      );
+
+      const exact = `${'a'.repeat(253)}😀`;
+      expect(exact.length).toBe(255);
+      expect(await upload(exact)).toBe(exact);
+
+      const splitDiscriminator = `${'a'.repeat(254)}😀`;
+      expect(splitDiscriminator.length).toBe(256);
+      const sanitized = await upload(splitDiscriminator);
+      expect(sanitized).toBe('a'.repeat(254));
+      expect(sanitized.charCodeAt(sanitized.length - 1)).not.toBe(0xd83d);
+    } finally {
+      cleanup();
+    }
+  });
+
   it('rejects empty buffers and oversize uploads', async () => {
     const { db, channel, cleanup } = bootstrap();
     try {

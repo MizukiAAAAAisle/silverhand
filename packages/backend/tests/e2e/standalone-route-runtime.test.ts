@@ -40,7 +40,7 @@ import { SqliteAuthSessionsRepo } from '../../src/repos/auth-sessions-repo.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { HostClient, type RuntimeStatusResult } from '@silverhand/host';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '@silverhand/host/drivers';
@@ -112,6 +112,40 @@ interface RouteEnv {
   conversationId: string;
   sessionId: string;
 }
+
+function initializedRuntimeSeen(
+  events: G2Harness['events'],
+  runtime: RuntimeStatusResult['runtimes'][number],
+): boolean {
+  return runtime.pid !== null && runtime.phase === 'ready' && events.some(event =>
+    event.frame.kind === 'runtime_parsed_event'
+    && event.frame.agent_id === runtime.agent_id
+    && event.frame.conversation_id === runtime.conversation_id
+    && event.frame.runtime_generation === runtime.runtime_generation
+    && event.frame.parsed.kind === 'session_init',
+  );
+}
+
+it('the initialized-sibling barrier rejects an old generation and a non-live PID', () => {
+  const runtime: RuntimeStatusResult['runtimes'][number] = {
+    runtime_scope: { kind: 'conversation', conversation_id: 'c', agent_id: 'a' },
+    conversation_id: 'c', agent_id: 'a', runtime_generation: 2,
+    pid: 42, phase: 'ready', run_state: null, started_at: 1,
+  };
+  const events: G2Harness['events'] = [{
+    hostId: 'h', connectionId: 'connection', observedAt: 1,
+    frame: { direction: 'daemon_to_server', type: 'event', kind: 'runtime_parsed_event',
+      runtime_scope: runtime.runtime_scope, conversation_id: 'c', agent_id: 'a',
+      runtime_generation: 1, parsed: { kind: 'session_init', sessionId: 'session' }, ts: 1 },
+  }];
+  expect(initializedRuntimeSeen(events, runtime)).toBe(false);
+  const frame = events[0]!.frame;
+  if (frame.kind !== 'runtime_parsed_event') throw new Error('fixture kind');
+  frame.runtime_generation = 2;
+  expect(initializedRuntimeSeen(events, runtime)).toBe(true);
+  expect(initializedRuntimeSeen(events, { ...runtime, pid: null })).toBe(false);
+  expect(initializedRuntimeSeen(events, { ...runtime, phase: 'draining' })).toBe(false);
+});
 
 /**
  * Seed the standalone DB with the workspace / agent / channel rows
@@ -715,14 +749,19 @@ describe('Daemon lifecycle isolation — public reset under Desktop supervisor',
       snapshot => [siblingA, siblingB].every(env =>
         snapshot.runtimes.some(runtime =>
           runtime.agent_id === env.agentId
-          && runtime.pid !== null
-          && runtime.phase === 'ready',
+          // `ready` permits input before runtime initialization. The deliberately
+          // short init watchdog may still retry that generation under parallel
+          // load; capture identity only after THIS generation's session-init proof.
+          && initializedRuntimeSeen(harness!.events, runtime),
         ),
       ),
       'matrix siblings ready',
     );
     const siblingAPid = pidFor(siblingsReady, siblingA);
     const siblingBPid = pidFor(siblingsReady, siblingB);
+    const siblingGenerations = siblingsReady.runtimes
+      .filter(runtime => [siblingA.agentId, siblingB.agentId].includes(runtime.agent_id))
+      .map(runtime => [runtime.agent_id, runtime.runtime_generation]);
 
     const assertSiblingTraffic = async (phase: string): Promise<void> => {
       expect(desktopDaemon!.daemon.pid).toBe(daemonPid);
@@ -735,8 +774,33 @@ describe('Daemon lifecycle isolation — public reset under Desktop supervisor',
         ),
         `${phase} siblings remain live`,
       );
-      expect(pidFor(snapshot, siblingA)).toBe(siblingAPid);
-      expect(pidFor(snapshot, siblingB)).toBe(siblingBPid);
+      const siblingLifecycle = JSON.stringify(harness!.events.filter(event =>
+        'agent_id' in event.frame
+        && [siblingA.agentId, siblingB.agentId].includes(String(event.frame.agent_id))
+        && (event.frame.kind.startsWith('runtime_init_')
+          || ['runtime_exit', 'runtime_delivery_failed', 'runtime_parsed_event'].includes(event.frame.kind)),
+      ));
+      let processLog = '';
+      if (pidFor(snapshot, siblingA) !== siblingAPid || pidFor(snapshot, siblingB) !== siblingBPid) {
+        const dir = join(harness!.silverhandDir, 'd', 'l');
+        processLog = readdirSync(dir).filter(name => name.endsWith('.log'))
+          .flatMap(name => readFileSync(join(dir, name), 'utf8').split('\n'))
+          .filter(line => [siblingA.agentId, siblingB.agentId].some(id => line.includes(id)))
+          .map(line => {
+            try {
+              const row = JSON.parse(line);
+              return JSON.stringify({ ts: row.ts, pid: row.pid, action: row.action,
+                signal: row.signal, init_timed_out: row.init_timed_out,
+                init_retry_planned: row.init_retry_planned, timeout_reason: row.timeout_reason });
+            } catch { return ''; }
+          })
+          .join('\n');
+      }
+      expect(pidFor(snapshot, siblingA), `${siblingLifecycle}\n${processLog}`).toBe(siblingAPid);
+      expect(pidFor(snapshot, siblingB), `${siblingLifecycle}\n${processLog}`).toBe(siblingBPid);
+      expect(snapshot.runtimes
+        .filter(runtime => [siblingA.agentId, siblingB.agentId].includes(runtime.agent_id))
+        .map(runtime => [runtime.agent_id, runtime.runtime_generation])).toEqual(siblingGenerations);
       for (const env of [siblingA, siblingB]) {
         const send = await postJson(
           `${harness!.serverUrl}/api/channels/${env.conversationId}/messages`,

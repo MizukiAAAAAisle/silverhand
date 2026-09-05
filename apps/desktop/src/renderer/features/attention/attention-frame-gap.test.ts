@@ -141,4 +141,49 @@ describe('attention snapshot_required gap path (#task:1870)', () => {
     expect(chSeen).not.toContain(JSON.stringify(attentionBadgesKey()));
     expect(chSeen).toContain(JSON.stringify(attentionModesKey(OTHER)));
   });
+
+  it('a THIN notification-clear unread_updated re-reads the roll-up; the enriched message variant does not', () => {
+    // Source #3 (a directed notification going read) carries NO absolute badge
+    // frame — the migrated backend publishes a thin `unread_updated { marked }`
+    // refetch signal instead, because an absolute count delivered out of commit
+    // order would let an earlier clear's stale value win under `applyBadgeUpdate`'s
+    // last-write-wins. So the thin variant (no `conversation_id`) MUST re-read the
+    // authoritative roll-up here; two clears out of order each converge on it.
+    const thin: ServerFrame = {
+      type: 'event',
+      scope: 'viewer:u1',
+      seq: decodeTransportSeq(9),
+      epoch: EPOCH,
+      kind: 'unread_updated',
+      payload: { marked: 2 },
+    };
+    const thinQc = new QueryClient();
+    const thinSeen = trackInvalidations(thinQc);
+    applyAttentionFrame(thinQc, thin, true);
+    expect(thinSeen).toContain(JSON.stringify(attentionBadgesKey()));
+    expect(thinSeen).toContain(JSON.stringify(['attention', 'modes']));
+
+    // The ENRICHED message variant (has `conversation_id`) rides its own absolute
+    // `attention_badge_updated` frame in the same transaction, so re-reading the
+    // roll-up here would be redundant churn — this arm must stay off it.
+    const enriched: ServerFrame = {
+      type: 'event',
+      scope: 'viewer:u1',
+      seq: decodeTransportSeq(10),
+      epoch: EPOCH,
+      kind: 'unread_updated',
+      payload: {
+        conversation_id: 'c_1',
+        workspace_id: OTHER,
+        conversation_unread_count: 1,
+        workspace_unread_count: 1,
+        latest_unread: null,
+      },
+    };
+    const enrichedQc = new QueryClient();
+    const enrichedSeen = trackInvalidations(enrichedQc);
+    applyAttentionFrame(enrichedQc, enriched, true);
+    expect(enrichedSeen).not.toContain(JSON.stringify(attentionBadgesKey()));
+    expect(enrichedSeen).toContain(JSON.stringify(['attention', 'modes']));
+  });
 });

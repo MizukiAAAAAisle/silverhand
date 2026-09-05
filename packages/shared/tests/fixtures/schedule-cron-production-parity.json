@@ -1,0 +1,233 @@
+{
+  "authority": {
+    "signer": "packages/backend ScheduleService.create",
+    "engine": "cron-parser@4.9.0",
+    "consumer": "rust backend-sqlite ProductionCronEvaluator"
+  },
+  "cases": [
+    {
+      "name": "single_value_step_first",
+      "expression": "1/5 * * * *",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1767225660000 }
+    },
+    {
+      "name": "single_value_step_continues",
+      "expression": "1/5 * * * *",
+      "timezone": "UTC",
+      "after": 1767225660000,
+      "expected": { "kind": "next", "instant": 1767225960000 }
+    },
+    {
+      "name": "range_step",
+      "expression": "1-11/5 * * * *",
+      "timezone": "UTC",
+      "after": 1767225660000,
+      "expected": { "kind": "next", "instant": 1767225960000 }
+    },
+    {
+      "name": "list",
+      "expression": "1,6,11 * * * *",
+      "timezone": "UTC",
+      "after": 1767225660000,
+      "expected": { "kind": "next", "instant": 1767225960000 }
+    },
+    {
+      "name": "named_month_and_weekday",
+      "expression": "0 9 * JAN MON",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1767603600000 }
+    },
+    {
+      "name": "question_mark_day_of_month",
+      "expression": "0 9 ? * MON",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1767603600000 }
+    },
+    {
+      "name": "question_mark_then_numeric_dom_list",
+      "expression": "0 9 ?,1 * *",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1767258000000 }
+    },
+    {
+      "name": "numeric_then_question_mark_dom_list",
+      "expression": "0 9 1,? * *",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1767258000000 }
+    },
+    {
+      "name": "question_mark_dom_step",
+      "expression": "0 9 ?/2 * *",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1767258000000 }
+    },
+    {
+      "name": "question_mark_then_named_dow_list",
+      "expression": "0 9 * * ?,MON",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1767258000000 }
+    },
+    {
+      "name": "zero_last_sunday",
+      "expression": "0 9 * * 0L",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1769331600000 }
+    },
+    {
+      "name": "seven_last_sunday",
+      "expression": "0 9 * * 7L",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1769331600000 }
+    },
+    {
+      "name": "numeric_prefix_last_day",
+      "expression": "0 9 1L * *",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1769850000000 }
+    },
+    {
+      "name": "last_day_then_numeric_dom_list",
+      "expression": "0 9 L,1 * *",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1767258000000 }
+    },
+    {
+      "name": "ecmascript_feff_field_separator",
+      "expression": "0﻿9﻿*﻿*﻿*",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1767258000000 }
+    },
+    {
+      "name": "nth_weekday_supported_by_both",
+      "expression": "0 9 * * MON#2",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1768208400000 }
+    },
+    {
+      "name": "last_day_supported_by_both",
+      "expression": "0 9 L * *",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "next", "instant": 1769850000000 }
+    },
+    {
+      "name": "dst_gap_moves_to_same_relative_minute",
+      "expression": "30 2 * * *",
+      "timezone": "America/New_York",
+      "after": 1772949600000,
+      "expected": { "kind": "next", "instant": 1772955000000 }
+    },
+    {
+      "name": "dst_fold_first_wall_occurrence",
+      "expression": "30 1 * * *",
+      "timezone": "America/New_York",
+      "after": 1793505600000,
+      "expected": { "kind": "next", "instant": 1793511000000 }
+    },
+    {
+      "name": "dst_fold_does_not_repeat_same_wall_occurrence",
+      "expression": "30 1 * * *",
+      "timezone": "America/New_York",
+      "after": 1793511000000,
+      "expected": { "kind": "next", "instant": 1793601000000 }
+    },
+    {
+      "name": "impossible_calendar_has_no_future",
+      "expression": "0 0 31 2 *",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "error", "code": "invalid_cron_expression" }
+    },
+    {
+      "name": "timezone_precedes_expression",
+      "expression": "not cron",
+      "timezone": "Mars/Olympus",
+      "after": 1767225600000,
+      "expected": { "kind": "error", "code": "invalid_timezone" }
+    },
+    {
+      "name": "alias_is_refused",
+      "expression": "@daily",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "error", "code": "invalid_cron_expression" }
+    },
+    {
+      "name": "six_field_is_refused",
+      "expression": "0 0 9 * * *",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "error", "code": "invalid_cron_expression" }
+    },
+    {
+      "name": "unicode_nel_is_not_an_ecmascript_separator",
+      "expression": "09***",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "error", "code": "invalid_cron_expression" }
+    },
+    {
+      "name": "croner_closest_weekday_superset_is_refused",
+      "expression": "0 9 15W * *",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "error", "code": "invalid_cron_expression" }
+    },
+    {
+      "name": "croner_dom_dow_plus_superset_is_refused",
+      "expression": "0 9 * * MON+",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "error", "code": "invalid_cron_expression" }
+    },
+    {
+      "name": "croner_last_occurrence_superset_is_refused",
+      "expression": "0 9 * * MON#L",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "error", "code": "invalid_cron_expression" }
+    },
+    {
+      "name": "nth_dow_list_is_refused",
+      "expression": "0 9 * * MON#2,FRI",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "error", "code": "invalid_cron_expression" }
+    },
+    {
+      "name": "nth_dow_step_is_refused",
+      "expression": "0 9 * * MON#2/2",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "error", "code": "invalid_cron_expression" }
+    },
+    {
+      "name": "nth_dow_range_is_refused",
+      "expression": "0 9 * * MON#2-FRI",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "error", "code": "invalid_cron_expression" }
+    },
+    {
+      "name": "croner_leading_step_superset_is_refused",
+      "expression": "/10 * * * *",
+      "timezone": "UTC",
+      "after": 1767225600000,
+      "expected": { "kind": "error", "code": "invalid_cron_expression" }
+    }
+  ]
+}

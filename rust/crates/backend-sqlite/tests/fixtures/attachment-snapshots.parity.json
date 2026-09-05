@@ -1,0 +1,57 @@
+{
+  "note": "extractAttachmentSnapshots outcomes signed by the real TS extractor (attachment-snapshots-rust-parity.test.ts). Each cell: the message `metadata` object, and the `attachments` value the read authority projects (an array of canonical snapshots, or null when there are no valid items). The Rust attachment_snapshots must reproduce this exactly: size is any number, label is the CANONICAL formatted form (whitespace trimmed), malformed items dropped, empty -> null.",
+  "cells": [
+    {
+      "label": "canonical-label-trimmed-to-canonical",
+      "metadata": { "attachments": [{ "id": "a1", "filename": "f.png", "size": 10, "content_type": "image/png", "label": "  Image #1  " }] },
+      "attachments": [{ "id": "a1", "filename": "f.png", "size": 10, "content_type": "image/png", "label": "Image #1" }]
+    },
+    {
+      "label": "fractional-size-kept-no-label",
+      "metadata": { "attachments": [{ "id": "a2", "filename": "g.bin", "size": 1.5, "content_type": "application/octet-stream" }] },
+      "attachments": [{ "id": "a2", "filename": "g.bin", "size": 1.5, "content_type": "application/octet-stream" }]
+    },
+    {
+      "label": "non-canonical-label-dropped",
+      "metadata": { "attachments": [{ "id": "a3", "filename": "h.txt", "size": 3, "content_type": "text/plain", "label": "custom" }] },
+      "attachments": [{ "id": "a3", "filename": "h.txt", "size": 3, "content_type": "text/plain" }]
+    },
+    {
+      "label": "leading-zero-ordinal-dropped",
+      "metadata": { "attachments": [{ "id": "a4", "filename": "i.txt", "size": 3, "content_type": "text/plain", "label": "Image #01" }] },
+      "attachments": [{ "id": "a4", "filename": "i.txt", "size": 3, "content_type": "text/plain" }]
+    },
+    {
+      "label": "malformed-item-dropped",
+      "metadata": { "attachments": [{ "id": "a5", "filename": "j.txt", "size": 3, "content_type": "text/plain" }, { "id": "bad", "filename": 123 }] },
+      "attachments": [{ "id": "a5", "filename": "j.txt", "size": 3, "content_type": "text/plain" }]
+    },
+    {
+      "label": "empty-attachments-is-null",
+      "metadata": { "attachments": [] },
+      "attachments": null
+    },
+    {
+      "label": "no-attachments-key-is-null",
+      "metadata": { "subtype": "note" },
+      "attachments": null
+    },
+    {
+      "label": "File-label-max-ordinal",
+      "metadata": { "attachments": [{ "id": "a6", "filename": "k.pdf", "size": 7, "content_type": "application/pdf", "label": "File #9999" }] },
+      "attachments": [{ "id": "a6", "filename": "k.pdf", "size": 7, "content_type": "application/pdf", "label": "File #9999" }]
+    },
+    {
+      "label": "feff-bom-is-trimmed-by-ecmascript-so-canonical-kept",
+      "note": "U+FEFF (ZWNBSP/BOM) IS in the ECMAScript String.prototype.trim set but is NOT Rust White_Space; str::trim would keep it and drop the label. ES trims it, leaving the canonical 'Image #2'.",
+      "metadata": { "attachments": [{ "id": "a7", "filename": "l.png", "size": 2, "content_type": "image/png", "label": "\uFEFFImage #2\uFEFF" }] },
+      "attachments": [{ "id": "a7", "filename": "l.png", "size": 2, "content_type": "image/png", "label": "Image #2" }]
+    },
+    {
+      "label": "nel-u0085-is-not-trimmed-by-ecmascript-so-label-dropped",
+      "note": "U+0085 (NEL) IS Rust White_Space but is NOT in the ECMAScript trim set; str::trim would strip it and wrongly canonicalize. ES keeps it, so the label is non-canonical and dropped (positional fallback).",
+      "metadata": { "attachments": [{ "id": "a8", "filename": "m.png", "size": 4, "content_type": "image/png", "label": "\u0085Image #3\u0085" }] },
+      "attachments": [{ "id": "a8", "filename": "m.png", "size": 4, "content_type": "image/png" }]
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "users": [
+    { "user_id": "user-a", "presence": "offline", "last_seen_at": 500 },
+    { "user_id": "user-b", "presence": "online", "last_seen_at": null },
+    { "user_id": "user-c", "presence": "offline", "last_seen_at": null }
+  ]
+}

@@ -1,0 +1,91 @@
+[
+  {
+    "name": "channel_success",
+    "surface": "channel_put",
+    "method": "PUT",
+    "path": "/api/conversations/c/attention-preference",
+    "request": { "mode": "mentions" },
+    "status": 200,
+    "body": { "conversation_id": "c", "mode": "mentions" }
+  },
+  {
+    "name": "channel_unknown_member_stripped",
+    "surface": "channel_put",
+    "method": "PUT",
+    "path": "/api/conversations/c/attention-preference",
+    "request": { "mode": "mute", "unknown": "stripped" },
+    "status": 200,
+    "body": { "conversation_id": "c", "mode": "mute" }
+  },
+  {
+    "name": "channel_invalid_enum",
+    "surface": "channel_put",
+    "method": "PUT",
+    "path": "/api/conversations/c/attention-preference",
+    "request": { "mode": "loud" },
+    "status": 400,
+    "body": {
+      "error": "invalid input",
+      "issues": [{
+        "received": "loud",
+        "code": "invalid_enum_value",
+        "options": ["all", "mentions", "mute"],
+        "path": ["mode"],
+        "message": "Invalid enum value. Expected 'all' | 'mentions' | 'mute', received 'loud'"
+      }]
+    }
+  },
+  {
+    "name": "channel_missing_precedes_invalid",
+    "surface": "channel_put",
+    "method": "PUT",
+    "path": "/api/conversations/missing/attention-preference",
+    "request": { "mode": "loud" },
+    "status": 404,
+    "body": { "error": "channel not found" }
+  },
+  {
+    "name": "workspace_get_default",
+    "surface": "workspace_get",
+    "method": "GET",
+    "path": "/api/workspaces/w/attention-preference",
+    "status": 200,
+    "body": { "workspace_id": "w", "muted": false }
+  },
+  {
+    "name": "workspace_put_success",
+    "surface": "workspace_put",
+    "method": "PUT",
+    "path": "/api/workspaces/w/attention-preference",
+    "request": { "muted": true },
+    "status": 200,
+    "body": { "workspace_id": "w", "muted": true }
+  },
+  {
+    "name": "workspace_missing_boolean",
+    "surface": "workspace_put",
+    "method": "PUT",
+    "path": "/api/workspaces/w/attention-preference",
+    "request": {},
+    "status": 400,
+    "body": {
+      "error": "invalid input",
+      "issues": [{
+        "code": "invalid_type",
+        "expected": "boolean",
+        "received": "undefined",
+        "path": ["muted"],
+        "message": "Required"
+      }]
+    }
+  },
+  {
+    "name": "workspace_missing_precedes_invalid",
+    "surface": "workspace_put",
+    "method": "PUT",
+    "path": "/api/workspaces/missing/attention-preference",
+    "request": { "muted": "yes" },
+    "status": 403,
+    "body": { "error": "forbidden" }
+  }
+]

@@ -1,0 +1,131 @@
+[
+  {
+    "name": "empty_global",
+    "setup": "empty",
+    "path": "/api/activity",
+    "status": 200,
+    "body": { "items": [] }
+  },
+  {
+    "name": "empty_workspace_query_is_global",
+    "setup": "empty",
+    "path": "/api/activity?workspace_id=",
+    "status": 200,
+    "body": { "items": [] }
+  },
+  {
+    "name": "first_workspace_query_wins",
+    "setup": "workspace",
+    "path": "/api/activity?workspace_id=w&workspace_id=other",
+    "status": 200,
+    "body": {
+      "items": [
+        {
+          "id": "agent_failed:n-fail",
+          "kind": "agent_failed",
+          "salience": "directed",
+          "conversation_id": "c",
+          "thread_root_id": null,
+          "message_id": null,
+          "notification_id": "n-fail",
+          "location": { "kind": "workspace_channel", "workspace_id": "w", "title": "General" },
+          "thread_root_preview": null,
+          "preview": "Alice — runtime down",
+          "preview_sender": null,
+          "timestamp": 4,
+          "unread_count": null
+        },
+        {
+          "id": "mention:n-new",
+          "kind": "mention",
+          "salience": "directed",
+          "conversation_id": "c",
+          "thread_root_id": null,
+          "message_id": "m-mention",
+          "notification_id": "n-new",
+          "location": { "kind": "workspace_channel", "workspace_id": "w", "title": "General" },
+          "thread_root_preview": null,
+          "preview": "directed text",
+          "preview_sender": {
+            "status": "active",
+            "kind": "user",
+            "id": "activity-other",
+            "name": "other-activity",
+            "display_name": "Other",
+            "avatar_url": null,
+            "runtime": null
+          },
+          "timestamp": 3,
+          "unread_count": null
+        },
+        {
+          "id": "unread:c::",
+          "kind": "unread",
+          "salience": "ambient",
+          "conversation_id": "c",
+          "thread_root_id": null,
+          "message_id": "m-plain",
+          "notification_id": null,
+          "location": { "kind": "workspace_channel", "workspace_id": "w", "title": "General" },
+          "thread_root_preview": null,
+          "preview": "plain unread",
+          "preview_sender": {
+            "status": "active",
+            "kind": "user",
+            "id": "activity-other",
+            "name": "other-activity",
+            "display_name": "Other",
+            "avatar_url": null,
+            "runtime": null
+          },
+          "timestamp": 2,
+          "unread_count": 1
+        }
+      ]
+    }
+  },
+  {
+    "name": "global_direct_pair_uses_counterpart_identity_and_directed_grade",
+    "setup": "pair",
+    "path": "/api/activity",
+    "status": 200,
+    "body": {
+      "items": [
+        {
+          "id": "unread:pair::",
+          "kind": "unread",
+          "salience": "directed",
+          "conversation_id": "pair",
+          "thread_root_id": null,
+          "message_id": "m-pair",
+          "notification_id": null,
+          "location": {
+            "kind": "direct_pair",
+            "counterpart": {
+              "status": "active",
+              "kind": "human",
+              "id": "activity-other",
+              "name": "other-activity",
+              "display_name": "Other",
+              "avatar_url": null,
+              "runtime": null
+            }
+          },
+          "thread_root_preview": null,
+          "preview": "pair unread",
+          "preview_sender": {
+            "status": "active",
+            "kind": "user",
+            "id": "activity-other",
+            "name": "other-activity",
+            "display_name": "Other",
+            "avatar_url": null,
+            "runtime": null
+          },
+          "timestamp": 2,
+          "unread_count": 1
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,39 @@
+[package]
+name = "silverhand-backend-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+form_urlencoded.workspace = true
+futures-util.workspace = true
+garde.workspace = true
+getrandom.workspace = true
+pulldown-cmark.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+silverhand-backend-core.workspace = true
+silverhand-backend-filesystem.workspace = true
+subtle.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+
+[build-dependencies]
+serde_json.workspace = true
+
+[dev-dependencies]
+silverhand-backend-sqlite.workspace = true
+sqlx.workspace = true
+syn.workspace = true
+tempfile.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tokio-tungstenite.workspace = true
+tower.workspace = true
+tracing-subscriber.workspace = true

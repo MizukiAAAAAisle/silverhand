@@ -1,7 +1,8 @@
 /**
- * The single WRITE-POINT for every current wire-protocol version number. The
- * five public constants that gate the wire read their value from here and add
- * nothing of their own:
+ * The single TypeScript facade for every current wire-protocol version number.
+ * Desktop admission values come from the shared backend-admission artifact so
+ * the desktop client and Rust server cannot drift; daemon wire versions remain
+ * owned here.
  *
  *   - `host`             → `HOST_PROTOCOL_VERSION`     (`packages/host/src/protocol.ts`)
  *   - `outbound`         → `OUTBOUND_PROTOCOL_VERSION` (`packages/host/src/outbound-protocol.ts`)
@@ -21,15 +22,18 @@
  * `as const` is load-bearing: derived constants must keep their literal types
  * (e.g. `z.literal(OUTBOUND_PROTOCOL_VERSION)`).
  */
+import { BACKEND_ADMISSION } from './backend-admission.generated.js';
+import { DAEMON_ADMISSION } from './daemon-admission.generated.js';
+
 export const PROTOCOL_VERSIONS = {
   /** CLI/backend ↔ local daemon (strict-equality hello gate). */
-  host: 11,
+  host: DAEMON_ADMISSION.hostProtocolVersion,
   /** Remote daemon ↔ standalone server (strict-equality hello gate). */
-  outbound: 10,
+  outbound: DAEMON_ADMISSION.outboundProtocolVersion,
   /** Desktop ↔ server current epoch (min-window range gate). */
-  desktopApi: 3,
+  desktopApi: BACKEND_ADMISSION.desktopApi,
   /** Lowest client epoch this server build admits. */
-  desktopMinClient: 3,
+  desktopMinClient: BACKEND_ADMISSION.desktopMinClient,
   /** Lowest server epoch this desktop build accepts. */
-  desktopMinServer: 3,
+  desktopMinServer: BACKEND_ADMISSION.desktopMinServer,
 } as const;

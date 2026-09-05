@@ -1,0 +1,28 @@
+{
+  "success": {
+    "authorization": "valid_session",
+    "request": {},
+    "status": 200,
+    "body": {
+      "host_id": "<host_id>",
+      "host": {
+        "id": "<host_id>",
+        "name": "<host_name>",
+        "kind": "remote",
+        "created_at": 0,
+        "revoked_at": null,
+        "last_seen_at": null,
+        "activated_at": null,
+        "finalized_at": null,
+        "connected_host_name": null,
+        "provisioning_source": "user_invite",
+        "status": "pending",
+        "placeable": false,
+        "creator_user_id": "<user_id>",
+        "display_label": null
+      },
+      "connect_token": "<connect_token>",
+      "daemon_npm_spec": "@silverhand-ai/daemon@latest"
+    }
+  }
+}

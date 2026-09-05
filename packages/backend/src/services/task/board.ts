@@ -64,6 +64,12 @@ export interface TaskBoardCursor {
 }
 
 export function encodeTaskBoardCursor(cursor: TaskBoardCursor): string {
+  if (!Number.isSafeInteger(cursor.taskNumber) || cursor.taskNumber <= 0) {
+    throw new RangeError('task board cursor number must be a positive JS-safe integer');
+  }
+  if (cursor.taskId.length === 0) {
+    throw new RangeError('task board cursor id must be non-empty');
+  }
   return Buffer.from(
     JSON.stringify([cursor.taskNumber, cursor.taskId]),
     'utf8',
@@ -74,15 +80,25 @@ export function encodeTaskBoardCursor(cursor: TaskBoardCursor): string {
  *  that into a 400 rather than silently serving page 1 (a silent reset would
  *  loop a scrolling client forever on the first window). */
 export function decodeTaskBoardCursor(raw: string): TaskBoardCursor | null {
+  // Node's decoder is intentionally permissive (padding and non-canonical
+  // spellings); the protocol is not. Accept exactly one unpadded base64url
+  // representation and verify it by round-tripping through the encoder.
+  if (!/^[A-Za-z0-9_-]+$/.test(raw)) return null;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+    const bytes = Buffer.from(raw, 'base64url');
+    if (bytes.toString('base64url') !== raw) return null;
+    parsed = JSON.parse(bytes.toString('utf8'));
   } catch {
     return null;
   }
   if (!Array.isArray(parsed) || parsed.length !== 2) return null;
   const [taskNumber, taskId] = parsed as [unknown, unknown];
-  if (typeof taskNumber !== 'number' || !Number.isInteger(taskNumber)) return null;
+  if (
+    typeof taskNumber !== 'number' ||
+    !Number.isSafeInteger(taskNumber) ||
+    taskNumber <= 0
+  ) return null;
   if (typeof taskId !== 'string' || taskId.length === 0) return null;
   return { taskNumber, taskId };
 }

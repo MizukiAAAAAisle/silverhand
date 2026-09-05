@@ -1,0 +1,50 @@
+[
+  {
+    "name": "absent",
+    "header": null,
+    "ts_extracted_token": null,
+    "rust_extracted_token": null
+  },
+  {
+    "name": "empty",
+    "header": "",
+    "ts_extracted_token": null,
+    "rust_extracted_token": null
+  },
+  {
+    "name": "empty bearer",
+    "header": "Bearer ",
+    "ts_extracted_token": null,
+    "rust_extracted_token": null
+  },
+  {
+    "name": "canonical bearer",
+    "header": "Bearer valid-token",
+    "ts_extracted_token": "valid-token",
+    "rust_extracted_token": "valid-token"
+  },
+  {
+    "name": "case and whitespace",
+    "header": "bEaReR\t  valid-token  ",
+    "ts_extracted_token": "valid-token",
+    "rust_extracted_token": "valid-token"
+  },
+  {
+    "name": "wrong scheme",
+    "header": "Basic valid-token",
+    "ts_extracted_token": "Basic valid-token",
+    "rust_extracted_token": null
+  },
+  {
+    "name": "raw valid token deliberate tightening",
+    "header": "valid-token",
+    "ts_extracted_token": "valid-token",
+    "rust_extracted_token": null
+  },
+  {
+    "name": "scheme without credentials",
+    "header": "Bearer",
+    "ts_extracted_token": "Bearer",
+    "rust_extracted_token": null
+  }
+]

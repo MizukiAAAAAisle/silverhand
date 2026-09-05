@@ -24,3 +24,4 @@ export * from './sort.js';
 export * from './favorites.js';
 export * from './paths.js';
 export * from './principal-header.js';
+export * from './wire-number.js';

@@ -22,14 +22,10 @@ import {
   SavedMessagesQueryInputSchema,
   SearchQueryInputSchema,
   UpdateChannelInputSchema,
-  SendMessageInputSchema,
   TEMP_CONVERSATION_DEBUG_WINDOW_MS,
-  MAX_MESSAGE_CONTENT_BYTES,
-  MAX_MESSAGE_CONTENT_LABEL,
   MESSAGE_SEND_MAX_BODY_BYTES,
-  messageContentByteLength,
-  messageContentExceedsLimit,
 } from '@silverhand/shared';
+import { UNREADABLE_SEND_BODY, admitHumanSend } from './send-ingress.js';
 import type { MessageSendAck } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
@@ -958,23 +954,15 @@ export function createConversationMessagingApp(
       body = await c.req.json();
     } catch (err) {
       if (err instanceof Error && err.name === 'BodyLimitError') throw err;
-      body = {};
+      body = UNREADABLE_SEND_BODY;
     }
-    const parsed = SendMessageInputSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    // The ingress decision — shape, then the content cap, and this door's own wording for
+    // each — belongs to `send-ingress`, which the Rust parity oracle answers through too.
+    const admission = admitHumanSend(body);
+    if (admission.refusal) {
+      return c.json(admission.refusal.body, admission.refusal.status);
     }
-    if (messageContentExceedsLimit(parsed.data.content)) {
-      return c.json(
-        {
-          error: `message content exceeds ${MAX_MESSAGE_CONTENT_LABEL} limit`,
-          code: 'content_too_large',
-          max_bytes: MAX_MESSAGE_CONTENT_BYTES,
-          actual_bytes: messageContentByteLength(parsed.data.content),
-        },
-        413,
-      );
-    }
+    const input = admission.admitted;
     // Send-message delivery is best-effort: `sendMessage` always persists the
     // message and returns 201, while per-agent runtime fan-out is wrapped in a
     // top-level catch so transient daemon-down state does NOT bubble up as an
@@ -1002,16 +990,16 @@ export function createConversationMessagingApp(
       const result = await ctx.conversationMessageService.sendMessage({
         conversationId: channel.id,
         actor: getUserPrincipal(c),
-        content: parsed.data.content,
-        attachmentRefs: normalizeAttachmentRefs(parsed.data.attachment_ids),
+        content: input.content,
+        attachmentRefs: normalizeAttachmentRefs(input.attachment_ids),
         // A person's client posts where the person is LOOKING, so the human door
         // can only express a placement inside this conversation — never a foreign
         // stream (#task:2021 P4-4). `reply_to_message_id` may be any message in
         // the cluster; the send transaction normalizes it to the cluster root.
-        destination: parsed.data.reply_to_message_id
+        destination: input.reply_to_message_id
           ? {
               kind: 'own_reply_cluster',
-              messageId: parsed.data.reply_to_message_id,
+              messageId: input.reply_to_message_id,
             }
           : { kind: 'own_main_line' },
       });
@@ -1129,17 +1117,19 @@ export function createConversationRuntimeApp(
       return c.json({ error: 'message not found' }, 404);
     }
     const viewerUserId = requireViewerUserId(c);
-    const row = saved.save(id, viewerUserId);
-    if (!row) return c.json({ error: 'message not found' }, 404);
+    const committed = saved.saveCommitted(id, viewerUserId);
+    if (!committed) return c.json({ error: 'message not found' }, 404);
     // Notify the resolved viewer's private scope so the saved list
     // invalidates without polling. Pre-PR1 this was 'viewer:local';
     // routes now resolve the current viewer principal.
-    ctx.events.publishToScope(
-      `viewer:${viewerUserId}`,
-      'saved_changed',
-      { message_id: id, action: 'save' },
-    );
-    return c.json({ saved: row }, 201);
+    if (committed.changed) {
+      ctx.events.publishToScope(
+        `viewer:${viewerUserId}`,
+        'saved_changed',
+        { message_id: id, action: 'save' },
+      );
+    }
+    return c.json({ saved: committed.saved }, 201);
   });
 
   app.delete(apiPaths.messageSave(':id'), c => {
@@ -1150,12 +1140,14 @@ export function createConversationRuntimeApp(
       return c.json({ error: 'message not found' }, 404);
     }
     const viewerUserId = requireViewerUserId(c);
-    saved.remove(id, viewerUserId);
-    ctx.events.publishToScope(
-      `viewer:${viewerUserId}`,
-      'saved_changed',
-      { message_id: id, action: 'unsave' },
-    );
+    const committed = saved.removeCommitted(id, viewerUserId);
+    if (committed.changed) {
+      ctx.events.publishToScope(
+        `viewer:${viewerUserId}`,
+        'saved_changed',
+        { message_id: id, action: 'unsave' },
+      );
+    }
     return c.body(null, 204);
   });
 

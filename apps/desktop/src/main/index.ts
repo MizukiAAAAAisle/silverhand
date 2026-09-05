@@ -1,6 +1,8 @@
 import { app, BrowserWindow, Menu, session as electronSession, shell, type MenuItemConstructorOptions } from 'electron';
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn as spawnChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { rm as fsRm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import {
@@ -37,11 +39,24 @@ import {
 } from '@silverhand/shared';
 import {
   createCategorizedLoggers,
-  startEmbeddedSilverhandServer,
   type CategorizedLoggers,
-  type RunningBackend,
   type FileLogger,
 } from '@silverhand/server';
+// #task:2343 — the embedded arm launches the PREBUILT Rust backend out-of-process, not
+// an in-process TS backend. ALL embedded-only runtime surface (migrator, launcher,
+// sidecar verifier, production deps) is reached through the ONE `embedded-launcher` seam,
+// which the remote-only build aliases to a throwing stub — so the remote-only main graph
+// contains no `@silverhand/backend` / `better-sqlite3` / launcher / sidecar.
+import {
+  startDesktopEmbeddedBackend,
+} from './embedded-launcher.js';
+import type {
+  EmbeddedRustBackendHandle,
+  EmbeddedRustBackendTerminalReason,
+} from './embedded-rust-backend.js';
+import { persistEmbeddedBackend, invalidateEmbeddedRuntime } from './embedded-backend-publication.js';
+import { EmbeddedBackendOwner } from './embedded-backend-owner.js';
+const embeddedBackendOwner = new EmbeddedBackendOwner();
 import {
   DESKTOP_ALLOW_INSECURE_REMOTE,
   DESKTOP_REMOTE_ONLY,
@@ -66,6 +81,7 @@ import {
   loadOrCreateServerConfig,
   silverhandDir,
   writeServerConfig,
+  invalidateEmbeddedServerUrl,
   desktopAppPaths,
 } from './config.js';
 import { resolveEffectiveBootProfile } from './desktop-build-config.js';
@@ -93,7 +109,6 @@ import {
   type LocalHostClaimStatus,
 } from './local-host-claim.js';
 import {
-  startAttachWatchdog,
   type ExpectedAttachWindow,
 } from './outbound-attach.js';
 import {
@@ -128,7 +143,6 @@ import {
   decideBackendBootMode,
   evaluateProfileCommitGuard,
   executeBackendStartup,
-  localOutboundSocketPathForStartupPlan,
   planBackendStartup,
   ProfileUnusableError,
   RemoteOnlyServerProfileRequiredError,
@@ -194,19 +208,16 @@ const nodeSystemCaActivation = enableNodeSystemCa();
 /**
  * D4.a Commit 5d — typed union of the two boot-time backend
  * adapters. The desktop main process always has either a local
- * embedded backend (`startEmbeddedSilverhandServer` produced a
- * `RunningBackend`) or a remote one (the user's profile pointed at a
- * remote URL; main built a `RemoteBackendHandle` instead). Code that
- * needs the URL goes through {@link requireBackendUrl}; code that
- * actually depends on in-process embedded surface (the
- * `BackendContext`, the local `HostWsServerController` registry, the
- * `ServerConfig` for legacy on-disk persistence) goes through
- * {@link requireEmbeddedBackend} or {@link getEmbeddedHostWsController}
- * — both of which `null` / typed-fail on the remote arm so a remote
- * boot can never silently consume an embedded-only side effect.
+ * embedded backend (the out-of-process Rust `EmbeddedRustBackendHandle`)
+ * or a remote one (the user's profile pointed at a remote URL; main
+ * built a `RemoteBackendHandle` instead). Code that needs the URL goes
+ * through {@link requireBackendUrl}; code that depends on the embedded
+ * arm goes through {@link requireEmbeddedBackend}, which typed-fails on
+ * the remote arm so a remote boot can never silently consume an
+ * embedded-only side effect.
  */
 type BackendHandle =
-  | { readonly kind: 'embedded'; readonly running: RunningBackend }
+  | { readonly kind: 'embedded'; readonly running: EmbeddedRustBackendHandle }
   | RemoteBackendHandle;
 
 type DesktopHostProxyConfig = HostProxyConfig;
@@ -531,37 +542,9 @@ function patchPathFromLoginShell(): { ok: boolean; detail: string } {
 }
 
 /**
- * Resolve how to launch the `silverhand` CLI exposed to agents on PATH.
- *
- * ConversationManager writes a per-spawn `bin/silverhand` shim that forwards
- * here. In both dev and release we reuse the Electron binary as a Node host
- * via `ELECTRON_RUN_AS_NODE=1`; the only difference is where the esbuild
- * bundle lives on disk. The release copy is renamed to `.mjs` so Node treats
- * it as ESM without a sibling `package.json` type=module (dev works as-is
- * because `packages/cli/package.json` provides that). We used to ship a
- * bun-compiled single-file binary in release — that pulled in the Bun
- * runtime (~60MB) for no benefit, because the package already contains a
- * full Node runtime inside Electron.
- */
-function resolveSilverhandCliLauncher(): {
-  command: string;
-  args: string[];
-  env?: Record<string, string>;
-} {
-  const entry = app.isPackaged
-    ? join(process.resourcesPath, 'silverhand-cli', 'cli.mjs')
-    : join(resolve(app.getAppPath(), '../..'), 'packages/cli/dist/cli.js');
-  return {
-    command: process.execPath,
-    args: [entry],
-    env: { ELECTRON_RUN_AS_NODE: '1' },
-  };
-}
-
-/**
  * Resolve how to launch the `silverhand-daemon` child process from
- * Electron main. Mirrors `resolveSilverhandCliLauncher` — same trick:
- *
+ * Electron main. Same trick as the daemon/CLI launchers: reuse the
+ * Electron binary as a Node host via `ELECTRON_RUN_AS_NODE=1`.
  *  - dev: the daemon entry runs via tsx (installed in
  *    `packages/host/node_modules/.bin/tsx`); we launch it through the
  *    same Electron-as-Node host so `process.execPath` stays the
@@ -602,9 +585,6 @@ interface DaemonPaths {
   daemonIdentityPath: string;
   hostConfigPath: string;
   controlPlaneServerUrlPath: string;
-  /** Local outbound frame socket — the daemon binds it and the embedded
-   *  backend dials it for the D5.a R4-unified outbound envelope. */
-  localOutboundSocketPath: string;
 }
 
 function daemonPaths(): DaemonPaths {
@@ -621,7 +601,6 @@ function daemonPaths(): DaemonPaths {
     daemonIdentityPath: paths.run.identity,
     hostConfigPath: paths.desktop.computerBinding,
     controlPlaneServerUrlPath: paths.run.controlPlaneServerUrl,
-    localOutboundSocketPath: paths.run.outboundSocket,
   };
 }
 
@@ -642,41 +621,17 @@ function embeddedBootstrapPath(): string {
  *     Use for HTTP/WS/proxy URL construction and origin overrides.
  *
  *   - {@link requireEmbeddedBackend} — typed-throw on remote arm.
- *     Use ONLY for code that genuinely depends on in-process
- *     embedded surface (e.g. the `BackendContext`, `ServerConfig`
- *     for legacy on-disk write). The `reason` argument is logged
- *     in the throw so a regression that calls this on the remote
- *     arm fails loud at the offending site.
- *
- *   - {@link getEmbeddedHostWsController} — `null` on remote arm.
- *     Use for graceful-shutdown detach observability: on remote
- *     there is no in-process registry to observe, so the helper
- *     returns `null` and the consumer falls back to RPC-only path.
- *     This MUST be `null`, not `undefined`, so the caller can
- *     distinguish "registry deliberately absent" from "registry
- *     accessor missing because of an upstream bug".
+ *     Use ONLY for code that genuinely depends on the embedded arm's
+ *     handle. The `reason` argument is logged in the throw so a
+ *     regression that calls this on the remote arm fails loud at the
+ *     offending site.
  */
 function requireBackendUrl(): string {
   if (!backend) throw new Error('backend not ready');
   return backend.kind === 'embedded' ? backend.running.url : backend.url;
 }
 
-/**
- * #task:1630 — the deployment arm this process is serving.
- *
- * Throws rather than defaulting: every caller here is answering a
- * question that only makes sense once a backend handle exists
- * (`BackendInfo` and the host mutation replies built from
- * `snapshotLocalHostInfo()`). Guessing `'remote'` for a not-yet-booted
- * handle would report the attachment as unobservable — the one lie the
- * discriminant exists to prevent (see `local-host-ws-attachment.ts`).
- */
-function requireBackendKind(): 'embedded' | 'remote' {
-  if (!backend) throw new Error('backend not ready');
-  return backend.kind;
-}
-
-function requireEmbeddedBackend(reason: string): RunningBackend {
+function requireEmbeddedBackend(reason: string): EmbeddedRustBackendHandle {
   if (!backend) {
     throw new Error(`backend not ready (caller: ${reason})`);
   }
@@ -688,11 +643,21 @@ function requireEmbeddedBackend(reason: string): RunningBackend {
   return backend.running;
 }
 
-function getEmbeddedHostWsController(): ReturnType<
-  NonNullable<RunningBackend['context']['hostWsController']>
-> | null {
-  if (!backend || backend.kind !== 'embedded') return null;
-  return backend.running.context.hostWsController?.() ?? null;
+/**
+ * #task:2343 — the attachment-observer CAPABILITY: does Desktop main hold an
+ * authoritative in-process backend registry observer?
+ *
+ * With the out-of-process Rust embedded backend (and remote), Desktop main has NO such
+ * observer — the local-host WS attachment is owned by the daemon's generation-bound
+ * `/ws/host` flow, not an in-process registry. So this is ALWAYS false now. It is a
+ * CAPABILITY, deliberately NOT derived from `backend.kind` (which expresses deployment
+ * mode only): a Rust embedded backend is out-of-process exactly like remote and must not
+ * be treated as if a registry lived in this process. `observable:false` means "cannot
+ * read a local registry", NOT "not connected" — connection status comes from the daemon/
+ * backend status surfaces, and attach/reload/detach still run the real daemon flow.
+ */
+function hasLocalRegistryObserver(): boolean {
+  return false;
 }
 
 function backendUrl(path: string): string {
@@ -1347,10 +1312,10 @@ type DesktopHostMutationResult =
  * The `local_host_*` block of `BackendInfo` (and of the host mutation
  * replies, which spread it).
  *
- * REQUIRES a live backend handle — it throws otherwise (see
- * {@link requireBackendKind}). All three callers already prove one:
- * `backend:info` answers `null` before reaching here, and both host
- * mutations bail on `!backend` before their request. There is
+ * REQUIRES a live backend handle — it throws otherwise. All three
+ * callers already prove one: `backend:info` answers `null` before
+ * reaching here, and both host mutations bail on `!backend` before
+ * their request. There is
  * deliberately no degraded snapshot: the honest answer to "no backend
  * yet" is no snapshot at all, not a snapshot whose attachment claims to
  * be unobservable (#task:1630).
@@ -1371,23 +1336,16 @@ function snapshotLocalHostInfo(): {
     // `local_host_status` and nothing else (per the D3.a/D3.d locked
     // scope on host status semantics).
     //
-    // #task:1630: observability is derived from the backend discriminant
-    // DIRECTLY, never from `getEmbeddedHostWsController() === null` — that
-    // helper also returns null for an embedded process whose controller
-    // accessor is missing (an upstream bug, see `:1696`), and reporting
-    // THAT as `observable: false` would tell the renderer to stop looking
-    // instead of surfacing the stuck attach. So: observable ⇔ the registry
-    // is in this process; `attached_at: null` inside the observable arm
-    // keeps its old meaning (claimed but nothing attached yet). The
-    // derivation itself lives in `local-host-ws-attachment.ts` so it is
-    // unit-falsifiable; this file mints no discriminant of its own.
+    // #task:2343: observability is the attachment-observer CAPABILITY
+    // (`hasLocalRegistryObserver()`), NOT the backend discriminant. With the
+    // out-of-process Rust embedded backend (and remote) Desktop main holds no local
+    // registry, so this is `observable:false` for both arms and no local `attached_at`
+    // is read. `observable:false` means "no local registry to read", not "not attached":
+    // connection status comes from the daemon/backend surfaces. The derivation lives in
+    // `local-host-ws-attachment.ts` so it stays unit-falsifiable.
     local_host_ws_attachment: describeLocalHostWsAttachment({
-      backendKind: requireBackendKind(),
-      attachedAt:
-        localHostClaim.status === 'claimed'
-          ? getEmbeddedHostWsController()?.getAttachment(localHostClaim.hostId)
-              ?.attachedAt ?? null
-          : null,
+      hasLocalRegistryObserver: hasLocalRegistryObserver(),
+      attachedAt: null,
     }),
     // D3.c Commit 4: surface the daemon-config `server_url` so the
     // Settings "Server" pane (and any future Hosts page readout) can
@@ -1410,11 +1368,12 @@ function snapshotLocalHostInfo(): {
  * (pre-IPC) rather than after `await`.
  */
 function captureAttachWindow(localHostId: string): ExpectedAttachWindow {
-  const controller = getEmbeddedHostWsController();
-  const prev = controller?.getAttachment(localHostId) ?? null;
+  // #task:2343: no in-process registry observer (out-of-process backend), so there is no
+  // prior local attachment to read; the freshness lower bound is the current instant and
+  // the daemon-generation flow owns attach verification.
   return {
     expectedHostId: localHostId,
-    previousConnectionId: prev?.connectionId ?? null,
+    previousConnectionId: null,
     expectAttachSince: Date.now(),
   };
 }
@@ -1490,47 +1449,15 @@ async function triggerLocalHostOutboundAttach(input: {
   // Cancel any previously-running watchdog (rotate-token / re-login
   // can fire while a prior one is still polling).
   activeAttachWatchdog?.abort();
-  // D4.a Commit 5d — controller is `null` on the remote arm (no
-  // in-process registry) AND on the embedded arm if `hostWsController`
-  // is unavailable. Both cases mean "we acked the attach IPC but
-  // can't observe the WS attachment locally"; the watchdog stays
-  // un-armed and the user-facing status enum simply waits for
-  // `local_host_status` updates from a different surface (renderer
-  // poll / typed claim error) instead of from registry observation.
-  const controller = getEmbeddedHostWsController();
-  if (!controller) {
-    // No controller (remote arm, or embedded edge); we still acked
-    // the IPC, so attach itself is fine — just can't observe it
-    // from main.
+  // #task:2343 — no in-process registry observer (out-of-process Rust embedded backend
+  // OR remote). We acked the attach IPC and the daemon owns the real generation-bound
+  // `/ws/host` attach; there is no local registry to poll, so the watchdog stays
+  // un-armed and the user-facing status simply waits for `local_host_status` updates from
+  // other surfaces (renderer poll / typed claim error). This is a CAPABILITY, not a kind
+  // check — Rust embedded must NOT be treated as a `no_attachment_controller` fault.
+  if (!hasLocalRegistryObserver()) {
     return;
   }
-  const watchdog = startAttachWatchdog(input.attachWindow, {
-    getAttachment: hostId => controller.getAttachment(hostId),
-  });
-  activeAttachWatchdog = watchdog;
-  watchdog.promise
-    .then(outcome => {
-      if (activeAttachWatchdog === watchdog) activeAttachWatchdog = null;
-      if (outcome.ok) {
-        logger?.info(
-          {
-            localHostId: input.localHostId,
-            elapsedMs: outcome.elapsedMs,
-            attachedAt: outcome.attachment.attachedAt,
-            connectionId: outcome.attachment.connectionId,
-          },
-          'D3.a host outbound WS attached',
-        );
-      } else if (outcome.reason === 'timeout') {
-        logger?.warn(
-          { localHostId: input.localHostId, elapsedMs: outcome.elapsedMs },
-          'D3.a host outbound WS attach watchdog timed out (UI status stays connecting)',
-        );
-      }
-    })
-    .catch(err => {
-      logger?.warn({ err }, 'D3.a attach watchdog promise rejected unexpectedly');
-    });
 }
 
 /** Rotate the long-lived credential for the desktop's CURRENT local
@@ -1868,21 +1795,16 @@ async function saveServerUrlFromSettings(
   // Mirrors the D3.b `host_outbound_detach` controller-snapshot
   // pattern.
   //
-  // D4.a Commit 5d / `#task:1021`: derive `remoteMode` from the
-  // backend discriminant DIRECTLY, NOT from `controller === null`.
-  // `getEmbeddedHostWsController()` returns null in TWO distinct cases
-  // (`:556-561`): `backend.kind !== 'embedded'` (genuinely remote) AND
-  // embedded-but-`hostWsController?.()` missing (a registry-missing edge
-  // that SHOULD surface as `no_attachment_controller`). Binding
-  // `remoteMode = controller === null` would conflate them and promote
-  // that embedded edge to a `reloaded_remote` success — swallowing the
-  // failure the orchestrator is supposed to expose (Cindy `#task:1021`
-  // review P1). So: `remoteMode = backend.kind === 'remote'` (explicit),
-  // and the controller is still snapshotted separately for
-  // `bindAttachmentAccessor` (null on the remote arm → no local watchdog;
-  // connectivity is shown by the renderer's connection indicator, which
-  // polls remote host-status `availability` — #task:1010).
-  const controller = getEmbeddedHostWsController();
+  // #task:2343 — the outbound-reload verification mode is the attachment-observer
+  // CAPABILITY, not `backend.kind`. With the out-of-process Rust embedded backend (and
+  // remote) there is NO local registry observer, so verification is daemon-only for BOTH
+  // arms (`remoteMode` = "no local observer" = true here). Deriving it from
+  // `kind === 'remote'` would leave Rust embedded expecting a local controller and
+  // falling into a `no_attachment_controller` false-fault (the exact conflation
+  // #task:1021 warned about) — so it is the capability, and `bindAttachmentAccessor(null)`
+  // yields no local watchdog. Connectivity is shown by the renderer's connection
+  // indicator (remote host-status availability, #task:1010).
+  const controller = null;
   const allowInsecureRemote = desktopAllowsInsecureRemote();
   const outcome = await performOutboundReload(
     { serverUrl: rawServerUrl },
@@ -1892,7 +1814,7 @@ async function saveServerUrlFromSettings(
       writeDaemonHostConfig: config => writeDaemonHostConfig(daemonConfigPath, config),
       hostOutboundReload: () => client.hostOutboundReload(),
       getAttachment: bindAttachmentAccessor(controller),
-      remoteMode: backend.kind === 'remote',
+      remoteMode: !hasLocalRegistryObserver(),
       currentLocalHostId: () =>
         localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
       currentHostToken: () => readDaemonHostConfig(daemonConfigPath)?.host_token ?? null,
@@ -2270,6 +2192,9 @@ async function bootstrap(): Promise<void> {
     // in-process ConversationManager runtime, Commit C removed the
     // env switch). Recovery is fixing the daemon spawn / socket.
     const paths = daemonPaths();
+    if (startupPlan.mode === 'embedded') {
+      await fsRm(paths.controlPlaneServerUrlPath, { force: true });
+    }
     const daemonLauncher = resolveDaemonLauncher();
     daemon = await spawnDaemonChild({
       launcher: daemonLauncher,
@@ -2287,15 +2212,14 @@ async function bootstrap(): Promise<void> {
         startupPlan.mode === 'embedded'
           ? paths.controlPlaneServerUrlPath
           : null,
-      // D5.a-3: only an embedded backend dials this local outbound frame
-      // socket. A remote backend reaches the daemon over its authenticated
-      // outbound WebSocket; enabling the embedded listener on that arm makes
-      // the daemon select the wrong (`local-embedded`) workspace-registry
-      // namespace. Host-control IPC continues to use daemon.sock in both arms.
-      localOutboundSocketPath: localOutboundSocketPathForStartupPlan(
-        startupPlan,
-        paths.localOutboundSocketPath,
-      ),
+      // #task:2343: the local-outbound frame socket was the OLD in-process TS embedded
+      // backend's data plane. The out-of-process Rust embedded backend reaches the daemon
+      // over the SAME authenticated, generation-bound `/ws/host` outbound WebSocket as
+      // remote — there is NO local-outbound-socket data plane anymore, and enabling it
+      // would be a hidden fallback (and would select the wrong `local-embedded`
+      // workspace-registry namespace). So it is `null` for BOTH arms. Host-control IPC
+      // continues over `daemon.sock` in both arms (unchanged).
+      localOutboundSocketPath: null,
       // D3.a Commit 4: the daemon is spawned WITHOUT --host-config so
       // it cannot dial a stale `daemon-config.json` left over from a
       // previous user. Outbound attach is triggered after login via
@@ -2456,7 +2380,7 @@ async function bootstrap(): Promise<void> {
     });
     // D4.a Commit 5d fixup (Cindy P1-1) — dispatch via the
     // `executeBackendStartup` adapter. `loadOrCreateServerConfig`,
-    // `startEmbeddedSilverhandServer`, and `writeServerConfig` are
+    // `startDesktopEmbeddedBackend`, and `writeServerConfig` are
     // all routed through `deps.startEmbeddedAndPersistConfig` ONLY
     // on the embedded arm. The remote arm calls
     // `buildRemoteBackendHandle` and never touches the legacy
@@ -2474,40 +2398,80 @@ async function bootstrap(): Promise<void> {
     //
     // Seam pin: `__tests__/execute-backend-startup.test.ts` — the
     // load-bearing fix for Cindy 5d-fixup P1-1.
-    backend = await executeBackendStartup<
-      RunningBackend,
+    const startedBackend = await executeBackendStartup<
+      EmbeddedRustBackendHandle,
       RemoteBackendHandle
     >(startupPlan, {
       loadOrCreateServerConfig: () => loadOrCreateServerConfig(),
-      startEmbeddedAndPersistConfig: async config => {
-        const running = await startEmbeddedSilverhandServer({
-          dataDir: desktopAppPaths().embeddedServer.root,
-          // The embedded arm trusts the loaded ServerConfig; runtime
-          // shape is asserted by `loadOrCreateServerConfig` /
-          // `ServerConfigSchema.parse` upstream.
-          serverConfig: config as Awaited<
-            ReturnType<typeof loadOrCreateServerConfig>
-          >,
-          silverhandCliLauncher: resolveSilverhandCliLauncher(),
-          logger: logger ?? undefined,
-          loggers: loggers ?? undefined,
-          logDir: desktopAppPaths().logs,
-          // D5.a-3 (A6): the embedded backend no longer receives the
-          // desktop HostClient. It dials the daemon's local outbound
-          // frame socket itself and speaks the same R4-unified outbound
-          // envelope as standalone. The desktop HostClient is retained
-          // purely for host-control IPC (revoke/disconnect/rotate-token/
-          // status); it is NOT a runtime/materialize transport anymore.
-          outboundSocketPath: paths.localOutboundSocketPath,
+      startEmbeddedAndPersistConfig: config => embeddedBackendOwner.start(async () => {
+        // #task:2343 — the embedded arm launches the PREBUILT Rust backend
+        // out-of-process. NO in-process TS backend, NO TS fallback.
+        const appPaths = desktopAppPaths();
+        const bootstrapTokenPath = embeddedBootstrapPath();
+        // (3) Spawn with the launcher-owned EXPLICIT config boundary + a minted
+        // generation; await the bound frame, `/readyz`, and the api_epoch gate.
+        const serverConfig = config as Awaited<
+          ReturnType<typeof loadOrCreateServerConfig>
+        >;
+        const daemonNpmSpec = process.env.SILVERHAND_DAEMON_NPM_SPEC?.trim();
+        const rendererOrigin = process.env.ELECTRON_RENDERER_URL
+          ? new URL(process.env.ELECTRON_RENDERER_URL).origin
+          : null;
+        const handle = await startDesktopEmbeddedBackend(
+          { isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() },
+          {
+            databasePath: appPaths.embeddedServer.database,
+            signal: embeddedBackendOwner.signal,
+            blobsRoot: appPaths.embeddedServer.blobs,
+            logDir: appPaths.logs,
+            bootstrapTokenPath,
+            listen: { hostname: '127.0.0.1', port: 0 },
+            // The Rust backend self-derives its finalized bound loopback origin into the
+            // event-WS allowlist (TS parity); the launcher supplies the renderer dev
+            // origin (when present) so a dev renderer's WS upgrade is allowed too.
+            allowedOrigins: rendererOrigin
+              ? [rendererOrigin]
+              : ['http://127.0.0.1:0'],
+            ...(daemonNpmSpec ? { daemonNpmSpec } : {}),
+            disableSignup: false,
+            apiEpoch: {
+              clientEpoch: DESKTOP_SERVER_API_EPOCH,
+              minimumServerEpoch: MINIMUM_SERVER_API_EPOCH,
+            },
+          },
+          logger ?? undefined,
+        ).catch(async error => {
+          await invalidateEmbeddedServerUrl(serverConfig);
+          throw error;
         });
-        await writeServerConfig(running.context.serverConfig);
-        writeFileSync(
-          paths.controlPlaneServerUrlPath,
-          `${running.context.serverConfig.url}\n`,
-          { mode: 0o600 },
-        );
-        return running;
-      },
+        // (4) Persist the launcher-owned effective URL (from the bound frame) + the
+        // control-plane URL file the daemon reads. The backend does NOT self-persist an
+        // app-data ServerConfig; the launcher owns this boundary.
+        //
+        // #task:2343 P0-3 — the started child is now a live resource that the GLOBAL
+        // `backend` does NOT yet own (this closure has not returned). If either persist
+        // write throws, an un-guarded path would lose the only reference to the child
+        // (orphan) AND could leave a half-written control-plane URL that the daemon then
+        // reads as a live-but-dead server. `handle` is the typed owner across this
+        // boundary: on ANY persist failure we close the child (SIGTERM→grace→SIGKILL +
+        // token cleanup) and roll back the control-plane URL file before rethrowing, so
+        // the failure surfaces with zero orphan and zero stale effective URL.
+        await persistEmbeddedBackend(handle, {
+          config: () => writeServerConfig({ ...serverConfig, url: handle.url }),
+          controlUrl: () => writeFileSync(paths.controlPlaneServerUrlPath, `${handle.url}\n`, { mode: 0o600 }),
+          invalidate: async () => {
+            try { await fsRm(paths.controlPlaneServerUrlPath, { force: true }); }
+            finally { await invalidateEmbeddedServerUrl(serverConfig); }
+          },
+        }, embeddedBackendOwner.signal);
+        // #task:2343 P0-4 — register the single terminal owner. A post-publish fatal
+        // (child crash, stray/duplicate stdout line, stdout stream error) MUST invalidate
+        // the app's view of the backend rather than leaving `backend`/the renderer
+        // believing it is healthy while the child is dead. `onTerminal` fires at most
+        // once; we invalidate the global backend + clear the control-plane URL + route
+        // through the visible runtime-failure surface.
+        return handle;
+      }),
       buildRemoteHandle: input => buildRemoteBackendHandle(input),
       refuse: refusePlan => {
         // Throws — typed as `(plan) => never` so the union narrows
@@ -2528,6 +2492,16 @@ async function bootstrap(): Promise<void> {
         });
       },
     });
+    if (embeddedBackendOwner.isStopping) {
+      if (startedBackend.kind === 'embedded') await embeddedBackendOwner.close(startedBackend.running);
+      throw new Error('backend startup cancelled before main publication');
+    }
+    backend = startedBackend;
+    if (backend.kind === 'embedded') {
+      const handle = backend.running;
+      handle.onTerminal(reason => { void handlePostPublishEmbeddedFatal(handle, reason); });
+      if (!backend) throw new Error('embedded backend terminated during publication');
+    }
     installBackendEventWsOriginOverride();
     if (!HEADLESS) {
       // D4.a Commit 5d: `hydrateDesktopSession` works on both arms —
@@ -3108,7 +3082,9 @@ function buildProfilePhase2Deps(): PerformProfilePhase2Deps | null {
   // `no_attachment_controller` arm surfaces a typed
   // `partial_apply_pending` so the renderer can render its banner
   // without claiming to have verified attachment from main.
-  const controller = getEmbeddedHostWsController();
+  // #task:2343 — no local registry observer (out-of-process backend); attachment
+  // verification is daemon-only. `bindAttachmentAccessor(null)` → no local watchdog.
+  const controller = null;
   return {
     allowInsecureRemote: desktopAllowsInsecureRemote(),
     writeDaemonHostConfig: config => writeDaemonHostConfig(daemonConfigPath, config),
@@ -3447,13 +3423,14 @@ app.whenReady().then(async () => {
     // path. Typed-fail loudly if a regression boots HEADLESS with a
     // remote profile (e.g. CI accidentally inherits `server-profile.bin`).
     const embedded = requireEmbeddedBackend('HEADLESS handshake (SILVERHAND_HEADLESS=1)');
+    // #task:2343: the bootstrap token path is LAUNCHER-owned (the launcher hands it to
+    // the Rust child as `SILVERHAND_BOOTSTRAP_TOKEN_PATH` and the child writes it there
+    // iff embedded+loopback). It is not read from an in-process backend context.
     process.stdout.write(
       JSON.stringify({
         url: embedded.url,
         port: embedded.port,
-        bootstrap_token_path: embedded.context.embeddedBootstrap.enabled
-          ? embedded.context.embeddedBootstrap.filePath
-          : null,
+        bootstrap_token_path: embeddedBootstrapPath(),
         silverhand_dir: silverhandDir(),
       }) + '\n',
     );
@@ -3511,6 +3488,32 @@ function reportStartupFailure(err: unknown): void {
   showStartupFailureWindow({ notice, logsDir });
 }
 
+/**
+ * #task:2343 P0-4 — the single owner reaction to a PUBLISHED embedded backend dying
+ * (child crash, post-publish stdout protocol violation, or stdout stream fatal). Unlike a
+ * silent background `void close()`, this INVALIDATES the app's health view: it drops the
+ * global {@link backend} so no request routes to a dead child, clears the control-plane
+ * URL file so the daemon does not read a live-but-dead server, closes the handle
+ * (idempotent — reclaims the child + token), and routes through the visible runtime-
+ * failure surface. Idempotent and a no-op once shutdown has started (that path already
+ * owns teardown).
+ */
+async function handlePostPublishEmbeddedFatal(
+  handle: EmbeddedRustBackendHandle,
+  reason: EmbeddedRustBackendTerminalReason,
+): Promise<void> {
+  await embeddedBackendOwner.own(() => invalidateEmbeddedRuntime(reason, {
+    isCurrent: () => !isShuttingDown && backend?.kind === 'embedded' && backend.running === handle,
+    invalidate: () => { backend = null; },
+    clearUrls: async () => {
+      try { rmSync(daemonPaths().controlPlaneServerUrlPath, { force: true }); }
+      finally { await invalidateEmbeddedServerUrl(); }
+    },
+    close: () => embeddedBackendOwner.close(handle),
+    report: terminal => reportStartupFailure(new Error(`embedded backend terminated at runtime (${terminal.kind})`)),
+  })).catch(err => logger?.error({ err }, 'embedded backend runtime cleanup failed'));
+}
+
 app.on('window-all-closed', () => {
   // In headless mode there are no windows to begin with — that signal
   // would quit the app immediately. Keep alive until SIGINT.
@@ -3533,6 +3536,7 @@ if (HEADLESS) {
 let isShuttingDown = false;
 
 async function shutdown(): Promise<void> {
+  embeddedBackendOwner.beginShutdown();
   // Notify the renderer so it can show a progress overlay while we
   // clean up — prevents the window from looking frozen.
   const pushProgress = (step: string): void => {
@@ -3544,15 +3548,9 @@ async function shutdown(): Promise<void> {
   };
 
   try {
-    // D3.b Commit 3 — best-effort outbound-detach hint, sent BEFORE
-    // `backend.close()` because the backend itself owns the
-    // `HostWsServerController` registry we want to observe go null.
-    // Closing backend first would tear down the registry and reduce
-    // this step to a fire-and-forget daemon-only signal (still
-    // useful, just less observable). The detach is bounded by an
-    // internal 1.5s budget and never blocks shutdown — any
-    // outcome (RPC throw, timeout, registry never clears) just gets
-    // logged. See `outbound-detach.ts` for the full contract.
+    // Ask the daemon to detach while its backend is still reachable. Both backend
+    // modes use the authenticated host WebSocket; main has no registry observer.
+    // The daemon RPC has its own bounded shutdown budget.
     if (hostClient) {
       const claimedHostId =
         localHostClaim.status === 'claimed' ? localHostClaim.hostId : null;
@@ -3566,15 +3564,11 @@ async function shutdown(): Promise<void> {
       // of the truthful "we couldn't observe the registry at all"
       // (Cindy #task:630 P1-A).
       //
-      // D4.a Commit 5d: on the remote arm `getEmbeddedHostWsController()`
-      // returns `null`, so the detach helper runs RPC-only — exactly
-      // the right thing (the WS attachment registry lives on the
-      // remote backend and the daemon's outbound socket close is
-      // observed there, not from main).
-      const hostWsController = getEmbeddedHostWsController();
-      const getAttachment = hostWsController
-        ? (hostId: string) => hostWsController.getAttachment(hostId)
-        : undefined;
+      // #task:2343: no in-process registry observer (out-of-process Rust embedded
+      // backend OR remote), so shutdown detach is RPC-only — `getAttachment` is
+      // undefined and the helper never waits on a nonexistent local registry. The
+      // daemon's outbound socket close is observed by the daemon/backend, not from main.
+      const getAttachment = undefined;
       const detachOutcome = await gracefullyDetachOutbound({
         client: hostClient,
         hostId: claimedHostId,
@@ -3605,14 +3599,22 @@ async function shutdown(): Promise<void> {
     console.error('[main] outbound detach hint failed unexpectedly:', err);
   }
 
+  // Join unpublished startup and fatal cleanup as well as any published handle.
+  // Detach above retains its existing chance to use the still-running backend.
+  await embeddedBackendOwner.shutdown();
   try {
     if (backend) {
       pushProgress('Stopping agents…');
-      // D4.a Commit 5d — `close()` exists on both arms. Embedded
-      // owns a Hono server / runtime host / scheduler; remote's
-      // `close()` is a no-op (nothing to tear down — the server is
-      // remote, daemon + hostClient teardown happen below).
-      await (backend.kind === 'embedded' ? backend.running.close() : backend.close());
+      // Embedded owns a child process; remote has no local backend to reclaim.
+      if (backend.kind === 'embedded') {
+        try { await embeddedBackendOwner.close(backend.running); }
+        finally {
+          rmSync(daemonPaths().controlPlaneServerUrlPath, { force: true });
+          await invalidateEmbeddedServerUrl();
+        }
+      } else {
+        await backend.close();
+      }
       pushProgress('Cleanup finished');
       backend = null;
     }
@@ -3676,19 +3678,10 @@ app.on('before-quit', event => {
   app.setBadgeCount(0);
 
   // Hard ceiling so a wedged shutdown can't hang the app forever.
-  // Two sequential budgets share this window:
-  //
-  //   1. `backend.close()` — `ConversationManager.stop` escalates to
-  //      SIGKILL after 10s. Add a couple of seconds of headroom for
-  //      activity log flush + HTTP drain + DB close.
-  //   2. `daemon.kill({ gracefulMs: 5_000 })` — daemon gets 5s of
-  //      SIGTERM before SIGKILL.
-  //
-  // 10s (CM) + 5s (daemon) + 10s safety margin = 25s. The previous
-  // 15s ceiling barely covered the CM stage alone; adding daemon
-  // shutdown after it would race the watchdog and cause `app.exit(1)`
-  // before the daemon released its pid file / socket, leaving stale
-  // state for the next launch. See review of #task:510 PR-1.
+  // Embedded startup/fatal/published ownership is drained before successful exit:
+  // the Rust child gets its bounded SIGTERM→SIGKILL grace, then the daemon gets
+  // 5s. The remaining margin covers detach and logging. This watchdog is an
+  // emergency failed exit, never a substitute for the normal reclaim join.
   const watchdog = setTimeout(() => {
     console.error('[main] shutdown watchdog fired; forcing exit');
     app.exit(1);

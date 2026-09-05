@@ -213,7 +213,8 @@ export class AttentionBadgeRepo {
       WHERE c.workspace_id = @workspace
         AND c.placement_kind = 'workspace'
         AND c.roster_policy = 'open'
-        AND ${liveConversationPredicate('c')}`,
+        AND ${liveConversationPredicate('c')}
+      ORDER BY c.created_at ASC, c.id ASC`,
     ).all({
       viewer: viewerUserId,
       workspace: workspaceId,

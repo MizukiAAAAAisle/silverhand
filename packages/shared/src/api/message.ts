@@ -448,7 +448,21 @@ export type UnreadUpdatedMessagePayload = z.infer<
  *  desktop main process which OS notifications to `.close()`, so no read
  *  predicate is re-derived on the client. Other producers (the mark-read route)
  *  carry `marked` instead; both are optional and non-load-bearing for the badge
- *  count itself, which the client always refetches. */
+ *  count itself, which the client always refetches.
+ *
+ *  This BADGE variant is a REFETCH SIGNAL, not an absolute-count carrier. Source
+ *  #3 (a directed notification going read via `POST /api/notifications/read`) is
+ *  the case that relies on that: the Rust-migrated backend deliberately does NOT
+ *  publish a standalone absolute `attention_badge_updated` for the mark-read
+ *  path — an absolute count delivered out of commit order would let an earlier
+ *  clear's stale value win under the client's last-write-wins badge apply — so
+ *  the client re-reads the authoritative roll-up on this signal instead. (The
+ *  general commit-order/versioning of the absolute `attention_badge_updated`
+ *  frame across ALL producers is a separate, still-open concern.) This is a
+ *  deliberate delivery divergence from the pre-migration TypeScript route, which
+ *  shipped a standalone absolute badge per changed workspace; user-visible
+ *  projection parity is preserved at the cost of one roll-up refetch per
+ *  user-initiated clear. */
 export interface UnreadUpdatedBadgePayload {
   dismissed_notification_ids?: string[];
   marked?: number;
@@ -741,7 +755,8 @@ export type SavedMessageDto = z.infer<typeof SavedMessageDtoSchema>;
  *  messages older than the newest N). `workspace_id` narrows to one workspace
  *  (omitted = all workspaces the caller can see); `since` is `saved_at >= since`
  *  (epoch ms) — the SAVE-time window, not message created/updated time, matching
- *  the list's `saved_at DESC` order. All are applied before `ORDER BY … LIMIT`.
+ *  the list's `saved_at DESC, id DESC` total order. All are applied before
+ *  `ORDER BY … LIMIT`.
  *
  *  `user_id` / `agent_id` narrow by SENDER (#task:2059). They are the shared
  *  `SENDER_FILTER_FIELDS` axis above, spread — not copied — so this face and

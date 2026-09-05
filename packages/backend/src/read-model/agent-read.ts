@@ -35,7 +35,7 @@ import {
   loadReactionAggregates,
   type ReactionViewer,
 } from './message-reactions.js';
-import { senderRefFromAuthor } from '@silverhand/shared';
+import { foldCase, senderRefFromAuthor } from '@silverhand/shared';
 import type {
   AgentListChannelsDto,
   AgentListedChannel,
@@ -97,15 +97,15 @@ function messageRef(row: MessageRow, target: ReadHistoryTargetRef): MessageRef {
 function snippetFor(content: string): string {
   const compact = content.replace(/\s+/g, ' ').trim();
   if (compact.length <= READ_HISTORY_SNIPPET_MAX_CHARS) return compact;
-  return `${compact.slice(0, READ_HISTORY_SNIPPET_MAX_CHARS - 1)}…`;
-}
-
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, ch => `\\${ch}`);
-}
-
-function likeNeedle(query: string): string {
-  return `%${escapeLike(query)}%`;
+  // Scalar-safe truncation (Cindy #27/#14): if the cut at MAX-1 UTF-16 units would
+  // land between a surrogate pair's halves, shrink inward by one so the ellipsis never
+  // leaves a lone high surrogate. Shares the exact contract the Rust `snippet_for`
+  // (truncate_utf16_scalar_safe) enforces — the read snippet and search excerpt do NOT
+  // split astral scalars.
+  let end = READ_HISTORY_SNIPPET_MAX_CHARS - 1;
+  const lead = compact.charCodeAt(end - 1);
+  if (lead >= 0xd800 && lead <= 0xdbff) end -= 1;
+  return `${compact.slice(0, end)}…`;
 }
 
 function historyRowToMessage(
@@ -548,29 +548,127 @@ function searchMessageRef(row: AgentSearchMessageRow): MessageRef {
   };
 }
 
-function searchExcerptFor(
+// Exported for the Rust-parity signer (Cindy R4 #4): the shared corpus signs the
+// excerpt + match_offset this producer emits, and the Rust `search_excerpt_for`
+// replays it, so the two fold-span implementations cannot diverge.
+export function searchExcerptFor(
   content: string,
   query: string,
 ): { excerpt: string; match_offset: number } {
   const compact = content.replace(/\s+/g, ' ').trim();
-  const lower = compact.toLocaleLowerCase();
-  const lowerQuery = query.toLocaleLowerCase();
-  const matchStart = lower.indexOf(lowerQuery);
+  // Portable full case fold (#task:2341, Cindy #22/#49): fold BOTH sides with the
+  // pinned `foldCase` (no NFC, no host `toLocaleLowerCase`), find the match in FOLDED
+  // space, then map the folded match-start back to the ORIGINAL text's UTF-16 offset
+  // via a per-code-point fold-span map. A full fold can EXPAND (`ß`→`ss`), so a
+  // naive same-offset slice on the original would drift; the span map keeps the
+  // offset/excerpt anchored to the original text. The window is sliced SCALAR-SAFE
+  // (#27): an edge inside a surrogate pair shrinks inward by one unit.
+  const folded = foldWithSpans(compact);
+  const foldedQuery = foldCase(query);
+  const matchStart = folded.foldedText.indexOf(foldedQuery);
   if (matchStart < 0) {
-    const excerpt = compact.slice(0, SEARCH_EXCERPT_CONTEXT_CHARS * 2);
+    const excerpt = scalarSafeSlice(compact, 0, SEARCH_EXCERPT_CONTEXT_CHARS * 2);
     return { excerpt, match_offset: 0 };
   }
-  const start = Math.max(0, matchStart - SEARCH_EXCERPT_CONTEXT_CHARS);
-  const end = Math.min(
-    compact.length,
-    matchStart + query.length + SEARCH_EXCERPT_CONTEXT_CHARS,
+  // Map the folded [matchStart, matchStart+foldedQuery.length) range to the MINIMAL
+  // complete ORIGINAL scalar interval that covers it (Cindy R4 #4). A full fold can
+  // EXPAND (`ß`→`ss`), so a match that begins or ends part-way through an expansion
+  // must map to the WHOLE original scalar it overlaps — never past its start (which
+  // would land on the next scalar) nor short of its end (using the query length).
+  const [originalStart, originalEnd] = foldedRangeToOriginal(
+    matchStart,
+    foldedQuery.length,
+    folded.spans,
+  );
+  const start = scalarSafeStart(
+    Math.max(0, originalStart - SEARCH_EXCERPT_CONTEXT_CHARS),
+    compact,
+  );
+  const end = scalarSafeEnd(
+    Math.min(compact.length, originalEnd + SEARCH_EXCERPT_CONTEXT_CHARS),
+    compact,
   );
   const prefix = start > 0 ? '...' : '';
   const suffix = end < compact.length ? '...' : '';
   return {
     excerpt: `${prefix}${compact.slice(start, end)}${suffix}`,
-    match_offset: matchStart - start + prefix.length,
+    match_offset: originalStart - start + prefix.length,
   };
+}
+
+/** Per-code-point fold spans of `text`: the folded string plus, for each ORIGINAL
+ *  code point (in order), its UTF-16 width in the original and in the fold. Mirrors
+ *  the Rust `fold_case_only_with_spans` so the two excerpt implementations agree. */
+function foldWithSpans(text: string): {
+  foldedText: string;
+  spans: { originalUtf16: number; foldedUtf16: number }[];
+} {
+  let foldedText = '';
+  const spans: { originalUtf16: number; foldedUtf16: number }[] = [];
+  for (const character of text) {
+    const originalUtf16 = character.length; // UTF-16 units of this code point
+    const foldedChar = foldCase(character);
+    foldedText += foldedChar;
+    spans.push({ originalUtf16, foldedUtf16: foldedChar.length });
+  }
+  return { foldedText, spans };
+}
+
+/** Map a FOLDED UTF-16 range [foldedStart, foldedStart+foldedLen) to the MINIMAL
+ *  complete ORIGINAL scalar interval [origStart, origEnd) that covers it — mirrors
+ *  the Rust `folded_range_to_original` (Cindy R4 #4). origStart is the BEGINNING of
+ *  the span containing foldedStart; origEnd is the END of the span containing the last
+ *  folded unit, so a partial-expansion match covers the whole original scalar and
+ *  never drifts to a neighbour. */
+function foldedRangeToOriginal(
+  foldedStart: number,
+  foldedLen: number,
+  spans: { originalUtf16: number; foldedUtf16: number }[],
+): [number, number] {
+  const foldedEndInclusive = foldedStart + Math.max(1, foldedLen) - 1;
+  let foldedCursor = 0;
+  let originalCursor = 0;
+  let origStart = 0;
+  let origEnd = 0;
+  let sawStart = false;
+  for (const span of spans) {
+    const spanFoldedBegin = foldedCursor;
+    const spanFoldedEnd = foldedCursor + span.foldedUtf16; // exclusive
+    if (!sawStart && foldedStart < spanFoldedEnd) {
+      origStart = originalCursor;
+      sawStart = true;
+    }
+    if (foldedEndInclusive < spanFoldedEnd && foldedEndInclusive >= spanFoldedBegin) {
+      origEnd = originalCursor + span.originalUtf16;
+      return [origStart, origEnd];
+    }
+    foldedCursor = spanFoldedEnd;
+    originalCursor += span.originalUtf16;
+    origEnd = originalCursor;
+  }
+  if (!sawStart) {
+    origStart = originalCursor;
+    origEnd = originalCursor;
+  }
+  return [origStart, Math.max(origStart, origEnd)];
+}
+
+/** A window START on a low surrogate (pair tail) moves to +1 (Cindy #27). */
+function scalarSafeStart(offset: number, text: string): number {
+  const unit = text.charCodeAt(offset);
+  return offset < text.length && unit >= 0xdc00 && unit <= 0xdfff
+    ? offset + 1
+    : offset;
+}
+/** A window END right after a high surrogate (pair lead) drops it to -1 (Cindy #27). */
+function scalarSafeEnd(offset: number, text: string): number {
+  const unit = text.charCodeAt(offset - 1);
+  return offset > 0 && offset <= text.length && unit >= 0xd800 && unit <= 0xdbff
+    ? offset - 1
+    : offset;
+}
+function scalarSafeSlice(text: string, start: number, end: number): string {
+  return text.slice(scalarSafeStart(start, text), scalarSafeEnd(end, text));
 }
 
 type SearchMessagesResult =
@@ -596,8 +694,15 @@ export function buildAgentSearchMessagesDto(
     limit: number;
   },
 ): SearchMessagesResult {
-  const where: string[] = [`m.content LIKE ? ESCAPE '\\'`];
-  const params: Array<string | number> = [likeNeedle(input.q)];
+  // #task:2341 (Cindy #50/#8): candidate SELECTION shares the pinned full-fold with
+  // the excerpt — an ASCII `content LIKE` prefilter is NOT a superset of the portable
+  // full fold (`strasse` must match `Straße`), so it would drop real matches and drift
+  // from the Rust wire. Rows are fetched in `(created_at DESC, seq DESC)` order and
+  // fold-filtered here until `limit` hits, mirroring the Rust continuous keyset eval;
+  // no `content LIKE` predicate and no SQL LIMIT (which would cap a WRONG candidate
+  // universe).
+  const where: string[] = [];
+  const params: Array<string | number> = [];
   let conversationId: string | null = null;
   let workspaceId: string | null = null;
 
@@ -686,12 +791,9 @@ export function buildAgentSearchMessagesDto(
   // projected. It is stated FIRST (and its params first) so the parameter order
   // still matches the former leading join parameter.
   const participation = agentParticipates('conv', agentId);
-  const sqlParams: Array<string | number> = [
-    ...participation.params,
-    ...params,
-    input.limit,
-  ];
-  const rows = db
+  const sqlParams: Array<string | number> = [...participation.params, ...params];
+  const scopePredicate = where.length > 0 ? ` AND ${where.join(' AND ')}` : '';
+  const candidateRows = db
     .prepare<Array<string | number>, AgentSearchMessageRow>(
       `SELECT
           m.*,
@@ -703,12 +805,21 @@ export function buildAgentSearchMessagesDto(
          FROM messages m
          JOIN conversations conv ON conv.id = m.conversation_id
          ${LINKED_TASK_JOINS}
-        WHERE ${participation.sql}
-          AND ${where.join(' AND ')}
-        ORDER BY m.created_at DESC, m.seq DESC
-        LIMIT ?`,
+        WHERE ${participation.sql}${scopePredicate}
+        ORDER BY m.created_at DESC, m.seq DESC, m.id DESC`,
     )
     .all(...sqlParams);
+
+  // Fold-filter the ordered candidates until `limit` hits — the SAME pinned
+  // `foldCase` the excerpt uses, so selection and excerpt agree (Cindy #8/#50).
+  const foldedQuery = foldCase(input.q);
+  const rows: AgentSearchMessageRow[] = [];
+  for (const row of candidateRows) {
+    if (foldCase(row.content).includes(foldedQuery)) {
+      rows.push(row);
+      if (rows.length >= input.limit) break;
+    }
+  }
 
   const authors = loadMessageAuthors(db, rows);
   return {

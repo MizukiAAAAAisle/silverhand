@@ -56,6 +56,17 @@ const nativeExternalDeps = [
 
 export default defineConfig({
   main: {
+    plugins: remoteOnly ? [{
+      name: 'remote-only-construction-boundary',
+      generateBundle() {
+        const modules = [...this.getModuleIds()];
+        const forbidden = modules.filter(id =>
+          /(?:packages\/backend\/|@silverhand\/backend|better-sqlite3|\/embedded-launcher\.ts$|\/embedded-rust-backend\.ts$|\/rust-backend-sidecar\.ts$|\/embedded-startup-preparation\.ts$)/.test(id),
+        );
+        if (forbidden.length) throw new Error(`remote-only graph reached embedded modules: ${forbidden.join(', ')}`);
+        console.info(`[remote-only] module graph verified (${modules.length} modules; embedded/migrator/sidecar/native database absent)`);
+      },
+    }] : [],
     define: {
       __SILVERHAND_DESKTOP_REMOTE_ONLY__: JSON.stringify(remoteOnly),
       __SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE__: JSON.stringify(
@@ -79,6 +90,14 @@ export default defineConfig({
             '@silverhand/server': resolve(
               __dirname,
               'src/main/remote-only-server-stub.ts',
+            ),
+            // #task:2343 P0-10 — swap the embedded seam for a throwing stub so the
+            // remote-only main graph never imports `@silverhand/backend` (→ no
+            // `better-sqlite3`), the Rust launcher, or the sidecar verifier. The `.js`
+            // specifier matches the import in `index.ts`.
+            './embedded-launcher.js': resolve(
+              __dirname,
+              'src/main/embedded-launcher.remote-only.ts',
             ),
           }
         : {},

@@ -1,0 +1,107 @@
+[
+  {
+    "name": "rename_canonical",
+    "request": { "title": "  General  " },
+    "schema_accepted": true,
+    "operation": "rename",
+    "canonical_title": "General"
+  },
+  {
+    "name": "visibility_public",
+    "request": { "visibility": "public" },
+    "schema_accepted": true,
+    "operation": "visibility"
+  },
+  {
+    "name": "unknown_key_is_stripped",
+    "request": { "visibility": "private", "future": { "ignored": true } },
+    "schema_accepted": true,
+    "operation": "visibility"
+  },
+  {
+    "name": "neither_field",
+    "request": {},
+    "schema_accepted": false,
+    "body": {
+      "error": "invalid input",
+      "issues": [{
+        "code": "custom",
+        "message": "exactly one of `title` or `visibility` must be provided",
+        "path": []
+      }]
+    }
+  },
+  {
+    "name": "both_fields",
+    "request": { "title": "General", "visibility": "public" },
+    "schema_accepted": false,
+    "body": {
+      "error": "invalid input",
+      "issues": [{
+        "code": "custom",
+        "message": "exactly one of `title` or `visibility` must be provided",
+        "path": []
+      }]
+    }
+  },
+  {
+    "name": "non_object",
+    "request": null,
+    "schema_accepted": false,
+    "body": {
+      "error": "invalid input",
+      "issues": [{
+        "code": "invalid_type",
+        "expected": "object",
+        "received": "null",
+        "path": [],
+        "message": "Expected object, received null"
+      }]
+    }
+  },
+  {
+    "name": "title_wrong_type",
+    "request": { "title": 4 },
+    "schema_accepted": false,
+    "body": {
+      "error": "invalid input",
+      "issues": [{
+        "code": "invalid_type",
+        "expected": "string",
+        "received": "number",
+        "path": ["title"],
+        "message": "Expected string, received number"
+      }]
+    }
+  },
+  {
+    "name": "visibility_bad_enum",
+    "request": { "visibility": "loud" },
+    "schema_accepted": false,
+    "body": {
+      "error": "invalid input",
+      "issues": [{
+        "received": "loud",
+        "code": "invalid_enum_value",
+        "options": ["private", "public"],
+        "path": ["visibility"],
+        "message": "Invalid enum value. Expected 'private' | 'public', received 'loud'"
+      }]
+    }
+  },
+  {
+    "name": "visibility_wrong_type",
+    "request": { "visibility": false },
+    "schema_accepted": false,
+    "body": {
+      "error": "invalid input",
+      "issues": [{
+        "expected": "'private' | 'public'",
+        "received": "boolean",
+        "code": "invalid_type",
+        "path": ["visibility"],
+        "message": "Expected 'private' | 'public', received boolean"
+      }]
+    }
+  }
+]

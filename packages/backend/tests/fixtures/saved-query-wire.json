@@ -1,0 +1,205 @@
+[
+  {
+    "name": "sender_is_ecmascript_trimmed",
+    "input": { "user_id": "﻿user-1﻿" },
+    "output": { "user_id": "user-1" }
+  },
+  {
+    "name": "nel_is_not_ecmascript_whitespace",
+    "input": { "user_id": "user-1" },
+    "output": { "user_id": "user-1" }
+  },
+  {
+    "name": "blank_sender_is_absent",
+    "input": { "agent_id": " ﻿ " },
+    "output": {}
+  },
+  {
+    "name": "workspace_blank_is_absent",
+    "input": { "workspace_id": "﻿" },
+    "output": {}
+  },
+  {
+    "name": "workspace_nonblank_is_not_trimmed_by_the_published_schema",
+    "input": { "workspace_id": " workspace-1 " },
+    "output": { "workspace_id": " workspace-1 " }
+  },
+  {
+    "name": "empty_since_is_absent",
+    "input": { "since": "" },
+    "output": {}
+  },
+  {
+    "name": "whitespace_since_coerces_to_zero",
+    "input": { "since": " " },
+    "output": { "since": 0 }
+  },
+  {
+    "name": "exponent_since_coerces_to_integer",
+    "input": { "since": "1e3" },
+    "output": { "since": 1000 }
+  },
+  {
+    "name": "integral_decimal_since_coerces_to_integer",
+    "input": { "since": "1.0" },
+    "output": { "since": 1 }
+  },
+  {
+    "name": "hex_since_uses_ecmascript_number_coercion",
+    "input": { "since": "0x10" },
+    "output": { "since": 16 }
+  },
+  {
+    "name": "binary_since_uses_ecmascript_number_coercion",
+    "input": { "since": "0b10" },
+    "output": { "since": 2 }
+  },
+  {
+    "name": "octal_since_uses_ecmascript_number_coercion",
+    "input": { "since": "0o10" },
+    "output": { "since": 8 }
+  },
+  {
+    "name": "prefix_beyond_u128_is_valid_but_outside_persisted_range",
+    "input": { "since": "0x100000000000000000000000000000000" },
+    "output": { "since": 3.402823669209385e+38 },
+    "rust_output": { "since": "beyond_persisted_range" },
+    "path": "/api/saved?since=0x100000000000000000000000000000000"
+  },
+  {
+    "name": "two_to_the_63_is_not_saturated_to_i64_max",
+    "input": { "since": "9223372036854775808" },
+    "output": { "since": 9223372036854776000 },
+    "rust_output": { "since": "beyond_persisted_range" },
+    "path": "/api/saved?since=9223372036854775808"
+  },
+  {
+    "name": "prefixed_integer_is_rounded_once_before_the_persisted_predicate",
+    "input": { "since": "0x200000000000011" },
+    "output": { "since": 144115188075855900 },
+    "rust_output": { "since": 144115188075855904 },
+    "path": "/api/saved?since=0x200000000000011",
+    "boundary_saved_at": "144115188075855890"
+  },
+  {
+    "name": "prefix_that_rounds_to_infinity_is_rejected_as_float",
+    "input": { "since": "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "integer",
+        "received": "float",
+        "message": "Expected integer, received float",
+        "path": ["since"]
+      }
+    ],
+    "path": "/api/saved?since=0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "route_status": 400
+  },
+  {
+    "name": "max_finite_prefix_stays_a_valid_beyond_range_integer",
+    "input": { "since": "0xfffffffffffff800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+    "output": { "since": 1.7976931348623157e+308 },
+    "rust_output": { "since": "beyond_persisted_range" },
+    "path": "/api/saved?since=0xfffffffffffff800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "name": "prefix_at_the_binary64_overflow_tie_is_rejected_as_float",
+    "input": { "since": "0xfffffffffffffc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "integer",
+        "received": "float",
+        "message": "Expected integer, received float",
+        "path": ["since"]
+      }
+    ],
+    "path": "/api/saved?since=0xfffffffffffffc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "route_status": 400
+  },
+  {
+    "name": "rust_inf_alias_is_ecmascript_nan",
+    "input": { "since": "inf" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "number",
+        "received": "nan",
+        "path": ["since"],
+        "message": "Expected number, received nan"
+      }
+    ],
+    "path": "/api/saved?since=inf",
+    "route_status": 400
+  },
+  {
+    "name": "signed_case_insensitive_rust_infinity_alias_is_ecmascript_nan",
+    "input": { "since": "+infinity" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "number",
+        "received": "nan",
+        "path": ["since"],
+        "message": "Expected number, received nan"
+      }
+    ],
+    "path": "/api/saved?since=%2Binfinity",
+    "route_status": 400
+  },
+  {
+    "name": "fractional_since_is_rejected_as_float",
+    "input": { "since": "1.5" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "integer",
+        "received": "float",
+        "message": "Expected integer, received float",
+        "path": ["since"]
+      }
+    ]
+  },
+  {
+    "name": "infinite_since_is_rejected_as_float",
+    "input": { "since": "Infinity" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "integer",
+        "received": "float",
+        "message": "Expected integer, received float",
+        "path": ["since"]
+      }
+    ]
+  },
+  {
+    "name": "nan_since_is_rejected_as_nan",
+    "input": { "since": "NaN" },
+    "issues": [
+      {
+        "code": "invalid_type",
+        "expected": "number",
+        "received": "nan",
+        "message": "Expected number, received nan",
+        "path": ["since"]
+      }
+    ]
+  },
+  {
+    "name": "negative_since_is_rejected",
+    "input": { "since": "-1" },
+    "issues": [
+      {
+        "code": "too_small",
+        "minimum": 0,
+        "type": "number",
+        "inclusive": true,
+        "exact": false,
+        "message": "Number must be greater than or equal to 0",
+        "path": ["since"]
+      }
+    ]
+  }
+]
