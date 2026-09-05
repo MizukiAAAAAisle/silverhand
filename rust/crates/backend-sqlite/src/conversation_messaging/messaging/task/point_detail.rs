@@ -25,9 +25,10 @@ struct SnapshotAuthority<'a> {
 }
 
 #[cfg(test)]
-tokio::task_local! {
-    static POINT_READ_ENTERED: std::sync::Arc<tokio::sync::Notify>;
-}
+#[path = "../../../../tests/support/point_read_test_hooks.rs"]
+mod test_hooks;
+#[cfg(test)]
+use test_hooks::POINT_READ_ENTERED;
 
 #[cfg(test)]
 async fn pause_point_read() {

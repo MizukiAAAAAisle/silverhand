@@ -64,10 +64,10 @@ impl From<AgentSearchStoreError> for PersistenceFailure {
 }
 
 #[cfg(test)]
-tokio::task_local! {
-    static SEARCH_TIMING: std::cell::Cell<std::time::Duration>;
-    static SEARCH_ROW_ENTERED: std::sync::Arc<tokio::sync::Notify>;
-}
+#[path = "../../../../tests/support/search_test_hooks.rs"]
+mod test_hooks;
+#[cfg(test)]
+use test_hooks::{SEARCH_ROW_ENTERED, SEARCH_TIMING};
 
 impl AgentSearchRead for SqliteAgentSearch {
     async fn search(
