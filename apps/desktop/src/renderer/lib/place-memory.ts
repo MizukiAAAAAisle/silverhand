@@ -32,7 +32,7 @@
 import type { ChannelLayout } from '@/router';
 import type { MessageSeq } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
-import { isDefaultTabs, normalizeTabs, parseTabs, type Tab } from './conversation-tabs';
+import { firstTabKey, isDefaultTabs, normalizeTabs, parseTabs, resolveActiveTabKey, tabKey, type Tab } from './conversation-tabs';
 
 export const LAST_CHANNEL_KEY = 'silverhand:layout.last-channel-by-workspace';
 export const LAST_WORKSPACE_KEY = 'silverhand:layout.last-workspace';
@@ -40,6 +40,7 @@ export const LAST_CHAT_PLACE_KEY = 'silverhand:layout.last-chat-place';
 export const LAST_LAYOUT_KEY = 'silverhand:layout.last-layout-by-channel';
 export const CLOSE_WATERMARK_KEY = 'silverhand:layout.close-watermark-by-channel';
 export const CONVERSATION_TABS_KEY = 'silverhand:layout.conversation-tabs';
+export const FUNCTIONAL_TABS_KEY = 'silverhand:layout.functional-tabs';
 
 function loadStringValue(key: string): string | null {
   try {
@@ -313,15 +314,7 @@ export function recordCloseWatermark(channelId: string, seq: MessageSeq): void {
   saveNumberMap(CLOSE_WATERMARK_KEY, closeWatermarkByChannel);
 }
 
-/**
- * Per-conversation view tabs (#task:2121). The whole ordered tab list is
- * stored per conversation — builtins (Chat/Tasks) share one draggable order
- * with the viewer's custom tabs (attachment previewers, later panel views), so
- * the order itself is what's remembered (shiki 2026-08-21). The active tab is
- * intentionally NOT persisted (a conversation opens on the first tab in order).
- * Each list is validated + repaired on load through {@link parseTabs}, which
- * drops non-conforming entries and guarantees both builtins are present.
- */
+/** Legacy mixed orders retain attachment positions; functional entries are shared. */
 function loadTabsMap(key: string): Map<string, Tab[]> {
   try {
     const raw = localStorage.getItem(key);
@@ -344,41 +337,101 @@ function loadTabsMap(key: string): Map<string, Tab[]> {
 
 export const tabsByConversation = loadTabsMap(CONVERSATION_TABS_KEY);
 
+function loadFunctionalTabs(): Tab[] {
+  try {
+    const raw = localStorage.getItem(FUNCTIONAL_TABS_KEY);
+    if (raw) return normalizeTabs(parseTabs(JSON.parse(raw)).filter(tab => tab.kind !== 'attachment'));
+  } catch {
+    // Invalid storage falls back to the existing layouts.
+  }
+  return normalizeTabs(Array.from(tabsByConversation.values()).flat().filter(tab => tab.kind !== 'attachment'));
+}
+
+let functionalTabs = loadFunctionalTabs();
+let activeFunctionalKey: string | null = null;
+const activeAttachmentByConversation = new Map<string, string>(
+  Array.from(tabsByConversation).flatMap(([id, tabs]) => {
+    const first = tabs[0];
+    return first?.kind === 'attachment' ? [[id, tabKey(first)] as const] : [];
+  }),
+);
+const tabListeners = new Set<() => void>();
+let tabsVersion = 0;
+export const getConversationTabsVersion = (): number => tabsVersion;
+export function subscribeConversationTabs(listener: () => void): () => void {
+  tabListeners.add(listener);
+  return () => { tabListeners.delete(listener); };
+}
+function notifyConversationTabs(): void {
+  tabsVersion += 1;
+  for (const listener of tabListeners) listener();
+}
+
 function persistConversationTabs(): void {
   try {
     localStorage.setItem(
       CONVERSATION_TABS_KEY,
       JSON.stringify(Object.fromEntries(tabsByConversation)),
     );
+    localStorage.setItem(FUNCTIONAL_TABS_KEY, JSON.stringify(functionalTabs));
   } catch {
     // Quota / disabled storage — fall back to in-memory only.
   }
 }
 
-/** Read a conversation's tab order, repaired to always carry both builtins.
- *  Returns the default order (Chat, Tasks) when nothing is stored. */
+/** Replace functional slots with the shared order; file slots remain conversation-bound. */
 export function getConversationTabs(conversationId: string): Tab[] {
-  return normalizeTabs(tabsByConversation.get(conversationId) ?? []);
+  const local = tabsByConversation.get(conversationId) ?? [];
+  const remaining = [...functionalTabs];
+  const tabs: Tab[] = [];
+  for (const tab of local) {
+    if (tab.kind === 'attachment') tabs.push(tab);
+    else {
+      const next = remaining.shift();
+      if (next) tabs.push(next);
+    }
+  }
+  return [...tabs, ...remaining];
 }
 
-/**
- * Record a conversation's tab order, persisting through to disk. No-ops when
- * byte-identical to what's already stored so an unrelated tab switch doesn't
- * thrash localStorage. An untouched default order drops the entry entirely so
- * a conversation the viewer never customized leaves no key behind.
- */
+export function getConversationActiveTab(conversationId: string): string {
+  const tabs = getConversationTabs(conversationId);
+  const local = activeAttachmentByConversation.get(conversationId);
+  if (local && tabs.some(tab => tabKey(tab) === local)) return local;
+  return resolveActiveTabKey(tabs, activeFunctionalKey ?? firstTabKey(functionalTabs));
+}
+
+/** Functional selection is session-wide; selecting a file only affects its conversation. */
+export function recordConversationActiveTab(conversationId: string, key: string): void {
+  const tab = getConversationTabs(conversationId).find(tab => tabKey(tab) === key);
+  if (!tab) return;
+  if (tab.kind === 'attachment') {
+    if (activeAttachmentByConversation.get(conversationId) === key) return;
+    activeAttachmentByConversation.set(conversationId, key);
+  } else {
+    const cleared = activeAttachmentByConversation.delete(conversationId);
+    if (!cleared && activeFunctionalKey === key) return;
+    activeFunctionalKey = key;
+  }
+  notifyConversationTabs();
+}
+
+/** Persist shared functional order/open state and this conversation's file positions. */
 export function recordConversationTabs(conversationId: string, tabs: Tab[]): void {
   const normalized = normalizeTabs(tabs);
+  const nextFunctional = normalized.filter(tab => tab.kind !== 'attachment');
   const prev = tabsByConversation.get(conversationId);
-  if (isDefaultTabs(normalized)) {
-    if (prev === undefined) return;
-    tabsByConversation.delete(conversationId);
-    persistConversationTabs();
-    return;
-  }
-  if (prev && JSON.stringify(prev) === JSON.stringify(normalized)) return;
-  tabsByConversation.set(conversationId, normalized);
+  const changed = JSON.stringify(functionalTabs) !== JSON.stringify(nextFunctional)
+    || JSON.stringify(prev ?? []) !== JSON.stringify(isDefaultTabs(normalized) ? [] : normalized);
+  if (!changed) return;
+  functionalTabs = nextFunctional;
+  activeFunctionalKey = resolveActiveTabKey(functionalTabs, activeFunctionalKey);
+  const localActive = activeAttachmentByConversation.get(conversationId);
+  if (localActive && !normalized.some(tab => tabKey(tab) === localActive)) activeAttachmentByConversation.delete(conversationId);
+  if (isDefaultTabs(normalized)) tabsByConversation.delete(conversationId);
+  else tabsByConversation.set(conversationId, normalized);
   persistConversationTabs();
+  notifyConversationTabs();
 }
 
 /**
@@ -393,6 +446,10 @@ export function clearPlaceMemory(): void {
   lastLayoutByChannel.clear();
   closeWatermarkByChannel.clear();
   tabsByConversation.clear();
+  functionalTabs = normalizeTabs([]);
+  activeFunctionalKey = null;
+  activeAttachmentByConversation.clear();
+  notifyConversationTabs();
   try {
     localStorage.removeItem(LAST_WORKSPACE_KEY);
     localStorage.removeItem(LAST_CHANNEL_KEY);
@@ -400,6 +457,7 @@ export function clearPlaceMemory(): void {
     localStorage.removeItem(LAST_LAYOUT_KEY);
     localStorage.removeItem(CLOSE_WATERMARK_KEY);
     localStorage.removeItem(CONVERSATION_TABS_KEY);
+    localStorage.removeItem(FUNCTIONAL_TABS_KEY);
   } catch {
     // Quota / disabled storage — Maps are already empty.
   }

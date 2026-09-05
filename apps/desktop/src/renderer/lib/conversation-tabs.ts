@@ -8,12 +8,9 @@
  * Custom tabs (attachment previewers, panel surfaces) are reorderable and
  * removable.
  *
- * The whole ordered list is persisted per conversation (see `place-memory.ts`).
- * The ACTIVE tab is deliberately NOT persisted: reopening a conversation enters
- * the FIRST tab in its persisted order — whatever the viewer dragged there, not
- * a hardcoded Chat. Active is component state, resolved through
- * {@link resolveActiveTabKey} so a removed or stale target falls back to the
- * first tab rather than a blank pane.
+ * Functional tab order and open state are shared by this client's user.
+ * Attachment previews remain conversation-bound. The persistence and active
+ * selection store lives in `place-memory.ts` and resets on logout.
  *
  * PURE module: no React, no localStorage, no queries. The persistence half
  * lives in `place-memory.ts` (identity-bound, wiped on logout) and consumes
@@ -100,7 +97,7 @@ export function tabKey(tab: Tab): string {
   }
 }
 
-/** The key of the first tab in an order — the tab a conversation opens on. */
+/** The key of the leading tab in an order. */
 export function firstTabKey(tabs: readonly Tab[]): string {
   const first = tabs[0];
   return first ? tabKey(first) : 'chat';

@@ -35,6 +35,10 @@ const {
   LAST_LAYOUT_KEY,
   CLOSE_WATERMARK_KEY,
   CONVERSATION_TABS_KEY,
+  FUNCTIONAL_TABS_KEY,
+  getConversationActiveTab,
+  recordConversationActiveTab,
+  subscribeConversationTabs,
   clearPlaceMemory,
   closeWatermarkByChannel,
   getChannelLayout,
@@ -362,13 +366,7 @@ describe('place-memory', () => {
     });
   });
 
-  // ── Per-conversation tab order (#task:2121) ────────────────────────────
-  //
-  // The layout the tab strip persists: a per-conversation ordering of Chat /
-  // Tasks / attachment tabs. These pin the four storage behaviors the strip
-  // depends on — write-through, per-conversation isolation, load-time repair,
-  // and default-elision on both write and load — plus the logout wipe. UI
-  // painting (the strip itself) is deliberately untested; this is the data seam.
+  // Shared functional preferences and conversation-bound files form one storage seam.
   describe('conversation tabs', () => {
     // A custom order (Tasks dragged ahead of Chat) — non-default, carries no
     // attachment, so it exercises reordering without an attachment fixture.
@@ -394,13 +392,12 @@ describe('place-memory', () => {
       expect(JSON.parse(raw!)).toEqual({ c1: withAttachment });
     });
 
-    it('keeps each conversation independent', () => {
+    it('shares functional order while keeping attachments independent', () => {
       recordConversationTabs('c1', swapped);
       recordConversationTabs('c2', withAttachment);
-      expect(getConversationTabs('c1')).toEqual(swapped);
+      expect(getConversationTabs('c1')).toEqual([{ kind: 'chat' }, { kind: 'tasks' }]);
       expect(getConversationTabs('c2')).toEqual(withAttachment);
-      // An unrecorded conversation falls back to the default order, not another
-      // conversation's layout.
+      // A new conversation shares the functional order without another conversation's file.
       expect(getConversationTabs('c3')).toEqual([{ kind: 'chat' }, { kind: 'tasks' }]);
     });
 
@@ -457,8 +454,8 @@ describe('place-memory', () => {
       expect(fresh.getConversationTabs('cCustom')).toEqual(swapped);
       expect(fresh.getConversationTabs('cPartial')).toEqual([
         { kind: 'attachment', attachmentId: 'att-9', filename: 'x.html', contentType: 'text/html' },
-        { kind: 'chat' },
         { kind: 'tasks' },
+        { kind: 'chat' },
       ]);
       // The mistyped tab is dropped; the surviving builtins are the default, so
       // cBadTab elides to no entry.
@@ -473,6 +470,76 @@ describe('place-memory', () => {
       const fresh = await import('./place-memory');
       expect(fresh.tabsByConversation.size).toBe(0);
       expect(fresh.getConversationTabs('c1')).toEqual([{ kind: 'chat' }, { kind: 'tasks' }]);
+      vi.resetModules();
+    });
+
+    it('shares panel open/close and order without copying files', () => {
+      const panel: Tab = { kind: 'panel', panel: 'threads' };
+      recordConversationTabs('a', [panel, ...withAttachment]);
+      expect(getConversationTabs('b')).toEqual([panel, { kind: 'chat' }, { kind: 'tasks' }]);
+      recordConversationTabs('b', [{ kind: 'tasks' }, { kind: 'chat' }]);
+      expect(getConversationTabs('a')).toEqual([{ kind: 'tasks' }, { kind: 'chat' }, withAttachment[2]]);
+    });
+
+    it('shares active functional selection while restoring each conversation file selection', () => {
+      recordConversationTabs('a', withAttachment);
+      recordConversationActiveTab('a', 'tasks');
+      expect(getConversationActiveTab('b')).toBe('tasks');
+      recordConversationActiveTab('a', 'attachment:att-1');
+      expect(getConversationActiveTab('a')).toBe('attachment:att-1');
+      expect(getConversationActiveTab('b')).toBe('tasks');
+      recordConversationActiveTab('b', 'chat');
+      expect(getConversationActiveTab('a')).toBe('attachment:att-1');
+      expect(getConversationActiveTab('c')).toBe('chat');
+      recordConversationTabs('a', [{ kind: 'chat' }, { kind: 'tasks' }]);
+      expect(getConversationActiveTab('a')).toBe('chat');
+    });
+
+    it('drops a closed functional selection instead of reviving it when reopened', () => {
+      const panel: Tab = { kind: 'panel', panel: 'attachments' };
+      recordConversationTabs('a', [{ kind: 'chat' }, { kind: 'tasks' }, panel]);
+      recordConversationActiveTab('a', 'panel:attachments');
+      recordConversationTabs('b', [{ kind: 'chat' }, { kind: 'tasks' }]);
+      expect(getConversationActiveTab('a')).toBe('chat');
+      recordConversationTabs('b', [{ kind: 'chat' }, { kind: 'tasks' }, panel]);
+      expect(getConversationActiveTab('a')).toBe('chat');
+    });
+
+    it('notifies other consumers of selection and clears shared state on logout', () => {
+      const listener = vi.fn();
+      const unsubscribe = subscribeConversationTabs(listener);
+      recordConversationTabs('a', [{ kind: 'panel', panel: 'members' }, ...withAttachment]);
+      recordConversationActiveTab('a', 'attachment:att-1');
+      expect(listener).toHaveBeenCalledTimes(2);
+      clearPlaceMemory();
+      expect(getConversationTabs('a')).toEqual([{ kind: 'chat' }, { kind: 'tasks' }]);
+      expect(getConversationActiveTab('a')).toBe('chat');
+      expect(localStorage.getItem(FUNCTIONAL_TABS_KEY)).toBeNull();
+      expect(listener).toHaveBeenCalledTimes(3);
+      unsubscribe();
+    });
+
+    it('restores global panels and order but does not persist active file selection', async () => {
+      recordConversationTabs('a', [{ kind: 'panel', panel: 'threads' }, ...withAttachment]);
+      recordConversationActiveTab('a', 'attachment:att-1');
+      vi.resetModules();
+      const fresh = await import('./place-memory');
+      expect(fresh.getConversationTabs('b')).toEqual([{ kind: 'panel', panel: 'threads' }, { kind: 'chat' }, { kind: 'tasks' }]);
+      expect(fresh.getConversationTabs('a').some(tab => tab.kind === 'attachment')).toBe(true);
+      expect(fresh.getConversationActiveTab('a')).toBe('panel:threads');
+      fresh.clearPlaceMemory();
+      vi.resetModules();
+    });
+
+    it('restores a leading file in its own conversation without inheriting another file', async () => {
+      recordConversationTabs('a', [withAttachment[2]!, { kind: 'chat' }, { kind: 'tasks' }]);
+      vi.resetModules();
+      const fresh = await import('./place-memory');
+      fresh.recordConversationActiveTab('b', 'tasks');
+      expect(fresh.getConversationActiveTab('a')).toBe('attachment:att-1');
+      expect(fresh.getConversationActiveTab('b')).toBe('tasks');
+      expect(fresh.getConversationTabs('b').every(tab => tab.kind !== 'attachment')).toBe(true);
+      fresh.clearPlaceMemory();
       vi.resetModules();
     });
 
