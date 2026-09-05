@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
-import { Loader2, Pencil } from 'lucide-react';
+import { Pencil } from 'lucide-react';
 import type { TaskDetailDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { TaskIcon } from '@/components/tasks/TaskIcon';
@@ -211,9 +211,24 @@ function PaneStatePanel({
 }): JSX.Element {
   if (failure === null) {
     return (
-      <div className="flex items-center gap-2 px-[18px] py-6 text-sm text-text-muted">
-        <Loader2 className="size-4 animate-spin" aria-hidden />
-        Loading…
+      <div role="status" aria-label="Loading task" className="min-h-0 flex-1 overflow-hidden px-[18px] py-4">
+        <div aria-hidden className="flex flex-col gap-4 motion-safe:animate-pulse">
+          <div className="h-5 w-3/4 rounded-[var(--control-radius)] bg-bg-hover" />
+          <div className="task-pane-meta items-center">
+            {Array.from({ length: 6 }, (_, index) => (
+              <Fragment key={index}>
+                <div className="h-2.5 w-14 rounded-[var(--control-radius)] bg-bg-hover" />
+                <div className="h-3 w-24 max-w-full rounded-[var(--control-radius)] bg-bg-hover" />
+              </Fragment>
+            ))}
+          </div>
+          <div className="flex flex-col gap-2">
+            <div className="mb-1 h-2.5 w-20 rounded-[var(--control-radius)] bg-bg-hover" />
+            <div className="h-3 w-full rounded-[var(--control-radius)] bg-bg-hover" />
+            <div className="h-3 w-full rounded-[var(--control-radius)] bg-bg-hover" />
+            <div className="h-3 w-2/3 rounded-[var(--control-radius)] bg-bg-hover" />
+          </div>
+        </div>
       </div>
     );
   }
