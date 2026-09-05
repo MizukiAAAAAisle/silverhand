@@ -1,5 +1,4 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import * as Popover from '@radix-ui/react-popover';
 import { Trash2 } from 'lucide-react';
 import type { AgentDto, WorkspaceRole } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
@@ -24,74 +23,14 @@ import {
   type WorkspaceHumanMember,
 } from './hooks';
 
-interface ManageMembersPopoverProps {
-  workspaceId: string;
-  /** The clickable element that triggers the popover (rendered as the
-   *  Radix Trigger via `asChild`, so callers control the visual). */
-  children: ReactNode;
-}
-
-/**
- * Anchored member-management surface for a workspace — shadcn-style.
- * Top: a searchable picker that immediately enrolls the picked
- * candidate (agent or human); below that, a single MEMBERS section
- * lists everyone currently in the workspace. Agents and humans are
- * intentionally not split out in MEMBERS — both are first-class
- * members and the grouping label would imply otherwise. The *picker*
- * does group them, because there the two kinds follow different
- * eligibility rules (see `candidateGroups` below).
- *
- * Replaces the previous modal `ManageMembersDialog` so the action
- * stays anchored to its trigger in the titlebar.
- *
- * Role gating mirrors the backend governance gates, per kind AND per verb (a
- * member must never see a control that would only 403). An agent's placement —
- * both directions — is its creator's authority rather than a roster role
- * (#task:1681, #task:1683), so ANY workspace member sees the picker with their
- * OWN agents in it and the Trash2 on those same agents; admins/owners keep the
- * whole agent roster. Inviting a person needs admin+, so the HUMANS group
- * appears only for admins/owners, and the human Trash2 is owner-only and never
- * on the owner row. `membersKey` invalidates on `role_changed`, so a promotion
- * re-lights these controls live.
- *
- * Removal: agents have a Trash2 row action backed by `DELETE
- * /api/workspaces/:id/members/:agentId` (admin, or the agent's creator — see
- * {@link canRemoveWorkspaceAgent}). Humans have a Trash2 backed by `DELETE
- * /api/workspaces/:id/members/users/:userId` (owner-only); the owner row never
- * renders it (UI mirror of the backend `owner_removal_unsupported`, so removing
- * an owner can't be attempted).
- */
-export function ManageMembersPopover({
-  workspaceId,
-  children,
-}: ManageMembersPopoverProps): JSX.Element {
-  return (
-    <Popover.Root>
-      <Popover.Trigger asChild>{children}</Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          align="start"
-          sideOffset={6}
-          collisionPadding={8}
-          data-popover-frame="info"
-          className="z-[var(--z-dialog)] w-[280px] rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none"
-        >
-          <PopoverBody workspaceId={workspaceId} />
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
-  );
-}
-
 type Candidate = MemberCandidate;
 
 type Member =
   | { kind: 'agent'; agent: AgentDto }
   | { kind: 'human'; user: WorkspaceHumanMember };
 
-// Split body out so the React-Query hooks below only mount once the
-// popover actually opens (Radix unmounts Content when closed).
-function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
+/** Membership controls retain per-kind, per-verb governance from the workspace roster. */
+export function WorkspaceMembersPanel({ workspaceId }: { workspaceId: string }): JSX.Element {
   const { data: memberLists, isLoading: membersLoading } =
     useWorkspaceMemberLists(workspaceId);
   const agentMembers = memberLists?.agents ?? [];

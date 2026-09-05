@@ -380,7 +380,7 @@ function RegisteredAppShell({
   const [createChannelWorkspaceId, setCreateChannelWorkspaceId] = useState<
     string | null
   >(null);
-  const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
+  const [workspaceSettingsId, setWorkspaceSettingsId] = useState<string | null>(null);
   // #task:808 slice 4 — selected host in the Computers section. In-memory
   // (no URL persistence in v1; no other surface deep-links to a specific
   // host). Auto-defaults to the local host once the host list lands so
@@ -463,6 +463,7 @@ function RegisteredAppShell({
     [agents],
   );
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
+  const settingsWorkspace = workspaces.find(w => w.id === workspaceSettingsId) ?? null;
   // The pane owner already holds the workspace id→name authority (`workspaces`),
   // so it resolves the display name a Composer needs to spell a semantic channel
   // locator and hands it down as a SIBLING prop — no leaf lookup, mirroring how
@@ -1606,13 +1607,13 @@ function RegisteredAppShell({
     [],
   );
 
-  const handleWorkspaceDeleted = (): void => {
+  const handleWorkspaceDeleted = (deletedId: string): void => {
+    if (deletedId !== selectedWorkspaceId) return;
     // Pick the next workspace in the same rail group as the deleted one,
     // wrapping to the first when the deleted entry was last. Falls back
     // across groups if that group is now empty, then to /chat when
     // nothing remains. Computed from the pre-invalidate snapshot — the
     // workspaces query refetch hasn't landed yet at this point.
-    const deletedId = selectedWorkspaceId;
     const deleted = workspaces.find(w => w.id === deletedId);
     const sameGroup = deleted
       ? workspaces.filter(w => isAgentSpace(w) === isAgentSpace(deleted))
@@ -2350,13 +2351,8 @@ function RegisteredAppShell({
       }}
     >
       <Titlebar
-        workspaceId={selectedWorkspace?.id ?? null}
         workspaceName={titlebarWorkspaceName}
-        workspaceOwnerAgentId={selectedWorkspace?.owner_agent_id ?? null}
         workspaceArchivedAt={selectedWorkspace?.archived_at ?? null}
-        onOpenWorkspaceSettings={
-          selectedWorkspace ? () => setWorkspaceSettingsOpen(true) : undefined
-        }
         workspaceSidebarVisible={workspaceSidebarVisible}
         onToggleWorkspaceSidebar={toggleWorkspaceSidebar}
         chromeMode={appSection === 'activity' ? 'activity' : 'chat'}
@@ -2689,6 +2685,7 @@ function RegisteredAppShell({
                       directDraftAgentId={directDraftAgentId}
                       onSelectDirectDraft={nav.toDirectDraft}
                       onCreateChannel={setCreateChannelWorkspaceId}
+                      onOpenWorkspaceSettings={setWorkspaceSettingsId}
                       // STARRED is global, so the parent workspace is explicit —
                       // `handleSelectChannel` then opens a starred channel in another
                       // workspace with the SAME remembered-layout restore as its home
@@ -2759,6 +2756,7 @@ function RegisteredAppShell({
                     nav.toChannel(navWorkspaceId, channelId);
                   }}
                   onOpenWorkspace={handleSelectWorkspace}
+                  onOpenWorkspaceSettings={setWorkspaceSettingsId}
                 />
               ) : (
                 <>
@@ -2838,13 +2836,14 @@ function RegisteredAppShell({
         }}
       />
       <WorkspaceSettingsDialog
-        open={workspaceSettingsOpen}
-        onOpenChange={setWorkspaceSettingsOpen}
-        workspaceId={selectedWorkspace?.id ?? null}
-        workspaceName={selectedWorkspace?.name ?? null}
-        capabilities={workspaceCapabilities(selectedWorkspace)}
-        archivedAt={selectedWorkspace?.archived_at ?? null}
-        onDeleted={handleWorkspaceDeleted}
+        key={workspaceSettingsId ?? 'closed'}
+        open={workspaceSettingsId !== null && settingsWorkspace !== null}
+        onOpenChange={open => { if (!open) setWorkspaceSettingsId(null); }}
+        workspaceId={settingsWorkspace?.id ?? null}
+        workspaceName={settingsWorkspace?.name ?? null}
+        capabilities={workspaceCapabilities(settingsWorkspace)}
+        archivedAt={settingsWorkspace?.archived_at ?? null}
+        onDeleted={() => { if (workspaceSettingsId) handleWorkspaceDeleted(workspaceSettingsId); }}
       />
       {/* Task detail modal — the NON-pane half of the `?task` split (#task:1721):
         * a board card or a cold deep-link outside chat, where there is no

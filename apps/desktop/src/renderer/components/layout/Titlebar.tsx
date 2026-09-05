@@ -1,25 +1,14 @@
 import {
   PanelLeftClose,
   PanelLeftOpen,
-  Settings,
-  Users,
 } from 'lucide-react';
-import { ManageMembersPopover } from '@/features/workspaces/ManageMembersPopover';
-import { isAgentSpace } from '@/features/workspaces/workspace-ownership';
 
 interface TitlebarProps {
-  workspaceId: string | null;
   workspaceName: string | null;
-  /** The agent that owns the open workspace, or `null` for a people-owned one
-   *  (and while nothing is open). Gates the two container-level affordances
-   *  below — an Agent Space genuinely has neither, so this stays a two-state
-   *  branch rather than becoming constant-true (@Paul, #task:2078). */
-  workspaceOwnerAgentId: string | null;
   /** epoch ms when the workspace was archived; null for active workspaces.
    *  Drives the inline `Archived` pill so the user knows why this
    *  workspace is missing from the main sidebar list. */
   workspaceArchivedAt: number | null;
-  onOpenWorkspaceSettings?: () => void;
   workspaceSidebarVisible: boolean;
   onToggleWorkspaceSidebar: () => void;
   /** Which section's chrome the titlebar frames (#task:1394). `chat` shows the
@@ -36,8 +25,7 @@ interface TitlebarProps {
 }
 
 /**
- * Window-wide titlebar — drag region with the current workspace's name
- * and its primary actions (Settings, Manage Members, New Channel).
+ * Window-wide drag region with the current workspace's name.
  * Workspace info starts after the section-specific left
  * chrome (`chromeWidth`) so it sits directly above the first content
  * column it describes: in chat that's the (collapsible) sidebar;
@@ -48,24 +36,13 @@ interface TitlebarProps {
  * macOS — see main/index.ts).
  */
 export function Titlebar({
-  workspaceId,
   workspaceName,
-  workspaceOwnerAgentId,
   workspaceArchivedAt,
-  onOpenWorkspaceSettings,
   workspaceSidebarVisible,
   onToggleWorkspaceSidebar,
   chromeMode,
 }: TitlebarProps): JSX.Element {
   const hasWorkspace = workspaceName !== null;
-  // An Agent Space has no member set to manage and no settings to open: it is the
-  // viewer plus its one agent, its name is derived from that agent, and its
-  // lifecycle belongs to the agent (`workspaceCapabilities` holds the same three
-  // facts for the dialogs). Both gates also need `hasWorkspace`, which already
-  // implies the row resolved — the name comes from the same row as the owner.
-  const isOwnedByAgent = isAgentSpace({ owner_agent_id: workspaceOwnerAgentId });
-  const showManageMembers = hasWorkspace && !isOwnedByAgent && !!workspaceId;
-  const showSettings = hasWorkspace && !isOwnedByAgent && !!onOpenWorkspaceSettings;
   const isArchived = workspaceArchivedAt !== null;
   // Activity has no browse sidebar — the Activity list IS the left column — so
   // its label offset is `NavRail + Activity-list` width, read from the SAME
@@ -164,31 +141,6 @@ export function Titlebar({
         <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-[length:var(--text-badge)] uppercase tracking-wider text-text-muted">
           archived
         </span>
-      ) : null}
-
-      {showManageMembers ? (
-        <ManageMembersPopover workspaceId={workspaceId!}>
-          <button
-            type="button"
-            aria-label="Manage members"
-            title="Manage members"
-            className="no-drag flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
-          >
-            <Users className="size-3.5" />
-          </button>
-        </ManageMembersPopover>
-      ) : null}
-
-      {showSettings ? (
-        <button
-          type="button"
-          onClick={onOpenWorkspaceSettings}
-          aria-label="Workspace settings"
-          title="Workspace settings"
-          className="no-drag flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
-        >
-          <Settings className="size-3.5" />
-        </button>
       ) : null}
 
       {/* Trailing spacer keeps a small breathable margin at the right

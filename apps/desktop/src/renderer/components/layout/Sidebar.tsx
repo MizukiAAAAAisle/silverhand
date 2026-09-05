@@ -53,6 +53,7 @@ interface SidebarProps {
   /** Start channel creation scoped to one workspace — the merged tree has no
    *  "current" workspace to imply. */
   onCreateChannel: (workspaceId: string) => void;
+  onOpenWorkspaceSettings: (workspaceId: string) => void;
   /** Open a `direct_pair` — a conversation with NO workspace coordinate
    *  (#task:2035). A separate handler from `onSelectConversation` because the two
    *  navigations land on different routes: passing a null workspace to the
@@ -316,6 +317,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           selected={selected}
           onSelectChannel={props.onSelectChannel}
           onCreateChannel={props.onCreateChannel}
+          onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
           headerAction={
             <span className="flex items-center">
               {sortMenuFor('regular')}
@@ -374,6 +376,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           selected={selected}
           onSelectChannel={props.onSelectChannel}
           onCreateChannel={props.onCreateChannel}
+          onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
           emptyHint="Creating an agent opens its space"
           agentsById={props.agentsById}
           ownerAgentAvatarUrls={ownerAgentAvatarUrls}

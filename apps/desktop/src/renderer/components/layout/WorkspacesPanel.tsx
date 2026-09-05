@@ -1,7 +1,7 @@
 import { Fragment, type ReactNode } from 'react';
 import type { AgentDto, SortGroup } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
-import { ChevronDown, LayoutGrid, MessagesSquare, Plus } from 'lucide-react';
+import { ChevronDown, LayoutGrid, MessagesSquare, Plus, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import {
@@ -86,6 +86,7 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   selected: SelectedConversation;
   onSelectChannel: (channelId: string, workspaceId: string) => void;
   onCreateChannel: (workspaceId: string) => void;
+  onOpenWorkspaceSettings: (workspaceId: string) => void;
   /** Optional `+` button. The AGENT SPACES section omits this — an agent space is
    *  created with its agent, never from the rail. Ignored when `headerAction`
    *  is set (the caller composes its own action cluster, e.g. sort + add). */
@@ -124,6 +125,7 @@ interface RailRowContext {
   selected: SelectedConversation;
   onSelectChannel: (channelId: string, workspaceId: string) => void;
   onCreateChannel: (workspaceId: string) => void;
+  onOpenWorkspaceSettings: (workspaceId: string) => void;
   agentsById?: ReadonlyMap<string, AgentDto>;
   ownerAgentAvatarUrls: ReadonlyMap<string, string | null>;
 }
@@ -241,6 +243,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   selected,
   onSelectChannel,
   onCreateChannel,
+  onOpenWorkspaceSettings,
   onAdd,
   headerAction,
   emptyHint,
@@ -254,6 +257,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
     selected,
     onSelectChannel,
     onCreateChannel,
+    onOpenWorkspaceSettings,
     agentsById,
     ownerAgentAvatarUrls,
   };
@@ -668,6 +672,20 @@ function WorkspaceHeaderRow({
         {expanded ? (
           <span className={hoverOnly}>
             <ChannelSortMenu workspaceId={workspace.id} />
+          </span>
+        ) : null}
+        {!isAgentSpace(workspace) ? (
+          <span className={hoverOnly}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => ctx.onOpenWorkspaceSettings(workspace.id)}
+              aria-label={`Settings for ${title}`}
+              title="Workspace settings"
+            >
+              <Settings className="size-3.5" />
+            </Button>
           </span>
         ) : null}
         <span className={hoverOnly}>

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Archive, ArchiveRestore, LogOut, Settings2, ShieldCheck } from 'lucide-react';
+import { Archive, ArchiveRestore, LogOut, Settings2, ShieldCheck, Users } from 'lucide-react';
 import type { AgentCapability } from '@silverhand/shared';
 import {
   Dialog,
@@ -18,6 +18,7 @@ import {
 import { cn } from '@/lib/cn';
 import { nameFormatMessage } from '@/features/naming/useNameAvailability';
 import { AgentPermissionsPanel } from './AgentPermissionsPanel';
+import { WorkspaceMembersPanel } from './ManageMembersPopover';
 import { HumanRolesPanel } from './HumanRolesPanel';
 import {
   useArchiveWorkspace,
@@ -33,7 +34,7 @@ import {
 } from './workspace-permissions';
 import type { WorkspaceCapabilities } from './workspace-capabilities';
 
-type SettingsSection = 'general' | 'agents';
+type SettingsSection = 'general' | 'members' | 'agents';
 type PermissionTab = 'agents' | 'human';
 
 const PERMISSION_TABS: { id: PermissionTab; label: string }[] = [
@@ -64,6 +65,7 @@ interface WorkspaceSettingsDialogProps {
 
 const NAV_ITEMS: { id: SettingsSection; label: string; icon: typeof Settings2 }[] = [
   { id: 'general', label: 'General', icon: Settings2 },
+  { id: 'members', label: 'Members', icon: Users },
   { id: 'agents', label: 'Permission', icon: ShieldCheck },
 ];
 
@@ -127,7 +129,7 @@ export function WorkspaceSettingsDialog({
       setConfirmingDelete(false);
       setConfirmingLeave(false);
     }
-  }, [open, workspaceName, initialSection, hasMembers]);
+  }, [open, workspaceId, workspaceName, initialSection, hasMembers]);
 
   const handleRename = async (e: FormEvent) => {
     e.preventDefault();
@@ -271,6 +273,8 @@ export function WorkspaceSettingsDialog({
                 onLeave={handleLeave}
                 leavePending={leaveWorkspace.isPending}
               />
+            ) : activeSection === 'members' && workspaceId ? (
+              <WorkspaceMembersPanel key={workspaceId} workspaceId={workspaceId} />
             ) : (
               <div className="flex flex-col gap-4">
                 {/* Permission sub-tabs: agent capabilities vs human roles.

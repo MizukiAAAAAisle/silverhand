@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import dayjs from 'dayjs';
-import { Archive, ArchiveRestore } from 'lucide-react';
+import { Archive, ArchiveRestore, Settings } from 'lucide-react';
 import type { ArchivedChannelListItemDto } from '@silverhand/shared';
 import type { AgentDto } from '@silverhand/shared';
 import { ChannelIcon } from '@/components/ChannelIcon';
@@ -52,6 +52,7 @@ interface ArchivedChannelsPanelProps {
    *  `ARCHIVED` group used, so opening one from here behaves identically
    *  (#task:1890). */
   onOpenWorkspace: (workspaceId: string) => void;
+  onOpenWorkspaceSettings: (workspaceId: string) => void;
 }
 
 export function ArchivedChannelsPanel({
@@ -60,6 +61,7 @@ export function ArchivedChannelsPanel({
   onFilterChange,
   onOpenChannel,
   onOpenWorkspace,
+  onOpenWorkspaceSettings,
 }: ArchivedChannelsPanelProps): JSX.Element {
   // App-owned (controlled) filter state so switching panes and returning
   // keeps the selection for the session (#task:1259).
@@ -159,6 +161,7 @@ export function ArchivedChannelsPanel({
                   agentAvatarUrls={agentAvatarUrls}
                   restorePending={archiveWorkspace.isPending}
                   onOpen={() => onOpenWorkspace(workspace.id)}
+                  onSettings={() => onOpenWorkspaceSettings(workspace.id)}
                   onRestore={() =>
                     archiveWorkspace.mutate({
                       id: workspace.id,
@@ -226,6 +229,7 @@ function ArchivedWorkspaceRow({
   restorePending,
   onOpen,
   onRestore,
+  onSettings,
 }: {
   workspace: WorkspaceListItem;
   agentsById: ReadonlyMap<string, AgentDto>;
@@ -233,6 +237,7 @@ function ArchivedWorkspaceRow({
   restorePending: boolean;
   onOpen: () => void;
   onRestore: () => void;
+  onSettings: () => void;
 }): JSX.Element {
   const archivedAt = workspace.archived_at
     ? dayjs(workspace.archived_at).format('YYYY-MM-DD HH:mm')
@@ -262,6 +267,17 @@ function ArchivedWorkspaceRow({
             </span>
           </span>
         </button>
+        {workspace.owner_agent_id === null ? (
+          <button
+            type="button"
+            onClick={onSettings}
+            className="m-3 ml-0 inline-flex size-7 shrink-0 items-center justify-center self-center rounded-[var(--control-radius)] text-text-secondary hover:bg-bg-hover focus-outline"
+            aria-label={`Settings for ${workspace.name}`}
+            title="Workspace settings"
+          >
+            <Settings className="size-3.5" />
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={e => {
