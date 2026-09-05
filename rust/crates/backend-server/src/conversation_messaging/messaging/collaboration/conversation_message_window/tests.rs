@@ -92,14 +92,6 @@ struct SplicedRead {
 impl ConversationMessageWindowReadPort for SplicedRead {
     type Error = Infallible;
 
-    async fn admit(
-        &self,
-        _viewer: &UserId,
-        _conversation: &ConversationId,
-    ) -> Result<Result<(), MessageWindowRefusal>, Self::Error> {
-        Ok(Ok(()))
-    }
-
     async fn read(
         &self,
         _viewer: &UserId,
@@ -232,14 +224,6 @@ struct OrderingRead {
 impl ConversationMessageWindowReadPort for OrderingRead {
     type Error = Infallible;
 
-    async fn admit(
-        &self,
-        _viewer: &UserId,
-        _conversation: &ConversationId,
-    ) -> Result<Result<(), MessageWindowRefusal>, Self::Error> {
-        Ok(self.admission)
-    }
-
     async fn read(
         &self,
         _viewer: &UserId,
@@ -247,7 +231,9 @@ impl ConversationMessageWindowReadPort for OrderingRead {
         _request: ConversationMessageWindowRequest,
     ) -> Result<Result<ConversationMessageWindow, MessageWindowRefusal>, Self::Error> {
         self.reads.fetch_add(1, Ordering::SeqCst);
-        unreachable!("an invalid query or rejected admission must not reach the snapshot read")
+        Ok(Err(self
+            .admission
+            .expect_err("test expects denied snapshot")))
     }
 }
 
@@ -263,7 +249,7 @@ async fn ordered_call(port: OrderingRead, uri: &str) -> (StatusCode, Value) {
 }
 
 #[tokio::test]
-async fn conversation_authority_precedes_query_and_a_query_refusal_precedes_read() {
+async fn invalid_coordinates_do_not_read_and_valid_coordinates_use_snapshot_authority() {
     let reads = Arc::new(AtomicUsize::new(0));
     let (status, body) = ordered_call(
         OrderingRead {
@@ -273,8 +259,8 @@ async fn conversation_authority_precedes_query_and_a_query_refusal_precedes_read
         "/api/channels/c/messages?before_seq=bad&after_seq=also-bad",
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(body, json!({"error":"channel not found"}));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "invalid_cursor");
     assert_eq!(reads.load(Ordering::SeqCst), 0);
 
     let (status, body) = ordered_call(
@@ -294,6 +280,22 @@ async fn conversation_authority_precedes_query_and_a_query_refusal_precedes_read
         })
     );
     assert_eq!(reads.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_valid_request_calls_the_authoritative_read_exactly_once() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let (status, body) = ordered_call(
+        OrderingRead {
+            admission: Err(MessageWindowRefusal::Forbidden),
+            reads: reads.clone(),
+        },
+        "/api/channels/c/messages?limit=50",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "forbidden");
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

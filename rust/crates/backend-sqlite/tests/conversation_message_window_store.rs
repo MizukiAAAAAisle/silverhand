@@ -274,6 +274,66 @@ async fn mainline_thread_public_neutralization_and_sidecars_share_one_snapshot()
 }
 
 #[tokio::test]
+async fn the_reused_reader_rechecks_current_membership_and_public_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("window-access-change.sqlite");
+    seed(&path).await;
+    let reader = MessagingStore::open(&path)
+        .await
+        .unwrap()
+        .conversation_message_window();
+    let viewer = UserId::parse("viewer").unwrap();
+    let conversation = ConversationId::parse("c").unwrap();
+    let request = ConversationMessageWindowRequest::new(
+        MessageWindowStreamRequest::Mainline,
+        50,
+        MessageWindowAnchor::Latest,
+    )
+    .unwrap();
+    assert!(
+        reader
+            .read(&viewer, &conversation, request.clone())
+            .await
+            .unwrap()
+            .is_ok()
+    );
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    db.execute("UPDATE conversations SET visibility='private' WHERE id='c'")
+        .await
+        .unwrap();
+    db.execute("DELETE FROM conversation_users WHERE conversation_id='c' AND user_id='viewer'")
+        .await
+        .unwrap();
+    assert!(matches!(
+        reader
+            .read(&viewer, &conversation, request.clone())
+            .await
+            .unwrap(),
+        Err(MessageWindowRefusal::Forbidden)
+    ));
+    db.execute("UPDATE conversations SET visibility='public' WHERE id='c'")
+        .await
+        .unwrap();
+    assert!(
+        reader
+            .read(&viewer, &conversation, request.clone())
+            .await
+            .unwrap()
+            .is_ok()
+    );
+    db.execute("DELETE FROM workspace_users WHERE workspace_id='w' AND user_id='viewer'")
+        .await
+        .unwrap();
+    assert!(matches!(
+        reader.read(&viewer, &conversation, request).await.unwrap(),
+        Err(MessageWindowRefusal::Forbidden)
+    ));
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn selected_reply_sidecars_are_strictly_decoded_before_projection() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("message-window-corrupt.sqlite");
@@ -301,6 +361,72 @@ async fn selected_reply_sidecars_are_strictly_decoded_before_projection() {
         .unwrap();
     db.close().await.unwrap();
     assert!(read(&path, "viewer", latest).await.unwrap().is_ok());
+}
+
+#[tokio::test]
+async fn multiple_reply_roots_keep_counts_replier_dedup_and_last_three_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("multi-root-window.sqlite");
+    seed(&path).await;
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    for seq in 6..=9 {
+        sqlx::query("INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at,thread_root_id,author_id,author_name,author_display_name) VALUES(?,'c','user','reply-a','reply',?,?,'root-2','reply-a','reply-a','Reply A')")
+            .bind(format!("root2-reply-{seq}")).bind(seq).bind(seq * 10)
+            .execute(&mut db).await.unwrap();
+    }
+    db.execute("INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at,author_id,author_name,author_display_name) VALUES('root-empty','c','user','viewer','empty',10,100,'viewer','viewer','Viewer')").await.unwrap();
+    db.execute("UPDATE conversations SET latest_message_seq=10 WHERE id='c'")
+        .await
+        .unwrap();
+    db.execute("UPDATE conversation_stream_heads SET latest_seq=10 WHERE conversation_id='c' AND thread_root_id IS NULL").await.unwrap();
+    db.close().await.unwrap();
+    let request = ConversationMessageWindowRequest::new(
+        MessageWindowStreamRequest::Mainline,
+        50,
+        MessageWindowAnchor::Latest,
+    )
+    .unwrap();
+    let window = read(&path, "viewer", request.clone())
+        .await
+        .unwrap()
+        .unwrap()
+        .bind(
+            &UserId::parse("viewer").unwrap(),
+            &ConversationId::parse("c").unwrap(),
+            &request,
+        )
+        .unwrap();
+    let roots = window.roots();
+    assert_eq!(roots.len(), 3);
+    let first = roots
+        .iter()
+        .find(|r| r.root().as_str() == "root-1")
+        .unwrap();
+    assert_eq!(first.count().get(), 2);
+    let second = roots
+        .iter()
+        .find(|r| r.root().as_str() == "root-2")
+        .unwrap();
+    assert_eq!(second.count().get(), 4);
+    assert_eq!(second.previews().len(), 3);
+    assert_eq!(second.summary().unwrap().repliers().len(), 1);
+    assert_eq!(second.summary().unwrap().replier_total().get(), 1);
+    assert_eq!(
+        second
+            .previews()
+            .iter()
+            .map(|p| p.seq().get())
+            .collect::<Vec<_>>(),
+        [7, 8, 9]
+    );
+    let empty = roots
+        .iter()
+        .find(|r| r.root().as_str() == "root-empty")
+        .unwrap();
+    assert_eq!(empty.count().get(), 0);
+    assert!(empty.previews().is_empty());
 }
 
 #[tokio::test]

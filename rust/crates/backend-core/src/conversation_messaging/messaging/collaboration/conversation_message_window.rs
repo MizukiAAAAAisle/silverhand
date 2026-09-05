@@ -1257,14 +1257,7 @@ pub enum MessageWindowRefusal {
 pub trait ConversationMessageWindowReadPort {
     type Error: Error + Send + Sync + 'static;
 
-    /// Rejection-only preflight preserving TS authority-before-query order.
-    /// Success is not a token; `read` re-evaluates visibility in its snapshot.
-    fn admit(
-        &self,
-        viewer: &UserId,
-        conversation: &ConversationId,
-    ) -> impl Future<Output = Result<Result<(), MessageWindowRefusal>, Self::Error>> + Send;
-
+    /// Authorizes the viewer in the snapshot used for the returned window.
     fn read(
         &self,
         viewer: &UserId,

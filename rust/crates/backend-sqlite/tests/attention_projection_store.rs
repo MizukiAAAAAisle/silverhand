@@ -30,6 +30,53 @@ async fn seed(path: &std::path::Path) {
 }
 
 #[tokio::test]
+async fn joined_archive_fact_preserves_loud_and_directed_badges() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("archive-badges.sqlite");
+    seed(&path).await;
+    let store = MessagingStore::open(&path)
+        .await
+        .unwrap()
+        .attention_projection();
+    let viewer = UserId::parse("u").unwrap();
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    for (sql, expected) in [
+        (
+            "DELETE FROM workspace_attention_preferences WHERE user_id='u' AND workspace_id='w'",
+            2,
+        ),
+        ("UPDATE conversations SET archived_at=0 WHERE id='c-b'", 1),
+        ("UPDATE conversations SET archived_at=0 WHERE id='c-a'", 0),
+        (
+            "UPDATE conversations SET archived_at=NULL WHERE id IN ('c-a','c-b')",
+            2,
+        ),
+        (
+            "DELETE FROM conversation_users WHERE conversation_id='c-b' AND user_id='u'",
+            1,
+        ),
+        ("UPDATE notifications SET read_at=4 WHERE id='n-1'", 1),
+        ("UPDATE notifications SET read_at=4 WHERE id='n-2'", 0),
+    ] {
+        sqlx::query(sql).execute(&mut db).await.unwrap();
+        let badges = store.badges(&viewer).await.unwrap();
+        assert_eq!(badges.total().get(), expected, "{sql}");
+        assert_eq!(
+            badges
+                .by_workspace()
+                .iter()
+                .map(|row| row.count().get())
+                .sum::<i64>(),
+            expected,
+            "{sql}"
+        );
+    }
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn badge_and_modes_share_the_directed_claim_and_stable_channel_order() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("projection.sqlite");

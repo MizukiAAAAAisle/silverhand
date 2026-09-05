@@ -37,9 +37,7 @@ use crate::conversation_messaging::messaging::{
 };
 
 use super::{
-    channel_lifecycle::{
-        ChannelLifecycleStoreError, load_channel_row, load_human_members, load_workspace_role_fact,
-    },
+    channel_lifecycle::{ChannelLifecycleStoreError, load_channel_row, load_workspace_role_fact},
     reaction::aggregate_facts_in_snapshot,
 };
 
@@ -103,17 +101,6 @@ impl From<ConversationMessageWindowStoreError> for PersistenceFailure {
 impl ConversationMessageWindowReadPort for SqliteConversationMessageWindowRead {
     type Error = PersistenceFailure;
 
-    async fn admit(
-        &self,
-        viewer: &UserId,
-        conversation: &ConversationId,
-    ) -> Result<Result<(), MessageWindowRefusal>, Self::Error> {
-        self.admit_inner(viewer, conversation)
-            .await
-            .map(|outcome| outcome.map(|_| ()))
-            .map_err(PersistenceFailure::from)
-    }
-
     async fn read(
         &self,
         viewer: &UserId,
@@ -127,18 +114,6 @@ impl ConversationMessageWindowReadPort for SqliteConversationMessageWindowRead {
 }
 
 impl SqliteConversationMessageWindowRead {
-    async fn admit_inner(
-        &self,
-        viewer: &UserId,
-        requested: &ConversationId,
-    ) -> Result<Result<AdmittedAudience, MessageWindowRefusal>, ConversationMessageWindowStoreError>
-    {
-        let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
-        let outcome = admit_in_snapshot(&mut tx, viewer, requested).await?;
-        tx.commit().await?;
-        Ok(outcome)
-    }
-
     async fn read_inner(
         &self,
         viewer: &UserId,
@@ -296,13 +271,29 @@ async fn admit_in_snapshot(
     };
     let admitted = match row.placement() {
         ChannelLifecyclePlacement::Workspace(workspace) => {
-            let members = load_human_members(tx, requested).await.map_err(access)?;
+            // Read only this viewer's seat, not every unrelated roster member.
+            let member_row = sqlx::query(
+                "SELECT user_id,joined_at FROM conversation_users WHERE conversation_id=? AND user_id=?",
+            )
+            .bind(requested.as_str())
+            .bind(viewer.as_str())
+            .fetch_optional(&mut **tx)
+            .await?;
+            let member = member_row
+                .map(|row| {
+                    let _: i64 = row.try_get("joined_at")?;
+                    let id = UserId::parse(row.try_get::<String, _>("user_id")?)
+                        .map_err(|_| ConversationMessageWindowStoreError::Coordinate)?;
+                    if &id != viewer {
+                        return Err(ConversationMessageWindowStoreError::Coordinate);
+                    }
+                    Ok(id)
+                })
+                .transpose()?;
             let role = load_workspace_role_fact(tx, viewer, workspace.workspace())
                 .await
                 .map_err(access)?;
-            let member = role
-                .as_ref()
-                .and_then(|_| members.iter().find(|member| *member == viewer).cloned());
+            let member = role.as_ref().and(member);
             let public = role.is_some()
                 && workspace.roster() == DirectoryRoster::Open
                 && row.visibility() == ChannelVisibility::Public
@@ -812,6 +803,34 @@ struct RawPreview {
     attachments: Vec<AttachmentSnapshot>,
 }
 
+// Drive latest-row lookup from the selected-root aggregate. Reversing this
+// inner join lets SQLite scan every message in the conversation, even when
+// none of the requested roots has a reply.
+const REPLY_SUMMARIES: &str = "SELECT lr.conversation_id AS reply_conversation_id,agg.root_id,agg.reply_count,\
+         lr.created_at AS last_reply_at,lr.seq AS last_reply_seq FROM \
+         (SELECT thread_root_id AS root_id,COUNT(*) AS reply_count,MAX(seq) AS last_reply_seq \
+         FROM messages m WHERE m.thread_root_id IN (SELECT value FROM json_each(?)) \
+         AND m.conversation_id=? AND m.from_kind!='system' GROUP BY m.thread_root_id) agg \
+         CROSS JOIN messages lr ON lr.conversation_id=? AND lr.thread_root_id=agg.root_id \
+         AND lr.seq=agg.last_reply_seq";
+
+const REPLY_REPLIERS: &str = "SELECT m.conversation_id AS reply_conversation_id,m.thread_root_id AS root_id,\
+         m.from_kind,m.from_agent_id,m.from_user_id,m.author_id,m.author_name,\
+         m.author_display_name,MAX(m.seq) AS last_seq FROM messages m \
+         WHERE m.thread_root_id IN (SELECT value FROM json_each(?)) AND m.conversation_id=? \
+         AND m.from_kind!='system' GROUP BY m.thread_root_id,m.from_kind,m.author_id \
+         ORDER BY m.thread_root_id, last_seq DESC";
+
+const REPLY_PREVIEWS: &str = "SELECT reply_conversation_id,root_id,message_id,seq,created_at,from_kind,from_agent_id,\
+         from_user_id,author_id,author_name,author_display_name,content,metadata FROM \
+         (SELECT m.conversation_id AS reply_conversation_id,m.thread_root_id AS root_id,\
+         m.id AS message_id,m.seq,m.created_at,m.from_kind,m.from_agent_id,m.from_user_id,\
+         m.author_id,m.author_name,m.author_display_name,m.content,m.metadata,\
+         ROW_NUMBER() OVER(PARTITION BY m.thread_root_id ORDER BY m.seq DESC) AS rn \
+         FROM messages m WHERE m.thread_root_id IN (SELECT value FROM json_each(?)) \
+         AND m.conversation_id=? AND m.from_kind!='system') WHERE rn<=3 \
+         ORDER BY root_id,seq ASC";
+
 async fn load_reply_sidecars(
     tx: &mut Transaction<'_, Sqlite>,
     conversation: &ConversationId,
@@ -827,20 +846,12 @@ async fn load_reply_sidecars(
     let root_json =
         serde_json::to_string(&roots.iter().map(ThreadRootId::as_str).collect::<Vec<_>>())
             .map_err(|_| ConversationMessageWindowStoreError::Metadata)?;
-    let summary_rows = sqlx::query(
-        "SELECT lr.conversation_id AS reply_conversation_id,agg.root_id,agg.reply_count,\
-         lr.created_at AS last_reply_at,lr.seq AS last_reply_seq FROM \
-         (SELECT thread_root_id AS root_id,COUNT(*) AS reply_count,MAX(seq) AS last_reply_seq \
-         FROM json_each(?) requested JOIN messages m ON m.thread_root_id=requested.value \
-         WHERE m.conversation_id=? AND m.from_kind!='system' GROUP BY m.thread_root_id) agg \
-         JOIN messages lr ON lr.conversation_id=? AND lr.thread_root_id=agg.root_id \
-         AND lr.seq=agg.last_reply_seq",
-    )
-    .bind(&root_json)
-    .bind(conversation.as_str())
-    .bind(conversation.as_str())
-    .fetch_all(&mut **tx)
-    .await?;
+    let summary_rows = sqlx::query(REPLY_SUMMARIES)
+        .bind(&root_json)
+        .bind(conversation.as_str())
+        .bind(conversation.as_str())
+        .fetch_all(&mut **tx)
+        .await?;
     let mut summaries = HashMap::new();
     for row in &summary_rows {
         let value = RawReplySummary {
@@ -854,18 +865,11 @@ async fn load_reply_sidecars(
             return Err(ConversationMessageWindowStoreError::Coordinate);
         }
     }
-    let replier_rows = sqlx::query(
-        "SELECT m.conversation_id AS reply_conversation_id,m.thread_root_id AS root_id,\
-         m.from_kind,m.from_agent_id,m.from_user_id,m.author_id,m.author_name,\
-         m.author_display_name,MAX(m.seq) AS last_seq FROM json_each(?) requested \
-         JOIN messages m ON m.thread_root_id=requested.value WHERE m.conversation_id=? \
-         AND m.from_kind!='system' GROUP BY m.thread_root_id,m.from_kind,m.author_id \
-         ORDER BY m.thread_root_id, last_seq DESC",
-    )
-    .bind(&root_json)
-    .bind(conversation.as_str())
-    .fetch_all(&mut **tx)
-    .await?;
+    let replier_rows = sqlx::query(REPLY_REPLIERS)
+        .bind(&root_json)
+        .bind(conversation.as_str())
+        .fetch_all(&mut **tx)
+        .await?;
     let repliers = replier_rows
         .iter()
         .map(|row| {
@@ -877,21 +881,11 @@ async fn load_reply_sidecars(
             })
         })
         .collect::<Result<Vec<_>, ConversationMessageWindowStoreError>>()?;
-    let preview_rows = sqlx::query(
-        "SELECT reply_conversation_id,root_id,message_id,seq,created_at,from_kind,from_agent_id,\
-         from_user_id,author_id,author_name,author_display_name,content,metadata FROM \
-         (SELECT m.conversation_id AS reply_conversation_id,m.thread_root_id AS root_id,\
-         m.id AS message_id,m.seq,m.created_at,m.from_kind,m.from_agent_id,m.from_user_id,\
-         m.author_id,m.author_name,m.author_display_name,m.content,m.metadata,\
-         ROW_NUMBER() OVER(PARTITION BY m.thread_root_id ORDER BY m.seq DESC) AS rn \
-         FROM json_each(?) requested JOIN messages m ON m.thread_root_id=requested.value \
-         WHERE m.conversation_id=? AND m.from_kind!='system') WHERE rn<=3 \
-         ORDER BY root_id,seq ASC",
-    )
-    .bind(root_json)
-    .bind(conversation.as_str())
-    .fetch_all(&mut **tx)
-    .await?;
+    let preview_rows = sqlx::query(REPLY_PREVIEWS)
+        .bind(root_json)
+        .bind(conversation.as_str())
+        .fetch_all(&mut **tx)
+        .await?;
     let previews = preview_rows
         .iter()
         .map(|row| {
@@ -1194,4 +1188,110 @@ fn identity(field: &'static str) -> ConversationMessageWindowStoreError {
 
 fn linked_task(field: &'static str) -> ConversationMessageWindowStoreError {
     ConversationMessageWindowStoreError::LinkedTask { field }
+}
+
+#[cfg(test)]
+mod reply_lookup_tests {
+    use super::*;
+    use sqlx::{Connection, Executor};
+
+    #[tokio::test]
+    async fn a_queued_window_authorizes_after_access_changes_before_its_snapshot() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let mut db = pool.acquire().await.unwrap();
+        db.execute(sqlx::raw_sql(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+        ))))
+        .await
+        .unwrap();
+        for statement in [
+            "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('viewer','viewer','Viewer',1,1)",
+            "INSERT INTO workspaces(id,name,name_key,created_at,updated_at) VALUES('w','W','w',1,1)",
+            "INSERT INTO workspace_users(workspace_id,user_id,joined_at,role) VALUES('w','viewer',1,'member')",
+            "INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,latest_message_seq,created_at,updated_at) VALUES('c','w','workspace','open','C','c','idle','private',0,1,1)",
+            "INSERT INTO conversation_users(conversation_id,user_id,joined_at) VALUES('c','viewer',1)",
+        ] {
+            db.execute(statement).await.unwrap();
+        }
+        drop(db);
+        let reader = SqliteConversationMessageWindowRead { pool: pool.clone() };
+        let viewer = UserId::parse("viewer").unwrap();
+        let conversation = ConversationId::parse("c").unwrap();
+        let request = ConversationMessageWindowRequest::new(
+            MessageWindowStreamRequest::Mainline,
+            50,
+            MessageWindowAnchor::Latest,
+        )
+        .unwrap();
+        assert!(
+            reader
+                .read(&viewer, &conversation, request.clone())
+                .await
+                .unwrap()
+                .is_ok()
+        );
+        let mut db = pool.acquire().await.unwrap();
+        let pending = reader.read(&viewer, &conversation, request);
+        tokio::pin!(pending);
+        tokio::select! {
+            biased;
+            result = &mut pending => panic!("read bypassed occupied snapshot connection: {result:?}"),
+            () = tokio::task::yield_now() => {}
+        }
+        db.execute("DELETE FROM conversation_users WHERE conversation_id='c' AND user_id='viewer'")
+            .await
+            .unwrap();
+        drop(db);
+        assert!(matches!(
+            pending.await.unwrap(),
+            Err(MessageWindowRefusal::Forbidden)
+        ));
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn all_reply_sidecars_seek_both_conversation_and_root_on_linked_sqlite() {
+        let mut db = sqlx::SqliteConnection::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        db.execute(sqlx::raw_sql(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../packages/backend/tests/migration-baseline/schema-current.sql"
+        ))))
+        .await
+        .unwrap();
+        let roots =
+            serde_json::to_string(&(0..50).map(|n| format!("root-{n}")).collect::<Vec<_>>())
+                .unwrap();
+        for (name, statement, binds) in [
+            ("summary", REPLY_SUMMARIES, 3),
+            ("repliers", REPLY_REPLIERS, 2),
+            ("previews", REPLY_PREVIEWS, 2),
+        ] {
+            let explain = format!("EXPLAIN QUERY PLAN {statement}");
+            // Prefix only a compile-time production statement, never request text.
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(explain))
+                .bind(&roots)
+                .bind("c");
+            if binds == 3 {
+                query = query.bind("c");
+            }
+            let rows = query.fetch_all(&mut db).await.unwrap();
+            let plan = rows
+                .iter()
+                .map(|row| row.get::<String, _>("detail"))
+                .collect::<Vec<_>>();
+            assert!(plan.iter().any(|step| step.contains("SEARCH m USING INDEX idx_messages_thread_root (conversation_id=? AND thread_root_id=?)")), "{name}: {plan:?}");
+            if name == "summary" {
+                assert!(plan.iter().any(|step| step.contains("SEARCH lr USING INDEX idx_messages_thread_root (conversation_id=? AND thread_root_id=? AND seq=?)")), "{plan:?}");
+            }
+            eprintln!("{name}: {plan:?}");
+        }
+        db.close().await.unwrap();
+    }
 }

@@ -64,22 +64,8 @@ async fn read<P: ConversationMessageWindowReadPort>(
         Err(_) => return error(StatusCode::BAD_REQUEST, "channel id required"),
     };
 
-    // TypeScript establishes conversation existence/readability before parsing
-    // any cursor. This is rejection-only: the snapshot read repeats the gate.
-    match state.0.admit(&viewer, &conversation).await {
-        Ok(Ok(())) => {}
-        Ok(Err(refusal)) => return refusal_wire(refusal),
-        Err(error) => {
-            tracing::error!(
-                error_chain = crate::foundation::safe_log_field::safe_display(
-                    &(crate::foundation::error::describe(&error))
-                ),
-                "conversation-message-window admission failed"
-            );
-            return internal();
-        }
-    }
-
+    // Parse request-local coordinates once; the read authorizes the viewer in
+    // the same snapshot as the returned messages and sidecars.
     let request = match request(&raw_query) {
         Ok(value) => value,
         Err(refusal) => return query_refusal_wire(refusal),

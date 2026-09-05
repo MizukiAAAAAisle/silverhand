@@ -276,8 +276,8 @@ const BADGE_COUNTS_BY_WORKSPACE: &str = concat!(
      c.workspace_id AS workspace_id, COUNT(m.id) AS c FROM conversations c JOIN \
      conversation_users cu ON cu.conversation_id=c.id AND cu.user_id=(SELECT viewer FROM p) \
      JOIN messages m ON m.conversation_id=c.id AND ",
-    rollup_unread!(),
-    " WHERE ",
+    rollup_unread!(live_conversation),
+    " WHERE c.archived_at IS NULL AND ",
     loud_positional!(),
     " GROUP BY c.workspace_id UNION ALL SELECT c.workspace_id AS workspace_id, ",
     directed_claim_count!(),
