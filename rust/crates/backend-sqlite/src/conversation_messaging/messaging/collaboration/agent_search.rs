@@ -1,7 +1,7 @@
 //! The agent message-search read as ONE authorized connection-bound snapshot.
 //!
 //! Scope resolution (the #54 conversation_id provenance matrix, workspace
-//! cross-reach, `read_messages` cap, and participation), continuous keyset
+//! cross-reach, `read_messages` cap, and participation), continuous streaming
 //! fold-evaluation (ordered `created_at DESC, seq DESC`, NO fixed scan cap and NO
 //! LIKE pre-filter, since the pinned portable full fold is not a superset of SQLite
 //! ASCII LIKE, so candidate selection must share the SAME fold as the excerpt),
@@ -63,10 +63,11 @@ impl From<AgentSearchStoreError> for PersistenceFailure {
     }
 }
 
-/// How many candidate rows to pull per keyset page. This bounds MEMORY only; it is
-/// NOT a result cap or a scan budget — the loop pages until `limit` hits are found or
-/// the scope is exhausted (Cindy #50: no silent truncation).
-const CANDIDATE_PAGE: i64 = 256;
+#[cfg(test)]
+tokio::task_local! {
+    static SEARCH_TIMING: std::cell::Cell<std::time::Duration>;
+    static SEARCH_ROW_ENTERED: std::sync::Arc<tokio::sync::Notify>;
+}
 
 impl AgentSearchRead for SqliteAgentSearch {
     async fn search(
@@ -81,6 +82,8 @@ impl AgentSearchRead for SqliteAgentSearch {
             .begin_with("BEGIN DEFERRED")
             .await
             .map_err(AgentSearchStoreError::from)?;
+        #[cfg(test)]
+        let transaction_started = std::time::Instant::now();
 
         // Resolve the scope + authorize, all in-snapshot.
         let scope = match resolve_scope(&mut tx, agent, source, selector).await? {
@@ -91,12 +94,16 @@ impl AgentSearchRead for SqliteAgentSearch {
             }
         };
 
-        // Continuous keyset fold-eval until `limit` hits or scope exhausted.
+        // Continuous fold evaluation until `limit` hits or scope exhausted.
         let hits = collect_hits(&mut tx, agent, &scope, query).await?;
 
         // Resolve authors for the collected hits IN this tx (Cindy #51).
         let evidence: Vec<AuthorEvidence> = hits.iter().map(|h| h.evidence.clone()).collect();
         let authors = resolve_authors(&mut tx, &evidence).await?;
+        // Excerpt folding and DTO allocation only consume the collected facts.
+        tx.commit().await.map_err(AgentSearchStoreError::from)?;
+        #[cfg(test)]
+        let _ = SEARCH_TIMING.try_with(|elapsed| elapsed.set(transaction_started.elapsed()));
 
         let mut projected = Vec::with_capacity(hits.len());
         for (hit, author) in hits.into_iter().zip(authors) {
@@ -111,7 +118,6 @@ impl AgentSearchRead for SqliteAgentSearch {
             });
         }
 
-        tx.commit().await.map_err(AgentSearchStoreError::from)?;
         Ok(Ok(AgentSearchResult {
             scope: scope.echo,
             hits: projected,
@@ -258,99 +264,54 @@ async fn resolve_scope(
     }
 }
 
-/// Page candidates in `(created_at DESC, seq DESC, id DESC)` order, fold-filtering
-/// each page, until `limit` hits are found or the scope is exhausted. NO fixed scan
-/// cap; NO SQL LIKE pre-filter (the fold is not a LIKE superset) (Cindy #50). The
-/// keyset cursor is the FULL total order `(created_at, seq, id)` strictly descending:
-/// `seq` is unique only WITHIN a conversation, so a workspace scope needs the
-/// globally-unique `id` tiebreaker or a page boundary landing on rows with the same
-/// `(created_at, seq)` in different conversations would skip the rest of the tie
-/// (Cindy #4).
+/// Stream one ordered authorized query until enough fold matches or exhaustion.
+/// No scan cap or LIKE prefilter: full Unicode folding defines inclusion. The
+/// SQLx row stream bounds adapter buffering; unlike repeated keyset queries it
+/// does not re-plan/re-sort the remaining scope every 256 non-matches.
 async fn collect_hits(
     tx: &mut Transaction<'_, Sqlite>,
     agent: &AgentId,
     scope: &AuthorizedScope,
     query: &AgentSearchQuery,
 ) -> Result<Vec<RawHit>, PersistenceFailure> {
+    use futures_util::TryStreamExt;
     let folded_needle = fold_case_only(&query.text);
-    let mut hits: Vec<RawHit> = Vec::new();
-    // Keyset cursor: rows strictly less than this in (created_at, seq, id) DESC.
-    let mut cursor: Option<SearchCursor> = None;
-    loop {
-        let page =
-            fetch_candidate_page(tx, agent, scope, query.include_system, cursor.as_ref()).await?;
-        if page.is_empty() {
-            break;
+    let mut hits = Vec::new();
+    let (statement, scope_id) = match (&scope.conversation, query.include_system) {
+        (Some(conversation), true) => (CONV_ALL, conversation.as_str()),
+        (Some(conversation), false) => (CONV_NOSYS, conversation.as_str()),
+        (None, true) => (
+            WS_ALL,
+            scope.workspace.as_ref().expect("workspace scope").as_str(),
+        ),
+        (None, false) => (
+            WS_NOSYS,
+            scope.workspace.as_ref().expect("workspace scope").as_str(),
+        ),
+    };
+    let mut rows = sqlx::query(statement)
+        .bind(agent.as_str())
+        .bind(scope_id)
+        .fetch(&mut **tx);
+    while let Some(row) = rows.try_next().await.map_err(AgentSearchStoreError::from)? {
+        #[cfg(test)]
+        if let Ok(entered) = SEARCH_ROW_ENTERED.try_with(Clone::clone) {
+            entered.notify_one();
+            std::future::pending::<()>().await;
         }
-        // Advance the cursor to the last row of this page BEFORE filtering.
-        let last = &page[page.len() - 1];
-        cursor = Some(SearchCursor {
-            created_at: last.created_at,
-            seq: last.seq,
-            id: last.id.clone(),
-        });
-        let page_len = page.len();
-        for raw in page {
-            // Fold-match: candidate iff the folded content contains the folded query
-            // (the SAME fold as the excerpt — Cindy #37).
-            if fold_case_only(&raw.content).contains(&folded_needle) {
-                hits.push(raw);
-                if hits.len() as i64 >= query.limit {
-                    return Ok(hits);
-                }
+        let raw = decode_raw_hit(&row)?;
+        if fold_case_only(&raw.content).contains(&folded_needle) {
+            hits.push(raw);
+            if hits.len() as i64 >= query.limit {
+                break;
             }
-        }
-        // A short page means the scope is exhausted.
-        if (page_len as i64) < CANDIDATE_PAGE {
-            break;
         }
     }
     Ok(hits)
 }
 
-/// The keyset cursor over the FULL `(created_at, seq, id)` total order.
-struct SearchCursor {
-    created_at: i64,
-    seq: i64,
-    id: String,
-}
-
-/// Fetch one keyset page of participation-guarded candidate rows for the scope,
-/// ordered `created_at DESC, seq DESC, id DESC`, strictly after the cursor.
-async fn fetch_candidate_page(
-    tx: &mut Transaction<'_, Sqlite>,
-    agent: &AgentId,
-    scope: &AuthorizedScope,
-    include_system: bool,
-    cursor: Option<&SearchCursor>,
-) -> Result<Vec<RawHit>, PersistenceFailure> {
-    // The FIRST page has no cursor; the seed here is a max sentinel the `< pair`
-    // predicate never actually uses (only the FIRST/NEXT SQL split matters).
-    let seed = SearchCursor {
-        created_at: i64::MAX,
-        seq: i64::MAX,
-        id: "\u{10FFFF}".to_owned(),
-    };
-    let cursor_ref = cursor.unwrap_or(&seed);
-    let rows = match (
-        scope.conversation.is_some(),
-        include_system,
-        cursor.is_some(),
-    ) {
-        (true, true, false) => bind_conv(tx, CONV_ALL_FIRST, agent, scope, cursor_ref).await?,
-        (true, true, true) => bind_conv(tx, CONV_ALL_NEXT, agent, scope, cursor_ref).await?,
-        (true, false, false) => bind_conv(tx, CONV_NOSYS_FIRST, agent, scope, cursor_ref).await?,
-        (true, false, true) => bind_conv(tx, CONV_NOSYS_NEXT, agent, scope, cursor_ref).await?,
-        (false, true, false) => bind_ws(tx, WS_ALL_FIRST, agent, scope, cursor_ref).await?,
-        (false, true, true) => bind_ws(tx, WS_ALL_NEXT, agent, scope, cursor_ref).await?,
-        (false, false, false) => bind_ws(tx, WS_NOSYS_FIRST, agent, scope, cursor_ref).await?,
-        (false, false, true) => bind_ws(tx, WS_NOSYS_NEXT, agent, scope, cursor_ref).await?,
-    };
-    rows.iter().map(decode_raw_hit).collect()
-}
-
 macro_rules! candidate_sql {
-    ($scopepred:literal, $system:literal, $cursor:literal) => {
+    ($scopepred:literal, $system:literal) => {
         concat!(
             "SELECT m.id AS id, m.conversation_id AS conversation_id, m.content AS content, \
              m.seq AS seq, m.created_at AS created_at, m.from_kind AS from_kind, \
@@ -371,84 +332,16 @@ macro_rules! candidate_sql {
             $scopepred,
             " ",
             $system,
-            " ",
-            $cursor,
-            " ORDER BY m.created_at DESC, m.seq DESC, m.id DESC LIMIT ",
-            stringify!(256)
+            " ORDER BY m.created_at DESC, m.seq DESC, m.id DESC"
         )
     };
 }
 
-// ?2 = scope id (conversation id or workspace id); ?3 = cursor created_at; ?4 =
-// cursor seq; ?5 = cursor message id. The keyset is the FULL total order
-// `(created_at, seq, id)` DESC: `seq` is unique only WITHIN a conversation, so a
-// workspace scope can hold two rows with the same `(created_at, seq)` in different
-// conversations — the globally-unique `id` breaks the tie so a page boundary landing
-// on tied rows never skips the rest of the tie (Cindy #4). The keyset predicate is
-// inlined as a literal (concat! in the macro requires literal args).
-const CONV_ALL_FIRST: &str = candidate_sql!("conv.id = ?2", "", "");
-const CONV_ALL_NEXT: &str = candidate_sql!(
-    "conv.id = ?2",
-    "",
-    "AND (m.created_at < ?3 OR (m.created_at = ?3 AND (m.seq < ?4 OR (m.seq = ?4 AND m.id < ?5))))"
-);
-const CONV_NOSYS_FIRST: &str = candidate_sql!("conv.id = ?2", "AND m.from_kind <> 'system'", "");
-const CONV_NOSYS_NEXT: &str = candidate_sql!(
-    "conv.id = ?2",
-    "AND m.from_kind <> 'system'",
-    "AND (m.created_at < ?3 OR (m.created_at = ?3 AND (m.seq < ?4 OR (m.seq = ?4 AND m.id < ?5))))"
-);
-const WS_ALL_FIRST: &str = candidate_sql!("conv.workspace_id = ?2", "", "");
-const WS_ALL_NEXT: &str = candidate_sql!(
-    "conv.workspace_id = ?2",
-    "",
-    "AND (m.created_at < ?3 OR (m.created_at = ?3 AND (m.seq < ?4 OR (m.seq = ?4 AND m.id < ?5))))"
-);
-const WS_NOSYS_FIRST: &str =
-    candidate_sql!("conv.workspace_id = ?2", "AND m.from_kind <> 'system'", "");
-const WS_NOSYS_NEXT: &str = candidate_sql!(
-    "conv.workspace_id = ?2",
-    "AND m.from_kind <> 'system'",
-    "AND (m.created_at < ?3 OR (m.created_at = ?3 AND (m.seq < ?4 OR (m.seq = ?4 AND m.id < ?5))))"
-);
-
-async fn bind_conv(
-    tx: &mut Transaction<'_, Sqlite>,
-    sql: &'static str,
-    agent: &AgentId,
-    scope: &AuthorizedScope,
-    cursor: &SearchCursor,
-) -> Result<Vec<sqlx::sqlite::SqliteRow>, PersistenceFailure> {
-    let conversation = scope.conversation.as_ref().expect("conversation scope");
-    sqlx::query(sql)
-        .bind(agent.as_str())
-        .bind(conversation.as_str())
-        .bind(cursor.created_at)
-        .bind(cursor.seq)
-        .bind(&cursor.id)
-        .fetch_all(&mut **tx)
-        .await
-        .map_err(|e| PersistenceFailure::from_source(AgentSearchStoreError::Sql(e)))
-}
-
-async fn bind_ws(
-    tx: &mut Transaction<'_, Sqlite>,
-    sql: &'static str,
-    agent: &AgentId,
-    scope: &AuthorizedScope,
-    cursor: &SearchCursor,
-) -> Result<Vec<sqlx::sqlite::SqliteRow>, PersistenceFailure> {
-    let workspace = scope.workspace.as_ref().expect("workspace scope");
-    sqlx::query(sql)
-        .bind(agent.as_str())
-        .bind(workspace.as_str())
-        .bind(cursor.created_at)
-        .bind(cursor.seq)
-        .bind(&cursor.id)
-        .fetch_all(&mut **tx)
-        .await
-        .map_err(|e| PersistenceFailure::from_source(AgentSearchStoreError::Sql(e)))
-}
+// seq is only conversation-local: id remains the global tie breaker.
+const CONV_ALL: &str = candidate_sql!("conv.id = ?2", "");
+const CONV_NOSYS: &str = candidate_sql!("conv.id = ?2", "AND m.from_kind <> 'system'");
+const WS_ALL: &str = candidate_sql!("conv.workspace_id = ?2", "");
+const WS_NOSYS: &str = candidate_sql!("conv.workspace_id = ?2", "AND m.from_kind <> 'system'");
 
 /// JS-safe integer gate at store→projection (Cindy #48): a stored numeric JS can't
 /// represent exactly is a read error, not a truncated wire number.
@@ -721,6 +614,180 @@ INSERT INTO messages (id,conversation_id,from_kind,from_agent_id,content,seq,cre
     }
 
     #[tokio::test]
+    async fn streamed_search_releases_single_connection_on_limit_error_and_cancel() {
+        use std::{sync::Arc, time::Duration};
+        let (dir, original) = seeded().await;
+        original.pool.close().await;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(SqliteConnectOptions::new().filename(dir.path().join("s.sqlite")))
+            .await
+            .unwrap();
+        let read = SqliteAgentSearch::from_pool(pool.clone());
+        let mut q = query("text");
+        q.limit = 1;
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            read.search(
+                &agent("agent-a"),
+                None,
+                &SearchScopeSelector::Conversation(conv("chan")),
+                &q,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+        assert_eq!(result.hits.len(), 1);
+        assert!(
+            result.hits[0].author.is_some(),
+            "author lookup reuses the stream's connection"
+        );
+        pool.begin_with("BEGIN IMMEDIATE")
+            .await
+            .unwrap()
+            .rollback()
+            .await
+            .unwrap();
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let cloned = read.clone();
+        let task = tokio::spawn(SEARCH_ROW_ENTERED.scope(entered.clone(), async move {
+            cloned
+                .search(
+                    &agent("agent-a"),
+                    None,
+                    &SearchScopeSelector::Conversation(conv("chan")),
+                    &query("text"),
+                )
+                .await
+        }));
+        tokio::time::timeout(Duration::from_secs(2), entered.notified())
+            .await
+            .unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(2), pool.begin_with("BEGIN IMMEDIATE"))
+            .await
+            .unwrap()
+            .unwrap()
+            .rollback()
+            .await
+            .unwrap();
+
+        sqlx::query("UPDATE messages SET seq=9007199254740993 WHERE id='m2'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            read.search(
+                &agent("agent-a"),
+                None,
+                &SearchScopeSelector::Conversation(conv("chan")),
+                &query("text")
+            )
+            .await
+            .is_err()
+        );
+        tokio::time::timeout(Duration::from_secs(2), pool.begin_with("BEGIN IMMEDIATE"))
+            .await
+            .unwrap()
+            .unwrap()
+            .rollback()
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    /// Manual bounded scale evidence, not a noisy wall-clock CI threshold.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "scale measurement: run explicitly with --ignored --nocapture"]
+    async fn search_scale_request_transaction_and_writer_wait() {
+        use std::{
+            cell::Cell,
+            sync::{
+                Arc,
+                atomic::{AtomicBool, Ordering},
+            },
+            time::{Duration, Instant},
+        };
+        for size in [1_000_i64, 10_000] {
+            let (_dir, read) = seeded().await;
+            sqlx::query("PRAGMA journal_mode=WAL")
+                .execute(&read.pool)
+                .await
+                .unwrap();
+            sqlx::query("DELETE FROM messages")
+                .execute(&read.pool)
+                .await
+                .unwrap();
+            let content = "x".repeat(1024);
+            sqlx::query("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < ?) INSERT INTO messages(id,conversation_id,from_kind,content,seq,created_at) SELECT 'scale-' || i,'chan','system',CASE WHEN i=1 THEN ? || ' straße' ELSE ? END,i,i FROM n")
+                .bind(size).bind(&content).bind(&content).execute(&read.pool).await.unwrap();
+            for (needle, expected) in [("not-present-needle", 0), ("SS", 1)] {
+                let stop = Arc::new(AtomicBool::new(false));
+                let writer_stop = stop.clone();
+                let writer_pool = read.pool.clone();
+                let writer = tokio::spawn(async move {
+                    let mut waits = Vec::new();
+                    while !writer_stop.load(Ordering::Relaxed) {
+                        let start = Instant::now();
+                        let mut tx = writer_pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+                        waits.push(start.elapsed().as_micros());
+                        sqlx::query(
+                            "UPDATE conversations SET updated_at=updated_at+1 WHERE id='chan'",
+                        )
+                        .execute(&mut *tx)
+                        .await
+                        .unwrap();
+                        tx.commit().await.unwrap();
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                    waits
+                });
+                let mut requests = Vec::new();
+                let mut transactions = Vec::new();
+                for _ in 0..3 {
+                    SEARCH_TIMING
+                        .scope(Cell::new(Duration::ZERO), async {
+                            let start = Instant::now();
+                            let result = read
+                                .search(
+                                    &agent("agent-a"),
+                                    Some(&conv("chan")),
+                                    &SearchScopeSelector::Conversation(conv("chan")),
+                                    &query(needle),
+                                )
+                                .await
+                                .unwrap()
+                                .unwrap();
+                            requests.push(start.elapsed().as_micros());
+                            transactions
+                                .push(SEARCH_TIMING.with(|elapsed| elapsed.get().as_micros()));
+                            assert_eq!(result.hits.len(), expected);
+                            if expected == 1 {
+                                assert_eq!(result.hits[0].message_id, "scale-1");
+                            }
+                        })
+                        .await;
+                }
+                stop.store(true, Ordering::Relaxed);
+                let mut waits = writer.await.unwrap();
+                waits.sort_unstable();
+                assert!(!waits.is_empty());
+                println!(
+                    "search_scale rows={size} bytes_per_row=1024 needle={needle} hits={expected} requests_us={requests:?} transactions_us={transactions:?} concurrent_writers=1 writer_samples={} writer_wait_p50_us={} writer_wait_p95_us={}",
+                    waits.len(),
+                    waits[waits.len() / 2],
+                    waits[(waits.len() - 1) * 95 / 100]
+                );
+            }
+            read.pool.close().await;
+        }
+    }
+
+    #[tokio::test]
     async fn fold_match_finds_a_non_like_hit_and_carries_per_hit_coords() {
         let (_d, read) = seeded().await;
         // "SS" folds to match "ß" — an ASCII LIKE '%SS%' would NOT return m1, proving
@@ -898,7 +965,7 @@ INSERT INTO messages (id,conversation_id,from_kind,from_agent_id,content,seq,cre
     }
 
     #[tokio::test]
-    async fn workspace_keyset_does_not_skip_a_tie_across_conversations_at_a_page_boundary() {
+    async fn workspace_stream_does_not_skip_a_tie_across_conversations_beyond_old_page_boundary() {
         // Cindy #4: `seq` is unique only WITHIN a conversation, so a workspace scope can
         // hold many rows sharing the same (created_at, seq) across conversations. Seed
         // >CANDIDATE_PAGE (256) such tied NON-matching rows plus ONE match whose
