@@ -14,9 +14,8 @@
 //!   window, interval floor + stale `start_at` floor, repeat-boundedness,
 //!   timezone/cron validity, `until_at` sanity). It reads no persisted state, so
 //!   it cannot decide the capacity cap.
-//! - **The stateful preconditions** (owner agent exists, its agent_home DM
-//!   exists, the resolved target conversation exists / is not closed / still has
-//!   the owner as a participant and still grants `manage_schedules`) are replayed
+//! - **The stateful preconditions** (owner agent exists, the resolved target
+//!   conversation exists / is not closed / still has the owner as a participant and still grants `manage_schedules`) are replayed
 //!   by the create UoW on its reserved writer. The route's earlier checks preserve
 //!   refusal order but are not write credentials.
 //! - **The capacity cap** (`too_many_active_schedules`) also lives in that one
@@ -295,8 +294,6 @@ pub enum ScheduleCreateOutcome {
     Created(Box<ScheduleView>),
     /// The owner agent no longer exists at the linearization point.
     AgentNotFound,
-    /// The owner has no agent-home workspace with a fixed DM conversation.
-    AgentHomeNotFound,
     /// The owner already holds [`SCHEDULE_MAX_ACTIVE_PER_AGENT`] active schedules.
     CapExceeded { active: i64 },
     /// The resolved target conversation no longer exists at insert time.
@@ -339,7 +336,7 @@ pub enum ScheduleCreateOutcome {
 /// [`TargetClosed`]: ScheduleCreateOutcome::TargetClosed
 /// [`ActorNotParticipant`]: ScheduleCreateOutcome::ActorNotParticipant
 pub trait ScheduleCreateStore {
-    /// One linearized create: owner → agent-home DM → target existence → target
+    /// One linearized create: owner → target existence → target
     /// closure → participation → active cap → stateless canonicalization → insert,
     /// all inside one reserved writer. This ordering is product-visible.
     fn create<C>(

@@ -13,7 +13,7 @@
 //!    resolved destination; denial keeps the typed `capability_denied` envelope.
 //!    This order is observable — a nonexistent target is answered by step 3 before
 //!    capability is ever consulted.
-//! 5. the atomic [`ScheduleCreateStore::create`] UoW replays owner/home/target/
+//! 5. the atomic [`ScheduleCreateStore::create`] UoW replays owner/target/
 //!    participation/capability/cap under one write lock, then samples its clock,
 //!    applies [`ScheduleCreateRequest::plan`], and inserts. Its typed outcome maps
 //!    without introducing a second stateful or time authority.
@@ -207,11 +207,6 @@ where
             StatusCode::NOT_FOUND,
             "agent_not_found",
             format!("agent {owner_id} not found"),
-        ),
-        Ok(ScheduleCreateOutcome::AgentHomeNotFound) => schedule_error(
-            StatusCode::NOT_FOUND,
-            "agent_home_not_found",
-            format!("agent {owner_id} has no agent_home DM channel"),
         ),
         Ok(ScheduleCreateOutcome::Invalid(guard)) => guard_refusal(guard),
         Err(_) => internal_error(),

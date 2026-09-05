@@ -188,18 +188,6 @@ impl<K: Clock + Send + Sync> ScheduleCreateStore for SqliteScheduleCreate<K> {
             return Ok(ScheduleCreateOutcome::AgentNotFound);
         }
 
-        let home_exists: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM workspaces w WHERE w.owner_agent_id = ? AND EXISTS (SELECT 1 FROM conversations c WHERE c.workspace_id = w.id AND c.roster_policy = 'fixed') LIMIT 1",
-        )
-        .bind(owner.as_str())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(driver)?;
-        if home_exists.is_none() {
-            tx.rollback().await.map_err(driver)?;
-            return Ok(ScheduleCreateOutcome::AgentHomeNotFound);
-        }
-
         let target = sqlx::query(SELECT_TARGET_CONVERSATION)
             .bind(target_id.as_str())
             .fetch_optional(&mut *tx)

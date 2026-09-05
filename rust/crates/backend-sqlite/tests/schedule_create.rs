@@ -128,19 +128,6 @@ async fn seed(connection: &mut SqliteConnection) {
     .execute(&mut *connection)
     .await
     .unwrap();
-    sqlx::query(
-        "INSERT INTO workspaces (id, name, name_key, owner_agent_id, created_at, updated_at)
-         VALUES ('home-1', 'home', NULL, ?, 1, 1)",
-    )
-    .bind(OWNER)
-    .execute(&mut *connection)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO conversations
-            (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at)
-         VALUES ('home-dm-1', 'home-1', 'workspace', 'fixed', 'dm', 'dm', 'active', 1, 1)",
-    ).execute(&mut *connection).await.unwrap();
 }
 
 /// A once-spec create request firing comfortably inside the delay window.
@@ -214,16 +201,14 @@ async fn a_valid_create_inserts_one_pending_row_and_projects_the_canonical_view(
 }
 
 #[tokio::test]
-async fn stateful_agent_home_participation_and_capability_gates_are_fresh_and_zero_write() {
+async fn stateful_agent_participation_and_capability_gates_are_fresh_and_zero_write() {
     enum Mutation {
         Agent,
-        Home,
         Participation,
         Capability,
     }
     for (mutation, expected) in [
         (Mutation::Agent, ScheduleCreateOutcome::AgentNotFound),
-        (Mutation::Home, ScheduleCreateOutcome::AgentHomeNotFound),
         (
             Mutation::Participation,
             ScheduleCreateOutcome::ActorNotParticipant,
@@ -237,13 +222,6 @@ async fn stateful_agent_home_participation_and_capability_gates_are_fresh_and_ze
         match mutation {
             Mutation::Agent => {
                 sqlx::query("DELETE FROM agents WHERE id=?")
-                    .bind(OWNER)
-                    .execute(&mut connection)
-                    .await
-                    .unwrap();
-            }
-            Mutation::Home => {
-                sqlx::query("DELETE FROM workspaces WHERE owner_agent_id=?")
                     .bind(OWNER)
                     .execute(&mut connection)
                     .await

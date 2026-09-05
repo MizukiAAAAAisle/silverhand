@@ -28,14 +28,11 @@ Common flags:
                            1..500 chars.
   --kind once|interval|cron Required. Time policy.
   --target-conversation <address>
-                           Required. The conversation whose
-                           (conversation, you) runtime is woken up on
-                           each fire — that runtime owns the full
-                           lifecycle: receive wake → produce work →
-                           post result, all in its own context.
-                           Splitting fire-target from execution-target
-                           is intentionally NOT supported: the session
-                           that posts is the one that did the work.
+                           Required. The conversation receiving the wake.
+                           Your runtime scope determines execution:
+                           agent-scoped agents keep their shared runtime;
+                           conversation-scoped agents wake in that target's
+                           isolated runtime. The target remains explicit.
                            Spelled like any other address —
                            \`#conv:<conversation_id>\`,
                            \`#<workspace>/<title>\`,
@@ -45,8 +42,7 @@ Common flags:
                            cluster shares its parent's runtime, so a
                            \`/thread:\` suffix is refused rather than
                            quietly ignored. There is no default — the
-                           conversation this CLI is authenticated in is
-                           where your credential lives, not a destination.
+                           credential identifies you, not a destination.
 
 once flags (exactly one):
   --fire-at <epoch_ms>     Absolute UTC fire time.
@@ -154,9 +150,8 @@ stdout: { "schedule": ScheduleDto }`,
         command: 'silverhand schedule create',
         flag: 'target-conversation',
         because:
-          'a fire wakes the (conversation, you) runtime of ONE conversation, ' +
-          'and the conversation this CLI is authenticated in is where your ' +
-          'credential lives, not a default destination.',
+          'a fire needs ONE explicit conversation destination; your runtime ' +
+          'scope determines which session executes it, not a default target.',
       },
     );
 

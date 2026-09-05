@@ -3343,17 +3343,6 @@ async fn the_composed_schedule_driver_delivers_and_settles_a_due_occurrence() {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::raw_sql(
-        "INSERT INTO workspaces(id,name,owner_agent_id,created_at,updated_at) VALUES \
-           ('home-schedule-owner','Owner Home','schedule-owner',1,1); \
-         INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at) VALUES \
-           ('home-dm-schedule-owner','home-schedule-owner','workspace','fixed','Onboarding','onboarding','idle','private',1,1); \
-         INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES \
-           ('home-dm-schedule-owner','schedule-owner',1);",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
     sqlx::query(
         "INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES(?,?,1)",
     )
@@ -3374,16 +3363,6 @@ async fn the_composed_schedule_driver_delivers_and_settles_a_due_occurrence() {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query(
-        "INSERT INTO schedules(id,owner_agent_id,target_conversation_id,title,message,spec_json,\
-         next_fire_at,status,fired_count,max_occurrences,until_at,consecutive_failure_count,\
-         created_at,updated_at) VALUES('schedule-due','schedule-owner',?,'Digest','wake now',\
-         '{\"kind\":\"once\",\"fire_at\":1}',9000000000000000,'pending',0,NULL,NULL,0,1,1)",
-    )
-    .bind(CONVERSATION_ID)
-    .execute(&pool)
-    .await
-    .unwrap();
     pool.close().await;
 
     let app = prepare(&config(fixture.path.clone())).await.unwrap();
@@ -3403,15 +3382,11 @@ async fn the_composed_schedule_driver_delivers_and_settles_a_due_occurrence() {
         .connect(fixture.path.to_str().unwrap())
         .await
         .unwrap();
-    sqlx::query("UPDATE schedules SET next_fire_at=1 WHERE id='schedule-due'")
-        .execute(&pool)
-        .await
-        .unwrap();
     let fire_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64
-        + 60_000;
+        + 31_000;
     let (rearm_status, rearm_body) = json_request_with_body(
         &router,
         "POST",
@@ -3423,39 +3398,100 @@ async fn the_composed_schedule_driver_delivers_and_settles_a_due_occurrence() {
     )
     .await;
     assert_eq!(rearm_status, StatusCode::OK, "{rearm_body}");
+    let created: serde_json::Value = serde_json::from_str(&rearm_body).unwrap();
+    let schedule_id = created["schedule"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(created["schedule"]["owner_agent_id"], "schedule-owner");
+    assert_eq!(
+        created["schedule"]["target_conversation_id"],
+        CONVERSATION_ID
+    );
+    assert_eq!(created["schedule"]["next_fire_at"], fire_at);
+    delivery_daemon.close().await;
+    shutdown_tx.send(()).unwrap();
+    running.await.unwrap().unwrap();
+    drop(router);
+    drop(runtime_credentials);
+    pool.close().await;
+    // Pools close asynchronously on drop. Wait for a real exclusive SQLite
+    // transaction to prove the previous app released its database connections.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let mut probe = sqlx::SqliteConnection::connect(fixture.path.to_str().unwrap())
+                .await
+                .unwrap();
+            sqlx::query("PRAGMA busy_timeout=0")
+                .execute(&mut probe)
+                .await
+                .unwrap();
+            sqlx::query("PRAGMA locking_mode=EXCLUSIVE")
+                .execute(&mut probe)
+                .await
+                .unwrap();
+            if sqlx::query("BEGIN EXCLUSIVE")
+                .execute(&mut probe)
+                .await
+                .is_ok()
+            {
+                sqlx::query("ROLLBACK").execute(&mut probe).await.unwrap();
+                probe.close().await.unwrap();
+                break;
+            }
+            probe.close().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("previous app retained database connections");
+    let app = prepare(&config(fixture.path.clone())).await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let running = tokio::spawn(serve(listener, app, async move {
+        let _ = shutdown_rx.await;
+        Ok::<(), std::io::Error>(())
+    }));
+    let delivery_daemon = AttachedDeliveryDaemon::connect(address).await;
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
     let (status, messages, owner_inboxes, peer_inboxes): (String, i64, i64, i64) = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
+        std::time::Duration::from_secs(45),
         async {
             loop {
                 let status: String =
-                    sqlx::query_scalar("SELECT status FROM schedules WHERE id='schedule-due'")
+                    sqlx::query_scalar("SELECT status FROM schedules WHERE id=?")
+                        .bind(&schedule_id)
                         .fetch_one(&pool)
                         .await
                         .unwrap();
                 let messages: i64 = sqlx::query_scalar(
                     "SELECT COUNT(*) FROM messages WHERE conversation_id=? \
                      AND json_extract(metadata,'$.subtype')='schedule_fire' \
-                     AND json_extract(metadata,'$.schedule_id')='schedule-due'",
+                     AND json_extract(metadata,'$.schedule_id')=?",
                 )
                 .bind(CONVERSATION_ID)
+                .bind(&schedule_id)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
                 let inboxes: i64 = sqlx::query_scalar(
                     "SELECT COUNT(*) FROM conversation_inboxes ci JOIN messages m ON m.id=ci.message_id \
                      WHERE ci.conversation_id=? AND ci.agent_id='schedule-owner' \
-                     AND json_extract(m.metadata,'$.schedule_id')='schedule-due'",
+                     AND json_extract(m.metadata,'$.schedule_id')=?",
                 )
                 .bind(CONVERSATION_ID)
+                .bind(&schedule_id)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
                 let peer_inboxes: i64 = sqlx::query_scalar(
                     "SELECT COUNT(*) FROM conversation_inboxes ci JOIN messages m ON m.id=ci.message_id \
                      WHERE ci.conversation_id=? AND ci.agent_id='schedule-peer' \
-                     AND json_extract(m.metadata,'$.schedule_id')='schedule-due'",
+                     AND json_extract(m.metadata,'$.schedule_id')=?",
                 )
                 .bind(CONVERSATION_ID)
+                .bind(&schedule_id)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -3468,7 +3504,7 @@ async fn the_composed_schedule_driver_delivers_and_settles_a_due_occurrence() {
     )
     .await
     .expect("production schedule driver did not settle the due occurrence");
-    assert!(status == "done" || status == "failed", "{status}");
+    assert_eq!(status, "done");
     assert_eq!(
         messages, 1,
         "one claimed occurrence writes one wake message"
@@ -3492,12 +3528,29 @@ async fn the_composed_schedule_driver_delivers_and_settles_a_due_occurrence() {
         head_before_send, None,
         "schedule_fire is freshness-exempt and must not advance the target stream head"
     );
+    let persisted: (String, String, i64, i64) = sqlx::query_as(
+        "SELECT owner_agent_id,target_conversation_id,next_fire_at,fired_count FROM schedules WHERE id=?",
+    ).bind(&schedule_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        persisted,
+        ("schedule-owner".into(), CONVERSATION_ID.into(), fire_at, 1)
+    );
+    let rescanner = silverhand_backend_sqlite::conversation_messaging::messaging::schedule::SqliteScheduleStore::open(&fixture.path).await.unwrap();
+    assert!(
+        rescanner
+            .due_candidates(fire_at + 60_000, 200)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a later driver sweep must not reselect the settled one-shot schedule"
+    );
     delivery_daemon.wait_for_deliveries(1).await;
     let message_id: String = sqlx::query_scalar(
         "SELECT id FROM messages WHERE conversation_id=? \
-         AND json_extract(metadata,'$.schedule_id')='schedule-due'",
+         AND json_extract(metadata,'$.schedule_id')=?",
     )
     .bind(CONVERSATION_ID)
+    .bind(&schedule_id)
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -10686,6 +10739,13 @@ async fn service_lane_delivery_commands<S>(
         tokio::select! {
             () = stop.notified() => break,
             command = next_daemon_json(&mut socket) => {
+                if command["type"] == "heartbeat" && command["kind"] == "ping" {
+                    socket.send(ClientMessage::Text(serde_json::json!({
+                        "direction": "daemon_to_server", "type": "heartbeat",
+                        "kind": "pong", "ts": command["ts"], "echo_ts": command["ts"],
+                    }).to_string().into())).await.unwrap();
+                    continue;
+                }
                 let result = match command["kind"].as_str() {
                     Some("runtime_status") => serde_json::json!({ "runtimes": [] }),
                     Some("host_status") => {
