@@ -1,5 +1,6 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
+import { toast } from 'sonner';
 import type {
   AddWorkspaceMemberInput,
   AgentCapabilitiesDto,
@@ -1127,16 +1128,22 @@ export function useArchiveChannel(workspaceId: string | null) {
     },
     onSuccess: (channel, vars) => {
       const targetWorkspaceId = vars.workspaceId ?? channel.workspace_id ?? workspaceId;
-      // Active and archived lists are disjoint contracts on the server;
-      // refresh both so the row leaves one and appears in the other
-      // immediately, even before the WS event arrives.
-      if (targetWorkspaceId) {
-        qc.invalidateQueries({ queryKey: channelsKey(targetWorkspaceId) });
-        qc.invalidateQueries({ queryKey: archivedChannelsKey(targetWorkspaceId) });
-      }
-      qc.invalidateQueries({ queryKey: ['archived-channels'] });
+      reconcileChannelArchive(qc, channel.id, targetWorkspaceId);
+    },
+    onError: () => {
+      toast.error('Failed to update channel archive');
     },
   });
+}
+
+/** Archive ACK invalidates channel lists and the detail used by row menus. */
+export function reconcileChannelArchive(qc: QueryClient, channelId: string, workspaceId: string | null): void {
+  if (workspaceId) {
+    void qc.invalidateQueries({ queryKey: channelsKey(workspaceId) });
+    void qc.invalidateQueries({ queryKey: archivedChannelsKey(workspaceId) });
+  }
+  void qc.invalidateQueries({ queryKey: ['archived-channels'] });
+  void qc.invalidateQueries({ queryKey: channelDetailKey(channelId) });
 }
 
 export function useRenameChannel(workspaceId: string | null) {

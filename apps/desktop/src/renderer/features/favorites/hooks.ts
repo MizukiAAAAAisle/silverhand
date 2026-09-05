@@ -184,9 +184,7 @@ export function useFavorites(watchWorkspaceIds: FavoritesWatchScope) {
     const unsub = onWsFrame(frame => {
       const viewerSnapshot =
         frame.type === 'snapshot_required' && isCurrentViewerScope(frame.scope);
-      if (viewerSnapshot || decideFavoritesInvalidation(frame, scopeIds)) {
-        void qc.invalidateQueries({ queryKey: favoritesKey });
-      }
+      void applyFavoritesSync(qc, frame, scopeIds, viewerSnapshot);
     });
     return () => {
       for (const s of subs) s.unsubscribe();
@@ -304,4 +302,12 @@ export function useUnstarFavorite() {
       toast.error('Failed to unstar, please retry');
     },
   });
+}
+
+/** The subscribed workspace set survives an empty favorites projection. */
+export function applyFavoritesSync(qc: QueryClient, frame: FavoritesSyncFrame, scopeIds: readonly string[], viewerSnapshot = false): Promise<void> {
+  if (viewerSnapshot || decideFavoritesInvalidation(frame, scopeIds)) {
+    return qc.invalidateQueries({ queryKey: favoritesKey });
+  }
+  return Promise.resolve();
 }
