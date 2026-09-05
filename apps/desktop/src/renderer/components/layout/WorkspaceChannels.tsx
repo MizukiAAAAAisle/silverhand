@@ -53,22 +53,16 @@ import {
   type ChannelAttentionModeRowDto,
   type ConversationVisibility,
 } from '@silverhand/shared';
-import { Archive, ArchiveRestore, Bell, Copy, Plus, Star } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { useSortable } from '@dnd-kit/sortable';
 import { ChannelIcon } from '@/components/ChannelIcon';
-import {
-  AppContextMenu,
-  AppContextMenuItem,
-  AppContextMenuSeparator,
-  AppContextMenuSub,
-} from '@/components/menus/AppContextMenu';
-import { ChannelAttentionMenuItems } from '@/components/layout/ChannelAttentionSurfaces';
+import { AppContextMenu } from '@/components/menus/AppContextMenu';
+import { ChannelRowMenuItems } from './ChannelRowMenuItems';
 import {
   ConversationRowLayout,
   NESTED_GLYPH_INSET,
   MutedMarker,
   UnreadBadge,
-  copyConversationName,
 } from '@/components/layout/sidebar-shared';
 import { SortModeMenu } from '@/components/layout/SortModeMenu';
 import {
@@ -475,24 +469,6 @@ function ChannelRow({
 }): JSX.Element {
   const isClosed = channel.closed_at !== null;
   const isArchived = channel.archived_at !== null;
-  // Fail-closed membership gate: member/org actions render only for an
-  // authoritative member. A browse-only public row (is_member === false) — or an
-  // unknown row — keeps only the presentation-state actions (Star) + read-side
-  // Copy name. Star + manual drag-sort are viewer-local and stay available.
-  const isMember = channel.is_member === true;
-  // Archive/Restore is a channel-like organization action (#task:1145): it
-  // applies to any top-level channel-like row — `channel` in a people-owned
-  // workspace AND `dm_channel` in an agent space — and only excludes threads.
-  // Non-members can't organize a channel they haven't joined (the backend 403s),
-  // so it is member-gated.
-  const showArchiveMenu = isMember;
-  // Per-viewer attention preference — a member-scoped write, regular channels
-  // only. Hidden for a browse-only public row.
-  const showAttentionMenu = isMember && channel.roster_policy === 'open';
-  // Star + attention + archive form the management group; the separator below
-  // fences them off from "Copy name" whenever any member action is present.
-  const hasManagementMenu = showArchiveMenu || showAttentionMenu;
-
   // One number per row, and its volume — via the shared `channelNodeBadge` so the
   // collapsed poke-out reveal filter paints from the EXACT same predicate (a row is
   // revealed iff the badge it would show is `loud`). The member gate, the
@@ -560,51 +536,19 @@ function ChannelRow({
 
   return (
     <AppContextMenu trigger={row}>
-      {/* One-way: this list never holds a starred channel (#task:1888 excludes it
-          before render), so there is no Unstar state to reach here. Unstar lives on
-          the STARRED row itself, where the channel actually is. */}
-      <AppContextMenuItem
-        icon={<Star className="size-3.5" />}
-        onSelect={() => onStar(channel.id, true)}
-      >
-        Star
-      </AppContextMenuItem>
-      {/* Per-viewer attention preference — regular channels only (the backend
-          404s dm_channel / thread). The tier comes from the workspace batch the
-          badges already read, so opening this fires no request of its own. */}
-      {showAttentionMenu ? (
-        <AppContextMenuSub icon={<Bell className="size-3.5" />} label="Notifications">
-          <ChannelAttentionMenuItems
-            channelId={channel.id}
-            mode={attention?.mode}
-            workspaceMuted={workspaceMuted}
-          />
-        </AppContextMenuSub>
-      ) : null}
-      {showArchiveMenu ? (
-        <AppContextMenuItem
-          icon={
-            isArchived ? (
-              <ArchiveRestore className="size-3.5" />
-            ) : (
-              <Archive className="size-3.5" />
-            )
-          }
-          disabled={archivePending}
-          onSelect={() => onArchive(channel.id, !isArchived)}
-        >
-          {isArchived ? 'Restore' : 'Archive'}
-        </AppContextMenuItem>
-      ) : null}
-      {hasManagementMenu ? <AppContextMenuSeparator /> : null}
-      <AppContextMenuItem
-        icon={<Copy className="size-3.5" />}
-        onSelect={() => {
-          void copyConversationName(channel.title);
-        }}
-      >
-        Copy name
-      </AppContextMenuItem>
+      <ChannelRowMenuItems
+        channelId={channel.id}
+        title={channel.title}
+        rosterPolicy={channel.roster_policy}
+        isMember={channel.is_member === true}
+        isArchived={isArchived}
+        starred={false}
+        attention={attention}
+        workspaceMuted={workspaceMuted}
+        onStar={() => onStar(channel.id, true)}
+        onArchive={() => onArchive(channel.id, !isArchived)}
+        archivePending={archivePending}
+      />
     </AppContextMenu>
   );
 }

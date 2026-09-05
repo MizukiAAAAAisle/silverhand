@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Bell, Copy, Star } from 'lucide-react';
+import { Star } from 'lucide-react';
 import type {
   ChannelAttentionMode,
   ChannelAttentionModeRowDto,
@@ -7,20 +7,15 @@ import type {
 } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
 import { ChannelIcon } from '@/components/ChannelIcon';
-import {
-  AppContextMenu,
-  AppContextMenuItem,
-  AppContextMenuSeparator,
-  AppContextMenuSub,
-} from '@/components/menus/AppContextMenu';
+import { AppContextMenu } from '@/components/menus/AppContextMenu';
+import { ChannelRowMenuItems } from './ChannelRowMenuItems';
 import { useFavorites, useUnstarFavorite } from '@/features/favorites/hooks';
 import { useAttentionModesAcrossWorkspaces } from '@/features/attention/hooks';
 import type { FavoritesWatchScope } from '@/lib/home-grouping';
-import { useSetSortMode } from '@/features/workspaces/hooks';
+import { useArchiveChannel, useChannelDetail, useSetSortMode } from '@/features/workspaces/hooks';
 import { channelRowBadge } from '@/lib/attention-mode';
 import { conversationSelectionTier } from '@/lib/rail-selection';
 import { sortModeOf } from '@/lib/viewer-sort';
-import { ChannelAttentionMenuItems } from '@/components/layout/ChannelAttentionSurfaces';
 import { SortModeMenu } from '@/components/layout/SortModeMenu';
 import {
   SortableGroup,
@@ -33,7 +28,6 @@ import {
   MutedMarker,
   SidebarSection,
   UnreadBadge,
-  copyConversationName,
 } from './sidebar-shared';
 
 /** The favorites list's own sort namespace. A single FLAT group (`favorites`),
@@ -249,6 +243,7 @@ function FavoriteRow({
   draggable,
 }: FavoriteRowProps): JSX.Element {
   const isPrimary = conversationSelectionTier(item.entity_id, selectedChannelId) === 'primary';
+  const archive = useArchiveChannel(item.workspace_id);
 
   // Byte-identical to the parent list's `ChannelRow`, which is the acceptance
   // contract for the move. A `dm_channel` carries no tier row (the backend's
@@ -279,16 +274,6 @@ function FavoriteRow({
   // make a muted workspace's `all`-tier rows count positional unread as `loud`
   // again (a behaviour regression, not one fewer icon). Same split as `ChannelRow`.
   const isSilenced = attention?.mode === 'mute';
-
-  // Notifications is a member-scoped write on regular channels only (the backend
-  // 404s a dm_channel). Membership is read off the SAME authority the badge uses:
-  // the modes batch joins `conversation_users`, so a row with no tier is a row the
-  // viewer is not a member of — a browse-only PUBLIC channel can be starred without
-  // joining, and offering it the menu would hand the user a guaranteed 404
-  // (@Cindy MUST FIX, #task:1889; the parent list's `ChannelRow` gates on `isMember`
-  // for the same reason). While the batch is loading or failed the entry is simply
-  // absent rather than optimistically offered.
-  const showAttentionMenu = item.roster_policy === 'open' && attention !== undefined;
 
   const row = (
     <ConversationRowLayout
@@ -331,33 +316,38 @@ function FavoriteRow({
 
   return (
     <AppContextMenu trigger={row}>
-      {/* Unstar returns the conversation to its parent's list — the inverse of the
-          move, and the only place it can be undone (the parent's list no longer
-          holds the row). */}
-      <AppContextMenuItem
-        icon={<Star className="size-3.5 fill-current" />}
-        onSelect={onUnstar}
-      >
-        Unstar
-      </AppContextMenuItem>
-      {showAttentionMenu ? (
-        <AppContextMenuSub icon={<Bell className="size-3.5" />} label="Notifications">
-          <ChannelAttentionMenuItems
-            channelId={item.entity_id}
-            mode={attention?.mode}
-            workspaceMuted={workspaceMuted}
-          />
-        </AppContextMenuSub>
-      ) : null}
-      <AppContextMenuSeparator />
-      <AppContextMenuItem
-        icon={<Copy className="size-3.5" />}
-        onSelect={() => {
-          void copyConversationName(item.title);
-        }}
-      >
-        Copy name
-      </AppContextMenuItem>
+      <FavoriteMenuItems
+        item={item}
+        attention={attention}
+        workspaceMuted={workspaceMuted}
+        onUnstar={onUnstar}
+        archivePending={archive.isPending}
+        onArchive={archived => archive.mutate({ channelId: item.entity_id, archived, workspaceId: item.workspace_id })}
+      />
     </AppContextMenu>
+  );
+}
+
+/** Mounted by the menu portal: resolve membership only when actions are requested. */
+function FavoriteMenuItems({ item, attention, workspaceMuted, onUnstar, onArchive, archivePending }: Pick<FavoriteRowProps, 'item' | 'attention' | 'workspaceMuted' | 'onUnstar'> & {
+  onArchive: (archived: boolean) => void;
+  archivePending: boolean;
+}): JSX.Element {
+  const { data } = useChannelDetail(item.entity_id);
+  const isArchived = data?.channel.archived_at != null;
+  return (
+    <ChannelRowMenuItems
+      channelId={item.entity_id}
+      title={item.title}
+      rosterPolicy={item.roster_policy}
+      isMember={data?.is_member === true}
+      isArchived={isArchived}
+      starred
+      attention={attention}
+      workspaceMuted={workspaceMuted}
+      onStar={onUnstar}
+      onArchive={() => onArchive(!isArchived)}
+      archivePending={archivePending}
+    />
   );
 }
