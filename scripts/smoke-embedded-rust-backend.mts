@@ -1,6 +1,6 @@
 // Production launcher smoke. Optional argument: final packaged Resources directory.
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -26,7 +26,13 @@ const { startDesktopEmbeddedBackend } =
   await import('../apps/desktop/src/main/embedded-launcher.js');
 const paths = resolveDesktopAppPaths(process.env.SILVERHAND_DIR);
 mkdirSync(paths.embeddedServer.root, { recursive: true });
-const resources = process.argv[2];
+let resources = process.argv[2];
+if (resources === '--sidecar-stage') {
+  const stage = process.argv[3];
+  assert.ok(stage, '--sidecar-stage requires the independently built stage directory');
+  symlinkSync(stage, join(root, 'silverhand-backend'), 'dir');
+  resources = root;
+}
 let handle: EmbeddedRustBackendHandle | undefined;
 let socket: WebSocket | undefined;
 const location = {
@@ -78,7 +84,7 @@ try {
     'bad config must fail through the typed production startup surface');
   assert.equal(existsSync(paths.embeddedServer.bootstrap), false);
   assert.equal(existsSync(`${paths.embeddedServer.bootstrap}.tmp`), false);
-  console.error('[smoke] PASS: production verify → migrate/close → bound/ready/epoch → bootstrap → human route 200 → authenticated WS open → close; bad-config typed failure reclaimed');
+  console.error('[smoke] PASS: production verify → Rust-owned migration/close → bound/ready/epoch → bootstrap → human route 200 → authenticated WS open → close; bad-config typed failure reclaimed');
 } finally {
   socket?.terminate();
   await handle?.close();

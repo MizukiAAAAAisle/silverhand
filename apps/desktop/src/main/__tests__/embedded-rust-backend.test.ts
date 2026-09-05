@@ -63,7 +63,7 @@ function config(): EmbeddedRustBackendConfig {
 }
 
 function boundLine(overrides: Record<string, unknown> = {}): string {
-  return `${JSON.stringify({
+  return phaseLine('preparing') + phaseLine('prepared') + `${JSON.stringify({
     v: STARTUP_PROTOCOL_VERSION,
     kind: BOUND_FRAME_KIND,
     generation: GENERATION,
@@ -71,6 +71,10 @@ function boundLine(overrides: Record<string, unknown> = {}): string {
     port: 51763,
     ...overrides,
   })}\n`;
+}
+
+function phaseLine(kind: 'preparing' | 'prepared'): string {
+  return `${JSON.stringify({ v: STARTUP_PROTOCOL_VERSION, kind, generation: GENERATION })}\n`;
 }
 
 /** A clock backed by real timers so vitest fake timers drive it deterministically:
@@ -150,6 +154,64 @@ const FAST: EmbeddedRustBackendTimings = {
 };
 
 describe('startup ordering and cancellation', () => {
+  it('bound does not reset the prepared-to-service deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({probeReadyz: async () => new Promise(() => {})});
+      let outcome: unknown;
+      const starting = startEmbeddedRustBackend({ executablePath: '/app/backend' }, config(), h.deps)
+        .catch(error => { outcome = error; return error; });
+      await Promise.resolve();
+      h.child.emitStdout(phaseLine('preparing'));
+      await vi.advanceTimersByTimeAsync(60_000);
+      h.child.emitStdout(phaseLine('prepared'));
+      await vi.advanceTimersByTimeAsync(20_000);
+      h.child.emitStdout(boundLine().slice(phaseLine('preparing').length + phaseLine('prepared').length));
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(outcome).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await starting).toMatchObject({kind:'readiness-timeout'});
+      expect(h.child.killed).toContain('SIGTERM');
+    } finally { vi.useRealTimers(); }
+  });
+  it('confirmed preparation can exceed 30 seconds; service budget starts only at prepared', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness();
+      let published = false;
+      const starting = startEmbeddedRustBackend({ executablePath: '/app/backend' }, config(), h.deps)
+        .then(handle => { published = true; return handle; });
+      await Promise.resolve();
+      h.child.emitStdout(phaseLine('preparing'));
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(published).toBe(false);
+      expect(h.child.killed).toEqual([]);
+      h.child.emitStdout(boundLine().slice(phaseLine('preparing').length));
+      const handle = await starting;
+      expect(handle.url).toBe('http://127.0.0.1:51763');
+      await handle.close();
+    } finally { vi.useRealTimers(); }
+  });
+
+  for (const phase of ['preparing', 'prepared'] as const) {
+    it(`cancellation in ${phase} waits for forced reclamation without publication`, async () => {
+      vi.useFakeTimers();
+      try {
+        const h = harness();
+        h.child.ignoreTerm = true;
+        const abort = new AbortController();
+        const starting = startEmbeddedRustBackend({ executablePath: '/app/backend' },
+          { ...config(), signal: abort.signal }, h.deps).catch(error => error);
+        await Promise.resolve();
+        h.child.emitStdout(phaseLine('preparing') + (phase === 'prepared' ? phaseLine('prepared') : ''));
+        abort.abort();
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMINGS.shutdownGraceMs);
+        expect(await starting).toMatchObject({ kind: 'shutdown-during-startup' });
+        expect(h.child.killed).toEqual(['SIGTERM', 'SIGKILL']);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally { vi.useRealTimers(); }
+    });
+  }
   it('abort before the first frame disposes its timer after reclamation', async () => {
     vi.useFakeTimers();
     try {
@@ -365,7 +427,7 @@ describe('startEmbeddedRustBackend — failure matrix (each fail-loud, reclaim, 
       h.deps,
       FAST,
     );
-    queueMicrotask(() => h.child.emitStdout(`garbage\n${boundLine()}\n`));
+    queueMicrotask(() => h.child.emitStdout(`${boundLine()}duplicate\n`));
     await expect(promise).rejects.toMatchObject({ kind: 'duplicate-frame' });
     expect(h.child.killed).toContain('SIGTERM');
   });

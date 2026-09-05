@@ -15,7 +15,6 @@ describe('pre-child token ownership', () => {
           if (['missing-manifest', 'missing-binary', 'verify'].includes(fault)) throw new Error(fault);
           return 'verified';
         },
-        migrate: () => { order.push('migrate'); if (fault === 'migration') { artifacts.add('tmp'); throw new Error(fault); } },
         launch: () => {
           order.push('launch'); artifacts.add('final'); artifacts.add('tmp');
           if (fault === 'spawn-throw') throw new Error(fault);

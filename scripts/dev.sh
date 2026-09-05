@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # One-shot dev launcher for Silverhand.
 # - installs deps if missing
-# - swaps better-sqlite3 binding to electron's ABI (cached, see _native.sh)
 # - starts electron-vite dev
 #
 # Usage: ./scripts/dev.sh [--clean] [--reinstall]
@@ -11,8 +10,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-# shellcheck source=./_native.sh
-source "$ROOT_DIR/scripts/_native.sh"
 
 CLEAN=0
 REINSTALL=0
@@ -23,7 +20,7 @@ for arg in "$@"; do
     -h|--help)
       echo "Usage: $0 [--clean] [--reinstall]"
       echo "  --clean     remove dist/out caches before starting"
-      echo "  --reinstall force a fresh pnpm install + native rebuild (clears the binding cache too)"
+      echo "  --reinstall force a fresh pnpm install"
       exit 0
       ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
@@ -36,7 +33,7 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 
 if [[ "$REINSTALL" == "1" ]]; then
-  echo "[dev] --reinstall: clearing node_modules and binding cache"
+  echo "[dev] --reinstall: clearing node_modules"
   rm -rf node_modules apps/*/node_modules packages/*/node_modules
 fi
 
@@ -50,22 +47,6 @@ if [[ "$CLEAN" == "1" ]]; then
   rm -rf apps/desktop/out apps/desktop/dist
   pnpm -r exec rm -rf dist 2>/dev/null || true
 fi
-
-ELECTRON_VERSION="$(node -p "require('./apps/desktop/package.json').devDependencies.electron" 2>/dev/null | sed 's/^[\^~]//' || true)"
-if [[ -z "$ELECTRON_VERSION" ]]; then
-  echo "[dev] could not detect electron version from apps/desktop/package.json" >&2
-  exit 1
-fi
-ELECTRON_ABI="$(node -p "require('node-abi').getAbi('$ELECTRON_VERSION', 'electron')" 2>/dev/null || true)"
-if [[ -z "$ELECTRON_ABI" ]]; then
-  echo "[dev] could not resolve electron ABI for version $ELECTRON_VERSION (node-abi missing?)" >&2
-  exit 1
-fi
-
-locate_binding
-ensure_binding "$ELECTRON_ABI" \
-  "pnpm --filter @silverhand/desktop exec electron-rebuild -f -w better-sqlite3" \
-  "dev (electron $ELECTRON_VERSION)"
 
 # pnpm blocks postinstall scripts by default, so the Electron binary
 # (downloaded by node_modules/electron/install.js) is missing on first install.
@@ -106,6 +87,7 @@ case "$(node -p 'process.platform')-$(node -p 'process.arch')" in
   linux-x64) DEV_BACKEND_TARGET="x86_64-unknown-linux-gnu" ;;
   *) echo "[dev] no host-target mapping for $(node -p 'process.platform')-$(node -p 'process.arch')" >&2; exit 1 ;;
 esac
+node scripts/generate-rust-migrations.mjs --check
 ( cd "$ROOT_DIR/rust" && cargo build --release --bin silverhand-backend )
 SIDECAR_STAGE="$ROOT_DIR/rust/target/release"
 if [[ ! -x "$SIDECAR_STAGE/silverhand-backend" ]]; then

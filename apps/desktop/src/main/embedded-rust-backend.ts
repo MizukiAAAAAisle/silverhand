@@ -7,14 +7,13 @@
 //   2. spawn the child with a launcher-owned EXPLICIT env boundary (db, blobs, logs,
 //      bootstrap-token, listener, origins, daemon, signup, deployment_profile=embedded)
 //      + a launcher-minted `SILVERHAND_STARTUP_GENERATION`;
-//   3. read EXACTLY ONE stdout `bound` frame (via `BoundFrameReader`), whose generation
-//      must echo the minted value;
+//   3. read ordered preparing/prepared/bound frames, all echoing this generation;
 //   4. poll the reported URL for `/readyz=200` (the frame is `bound`, not `ready`);
 //   5. verify the API-epoch wire-compat from `/api/server/info`;
 //   6. publish an `EmbeddedRustBackendHandle { url, port, onTerminal, close }`.
 //
-// Migration is NOT done here: the caller runs the canonical TS migrator + backup +
-// FK/integrity and FULLY closes the DB BEFORE calling this, so the child is the only
+// Migration is owned by the Rust child, which backs up, migrates, audits and closes
+// its preparation connection before opening application pools. The child is the only
 // opener of the SQLite file (no dual-open). Compatibility is the independent `api_epoch`;
 // this module performs NO version-equality check.
 //
@@ -47,8 +46,10 @@ import type { VerifiedSidecar } from './rust-backend-sidecar.js';
 export interface EmbeddedRustBackendConfig {
   /** Desktop shutdown cancels startup before any handle is published. */
   signal?: AbortSignal;
-  /** Absolute path to the canonical SQLite database (already migrated + closed). */
+  /** Absolute path to the canonical SQLite database; the Rust child prepares it. */
   databasePath: string;
+  /** Raw explicit permission, parsed only by Rust; unset uses the embedded default. */
+  migrationPermission?: string;
   /** Absolute path to the blob storage root. */
   blobsRoot: string;
   /** Absolute path to the categorized-log directory. */
@@ -163,9 +164,9 @@ export interface EmbeddedRustBackendDeps {
 }
 
 export interface EmbeddedRustBackendTimings {
-  /** Max wait for the stdout `bound` frame after spawn. */
+  /** Max wait for the stdout `preparing` frame after spawn. */
   frameTimeoutMs: number;
-  /** Total startup budget from entry through frame, readiness and epoch verification. */
+  /** Service budget from `prepared` through bound, readiness and epoch verification. */
   readyTimeoutMs: number;
   /** `/readyz` poll interval. */
   readyPollIntervalMs: number;
@@ -186,8 +187,8 @@ export const DEFAULT_TIMINGS: EmbeddedRustBackendTimings = {
 
 /**
  * Launch the embedded Rust backend child and return a handle once it is BOUND,
- * `/readyz`-confirmed, and epoch-compatible. The DB migration MUST already be done and
- * the DB fully closed by the caller (no dual-open). Any failure reclaims the child +
+ * `/readyz`-confirmed, and epoch-compatible. Rust owns database preparation before
+ * publishing its bound frame (no TS dual-open). Any failure reclaims the child +
  * token and throws a typed `EmbeddedRustBackendStartError` — no handle/URL is ever
  * published on a failure path.
  */
@@ -197,7 +198,6 @@ export async function startEmbeddedRustBackend(
   deps: EmbeddedRustBackendDeps,
   timings: EmbeddedRustBackendTimings = DEFAULT_TIMINGS,
 ): Promise<EmbeddedRustBackendHandle> {
-  const deadline = deps.clock.now() + timings.readyTimeoutMs;
   await deps.removeBootstrapToken(config.bootstrapTokenPath);
   if (config.signal?.aborted) {
     throw new EmbeddedRustBackendStartError('shutdown-during-startup', 'startup cancelled');
@@ -248,14 +248,16 @@ export async function startEmbeddedRustBackend(
       controller.signal.addEventListener('abort', () => reject(
         new EmbeddedRustBackendStartError('shutdown-during-startup', 'startup cancelled'),
       ), { once: true });
-      deadlineTimer = setTimeout(() => reject(new EmbeddedRustBackendStartError(
-        bound ? 'readiness-timeout' : 'eof-before-frame', 'embedded backend exceeded the total startup deadline',
-      )), Math.max(0, deadline - deps.clock.now()));
+      monitor.onPrepared = () => {
+        deadlineTimer = setTimeout(() => reject(new EmbeddedRustBackendStartError(
+          bound ? 'readiness-timeout' : 'eof-before-frame', 'embedded backend exceeded the service startup deadline',
+        )), timings.readyTimeoutMs);
+      };
     });
     try {
       const frame = await Promise.race([monitor.awaitBoundFrame(timings, deps), cancelled]);
       bound = true;
-      // Probe work and terminal events share the deadline established at startup entry.
+      // Bound and probes share the deadline established at preparation completion.
       await Promise.race([
         runReadyAndEpochGate(frame.url, config, child, monitor, timings, deps, controller.signal),
         cancelled,
@@ -294,6 +296,7 @@ function buildChildEnv(
   };
   if (config.daemonNpmSpec) env.SILVERHAND_DAEMON_NPM_SPEC = config.daemonNpmSpec;
   if (config.disableSignup) env.SILVERHAND_DISABLE_SIGNUP = '1';
+  if (config.migrationPermission !== undefined) env.SILVERHAND_MIGRATE = config.migrationPermission;
   return env;
 }
 
@@ -313,6 +316,7 @@ function buildChildEnv(
  *    so the Desktop main invalidates the backend rather than silently dropping the line.
  */
 class StartupProtocolMonitor {
+  onPrepared: () => void = () => {};
   private readonly reader: BoundFrameReader;
   private phase: 'awaiting' | 'bound' | 'published' | 'disposed' = 'awaiting';
   private onData: ((chunk: Buffer | string) => void) | null = null;
@@ -339,7 +343,10 @@ class StartupProtocolMonitor {
     private readonly child: ChildProcess,
     generation: string,
   ) {
-    this.reader = new BoundFrameReader(generation);
+    this.reader = new BoundFrameReader(generation, (phase) => {
+      this.boundTimer?.clear();
+      if (phase === 'prepared') this.onPrepared();
+    });
   }
 
   awaitBoundFrame(
@@ -364,6 +371,7 @@ class StartupProtocolMonitor {
       const onData = (chunk: Buffer | string): void => {
         const outcome = this.reader.push(chunk);
         if (outcome === null) return;
+        if (outcome.status === 'preparing' || outcome.status === 'prepared') return;
         if (this.phase === 'awaiting') {
           if (outcome.status === 'bound') {
             settleResolve(outcome.frame);
@@ -433,7 +441,7 @@ class StartupProtocolMonitor {
         settleReject(
           new EmbeddedRustBackendStartError(
             'eof-before-frame',
-            `embedded Rust backend did not emit its bound frame within ${timings.frameTimeoutMs}ms`,
+            `embedded Rust backend did not enter preparation within ${timings.frameTimeoutMs}ms`,
           ),
         );
       });

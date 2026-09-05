@@ -95,7 +95,7 @@ import {
 } from '@silverhand/shared';
 import { deriveLocalOutboundFrameSocketPath } from '@silverhand/host';
 import type { Server as HttpServer } from 'node:http';
-import { createLogLevelControl, type LogLevelControl } from './logger.js';
+import { createLogLevelControl, type LogLevelControl } from '@silverhand/shared/node-file-logger';
 import type { AuthRuntimeConfig } from './auth/config.js';
 import {
   BackendMetrics,
@@ -1075,12 +1075,6 @@ export {
   type ObservedStatement,
 } from './observability/observed-statement.js';
 export { CURRENT_MIGRATION_STEP } from '@silverhand/shared/db/migrations';
-// #task:2343 — the embedded launcher's DB migration handoff (migrate + backup +
-// integrity audits then FULLY close), so the Rust child is the sole opener.
-export {
-  migrateAndCloseForEmbeddedHandoff,
-  type EmbeddedMigrationHandoffOptions,
-} from './embedded-migration-handoff.js';
 export {
   CURRENT_SCHEMA_EPOCH,
   MIN_SUPPORTED_MIGRATION_STEP,
@@ -1119,7 +1113,7 @@ export {
   type FileLogger,
   type FileLoggerOptions,
   type LogLevelControl,
-} from './logger.js';
+} from '@silverhand/shared/node-file-logger';
 
 function elapsedSince(startedAt: number): number {
   return Math.round((performance.now() - startedAt) * 10) / 10;

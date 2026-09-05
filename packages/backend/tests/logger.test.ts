@@ -6,7 +6,7 @@ import {
   createCategorizedLoggers,
   createFileLogger,
   createLogLevelControl,
-} from '../src/logger.js';
+} from '@silverhand/shared/node-file-logger';
 
 const dirs: string[] = [];
 

@@ -4,7 +4,8 @@ import {
   mkdirSync,
   readlinkSync,
   readdirSync,
-  rmSync,
+  renameSync,
+  chmodSync,
   symlinkSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -34,16 +35,18 @@ export interface OpenDatabaseOptions {
 }
 
 export function openDatabase(filepath: string, opts: OpenDatabaseOptions = {}): Db {
-  const releaseMigrationLock =
-    filepath === ':memory:' ? null : acquireMigrationLock(filepath);
   let db: Db | null = null;
   try {
     db = new Database(filepath);
     const runtimeBusyTimeoutMs = opts.busyTimeoutMs ?? 5000;
     const migrationBusyTimeoutMs = opts.migrationBusyTimeoutMs ?? 0;
     db.pragma(`busy_timeout = ${migrationBusyTimeoutMs}`);
+    // Shared with Rust startup: hold the real database lock across the complete
+    // preparation, including backup and gaps between migration transactions.
+    if (filepath !== ':memory:') db.pragma('locking_mode = EXCLUSIVE');
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
+    db.exec('BEGIN EXCLUSIVE; COMMIT;');
     const migrationDb = db;
     const result = runMigrations(db, {
       expectedStep: CURRENT_MIGRATION_STEP,
@@ -65,13 +68,18 @@ export function openDatabase(filepath: string, opts: OpenDatabaseOptions = {}): 
     // Runtime SQL keeps the pre-D1 retry behavior. The migration phase above is
     // deliberately fail-fast so concurrent startup/admin migration attempts do
     // not wait in a partially-booted process.
+    if (filepath !== ':memory:') {
+      db.close();
+      db = null;
+      db = new Database(filepath);
+      db.pragma('journal_mode = WAL');
+      db.pragma('foreign_keys = ON');
+    }
     db.pragma(`busy_timeout = ${runtimeBusyTimeoutMs}`);
     return db;
   } catch (err) {
     db?.close();
     throw err;
-  } finally {
-    releaseMigrationLock?.();
   }
 }
 
@@ -433,7 +441,10 @@ export function backupDataDirBeforeMigration(
     toStep: number;
   },
 ): string {
-  db.pragma('wal_checkpoint(TRUNCATE)');
+  const checkpoint = db.pragma('wal_checkpoint(TRUNCATE)') as Array<{ busy: number }>;
+  if (checkpoint.some(row => row.busy !== 0)) {
+    throw new Error('migration backup checkpoint is busy');
+  }
   const dataDir = dirname(opts.dbPath);
   const ts = new Date()
     .toISOString()
@@ -443,16 +454,23 @@ export function backupDataDirBeforeMigration(
     dirname(dataDir),
     `${basename(dataDir)}-backup-${ts}`,
   );
-  copyBackupTree(dataDir, backupPath);
+  const partialPath = `${backupPath}.partial`;
+  const excluded = new Set([opts.dbPath, `${opts.dbPath}-wal`, `${opts.dbPath}-shm`, `${opts.dbPath}-journal`]);
+  copyBackupTree(dataDir, partialPath, excluded);
+  const backupDb = join(partialPath, basename(opts.dbPath));
+  db.prepare('VACUUM INTO ?').run(backupDb);
+  chmodSync(backupDb, lstatSync(opts.dbPath).mode & 0o777);
+  renameSync(partialPath, backupPath);
   return backupPath;
 }
 
-function copyBackupTree(src: string, dest: string): void {
+function copyBackupTree(src: string, dest: string, excluded: ReadonlySet<string>): void {
+  if (excluded.has(src)) return;
   const info = lstatSync(src);
   if (info.isDirectory()) {
     mkdirSync(dest, { mode: info.mode & 0o777 });
     for (const entry of readdirSync(src)) {
-      copyBackupTree(join(src, entry), join(dest, entry));
+      copyBackupTree(join(src, entry), join(dest, entry), excluded);
     }
     return;
   }
@@ -469,32 +487,12 @@ function copyBackupTree(src: string, dest: string): void {
   // these ephemeral filesystem entries so data-dir backups still complete.
 }
 
-function acquireMigrationLock(dbPath: string): () => void {
-  const lockPath = migrationLockPath(dbPath);
-  try {
-    mkdirSync(lockPath, { mode: 0o700 });
-  } catch (err) {
-    throw new DatabaseMigrationError(
-      'migration_locked',
-      `could not acquire migration lock at ${lockPath}: ${errorMessage(err)}`,
-    );
-  }
-  return () => {
-    rmSync(lockPath, { recursive: true, force: true });
-  };
-}
-
 function backupDataDirPathHint(dbPath: string): string {
   const dataDir = dirname(dbPath);
   return join(
     dirname(dataDir),
     `${basename(dataDir)}-backup-<utc>`,
   );
-}
-
-function migrationLockPath(dbPath: string): string {
-  const dataDir = dirname(dbPath);
-  return join(dirname(dataDir), `${basename(dataDir)}.migration.lock`);
 }
 
 function errorMessage(err: unknown): string {

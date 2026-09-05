@@ -26,22 +26,10 @@ const allowedBackendImports = [
   // zero-runtime guarantee — second occurrence allowed for the
   // second consumer file.
   'HostWsAttachment',
-  // #task:2343: the embedded arm runs the canonical TS migrator + backup + FK/integrity
-  // and FULLY closes the DB before spawning the out-of-process Rust backend (no
-  // dual-open). This is the ONLY backend runtime symbol the embedded boot path imports;
-  // it opens+migrates+closes and returns nothing, so no backend serving surface crosses.
-  'migrateAndCloseForEmbeddedHandoff',
 ].sort();
 
-const allowedServerImports = [
-  'CategorizedLoggers',
-  'FileLogger',
-  // #task:2343: the embedded migrate setting resolver. `startEmbeddedSilverhandServer`
-  // and the in-process `RunningBackend` are GONE from the desktop embedded arm — the
-  // backend is out-of-process (Rust), so no in-process server surface is imported.
-  'createCategorizedLoggers',
-  'resolveEmbeddedMigrationEnv',
-].sort();
+const allowedServerImports: string[] = [];
+
 
 const cataloguedIpcHandlers = [
   'attachment:openExternal',
@@ -191,33 +179,26 @@ describe('desktop protocol purity catalogue', () => {
     expect(imports).toEqual(allowedServerImports);
   });
 
-  it('bundles workspace server code into the desktop main build', () => {
+  it('bundles shared utilities without a TS server build dependency', () => {
     const config = readFileSync(
       join(desktopRoot, 'electron.vite.config.ts'),
       'utf8',
     );
 
     expect(config).toMatch(
-      /const workspaceDeps = \[[\s\S]*'@silverhand\/server'[\s\S]*\];/,
+      /const workspaceDeps = \[[\s\S]*'@silverhand\/shared'[\s\S]*\];/,
     );
+    expect(config).not.toContain("'@silverhand/server'");
   });
 
-  it('remote-only main build aliases @silverhand/server to a desktop-local stub', () => {
+  it('both profiles use the same shared Node logger without a server stub', () => {
     const config = readFileSync(
       join(desktopRoot, 'electron.vite.config.ts'),
       'utf8',
     );
-    const stub = readFileSync(
-      join(mainRoot, 'remote-only-server-stub.ts'),
-      'utf8',
-    );
-
     expect(config).toMatch(/SILVERHAND_DESKTOP_REMOTE_ONLY/);
-    expect(config).toMatch(/@silverhand\/server/);
-    expect(config).toMatch(/remote-only-server-stub\.ts/);
-    expect(stub).not.toMatch(/@silverhand\/server|@silverhand\/backend/);
-    expect(stub).toMatch(/startEmbeddedSilverhandServer/);
-    expect(stub).toMatch(/remote-only/);
+    expect(config).not.toMatch(/remote-only-server-stub\.ts/);
+    expect(readFileSync(join(mainRoot, 'index.ts'), 'utf8')).toContain('@silverhand/shared/node-file-logger');
   });
 
   it('#task:2343 P0-10: remote-only build aliases the embedded-launcher seam to a stub with no embedded value imports', () => {
@@ -329,10 +310,6 @@ describe('desktop protocol purity catalogue', () => {
     // packaging; listing either as runtime dependencies ships duplicate dead
     // node_modules and inflates the DMG.
     expect(Object.keys(desktopPackage.dependencies).sort()).toEqual([
-      '@hono/node-server',
-      '@node-rs/argon2',
-      'better-sqlite3',
-      'hono',
       'zod',
     ]);
     expect(desktopPackage.devDependencies).toHaveProperty('mermaid');

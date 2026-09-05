@@ -5,8 +5,7 @@ import {
   sanitizeLogFields,
   SILVERHAND_LOG_LEVEL_ENV,
   type SilverhandLogLevel,
-} from '@silverhand/shared';
-import type { BackendLogger } from './context.js';
+} from './logging.js';
 
 type LogEventLevel = SilverhandLogLevel | 'error';
 
@@ -31,7 +30,10 @@ export interface FileLoggerOptions {
   alwaysWriteCategories?: readonly string[];
 }
 
-export interface FileLogger extends BackendLogger {
+export interface FileLogger {
+  info(obj: unknown, msg?: string): void;
+  warn(obj: unknown, msg?: string): void;
+  error(obj: unknown, msg?: string): void;
   /** Absolute path of the log file currently being written. */
   filePath: string;
   /** Mutable level/window state used by this logger and its children. */

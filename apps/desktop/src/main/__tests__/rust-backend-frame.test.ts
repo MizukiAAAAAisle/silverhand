@@ -26,10 +26,10 @@ describe('parseBoundFrame — the hardened frame contract', () => {
     const generation = '你好';
     const bytes = Buffer.from(`${frameLine({ generation })}\n`);
     const split = bytes.indexOf(Buffer.from(generation)) + 1;
-    const reader = new BoundFrameReader(generation);
-    expect(reader.push(bytes.subarray(0, split))).toBeNull();
+    const reader = preparedReader(generation);
+    expect(reader.push(bytes.subarray(0, split))).toEqual({ status: 'prepared' });
     expect(reader.push(bytes.subarray(split))).toMatchObject({ status: 'bound' });
-    expect(reader.push(Buffer.alloc(BOUND_FRAME_MAX_BYTES, 97))).toEqual({ status: 'duplicate' });
+    expect(reader.push(Buffer.alloc(BOUND_FRAME_MAX_BYTES, 97))).toEqual({ status: 'invalid', reason: 'oversize' });
   });
   it('accepts the exact contract frame and surfaces url + resolved port', () => {
     const result = parseBoundFrame(frameLine(), GEN);
@@ -51,7 +51,7 @@ describe('parseBoundFrame — the hardened frame contract', () => {
   });
 
   it('rejects a wrong protocol version (no fallback across an incompatible frame)', () => {
-    expect(parseBoundFrame(frameLine({ v: 2 }), GEN)).toEqual({
+    expect(parseBoundFrame(frameLine({ v: 1 }), GEN)).toEqual({
       status: 'invalid',
       reason: 'unknown-version',
     });
@@ -141,22 +141,35 @@ describe('parseBoundFrame — the hardened frame contract', () => {
   });
 });
 
-describe('BoundFrameReader — single-frame stdout semantics', () => {
+function preparedReader(generation: string): BoundFrameReader {
+  const reader = new BoundFrameReader(generation);
+  for (const kind of ['preparing', 'prepared']) reader.push(`${JSON.stringify({ v: STARTUP_PROTOCOL_VERSION, kind, generation })}\n`);
+  return reader;
+}
+
+describe('BoundFrameReader — ordered startup stdout semantics', () => {
+  it('rejects missing, repeated, reordered and wrong-generation preparation phases', () => {
+    const phase = (kind: string, generation = GEN) => `${JSON.stringify({v: STARTUP_PROTOCOL_VERSION, kind, generation})}\n`;
+    for (const lines of [frameLine() + '\n', phase('prepared'), phase('preparing') + phase('preparing'), phase('preparing') + phase('prepared', 'wrong')]) {
+      const reader = new BoundFrameReader(GEN);
+      expect(reader.push(lines)).toMatchObject({status: 'invalid'});
+    }
+  });
   it('settles bound on the first complete line, ignoring blank lines', () => {
     const reader = new BoundFrameReader(GEN);
     expect(reader.push('\n')).toBeNull(); // blank ignored
-    expect(reader.push(`${frameLine()}\n`)).toEqual({
+    expect(reader.push(`${JSON.stringify({v: STARTUP_PROTOCOL_VERSION, kind: 'preparing', generation: GEN})}\n${JSON.stringify({v: STARTUP_PROTOCOL_VERSION, kind: 'prepared', generation: GEN})}\n${frameLine()}\n`)).toEqual({
       status: 'bound',
       frame: { url: 'http://127.0.0.1:51763', port: 51763 },
     });
   });
 
   it('assembles a frame split across chunks', () => {
-    const reader = new BoundFrameReader(GEN);
+    const reader = preparedReader(GEN);
     const line = frameLine();
     const mid = Math.floor(line.length / 2);
-    expect(reader.push(line.slice(0, mid))).toBeNull();
-    expect(reader.push(line.slice(mid))).toBeNull(); // no newline yet
+    expect(reader.push(line.slice(0, mid))).toEqual({ status: 'prepared' });
+    expect(reader.push(line.slice(mid))).toEqual({ status: 'prepared' }); // no newline yet
     expect(reader.push('\n')).toEqual({
       status: 'bound',
       frame: { url: 'http://127.0.0.1:51763', port: 51763 },
@@ -164,7 +177,7 @@ describe('BoundFrameReader — single-frame stdout semantics', () => {
   });
 
   it('flips to duplicate when a second non-blank line arrives after a frame', () => {
-    const reader = new BoundFrameReader(GEN);
+    const reader = preparedReader(GEN);
     reader.push(`${frameLine()}\n`);
     expect(reader.push('anything\n')).toEqual({ status: 'duplicate' });
   });
@@ -210,7 +223,7 @@ describe('BoundFrameReader — single-frame stdout semantics', () => {
     const reader = new BoundFrameReader(GEN);
     // The generation echo carries multibyte characters; the frame is well under the cap.
     const gen = '世界-🌍';
-    const r2 = new BoundFrameReader(gen);
+    const r2 = preparedReader(gen);
     const line = `${JSON.stringify({
       v: STARTUP_PROTOCOL_VERSION,
       kind: BOUND_FRAME_KIND,

@@ -43,30 +43,28 @@ const minify = readMinifySetting();
 const workspaceDeps = [
   '@silverhand/shared',
   '@silverhand/backend',
-  '@silverhand/server',
 ];
 // Workspace packages are bundled here and must stay out of packaged app
 // production dependencies; electron-builder follows pnpm workspace symlinks
 // outside apps/desktop and fails packaging.
 const nativeExternalDeps = [
-  '@node-rs/argon2',
   'bufferutil',
   'utf-8-validate',
 ];
 
 export default defineConfig({
   main: {
-    plugins: remoteOnly ? [{
-      name: 'remote-only-construction-boundary',
+    plugins: [{
+      name: 'desktop-backend-construction-boundary',
       generateBundle() {
         const modules = [...this.getModuleIds()];
         const forbidden = modules.filter(id =>
-          /(?:packages\/backend\/|@silverhand\/backend|better-sqlite3|\/embedded-launcher\.ts$|\/embedded-rust-backend\.ts$|\/rust-backend-sidecar\.ts$|\/embedded-startup-preparation\.ts$)/.test(id),
+          /(?:packages\/(?:backend|server)\/|@silverhand\/(?:backend|server)|better-sqlite3|@node-rs\/argon2)/.test(id) || (remoteOnly && /\/(?:embedded-launcher|embedded-rust-backend|rust-backend-sidecar|embedded-startup-preparation)\.ts$/.test(id)),
         );
-        if (forbidden.length) throw new Error(`remote-only graph reached embedded modules: ${forbidden.join(', ')}`);
-        console.info(`[remote-only] module graph verified (${modules.length} modules; embedded/migrator/sidecar/native database absent)`);
+        if (forbidden.length) throw new Error(`desktop graph reached forbidden backend modules: ${forbidden.join(', ')}`);
+        console.info(`[desktop graph] ${remoteOnly ? 'remote-only' : 'embedded'}: ${modules.length} modules; TS backend/server and native database absent${remoteOnly ? '; embedded launcher and sidecar absent' : ''}`);
       },
-    }] : [],
+    }],
     define: {
       __SILVERHAND_DESKTOP_REMOTE_ONLY__: JSON.stringify(remoteOnly),
       __SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE__: JSON.stringify(
@@ -87,10 +85,6 @@ export default defineConfig({
     resolve: {
       alias: remoteOnly
         ? {
-            '@silverhand/server': resolve(
-              __dirname,
-              'src/main/remote-only-server-stub.ts',
-            ),
             // #task:2343 P0-10 — swap the embedded seam for a throwing stub so the
             // remote-only main graph never imports `@silverhand/backend` (→ no
             // `better-sqlite3`), the Rust launcher, or the sidecar verifier. The `.js`

@@ -94,10 +94,7 @@ pub enum NameCanonicalizationIssue {
 /// A domain with a narrower limit applies it to the returned display AFTER a
 /// success; it does not re-run this with a different cap (see the module docs).
 pub fn canonicalize_name(raw: &str) -> Result<CanonicalName, NameCanonicalizationIssue> {
-    let normalized: String = raw.nfc().collect();
-    let display = normalized
-        .trim_matches(is_ecmascript_trim_whitespace)
-        .to_owned();
+    let (display, key) = canonicalize_stored_name(raw);
     let code_points = display.chars().count();
     if code_points == 0 {
         return Err(NameCanonicalizationIssue::Empty);
@@ -115,8 +112,18 @@ pub fn canonicalize_name(raw: &str) -> Result<CanonicalName, NameCanonicalizatio
             index,
         });
     }
-    let key = fold_name_key(&display);
     Ok(CanonicalName { display, key })
+}
+
+/// Total keying for persisted legacy names and migration/audit use. Unlike new
+/// name admission this must not reject characters or lengths legal in old data.
+pub fn canonicalize_stored_name(raw: &str) -> (String, String) {
+    let normalized: String = raw.nfc().collect();
+    let display = normalized
+        .trim_matches(is_ecmascript_trim_whitespace)
+        .to_owned();
+    let key = fold_name_key(&display);
+    (display, key)
 }
 
 /// The pinned Unicode 16 full case fold followed by NFC.

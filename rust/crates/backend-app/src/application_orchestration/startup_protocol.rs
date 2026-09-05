@@ -4,11 +4,11 @@
 //! launcher spawns it on an ephemeral loopback port (`127.0.0.1:0`) it cannot know
 //! the real bound port until the child reports it, and it must NOT scrape stderr or
 //! predict the port. This module is the child's single authority for that handoff: a
-//! ONE-shot, versioned, length-bounded, single-line NDJSON frame written to STDOUT the
-//! instant the listener is bound and the production app is composed.
+//! versioned, length-bounded NDJSON sequence: preparing before database preparation,
+//! prepared after successful preparation/close, then bound after app composition.
 //!
 //! Contract (ratified shiki+Cindy):
-//! - `stdout` carries ONLY this protocol; all logs go to stderr.
+//! - `stdout` carries ONLY these three frames; all logs go to stderr.
 //! - The frame is emitted at the bound + composition-complete point, BEFORE the serve
 //!   accept-loop can answer requests, so its `kind` is `"bound"` (not `"ready"`); the
 //!   launcher must still poll `/readyz=200` on the reported URL before publishing.
@@ -19,13 +19,45 @@
 //!   independent `api_epoch`, artifact identity is the sidecar manifest, and process
 //!   correlation is this `generation`.)
 //! - The frame is length-bounded; a launcher-side parser rejects anything oversize,
-//!   malformed, unknown, or a second frame, failing startup with no fallback.
+//!   malformed, unknown, or out-of-order frames, failing startup with no fallback.
 
 use std::net::SocketAddr;
 
 /// The startup-protocol version. Bumped only on an incompatible frame-shape change; the
 /// launcher rejects a frame whose `v` it does not understand.
-pub const STARTUP_PROTOCOL_VERSION: u32 = 1;
+pub const STARTUP_PROTOCOL_VERSION: u32 = 2;
+
+/// Preparation progress carries no endpoint. The launcher bounds entry into
+/// preparation separately from service construction after successful preparation.
+pub(super) fn emit_preparation_phase(
+    generation: Option<&str>,
+    completed: bool,
+) -> Result<(), crate::StartupError> {
+    let Some(generation) = generation else {
+        return Ok(());
+    };
+    let value = serde_json::json!({
+        "v": STARTUP_PROTOCOL_VERSION,
+        "kind": if completed { "prepared" } else { "preparing" },
+        "generation": generation,
+    });
+    let mut line = serde_json::to_string(&value).expect("preparation frame serializes");
+    if line.len() >= BOUND_FRAME_MAX_BYTES {
+        return Err(crate::StartupError::StartupFrame(Box::new(
+            BoundFrameTooLarge {
+                len: line.len(),
+                max: BOUND_FRAME_MAX_BYTES,
+            },
+        )));
+    }
+    line.push('\n');
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout();
+    stdout
+        .write_all(line.as_bytes())
+        .and_then(|()| stdout.flush())
+        .map_err(|error| crate::StartupError::StartupFrame(Box::new(error)))
+}
 
 /// The frame `kind` the backend emits: the listener is BOUND and the app composed, but
 /// the serve accept-loop has not necessarily begun answering — the launcher still gates

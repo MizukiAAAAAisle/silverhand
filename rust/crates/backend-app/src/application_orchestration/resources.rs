@@ -88,9 +88,22 @@ pub(super) struct PassiveResources {
 
 impl PassiveResources {
     pub(super) async fn open(config: &AppConfig) -> Result<Self, StartupError> {
-        verify_schema(&config.database_path)
+        super::startup_protocol::emit_preparation_phase(config.startup_generation(), false)?;
+        let preparation =
+            silverhand_backend_sqlite::foundation::database_startup::prepare_database(
+                &config.database_path,
+                config.allow_schema_upgrade,
+            )
             .await
-            .map_err(StartupError::Schema)?;
+            .map_err(StartupError::DatabasePreparation)?;
+        super::startup_protocol::emit_preparation_phase(config.startup_generation(), true)?;
+        tracing::info!(
+            before_step = preparation.before_step,
+            after_step = preparation.after_step,
+            applied_steps = ?preparation.applied_steps,
+            backup_path = ?preparation.backup_path,
+            "database startup preparation completed"
+        );
         let boot = BootProgress::new();
         boot.mark_migrations_applied();
 

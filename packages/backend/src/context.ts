@@ -16,7 +16,7 @@ import type { AuthRuntimeConfig } from './auth/config.js';
 import type { EmbeddedBootstrapState } from './auth/embedded-bootstrap.js';
 import type { PasswordCredentialService } from './auth/password.js';
 import type { AuthSessionService } from './auth/session.js';
-import type { LogLevelControl } from './logger.js';
+import type { LogLevelControl } from '@silverhand/shared/node-file-logger';
 import type { RuntimeHostPlacementControl } from './runtime/host-placement.js';
 import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
 import type { HostRuntimeActivityView, HostStatusReadModel } from './runtime/host-status-read-model.js';

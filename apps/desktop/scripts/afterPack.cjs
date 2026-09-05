@@ -137,41 +137,6 @@ async function rewriteRemoteOnlyAsar(context, appPath) {
   }
 }
 
-function restorePackagedBetterSqlite3Binding(appPath) {
-  if (process.env.SILVERHAND_DESKTOP_REMOTE_ONLY === "1") {
-    return;
-  }
-
-  const source = process.env.SILVERHAND_ELECTRON_BETTER_SQLITE3_BINDING;
-  if (!source) {
-    throw new Error(
-      "[afterPack] missing SILVERHAND_ELECTRON_BETTER_SQLITE3_BINDING for regular package",
-    );
-  }
-  if (!fs.existsSync(source)) {
-    throw new Error(`[afterPack] Electron better-sqlite3 binding missing: ${source}`);
-  }
-
-  const target = path.join(
-    appPath,
-    "Contents",
-    "Resources",
-    "app.asar.unpacked",
-    "node_modules",
-    "better-sqlite3",
-    "build",
-    "Release",
-    "better_sqlite3.node",
-  );
-  if (!fs.existsSync(target)) {
-    throw new Error(`[afterPack] packaged better-sqlite3 binding missing: ${target}`);
-  }
-
-  fs.copyFileSync(source, target);
-  fs.chmodSync(target, 0o755);
-  console.log(`[afterPack] restored Electron ABI better-sqlite3 binding → ${target}`);
-}
-
 exports.default = async function afterPack(context) {
   if (context.electronPlatformName !== "darwin") {
     return;
@@ -189,7 +154,6 @@ exports.default = async function afterPack(context) {
   }
 
   await rewriteRemoteOnlyAsar(context, appPath);
-  restorePackagedBetterSqlite3Binding(appPath);
 
   console.log(`[afterPack] ad-hoc deep-signing ${appPath}`);
   execFileSync(

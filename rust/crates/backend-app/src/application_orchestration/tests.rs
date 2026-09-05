@@ -57,6 +57,25 @@ async fn prepare(config: &AppConfig) -> Result<PreparedApp, StartupError> {
 // target viewer (TOKEN) and this admin are told apart purely by which seeded
 // session their bearer hashes to.
 const ADMIN_TOKEN: &str = "admin-token";
+
+#[test]
+fn migration_permission_preserves_launcher_defaults_and_strict_override() {
+    for profile in [DeploymentProfile::Embedded, DeploymentProfile::RemoteOnly] {
+        assert_eq!(
+            parse_schema_upgrade(profile, None).unwrap(),
+            profile == DeploymentProfile::Embedded
+        );
+        assert_eq!(
+            parse_schema_upgrade(profile, Some("")).unwrap(),
+            profile == DeploymentProfile::Embedded
+        );
+        assert!(!parse_schema_upgrade(profile, Some(" 0 ")).unwrap());
+        assert!(parse_schema_upgrade(profile, Some(" 1 ")).unwrap());
+        for bad in ["true", "false", " ", "2"] {
+            assert!(parse_schema_upgrade(profile, Some(bad)).is_err());
+        }
+    }
+}
 const ADMIN_HASH: &str = "EKTHyfxSBtbzbcaUSoG7b0o8sOJQFK47EubD5ScSKSo";
 const CONVERSATION_ID: &str = "conv000000000001";
 const WORKSPACE_ID: &str = "workspace0000001";
@@ -376,7 +395,7 @@ async fn seed_channel_directory(path: &Path) {
         .unwrap();
     sqlx::raw_sql(
             "INSERT INTO workspaces(id,name,name_key,created_at,updated_at) VALUES \
-               ('workspace0000001','Workspace','directory-space',1,1); \
+               ('workspace0000001','Workspace','workspace',1,1); \
              INSERT INTO workspace_users(workspace_id,user_id,joined_at,role) VALUES \
                ('workspace0000001','user-1',1,'owner'); \
              INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,archived_at,created_at,updated_at) VALUES \
@@ -1413,20 +1432,24 @@ async fn the_two_audit_sinks_write_disjoint_prefixed_streams() {
 }
 
 #[tokio::test]
-async fn startup_refuses_missing_or_unowned_schema_before_serving() {
+async fn startup_initializes_missing_and_refuses_unowned_or_invalid_schema_before_serving() {
+    use silverhand_backend_sqlite::foundation::database_startup::{
+        DatabaseStartupError, prepare_database,
+    };
+    async fn verify_schema(path: &Path) -> Result<(), DatabaseStartupError> {
+        prepare_database(path, false).await.map(|_| ())
+    }
     let directory = tempfile::tempdir().unwrap();
     let missing = directory.path().join("missing.sqlite");
-    let Err(error) = prepare(&config(missing.clone())).await else {
-        panic!("missing database must fail closed");
-    };
-    assert!(matches!(error, StartupError::Schema(_)));
-    assert!(!missing.exists());
+    let app = prepare(&config(missing.clone())).await.unwrap();
+    assert!(missing.exists());
+    app.close_connections().await;
 
     let unowned = fixture(false).await;
     let Err(error) = prepare(&config(unowned.path)).await else {
         panic!("schema without migration ownership must fail closed");
     };
-    assert!(describe(&error).contains("no such table: _migrations"));
+    assert!(describe(&error).contains("schema_too_old"));
 
     let fixture = fixture(true).await;
     verify_schema(&fixture.path).await.unwrap();
@@ -1441,17 +1464,26 @@ async fn startup_refuses_missing_or_unowned_schema_before_serving() {
             .await
             .unwrap();
     }
+    pool.close().await;
     verify_schema(&fixture.path).await.unwrap();
-
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
     sqlx::query("DELETE FROM _migrations WHERE version = ?")
         .bind(CURRENT_MIGRATION_STEP - 1)
         .execute(&pool)
         .await
         .unwrap();
+    pool.close().await;
     assert!(matches!(
         verify_schema(&fixture.path).await,
-        Err(SchemaAdmissionError::LedgerMismatch)
+        Err(DatabaseStartupError::Ledger)
     ));
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO _migrations (version, name, applied_at) VALUES (?, 'restored', 1)")
         .bind(CURRENT_MIGRATION_STEP - 1)
         .execute(&pool)
@@ -1463,10 +1495,15 @@ async fn startup_refuses_missing_or_unowned_schema_before_serving() {
         .execute(&pool)
         .await
         .unwrap();
+    pool.close().await;
     assert!(matches!(
         verify_schema(&fixture.path).await,
-        Err(SchemaAdmissionError::LedgerMismatch)
+        Err(DatabaseStartupError::UpgradeDisabled { .. })
     ));
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO _migrations (version, name, applied_at) VALUES (?, 'restored', 1)")
         .bind(CURRENT_MIGRATION_STEP)
         .execute(&pool)
@@ -1478,9 +1515,10 @@ async fn startup_refuses_missing_or_unowned_schema_before_serving() {
         .execute(&pool)
         .await
         .unwrap();
+    pool.close().await;
     assert!(matches!(
         verify_schema(&fixture.path).await,
-        Err(SchemaAdmissionError::LedgerMismatch)
+        Err(DatabaseStartupError::TooNew(_))
     ));
     pool.close().await;
 }
@@ -6913,6 +6951,7 @@ async fn the_composition_agent_deletion_resumer_drives_the_full_production_lifec
             other => panic!("expected a minted deletion attempt, got {other:?}"),
         };
     let listener1 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    drop(lifecycle); // The test-only minting owner is not part of boot 1's lifecycle.
     let (stop1_tx, stop1_rx) = oneshot::channel();
     let boot1_running = tokio::spawn(serve(listener1, boot1, async move {
         let _ = stop1_rx.await;
@@ -6935,6 +6974,23 @@ async fn the_composition_agent_deletion_resumer_drives_the_full_production_lifec
 
     // Boot 2 over the SAME store: the durable marker survived shutdown, so recover
     // re-lists it; once the host attaches the deletion finally commits.
+    drop(close_probe);
+    // A real process exit releases every connection synchronously. This in-process
+    // test must also await aborted workers/SQLx pool-drop cleanup before simulating
+    // the next process. Witness the actual exclusive lock, not an arbitrary sleep.
+    {
+        use sqlx::Connection as _;
+        let quiesced = sqlx::SqliteConnection::connect_with(
+            &sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&fixture3.path)
+                .locking_mode(sqlx::sqlite::SqliteLockingMode::Exclusive)
+                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                .busy_timeout(std::time::Duration::from_secs(5)),
+        )
+        .await
+        .unwrap();
+        quiesced.close().await.unwrap();
+    }
     let boot2 = prepare(&config(fixture3.path.clone())).await.unwrap();
     let router2 = boot2.router.clone();
     let (status, body) = request(&router2, "GET", "/api/agents/a-retained", Some(&bearer)).await;
@@ -9977,14 +10033,6 @@ mod message_nav_search_activation {
     }
     impl ConversationMessageWindowReadPort for MessageNavSearchCountingPort {
         type Error = std::convert::Infallible;
-        async fn admit(
-            &self,
-            _: &UserId,
-            _: &ConversationId,
-        ) -> Result<Result<(), MessageWindowRefusal>, Self::Error> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            unreachable!("perimeter must refuse the anonymous read before the product port")
-        }
         async fn read(
             &self,
             _: &UserId,

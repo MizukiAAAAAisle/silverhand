@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -529,15 +530,20 @@ describe('database migrations', () => {
     }
   });
 
-  it('fails fast when another process owns the migration lock directory', () => {
+  it('does not remove unknown legacy lock directories and returns a normal runtime connection', () => {
     const dir = mkdtempSync(join(tmpdir(), 'silverhand-migration-dir-lock-test-'));
     const dataDir = join(dir, '.silverhand');
     mkdirSync(dataDir, { recursive: true });
     mkdirSync(join(dir, '.silverhand.migration.lock'));
     try {
-      expect(() => openDatabase(join(dataDir, 'silverhand.db'))).toThrow(
-        /migration lock/,
-      );
+      const db = openDatabase(join(dataDir, 'silverhand.db'));
+      try {
+        expect(db.pragma('locking_mode', { simple: true })).toBe('normal');
+        expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
+        expect(db.pragma('journal_mode', { simple: true })).toBe('wal');
+        expect(db.pragma('busy_timeout', { simple: true })).toBe(5000);
+      } finally { db.close(); }
+      expect(existsSync(join(dir, '.silverhand.migration.lock'))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

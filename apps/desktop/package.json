@@ -18,20 +18,11 @@
     "package:dir": "../../scripts/package.sh --dir"
   },
   "dependencies": {
-    "@hono/node-server": "^1.13.2",
-    "@node-rs/argon2": "^2.0.2",
-    "better-sqlite3": "^12.11.1",
-    "hono": "^4.6.5",
     "zod": "^3.23.8"
   },
-  "optionalDependencies": {
-    "@node-rs/argon2-darwin-arm64": "^2.0.2"
-  },
   "devDependencies": {
-    "@electron/rebuild": "^4.0.4",
     "@silverhand/backend": "workspace:*",
     "@silverhand/host": "workspace:*",
-    "@silverhand/server": "workspace:*",
     "@silverhand/shared": "workspace:*",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/modifiers": "^8.0.0",

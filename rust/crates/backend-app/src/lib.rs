@@ -192,7 +192,8 @@ use silverhand_backend_sqlite::{
     viewer_read_model::user_presence_last_seen::SqliteLastSeenSink,
     workspace_data_plane::SqliteWorkspaceScopeStore,
 };
-use sqlx::{Row, sqlite::SqlitePoolOptions};
+#[cfg(test)]
+use sqlx::sqlite::SqlitePoolOptions;
 use thiserror::Error;
 use tokio::{net::TcpListener, sync::oneshot};
 
@@ -246,10 +247,14 @@ const BOOTSTRAP_TOKEN_PATH_ENV: &str = "SILVERHAND_BOOTSTRAP_TOKEN_PATH";
 /// anything but its echo. Unset (or blank) means no startup frame is emitted (a bare
 /// `cargo run` / standalone launch has no launcher awaiting a frame).
 const STARTUP_GENERATION_ENV: &str = "SILVERHAND_STARTUP_GENERATION";
+#[cfg(test)]
 const BASELINE_MIGRATION_STEP: i64 = const_parse_i64(env!("SILVERHAND_BASELINE_MIGRATION_STEP"));
+#[cfg(test)]
 const CURRENT_MIGRATION_STEP: i64 = const_parse_i64(env!("SILVERHAND_CURRENT_MIGRATION_STEP"));
+#[cfg(test)]
 const MIGRATION_STEPS: &str = env!("SILVERHAND_MIGRATION_STEPS");
 
+#[cfg(test)]
 const fn const_parse_i64(value: &str) -> i64 {
     let bytes = value.as_bytes();
     let mut index = 0;
@@ -265,6 +270,7 @@ const fn const_parse_i64(value: &str) -> i64 {
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     database_path: PathBuf,
+    allow_schema_upgrade: bool,
     blobs_root: PathBuf,
     listen_addr: SocketAddr,
     allowed_origins: Vec<AllowedOrigin>,
@@ -344,6 +350,7 @@ impl AppConfig {
             .filter(|value| !value.is_empty());
         Ok(Self {
             database_path,
+            allow_schema_upgrade: deployment_profile == DeploymentProfile::Embedded,
             blobs_root,
             listen_addr,
             allowed_origins,
@@ -398,6 +405,10 @@ impl AppConfig {
         let startup_generation = env::var(STARTUP_GENERATION_ENV)
             .ok()
             .filter(|value| !value.trim().is_empty());
+        let allow_schema_upgrade = parse_schema_upgrade(
+            deployment_profile,
+            env::var("SILVERHAND_MIGRATE").ok().as_deref(),
+        )?;
         Self::new(
             database_path,
             blobs_root,
@@ -410,6 +421,12 @@ impl AppConfig {
             bootstrap_token_path,
             startup_generation,
         )
+        .map(|config| config.with_schema_upgrade(allow_schema_upgrade))
+    }
+
+    pub fn with_schema_upgrade(mut self, allow: bool) -> Self {
+        self.allow_schema_upgrade = allow;
+        self
     }
 
     pub fn listen_addr(&self) -> SocketAddr {
@@ -439,6 +456,20 @@ fn required_env(name: &'static str) -> Result<String, ConfigError> {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .ok_or(ConfigError::MissingEnvironment(name))
+}
+
+fn parse_schema_upgrade(
+    profile: DeploymentProfile,
+    raw: Option<&str>,
+) -> Result<bool, ConfigError> {
+    match raw {
+        None | Some("") => Ok(profile == DeploymentProfile::Embedded),
+        Some(value) => match value.trim() {
+            "0" => Ok(false),
+            "1" => Ok(true),
+            _ => Err(ConfigError::InvalidMigrationPermission(value.to_owned())),
+        },
+    }
 }
 
 /// Signup admission is parsed PER PROFILE, because the two launchers ship two
@@ -497,14 +528,18 @@ pub enum ConfigError {
     InvalidDeploymentProfile(String),
     #[error("SILVERHAND_DISABLE_SIGNUP {0:?} must be 0 or 1")]
     InvalidDisableSignup(String),
+    #[error("SILVERHAND_MIGRATE {0:?} must be 0 or 1")]
+    InvalidMigrationPermission(String),
 }
 
 #[derive(Debug, Error)]
 pub enum StartupError {
     #[error(transparent)]
     Config(#[from] ConfigError),
-    #[error("database schema admission failed")]
-    Schema(#[source] SchemaAdmissionError),
+    #[error("database startup preparation failed")]
+    DatabasePreparation(
+        #[source] silverhand_backend_sqlite::foundation::database_startup::DatabaseStartupError,
+    ),
     #[error(
         "a categorized audit log directory (SILVERHAND_LOG_DIR) is required: the mounted \
          CLI-preflight and agent owner-audit routes are durable audit producers and may not \
@@ -535,14 +570,6 @@ pub enum StartupError {
     Serve(#[source] std::io::Error),
     #[error("shutdown signal authority failed")]
     ShutdownSignal(#[source] Box<dyn Error + Send + Sync>),
-}
-
-#[derive(Debug, Error)]
-pub enum SchemaAdmissionError {
-    #[error("database operation failed while checking the migration ledger")]
-    Sql(#[source] sqlx::Error),
-    #[error("database migration ledger is not the exact prefix owned by this binary")]
-    LedgerMismatch,
 }
 
 /// The production [`EnrollmentClock`]. Reading the wall clock is a
@@ -806,45 +833,6 @@ async fn remove_stale_bootstrap_token(path: &Path) {
             }
         }
     }
-}
-
-async fn verify_schema(path: &Path) -> Result<(), SchemaAdmissionError> {
-    let options = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(false);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
-        .await
-        .map_err(SchemaAdmissionError::Sql)?;
-    let rows = sqlx::query("SELECT version FROM _migrations ORDER BY version")
-        .fetch_all(&pool)
-        .await
-        .map_err(SchemaAdmissionError::Sql)?;
-    let actual = rows
-        .iter()
-        .map(|row| row.try_get::<i64, _>("version"))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(SchemaAdmissionError::Sql)?;
-    pool.close().await;
-    let expected = MIGRATION_STEPS
-        .split(',')
-        .map(|step| {
-            step.parse::<i64>()
-                .expect("build script emitted numeric migration step")
-        })
-        .collect::<Vec<_>>();
-    if actual.iter().any(|step| *step > CURRENT_MIGRATION_STEP) {
-        return Err(SchemaAdmissionError::LedgerMismatch);
-    }
-    let active = actual
-        .into_iter()
-        .filter(|step| *step >= BASELINE_MIGRATION_STEP)
-        .collect::<Vec<_>>();
-    if active != expected || active.last() != Some(&CURRENT_MIGRATION_STEP) {
-        return Err(SchemaAdmissionError::LedgerMismatch);
-    }
-    Ok(())
 }
 
 pub async fn run(config: AppConfig) -> Result<(), StartupError> {

@@ -1,7 +1,7 @@
 # Remote-only package variant. Keep this intentionally close to
 # electron-builder.yml, but exclude embedded backend/native packages
-# and native unpack rules because @silverhand/server is aliased to a
-# desktop-local stub by electron.vite.config.ts.
+# and native unpack rules. Both profiles use the shared Node logger;
+# only this profile aliases the embedded launcher to a refusing stub.
 
 appId: com.silverhand.desktop
 productName: Silverhand-remote-server

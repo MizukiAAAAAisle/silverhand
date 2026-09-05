@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./api": "./src/api/index.ts",
+    "./node-file-logger": "./src/node-file-logger.ts",
     "./db": "./src/db/index.ts",
     "./db/baseline-schema": "./src/db/baseline-schema.ts",
     "./db/migrations": "./src/db/migrations.ts",

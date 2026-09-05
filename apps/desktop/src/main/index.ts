@@ -41,7 +41,7 @@ import {
   createCategorizedLoggers,
   type CategorizedLoggers,
   type FileLogger,
-} from '@silverhand/server';
+} from '@silverhand/shared/node-file-logger';
 // #task:2343 — the embedded arm launches the PREBUILT Rust backend out-of-process, not
 // an in-process TS backend. ALL embedded-only runtime surface (migrator, launcher,
 // sidecar verifier, production deps) is reached through the ONE `embedded-launcher` seam,

@@ -90,7 +90,7 @@ import { TaskService } from '../../src/services/task-service.js';
 import { UserService } from '../../src/services/user-service.js';
 import { createSqliteUserPersistence } from '../../src/repos/user-persistence.js';
 import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
-import { createLogLevelControl } from '../../src/logger.js';
+import { createLogLevelControl } from '@silverhand/shared/node-file-logger';
 import { makeTempSilverhandDir, openTestDb } from './db.js';
 import { SqliteAuthCredentialsRepo } from '../../src/repos/auth-credentials-repo.js';
 import { SqliteAuthSessionsRepo } from '../../src/repos/auth-sessions-repo.js';

@@ -2,9 +2,7 @@
 #
 # macOS-only (per CLAUDE.md). Produces a universal dmg + zip under
 # `apps/desktop/release/`. Run via `pnpm package` from the repo root —
-# that wrapper script swaps better-sqlite3 to the Electron ABI first
-# and rebuilds workspace packages, both of which electron-builder
-# itself can't do correctly in our pnpm monorepo.
+# that wrapper builds Desktop resources and the self-contained Rust sidecar.
 
 appId: com.silverhand.desktop
 productName: Silverhand
@@ -17,11 +15,7 @@ directories:
   # Output dir for the packaged .dmg / .app / .zip artifacts.
   output: release
 
-# We pre-build everything via `pnpm -r build` in scripts/package.sh, so
-# don't let electron-builder also try to rebuild native modules — the
-# better-sqlite3 binding it would produce would be for the *system*
-# Node ABI, not Electron's, which would crash on launch. The wrapper
-# script swaps in the Electron-ABI binding before this runs.
+# Builds are owned by scripts/package.sh; Desktop has no native DB dependency.
 npmRebuild: false
 nodeGypRebuild: false
 
@@ -38,7 +32,7 @@ afterPack: scripts/afterPack.cjs
 # What gets included in the asar.
 # - out/**: electron-vite output (main + preload + renderer)
 # - package.json: electron uses "main" to find the entrypoint
-# - node_modules: production deps (hono, better-sqlite3, etc.).
+# - node_modules: remaining production deps.
 #   Workspace deps (@silverhand/*) are bundled by electron-vite into
 #   out/main/index.js, so the symlinks in node_modules don't need to
 #   resolve at runtime — and they MUST be excluded, otherwise
@@ -52,37 +46,8 @@ files:
   - "!**/{tsconfig*.json,*.tsbuildinfo}"
   - "!**/node_modules/*/{README.md,readme.md,*.d.ts,LICENSE*,license*}"
   - "!**/node_modules/**/test/**"
-  # better-sqlite3 is unpacked for its native binding, but its package ships
-  # compile-time sqlite sources and object trees that are never read at runtime.
-  # Exclude them at file-selection time so both app.asar and app.asar.unpacked
-  # have a coherent view of the shipped package.
-  - "!node_modules/better-sqlite3/deps/**"
-  - "!node_modules/better-sqlite3/src/**"
-  - "!node_modules/better-sqlite3/build/deps/**"
-  - "!node_modules/better-sqlite3/build/Makefile"
-  - "!node_modules/better-sqlite3/build/*.mk"
-  - "!node_modules/better-sqlite3/build/*.gypi"
-  - "!node_modules/better-sqlite3/build/gyp-mac-tool"
-  - "!node_modules/better-sqlite3/build/Release/.deps/**"
-  - "!node_modules/better-sqlite3/build/Release/obj/**"
-  - "!node_modules/better-sqlite3/build/Release/obj.target/**"
-  - "!node_modules/better-sqlite3/build/Release/sqlite3.a"
-  - "!node_modules/better-sqlite3/build/Release/test_extension.node"
-
-# better-sqlite3's .node binary cannot live inside the asar — Node's
-# dlopen needs a real path on disk. The glob unpacks the whole package
-# (binding + JS shim) so requires resolve cleanly.
-#
-# @node-rs/argon2 is the same story: its native binding ships in a
-# platform-specific optional dep (@node-rs/argon2-darwin-arm64). pnpm nests
-# that package in its virtual store, so electron-builder doesn't pull it into
-# the asar (electron-userland/electron-builder#6289) — we declare it as a
-# direct optionalDependency in package.json to surface it, then unpack the
-# .node here so the @node-rs loader's `require('@node-rs/argon2-darwin-arm64')`
-# resolves at runtime.
-asarUnpack:
-  - node_modules/better-sqlite3/**/*
-  - node_modules/@node-rs/argon2-darwin-arm64/**/*
+  - "!node_modules/better-sqlite3/**"
+  - "!node_modules/@node-rs/**"
 
 # Ship the esbuild-bundled Silverhand CLI outside the asar so the per-spawn
 # `bin/silverhand` PATH shim can forward to it through Electron's Node runtime
@@ -106,9 +71,9 @@ extraResources:
   # `resources/silverhand-backend/` and `verifySidecar` checks arch + SHA-256 before
   # spawn. The embedded arm has no TS-backend fallback, so a missing/mismatched sidecar
   # fails startup loudly. (electron-builder.remote-only.yml does NOT ship these.)
-  - from: ../../rust/target/release/silverhand-backend
+  - from: ${env.SILVERHAND_BACKEND_STAGE}/silverhand-backend
     to: silverhand-backend/silverhand-backend
-  - from: ../../rust/target/release/silverhand-backend.manifest.json
+  - from: ${env.SILVERHAND_BACKEND_STAGE}/silverhand-backend.manifest.json
     to: silverhand-backend/silverhand-backend.manifest.json
 
 mac:

@@ -1,6 +1,6 @@
 // #task:2343 P0-10 — the embedded-backend SEAM. This is the SINGLE module the Desktop
 // main statically imports for ALL embedded-only runtime surface:
-//   - the canonical TS migrator (`@silverhand/backend`) + migration-env parser,
+//   - explicit configuration for the Rust-owned database startup,
 //   - the out-of-process Rust launcher (`startEmbeddedRustBackend` + env composer),
 //   - the sidecar verifier (`verifySidecar` + manifest resolution),
 //   - the production dependency factory that binds the real child spawn + HTTP probes.
@@ -16,9 +16,6 @@ import type { ChildProcess } from 'node:child_process';
 import { spawn as spawnChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { rm as fsRm } from 'node:fs/promises';
-
-import { migrateAndCloseForEmbeddedHandoff } from '@silverhand/backend';
-import { resolveEmbeddedMigrationEnv } from '@silverhand/server';
 
 import {
   composeRustBackendChildEnv,
@@ -50,22 +47,10 @@ export function startDesktopEmbeddedBackend(
   return prepareEmbeddedStartup({
     cleanupTokens: () => deps.removeBootstrapToken(config.bootstrapTokenPath),
     verify: () => resolveAndVerifyEmbeddedSidecar(location),
-    migrate: () => runEmbeddedMigrationAndClose(config.databasePath),
-    launch: sidecar => startEmbeddedRustBackend(sidecar, config, deps),
-  });
-}
-
-/**
- * Run the canonical embedded migration for the handoff and fully close the DB. Reads the
- * allow-schema-upgrade decision from the process env. Throws on migration failure — the
- * caller treats that as a hard, fail-loud startup error (no TS fallback) + token cleanup.
- */
-export function runEmbeddedMigrationAndClose(
-  databasePath: string,
-  env: NodeJS.ProcessEnv = process.env,
-): void {
-  migrateAndCloseForEmbeddedHandoff(databasePath, {
-    allowSchemaUpgrade: resolveEmbeddedMigrationEnv(env).value,
+    launch: sidecar => startEmbeddedRustBackend(sidecar, {
+      ...config,
+      migrationPermission: process.env.SILVERHAND_MIGRATE,
+    }, deps),
   });
 }
 

@@ -1,8 +1,8 @@
 // #task:2343 — the launcher-side dual of the Rust backend's stdout startup handoff
-// frame. The prebuilt `silverhand-backend` child writes EXACTLY ONE line to stdout the
-// instant its listener is bound and the app is composed:
+// frames. The prebuilt child emits preparing, prepared, then bound (v2), each
+// correlated to the spawn generation. Only bound contains an endpoint:
 //
-//   {"v":1,"kind":"bound","generation":"<echo>","url":"http://127.0.0.1:<port>","port":<port>}
+//   {"v":2,"kind":"bound","generation":"<echo>","url":"http://127.0.0.1:<port>","port":<port>}
 //
 // This module parses that line under the hardened acceptance boundary (shiki+Cindy):
 // strict protocol version, length bound, single frame, and generation echo matching the
@@ -14,7 +14,7 @@
 
 /** The startup protocol version this launcher understands. Must match the Rust
  * `STARTUP_PROTOCOL_VERSION`; a frame with any other `v` is rejected. */
-export const STARTUP_PROTOCOL_VERSION = 1;
+export const STARTUP_PROTOCOL_VERSION = 2;
 
 /** The only frame kind the child emits: bound (listener up, app composed) — NOT yet
  * `/readyz`-confirmed. The launcher still polls `/readyz` before publishing. */
@@ -37,6 +37,8 @@ export interface ParsedBoundFrame {
 export type BoundFrameParse =
   | { status: 'bound'; frame: ParsedBoundFrame }
   | { status: 'invalid'; reason: BoundFrameRejectReason };
+
+export type StartupFrameParse = BoundFrameParse | { status: 'preparing' } | { status: 'prepared' };
 
 /** Why a candidate stdout line was rejected. Every arm is a hard startup failure with an
  * actionable, surfaced reason — never a silent fallback. */
@@ -115,16 +117,18 @@ export function parseBoundFrame(
 }
 
 /**
- * A stateful single-frame reader over the child's stdout. The child emits EXACTLY ONE
- * frame; a SECOND non-blank line after a frame is a protocol violation (`duplicate`),
- * and blank lines are ignored. Feed decoded stdout chunks; the first complete line
- * resolves to `bound | invalid`, and any further non-blank line flips to `duplicate`.
+ * Ordered preparing → prepared → bound reader, with a separate bound on each line.
+ * Phase callbacks run during parsing, including when all three frames are coalesced
+ * into one chunk. No further nonblank line is allowed after bound.
  */
 export class BoundFrameReader {
   private buffer = Buffer.alloc(0);
-  private settled: BoundFrameParse | { status: 'duplicate' } | null = null;
+  private settled: StartupFrameParse | { status: 'duplicate' } | null = null;
 
-  constructor(private readonly expectedGeneration: string) {}
+  constructor(
+    private readonly expectedGeneration: string,
+    private readonly onPhase: (phase: 'preparing' | 'prepared') => void = () => {},
+  ) {}
 
   /**
    * Push a stdout chunk. Returns the settled outcome the first time a complete line is
@@ -137,7 +141,7 @@ export class BoundFrameReader {
    * grow launcher memory without limit. The bound is on the pending line only; already
    * consumed lines do not count.
    */
-  push(chunk: string | Buffer): BoundFrameParse | { status: 'duplicate' } | null {
+  push(chunk: string | Buffer): StartupFrameParse | { status: 'duplicate' } | null {
     if (this.settled?.status === 'duplicate') return this.settled;
     const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
     let offset = 0;
@@ -146,7 +150,7 @@ export class BoundFrameReader {
       const end = newline < 0 ? bytes.length : newline;
       if (this.buffer.length + end - offset >= BOUND_FRAME_MAX_BYTES) {
         this.buffer = Buffer.alloc(0);
-        this.settled = this.settled ? { status: 'duplicate' } : { status: 'invalid', reason: 'oversize' };
+        this.settled = { status: 'invalid', reason: 'oversize' };
         return this.settled;
       }
       this.buffer = Buffer.concat([this.buffer, bytes.subarray(offset, end)]);
@@ -154,24 +158,41 @@ export class BoundFrameReader {
       const line = this.buffer.toString('utf8');
       this.buffer = Buffer.alloc(0);
       if (line.trim() !== '') this.settleLine(line);
-      if (this.outcome()?.status === 'duplicate') return this.settled;
+      if (this.outcome()?.status === 'duplicate' || this.outcome()?.status === 'invalid') return this.settled;
       offset = end + 1;
     }
     return this.settled;
   }
 
   private settleLine(line: string): void {
-    if (this.settled === null) {
-      this.settled = parseBoundFrame(line, this.expectedGeneration);
-    } else {
-      // A frame (valid or not) was already seen; a second non-blank line is a
-      // protocol violation. stdout carries ONLY the one frame.
+    if (this.settled?.status === 'bound' || this.settled?.status === 'invalid') {
       this.settled = { status: 'duplicate' };
+      return;
     }
+    const expected = this.settled === null ? 'preparing' : this.settled.status === 'preparing' ? 'prepared' : 'bound';
+    if (expected === 'bound') {
+      this.settled = parseBoundFrame(line, this.expectedGeneration);
+      return;
+    }
+    let value: unknown;
+    try { value = JSON.parse(line); } catch {
+      this.settled = { status: 'invalid', reason: 'not-json' }; return;
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      this.settled = { status: 'invalid', reason: 'not-object' }; return;
+    }
+    const record = value as Record<string, unknown>;
+    const reason = record.v !== STARTUP_PROTOCOL_VERSION ? 'unknown-version'
+      : record.kind !== expected ? 'wrong-kind'
+      : record.generation !== this.expectedGeneration ? 'generation-mismatch'
+      : Object.keys(record).length !== 3 ? 'extra-keys' : null;
+    if (reason) { this.settled = { status: 'invalid', reason }; return; }
+    this.settled = { status: expected };
+    this.onPhase(expected);
   }
 
   /** The settled outcome, or `null` if no complete line has arrived yet. */
-  outcome(): BoundFrameParse | { status: 'duplicate' } | null {
+  outcome(): StartupFrameParse | { status: 'duplicate' } | null {
     return this.settled;
   }
 }

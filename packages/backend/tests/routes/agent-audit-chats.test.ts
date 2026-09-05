@@ -47,7 +47,7 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import { insertAgentScopedAgent } from '../utils/agent-scope.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
-import { createCategorizedLoggers, createLogLevelControl } from '../../src/logger.js';
+import { createCategorizedLoggers, createLogLevelControl } from '@silverhand/shared/node-file-logger';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { MessageReactionRepo } from '../../src/repos/message-reaction-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';

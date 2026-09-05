@@ -23,18 +23,6 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@hono/node-server':
-        specifier: ^1.13.2
-        version: 1.19.14(hono@4.12.15)
-      '@node-rs/argon2':
-        specifier: ^2.0.2
-        version: 2.0.2
-      better-sqlite3:
-        specifier: ^12.11.1
-        version: 12.11.1
-      hono:
-        specifier: ^4.6.5
-        version: 4.12.15
       zod:
         specifier: ^3.23.8
         version: 3.25.76
@@ -48,9 +36,6 @@ importers:
       '@dnd-kit/sortable':
         specifier: ^9.0.0
         version: 9.0.0(@dnd-kit/core@6.3.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)
-      '@electron/rebuild':
-        specifier: ^4.0.4
-        version: 4.0.4
       '@fontsource/rajdhani':
         specifier: ^5.2.7
         version: 5.2.7
@@ -93,9 +78,6 @@ importers:
       '@silverhand/host':
         specifier: workspace:*
         version: link:../../packages/host
-      '@silverhand/server':
-        specifier: workspace:*
-        version: link:../../packages/server
       '@silverhand/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -186,10 +168,6 @@ importers:
       vitest:
         specifier: ^4.1.10
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(vite@8.1.5(@types/node@22.19.17)(esbuild@0.28.0)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
-    optionalDependencies:
-      '@node-rs/argon2-darwin-arm64':
-        specifier: ^2.0.2
-        version: 2.0.2
 
   packages/backend:
     dependencies:

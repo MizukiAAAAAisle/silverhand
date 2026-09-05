@@ -45,7 +45,7 @@ describe('package.sh embedded Rust sidecar — host-target manifest identity', (
   it('builds the sidecar with cargo at PACKAGE time (never at runtime)', () => {
     expect(src).toMatch(/cargo build --release --bin silverhand-backend/);
     // Sidecar artifact is the host release path that manifest describes.
-    expect(src).toContain('rust/target/$BACKEND_TARGET/release/silverhand-backend');
+    expect(src).toContain('${CARGO_TARGET_DIR:-$ROOT_DIR/rust/target}/$BACKEND_TARGET/release/silverhand-backend');
     expect(src).toContain('--target "$BACKEND_TARGET"');
   });
 
@@ -56,10 +56,11 @@ describe('package.sh embedded Rust sidecar — host-target manifest identity', (
     expect(src).not.toMatch(/unknown-linux-gnu/);
   });
 
-  it('switches to Node ABI before production smoke and restores Electron afterwards', () => {
+  it('runs production smoke without mutating a native SQLite binding', () => {
     const smoke = src.indexOf('tsx scripts/smoke-embedded-rust-backend.mts');
-    expect(src.lastIndexOf('ensure_binding "$NODE_ABI"', smoke)).toBeGreaterThan(0);
-    expect(src.indexOf('ensure_binding "$ELECTRON_ABI"', smoke)).toBeGreaterThan(smoke);
+    expect(smoke).toBeGreaterThan(0);
+    expect(src).not.toContain('ensure_binding');
+    expect(src).not.toContain('electron-rebuild');
     expect(src).toContain('scripts/smoke-embedded-rust-backend.mts "$PACKAGED_APP_PATH/Contents/Resources"');
   });
 });

@@ -1,17 +1,8 @@
 #!/usr/bin/env bash
 # One-shot release packager for Silverhand (macOS-only).
 #
-# Steps:
-#   1. Build all workspace packages (`pnpm -r build`) — backend/shared need
-#      their tsc output; `packages/cli`, `packages/host`, and
-#      `packages/server` produce esbuild bundles; apps/desktop needs `out/`
-#      populated.
-#   2. Swap better-sqlite3's binding to the Electron ABI (cached, see
-#      _native.sh). electron-builder won't rebuild it for us — we set
-#      npmRebuild: false in the config because builder would otherwise
-#      build the binding for *system* node ABI and the packaged app
-#      would crash at startup.
-#   3. Run electron-builder, which packages the .app bundle and dmg.
+# Builds only Desktop, CLI/daemon resources and the self-contained Rust sidecar.
+# No TS server build or Electron SQLite ABI mutation is needed.
 #
 # Usage: ./scripts/package.sh [--dir] [--remote-only --server-url <origin>] [--allow-insecure-remote] [--minify|--no-minify]
 #   --dir                    skip dmg creation, only produce the .app (faster iteration)
@@ -27,8 +18,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-# shellcheck source=./_native.sh
-source "$ROOT_DIR/scripts/_native.sh"
 
 DIR_ONLY=0
 REMOTE_ONLY=0
@@ -315,31 +304,9 @@ fi
 export SILVERHAND_BUILD_COMMIT SILVERHAND_BUILD_DIRTY
 echo "[package] desktop release $CANONICAL_VERSION @ ${SILVERHAND_BUILD_COMMIT:0:12} (dirty=$SILVERHAND_BUILD_DIRTY)"
 
-pnpm -r build
+node scripts/generate-rust-migrations.mjs --check
+pnpm --filter @silverhand/shared --filter @silverhand/cli --filter @silverhand/host --filter @silverhand-ai/daemon build
 pnpm --filter @silverhand/desktop build
-
-ELECTRON_VERSION="$(node -p "require('./apps/desktop/package.json').devDependencies.electron" 2>/dev/null | sed 's/^[\^~]//' || true)"
-ELECTRON_ABI="$(node -p "require('node-abi').getAbi('$ELECTRON_VERSION', 'electron')" 2>/dev/null || true)"
-if [[ -z "$ELECTRON_ABI" ]]; then
-  echo "[package] could not resolve electron ABI for $ELECTRON_VERSION" >&2
-  exit 1
-fi
-
-if [[ "$REMOTE_ONLY" == "1" ]]; then
-  echo "[package] remote-only: skipping better-sqlite3 Electron ABI swap"
-else
-  locate_binding
-  ensure_binding "$ELECTRON_ABI" \
-    "pnpm --filter @silverhand/desktop exec electron-rebuild -f -w better-sqlite3" \
-    "package (electron $ELECTRON_VERSION)"
-
-  # electron-builder may materialize pnpm dependencies from its own package
-  # copy pipeline after our workspace-level swap. Keep a stable Electron-ABI
-  # snapshot for afterPack to restore into app.asar.unpacked right before
-  # signing, then verify the final app below.
-  export SILVERHAND_ELECTRON_BETTER_SQLITE3_BINDING="$CACHE_DIR/package-abi-$ELECTRON_ABI.node"
-  cp "$BINDING" "$SILVERHAND_ELECTRON_BETTER_SQLITE3_BINDING"
-fi
 
 BUILDER_CONFIG="electron-builder.yml"
 ARTIFACT_OUTPUT_DIR="release"
@@ -367,12 +334,15 @@ else
   BACKEND_TARGET="aarch64-apple-darwin"
   echo "[package] building embedded Rust backend sidecar (cargo build --release, host target $BACKEND_TARGET)"
   ( cd "$ROOT_DIR/rust" && cargo build --release --bin silverhand-backend --target "$BACKEND_TARGET" )
-  SIDECAR_SRC="$ROOT_DIR/rust/target/$BACKEND_TARGET/release/silverhand-backend"
+  SIDECAR_SRC="${CARGO_TARGET_DIR:-$ROOT_DIR/rust/target}/$BACKEND_TARGET/release/silverhand-backend"
   if [[ ! -x "$SIDECAR_SRC" ]]; then
     echo "[package] embedded Rust backend sidecar not found at $SIDECAR_SRC" >&2
     exit 1
   fi
-  SIDECAR_STAGE="$ROOT_DIR/rust/target/release"
+  SIDECAR_STAGE="${SILVERHAND_BACKEND_STAGE:-$ROOT_DIR/rust/target/release}"
+  # electron-builder prefixes its project directory before expanding env macros.
+  # Keep filesystem operations absolute and give its resource selector a relative path.
+  export SILVERHAND_BACKEND_STAGE="$(node -e 'console.log(require("node:path").relative(process.argv[1], process.argv[2]))' "$ROOT_DIR/apps/desktop" "$SIDECAR_STAGE")"
   mkdir -p "$SIDECAR_STAGE"
   SIDECAR_BIN="$SIDECAR_STAGE/silverhand-backend"
   cp "$SIDECAR_SRC" "$SIDECAR_BIN"
@@ -388,16 +358,13 @@ else
 MANIFEST
   echo "[package] embedded Rust backend sidecar target=$BACKEND_TARGET sha256=${SIDECAR_SHA256:0:12} manifest written"
 
-  # #task:2343 — real-process smoke against the just-built sidecar: migrate+close an
+  # #task:2343 — real-process smoke against the just-built sidecar: let Rust prepare an
   # ISOLATED (workspace-local gitignored) SILVERHAND_DIR, spawn the binary, verify the
   # bound frame / readyz / server-info / a mounted route / event WS / clean shutdown, plus
   # the bad-config failure arm. Runs at PACKAGE time (not runtime) via the tsx in
   # packages/cli. Fails the package on any regression.
   echo "[package] embedded Rust backend real-process smoke"
-  NODE_ABI="$(node -p 'process.versions.modules')"
-  ensure_binding "$NODE_ABI" "pnpm rebuild better-sqlite3" "package smoke (node)" 1
-  ( cd "$ROOT_DIR" && ./packages/cli/node_modules/.bin/tsx scripts/smoke-embedded-rust-backend.mts )
-  ensure_binding "$ELECTRON_ABI" "pnpm --filter @silverhand/desktop exec electron-rebuild -f -w better-sqlite3" "package (electron)"
+  ( cd "$ROOT_DIR" && ./packages/cli/node_modules/.bin/tsx scripts/smoke-embedded-rust-backend.mts --sidecar-stage "$SIDECAR_STAGE" )
 fi
 
 if [[ "$REMOTE_ONLY" == "1" ]]; then
@@ -435,40 +402,6 @@ else
   echo "[package] running electron-builder"
   ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --config "$BUILDER_CONFIG" --config.directories.output="$ARTIFACT_OUTPUT_DIR" )
 fi
-
-verify_packaged_better_sqlite3() {
-  local app_path="$1"
-  local expected_abi="$2"
-  local electron_bin
-  electron_bin="$(node -p "require('path').join(require('path').dirname(require.resolve('electron/package.json', { paths: ['./apps/desktop'] })), 'dist/Electron.app/Contents/MacOS/Electron')" 2>/dev/null || true)"
-  if [[ -n "$electron_bin" && ! -x "$electron_bin" ]]; then
-    echo "[package] Electron runtime missing from node_modules; materializing it for native smoke"
-    ( cd "$ROOT_DIR/apps/desktop" && env -u ELECTRON_RUN_AS_NODE pnpm exec electron --version >/dev/null )
-  fi
-  if [[ -z "$electron_bin" || ! -x "$electron_bin" ]]; then
-    echo "[package] could not resolve Electron binary for native smoke" >&2
-    return 1
-  fi
-  if [[ ! -d "$app_path" ]]; then
-    echo "[package] packaged app missing for native smoke: $app_path" >&2
-    return 1
-  fi
-
-  local app_package_json="$app_path/Contents/Resources/app.asar/package.json"
-  echo "[package] verifying packaged better-sqlite3 under Electron ABI $expected_abi"
-  ELECTRON_RUN_AS_NODE=1 "$electron_bin" -e '
-    const { createRequire } = require("node:module");
-    const expectedAbi = process.argv[2];
-    if (process.versions.modules !== expectedAbi) {
-      throw new Error(`Electron ABI mismatch in smoke: expected ${expectedAbi}, got ${process.versions.modules}`);
-    }
-    const req = createRequire(process.argv[1]);
-    const Database = req("better-sqlite3");
-    new Database(":memory:").close();
-    console.log(`[package] packaged better-sqlite3 ok for ABI ${process.versions.modules}`);
-    process.exit(0);
-  ' "$app_package_json" "$expected_abi"
-}
 
 verify_packaged_daemon() {
   local app_path="$1"
@@ -582,10 +515,7 @@ verify_packaged_daemon \
 verify_packaged_app_version "$PACKAGED_APP_PATH" "$CANONICAL_VERSION"
 
 if [[ "$REMOTE_ONLY" != "1" ]]; then
-  verify_packaged_better_sqlite3 "$PACKAGED_APP_PATH" "$ELECTRON_ABI"
-  ensure_binding "$NODE_ABI" "pnpm rebuild better-sqlite3" "packaged sidecar smoke (node)" 1
   ./packages/cli/node_modules/.bin/tsx scripts/smoke-embedded-rust-backend.mts "$PACKAGED_APP_PATH/Contents/Resources"
-  ensure_binding "$ELECTRON_ABI" "pnpm --filter @silverhand/desktop exec electron-rebuild -f -w better-sqlite3" "package restore (electron)"
 fi
 
 # This must remain the final package smoke. afterPack verifies the signature at
