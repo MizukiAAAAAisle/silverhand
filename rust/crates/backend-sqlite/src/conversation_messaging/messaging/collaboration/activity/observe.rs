@@ -20,7 +20,7 @@ use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use thiserror::Error;
 
 use super::valid_title_key_spelling;
-use crate::conversation_messaging::messaging::{HostEnvironment, MessagingStore};
+use crate::conversation_messaging::messaging::{HostEnvironment, MessagingStore, ROOT_WRITE_BEGIN};
 
 #[derive(Clone)]
 pub struct SqliteObservationStore<E = HostEnvironment> {
@@ -86,7 +86,10 @@ where
         viewer: UserId,
         batch: ObserveBatch,
     ) -> Result<Result<ObservationChanges, ObserveRefusal>, Self::Error> {
-        let mut tx = self.pool.begin().await?;
+        // This is a write unit, even though source validation comes first. Acquire
+        // the existing writer boundary before reading mutable ACL/head facts: a
+        // deferred snapshot cannot safely upgrade while another writer is active.
+        let mut tx = self.pool.begin_with(ROOT_WRITE_BEGIN).await?;
         let mut resolved = Vec::with_capacity(batch.sources().len());
         for source in batch.sources() {
             match resolve_source(&mut tx, &viewer, source).await? {

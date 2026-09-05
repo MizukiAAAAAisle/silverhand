@@ -83,6 +83,145 @@ fn at(value: i64) -> StreamPosition {
     StreamPosition::AtSeq(ObservedSeq::Persisted(MessageSeq::try_from(value).unwrap()))
 }
 
+// Production ObservationPort, not a standalone SQLite upgrade experiment. The
+// competing writer owns the lock before observe starts and releases it only after
+// observe has had a chance to reach its write boundary.
+#[tokio::test]
+async fn observation_waits_for_competing_writer_and_validates_fresh_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("observe-contention.sqlite");
+    seed(&path).await;
+    let store = MessagingStore::open(&path).await.unwrap().observation();
+    let mut writer = sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new().filename(&path),
+    )
+    .await
+    .unwrap();
+    let mut tx = writer.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    sqlx::query("UPDATE conversation_stream_heads SET latest_seq=22 WHERE conversation_id='c' AND thread_root_id IS NULL")
+        .execute(&mut *tx).await.unwrap();
+    let reading = tokio::spawn(async move {
+        observe(
+            &store,
+            &NoEffects,
+            UserId::parse("u").unwrap(),
+            ObserveBatch::new(vec![ObserveSource::Stream {
+                conversation: ConversationId::parse("c").unwrap(),
+                thread_root: None,
+                position: StreamPosition::StreamHead,
+            }])
+            .unwrap(),
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tx.commit().await.unwrap();
+    let outcome = reading.await.unwrap();
+    assert!(
+        outcome.is_ok(),
+        "production observe contention: {outcome:?}"
+    );
+    assert!(outcome.unwrap().is_ok());
+    let cursor: i64 = sqlx::query_scalar("SELECT last_read_seq FROM conversation_reads WHERE conversation_id='c' AND user_id='u' AND thread_root_id IS NULL")
+        .fetch_one(&mut writer).await.unwrap();
+    assert_eq!(
+        cursor, 22,
+        "validation must see the writer's committed head"
+    );
+    writer.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn observation_revalidates_membership_after_waiting_for_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("observe-membership.sqlite");
+    seed(&path).await;
+    let store = MessagingStore::open(&path).await.unwrap().observation();
+    let mut writer = sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new().filename(&path),
+    )
+    .await
+    .unwrap();
+    let mut tx = writer.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    sqlx::query("DELETE FROM conversation_users WHERE conversation_id='c' AND user_id='u'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let reading = tokio::spawn(async move {
+        observe(
+            &store,
+            &NoEffects,
+            UserId::parse("u").unwrap(),
+            ObserveBatch::new(vec![ObserveSource::Stream {
+                conversation: ConversationId::parse("c").unwrap(),
+                thread_root: None,
+                position: StreamPosition::StreamHead,
+            }])
+            .unwrap(),
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tx.commit().await.unwrap();
+    assert!(matches!(
+        reading.await.unwrap().unwrap(),
+        Err(ObserveRefusal::Forbidden)
+    ));
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM conversation_reads WHERE conversation_id='c' AND user_id='u'",
+    )
+    .fetch_one(&mut writer)
+    .await
+    .unwrap();
+    assert_eq!(rows, 0);
+    let unread: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM notifications WHERE id='n1' AND read_at IS NULL")
+            .fetch_one(&mut writer)
+            .await
+            .unwrap();
+    assert_eq!(unread, 1);
+    writer.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn observation_real_busy_timeout_remains_an_error_without_partial_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("observe-timeout.sqlite");
+    seed(&path).await;
+    let store = MessagingStore::open(&path).await.unwrap().observation();
+    let mut writer = sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new().filename(&path),
+    )
+    .await
+    .unwrap();
+    let tx = writer.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let outcome = observe(
+        &store,
+        &NoEffects,
+        UserId::parse("u").unwrap(),
+        ObserveBatch::new(vec![ObserveSource::Stream {
+            conversation: ConversationId::parse("c").unwrap(),
+            thread_root: None,
+            position: StreamPosition::StreamHead,
+        }])
+        .unwrap(),
+    )
+    .await;
+    assert!(matches!(
+        outcome,
+        Err(ObserveFailure::Driver(ObservationStoreError::Sql(_)))
+    ));
+    tx.rollback().await.unwrap();
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM conversation_reads WHERE conversation_id='c' AND user_id='u'",
+    )
+    .fetch_one(&mut writer)
+    .await
+    .unwrap();
+    assert_eq!(rows, 0);
+    writer.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn one_batch_is_atomic_monotone_and_returns_only_actual_committed_facts() {
     let dir = tempfile::tempdir().unwrap();

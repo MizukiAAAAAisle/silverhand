@@ -1537,9 +1537,11 @@ export function useMarkConversationNotificationsRead() {
 export function useMarkMessageChannelRead() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (params: string | { id: string }) => {
+    mutationFn: async (params: string | { id: string; snapshotSeq?: MessageSeq }) => {
       const channelId = typeof params === 'string' ? params : params.id;
-      return postObserve([mainlineStreamSourceHead(channelId)]);
+      return postObserve([typeof params !== 'string' && params.snapshotSeq !== undefined
+        ? streamSourceAtSeq(channelId, null, params.snapshotSeq)
+        : mainlineStreamSourceHead(channelId)]);
     },
     onSuccess: (result, params) => {
       reconcileUnreadAfterObserveIfRealtimeUnavailable(qc, result);
@@ -1549,7 +1551,9 @@ export function useMarkMessageChannelRead() {
       // settle of the same key, not UI built for mainline; if one ever does, it
       // inherits the immediate settle for free instead of the #task:1400 window.
       const channelId = typeof params === 'string' ? params : params.id;
-      settleStreamUnreadAfterObserve(qc, [mainlineStreamSourceHead(channelId)], result);
+      settleStreamUnreadAfterObserve(qc, [typeof params !== 'string' && params.snapshotSeq !== undefined
+        ? streamSourceAtSeq(channelId, null, params.snapshotSeq)
+        : mainlineStreamSourceHead(channelId)], result);
     },
     // No onSuccess message-unread invalidate while event WS is connected
     // (#task:1284). observe's post-commit enriched `unread_updated` message

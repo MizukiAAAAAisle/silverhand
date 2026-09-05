@@ -448,6 +448,82 @@ mod tests {
         call_raw(app, serde_json::to_string(&body).unwrap(), authenticated).await
     }
 
+    #[tokio::test]
+    async fn contended_observe_route_commits_seen_tail_and_leaves_later_unseen_message_unread() {
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_unread::ConversationUnreadReadPort;
+        use silverhand_backend_core::foundation::identity::ConversationId;
+        let (_dir, path, store) = fixture_store().await;
+        let effects = Effects::default();
+        let app = router(store.observation(), effects.clone());
+        let mut writer =
+            SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))
+                .await
+                .unwrap();
+        for sql in [
+            "UPDATE conversations SET status='active' WHERE id='c'",
+            "INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at) VALUES('m22','c','user','other','seen',22,22)",
+            "UPDATE conversation_stream_heads SET latest_seq=22 WHERE conversation_id='c' AND thread_root_id IS NULL",
+            "UPDATE conversations SET latest_message_seq=22 WHERE id='c'",
+        ] {
+            sqlx::query(sql).execute(&mut writer).await.unwrap();
+        }
+        let mut competing = writer.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        sqlx::query("UPDATE conversations SET updated_at=23 WHERE id='c'")
+            .execute(&mut *competing)
+            .await
+            .unwrap();
+        let body = json!({"sources":[{"kind":"stream","conversation_id":"c","thread_root_id":null,"position":{"kind":"at_seq","seq":22}}]});
+        let pending = tokio::spawn(call(app.clone(), body.clone(), true));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        competing.commit().await.unwrap();
+        assert_eq!(
+            pending.await.unwrap(),
+            (StatusCode::OK, json!({"changed":true}))
+        );
+        let viewer = UserId::parse("local").unwrap();
+        let conversation = ConversationId::parse("c").unwrap();
+        let read = store.conversation_unread();
+        assert_eq!(
+            read.read(&viewer, &conversation)
+                .await
+                .unwrap()
+                .unwrap()
+                .bind(&conversation)
+                .unwrap()
+                .mainline()
+                .count(),
+            0
+        );
+        assert!(effects.0.lock().unwrap().contains(&"conversation"));
+
+        for sql in [
+            "INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at) VALUES('m23','c','user','other','unseen',23,23)",
+            "UPDATE conversation_stream_heads SET latest_seq=23 WHERE conversation_id='c' AND thread_root_id IS NULL",
+            "UPDATE conversations SET latest_message_seq=23 WHERE id='c'",
+        ] {
+            sqlx::query(sql).execute(&mut writer).await.unwrap();
+        }
+        assert_eq!(
+            call(app, body, true).await,
+            (StatusCode::OK, json!({"changed":false}))
+        );
+        assert_eq!(
+            read.read(&viewer, &conversation)
+                .await
+                .unwrap()
+                .unwrap()
+                .bind(&conversation)
+                .unwrap()
+                .mainline()
+                .count(),
+            1
+        );
+        let cursor: i64 = sqlx::query_scalar("SELECT last_read_seq FROM conversation_reads WHERE user_id='local' AND conversation_id='c' AND thread_root_id IS NULL")
+            .fetch_one(&mut writer).await.unwrap();
+        assert_eq!(cursor, 22);
+        writer.close().await.unwrap();
+    }
+
     async fn call_raw(app: Router, body: String, authenticated: bool) -> (StatusCode, Value) {
         let mut request = Request::builder()
             .method("POST")

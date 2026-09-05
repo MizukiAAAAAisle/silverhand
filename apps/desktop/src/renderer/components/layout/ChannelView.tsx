@@ -46,7 +46,7 @@ import {
 import { useChannelMembership } from '@/features/channels/use-channel-membership';
 import { useChannelDetail, useJoinChannel } from '@/features/workspaces/hooks';
 import { lastCommittedSeq } from '@/features/channels/pending-message';
-import { nextTailReadMark, type TailReadMark } from '@/lib/channel-read';
+import { nextTailReadMark, observeVisibleTail, type TailReadMark } from '@/lib/channel-read';
 import type { WorkspaceChannelReference } from '@/components/chat/ConversationRef';
 import { MemberStrip } from './channel-view/member-strip';
 import { MembersButton } from './channel-view/members-button';
@@ -601,9 +601,10 @@ function ActiveChannelView({
       hasNewerLiveGap,
     );
     if (!next) return;
-    lastMarkedRef.current = next;
-    markRead.mutate(conversation.id);
-    // markRead.mutate is stable; nextTailReadMark encodes the trigger.
+    return observeVisibleTail(next,
+      mark => markRead.mutateAsync({ id: mark.channelId, snapshotSeq: mark.seq }),
+      mark => { lastMarkedRef.current = mark; });
+    // mutateAsync is stable; cleanup cancels recovery if this tail is no longer visible.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation.id, tailSeq, isAtTail, hasNewerLiveGap, gate.allowMemberEffects]);
 
