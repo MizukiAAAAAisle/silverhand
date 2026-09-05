@@ -1,0 +1,26 @@
+{
+  "mtimeMs": 1700000000123.456,
+  "tree": {
+    "ok": true,
+    "tree": {
+      "nodes": [
+        {
+          "path": "MEMORY.md",
+          "kind": "file",
+          "size": 21,
+          "mtime": 1700000000123.456
+        }
+      ]
+    }
+  },
+  "file": {
+    "ok": true,
+    "file": {
+      "path": "MEMORY.md",
+      "content": "workspace file proof\n",
+      "size": 21,
+      "mtime": 1700000000123.456,
+      "truncated": false
+    }
+  }
+}

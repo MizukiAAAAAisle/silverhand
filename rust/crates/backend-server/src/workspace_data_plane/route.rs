@@ -422,7 +422,7 @@ fn internal_error() -> Response {
 
 /// Success body `{ "tree": { "nodes": [...] } }`. The projection is the transport's
 /// own: the domain kind enum renders as the wire's `file`/`directory` string, and
-/// `size`/`mtime` stay JavaScript-safe integers.
+/// Byte sizes remain safe integers; mtimes preserve fractional milliseconds.
 #[derive(Serialize)]
 struct TreeResponse {
     tree: TreeBody,
@@ -438,7 +438,7 @@ struct NodeDto {
     path: String,
     kind: &'static str,
     size: i64,
-    mtime: i64,
+    mtime: f64,
 }
 
 /// Success body `{ "file": {...} }`.
@@ -452,7 +452,7 @@ struct FileBody {
     path: String,
     content: String,
     size: i64,
-    mtime: i64,
+    mtime: f64,
     truncated: bool,
 }
 
@@ -793,13 +793,15 @@ mod tests {
                     path: "dir".to_string(),
                     kind: WorkspaceNodeKind::Directory,
                     size: JsSafeInteger::new(0).unwrap(),
-                    mtime: JsSafeInteger::new(10).unwrap(),
+                    mtime: silverhand_backend_core::workspace_data_plane::WorkspaceMtime::new(10.0)
+                        .unwrap(),
                 },
                 WorkspaceTreeNode {
                     path: "dir/a.txt".to_string(),
                     kind: WorkspaceNodeKind::File,
                     size: JsSafeInteger::new(4).unwrap(),
-                    mtime: JsSafeInteger::new(20).unwrap(),
+                    mtime: silverhand_backend_core::workspace_data_plane::WorkspaceMtime::new(20.0)
+                        .unwrap(),
                 },
             ],
         }
@@ -810,7 +812,8 @@ mod tests {
             path: "a.txt".to_string(),
             content: "body".to_string(),
             size: JsSafeInteger::new(4).unwrap(),
-            mtime: JsSafeInteger::new(20).unwrap(),
+            mtime: silverhand_backend_core::workspace_data_plane::WorkspaceMtime::new(20.0)
+                .unwrap(),
             truncated: false,
         }
     }
@@ -954,8 +957,8 @@ mod tests {
             reply.body,
             json!({
                 "tree": { "nodes": [
-                    { "path": "dir", "kind": "directory", "size": 0, "mtime": 10 },
-                    { "path": "dir/a.txt", "kind": "file", "size": 4, "mtime": 20 }
+                    { "path": "dir", "kind": "directory", "size": 0, "mtime": 10.0 },
+                    { "path": "dir/a.txt", "kind": "file", "size": 4, "mtime": 20.0 }
                 ] }
             })
         );
@@ -982,7 +985,7 @@ mod tests {
             reply.body,
             json!({
                 "file": {
-                    "path": "a.txt", "content": "body", "size": 4, "mtime": 20, "truncated": false
+                    "path": "a.txt", "content": "body", "size": 4, "mtime": 20.0, "truncated": false
                 }
             })
         );
@@ -1281,6 +1284,48 @@ mod tests {
             assert_eq!(reply.status.as_u16(), status, "{wire}");
             assert_eq!(reply.body["code"], wire);
             assert_eq!(reply.body["error"], "product message");
+        }
+    }
+    #[tokio::test]
+    async fn real_host_fractional_mtime_payload_survives_tree_and_file_http_routes() {
+        // Captured from the real host handlers over an isolated file with a
+        // fractional stat.mtimeMs. Feed the production codec, not invented facts.
+        let payload: Value =
+            serde_json::from_str(include_str!("fixtures/fractional_mtime.json")).unwrap();
+        for session_scope in ["agent", "conversation"] {
+            for (key, uri) in [
+                ("tree", "/api/agents/a1/workspace/tree"),
+                ("file", "/api/agents/a1/workspace/file?path=MEMORY.md"),
+            ] {
+                let decoded = if key == "tree" {
+                    super::super::codec::decode_tree(&payload[key]).map(Answer::Tree)
+                } else {
+                    super::super::codec::decode_file(&payload[key]).map(Answer::File)
+                };
+                let plane = decoded.map(FakeDataPlane::ok).unwrap_or_else(|| {
+                    FakeDataPlane::faulting(WorkspaceFsFaultCode::DaemonInternalError)
+                });
+                let mut detail = projection(HOST);
+                detail.session_scope = session_scope.to_owned();
+                let scoped_facts = AgentDetailFacts::from_source(
+                    agent("a1"),
+                    user(OWNER),
+                    [],
+                    [],
+                    MaterializationStatus::Active,
+                    detail,
+                );
+                let reply = run(
+                    present(scoped_facts),
+                    FakeScope::authorizing(),
+                    plane,
+                    uri,
+                    true,
+                )
+                .await;
+                assert_eq!(reply.status, StatusCode::OK, "{uri}: {}", reply.body);
+                assert_eq!(reply.body[key], payload[key][key]);
+            }
         }
     }
 }

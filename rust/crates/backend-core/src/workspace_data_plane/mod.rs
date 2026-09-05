@@ -20,7 +20,7 @@ mod fs;
 mod scope;
 
 pub use fs::{
-    WorkspaceDataPlane, WorkspaceFileRead, WorkspaceFsFault, WorkspaceFsFaultCode,
+    WorkspaceDataPlane, WorkspaceFileRead, WorkspaceFsFault, WorkspaceFsFaultCode, WorkspaceMtime,
     WorkspaceNodeKind, WorkspaceTree, WorkspaceTreeNode,
 };
 pub use scope::{

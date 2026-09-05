@@ -14,7 +14,7 @@ use silverhand_backend_core::{
     foundation::identity::{AgentId, WorkspaceId},
     foundation::wire_number::JsSafeInteger,
     workspace_data_plane::{
-        WorkspaceFileRead, WorkspaceNodeKind, WorkspaceTree, WorkspaceTreeNode,
+        WorkspaceFileRead, WorkspaceMtime, WorkspaceNodeKind, WorkspaceTree, WorkspaceTreeNode,
     },
 };
 
@@ -69,7 +69,7 @@ pub(crate) fn decode_file(value: &Value) -> Option<WorkspaceFileRead> {
         path: nonempty_path(file.get("path")?)?,
         content: file.get("content")?.as_str()?.to_owned(),
         size: js_safe_stat(file.get("size")?)?,
-        mtime: js_safe_stat(file.get("mtime")?)?,
+        mtime: WorkspaceMtime::new(file.get("mtime")?.as_f64()?)?,
         truncated: file.get("truncated")?.as_bool()?,
     })
 }
@@ -85,7 +85,7 @@ fn decode_node(value: &Value) -> Option<WorkspaceTreeNode> {
         path: nonempty_path(node.get("path")?)?,
         kind,
         size: js_safe_stat(node.get("size")?)?,
-        mtime: js_safe_stat(node.get("mtime")?)?,
+        mtime: WorkspaceMtime::new(node.get("mtime")?.as_f64()?)?,
     })
 }
 
@@ -222,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stat_past_the_javascript_safe_boundary_folds_the_whole_frame() {
+    fn byte_counts_keep_integer_bounds_while_mtime_uses_the_number_contract() {
         // A magnitude one past `JsSafeInteger::MAX` would round on the JS side, so
         // the codec refuses it — the adapter converges that to daemon_internal_error
         // rather than letting an unsafe stat cross into the domain. (Derived from the
@@ -240,7 +240,7 @@ mod tests {
                 "ok": true,
                 "tree": { "nodes": [ { "path": "a", "kind": "file", "size": 0, "mtime": over } ] }
             }))
-            .is_none()
+            .is_some()
         );
         assert!(
             decode_file(&json!({
@@ -254,7 +254,7 @@ mod tests {
                 "ok": true,
                 "file": { "path": "a", "content": "", "size": 0, "mtime": over, "truncated": false }
             }))
-            .is_none()
+            .is_some()
         );
     }
 
@@ -268,13 +268,38 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(node.nodes[0].size.get(), JsSafeInteger::MAX);
-        assert_eq!(node.nodes[0].mtime.get(), JsSafeInteger::MAX);
+        assert_eq!(node.nodes[0].mtime.get(), JsSafeInteger::MAX as f64);
         let file = decode_file(&json!({
             "ok": true,
             "file": { "path": "a", "content": "", "size": max, "mtime": max, "truncated": false }
         }))
         .unwrap();
         assert_eq!(file.size.get(), JsSafeInteger::MAX);
-        assert_eq!(file.mtime.get(), JsSafeInteger::MAX);
+        assert_eq!(file.mtime.get(), JsSafeInteger::MAX as f64);
+    }
+    #[test]
+    fn mtime_refuses_wrong_types_and_non_finite_json_representations() {
+        for invalid in [
+            json!(null),
+            json!("1700000000123.456"),
+            json!(true),
+            json!([]),
+            json!({}),
+            json!(f64::INFINITY),
+            json!(f64::NAN),
+        ] {
+            assert!(
+                decode_tree(&json!({"ok": true, "tree": {"nodes": [
+                    {"path": "a", "kind": "file", "size": 1, "mtime": invalid}
+                ]}}))
+                .is_none()
+            );
+            assert!(
+                decode_file(&json!({"ok": true, "file": {
+                    "path": "a", "content": "x", "size": 1, "mtime": invalid, "truncated": false
+                }}))
+                .is_none()
+            );
+        }
     }
 }

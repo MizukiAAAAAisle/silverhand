@@ -6,12 +6,15 @@ import {
   rmSync,
   symlinkSync,
   writeFileSync,
+  utimesSync,
+  statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   AgentWorkspaceFsError,
   listAgentWorkspaceTree,
+  readAgentWorkspaceFile,
   validateVirtualPathShape,
 } from '../../src/daemon/agent-workspace-fs/index.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
@@ -48,6 +51,25 @@ function l2BundleDir(workspaceId = 'ws_1'): string {
 }
 
 describe('listAgentWorkspaceTree', () => {
+  it('preserves real fractional mtime in tree and file results for home and workspace roots', async () => {
+    for (const workspaceId of [undefined, 'ws_1']) {
+      const base = workspaceId ? l2BundleDir(workspaceId) : agentDir();
+      mkdirSync(base, { recursive: true });
+      const path = join(base, 'MEMORY.md');
+      writeFileSync(path, 'workspace file proof\n');
+      utimesSync(path, 1700000000.123456, 1700000000.123456);
+      const mtime = statSync(path).mtimeMs;
+      expect(Number.isInteger(mtime)).toBe(false);
+      const params = { agent_id: AGENT_ID, workspace_id: workspaceId };
+      const deps = { agentHomeRootDir };
+      const tree = await listAgentWorkspaceTree(params, deps);
+      const file = await readAgentWorkspaceFile({ ...params, path: 'MEMORY.md' }, deps);
+      expect(tree.tree.nodes.find(node => node.path === 'MEMORY.md')?.mtime).toBe(mtime);
+      expect(file.file.mtime).toBe(mtime);
+      expect(file.file.content).toBe('workspace file proof\n');
+    }
+  });
+
   beforeEach(() => {
     agentHomeRootDir = mkdtempSync(join(tmpdir(), 'shtree-agents-'));
   });

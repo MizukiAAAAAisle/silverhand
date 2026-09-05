@@ -13,19 +13,32 @@
 //! [`WorkspaceFsFaultCode::ForbiddenPath`] arm, authored by the daemon, not this
 //! layer.
 //!
-//! Byte counts and mtimes are carried as [`JsSafeInteger`], not a naked `i64`:
-//! the wire contract is an integer every JavaScript JSON consumer can represent
-//! exactly, so the type itself owns the binary64 precision boundary. The codec
-//! mints these on the way in — rejecting a fraction, an out-of-`i64` number, or a
-//! magnitude past `2^53-1` that would round on the JS side — and the route emits
-//! the guaranteed-safe `i64` back out. A stat the boundary refuses is a daemon
-//! answer the codec cannot represent, folded to `daemon_internal_error` rather
-//! than widening the domain to carry an unsafe value.
+//! Byte counts use [`JsSafeInteger`]. Modification times preserve the daemon's
+//! finite binary64 milliseconds, including sub-millisecond fractions from Node
+//! `stat.mtimeMs`; treating those as integers rejects ordinary filesystem data.
 
 use std::future::Future;
 
 use crate::foundation::identity::{AgentId, HostId, WorkspaceId};
 use crate::foundation::wire_number::JsSafeInteger;
+
+/// Filesystem modification time in milliseconds, preserving fractional precision.
+/// Non-finite values cannot cross JSON and are rejected at construction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorkspaceMtime(f64);
+
+impl WorkspaceMtime {
+    pub fn new(value: f64) -> Option<Self> {
+        value.is_finite().then_some(Self(value))
+    }
+
+    pub fn get(self) -> f64 {
+        self.0
+    }
+}
+
+// Construction excludes NaN, so equality is reflexive.
+impl Eq for WorkspaceMtime {}
 
 /// Whether a tree node is a file or a directory. The wire spells these
 /// `"file"` / `"directory"`; the codec owns that spelling.
@@ -43,7 +56,7 @@ pub struct WorkspaceTreeNode {
     pub path: String,
     pub kind: WorkspaceNodeKind,
     pub size: JsSafeInteger,
-    pub mtime: JsSafeInteger,
+    pub mtime: WorkspaceMtime,
 }
 
 /// The flat listing returned by the tree read: every visible node under the
@@ -60,7 +73,7 @@ pub struct WorkspaceFileRead {
     pub path: String,
     pub content: String,
     pub size: JsSafeInteger,
-    pub mtime: JsSafeInteger,
+    pub mtime: WorkspaceMtime,
     pub truncated: bool,
 }
 
@@ -135,4 +148,19 @@ pub trait WorkspaceDataPlane {
         workspace: Option<&WorkspaceId>,
         path: &str,
     ) -> impl Future<Output = Result<WorkspaceFileRead, WorkspaceFsFault>> + Send;
+}
+
+#[cfg(test)]
+mod mtime_tests {
+    use super::WorkspaceMtime;
+
+    #[test]
+    fn finite_milliseconds_preserve_fraction_and_reject_non_finite_values() {
+        for value in [0.0, -0.25, 1700000000123.456, f64::MAX] {
+            assert_eq!(WorkspaceMtime::new(value).unwrap().get(), value);
+        }
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(WorkspaceMtime::new(value).is_none());
+        }
+    }
 }
