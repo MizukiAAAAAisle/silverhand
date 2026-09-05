@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 import { describe, expect, it } from 'vitest';
 
@@ -17,6 +18,16 @@ const PACKAGE_SH = fileURLToPath(
 
 describe('package.sh embedded Rust sidecar — host-target manifest identity', () => {
   const src = readFileSync(PACKAGE_SH, 'utf8');
+
+  it('supports isolated artifact output and rejects traversal before building', () => {
+    expect(src).toContain('ARTIFACT_OUTPUT_DIR="$OUTPUT_DIR"');
+    expect(src.match(/--config\.directories\.output="\$ARTIFACT_OUTPUT_DIR"/g)).toHaveLength(2);
+    for (const name of ['../release', '/tmp', '.', '']) {
+      const result = spawnSync('bash', [PACKAGE_SH, '--output-dir', name], { encoding: 'utf8' });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('simple directory name');
+    }
+  });
 
   it('derives the desktop target from the Electron platform+arch (not a uname triple)', () => {
     expect(src).toMatch(/DESKTOP_ARCH="\$\(node -p 'process\.arch'\)"/);

@@ -20,6 +20,7 @@
 #   --allow-insecure-remote  bake acceptance for non-loopback http:// remote URLs
 #   --minify                 minify shipped JS bundles (default for release packages)
 #   --no-minify              keep shipped JS readable (default with --dir)
+#   --output-dir <name>      separate artifact directory under apps/desktop
 
 set -euo pipefail
 
@@ -33,6 +34,7 @@ DIR_ONLY=0
 REMOTE_ONLY=0
 ALLOW_INSECURE_REMOTE="${SILVERHAND_ALLOW_INSECURE_REMOTE:-0}"
 SERVER_URL=""
+OUTPUT_DIR=""
 
 parse_minify_flag() {
   local raw="$1"
@@ -56,6 +58,14 @@ while [[ $# -gt 0 ]]; do
     --remote-only)
       REMOTE_ONLY=1
       shift
+      ;;
+    --output-dir)
+      if [[ $# -lt 2 || ! "$2" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+        echo "[package] --output-dir requires a simple directory name" >&2
+        exit 2
+      fi
+      OUTPUT_DIR="$2"
+      shift 2
       ;;
     --allow-insecure-remote)
       ALLOW_INSECURE_REMOTE=1
@@ -82,7 +92,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      echo "Usage: $0 [--dir] [--remote-only --server-url <origin>] [--allow-insecure-remote] [--minify|--no-minify]"
+      echo "Usage: $0 [--dir] [--output-dir <name>] [--remote-only --server-url <origin>] [--allow-insecure-remote] [--minify|--no-minify]"
       exit 0
       ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -413,13 +423,17 @@ if [[ "$REMOTE_ONLY" == "1" ]]; then
   echo "[package] generated remote-only manifest @ version $CANONICAL_VERSION"
 fi
 
+if [[ -n "$OUTPUT_DIR" ]]; then
+  ARTIFACT_OUTPUT_DIR="$OUTPUT_DIR"
+fi
+
 if [[ "$DIR_ONLY" == "1" ]]; then
   echo "[package] running electron-builder --dir"
-  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --dir --config "$BUILDER_CONFIG" )
+  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --dir --config "$BUILDER_CONFIG" --config.directories.output="$ARTIFACT_OUTPUT_DIR" )
 else
   stage_dmgbuild_bundle
   echo "[package] running electron-builder"
-  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --config "$BUILDER_CONFIG" )
+  ( cd "$ROOT_DIR/apps/desktop" && pnpm exec electron-builder --mac --config "$BUILDER_CONFIG" --config.directories.output="$ARTIFACT_OUTPUT_DIR" )
 fi
 
 verify_packaged_better_sqlite3() {
