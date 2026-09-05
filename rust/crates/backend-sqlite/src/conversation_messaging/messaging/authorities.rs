@@ -250,7 +250,7 @@ impl<'connection> ConversationAuthorityReader<'connection> {
                         .ok_or_else(|| corrupt("conversations.endpoint_b"))?,
                 ];
                 for (principal, deleted) in endpoints {
-                    if *deleted || !self.principal_exists(principal).await? {
+                    if *deleted || !self.principal_allows_direct_messages(principal).await? {
                         return Ok(false);
                     }
                 }
@@ -260,16 +260,18 @@ impl<'connection> ConversationAuthorityReader<'connection> {
         }
     }
 
-    async fn principal_exists(
+    async fn principal_allows_direct_messages(
         &mut self,
         principal: &PrincipalIdentity,
     ) -> Result<bool, PersistenceFailure> {
         let found: Option<i64> = match principal.kind() {
-            PrincipalKind::Agent => sqlx::query_scalar("SELECT 1 FROM agents WHERE id = ?")
-                .bind(principal.as_str())
-                .fetch_optional(&mut *self.connection)
-                .await
-                .map_err(driver)?,
+            PrincipalKind::Agent => {
+                sqlx::query_scalar("SELECT 1 FROM agents WHERE id = ? AND session_scope = 'agent'")
+                    .bind(principal.as_str())
+                    .fetch_optional(&mut *self.connection)
+                    .await
+                    .map_err(driver)?
+            }
             PrincipalKind::Human => sqlx::query_scalar("SELECT 1 FROM users WHERE id = ?")
                 .bind(principal.as_str())
                 .fetch_optional(&mut *self.connection)
@@ -606,7 +608,9 @@ where
                 .map_err(driver)?;
                 allowed.is_some()
             }
-            PLACEMENT_DIRECT_PAIR => self.agent_participates(&place, agent).await?,
+            PLACEMENT_DIRECT_PAIR => {
+                self.agent_participates(&place, agent).await? && self.accepts_posts(&place).await?
+            }
             _ => return Err(corrupt("conversations.placement_kind")),
         };
         Ok(if allowed {
@@ -838,18 +842,36 @@ where
                             TargetAddressOperatorReason::DirectPairNotFound,
                         )));
                     }
-                    None => self
-                        .store
-                        .open_direct_pair(
-                            &self.opened,
-                            participants,
-                            self.store
-                                .environment
-                                .now_unix_ms()
-                                .map_err(TargetAddressStoreError::Clock)?,
-                        )
-                        .await
-                        .map_err(TargetAddressStoreError::Open)?,
+                    None => {
+                        for principal in [participants.first(), participants.second()] {
+                            if let PrincipalIdentity::Agent(id) = principal {
+                                let scope: Option<String> =
+                                    sqlx::query_scalar(super::SELECT_AGENT_SESSION_SCOPE)
+                                        .bind(id.as_str())
+                                        .fetch_optional(&self.store.pool)
+                                        .await
+                                        .map_err(driver)
+                                        .map_err(TargetAddressStoreError::Persistence)?;
+                                if scope.as_deref() != Some("agent") {
+                                    return Ok(Err(RejectedTarget::new(
+                                        AddressRefusal::Unresolved,
+                                        TargetAddressOperatorReason::DirectPairNotFound,
+                                    )));
+                                }
+                            }
+                        }
+                        self.store
+                            .open_direct_pair(
+                                &self.opened,
+                                participants,
+                                self.store
+                                    .environment
+                                    .now_unix_ms()
+                                    .map_err(TargetAddressStoreError::Clock)?,
+                            )
+                            .await
+                            .map_err(TargetAddressStoreError::Open)?
+                    }
                 };
                 (id, thread)
             }

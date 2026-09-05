@@ -409,7 +409,7 @@ async fn read_chats(
         let read_only = pair
             .both_endpoints()
             .iter()
-            .any(|endpoint| endpoint.is_deleted() || !principals.exists(endpoint));
+            .any(|endpoint| endpoint.is_deleted() || !principals.allows_direct_messages(endpoint));
         summaries.push(AuditChatSummary::DirectPair {
             conversation_id: pair.conversation().clone(),
             counterpart,

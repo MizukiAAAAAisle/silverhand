@@ -65,10 +65,14 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::with_scope("conversation").await
+    }
+
+    async fn with_scope(scope: &str) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("product.sqlite");
         let mut db = current_schema::create_current_schema(&path).await;
-        seed(&mut db).await;
+        seed(&mut db, scope).await;
         Self {
             _directory: directory,
             path,
@@ -194,7 +198,7 @@ struct InboxWitness {
 
 /// The Messaging seed: the smallest set of rows the send path reads, expressed
 /// against the real constraints rather than around them.
-async fn seed(db: &mut SqliteConnection) {
+async fn seed(db: &mut SqliteConnection, scope: &str) {
     sqlx::query("INSERT INTO hosts (id, name, kind, created_at) VALUES (?, 'host', 'local', 0)")
         .bind(HOST_ID)
         .execute(&mut *db)
@@ -210,11 +214,12 @@ async fn seed(db: &mut SqliteConnection) {
     .unwrap();
     sqlx::query(
         "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
-         created_by_user_id) VALUES (?, 'lio', 'claude', ?, 0, 0, 'Lio', ?)",
+         created_by_user_id, session_scope) VALUES (?, 'lio', 'claude', ?, 0, 0, 'Lio', ?, ?)",
     )
     .bind(AGENT_ID)
     .bind(HOST_ID)
     .bind(USER_ID)
+    .bind(scope)
     .execute(&mut *db)
     .await
     .unwrap();
@@ -1098,7 +1103,7 @@ async fn a_refused_send_consumes_no_ordinal() {
 /// row, and a roster-shaped question would refuse both of them.
 #[tokio::test]
 async fn a_direct_pair_endpoint_participates_without_a_roster_row() {
-    let fixture = Fixture::new().await;
+    let fixture = Fixture::with_scope("agent").await;
     let store = fixture.store().await;
 
     let by_agent = store
@@ -2191,7 +2196,7 @@ async fn the_audience_and_the_write_gate_agree_on_a_channel() {
 /// planted follower that is not an endpoint stays out.
 #[tokio::test]
 async fn the_audience_and_the_write_gate_agree_on_a_direct_pair() {
-    let mut fixture = Fixture::new().await;
+    let mut fixture = Fixture::with_scope("agent").await;
     let store = fixture.store().await;
     let root = store
         .send_message(send(agent_actor(), PAIR_ID, "in the pair"))
@@ -2462,7 +2467,7 @@ async fn a_second_mention_travels_on_the_same_line() {
 /// the previous is answered, and each is reported per handle.
 #[tokio::test]
 async fn a_copy_that_does_not_happen_says_why() {
-    let mut fixture = Fixture::new().await;
+    let mut fixture = Fixture::with_scope("agent").await;
     let store = fixture.store().await;
 
     // A member already received the original.
@@ -3042,7 +3047,7 @@ async fn a_reply_names_people_and_still_delivers_to_its_cluster() {
 /// line has nowhere to put one.
 #[tokio::test]
 async fn naming_someone_in_a_direct_line_records_nothing() {
-    let fixture = Fixture::new().await;
+    let fixture = Fixture::with_scope("agent").await;
 
     let fact = fixture
         .store()
@@ -4552,4 +4557,22 @@ async fn the_cold_read_matches_the_entry_committed_on_the_fact() {
         .expect("a settled cluster has a placeable entry");
 
     assert_eq!(committed, cold);
+}
+
+#[tokio::test]
+async fn conversation_scoped_pair_refuses_both_senders_inside_the_write_transaction() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    for actor in [agent_actor(), user_actor()] {
+        let error = store
+            .send_message(send(actor, PAIR_ID, "blocked"))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SendMessageError::Conversation(ConversationRefusal::DirectMessageScope)
+        ));
+    }
+    assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 0);
+    assert_eq!(fixture.latest_seq(PAIR_ID).await, 0);
 }

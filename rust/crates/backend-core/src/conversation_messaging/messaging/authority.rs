@@ -58,6 +58,8 @@ pub enum ConversationRefusal {
     Archived,
     #[error("the other endpoint of this direct conversation no longer exists")]
     EndpointGone,
+    #[error("conversation-scoped agents cannot use direct messages; use a shared channel")]
+    DirectMessageScope,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -81,10 +83,15 @@ pub struct ReplyTargetRefusal;
 #[error("no reply cluster of this conversation is named by that root")]
 pub struct ThreadRootRefusal;
 
-/// Whether a principal named by an endpoint still exists. The narrow half of the
-/// facts the survivor rule needs, kept its own capability so a caller of the rule
-/// does not have to hold the whole write gate's reads.
+/// Endpoint existence and DM eligibility, read inside the write transaction.
+/// Participation and historical visibility remain separate from write eligibility.
 pub trait EndpointPrincipalReads {
+    /// Whether this live endpoint may participate in a writable direct pair.
+    fn endpoint_allows_direct_messages(
+        &mut self,
+        endpoint: &ConversationEndpoint,
+    ) -> impl Future<Output = Result<bool, PersistenceFailure>> + Send;
+
     fn endpoint_principal_exists(
         &mut self,
         endpoint: &ConversationEndpoint,
@@ -189,6 +196,13 @@ pub async fn assert_post_authority(
     {
         return Err(ConversationRefusal::EndpointGone.into());
     }
+    if let Some(endpoints) = &facts.direct_pair {
+        for endpoint in endpoints.both() {
+            if !reads.endpoint_allows_direct_messages(endpoint).await? {
+                return Err(ConversationRefusal::DirectMessageScope.into());
+            }
+        }
+    }
 
     Ok(facts)
 }
@@ -213,6 +227,13 @@ mod tests {
     }
 
     impl EndpointPrincipalReads for FakeReads {
+        async fn endpoint_allows_direct_messages(
+            &mut self,
+            _endpoint: &ConversationEndpoint,
+        ) -> Result<bool, PersistenceFailure> {
+            Ok(true)
+        }
+
         async fn endpoint_principal_exists(
             &mut self,
             endpoint: &ConversationEndpoint,

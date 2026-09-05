@@ -31,7 +31,7 @@ const SELECT_PAIRS: &str = "SELECT c.id, c.endpoint_a_kind, c.endpoint_a_id, c.e
       (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = ?)) \
      ORDER BY c.created_at ASC, c.id ASC";
 
-const SELECT_AGENTS: &str = "SELECT a.id, a.name, a.display_name, a.avatar_storage_key, a.updated_at, a.runtime \
+const SELECT_AGENTS: &str = "SELECT a.id, a.name, a.display_name, a.avatar_storage_key, a.updated_at, a.runtime, a.session_scope \
      FROM json_each(?) requested JOIN agents a ON a.id = requested.value";
 const SELECT_USERS: &str = "SELECT u.id, u.name, u.display_name, u.avatar_storage_key, u.updated_at \
      FROM json_each(?) requested JOIN users u ON u.id = requested.value";
@@ -105,10 +105,9 @@ impl SqliteDirectPairReadModel {
         for pair in evidence {
             let counterpart = pair.counterpart(viewer)?;
             let counterpart_value = principals.counterpart(&counterpart)?;
-            let read_only = pair
-                .endpoints()
-                .iter()
-                .any(|endpoint| endpoint.deleted_at_ms.is_some() || !principals.exists(endpoint));
+            let read_only = pair.endpoints().iter().any(|endpoint| {
+                endpoint.deleted_at_ms.is_some() || !principals.allows_direct_messages(endpoint)
+            });
             let unread_count = unread
                 .remove(&pair.conversation)
                 .ok_or(DirectPairReadError::MissingUnreadCount)?;
@@ -267,6 +266,7 @@ struct LivePrincipal {
     display_name: String,
     avatar: Option<AvatarRevision>,
     runtime: Option<RuntimeKind>,
+    allows_direct_messages: bool,
 }
 
 impl LivePrincipals {
@@ -316,11 +316,14 @@ impl LivePrincipals {
         Ok(live)
     }
 
-    /// Whether the endpoint's live principal row is present. `pub(crate)`: the audit
-    /// direct-pair arm computes the survivor read-only fact through this same check.
-    pub(crate) fn exists(&self, endpoint: &Endpoint) -> bool {
+    /// Whether this live endpoint supports DM writes. The audit projection shares
+    /// this rule; conversation-scoped agents remain visible but read-only.
+    pub(crate) fn allows_direct_messages(&self, endpoint: &Endpoint) -> bool {
         match &endpoint.identity {
-            PrincipalIdentity::Agent(id) => self.agents.contains_key(id.as_str()),
+            PrincipalIdentity::Agent(id) => self
+                .agents
+                .get(id.as_str())
+                .is_some_and(|p| p.allows_direct_messages),
             PrincipalIdentity::Human(id) => self.users.contains_key(id.as_str()),
         }
     }
@@ -373,6 +376,8 @@ fn live_principal(
             .filter(|key| !key.is_empty())
             .map(|_| AvatarRevision::at(updated_at)),
         runtime,
+        allows_direct_messages: runtime.is_none()
+            || row.try_get::<String, _>("session_scope")? == "agent",
     })
 }
 

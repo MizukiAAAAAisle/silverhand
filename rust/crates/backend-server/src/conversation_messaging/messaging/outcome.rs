@@ -137,6 +137,11 @@ fn conversation(refusal: &ConversationRefusal) -> Response {
         // NOT a lifecycle state and never postable again, so 403 rather than 409 — the same
         // answer the request-layer gate gives for the identical fact. A 409 would invite a
         // client to retry a state that cannot change.
+        ConversationRefusal::DirectMessageScope => told(
+            StatusCode::FORBIDDEN,
+            "conversation-scoped agents cannot use direct messages; use a shared channel",
+            "direct_message_scope_forbidden",
+        ),
         ConversationRefusal::EndpointGone => told(
             StatusCode::FORBIDDEN,
             "the other endpoint of this direct conversation no longer exists",
@@ -347,6 +352,14 @@ mod tests {
                 serde_json::json!({
                     "error": "conversation is archived",
                     "code": "conversation_archived"
+                }),
+            ),
+            (
+                ConversationRefusal::DirectMessageScope.into(),
+                StatusCode::FORBIDDEN,
+                serde_json::json!({
+                    "error": "conversation-scoped agents cannot use direct messages; use a shared channel",
+                    "code": "direct_message_scope_forbidden"
                 }),
             ),
             (

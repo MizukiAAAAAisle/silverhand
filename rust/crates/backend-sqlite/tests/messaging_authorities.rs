@@ -47,10 +47,14 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::with_conversation_agent(None).await
+    }
+
+    async fn with_conversation_agent(scoped: Option<&str>) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("authority.sqlite");
         let mut db = current_schema::create_current_schema(&path).await;
-        seed(&mut db).await;
+        seed(&mut db, scoped).await;
         Self {
             _temp: temp,
             path,
@@ -174,7 +178,7 @@ async fn target_refusal_observation_preserves_explicit_read_intent_and_forbidden
     );
 }
 
-async fn seed(db: &mut SqliteConnection) {
+async fn seed(db: &mut SqliteConnection, scoped: Option<&str>) {
     sqlx::query(
         "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
     )
@@ -191,7 +195,7 @@ async fn seed(db: &mut SqliteConnection) {
         (HIDDEN, "hidden", OTHER_USER, "agent"),
     ] {
         sqlx::query("INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, created_by_user_id, materialization_status, session_scope) VALUES (?, ?, 'codex', 'host-1', 0, 0, ?, ?, 'active', ?)")
-            .bind(id).bind(name).bind(name).bind(creator).bind(scope).execute(&mut *db).await.unwrap();
+            .bind(id).bind(name).bind(name).bind(creator).bind(if scoped == Some(id) { "conversation" } else { scope }).execute(&mut *db).await.unwrap();
     }
     sqlx::query("INSERT INTO workspaces (id, name, name_key, owner_user_id, created_at, updated_at) VALUES (?, 'Product Space', 'product space', ?, 0, 0)")
         .bind(WORKSPACE).bind(USER).execute(&mut *db).await.unwrap();
@@ -1444,5 +1448,60 @@ async fn readable_boards_unions_member_workspaces_owner_home_and_endpoint_pairs(
         boards.len(),
         3,
         "exactly the two workspaces and the one pair"
+    );
+}
+
+#[tokio::test]
+async fn conversation_scoped_endpoints_cannot_allocate_a_direct_pair() {
+    for scoped in [AGENT, PEER] {
+        let mut fixture = Fixture::with_conversation_agent(Some(scoped)).await;
+        let store = fixture.store().await;
+        let target = store.target_address(Opened::default(), Refusals::default());
+        assert_eq!(
+            target
+                .resolve(
+                    &agent(),
+                    "dm:@peer",
+                    DirectPairAllocation::Permitted,
+                    DeliveryIntent::Write
+                )
+                .await
+                .unwrap(),
+            Err(AddressRefusal::Unresolved)
+        );
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM conversations WHERE placement_kind = 'direct_pair'",
+        )
+        .fetch_one(&mut fixture.db)
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
+    }
+}
+
+#[tokio::test]
+async fn historical_pair_remains_resolvable_for_reads_but_loses_send_capability() {
+    let mut fixture = Fixture::with_conversation_agent(Some(PEER)).await;
+    let store = fixture.store().await;
+    let target = store.target_address(Opened::default(), Refusals::default());
+    sqlx::query("INSERT INTO conversations (id, placement_kind, roster_policy, endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, title, status, created_at, updated_at) VALUES ('pair000000000001', 'direct_pair', 'fixed', 'agent', ?, 'agent', ?, '', 'open', 0, 0)")
+        .bind(AGENT).bind(PEER).execute(&mut fixture.db).await.unwrap();
+    let read = target
+        .resolve(
+            &agent(),
+            "dm:@peer",
+            DirectPairAllocation::Forbidden,
+            DeliveryIntent::Read,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(read.conversation.as_str(), "pair000000000001");
+    assert!(
+        store
+            .may_send_messages(&agent(), &read.conversation)
+            .await
+            .unwrap()
+            .is_err()
     );
 }

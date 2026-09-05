@@ -2797,6 +2797,23 @@ impl MessageRow {
 }
 
 impl<E: Send + Sync> EndpointPrincipalReads for TxScope<'_, '_, E> {
+    async fn endpoint_allows_direct_messages(
+        &mut self,
+        endpoint: &ConversationEndpoint,
+    ) -> Result<bool, PersistenceFailure> {
+        match &endpoint.principal {
+            messaging::PrincipalIdentity::Human(_) => Ok(true),
+            messaging::PrincipalIdentity::Agent(agent) => {
+                let scope: Option<String> = sqlx::query_scalar(SELECT_AGENT_SESSION_SCOPE)
+                    .bind(agent.as_str())
+                    .fetch_optional(&mut *self.tx)
+                    .await
+                    .map_err(driver)?;
+                Ok(scope.as_deref() == Some("agent"))
+            }
+        }
+    }
+
     async fn endpoint_principal_exists(
         &mut self,
         endpoint: &ConversationEndpoint,

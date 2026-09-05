@@ -105,7 +105,10 @@ Flags:
                           dm:@<handle>
                                       your direct pair with that principal.
                                       Sending to the main line opens the pair
-                                      if it does not exist yet.
+                                      if it does not exist yet. Agent endpoints
+                                      must use agent scope. Conversation-scoped
+                                      agents must communicate in a shared channel;
+                                      existing DM history remains read-only.
                         Append \`/thread:<root_message_id>\` to any of them to
                         post into a reply cluster. A cluster is addressed by
                         its ROOT — the id under \`thread_root_id\`, or the

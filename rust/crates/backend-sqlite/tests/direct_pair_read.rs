@@ -15,6 +15,10 @@ use sqlx::Connection;
 mod current_schema;
 
 async fn seeded(path: &std::path::Path) {
+    seeded_scope(path, "agent").await
+}
+
+async fn seeded_scope(path: &std::path::Path, scope: &str) {
     let mut db = current_schema::create_current_schema(path).await;
     for statement in [
         "INSERT INTO users (id, name, display_name, avatar_storage_key, avatar_content_type, \
@@ -26,9 +30,9 @@ async fn seeded(path: &std::path::Path) {
          VALUES ('user-3', 'foreign', 'Foreign', 3, 13)",
         "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'Host', 'local', 1)",
         "INSERT INTO agents (id, name, display_name, runtime, host_id, avatar_storage_key, \
-         avatar_content_type, created_by_user_id, created_at, updated_at) VALUES \
+         avatar_content_type, created_by_user_id, created_at, updated_at, session_scope) VALUES \
          ('agent-1', 'agent', 'Agent One', 'codex', 'host-1', 'agent-key', 'image/png', \
-         'user-1', 1, 21)",
+         'user-1', 1, 21, ?)",
         // Oldest, viewer in slot B, agent counterpart.
         "INSERT INTO conversations (id, placement_kind, roster_policy, title, status, \
          endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, created_at, updated_at) \
@@ -54,7 +58,12 @@ async fn seeded(path: &std::path::Path) {
         "INSERT INTO messages (id, conversation_id, from_kind, from_agent_id, content, seq, \
          created_at) VALUES ('message-2', 'pair-agent', 'agent', 'agent-1', 'two', 2, 2)",
     ] {
-        sqlx::query(statement).execute(&mut db).await.unwrap();
+        let query = sqlx::query(statement);
+        if statement.starts_with("INSERT INTO agents") {
+            query.bind(scope).execute(&mut db).await.unwrap();
+        } else {
+            query.execute(&mut db).await.unwrap();
+        }
     }
     db.close().await.unwrap();
 }
@@ -351,4 +360,21 @@ async fn an_unknown_stored_runtime_fails_the_read_until_it_is_repaired() {
         panic!("the repaired row must project an active agent counterpart")
     };
     assert_eq!(agent.runtime(), RuntimeKind::Cursor);
+}
+
+#[tokio::test]
+async fn conversation_scoped_pair_keeps_history_and_counterpart_but_is_read_only() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("direct-pairs.sqlite");
+    seeded_scope(&path, "conversation").await;
+    let model = SqliteDirectPairReadModel::open(&path).await.unwrap();
+    let list = model.list_direct_pairs(&viewer()).await.unwrap();
+    let pair = &list.items()[0];
+    assert!(pair.is_read_only());
+    assert_eq!(pair.unread_count().get(), 2);
+    assert!(matches!(
+        pair.counterpart(),
+        DirectPairCounterpart::Active(_)
+    ));
+    assert!(!list.items()[1].is_read_only());
 }
