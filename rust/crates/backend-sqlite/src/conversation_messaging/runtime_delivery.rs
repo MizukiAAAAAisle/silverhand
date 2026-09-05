@@ -1014,6 +1014,20 @@ impl RuntimeInboxCustodyPort for SqliteRuntimeDeliveryStore {
 }
 
 impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
+    async fn runtime_activity_targets(
+        &self,
+        admission: RuntimeEventAdmission,
+        origin: ConversationId,
+    ) -> Result<Option<Vec<RuntimeStatusTarget>>, PersistenceFailure> {
+        let mut tx = self.pool.begin().await.map_err(persistence)?;
+        if !principal_is_current_in_tx(&mut tx, &admission).await? {
+            return Ok(None);
+        }
+        let targets = status_targets_for(&mut tx, admission.principal(), &origin).await?;
+        tx.commit().await.map_err(persistence)?;
+        Ok(Some(targets))
+    }
+
     async fn current_admission(
         &self,
         host_id: String,
@@ -2899,6 +2913,66 @@ mod runtime_control_seat_tests {
                     AgentId::parse("agent-seat").unwrap(),
                     ConversationId::parse("conversation-2").unwrap(),
                 )
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_activity_targets_require_current_host_custody_and_membership() {
+        use silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustody;
+        let (_directory, store) = seeded().await;
+        let admitted = |host: &str, daemon: &str, generation: i64| {
+            RuntimeEventAdmission::new(
+                host.to_owned(),
+                RuntimePrincipal::for_scope(
+                    agent_seat("agent-seat"),
+                    RuntimeCustody::new(
+                        RuntimeGeneration::new(generation).unwrap(),
+                        DaemonInstanceId::parse(daemon).unwrap(),
+                    ),
+                ),
+            )
+        };
+        let origin = ConversationId::parse("conversation-1").unwrap();
+        for (host, daemon, generation) in [
+            ("wrong-host", "daemon-1", 1),
+            ("host-1", "wrong-daemon", 1),
+            ("host-1", "daemon-1", 2),
+        ] {
+            assert!(
+                store
+                    .runtime_activity_targets(admitted(host, daemon, generation), origin.clone())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let current = admitted("host-1", "daemon-1", 1);
+        let targets = store
+            .runtime_activity_targets(current.clone(), origin.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].conversation(), &origin);
+        sqlx::query("DELETE FROM conversation_agents WHERE agent_id='agent-seat'")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .runtime_activity_targets(current.clone(), origin.clone())
+                .await
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+        sqlx::query("UPDATE agent_runtime_slots SET generation=2,claimed_by_daemon_instance_id='daemon-2' WHERE agent_id='agent-seat'").execute(&store.pool).await.unwrap();
+        assert!(
+            store
+                .runtime_activity_targets(current, origin)
                 .await
                 .unwrap()
                 .is_none()

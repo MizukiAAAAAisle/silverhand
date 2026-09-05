@@ -428,11 +428,14 @@ impl<C, D> DaemonRuntimeOwner<C, D> {
         self.events.publish_host_connection_changed(owner, host)
     }
 
-    pub(crate) fn conversation_run_states(
+    pub(crate) async fn conversation_run_states(
         &self,
         conversation: &ConversationId,
-    ) -> Result<Vec<ConversationAgentRunStateSnapshot>, DaemonRuntimeEventError> {
-        self.events.conversation_run_states(conversation)
+    ) -> Result<Vec<ConversationAgentRunStateSnapshot>, DaemonRuntimeEventError>
+    where
+        D: silverhand_backend_core::host_runtime::runtime_event::DaemonEventDurablePort,
+    {
+        self.events.conversation_run_states(conversation).await
     }
 
     /// A cloneable handle for the workspace-delete bulk `conversation_closed`

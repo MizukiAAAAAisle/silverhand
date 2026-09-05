@@ -56,7 +56,7 @@ pub trait ConversationAgentRunStateSource {
     fn snapshot(
         &self,
         conversation: &ConversationId,
-    ) -> Result<Vec<AgentRunStateProjection>, Self::Error>;
+    ) -> impl std::future::Future<Output = Result<Vec<AgentRunStateProjection>, Self::Error>> + Send;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -173,14 +173,20 @@ impl Error for RunStateSnapshotFailure {
     }
 }
 
-impl<C, D, H> ConversationAgentRunStateSource for DaemonDeliveryRuntime<C, D, H> {
+impl<C, D, H> ConversationAgentRunStateSource for DaemonDeliveryRuntime<C, D, H>
+where
+    D: silverhand_backend_core::host_runtime::runtime_event::DaemonEventDurablePort,
+    C: Sync,
+    H: Sync,
+{
     type Error = RunStateSnapshotFailure;
 
-    fn snapshot(
+    async fn snapshot(
         &self,
         conversation: &ConversationId,
     ) -> Result<Vec<AgentRunStateProjection>, Self::Error> {
         self.conversation_agent_run_states(conversation)
+            .await
             .map_err(RunStateSnapshotFailure::owner)?
             .into_iter()
             .map(AgentRunStateProjection::from_daemon)
@@ -264,7 +270,7 @@ where
         }
     }
 
-    let states = match state.snapshot.snapshot(&conversation) {
+    let states = match state.snapshot.snapshot(&conversation).await {
         Ok(states) => states,
         Err(failure) => {
             tracing::error!(

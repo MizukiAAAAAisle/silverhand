@@ -721,6 +721,14 @@ impl RuntimeSessionInitCommitResult {
 }
 
 pub trait DaemonEventDurablePort: Clone + Send + Sync + 'static {
+    /// Current custody and placement targets in one read snapshot. Used for
+    /// shared run-state projection; it grants no access to origin content.
+    fn runtime_activity_targets(
+        &self,
+        admission: RuntimeEventAdmission,
+        origin: ConversationId,
+    ) -> impl Future<Output = Result<Option<Vec<RuntimeStatusTarget>>, PersistenceFailure>> + Send;
+
     fn current_admission(
         &self,
         host_id: String,

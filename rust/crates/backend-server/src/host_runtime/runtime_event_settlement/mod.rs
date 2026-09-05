@@ -163,6 +163,7 @@ pub(crate) struct RuntimeExitPostCommit {
     intentional: bool,
     clear_cli_session_id: bool,
     run_state: Option<AgentRunStateWire>,
+    shared: bool,
     respawn: bool,
 }
 
@@ -217,10 +218,13 @@ impl<P> RuntimeEventSettlement<P> {
     /// the lock before conversation filtering, verification and ordering. This
     /// gives callers one atomic owner snapshot without lengthening the daemon
     /// event writer's critical section.
-    pub(crate) fn conversation_run_states(
+    fn candidate_run_states(
         &self,
         conversation: &ConversationId,
-    ) -> Result<Vec<ConversationAgentRunStateSnapshot>, DaemonRuntimeEventError> {
+    ) -> Result<
+        Vec<(RuntimeEventAdmission, ConversationAgentRunStateSnapshot)>,
+        DaemonRuntimeEventError,
+    > {
         let snapshot = {
             let state = self
                 .state
@@ -246,7 +250,7 @@ impl<P> RuntimeEventSettlement<P> {
             {
                 return Err(DaemonRuntimeEventError::InvalidPayload);
             }
-            if &source_conversation != conversation {
+            if principal.source().is_some() && &source_conversation != conversation {
                 continue;
             }
             selected.push((
@@ -285,10 +289,7 @@ impl<P> RuntimeEventSettlement<P> {
                         .as_str(),
                 ))
         });
-        Ok(selected
-            .into_iter()
-            .map(|(_, run_state)| run_state)
-            .collect())
+        Ok(selected)
     }
 }
 
@@ -432,6 +433,36 @@ impl<P> RuntimeEventSettlement<P>
 where
     P: DaemonEventDurablePort,
 {
+    pub(crate) async fn conversation_run_states(
+        &self,
+        conversation: &ConversationId,
+    ) -> Result<Vec<ConversationAgentRunStateSnapshot>, DaemonRuntimeEventError> {
+        let candidates = self.candidate_run_states(conversation)?;
+        let mut selected = Vec::new();
+        for (admission, mut snapshot) in candidates {
+            if admission.principal().source().is_some() {
+                selected.push(snapshot);
+                continue;
+            }
+            let Some(targets) = self
+                .durable
+                .runtime_activity_targets(admission.clone(), snapshot.source_conversation.clone())
+                .await?
+            else {
+                continue;
+            };
+            let Some(target) = targets.iter().find(|t| t.conversation() == conversation) else {
+                continue;
+            };
+            snapshot.state = snapshot.state.shared_projection(target.conversation());
+            // This coordinate comes from the matched placement authority, not
+            // from the caller or the runtime's mutable presentation focus.
+            snapshot.source_conversation = target.conversation().clone();
+            selected.push(snapshot);
+        }
+        Ok(selected)
+    }
+
     pub(crate) fn new(
         durable: P,
         conversation_projection: Arc<dyn ConversationRuntimeProjectionPort>,
@@ -568,6 +599,14 @@ where
                 {
                     return Ok(RuntimeEventDirective::None);
                 }
+                let Some(targets) = self
+                    .durable
+                    .runtime_activity_targets(admission.clone(), event.coordinate.conversation()?)
+                    .await?
+                else {
+                    return Ok(RuntimeEventDirective::None);
+                };
+                let shared = admission.principal().source().is_none();
                 {
                     let mut state = self
                         .state
@@ -590,10 +629,26 @@ where
                         .insert(admission.principal().agent().clone());
                     state.runs.insert(admission, event.state.clone());
                 }
-                self.publish_conversation(ConversationRuntimeProjectionFact::AgentActivity {
-                    conversation: event.coordinate.conversation()?,
-                    state: event.state,
-                })?;
+                let mut first_failure = None;
+                for target in targets {
+                    let projected = if shared {
+                        event.state.shared_projection(target.conversation())
+                    } else {
+                        event.state.clone()
+                    };
+                    if let Err(error) = self.publish_conversation(
+                        ConversationRuntimeProjectionFact::AgentActivity {
+                            conversation: target.conversation().clone(),
+                            state: projected,
+                        },
+                    ) && first_failure.is_none()
+                    {
+                        first_failure = Some(error);
+                    }
+                }
+                if let Some(error) = first_failure {
+                    return Err(error.into());
+                }
                 Ok(RuntimeEventDirective::None)
             }
             RuntimeProductEvent::Output(event) => {
@@ -964,6 +1019,7 @@ where
             intentional,
             clear_cli_session_id,
             run_state,
+            shared: admission.principal().source().is_none(),
             respawn: runtime_exit_should_respawn(init_failed, fatal, intentional),
         }))
     }
@@ -972,7 +1028,41 @@ where
         &self,
         effect: &RuntimeExitPostCommit,
     ) -> Result<(), DaemonRuntimeEventError> {
-        Ok(self.publish_status(
+        // A terminal shared run must reach the same targets as its live state,
+        // otherwise other channels retain a ghost "thinking" until reconnect.
+        let mut activity_failure = None;
+        let mut status_run = effect.run_state.clone();
+        if effect.shared
+            && let Some(run) = &effect.run_state
+        {
+            let mut terminal = run.clone();
+            terminal.status = if effect.status == RuntimeObservedStatus::Crashed {
+                AgentRunStatus::Failed
+            } else {
+                AgentRunStatus::Idle
+            };
+            terminal.terminal_reason = Some(if effect.intentional {
+                AgentRunTerminalReason::Stopped
+            } else if effect.status == RuntimeObservedStatus::Crashed {
+                AgentRunTerminalReason::Crashed
+            } else {
+                AgentRunTerminalReason::TurnEnded
+            });
+            terminal.updated_at = serde_json::Number::from(presence_now());
+            status_run = Some(terminal.shared_projection(&effect.conversation));
+            for target in &effect.status_targets {
+                if let Err(error) =
+                    self.publish_conversation(ConversationRuntimeProjectionFact::AgentActivity {
+                        conversation: target.conversation().clone(),
+                        state: terminal.shared_projection(target.conversation()),
+                    })
+                    && activity_failure.is_none()
+                {
+                    activity_failure = Some(error);
+                }
+            }
+        }
+        let status = self.publish_status(
             &effect.status_targets,
             &effect.agent,
             RuntimeStatusProjectionUpdate::Exit {
@@ -980,9 +1070,10 @@ where
                 code: effect.code,
                 intentional: effect.intentional,
                 clear_cli_session_id: effect.clear_cli_session_id,
-                run_state: effect.run_state.clone().map(Box::new),
+                run_state: status_run.map(Box::new),
             },
-        )?)
+        );
+        finish_live_effects([activity_failure.map_or(Ok(()), Err), status]).map_err(Into::into)
     }
 
     async fn handle_parsed(
@@ -1577,6 +1668,16 @@ pub(crate) struct ConversationAgentRunStateSnapshot {
 }
 
 impl AgentRunStateWire {
+    /// Re-anchor a shared runtime fact without sharing any source content.
+    pub(crate) fn shared_projection(&self, target: &ConversationId) -> Self {
+        let mut value = self.clone();
+        value.conversation_id = target.as_str().to_owned();
+        value.activity_snippet = None;
+        value.activity_snippet_kind = None;
+        value.detail = None;
+        value
+    }
+
     pub(crate) fn matches_coordinate(&self, agent: &str, conversation: &str) -> bool {
         self.agent_id == agent && self.conversation_id == conversation
     }
@@ -2150,12 +2251,12 @@ mod tests {
         ]);
 
         let snapshot = owner
-            .conversation_run_states(&ConversationId::parse("c").unwrap())
+            .candidate_run_states(&ConversationId::parse("c").unwrap())
             .unwrap();
         assert_eq!(
             snapshot
                 .iter()
-                .map(|snapshot| {
+                .map(|(_, snapshot)| {
                     (
                         snapshot.state.agent_id.as_str(),
                         snapshot.state.run_id.as_str(),
@@ -2175,7 +2276,7 @@ mod tests {
             )]);
 
             assert!(matches!(
-                owner.conversation_run_states(&ConversationId::parse("c").unwrap()),
+                owner.candidate_run_states(&ConversationId::parse("c").unwrap()),
                 Err(DaemonRuntimeEventError::InvalidPayload)
             ));
         }

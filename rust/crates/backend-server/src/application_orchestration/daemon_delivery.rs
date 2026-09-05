@@ -103,14 +103,17 @@ impl<C, D, H> DaemonDeliveryRuntime<C, D, H> {
         self.runtime.clear_session_waiters()
     }
 
-    pub(crate) fn conversation_agent_run_states(
+    pub(crate) async fn conversation_agent_run_states(
         &self,
         conversation: &ConversationId,
     ) -> Result<
         Vec<crate::host_runtime::runtime_event_settlement::ConversationAgentRunStateSnapshot>,
         DaemonRuntimeEventError,
-    > {
-        self.runtime.conversation_run_states(conversation)
+    >
+    where
+        D: silverhand_backend_core::host_runtime::runtime_event::DaemonEventDurablePort,
+    {
+        self.runtime.conversation_run_states(conversation).await
     }
 
     /// A cloneable handle for the workspace-delete bulk `conversation_closed`

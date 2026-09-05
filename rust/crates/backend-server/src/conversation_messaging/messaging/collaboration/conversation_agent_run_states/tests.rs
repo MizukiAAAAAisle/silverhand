@@ -61,7 +61,10 @@ struct FakeSnapshot {
 impl ConversationAgentRunStateSource for FakeSnapshot {
     type Error = Infallible;
 
-    fn snapshot(&self, _: &ConversationId) -> Result<Vec<AgentRunStateProjection>, Self::Error> {
+    async fn snapshot(
+        &self,
+        _: &ConversationId,
+    ) -> Result<Vec<AgentRunStateProjection>, Self::Error> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.states.clone())
     }

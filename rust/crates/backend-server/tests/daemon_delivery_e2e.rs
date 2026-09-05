@@ -166,6 +166,7 @@ struct Fixture {
     address: std::net::SocketAddr,
     effects: Effects,
     runtime_control: RuntimeControl,
+    run_states: Router,
     agent_profile_mcp: AgentProfileMcp,
     settlement_calls: Arc<AtomicUsize>,
     clear_settlement_calls: Arc<AtomicUsize>,
@@ -290,6 +291,12 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
     )
     .unwrap();
     let runtime_control = runtime.runtime_control();
+    let run_states = runtime.agent_run_states_router(
+        MessagingStore::open(&path)
+            .await
+            .unwrap()
+            .channel_lifecycle(),
+    );
     let agent_profile_mcp =
         runtime.agent_profile_mcp_data_plane(SqliteHostAgentStore::open(&path).await.unwrap());
     let effects = runtime.effects();
@@ -320,6 +327,7 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
         address,
         effects,
         runtime_control,
+        run_states,
         agent_profile_mcp,
         settlement_calls,
         clear_settlement_calls,
@@ -461,6 +469,17 @@ impl RuntimeInboxCustodyPort for CountingRuntimeDeliveryStore {
 }
 
 impl DaemonEventDurablePort for CountingRuntimeDeliveryStore {
+    async fn runtime_activity_targets(
+        &self,
+        admission: RuntimeEventAdmission,
+        origin: ConversationId,
+    ) -> Result<
+        Option<Vec<silverhand_backend_core::host_runtime::runtime_event::RuntimeStatusTarget>>,
+        PersistenceFailure,
+    > {
+        self.inner.runtime_activity_targets(admission, origin).await
+    }
+
     async fn current_admission(
         &self,
         host_id: String,
@@ -4988,9 +5007,11 @@ async fn stale_resume_fatal_clears_cli_session_before_successor_start() {
 }
 
 #[tokio::test]
-async fn agent_slot_status_reaches_all_projection_conversations_but_detail_only_the_origin() {
+async fn agent_slot_activity_is_shared_across_channels_and_dm_without_source_content() {
     const AGGREGATE_AGENT: &str = "agent-aggregate";
     const SECOND: &str = "conversation0002";
+    const PAIR: &str = "activity-dm";
+    const SECRET: &str = "secret-origin";
     let fixture = fixture("daemon-agent-slot-status.sqlite").await;
     let mut db = open(&fixture.path).await;
     sqlx::raw_sql(
@@ -5002,6 +5023,11 @@ async fn agent_slot_status_reaches_all_projection_conversations_but_detail_only_
          VALUES ('conversation0002', 'workspace-1', 'workspace', 'fixed', 'Second', 'second', 'active', 1, 1);
          INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0002', 'agent-aggregate', 1);
          INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES ('conversation0002', 'user-1', 1);
+         INSERT INTO conversations(id,placement_kind,roster_policy,title,endpoint_a_kind,endpoint_a_id,endpoint_b_kind,endpoint_b_id,status,visibility,created_at,updated_at)
+         VALUES('activity-dm','direct_pair','fixed','','agent','agent-aggregate','human','user-1','idle','private',1,1);
+         INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at)
+         VALUES('secret-origin','workspace-1','workspace','open','Secret','secret','idle','private',1,1);
+         INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('secret-origin','agent-aggregate',1);
          INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq, created_at)
          VALUES ('aggregate-message', 'conversation0001', 'user', 'user-1', 'wake aggregate', 2, 2);
          INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id, created_at, delivery_kind)
@@ -5017,6 +5043,8 @@ async fn agent_slot_status_reaches_all_projection_conversations_but_detail_only_
     .await;
     let mut second =
         connect_event_scope(fixture.address, &format!("conversation-side:{SECOND}")).await;
+    let mut direct =
+        connect_event_scope(fixture.address, &format!("conversation-side:{PAIR}")).await;
     let mut daemon = connect(fixture.address).await;
     complete_attachment(&mut daemon, &fixture.controller).await;
     let effects = fixture.effects.clone();
@@ -5052,7 +5080,11 @@ async fn agent_slot_status_reaches_all_projection_conversations_but_detail_only_
                     "status": "thinking",
                     "startedAt": 10,
                     "updatedAt": 11,
-                    "lastActivityAt": 11
+                    "lastActivityAt": 11,
+                    "activitySnippet": "private source text",
+                    "activitySnippetKind": "thinking",
+                    "detail": "private source location",
+                    "toolCallCounts": {"shell": 2}
                 },
                 "ts": 11
             }),
@@ -5062,7 +5094,69 @@ async fn agent_slot_status_reaches_all_projection_conversations_but_detail_only_
         ),
     )
     .await;
-    assert_eq!(next_json(&mut origin).await["kind"], "agent_activity");
+    for (socket, target) in [
+        (&mut origin, CONVERSATION),
+        (&mut second, SECOND),
+        (&mut direct, PAIR),
+    ] {
+        let event = next_json(socket).await;
+        assert_eq!(event["kind"], "agent_activity");
+        assert_eq!(event["payload"]["runId"], "aggregate-run");
+        assert_eq!(event["payload"]["conversationId"], target);
+        assert_eq!(event["payload"]["toolCallCounts"]["shell"], 2);
+        assert!(event["payload"].get("activitySnippet").is_none());
+        assert!(event["payload"].get("detail").is_none());
+        let (status, page) = management_request(
+            &fixture.run_states,
+            "GET",
+            &format!("/api/channels/{target}/agent-run-states"),
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert_eq!(page["states"], json!([event["payload"].clone()]));
+    }
+    let (denied, _) = management_request(
+        &fixture.run_states,
+        "GET",
+        &format!("/api/channels/{SECRET}/agent-run-states"),
+        "",
+    )
+    .await;
+    assert_eq!(denied, StatusCode::FORBIDDEN);
+    // A focus switch to a source this viewer cannot read keeps one public run.
+    send_product(&mut daemon, product_frame_for("runtime_state", Some(generation), json!({
+        "state": {"runId":"aggregate-run","agentId":AGGREGATE_AGENT,"conversationId":SECRET,
+          "status":"tool_running","startedAt":10,"updatedAt":12,"lastActivityAt":12,
+          "activitySnippet":"hidden tool input", "activitySnippetKind":"text", "detail":"secret-origin"}, "ts":12
+    }), AGGREGATE_AGENT, SECRET, "agent")).await;
+    for (socket, target) in [
+        (&mut origin, CONVERSATION),
+        (&mut second, SECOND),
+        (&mut direct, PAIR),
+    ] {
+        let event = next_json(socket).await;
+        assert_eq!(event["kind"], "agent_activity");
+        assert_eq!(event["payload"]["status"], "tool_running");
+        assert_eq!(event["payload"]["runId"], "aggregate-run");
+        assert!(!event.to_string().contains(SECRET));
+        assert!(!event.to_string().contains("hidden tool input"));
+        let (status, page) = management_request(
+            &fixture.run_states,
+            "GET",
+            &format!("/api/channels/{target}/agent-run-states"),
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(page["states"], json!([event["payload"].clone()]));
+    }
+    // An old generation event neither overwrites the snapshot nor emits a frame.
+    send_product(&mut daemon, product_frame_for("runtime_state", Some(generation + 1), json!({
+        "state":{"runId":"wrong-generation","agentId":AGGREGATE_AGENT,"conversationId":CONVERSATION,
+        "status":"thinking","startedAt":1,"updatedAt":99,"lastActivityAt":99},"ts":99
+    }), AGGREGATE_AGENT, CONVERSATION, "agent")).await;
+
     send_product(
         &mut daemon,
         product_frame_for(
@@ -5075,6 +5169,13 @@ async fn agent_slot_status_reaches_all_projection_conversations_but_detail_only_
         ),
     )
     .await;
+    for socket in [&mut origin, &mut second, &mut direct] {
+        let terminal = next_json(socket).await;
+        assert_eq!(terminal["kind"], "agent_activity");
+        assert_eq!(terminal["payload"]["terminalReason"], "stopped");
+        assert_eq!(terminal["payload"]["status"], "idle");
+        assert!(terminal["payload"].get("detail").is_none());
+    }
     let origin_status = next_json(&mut origin).await;
     let second_status = next_json(&mut second).await;
     assert_eq!(origin_status["kind"], "agent_status");
@@ -5084,7 +5185,105 @@ async fn agent_slot_status_reaches_all_projection_conversations_but_detail_only_
         "aggregate-run"
     );
     assert!(second_status["payload"].get("run_state").is_none());
+    assert!(!origin_status.to_string().contains(SECRET));
+    assert!(!origin_status.to_string().contains("hidden tool input"));
+    assert_eq!(
+        origin_status["payload"]["run_state"]["terminalReason"],
+        "stopped"
+    );
 
+    assert_eq!(next_json(&mut direct).await["kind"], "agent_status");
+    for target in [CONVERSATION, SECOND, PAIR] {
+        let (status, page) = management_request(
+            &fixture.run_states,
+            "GET",
+            &format!("/api/channels/{target}/agent-run-states"),
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            page["states"].as_array().unwrap().is_empty(),
+            "terminal run removed from shared owner"
+        );
+    }
+    let effects = fixture.effects.clone();
+    let restart = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGGREGATE_AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let restart_command = next_json(&mut daemon).await;
+    let successor = restart_command["params"]["runtime_generation"]
+        .as_i64()
+        .unwrap();
+    assert_eq!(successor, generation + 1);
+    respond(
+        &mut daemon,
+        &restart_command,
+        json!({"started":true,"pid":9,"started_at":200}),
+    )
+    .await;
+    restart.await.unwrap().unwrap();
+    for (wire_generation, run_id) in [(generation, "old-run"), (successor, "successor-run")] {
+        send_product(&mut daemon, product_frame_for("runtime_state", Some(wire_generation), json!({
+            "state":{"runId":run_id,"agentId":AGGREGATE_AGENT,"conversationId":CONVERSATION,
+            "status":"thinking","startedAt":200,"updatedAt":201,"lastActivityAt":201},"ts":201
+        }), AGGREGATE_AGENT, CONVERSATION, "agent")).await;
+    }
+    for (socket, target) in [
+        (&mut origin, CONVERSATION),
+        (&mut second, SECOND),
+        (&mut direct, PAIR),
+    ] {
+        let current = next_json(socket).await;
+        assert_eq!(current["kind"], "agent_activity");
+        assert_eq!(
+            current["payload"]["runId"], "successor-run",
+            "old generation has no projection"
+        );
+        let (_, page) = management_request(
+            &fixture.run_states,
+            "GET",
+            &format!("/api/channels/{target}/agent-run-states"),
+            "",
+        )
+        .await;
+        assert_eq!(page["states"], json!([current["payload"].clone()]));
+    }
+    sqlx::query("DELETE FROM conversation_agents WHERE conversation_id=? AND agent_id=?")
+        .bind(SECOND)
+        .bind(AGGREGATE_AGENT)
+        .execute(&mut db)
+        .await
+        .unwrap();
+    let (_, page) = management_request(
+        &fixture.run_states,
+        "GET",
+        &format!("/api/channels/{SECOND}/agent-run-states"),
+        "",
+    )
+    .await;
+    assert!(
+        page["states"].as_array().unwrap().is_empty(),
+        "removed participation cannot read a cached shared run"
+    );
+    send_product(&mut daemon, product_frame_for("runtime_state", Some(successor), json!({
+        "state":{"runId":"successor-run","agentId":AGGREGATE_AGENT,"conversationId":CONVERSATION,
+        "status":"waiting","startedAt":200,"updatedAt":202,"lastActivityAt":202},"ts":202
+    }), AGGREGATE_AGENT, CONVERSATION, "agent")).await;
+    assert_eq!(next_json(&mut origin).await["payload"]["status"], "waiting");
+    assert_eq!(next_json(&mut direct).await["payload"]["status"], "waiting");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), second.next())
+            .await
+            .is_err(),
+        "removed target receives no shared event"
+    );
+    direct.close(None).await.unwrap();
     origin.close(None).await.unwrap();
     second.close(None).await.unwrap();
     daemon.close(None).await.unwrap();
