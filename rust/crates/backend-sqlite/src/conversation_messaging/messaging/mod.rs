@@ -300,13 +300,34 @@ const SELECT_ATTACHMENT_SOURCE: &str =
     "SELECT id, channel_id, filename, size, content_type FROM attachments WHERE id = ?";
 const SELECT_AGENT_SESSION_SCOPE: &str = "SELECT session_scope FROM agents WHERE id = ?";
 
-/// The guard predicate: in-flight rows count as undelivered, which makes the
-/// guarded set a strict superset of what a runtime can drain. Existence only —
-/// never a sequence comparison — so it cannot be confused by row reuse.
-const SELECT_UNDELIVERED_IN_CONVERSATION: &str = "SELECT 1 FROM conversation_inboxes WHERE \
-     conversation_id = ? AND agent_id = ? AND delivered_at IS NULL AND failed_at IS NULL LIMIT 1";
-const SELECT_UNDELIVERED_FOR_AGENT: &str = "SELECT 1 FROM conversation_inboxes WHERE agent_id = ? \
-     AND delivered_at IS NULL AND failed_at IS NULL LIMIT 1";
+/// In-flight rows still count. A task system event's server-written actor is
+/// authoritative; its assignee, mentions and sender-shaped content are not.
+/// Ignore only the current agent's own known task events, without settling or
+/// moving any inbox cursor. Unknown/missing actor metadata remains blocking.
+macro_rules! freshness_relevant_inbox {
+    () => {
+        "i.delivered_at IS NULL AND i.failed_at IS NULL AND NOT EXISTS ( \
+         SELECT 1 FROM messages m WHERE m.id=i.message_id AND m.from_kind='system' \
+         AND CASE WHEN json_valid(m.metadata) THEN \
+             json_extract(m.metadata,'$.subtype') IN \
+                 ('task_create','task_edit','task_status','task_claim','task_unclaim') \
+             AND json_type(m.metadata,'$.actor')='object' \
+             AND json_extract(m.metadata,'$.actor.kind')='agent' \
+             AND json_type(m.metadata,'$.actor.id')='text' \
+             AND json_extract(m.metadata,'$.actor.id')=i.agent_id \
+         ELSE 0 END)"
+    };
+}
+const SELECT_UNDELIVERED_IN_CONVERSATION: &str = concat!(
+    "SELECT 1 FROM conversation_inboxes i WHERE i.conversation_id=? AND i.agent_id=? AND ",
+    freshness_relevant_inbox!(),
+    " LIMIT 1"
+);
+const SELECT_UNDELIVERED_FOR_AGENT: &str = concat!(
+    "SELECT 1 FROM conversation_inboxes i WHERE i.agent_id=? AND ",
+    freshness_relevant_inbox!(),
+    " LIMIT 1"
+);
 
 const RESERVE_NEXT_SEQ: &str =
     "UPDATE conversations SET latest_message_seq = latest_message_seq + 1 WHERE id = ?";

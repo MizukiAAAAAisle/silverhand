@@ -1229,6 +1229,197 @@ async fn an_accepted_attachment_is_stored_as_a_snapshot_in_the_message_metadata(
     assert_eq!(fact.message().attachments.len(), 1);
 }
 
+fn task_events_by(
+    actor: &str,
+    assignee: &str,
+) -> Vec<silverhand_backend_core::conversation_messaging::messaging::task::TaskEventMessage> {
+    use silverhand_backend_core::conversation_messaging::messaging::task::*;
+    let facts = TaskEventFacts {
+        task_id: TaskId::parse("task-own-event").unwrap(),
+        task_number: TaskNumber::new(1).unwrap(),
+        title: TaskTitle::parse("Work").unwrap(),
+        status: TaskStatus::InProgress,
+        actor: TaskSystemActor::Agent {
+            id: AgentId::parse(actor).unwrap(),
+            names: AgentEventNames::new("actor", "Actor"),
+        },
+        assignee: Some(TaskEventAssignee::Agent {
+            id: AgentId::parse(assignee).unwrap(),
+            names: AgentEventNames::new("assignee", "Assignee"),
+        }),
+    };
+    vec![
+        compose_create_event(&facts, CreatePlacement::Filed),
+        compose_edit_event(&facts),
+        compose_status_event(&facts),
+        compose_claim_event(&facts),
+        compose_unclaim_event(&facts, "Assignee"),
+    ]
+}
+
+async fn enqueue_task_event(fixture: &mut Fixture, conversation: &str, id: &str, metadata: &str) {
+    let seq = fixture.latest_seq(conversation).await + 1;
+    sqlx::query("INSERT INTO messages(id,conversation_id,from_kind,content,metadata,seq,created_at) VALUES(?,?,'system','task event',?,?,1)")
+        .bind(id).bind(conversation).bind(metadata).bind(seq).execute(&mut fixture.db).await.unwrap();
+    sqlx::query("UPDATE conversations SET latest_message_seq=? WHERE id=?")
+        .bind(seq)
+        .bind(conversation)
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO conversation_inboxes(conversation_id,agent_id,message_id,created_at,delivery_kind) VALUES(?,?,?,1,'turn')")
+        .bind(conversation).bind(AGENT_ID).bind(id).execute(&mut fixture.db).await.unwrap();
+}
+
+#[tokio::test]
+async fn self_authored_task_events_do_not_block_either_scope_or_settle_the_inbox() {
+    for scope in ["conversation", "agent"] {
+        for event in task_events_by(AGENT_ID, BROAD_AGENT_ID) {
+            let mut fixture = Fixture::with_scope(scope).await;
+            let event_conversation = if scope == "agent" {
+                OTHER_CHANNEL_ID
+            } else {
+                CHANNEL_ID
+            };
+            enqueue_task_event(
+                &mut fixture,
+                event_conversation,
+                "self-event",
+                &event.metadata,
+            )
+            .await;
+            fixture.execute("UPDATE conversation_inboxes SET in_flight_owner='runtime',in_flight_at=1 WHERE agent_id='agent-1'").await;
+            let before = fixture.witness_rows(AGENT_ID).await;
+            let fact = fixture
+                .store()
+                .await
+                .send_message(send(agent_actor(), CHANNEL_ID, "continue"))
+                .await
+                .unwrap()
+                .committed()
+                .clone();
+            assert!(!fact.freshness_bypassed());
+            assert_eq!(
+                fixture.witness_rows(AGENT_ID).await,
+                before,
+                "ignoring self input cannot acknowledge or release a lease"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn mixed_self_and_foreign_task_events_keep_the_foreign_input_blocking_atomically() {
+    for scope in ["conversation", "agent"] {
+        for foreign in task_events_by(BROAD_AGENT_ID, AGENT_ID) {
+            let mut fixture = Fixture::with_scope(scope).await;
+            let event_conversation = if scope == "agent" {
+                OTHER_CHANNEL_ID
+            } else {
+                CHANNEL_ID
+            };
+            let own = task_events_by(AGENT_ID, BROAD_AGENT_ID);
+            enqueue_task_event(
+                &mut fixture,
+                event_conversation,
+                "self-before",
+                &own[0].metadata,
+            )
+            .await;
+            enqueue_task_event(
+                &mut fixture,
+                event_conversation,
+                "foreign",
+                &foreign.metadata,
+            )
+            .await;
+            enqueue_task_event(
+                &mut fixture,
+                event_conversation,
+                "self-after",
+                &own[1].metadata,
+            )
+            .await;
+            let store = fixture.store().await;
+            let before = fixture.witness_rows(AGENT_ID).await;
+            let seq = fixture.latest_seq(CHANNEL_ID).await;
+            assert!(matches!(
+                store
+                    .send_message(send(agent_actor(), CHANNEL_ID, "too soon"))
+                    .await,
+                Err(SendMessageError::Stale(_))
+            ));
+            assert_eq!(
+                fixture.latest_seq(CHANNEL_ID).await,
+                seq,
+                "stale rejects before ordinal allocation"
+            );
+            assert_eq!(fixture.witness_rows(AGENT_ID).await, before);
+            fixture
+                .execute(
+                    "UPDATE conversation_inboxes SET delivered_at=1 WHERE message_id='foreign'",
+                )
+                .await;
+            store
+                .send_message(send(agent_actor(), CHANNEL_ID, "now fresh"))
+                .await
+                .unwrap();
+            assert_eq!(fixture.count("SELECT COUNT(*) FROM conversation_inboxes WHERE agent_id='agent-1' AND delivered_at IS NULL").await, 2);
+        }
+    }
+}
+
+#[tokio::test]
+async fn actor_metadata_is_fail_closed_and_cannot_be_spoofed_by_a_normal_message() {
+    for metadata in [
+        None,
+        Some("not-json"),
+        Some(r#"{"subtype":"task_status","task_assignee":{"type":"agent","id":"agent-1"}}"#),
+        Some(r#"{"subtype":"task_status","actor":{"kind":"user","id":"agent-1"}}"#),
+        Some(r#"{"subtype":"unknown","actor":{"kind":"agent","id":"agent-1"}}"#),
+        Some(r#"{"subtype":"task_edit","actor":{"kind":"agent","id":1}}"#),
+    ] {
+        let mut fixture = Fixture::new().await;
+        enqueue_task_event(
+            &mut fixture,
+            CHANNEL_ID,
+            "unknown",
+            metadata.unwrap_or("null"),
+        )
+        .await;
+        assert!(matches!(
+            fixture
+                .store()
+                .await
+                .send_message(send(agent_actor(), CHANNEL_ID, "must read"))
+                .await,
+            Err(SendMessageError::Stale(_))
+        ));
+    }
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let message = store
+        .send_message(send(user_actor(), CHANNEL_ID, "human input"))
+        .await
+        .unwrap()
+        .committed()
+        .message()
+        .id
+        .clone();
+    sqlx::query("UPDATE messages SET metadata=? WHERE id=?")
+        .bind(&task_events_by(AGENT_ID, AGENT_ID)[0].metadata)
+        .bind(message.as_str())
+        .execute(&mut fixture.db)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .send_message(send(agent_actor(), CHANNEL_ID, "cannot spoof"))
+            .await,
+        Err(SendMessageError::Stale(_))
+    ));
+}
+
 #[tokio::test]
 async fn an_agent_holding_undelivered_input_is_refused_as_stale() {
     let mut fixture = Fixture::new().await;
