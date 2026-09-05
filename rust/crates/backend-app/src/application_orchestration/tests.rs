@@ -3307,6 +3307,199 @@ async fn the_live_registry_closes_at_one_hundred_eighty_one_mounted_and_zero_res
 /// the real SQLite adapter, then settles the occurrence. A no-op committed effect, a
 /// test-only driver, or an unstarted driver leaves the row pending and this gate red.
 #[tokio::test]
+async fn agent_scoped_dm_control_admits_only_the_creator_endpoint_and_keeps_one_seat() {
+    let fixture = fixture(true).await;
+    seed_human(&fixture.path).await;
+    seed_runtime_agent(&fixture.path, "dm-control").await;
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('dm-other','dm-other','Other',1,1); \
+         INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,created_by_user_id,materialization_status,session_scope) VALUES \
+         ('dm-conv','dm-conv','qoder','h-registry-probe',1,1,'user-1','active','conversation'), \
+         ('dm-human-deleted','dm-human-deleted','qoder','h-registry-probe',1,1,'user-1','active','agent'), \
+         ('dm-foreign','dm-foreign','qoder','h-registry-probe',1,1,'dm-other','active','agent'); \
+         INSERT INTO conversations(id,title,placement_kind,roster_policy,endpoint_a_kind,endpoint_a_id,endpoint_b_kind,endpoint_b_id,status,visibility,created_at,updated_at) VALUES \
+         ('dm-control-pair','DM','direct_pair','fixed','agent','dm-control','human','user-1','idle','private',1,1), \
+         ('dm-foreign-pair','DM','direct_pair','fixed','agent','dm-foreign','human','user-1','idle','private',1,1), \
+         ('dm-conv-pair','DM','direct_pair','fixed','agent','dm-conv','human','user-1','idle','private',1,1), \
+         ('dm-human-deleted-pair','DM','direct_pair','fixed','agent','dm-human-deleted','human','user-1','idle','private',1,1), \
+         ('dm-other-pair','DM','direct_pair','fixed','agent','dm-control','human','dm-other','idle','private',1,1);"
+    ).execute(&pool).await.unwrap();
+    pool.close().await;
+    let app = prepare(&config(fixture.path.clone())).await.unwrap();
+    let router = app.router.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let running = tokio::spawn(serve(listener, app, async move {
+        let _ = shutdown_rx.await;
+        Ok::<(), std::io::Error>(())
+    }));
+    let daemon = AttachedDeliveryDaemon::connect(address).await;
+    let bearer = format!("Bearer {TOKEN}");
+    let (unauthenticated, _) = request(
+        &router,
+        "POST",
+        "/api/channels/dm-control-pair/agents/dm-control/start",
+        None,
+    )
+    .await;
+    assert_eq!(unauthenticated, StatusCode::UNAUTHORIZED);
+    for (pair, agent, expected) in [
+        ("dm-control-pair", "dm-foreign", StatusCode::BAD_REQUEST),
+        ("dm-conv-pair", "dm-conv", StatusCode::BAD_REQUEST),
+        ("dm-foreign-pair", "dm-foreign", StatusCode::FORBIDDEN),
+        ("dm-other-pair", "dm-control", StatusCode::FORBIDDEN),
+        ("dm-control-pair", "missing", StatusCode::NOT_FOUND),
+    ] {
+        for operation in ["start", "stop"] {
+            let (status, body) = request(
+                &router,
+                "POST",
+                &format!("/api/channels/{pair}/agents/{agent}/{operation}"),
+                Some(&bearer),
+            )
+            .await;
+            assert_eq!(status, expected, "{pair}/{agent}/{operation}: {body}");
+        }
+    }
+    assert!(
+        daemon.seen.lock().unwrap().is_empty(),
+        "refusals must not dispatch runtime commands"
+    );
+    let (pending, body) = request(
+        &router,
+        "POST",
+        "/api/channels/dm-control-pair/agents/dm-control/start",
+        Some(&bearer),
+    )
+    .await;
+    assert_eq!(pending, StatusCode::CONFLICT, "{body}");
+    assert!(body.contains("host_pending_attach"));
+    assert!(daemon.seen.lock().unwrap().is_empty());
+    let activation = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE hosts SET activated_at=1,finalized_at=1 WHERE id='h-registry-probe'")
+        .execute(&activation)
+        .await
+        .unwrap();
+    activation.close().await;
+    let (status, body) = request(
+        &router,
+        "POST",
+        "/api/channels/dm-control-pair/agents/dm-control/start",
+        Some(&bearer),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let starts = daemon.seen.lock().unwrap().clone();
+    let start = starts
+        .iter()
+        .find(|c| c["kind"] == "runtime_start")
+        .expect("real start dispatch");
+    assert_eq!(
+        start["params"]["options"]["runtime_scope"],
+        serde_json::json!({"kind":"agent","agent_id":"dm-control"})
+    );
+    assert!(
+        start["params"]["runtime_generation"]
+            .as_i64()
+            .is_some_and(|g| g > 0)
+    );
+    assert_eq!(start["params"]["conversation_id"], "dm-control-pair");
+    let (state_status, state_body) = request(
+        &router,
+        "GET",
+        "/api/agents/dm-control/runtime-state",
+        Some(&bearer),
+    )
+    .await;
+    assert_eq!(state_status, StatusCode::OK, "{state_body}");
+    let state: serde_json::Value = serde_json::from_str(&state_body).unwrap();
+    assert_eq!(state["seats"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        state["seats"][0]["scope"],
+        serde_json::json!({"kind":"agent"})
+    );
+    assert_eq!(
+        state["seats"][0]["generation"],
+        start["params"]["runtime_generation"]
+    );
+    let (status, body) = request(
+        &router,
+        "POST",
+        "/api/channels/dm-control-pair/agents/dm-control/stop",
+        Some(&bearer),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let commands = daemon.seen.lock().unwrap().clone();
+    let stop = commands
+        .iter()
+        .find(|c| c["kind"] == "runtime_stop")
+        .expect("real stop dispatch");
+    assert_eq!(
+        stop["params"]["runtime_scope"],
+        start["params"]["options"]["runtime_scope"]
+    );
+    assert_eq!(
+        stop["params"]["runtime_generation"],
+        start["params"]["runtime_generation"]
+    );
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    let seats: (i64, i64) = sqlx::query_as("SELECT COUNT(*),COUNT(conversation_id) FROM agent_runtime_slots WHERE agent_id='dm-control'").fetch_one(&pool).await.unwrap();
+    assert_eq!(seats, (1, 0), "DM uses the sole global seat");
+    sqlx::query("UPDATE conversations SET endpoint_a_deleted_at=1 WHERE id='dm-control-pair'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for operation in ["start", "stop"] {
+        let (status, _) = request(
+            &router,
+            "POST",
+            &format!("/api/channels/dm-control-pair/agents/dm-control/{operation}"),
+            Some(&bearer),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(
+        daemon.seen.lock().unwrap().len(),
+        commands.len(),
+        "tombstoned endpoint has zero control effects"
+    );
+    sqlx::query(
+        "UPDATE conversations SET endpoint_b_deleted_at=1 WHERE id='dm-human-deleted-pair'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for operation in ["start", "stop"] {
+        let (status, _) = request(
+            &router,
+            "POST",
+            &format!("/api/channels/dm-human-deleted-pair/agents/dm-human-deleted/{operation}"),
+            Some(&bearer),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+    assert_eq!(daemon.seen.lock().unwrap().len(), commands.len());
+    pool.close().await;
+    daemon.close().await;
+    shutdown_tx.send(()).unwrap();
+    running.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn the_composed_schedule_driver_delivers_and_settles_a_due_occurrence() {
     let fixture = fixture(true).await;
     seed_human(&fixture.path).await;
@@ -10768,6 +10961,10 @@ async fn service_lane_delivery_commands<S>(
                     Some("runtime_start") => {
                         seen.lock().unwrap().push(command.clone());
                         serde_json::json!({ "started": true, "pid": 1, "started_at": 1 })
+                    }
+                    Some("runtime_stop") => {
+                        seen.lock().unwrap().push(command.clone());
+                        serde_json::json!({ "mode": "hard", "stopped": true, "exit_code": null })
                     }
                     other => panic!("unexpected lane delivery command: {other:?}"),
                 };

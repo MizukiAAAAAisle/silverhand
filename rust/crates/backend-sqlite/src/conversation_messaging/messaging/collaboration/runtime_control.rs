@@ -16,8 +16,15 @@ const DEFERRED_READ_BEGIN: &str = "BEGIN DEFERRED";
 const SELECT_CONVERSATION_SHAPE: &str =
     "SELECT placement_kind, roster_policy FROM conversations WHERE id = ?";
 const SELECT_AGENT_EXISTS: &str = "SELECT 1 FROM agents WHERE id = ?";
-const SELECT_AGENT_MEMBERSHIP: &str =
-    "SELECT 1 FROM conversation_agents WHERE conversation_id = ? AND agent_id = ?";
+// A workspace uses its roster; a DM uses its actual live agent endpoint.
+// DM admission additionally requires the immutable agent scope. Human endpoint
+// liveness and creator control remain separate questions in the same snapshot.
+const SELECT_AGENT_MEMBERSHIP: &str = "SELECT 1 FROM conversations c JOIN agents a ON a.id = ? \
+    WHERE c.id = ? AND ((c.placement_kind = 'workspace' AND EXISTS ( \
+        SELECT 1 FROM conversation_agents ca WHERE ca.conversation_id=c.id AND ca.agent_id=a.id)) \
+    OR (c.placement_kind='direct_pair' AND a.session_scope='agent' AND ( \
+        (c.endpoint_a_kind='agent' AND c.endpoint_a_id=a.id AND c.endpoint_a_deleted_at IS NULL) \
+        OR (c.endpoint_b_kind='agent' AND c.endpoint_b_id=a.id AND c.endpoint_b_deleted_at IS NULL))))";
 const SELECT_CONVERSATION_POST_FACTS: &str = "SELECT placement_kind, workspace_id, \
     endpoint_a_kind, endpoint_a_id, endpoint_a_deleted_at, endpoint_b_kind, endpoint_b_id, \
     endpoint_b_deleted_at FROM conversations WHERE id = ?";
@@ -105,8 +112,8 @@ impl RuntimeControlAdmissionScope for SqliteRuntimeControlSnapshot {
         agent: &AgentId,
     ) -> Result<bool, Self::Error> {
         Ok(sqlx::query(SELECT_AGENT_MEMBERSHIP)
-            .bind(conversation.as_str())
             .bind(agent.as_str())
+            .bind(conversation.as_str())
             .fetch_optional(&mut *self.tx)
             .await?
             .is_some())
@@ -501,7 +508,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fixed_workspace_seats_admit_while_a_direct_pair_without_roster_refuses_first() {
+    async fn fixed_workspace_seats_admit_while_a_conversation_scoped_dm_refuses() {
         let (_directory, store) = seeded().await;
         let provider = CountingProvider::default();
         assert_eq!(
