@@ -1111,7 +1111,11 @@ export function useStarChannel(workspaceId: string | null) {
 
 export function useArchiveChannel(workspaceId: string | null) {
   const qc = useQueryClient();
-  return useMutation({
+  return useMutation(channelArchiveMutationOptions(qc, workspaceId));
+}
+
+export function channelArchiveMutationOptions(qc: QueryClient, workspaceId: string | null) {
+  return {
     mutationFn: async ({
       channelId,
       archived,
@@ -1126,14 +1130,14 @@ export function useArchiveChannel(workspaceId: string | null) {
       );
       return res.channel;
     },
-    onSuccess: (channel, vars) => {
+    onSuccess: (channel: ChannelLikeDto, vars: { workspaceId?: string }) => {
       const targetWorkspaceId = vars.workspaceId ?? channel.workspace_id ?? workspaceId;
       reconcileChannelArchive(qc, channel.id, targetWorkspaceId);
     },
     onError: () => {
       toast.error('Failed to update channel archive');
     },
-  });
+  };
 }
 
 /** Archive ACK invalidates channel lists and the detail used by row menus. */
