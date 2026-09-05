@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readSync, writeFileSync, linkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { openDatabase } from '../packages/backend/src/db';
@@ -107,6 +107,11 @@ async function run(rustTestBinary: string, oldFixture: string) {
       assert.equal(result.code,0,result.output);assert.equal(step(path).n,88);
       console.log(JSON.stringify({empty,strongKillRestart:true,noManualUnlock:true}));
     }
+    const aliased=fixture('ts-hardlink');linkSync(aliased,join(resolve(aliased,'..'),'database-alias'));
+    const rejectedAlias=await ts(aliased).closed;
+    assert.notEqual(rejectedAlias.code,0);assert.match(rejectedAlias.output,/hard-link/);
+    assert.equal(step(aliased).n,87);
+    console.log(JSON.stringify({tsHardLinkRefused:true,ledgerUnchanged:true}));
     console.log(JSON.stringify({root,allPassed:true}));
   } finally {
     for(const proc of children) if(proc.exitCode===null&&proc.signalCode===null) proc.kill('SIGKILL');

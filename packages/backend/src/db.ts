@@ -1,6 +1,7 @@
 import {
   copyFileSync,
   lstatSync,
+  statSync,
   mkdirSync,
   readlinkSync,
   readdirSync,
@@ -8,7 +9,7 @@ import {
   chmodSync,
   symlinkSync,
 } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import type { Database as Db } from 'better-sqlite3';
 import {
@@ -445,7 +446,8 @@ export function backupDataDirBeforeMigration(
   if (checkpoint.some(row => row.busy !== 0)) {
     throw new Error('migration backup checkpoint is busy');
   }
-  const dataDir = dirname(opts.dbPath);
+  const sourceDbPath = resolve(opts.dbPath);
+  const dataDir = dirname(sourceDbPath);
   const ts = new Date()
     .toISOString()
     .replace(/[-:]/g, '')
@@ -455,11 +457,11 @@ export function backupDataDirBeforeMigration(
     `${basename(dataDir)}-backup-${ts}`,
   );
   const partialPath = `${backupPath}.partial`;
-  const excluded = new Set([opts.dbPath, `${opts.dbPath}-wal`, `${opts.dbPath}-shm`, `${opts.dbPath}-journal`]);
+  const excluded = new Set([sourceDbPath, `${sourceDbPath}-wal`, `${sourceDbPath}-shm`, `${sourceDbPath}-journal`]);
   copyBackupTree(dataDir, partialPath, excluded);
   const backupDb = join(partialPath, basename(opts.dbPath));
   db.prepare('VACUUM INTO ?').run(backupDb);
-  chmodSync(backupDb, lstatSync(opts.dbPath).mode & 0o777);
+  chmodSync(backupDb, statSync(sourceDbPath).mode & 0o777);
   renameSync(partialPath, backupPath);
   return backupPath;
 }
@@ -475,6 +477,10 @@ function copyBackupTree(src: string, dest: string, excluded: ReadonlySet<string>
     return;
   }
   if (info.isFile()) {
+    const database = statSync(excluded.values().next().value!);
+    if (database.dev === info.dev && database.ino === info.ino) {
+      throw new Error('backup refuses a second hard-link path to the open database');
+    }
     copyFileSync(src, dest);
     return;
   }

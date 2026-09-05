@@ -257,6 +257,34 @@ async fn migration_lock_refuses_second_owner_then_releases() {
     prepare_database(&path, true).await.unwrap();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn database_hard_link_alias_is_refused_without_releasing_lock_or_advancing_ledger() {
+    let root = isolated();
+    let path = root.path().join("data/database.sqlite");
+    prepare_database(&path, true).await.unwrap();
+    let mut db = connect(&path).await;
+    db.execute("DELETE FROM _migrations WHERE version=88")
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    fs::hard_link(&path, path.with_file_name("database-alias")).unwrap();
+    let original = fs::read(&path).unwrap();
+    assert!(matches!(
+        prepare_database(&path, true).await,
+        Err(DatabaseStartupError::Backup(_))
+    ));
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert_eq!(fs::read(path.with_file_name("database-alias")).unwrap(), original);
+    let mut db = connect(&path).await;
+    let step: i64 = sqlx::query_scalar("SELECT MAX(version) FROM _migrations")
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(step, 87);
+    db.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn unsupported_gapped_and_malformed_ledgers_fail_without_recreating_data() {
     for (sql, expected) in [

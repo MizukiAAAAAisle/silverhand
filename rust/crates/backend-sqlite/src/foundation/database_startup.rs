@@ -331,6 +331,16 @@ fn copy_tree_except(src: &Path, dest: &Path, excluded: &[PathBuf]) -> std::io::R
             copy_tree_except(&entry.path(), &dest.join(entry.file_name()), excluded)?;
         }
     } else if info.is_file() {
+        #[cfg(unix)]
+        if let Some(database) = excluded.first() {
+            use std::os::unix::fs::MetadataExt;
+            let source = fs::metadata(database)?;
+            if info.dev() == source.dev() && info.ino() == source.ino() {
+                return Err(std::io::Error::other(
+                    "backup refuses a second hard-link path to the open database",
+                ));
+            }
+        }
         fs::copy(src, dest)?;
     } else if info.file_type().is_symlink() {
         #[cfg(unix)]
