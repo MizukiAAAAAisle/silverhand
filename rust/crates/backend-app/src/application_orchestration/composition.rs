@@ -1367,6 +1367,12 @@ pub(super) async fn compose_after_audit(
             event_config,
         );
 
+    // `daemon_router` has registered DaemonRuntimeOwner as its event sink, with
+    // activity/presence/status publishers on this same hub. The viewer transport
+    // above completes that production fanout installation in both profiles.
+    // This witnesses backend wiring, never whether a daemon is currently attached.
+    boot.mark_outbound_event_fanout_installed();
+
     // The three ANONYMOUS root faces — mounted at the top level, ahead of no perimeter,
     // because a supervisor probes liveness/readiness and a client reads discovery before
     // it holds any session (the product allowlists `server/info` + `health` past the

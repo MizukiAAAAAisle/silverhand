@@ -150,7 +150,7 @@ fn config_with_log_dir(path: PathBuf, log_dir: Option<PathBuf>) -> AppConfig {
 /// composition differential can drive the RemoteOnly half of the ONE product:
 /// `ServerMode::Remote` + `DeploymentMode::Standalone`, the control-plane runtimes
 /// router (no detector), and a `/readyz` whose Standalone shape carries the
-/// (uninstalled) fanout key.
+/// installed fanout key (independent of daemon attachment).
 fn remote_config(path: PathBuf) -> AppConfig {
     let blobs_root = path.parent().unwrap().join("blobs");
     let log_dir = path.parent().unwrap().join("logs");
@@ -8685,7 +8685,7 @@ fn signup_admission_matches_each_launchers_contract() {
 /// if composition swapped the runtimes arms, mis-projected a mode axis, or dropped a
 /// root face. Under the SAME profile it asserts: `/api/health` reports
 /// `mode:"remote"`; `/readyz` reports `mode:"remote"` + `deployment_mode:"standalone"`
-/// + an uninstalled fanout key + 503; and `/api/runtimes` is the control-plane
+/// + an installed fanout key + 503 before serving; and `/api/runtimes` is the control-plane
 /// refusal (503 `host_runtime_disabled` when authenticated, still 401 anonymous
 /// behind the perimeter — never a detection pass).
 #[tokio::test]
@@ -8703,7 +8703,7 @@ async fn the_remote_only_profile_composes_a_control_plane_backend() {
     assert_eq!(health["ok"], serde_json::json!(true));
     assert_eq!(health["mode"], serde_json::json!("remote"));
 
-    // `/readyz` — anonymous, standalone shape, fanout uninstalled → honest 503.
+    // `/readyz` — fanout installed, but no listener has been served yet → 503.
     let (status, body) = request(&router, "GET", "/readyz", None).await;
     assert_eq!(
         status,
@@ -8716,9 +8716,10 @@ async fn the_remote_only_profile_composes_a_control_plane_backend() {
     assert_eq!(ready["deployment_mode"], serde_json::json!("standalone"));
     assert_eq!(
         ready["checks"]["outbound_event_fanout_installed"],
-        serde_json::json!(false),
-        "no fanout call site in RemoteOnly → honestly uninstalled"
+        serde_json::json!(true),
+        "the shared daemon-to-viewer event chain is installed during composition"
     );
+    assert_eq!(ready["checks"]["listen_ready"], false);
 
     // `/api/runtimes` — anonymous still 401 (behind the perimeter)…
     let (status, _) = request(&router, "GET", "/api/runtimes", None).await;
@@ -8738,6 +8739,9 @@ async fn the_remote_only_profile_composes_a_control_plane_backend() {
     let refusal: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(refusal["code"], serde_json::json!("host_runtime_disabled"));
 }
+
+#[path = "remote_fanout_tests.rs"]
+mod remote_fanout_tests;
 /// one host with DISTINCT `created_at`, so the list's `created_at ASC` order is
 /// defined, plus a registered STRANGER (`user-stranger`, its own seeded session over
 /// `ADMIN_HASH`) who is in no arm of either agent — so the list face collapses that
