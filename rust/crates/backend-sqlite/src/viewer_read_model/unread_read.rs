@@ -113,8 +113,20 @@ pub(crate) use followed_thread_unread;
 /// The unread rollup: guards AND (main-line unread OR followed-thread unread).
 macro_rules! rollup_unread {
     () => {
+        $crate::viewer_read_model::unread_read::rollup_unread!(
+            @guards $crate::viewer_read_model::unread_read::unread_guards!()
+        )
+    };
+    // Only for a query that joins the message's conversation and filters that
+    // joined row with archived_at IS NULL in the same statement/snapshot.
+    (live_conversation) => {
+        $crate::viewer_read_model::unread_read::rollup_unread!(
+            @guards $crate::viewer_read_model::unread_read::message_unread_guards!()
+        )
+    };
+    (@guards $guards:expr) => {
         concat!(
-            $crate::viewer_read_model::unread_read::unread_guards!(),
+            $guards,
             " AND ((",
             $crate::viewer_read_model::unread_read::mainline_branch!(),
             ") OR (",
@@ -145,21 +157,6 @@ macro_rules! loud_positional {
             "(c.roster_policy = 'fixed' OR (c.roster_policy = 'open' AND ",
             channel_ambient_enters!(),
             "))"
-        )
-    };
-}
-
-/// The positional badge term: unread in loud conversations the viewer is seated in.
-macro_rules! badge_positional_term {
-    () => {
-        concat!(
-            "SELECT COUNT(m.id) AS c FROM conversations c JOIN conversation_users cu ON \
-             cu.conversation_id = c.id AND cu.user_id = (SELECT viewer FROM p) JOIN messages m ON \
-             m.conversation_id = c.id AND ",
-            rollup_unread!(),
-            " WHERE ",
-            loud_positional!(),
-            " AND c.workspace_id = (SELECT ws FROM p)"
         )
     };
 }
@@ -244,13 +241,22 @@ const CONVERSATION_UNREAD_COUNTS: &str = concat!(
      m.conversation_id = requested.conversation_id GROUP BY requested.conversation_id"
 );
 
-/// The viewer's unread count across every conversation they are seated in, in one workspace.
-const WORKSPACE_UNREAD_COUNT: &str = concat!(
-    "WITH p(viewer, ws) AS (SELECT ?, ?) SELECT COUNT(m.id) AS c FROM conversations c JOIN \
+/// The existing publication snapshot needs both the workspace count and its
+/// positional badge subset. Scan that same unread set once; quiet directed claims
+/// retain their separate, canonical term. No facts are shared across requests or
+/// moved out of the caller's existing read transaction.
+const WORKSPACE_UNREAD_AND_BADGE: &str = concat!(
+    "WITH p(viewer, ws, cdm) AS (SELECT ?, ?, ?) SELECT counts.workspace_count, \
+     counts.positional_count + (SELECT c FROM (",
+    badge_directed_term!(),
+    ")) AS badge_count FROM (SELECT COUNT(m.id) AS workspace_count, \
+     COALESCE(SUM(CASE WHEN m.id IS NOT NULL AND ",
+    loud_positional!(),
+    " THEN 1 ELSE 0 END),0) AS positional_count FROM conversations c JOIN \
      conversation_users cu ON cu.conversation_id = c.id AND cu.user_id = (SELECT viewer FROM p) \
      JOIN messages m ON m.conversation_id = c.id AND ",
-    rollup_unread!(),
-    " WHERE c.workspace_id = (SELECT ws FROM p)"
+    rollup_unread!(live_conversation),
+    " WHERE c.workspace_id = (SELECT ws FROM p) AND c.archived_at IS NULL) counts"
 );
 
 /// The single most-recent unread message for the viewer in one conversation, or no row.
@@ -262,18 +268,8 @@ const LATEST_UNREAD: &str = concat!(
     " ORDER BY m.seq DESC LIMIT 1"
 );
 
-/// The viewer's tiered attention badge for one workspace: loud unread plus quiet
-/// directed mentions, summed. `COALESCE(SUM(...), 0)` gives the oracle's `row?.c ?? 0`.
-const BADGE_COUNT: &str = concat!(
-    "WITH p(viewer, ws, cdm) AS (SELECT ?, ?, ?) SELECT COALESCE(SUM(c), 0) AS c FROM (",
-    badge_positional_term!(),
-    " UNION ALL ",
-    badge_directed_term!(),
-    ")"
-);
-
 /// The same tiered badge authority across all viewer workspaces. This is the
-/// cross-workspace face of `BADGE_COUNT`, matching the TypeScript
+/// cross-workspace face of `WORKSPACE_UNREAD_AND_BADGE`, matching the TypeScript
 /// `badgeCountsByWorkspace` roll-up rather than issuing one query per workspace.
 const BADGE_COUNTS_BY_WORKSPACE: &str = concat!(
     "WITH p(viewer, cdm) AS (SELECT ?, ?) SELECT workspace_id, SUM(c) AS c FROM (SELECT \
@@ -506,18 +502,15 @@ async fn viewer_unread(
         .bind(conversation.as_str())
         .fetch_one(&mut **tx)
         .await?;
-    let workspace_unread_count: i64 = sqlx::query_scalar(WORKSPACE_UNREAD_COUNT)
-        .bind(viewer.as_str())
-        .bind(workspace.as_str())
-        .fetch_one(&mut **tx)
-        .await?;
-    let latest_unread = latest_unread(tx, conversation, &viewer).await?;
-    let badge_count: i64 = sqlx::query_scalar(BADGE_COUNT)
+    let workspace_counts = sqlx::query(WORKSPACE_UNREAD_AND_BADGE)
         .bind(viewer.as_str())
         .bind(workspace.as_str())
         .bind(CHANNEL_DEFAULT_MODE)
         .fetch_one(&mut **tx)
         .await?;
+    let workspace_unread_count: i64 = workspace_counts.try_get("workspace_count")?;
+    let badge_count: i64 = workspace_counts.try_get("badge_count")?;
+    let latest_unread = latest_unread(tx, conversation, &viewer).await?;
 
     Ok(ViewerUnread {
         viewer,

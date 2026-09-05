@@ -317,6 +317,30 @@ INSERT INTO users (id, name, display_name, email, created_at, updated_at) \
         (directory, path)
     }
 
+    #[tokio::test]
+    async fn session_pool_retains_full_durability() {
+        let (_directory, path) = seed_db().await;
+        let store = SqliteSessionStore::open(&path).await.unwrap();
+        let mut connections = Vec::new();
+        for _ in 0..store.pool.options().get_max_connections() {
+            connections.push(store.pool.acquire().await.unwrap());
+        }
+        for connection in &mut connections {
+            let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
+                .fetch_one(&mut **connection)
+                .await
+                .unwrap();
+            let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
+                .fetch_one(&mut **connection)
+                .await
+                .unwrap();
+            assert_eq!(synchronous, 2);
+            assert_eq!(journal, "wal");
+        }
+        drop(connections);
+        store.pool.close().await;
+    }
+
     fn hash(plaintext: &str) -> SessionTokenHash {
         SessionTokenHash::of_plaintext(plaintext)
     }

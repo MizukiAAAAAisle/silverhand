@@ -306,18 +306,158 @@ async fn summary_binds_aggregate_and_every_row_viewer_before_wire() {
 }
 
 #[tokio::test]
-async fn every_selected_candidate_is_strictly_decoded_before_any_envelope() {
+async fn aggregate_counts_retain_eligible_corrupt_middle_rows() {
+    // Approved aggregate contract: unrelated non-returned fields are not audited.
+    // Every mutation remains eligible under the unchanged unread predicate.
+    for mutation in [
+        "UPDATE messages SET from_user_id='missing-author' WHERE id='own-reply'",
+        "UPDATE messages SET from_user_id='other',id='' WHERE id='own-reply'",
+        "UPDATE messages SET from_user_id='other',id=NULL WHERE id='own-reply'",
+        "UPDATE messages SET from_user_id='other',seq=6.5 WHERE id='own-reply'",
+        "UPDATE messages SET from_user_id='other',id=x'61' WHERE id='own-reply'",
+        "UPDATE messages SET from_user_id='other',id=CAST(x'80' AS TEXT) WHERE id='own-reply'",
+    ] {
+        let (dir, store) = store("workspace_member").await;
+        let mut db = SqliteConnection::connect_with(
+            &SqliteConnectOptions::new()
+                .filename(dir.path().join("message-unread.sqlite"))
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+        db.execute(sqlx::raw_sql(mutation)).await.unwrap();
+        for path in [
+            "/api/workspaces/w/message-unread",
+            "/api/message-unread-summary",
+            "/api/channels/c/message-unread",
+        ] {
+            let mut request = Request::builder().uri(path).body(Body::empty()).unwrap();
+            request
+                .extensions_mut()
+                .insert(UserId::parse("local").unwrap());
+            let response = router(store.message_unread())
+                .oneshot(request)
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::OK,
+                "{mutation} at {path}"
+            );
+            let body: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            if path == "/api/message-unread-summary" {
+                assert_eq!(body, serde_json::json!({"by_workspace":{"w":4}}));
+            } else if path == "/api/workspaces/w/message-unread" {
+                assert_eq!(body["total"], 4);
+                assert_eq!(body["by_conversation"]["c"], 3);
+                assert_eq!(body["latest_by_conversation"]["c"]["message_id"], "reply-2");
+                assert_eq!(body["latest_by_conversation"]["c"]["seq"], 7);
+            } else {
+                assert_eq!(body["total"], 3);
+                assert_eq!(body["latest_by_conversation"]["c"]["message_id"], "reply-2");
+            }
+        }
+        db.close().await.unwrap();
+        drop(store);
+    }
+}
+
+#[tokio::test]
+async fn returned_latest_still_rejects_bad_fields_while_count_only_summary_does_not_audit() {
+    for mutation in [
+        "UPDATE messages SET id='' WHERE id='reply-2'",
+        "UPDATE messages SET id=NULL WHERE id='reply-2'",
+        "UPDATE messages SET id=x'61' WHERE id='reply-2'",
+        "UPDATE messages SET id=CAST(x'80' AS TEXT) WHERE id='reply-2'",
+        "UPDATE messages SET seq=7.5 WHERE id='reply-2'",
+        "UPDATE messages SET seq=9007199254740992 WHERE id='reply-2'",
+        "UPDATE messages SET from_user_id='missing' WHERE id='reply-2'",
+        "DELETE FROM messages WHERE id='root'",
+    ] {
+        let (dir, store) = store("workspace_member").await;
+        let mut db = SqliteConnection::connect_with(
+            &SqliteConnectOptions::new()
+                .filename(dir.path().join("message-unread.sqlite"))
+                .foreign_keys(false),
+        )
+        .await
+        .unwrap();
+        db.execute(sqlx::raw_sql(mutation)).await.unwrap();
+        for path in [
+            "/api/workspaces/w/message-unread",
+            "/api/message-unread-summary",
+            "/api/channels/c/message-unread",
+        ] {
+            let mut request = Request::builder().uri(path).body(Body::empty()).unwrap();
+            request
+                .extensions_mut()
+                .insert(UserId::parse("local").unwrap());
+            let response = router(store.message_unread())
+                .oneshot(request)
+                .await
+                .unwrap();
+            let expected = if path == "/api/message-unread-summary" {
+                axum::http::StatusCode::OK
+            } else {
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            };
+            assert_eq!(response.status(), expected, "{mutation} at {path}");
+        }
+        db.close().await.unwrap();
+        drop(store);
+    }
+}
+
+#[tokio::test]
+async fn returned_pointer_identity_requires_utf8_and_preserves_nul() {
     let (dir, store) = store("workspace_member").await;
-    let options = SqliteConnectOptions::new()
-        .filename(dir.path().join("message-unread.sqlite"))
-        .foreign_keys(false);
-    let mut db = SqliteConnection::connect_with(&options).await.unwrap();
-    sqlx::query("DELETE FROM users WHERE id='other'")
+    let mut db = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(dir.path().join("message-unread.sqlite"))
+            .foreign_keys(false),
+    )
+    .await
+    .unwrap();
+    // A TEXT storage class and nonempty SQL comparison do not prove Rust String
+    // decodability. JSON validity also does not validate the UTF-8 bytes.
+    let witness: (String, i64, i64) = sqlx::query_as(
+        "SELECT typeof(CAST(x'80' AS TEXT)), \
+         CAST(x'80' AS TEXT) != '' COLLATE BINARY, \
+         json_valid(json_quote(CAST(x'80' AS TEXT)))",
+    )
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(witness, ("text".into(), 1, 1));
+    assert!(
+        sqlx::query_scalar::<_, String>("SELECT CAST(x'80' AS TEXT)")
+            .fetch_one(&mut db)
+            .await
+            .is_err()
+    );
+    for (expression, accepted) in [
+        ("SELECT NULL", false),
+        ("SELECT ''", false),
+        ("SELECT x'61'", false),
+        ("SELECT CAST(x'00' AS TEXT)", true),
+        ("SELECT CAST(x'610062' AS TEXT)", true),
+        ("SELECT '合法 opaque 身份'", true),
+    ] {
+        let raw = sqlx::query_scalar::<_, String>(expression)
+            .fetch_one(&mut db)
+            .await;
+        let accepted_by_decoder = raw.ok().is_some_and(|id| MessageId::parse(id).is_ok());
+        assert_eq!(accepted_by_decoder, accepted, "{expression}");
+    }
+    // Keep NUL in the latest candidate, so the actual three routes and pointer
+    // serialization must accept it, not merely count a hidden middle row.
+    sqlx::query("UPDATE messages SET id=?,seq=9007199254740991 WHERE id='reply-2'")
+        .bind("a\0b")
         .execute(&mut db)
         .await
         .unwrap();
-    drop(db);
-
     for path in [
         "/api/workspaces/w/message-unread",
         "/api/message-unread-summary",
@@ -331,13 +471,132 @@ async fn every_selected_candidate_is_strictly_decoded_before_any_envelope() {
             .oneshot(request)
             .await
             .unwrap();
-        assert_eq!(
-            response.status(),
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR
-        );
+        assert_eq!(response.status(), axum::http::StatusCode::OK, "{path}");
         let body: Value =
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
-        assert_eq!(body, serde_json::json!({"error":"internal error"}));
+        if path == "/api/workspaces/w/message-unread" {
+            assert_eq!(body["latest_by_conversation"]["c"]["message_id"], "a\0b");
+            assert_eq!(
+                body["latest_by_conversation"]["c"]["seq"],
+                9_007_199_254_740_991_i64
+            );
+        }
     }
+    db.close().await.unwrap();
+    drop(store);
+}
+
+#[tokio::test]
+async fn aggregate_rollups_keep_sparse_ordinals_and_conversation_identity() {
+    let (dir, store) = store("workspace_member").await;
+    let mut db = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new().filename(dir.path().join("message-unread.sqlite")),
+    )
+    .await
+    .unwrap();
+    sqlx::query("WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM numbers WHERE n<600) INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at) SELECT 'packet-'||n,'c','user','other','packet',1000+n,1 FROM numbers")
+        .execute(&mut db).await.unwrap();
+    sqlx::query("INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at) VALUES('gap-c','c','user','other','gap',1000000000,1),('gap-c2','c2','user','other','gap',1000000000,1)")
+        .execute(&mut db).await.unwrap();
+    for path in [
+        "/api/workspaces/w/message-unread",
+        "/api/message-unread-summary",
+    ] {
+        let mut request = Request::builder().uri(path).body(Body::empty()).unwrap();
+        request
+            .extensions_mut()
+            .insert(UserId::parse("local").unwrap());
+        let response = router(store.message_unread())
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        if path.ends_with("summary") {
+            assert_eq!(body, serde_json::json!({"by_workspace":{"w":605}}));
+        } else {
+            assert_eq!(body["total"], 605);
+            assert_eq!(body["by_conversation"], serde_json::json!({"c":603,"c2":2}));
+            for conversation in ["c", "c2"] {
+                assert_eq!(
+                    body["latest_by_conversation"][conversation],
+                    serde_json::json!({"conversation_id":conversation,"message_id":format!("gap-{conversation}"),"seq":1000000000,"thread_root_id":null})
+                );
+            }
+        }
+    }
+    db.close().await.unwrap();
+    drop(store);
+}
+
+#[tokio::test]
+async fn publication_combines_only_same_snapshot_counts_and_keeps_tier_rules() {
+    use silverhand_backend_core::conversation_messaging::messaging::unread::{
+        UnreadAudience, UnreadReadModel,
+    };
+    use silverhand_backend_sqlite::viewer_read_model::unread_read::SqliteUnreadReadModel;
+    let (dir, store) = store("workspace_member").await;
+    let path = dir.path().join("message-unread.sqlite");
+    let read = SqliteUnreadReadModel::open(&path).await.unwrap();
+    let mut db = SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path))
+        .await
+        .unwrap();
+    let conversation = ConversationId::parse("c").unwrap();
+    for (mutation, expected_workspace, expected_badge, expected_latest) in [
+        ("SELECT 1", 3, 3, Some(7)),
+        (
+            "INSERT INTO channel_attention_preferences VALUES('local','c','mentions',1); INSERT INTO notifications(id,kind,user_id,workspace_id,conversation_id,message_id,payload,created_at) VALUES('n1','mention_self','local','w','c','root','{}',1),('n2','mention_self','local','w','c','root','{}',2)",
+            3,
+            2,
+            Some(7),
+        ),
+        (
+            "INSERT INTO workspace_attention_preferences VALUES('local','w',1,1)",
+            3,
+            1,
+            Some(7),
+        ),
+        (
+            "INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at) VALUES('c3','w','workspace','fixed','Fixed','fixed','idle','private',3,3); INSERT INTO conversation_users(conversation_id,user_id,joined_at) VALUES('c3','local',3); INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at) VALUES('fixed-message','c3','user','other','fixed',1,3)",
+            4,
+            2,
+            Some(7),
+        ),
+        (
+            "UPDATE conversations SET archived_at=9 WHERE id='c'",
+            2,
+            1,
+            None,
+        ),
+    ] {
+        db.execute(sqlx::raw_sql(mutation)).await.unwrap();
+        let Some(UnreadAudience::Workspace { viewers, .. }) =
+            read.unread_audience(&conversation).await.unwrap()
+        else {
+            panic!("expected workspace audience")
+        };
+        assert_eq!(viewers.len(), 1);
+        let viewer = &viewers[0];
+        assert_eq!(viewer.viewer.as_str(), "local");
+        assert_eq!(
+            viewer.workspace_unread_count, expected_workspace,
+            "{mutation}"
+        );
+        assert_eq!(viewer.badge_count, expected_badge, "{mutation}");
+        assert_eq!(
+            viewer.latest_unread.as_ref().map(|p| p.seq),
+            expected_latest,
+            "{mutation}"
+        );
+        assert_eq!(
+            viewer.conversation_unread_count,
+            if expected_latest.is_some() { 2 } else { 0 }
+        );
+    }
+    db.close().await.unwrap();
+    drop(read);
+    drop(store);
 }

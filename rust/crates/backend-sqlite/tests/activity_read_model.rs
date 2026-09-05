@@ -100,6 +100,82 @@ async fn ordered_sources_dedupe_and_subtract_in_one_complete_projection() {
 }
 
 #[tokio::test]
+async fn mixed_archive_rows_preserve_activity_and_complete_publication() {
+    use silverhand_backend_core::{
+        conversation_messaging::messaging::unread::{UnreadAudience, UnreadReadModel},
+        foundation::identity::ConversationId,
+    };
+    use silverhand_backend_sqlite::viewer_read_model::unread_read::SqliteUnreadReadModel;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mixed-archive.sqlite");
+    seed(&path).await;
+    let read = MessagingStore::open(&path)
+        .await
+        .unwrap()
+        .activity_read_model();
+    let publication = SqliteUnreadReadModel::open(&path).await.unwrap();
+    let viewer = UserId::parse("u").unwrap();
+    let workspace = WorkspaceId::parse("w").unwrap();
+    let c = ConversationId::parse("c").unwrap();
+    let before = read.list_activity(&viewer, Some(&workspace)).await.unwrap();
+    let before_publication = publication.unread_audience(&c).await.unwrap().unwrap();
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    // A non-NULL zero is archived too; do not replace IS NULL with truthiness.
+    sqlx::raw_sql("INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,created_at,updated_at,latest_message_seq,archived_at) VALUES('hidden','w','workspace','open','Hidden','hidden-archive','open',1,1,1,0);
+        INSERT INTO conversation_users(conversation_id,user_id,joined_at) VALUES('hidden','u',1);
+        INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at,author_id,author_name,author_display_name) VALUES('m-hidden','hidden','user','other','hidden unread',1,1,'other','other-activity','Other');
+        INSERT INTO conversation_stream_heads(conversation_id,thread_root_id,latest_seq) VALUES('hidden',NULL,1);")
+        .execute(&mut db).await.unwrap();
+    assert_eq!(
+        read.list_activity(&viewer, Some(&workspace)).await.unwrap(),
+        before
+    );
+    assert_eq!(
+        publication.unread_audience(&c).await.unwrap().unwrap(),
+        before_publication
+    );
+    sqlx::query("UPDATE conversations SET archived_at=NULL WHERE id='hidden'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    let opened = read.list_activity(&viewer, Some(&workspace)).await.unwrap();
+    assert_eq!(opened.items().len(), before.items().len() + 1);
+    let UnreadAudience::Workspace { viewers, .. } =
+        publication.unread_audience(&c).await.unwrap().unwrap()
+    else {
+        panic!("workspace publication");
+    };
+    assert_eq!(viewers.len(), 1);
+    assert_eq!(viewers[0].conversation_unread_count, 2);
+    assert_eq!(viewers[0].workspace_unread_count, 3);
+    assert_eq!(viewers[0].badge_count, 3);
+    assert_eq!(
+        viewers[0].latest_unread.as_ref().unwrap().message.as_str(),
+        "m-plain"
+    );
+    sqlx::query("UPDATE conversations SET archived_at=7 WHERE id='c'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    let remaining = read.list_activity(&viewer, Some(&workspace)).await.unwrap();
+    assert_eq!(remaining.items().len(), 1);
+    assert_eq!(remaining.items()[0].conversation().as_str(), "hidden");
+    let UnreadAudience::Workspace { viewers, .. } =
+        publication.unread_audience(&c).await.unwrap().unwrap()
+    else {
+        panic!("workspace publication");
+    };
+    assert_eq!(viewers[0].conversation_unread_count, 0);
+    assert_eq!(viewers[0].workspace_unread_count, 1);
+    assert_eq!(viewers[0].badge_count, 1);
+    assert!(viewers[0].latest_unread.is_none());
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn cursor_archive_and_attention_tier_drive_both_sources_without_mutating_claims() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("activity.sqlite");

@@ -179,6 +179,13 @@ where
 }
 
 fn workspace_success(value: &BoundWorkspaceMessageUnread) -> Response {
+    if value
+        .rows()
+        .iter()
+        .any(|row| !safe_number(row.count()) || !safe_number(row.latest().seq().get()))
+    {
+        return internal();
+    }
     let mut counts = Map::new();
     let mut latest = Map::new();
     for row in value.rows() {
@@ -200,6 +207,9 @@ fn workspace_success(value: &BoundWorkspaceMessageUnread) -> Response {
             return internal();
         }
     };
+    if !safe_number(total) {
+        return internal();
+    }
     Json(json!({
         "by_conversation": counts,
         "latest_by_conversation": latest,
@@ -209,6 +219,9 @@ fn workspace_success(value: &BoundWorkspaceMessageUnread) -> Response {
 }
 
 fn summary_success(value: &BoundViewerMessageUnreadSummary) -> Response {
+    if value.rows().iter().any(|row| !safe_number(row.count())) {
+        return internal();
+    }
     let by_workspace = value
         .rows()
         .iter()
@@ -218,6 +231,14 @@ fn summary_success(value: &BoundViewerMessageUnreadSummary) -> Response {
 }
 
 fn conversation_success(value: &BoundConversationMessageUnread) -> Response {
+    if !safe_number(value.unread().count())
+        || value
+            .unread()
+            .latest()
+            .is_some_and(|pointer| !safe_number(pointer.seq().get()))
+    {
+        return internal();
+    }
     let mut counts = Map::new();
     counts.insert(
         value.conversation().as_str().to_owned(),
@@ -247,10 +268,117 @@ fn pointer_wire(value: &LatestUnreadPointer) -> Value {
     })
 }
 
+fn safe_number(value: i64) -> bool {
+    silverhand_backend_core::foundation::wire_number::JsSafeInteger::new(value).is_ok()
+}
+
 fn error(status: StatusCode, message: &'static str) -> Response {
     (status, Json(json!({"error": message}))).into_response()
 }
 
 fn internal() -> Response {
     error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+}
+
+#[cfg(test)]
+mod numeric_tests {
+    use super::*;
+    use silverhand_backend_core::{
+        conversation_messaging::messaging::collaboration::message_unread::{
+            ConversationMessageUnread, NonZeroUnreadCount, UnreadCount, UnreadRollup,
+            ViewerMessageUnreadSummary, WorkspaceConversationUnread, WorkspaceMessageUnread,
+            WorkspaceUnreadTotal,
+        },
+        conversation_messaging::messaging::{MessageId, MessageSeq},
+        foundation::{
+            identity::{ConversationId, UserId, WorkspaceId},
+            wire_number::JsSafeInteger,
+        },
+    };
+
+    #[test]
+    fn actual_success_envelopes_keep_safe_max_and_reject_max_plus_one() {
+        let workspace = WorkspaceId::parse("w").unwrap();
+        let viewer = UserId::parse("v").unwrap();
+        for (count, seq, expected) in [
+            (JsSafeInteger::MAX, JsSafeInteger::MAX, StatusCode::OK),
+            (JsSafeInteger::MAX + 1, 1, StatusCode::INTERNAL_SERVER_ERROR),
+            (1, JsSafeInteger::MAX + 1, StatusCode::INTERNAL_SERVER_ERROR),
+        ] {
+            let conversation = ConversationId::parse("c").unwrap();
+            let unread = UnreadRollup::projected(
+                UnreadCount::new(count).unwrap(),
+                Some(LatestUnreadPointer::projected(
+                    conversation.clone(),
+                    MessageId::parse("m").unwrap(),
+                    MessageSeq::try_from(seq).unwrap(),
+                    None,
+                )),
+            )
+            .unwrap();
+            let point = ConversationMessageUnread::projected(conversation.clone(), unread.clone())
+                .unwrap()
+                .bind(&conversation)
+                .unwrap();
+            assert_eq!(conversation_success(&point).status(), expected);
+            let UnreadRollup::Unread(unread) = unread else {
+                unreachable!()
+            };
+            let row =
+                WorkspaceConversationUnread::projected(workspace.clone(), conversation, unread)
+                    .unwrap();
+            let bound = WorkspaceMessageUnread::projected(workspace.clone(), vec![row])
+                .unwrap()
+                .bind(&workspace)
+                .unwrap();
+            assert_eq!(workspace_success(&bound).status(), expected);
+            let summary = ViewerMessageUnreadSummary::projected(
+                viewer.clone(),
+                vec![WorkspaceUnreadTotal::projected(
+                    viewer.clone(),
+                    workspace.clone(),
+                    NonZeroUnreadCount::new(UnreadCount::new(count).unwrap()).unwrap(),
+                )],
+            )
+            .unwrap()
+            .bind(&viewer)
+            .unwrap();
+            assert_eq!(
+                summary_success(&summary).status(),
+                if count <= JsSafeInteger::MAX {
+                    StatusCode::OK
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            );
+        }
+        let rows = ["c1", "c2"]
+            .into_iter()
+            .map(|id| {
+                let conversation = ConversationId::parse(id).unwrap();
+                let UnreadRollup::Unread(unread) = UnreadRollup::projected(
+                    UnreadCount::new(JsSafeInteger::MAX).unwrap(),
+                    Some(LatestUnreadPointer::projected(
+                        conversation.clone(),
+                        MessageId::parse(id).unwrap(),
+                        MessageSeq::try_from(1).unwrap(),
+                        None,
+                    )),
+                )
+                .unwrap() else {
+                    unreachable!()
+                };
+                WorkspaceConversationUnread::projected(workspace.clone(), conversation, unread)
+                    .unwrap()
+            })
+            .collect();
+        let total_overflow = WorkspaceMessageUnread::projected(workspace.clone(), rows)
+            .unwrap()
+            .bind(&workspace)
+            .unwrap();
+        assert_eq!(
+            workspace_success(&total_overflow).status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
 }

@@ -3941,6 +3941,20 @@ mod tests {
             connections.push(store.pool.acquire().await.unwrap());
         }
         for connection in &mut connections {
+            // Inspect the linked library, not the Cargo environment: a dependency
+            // upgrade must not silently restore the global cache LRU extension.
+            let options: Vec<String> = sqlx::query_scalar("PRAGMA compile_options")
+                .fetch_all(&mut **connection)
+                .await
+                .unwrap();
+            assert!(!options.iter().any(|o| o == "ENABLE_MEMORY_MANAGEMENT"));
+            assert!(options.iter().any(|o| o == "THREADSAFE=1"));
+            assert!(!options.iter().any(|o| o == "DEFAULT_MEMSTATUS=0"));
+            let cache_size: i64 = sqlx::query_scalar("PRAGMA cache_size")
+                .fetch_one(&mut **connection)
+                .await
+                .unwrap();
+            assert_eq!(cache_size, -2000);
             let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
                 .fetch_one(&mut **connection)
                 .await

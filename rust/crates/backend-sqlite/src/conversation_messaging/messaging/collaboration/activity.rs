@@ -14,7 +14,8 @@ use crate::{
         author::{AuthorEvidence, resolve_authors},
     },
     viewer_read_model::unread_read::{
-        CHANNEL_DEFAULT_MODE, channel_ambient_enters, effective_directed_mention, unread_guards,
+        CHANNEL_DEFAULT_MODE, channel_ambient_enters, effective_directed_mention,
+        message_unread_guards,
     },
 };
 use silverhand_backend_core::{
@@ -83,7 +84,9 @@ const POSITIONAL: &str = concat!(
        SELECT es.conversation_id, es.root, m.seq FROM entering_stream es CROSS JOIN messages m ON \
        m.conversation_id=es.conversation_id AND m.thread_root_id IS es.root AND \
        m.seq>es.cursor_seq WHERE ",
-    unread_guards!(),
+    // entering_stream already excludes archived conversations in this snapshot.
+    // Do not look up that same conversation again for every unread message.
+    message_unread_guards!(),
     " AND m.id NOT IN (SELECT value FROM json_each(?))\
      ), per_stream AS (\
        SELECT conversation_id, root, COUNT(*) AS unread_count, MIN(seq) AS first_unread_seq \

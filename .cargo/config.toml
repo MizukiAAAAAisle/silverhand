@@ -1,0 +1,6 @@
+# libsqlite3-sys adds this extension by default. Keep ordinary page caches,
+# MEMSTATUS, thread safety and adapter FULL durability; omit only global cache
+# reclamation and its shared LRU coordination. See rust/BUILDING.md.
+# Root placement covers Cargo invoked here and from rust/ (dev/package scripts).
+[env]
+LIBSQLITE3_FLAGS = { value = "-USQLITE_ENABLE_MEMORY_MANAGEMENT", force = true }
