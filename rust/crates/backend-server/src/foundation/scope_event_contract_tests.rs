@@ -306,8 +306,8 @@ async fn direct_pair_database() -> (tempfile::TempDir, std::path::PathBuf) {
     .unwrap();
     sqlx::query(
         "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, \
-             display_name, created_by_user_id) VALUES \
-             ('agent-1', 'agent', 'claude', 'host-1', 1, 1, 'Agent', 'user-1')",
+             display_name, created_by_user_id, session_scope) VALUES \
+             ('agent-1', 'agent', 'claude', 'host-1', 1, 1, 'Agent', 'user-1', 'agent')",
     )
     .execute(&mut db)
     .await
@@ -517,7 +517,7 @@ async fn direct_pair_count(path: &std::path::Path) -> i64 {
         .unwrap()
 }
 
-struct DenySend;
+struct DenySend(Arc<AtomicUsize>);
 
 impl SendCapability for DenySend {
     type Error = Infallible;
@@ -527,6 +527,7 @@ impl SendCapability for DenySend {
         _agent: &AgentId,
         _conversation: &ConversationId,
     ) -> Result<Result<(), CapabilityDenied>, Self::Error> {
+        self.0.fetch_add(1, Ordering::SeqCst);
         Ok(Err(CapabilityDenied))
     }
 }
@@ -556,6 +557,7 @@ fn direct_pair_router(
     store: MessagingStore,
     hub: ScopeEventHub,
     calls: Arc<AtomicUsize>,
+    capability_calls: Arc<AtomicUsize>,
 ) -> axum::Router {
     crate::conversation_messaging::messaging::router::send_router(
         crate::conversation_messaging::messaging::router::SendState {
@@ -564,7 +566,7 @@ fn direct_pair_router(
                 hub.messaging_events(),
                 crate::conversation_messaging::messaging::TargetAddressRefusalLog,
             ),
-            capability: DenySend,
+            capability: DenySend(capability_calls),
             authority: store.clone(),
             unit_of_work: CountedStore {
                 inner: store,
@@ -612,10 +614,12 @@ async fn real_resolver_announces_before_capability_refusal_and_never_enters_the_
     let store = MessagingStore::open(&path).await.unwrap();
     let hub = ScopeEventHub::test("epoch-1");
     let calls = Arc::new(AtomicUsize::new(0));
-    let app = direct_pair_router(store, hub.clone(), calls.clone());
+    let capability_calls = Arc::new(AtomicUsize::new(0));
+    let app = direct_pair_router(store, hub.clone(), calls.clone(), capability_calls.clone());
 
     let response = app.oneshot(agent_target_request("dm:@user")).await.unwrap();
     assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(capability_calls.load(Ordering::SeqCst), 1);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(direct_pair_count(&path).await, 1);
 
@@ -628,7 +632,8 @@ async fn a_thread_suffix_never_creates_a_missing_pair_but_checks_an_existing_pai
     let store = MessagingStore::open(&path).await.unwrap();
     let hub = ScopeEventHub::test("epoch-1");
     let calls = Arc::new(AtomicUsize::new(0));
-    let app = direct_pair_router(store, hub.clone(), calls.clone());
+    let capability_calls = Arc::new(AtomicUsize::new(0));
+    let app = direct_pair_router(store, hub.clone(), calls.clone(), capability_calls.clone());
     let missing_root = "root000000000099";
 
     let missing_pair = app
@@ -659,6 +664,7 @@ async fn a_thread_suffix_never_creates_a_missing_pair_but_checks_an_existing_pai
         .await
         .unwrap();
     assert_eq!(created.status(), axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(capability_calls.load(Ordering::SeqCst), 1);
     assert_eq!(direct_pair_count(&path).await, 1);
     assert_eq!(viewer_replay_len(&hub), 1);
 
