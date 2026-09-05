@@ -106,3 +106,40 @@ async fn production_sqlite_router_consumes_the_typescript_wire_fixture() {
         assert_eq!(body, entry.body, "{}", entry.name);
     }
 }
+
+#[tokio::test]
+async fn system_audit_actor_is_provenance_not_a_display_author() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("system-audit-window.sqlite");
+    seed(&path).await;
+    let mut db = SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    // Both TS insertSystemMessage and Rust session-clear persist the initiating
+    // user's FK on a system audit message, but project its author as null.
+    db.execute("INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,metadata,seq,created_at) VALUES ('audit','c','system','local','session cleared','{\"subtype\":\"session_cleared\",\"actor_user_id\":\"local\"}',6,60); UPDATE conversations SET latest_message_seq=6 WHERE id='c'; UPDATE conversation_stream_heads SET latest_seq=6 WHERE conversation_id='c' AND thread_root_id IS NULL; UPDATE messages SET from_user_id='local' WHERE id='reply-system'").await.unwrap();
+    db.close().await.unwrap();
+    let store = MessagingStore::open(&path).await.unwrap();
+    let app = conversation_message_window::router(store.conversation_message_window());
+    for (query, id) in [("", "audit"), ("?thread_root_id=root-1", "reply-system")] {
+        let request = Request::builder()
+            .uri(format!("/api/channels/c/messages{query}"))
+            .extension(UserId::parse("local").unwrap())
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let row = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap();
+        assert_eq!(row["from_kind"], "system");
+        assert_eq!(row["from_user_id"], "local");
+        assert!(row["author"].is_null());
+    }
+}

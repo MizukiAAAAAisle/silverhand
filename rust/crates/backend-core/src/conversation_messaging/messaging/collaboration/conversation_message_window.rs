@@ -214,9 +214,12 @@ impl WindowAuthorFact {
 
     fn validate(&self) -> Result<(), MessageWindowCorruption> {
         if self.from_kind == FromKind::System {
-            return (self.from_agent.is_none()
-                && self.from_user.is_none()
-                && self.snapshot_identity.is_none()
+            // System audit rows may retain the initiating actor's provenance
+            // FK (for example session_cleared). That is not a display author:
+            // both production writers and the shared author resolver preserve
+            // this distinction. Keep the FK on the wire without inventing an
+            // author or a send-time author snapshot for the system itself.
+            return (self.snapshot_identity.is_none()
                 && self.snapshot_name.is_none()
                 && self.snapshot_display_name.is_none()
                 && self.author.is_none())
@@ -1655,6 +1658,40 @@ mod tests {
             SelectedWindowMessage::seal(foreign_task),
             Err(MessageWindowCorruption::LinkedTask)
         );
+    }
+
+    #[test]
+    fn system_actor_provenance_does_not_become_a_display_author() {
+        for (agent, human) in [
+            (None, Some(user("initiator"))),
+            (Some(AgentId::parse("initiator").unwrap()), None),
+        ] {
+            let fact = WindowAuthorFact::sealed(
+                FromKind::System,
+                agent.clone(),
+                human.clone(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(fact.from_agent(), agent.as_ref());
+            assert_eq!(fact.from_user(), human.as_ref());
+            assert!(fact.author().is_none());
+            assert_eq!(
+                WindowAuthorFact::sealed(
+                    FromKind::System,
+                    agent,
+                    human,
+                    None,
+                    None,
+                    None,
+                    Some(author("foreign")),
+                ),
+                Err(MessageWindowCorruption::AuthorProvenance)
+            );
+        }
     }
 
     #[test]
