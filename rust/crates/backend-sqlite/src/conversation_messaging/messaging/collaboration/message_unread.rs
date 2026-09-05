@@ -196,9 +196,9 @@ impl SqliteMessageUnreadRead {
             .bind(workspace.as_str())
             .fetch_all(&mut *tx)
             .await?;
+        tx.commit().await?;
         let candidates = decode_workspace_candidates(rows, &workspace)?;
         let projection = workspace_projection(workspace, candidates)?;
-        tx.commit().await?;
         Ok(Ok(projection))
     }
 
@@ -206,10 +206,9 @@ impl SqliteMessageUnreadRead {
         &self,
         viewer: &UserId,
     ) -> Result<ViewerMessageUnreadSummary, MessageUnreadStoreError> {
-        let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
         let rows = sqlx::query(SUMMARY_CANDIDATES)
             .bind(viewer.as_str())
-            .fetch_all(&mut *tx)
+            .fetch_all(&self.pool)
             .await?;
         let mut totals = BTreeMap::<String, (UserId, WorkspaceId, i64)>::new();
         for row in rows {
@@ -254,7 +253,6 @@ impl SqliteMessageUnreadRead {
             .collect::<Result<Vec<_>, MessageUnreadStoreError>>()?;
         let summary = ViewerMessageUnreadSummary::projected(viewer.clone(), projected)
             .map_err(|_| MessageUnreadStoreError::MalformedProjection)?;
-        tx.commit().await?;
         Ok(summary)
     }
 
@@ -289,6 +287,7 @@ impl SqliteMessageUnreadRead {
             .bind(stored.as_str())
             .fetch_all(&mut *tx)
             .await?;
+        tx.commit().await?;
         let mut candidates = Vec::with_capacity(rows.len());
         for row in rows {
             let candidate = decode_candidate(&row)?;
@@ -300,7 +299,6 @@ impl SqliteMessageUnreadRead {
         let rollup = rollup(&stored, candidates)?;
         let projection = ConversationMessageUnread::projected(stored, rollup)
             .map_err(|_| MessageUnreadStoreError::MalformedProjection)?;
-        tx.commit().await?;
         Ok(Ok(projection))
     }
 }

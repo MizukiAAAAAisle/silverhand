@@ -108,6 +108,7 @@ impl SqliteAgentListColdRead {
         // many candidates the viewer has. `agent_list_read::visible_agents` re-decides
         // each row from these arms, so the narrowing above only offers a superset.
         let mut audiences = read_candidate_audiences(&mut tx, viewer).await?;
+        tx.commit().await?;
 
         let mut candidates = Vec::with_capacity(rows.len());
         for row in &rows {
@@ -128,7 +129,6 @@ impl SqliteAgentListColdRead {
             ));
         }
 
-        tx.commit().await?;
         Ok(candidates)
     }
 }

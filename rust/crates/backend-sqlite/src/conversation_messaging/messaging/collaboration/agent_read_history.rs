@@ -240,6 +240,10 @@ impl AgentReadHistoryRead for SqliteAgentReadHistory {
                 ))
             })?;
         let reactions = reaction_aggregates_for(&mut tx, agent, &message_ids).await?;
+        // All database facts are owned now. DTO/metadata work needs no connection.
+        tx.commit()
+            .await
+            .map_err(AgentReadHistoryStoreError::from)?;
 
         let mut messages = Vec::with_capacity(rows.len());
         for (row, author) in rows.into_iter().zip(authors) {
@@ -280,9 +284,6 @@ impl AgentReadHistoryRead for SqliteAgentReadHistory {
                 reactions,
             });
         }
-        tx.commit()
-            .await
-            .map_err(AgentReadHistoryStoreError::from)?;
         Ok(Ok(ReadHistoryWindow {
             messages,
             has_more_before,

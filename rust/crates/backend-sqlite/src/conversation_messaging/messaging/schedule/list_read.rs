@@ -25,9 +25,6 @@ use super::{ScheduleStoreError, driver};
 
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-/// A single ordered SELECT: a deferred read snapshot is all a list needs, and it
-/// never contends with the fire path's `IMMEDIATE` writers.
-const READ_BEGIN: &str = "BEGIN DEFERRED";
 
 /// The projection fragment, joining the target conversation for the label. Kept
 /// byte-for-byte aligned with `SCHEDULE_SELECT_WITH_TARGET`: `s.*` plus the two
@@ -94,10 +91,12 @@ impl ScheduleListReadModel for SqliteScheduleListRead {
         builder.push(" ORDER BY s.next_fire_at ASC, s.created_at ASC LIMIT ");
         builder.push_bind(query.limit.get());
 
-        let mut tx = self.pool.begin_with(READ_BEGIN).await.map_err(driver)?;
-        let rows = builder.build().fetch_all(&mut *tx).await.map_err(driver)?;
-        // A read-only snapshot; commit releases it without a write.
-        tx.commit().await.map_err(driver)?;
+        // The target join and owner filter are in this one statement's snapshot.
+        let rows = builder
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(driver)?;
 
         rows.iter()
             .map(|row| {

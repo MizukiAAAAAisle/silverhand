@@ -24,6 +24,19 @@ struct SnapshotAuthority<'a> {
     connection: &'a mut SqliteConnection,
 }
 
+#[cfg(test)]
+tokio::task_local! {
+    static POINT_READ_ENTERED: std::sync::Arc<tokio::sync::Notify>;
+}
+
+#[cfg(test)]
+async fn pause_point_read() {
+    if let Ok(entered) = POINT_READ_ENTERED.try_with(Clone::clone) {
+        entered.notify_one();
+        std::future::pending::<()>().await;
+    }
+}
+
 impl TaskParticipationReads for SnapshotAuthority<'_> {
     async fn is_agent_participant(
         &mut self,
@@ -104,12 +117,12 @@ impl TaskAuthorizedPointRead for SqliteTaskStore {
         &self,
         request: TaskReadRequest,
     ) -> Result<Option<VisibleTaskPoint>, PersistenceFailure> {
-        let mut connection = self.pool.acquire().await.map_err(driver)?;
-        sqlx::query("BEGIN")
-            .execute(&mut *connection)
-            .await
-            .map_err(driver)?;
+        // The candidate and its authorization share a snapshot; the typed owner
+        // also rolls back when request cancellation skips the explicit close.
+        let mut connection = self.pool.begin().await.map_err(driver)?;
         let result = async {
+            #[cfg(test)]
+            pause_point_read().await;
             let Some(candidate) = fetch_point_on(&mut connection, &request.address).await? else {
                 return Ok(None);
             };
@@ -119,10 +132,7 @@ impl TaskAuthorizedPointRead for SqliteTaskStore {
             authorize_task_point_on(&request, candidate, &mut authority).await
         }
         .await;
-        let close = sqlx::query("ROLLBACK")
-            .execute(&mut *connection)
-            .await
-            .map_err(driver);
+        let close = connection.rollback().await.map_err(driver);
         match (result, close) {
             (Err(error), _) => Err(error),
             (Ok(_), Err(error)) => Err(error),
@@ -136,12 +146,10 @@ impl TaskAuthorizedPointRead for SqliteTaskStore {
         conversation: ConversationId,
         number: silverhand_backend_core::conversation_messaging::messaging::task::TaskNumber,
     ) -> Result<Option<VisibleTaskPoint>, PersistenceFailure> {
-        let mut connection = self.pool.acquire().await.map_err(driver)?;
-        sqlx::query("BEGIN")
-            .execute(&mut *connection)
-            .await
-            .map_err(driver)?;
+        let mut connection = self.pool.begin().await.map_err(driver)?;
         let result = async {
+            #[cfg(test)]
+            pause_point_read().await;
             let Some(board) = conversation_board_on(&mut connection, &conversation).await? else {
                 return Ok(None);
             };
@@ -156,10 +164,7 @@ impl TaskAuthorizedPointRead for SqliteTaskStore {
             authorize_task_point_on(&request, candidate, &mut authority).await
         }
         .await;
-        let close = sqlx::query("ROLLBACK")
-            .execute(&mut *connection)
-            .await
-            .map_err(driver);
+        let close = connection.rollback().await.map_err(driver);
         match (result, close) {
             (Err(error), _) => Err(error),
             (Ok(_), Err(error)) => Err(error),
@@ -318,6 +323,53 @@ mod snapshot_tests {
         TaskId, TaskReadActor, TaskReadRequest,
     };
     use sqlx::Connection;
+
+    #[tokio::test]
+    async fn cancelled_point_ports_return_a_clean_single_pool_connection() {
+        use silverhand_backend_core::conversation_messaging::messaging::task::TaskNumber;
+        use std::{sync::Arc, time::Duration};
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let store = SqliteTaskStore { pool: pool.clone() };
+        for by_number in [false, true] {
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let call_store = store.clone();
+            let signal = entered.clone();
+            let task = tokio::spawn(POINT_READ_ENTERED.scope(signal, async move {
+                if by_number {
+                    call_store
+                        .read_authorized_point_by_conversation_number(
+                            UserId::parse("u").unwrap(),
+                            ConversationId::parse("c").unwrap(),
+                            TaskNumber::new(1).unwrap(),
+                        )
+                        .await
+                } else {
+                    call_store
+                        .read_authorized_point(TaskReadRequest {
+                            address: TaskReadAddress::ById(TaskId::parse("t").unwrap()),
+                            actor: TaskReadActor::User(UserId::parse("u").unwrap()),
+                        })
+                        .await
+                }
+            }));
+            tokio::time::timeout(Duration::from_secs(2), entered.notified())
+                .await
+                .unwrap();
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            // A one-connection pool cannot hide a poisoned connection behind a fresh one.
+            let next = tokio::time::timeout(Duration::from_secs(2), pool.begin())
+                .await
+                .unwrap();
+            assert!(next.is_ok(), "cancelled by_number={by_number}: {next:?}");
+            next.unwrap().rollback().await.unwrap();
+        }
+        pool.close().await;
+    }
 
     mod current_schema {
         include!(concat!(

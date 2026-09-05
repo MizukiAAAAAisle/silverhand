@@ -44,7 +44,6 @@ use thiserror::Error;
 
 const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const DEFERRED_READ_BEGIN: &str = "BEGIN DEFERRED";
 
 /// The narrow profile read: only the columns the internal profile DTO and its
 /// avatar-URL derivation consume. No host join, no ACL SQL, no wire-vocabulary
@@ -124,25 +123,22 @@ impl SqliteAgentProfileRead {
     }
 
     /// Read one profile row for `statement` bound to `key`. Shared by the id and
-    /// handle lookups so both resolve on ONE `BEGIN DEFERRED` snapshot and decode
+    /// handle lookups so both use one statement's snapshot and decode
     /// identically; only the predicate the statement carries differs.
     async fn read_profile_where(
         &self,
         statement: &'static str,
         key: &str,
     ) -> Result<Option<AgentProfileFact>, AgentProfileReadError> {
-        let mut tx = self.pool.begin_with(DEFERRED_READ_BEGIN).await?;
-
         let row = sqlx::query(statement)
             .bind(key)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&self.pool)
             .await?;
         let fact = match row {
             Some(row) => Some(decode_profile_row(&row)?),
             None => None,
         };
 
-        tx.commit().await?;
         Ok(fact)
     }
 }

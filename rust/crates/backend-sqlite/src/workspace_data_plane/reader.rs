@@ -1,4 +1,4 @@
-//! Single-read-transaction scope reader over the production SQLite schema.
+//! Single-statement scope reader over the production SQLite schema.
 //!
 //! It reads a workspace's existence, ownership, and BOTH membership edges (the
 //! human's `workspace_users` row and the agent's `workspace_members` row) in ONE
@@ -75,7 +75,7 @@ LEFT JOIN workspaces w ON w.id = request.workspace_id";
 type ScopeRow = (String, String, String, i64, Option<String>, i64, i64);
 
 /// Reads the workspace-scope facts behind the agent-pane data plane. Holds only a
-/// pool; every read is one deferred transaction over the current schema.
+/// pool; every read is one statement over the current schema.
 #[derive(Clone)]
 pub struct SqliteWorkspaceScopeStore {
     pool: SqlitePool,
@@ -138,15 +138,8 @@ impl AgentWorkspaceScopeRead for SqliteWorkspaceScopeStore {
         viewer: &UserId,
         agent: &AgentId,
     ) -> Result<AgentWorkspaceScopeFacts, PersistenceFailure> {
-        // One deferred read transaction: under WAL it takes a single snapshot on
-        // the first read, so existence, ownership, and both edges are one
-        // consistent view that cannot tear against a concurrent enrollment.
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(PersistenceFailure::from_source)?;
-
+        // The single statement already reads existence, ownership and both edges
+        // consistently; an outer BEGIN/COMMIT adds no cross-query guarantee.
         let (
             requested_workspace_id,
             read_viewer_id,
@@ -159,12 +152,9 @@ impl AgentWorkspaceScopeRead for SqliteWorkspaceScopeStore {
             .bind(workspace.as_str())
             .bind(viewer.as_str())
             .bind(agent.as_str())
-            .fetch_one(&mut *tx)
+            .fetch_one(&self.pool)
             .await
             .map_err(PersistenceFailure::from_source)?;
-
-        // A read-only transaction: committing simply releases the snapshot.
-        tx.commit().await.map_err(PersistenceFailure::from_source)?;
 
         // Decode the three coordinates the edges were read against back into the
         // domain. These are the SAME columns the membership subqueries filter on, so

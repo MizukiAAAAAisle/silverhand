@@ -579,9 +579,9 @@ async fn ensure_inbox_delivery<E: SendClock>(
 ) -> Result<(), OnboardingInboxEnsureError> {
     // Stamp with the store's own clock, ahead of opening the transaction.
     let now = environment.now_unix_ms()?;
-    // One transaction so the two witness reads and the insert see a single, consistent
-    // snapshot — a participation revoked mid-flight cannot slip a row past the gate.
-    let mut tx = pool.begin().await?;
+    // Reserve the writer BEFORE reading the message/recipient witnesses. Waiting
+    // here permits a competing writer to finish; upgrading a stale read does not.
+    let mut tx = pool.begin_with(ROOT_WRITE_BEGIN).await?;
 
     // Witness 1 — the message belongs to THIS conversation AND is a genuine onboarding
     // system message. One read returns the two discriminating columns; the shape is judged

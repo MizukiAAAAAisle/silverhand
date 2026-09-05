@@ -106,6 +106,7 @@ impl<E> SqliteWorkspaceRenameMessaging<E> {
         .bind(requested.as_str())
         .fetch_all(&mut *tx)
         .await?;
+        tx.commit().await?;
         let mut channels = Vec::with_capacity(selected.len());
         for row in selected {
             let workspace = WorkspaceId::parse(
@@ -121,7 +122,6 @@ impl<E> SqliteWorkspaceRenameMessaging<E> {
             channels.push(WorkspaceRenameChannel::selected(workspace, conversation));
         }
         let population = WorkspaceRenameChannels::selected(stored_workspace, channels)?;
-        tx.commit().await?;
         Ok(population)
     }
 }

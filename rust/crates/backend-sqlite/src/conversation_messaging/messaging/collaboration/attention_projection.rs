@@ -108,6 +108,9 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
             .await
             .map_err(AttentionProjectionStoreError::from)?;
 
+        tx.commit()
+            .await
+            .map_err(AttentionProjectionStoreError::from)?;
         let mut by_workspace = Vec::with_capacity(badge_rows.len());
         for (workspace, raw_count) in badge_rows {
             let count = AttentionCount::new(raw_count)
@@ -136,9 +139,6 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
                     }
                 }
             })?;
-        tx.commit()
-            .await
-            .map_err(AttentionProjectionStoreError::from)?;
         Ok(projected)
     }
 
@@ -189,6 +189,9 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
             .fetch_all(&mut *tx)
             .await
             .map_err(AttentionProjectionStoreError::from)?;
+        tx.commit()
+            .await
+            .map_err(AttentionProjectionStoreError::from)?;
         let mut channels = Vec::with_capacity(rows.len());
         for row in rows {
             let raw_conversation: String = row
@@ -209,9 +212,6 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
                     .map_err(|_| AttentionProjectionStoreError::MalformedCount)?,
             ));
         }
-        tx.commit()
-            .await
-            .map_err(AttentionProjectionStoreError::from)?;
         Ok(Ok(WorkspaceAttentionModes::projected(muted, channels)))
     }
 }
