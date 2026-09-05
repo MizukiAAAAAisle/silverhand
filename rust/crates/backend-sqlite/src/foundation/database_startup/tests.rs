@@ -74,7 +74,7 @@ async fn snapshot(
             .collect::<Vec<_>>()
             .join(",");
         let predicate = if omit_retired_preferences && table == "user_list_sort_mode" {
-            " WHERE NOT (list_key='workspaces' AND scope IN ('','pinned'))"
+            " WHERE NOT (list_key='workspaces' AND scope IN ('','pinned','starred'))"
         } else {
             ""
         };
@@ -98,9 +98,9 @@ async fn empty_store_runs_shared_history_without_ts_then_current_is_noop() {
     let path = root.path().join("data/database.sqlite");
     let first = prepare_database(&path, false).await.unwrap();
     assert_eq!(first.before_step, 0);
-    assert_eq!(first.after_step, 88);
+    assert_eq!(first.after_step, 89);
     assert_eq!(first.after_epoch, 69);
-    assert_eq!(first.applied_steps, (44..=88).collect::<Vec<_>>());
+    assert_eq!(first.applied_steps, (44..=89).collect::<Vec<_>>());
     assert!(first.backup_path.is_none());
     let second = prepare_database(&path, false).await.unwrap();
     assert!(second.applied_steps.is_empty());
@@ -154,10 +154,10 @@ async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
     .unwrap();
     assert!(matches!(
         prepare_database(&path, false).await,
-        Err(DatabaseStartupError::UpgradeDisabled { from: 87, to: 88 })
+        Err(DatabaseStartupError::UpgradeDisabled { from: 87, to: 89 })
     ));
     let upgraded = prepare_database(&path, true).await.unwrap();
-    assert_eq!(upgraded.applied_steps, vec![88]);
+    assert_eq!(upgraded.applied_steps, vec![88, 89]);
     let backup = upgraded.backup_path.unwrap();
     let mut live = connect(&path).await;
     assert_eq!(
@@ -190,7 +190,7 @@ async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
             .await
             .unwrap()
             .after_step,
-        88
+        89
     );
     // Optional export for the real-process smoke; fixture generation remains a
     // test-only activity, never a production startup fallback.
@@ -236,8 +236,69 @@ async fn failed_step_rolls_back_sql_and_ledger_before_restart() {
     assert_eq!(version, 44);
     db.close().await.unwrap();
     let restarted = prepare_database(&path, true).await.unwrap();
-    assert_eq!(restarted.applied_steps, (45..=88).collect::<Vec<_>>());
+    assert_eq!(restarted.applied_steps, (45..=89).collect::<Vec<_>>());
     assert!(restarted.backup_path.is_some());
+}
+
+#[tokio::test]
+async fn retired_workspace_starred_mode_upgrades_from_87_and_88_without_losing_other_data() {
+    for previous in [87, 88] {
+        let root = isolated();
+        let path = root.path().join("data/database.sqlite");
+        fs::create_dir(path.parent().unwrap()).unwrap();
+        let mut old_plan = plan();
+        old_plan.steps.retain(|step| step.version <= previous);
+        let mut db = connect(&path).await;
+        prepare_connected(&mut db, &path, true, &old_plan)
+            .await
+            .unwrap();
+        db.execute(sqlx::raw_sql(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../packages/backend/tests/fixtures/workspace-cold-read/seed.sql"
+        ))))
+        .await
+        .unwrap();
+        db.execute("INSERT INTO user_list_sort_mode(user_id,list_key,scope,mode,updated_at) VALUES ('user-1','workspaces','starred','manual',1),('user-2','workspaces','starred','recent',2),('user-1','favorites','','manual',3),('user-1','channels:ws-regular','starred','manual',4)").await.unwrap();
+        let before = snapshot(&mut db, false).await;
+        let expected = snapshot(&mut db, true).await;
+        assert_ne!(before, expected);
+        db.close().await.unwrap();
+        assert!(matches!(prepare_database(&path, false).await,
+            Err(DatabaseStartupError::UpgradeDisabled { from, to: 89 }) if from == previous));
+        let outcome = prepare_database(&path, true).await.unwrap();
+        assert_eq!(
+            outcome.applied_steps,
+            ((previous + 1)..=89).collect::<Vec<_>>()
+        );
+        let mut db = connect(&path).await;
+        assert_eq!(snapshot(&mut db, false).await, expected);
+        db.close().await.unwrap();
+        let mut backup = connect(&outcome.backup_path.unwrap().join("database.sqlite")).await;
+        assert_eq!(snapshot(&mut backup, false).await, before);
+        backup.close().await.unwrap();
+        assert!(
+            prepare_database(&path, false)
+                .await
+                .unwrap()
+                .applied_steps
+                .is_empty()
+        );
+
+        use silverhand_backend_core::{
+            foundation::identity::UserId,
+            identity_access::workspace_cold_read::WorkspaceColdReadUnitOfWork,
+        };
+        let reader =
+            crate::identity_access::workspace_cold_read::SqliteWorkspaceColdRead::open(&path)
+                .await
+                .unwrap();
+        let result = reader
+            .load_workspace_cold_read(&UserId::parse("user-1").unwrap())
+            .await
+            .unwrap();
+        assert_eq!(result.workspaces.len(), 3);
+        assert_eq!(result.viewer_sort.modes.len(), 2);
+    }
 }
 
 #[tokio::test]
@@ -264,7 +325,7 @@ async fn database_hard_link_alias_is_refused_without_releasing_lock_or_advancing
     let path = root.path().join("data/database.sqlite");
     prepare_database(&path, true).await.unwrap();
     let mut db = connect(&path).await;
-    db.execute("DELETE FROM _migrations WHERE version=88")
+    db.execute("DELETE FROM _migrations WHERE version>=88")
         .await
         .unwrap();
     db.close().await.unwrap();
@@ -296,7 +357,7 @@ async fn unsupported_gapped_and_malformed_ledgers_fail_without_recreating_data()
             "schema_too_old",
         ),
         (
-            "CREATE TABLE _migrations(version INTEGER); INSERT INTO _migrations VALUES(89)",
+            "CREATE TABLE _migrations(version INTEGER); INSERT INTO _migrations VALUES(90)",
             "schema_too_new",
         ),
         (

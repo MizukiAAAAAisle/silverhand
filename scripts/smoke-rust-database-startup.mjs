@@ -58,12 +58,12 @@ function inspect(dir){const db=new Database(join(dir,'database.sqlite'),{readonl
 }finally{db.close();}}
 const before=inspect(data);assert.equal(before.step,87);assert.ok(before.messages.length>0);
 await launch(data,'0',true);assert.deepEqual(inspect(data),before);
-await launch(data,'1');const after=inspect(data);assert.equal(after.step,88);
+await launch(data,'1');const after=inspect(data);assert.equal(after.step,89);
 for(const key of ['messages','users','sessions'])assert.deepEqual(after[key],before[key]);
-assert.deepEqual(after.preferences,before.preferences.filter(x=>!['','pinned'].includes(x.scope)));
+assert.deepEqual(after.preferences,before.preferences.filter(x=>!['','pinned','starred'].includes(x.scope)));
 const backups=readdirSync(root).filter(n=>n.startsWith('data-backup-'));assert.equal(backups.length,1);
 const restored=join(root,'restored');cpSync(join(root,backups[0]),restored,{recursive:true});assert.deepEqual(inspect(restored),before);
 await launch(data,'0');assert.deepEqual(inspect(data),after);
 await launch(restored,'1');assert.deepEqual(inspect(restored),after);
-const empty=join(root,'empty');mkdirSync(empty);await launch(empty,'0');assert.equal(inspect(empty).step,88);
-console.log(JSON.stringify({pass:true,root,checks:'remote-only: disabled refusal, nonempty87→88, exact selected data preservation, restore87→88, current restart, empty startup; PATH empty; all children exited'}));
+const empty=join(root,'empty');mkdirSync(empty);await launch(empty,'0');assert.equal(inspect(empty).step,89);
+console.log(JSON.stringify({pass:true,root,checks:'remote-only: disabled refusal, nonempty87→89, exact selected data preservation, restore87→89, current restart, empty startup; PATH empty; all children exited'}));

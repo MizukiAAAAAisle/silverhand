@@ -4098,6 +4098,19 @@ export const migrations: Migration[] = [
          AND scope IN ('', 'pinned');
     `,
   },
+  {
+    version: 89,
+    name: 'workspaces_drop_retired_starred_sort_scope',
+    // The pre-#1888 rail accepted `starred` as a workspace hard group
+    // (297b5b407, sort.ts legalGroups/modeScopeOf). Step 88 retired the flat
+    // and pinned modes but missed this historical preference. Append a step:
+    // databases already at 88 must receive the repair too. This removes only
+    // the retired group mode, never entity ranks/stars, other lists, or content.
+    up: `
+      DELETE FROM user_list_sort_mode
+       WHERE list_key = 'workspaces' AND scope = 'starred';
+    `,
+  },
 ];
 
 /**
