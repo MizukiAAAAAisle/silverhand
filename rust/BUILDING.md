@@ -1,4 +1,39 @@
-# Bundled SQLite build policy
+# Building the Rust backend
+
+## Linux x86_64 server from macOS / OrbStack
+
+Run `./scripts/build-rust-linux.sh` from the repository. Docker must be running;
+the current Docker context is used (OrbStack works). No macOS Rust target
+installation, Node build, Desktop packaging or ECS deployment is performed.
+
+This builds only `silverhand-backend` for `x86_64-unknown-linux-gnu` inside a
+`linux/amd64` container. On Apple Silicon this uses OrbStack's architecture
+emulation, not a macOS linker. The Rust 1.94.0 Debian bullseye image is pinned by
+digest; Cargo uses `--locked`. Registry and Linux target caches use separate named
+Docker volumes and never overwrite the macOS target cache. The source mount is
+read-only. `CARGO_BUILD_JOBS=2 ./scripts/build-rust-linux.sh` reduces build load.
+
+Each run writes a new `.cache/linux-server/<UTC timestamp>-<commit>/` directory
+with the executable, `SHA256SUMS`, `build.json`, ELF dependency/version reports
+and isolated smoke results. Old output directories are not cleared. The manifest
+records the source commit and tracked-dirty flag: use a clean source tree for
+release delivery, and do not edit sources while building.
+
+The verified ECS host (2026-09-06) is x86_64 Alibaba Cloud Linux 3 with glibc 2.32.
+Bullseye's glibc 2.31 provides a compatible build floor; bookworm's newer libc is
+not an interchangeable choice. The script checks the ELF architecture, required
+glibc symbols (at most 2.32), dependency resolution and actual startup on the
+older container runtime. It initializes an isolated empty database without
+Node/Cargo on the child's PATH, probes `/readyz` and `/api/server/info`, then
+requires SIGTERM exit 0. This is build/runtime compatibility evidence, not a
+production ECS deployment or real-data acceptance test.
+
+The produced executable still requires explicit database/blobs/log-directory,
+listen/origin and `remote-only` deployment configuration; see database startup
+ownership below and `../docs/rust-server-logging.md`. Do not point build tests at
+production data or copy a new binary over a running ECS process.
+
+## Bundled SQLite build policy
 
 Run Cargo from the repository root (`cargo build --manifest-path rust/Cargo.toml`)
 or from `rust/`. The checked-in root `.cargo/config.toml` is inherited by both,
