@@ -1075,6 +1075,12 @@ export {
   type ObservedStatement,
 } from './observability/observed-statement.js';
 export { CURRENT_MIGRATION_STEP } from '@silverhand/shared/db/migrations';
+// #task:2343 — the embedded launcher's DB migration handoff (migrate + backup +
+// integrity audits then FULLY close), so the Rust child is the sole opener.
+export {
+  migrateAndCloseForEmbeddedHandoff,
+  type EmbeddedMigrationHandoffOptions,
+} from './embedded-migration-handoff.js';
 export {
   CURRENT_SCHEMA_EPOCH,
   MIN_SUPPORTED_MIGRATION_STEP,

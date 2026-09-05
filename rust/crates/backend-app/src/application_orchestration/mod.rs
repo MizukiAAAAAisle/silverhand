@@ -11,6 +11,10 @@ pub(crate) mod create_aftermath;
 mod finalize;
 mod lane_mounts;
 mod resources;
+// #task:2343 — the out-of-process Desktop-launcher startup handoff frame (bound
+// address + echoed generation on stdout). `pub(crate)` so the crate root's `serve`
+// emits it; a narrow, self-contained protocol seam.
+pub(crate) mod startup_protocol;
 
 use audit::AuditWriters;
 use bind::BoundListener;
@@ -88,7 +92,12 @@ where
     match composition::compose_after_audit(config, bound.address(), resources, audit.facades())
         .await
     {
-        Ok(assembly) => Ok(finalize::commit(bound, assembly, audit)),
+        Ok(assembly) => Ok(finalize::commit(
+            bound,
+            assembly,
+            audit,
+            config.startup_generation().map(str::to_owned),
+        )),
         Err(original) => Err(audit.rollback(original).await),
     }
 }

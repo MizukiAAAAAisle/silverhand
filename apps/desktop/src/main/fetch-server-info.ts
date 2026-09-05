@@ -2,6 +2,7 @@ import { ServerInfoSchema, type ServerInfo } from '@silverhand/shared';
 
 export type ServerInfoFetcher = (
   input: string,
+  init?: { signal?: AbortSignal },
 ) => Promise<{
   ok: boolean;
   status: number;
@@ -18,6 +19,9 @@ export interface FetchServerInfoWithRetryOptions {
   fetcher?: ServerInfoFetcher;
   sleep?: SleepFn;
   retryDelaysMs?: readonly number[];
+  /** #task:2343 P0-2 — cancel an in-flight/pending fetch (and stop retrying) when the
+   * launcher's startup deadline / child-exit / shutdown aborts. */
+  signal?: AbortSignal;
 }
 
 class InvalidServerInfoResponseError extends Error {
@@ -40,8 +44,9 @@ const defaultSleep: SleepFn = ms =>
 async function fetchServerInfoOnce(
   url: string,
   fetcher: ServerInfoFetcher,
+  signal?: AbortSignal,
 ): Promise<ServerInfo> {
-  const res = await fetcher(url);
+  const res = await fetcher(url, signal ? { signal } : undefined);
   const text = await res.text();
   if (!res.ok) {
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
@@ -67,14 +72,30 @@ export async function fetchServerInfoWithRetry(
   const retryDelaysMs = opts.retryDelaysMs ?? SERVER_INFO_RETRY_DELAYS_MS;
 
   for (let attempt = 0; ; attempt += 1) {
+    if (opts.signal?.aborted) {
+      throw new Error('server info fetch aborted');
+    }
     try {
-      return await fetchServerInfoOnce(opts.url, fetcher);
+      return await fetchServerInfoOnce(opts.url, fetcher, opts.signal);
     } catch (err) {
       const retryDelayMs = retryDelaysMs[attempt];
-      if (retryDelayMs === undefined || !shouldRetryServerInfoError(err)) {
+      if (
+        retryDelayMs === undefined ||
+        !shouldRetryServerInfoError(err) ||
+        opts.signal?.aborted
+      ) {
         throw err;
       }
-      await sleep(retryDelayMs);
+      if (!opts.signal) { await sleep(retryDelayMs); continue; }
+      const signal = opts.signal;
+      let abort = (): void => {};
+      try {
+        await Promise.race([sleep(retryDelayMs), new Promise<never>((_, reject) => {
+          abort = () => reject(new Error('server info retry aborted'));
+          signal.addEventListener('abort', abort, { once: true });
+          if (signal.aborted) abort();
+        })]);
+      } finally { signal.removeEventListener('abort', abort); }
     }
   }
 }

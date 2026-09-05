@@ -141,6 +141,7 @@ fn config_with_log_dir(path: PathBuf, log_dir: Option<PathBuf>) -> AppConfig {
         true,
         log_dir,
         None,
+        None,
     )
     .unwrap()
 }
@@ -162,6 +163,7 @@ fn remote_config(path: PathBuf) -> AppConfig {
         DeploymentProfile::RemoteOnly,
         true,
         Some(log_dir),
+        None,
         None,
     )
     .unwrap()
@@ -188,6 +190,7 @@ fn config_with_bootstrap(
         true,
         Some(log_dir),
         token_path,
+        None,
     )
     .unwrap()
 }
@@ -616,6 +619,7 @@ fn config_has_no_implicit_database_listener_or_origin_defaults() {
             true,
             None,
             None,
+            None,
         ),
         Err(ConfigError::EmptyDatabasePath)
     ));
@@ -630,6 +634,7 @@ fn config_has_no_implicit_database_listener_or_origin_defaults() {
             true,
             None,
             None,
+            None,
         ),
         Err(ConfigError::EmptyBlobsRoot)
     ));
@@ -642,6 +647,7 @@ fn config_has_no_implicit_database_listener_or_origin_defaults() {
             None,
             DeploymentProfile::Embedded,
             true,
+            None,
             None,
             None,
         ),

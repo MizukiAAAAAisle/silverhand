@@ -239,6 +239,13 @@ const LOG_DIR_ENV: &str = "SILVERHAND_LOG_DIR";
 /// normalized to unset by [`AppConfig::from_env`]; direct construction with
 /// `AppConfig::new(..., Some(PathBuf::new()))` is invalid.
 const BOOTSTRAP_TOKEN_PATH_ENV: &str = "SILVERHAND_BOOTSTRAP_TOKEN_PATH";
+/// Optional launcher-minted spawn correlation token (#task:2343). When set, the
+/// process echoes it VERBATIM in the single stdout `bound` startup frame so the
+/// launcher can confirm the frame came from THIS spawn (not a stale/foreign process).
+/// It is opaque to the backend — never parsed, never a secret, never logged as
+/// anything but its echo. Unset (or blank) means no startup frame is emitted (a bare
+/// `cargo run` / standalone launch has no launcher awaiting a frame).
+const STARTUP_GENERATION_ENV: &str = "SILVERHAND_STARTUP_GENERATION";
 const BASELINE_MIGRATION_STEP: i64 = const_parse_i64(env!("SILVERHAND_BASELINE_MIGRATION_STEP"));
 const CURRENT_MIGRATION_STEP: i64 = const_parse_i64(env!("SILVERHAND_CURRENT_MIGRATION_STEP"));
 const MIGRATION_STEPS: &str = env!("SILVERHAND_MIGRATION_STEPS");
@@ -278,6 +285,10 @@ pub struct AppConfig {
     /// embedded profile and the actual bound listener being loopback, decided only after
     /// `TcpListener::bind` succeeds; this field is only the launcher-provided coordinate.
     bootstrap_token_path: Option<PathBuf>,
+    /// The launcher-minted spawn correlation token to echo in the stdout `bound`
+    /// startup frame (#task:2343), or `None` when no launcher is awaiting a frame. Opaque
+    /// — echoed verbatim, never a secret.
+    startup_generation: Option<String>,
 }
 
 impl AppConfig {
@@ -295,6 +306,7 @@ impl AppConfig {
         signup_enabled: bool,
         log_dir: Option<PathBuf>,
         bootstrap_token_path: Option<PathBuf>,
+        startup_generation: Option<String>,
     ) -> Result<Self, ConfigError> {
         if database_path.as_os_str().is_empty() {
             return Err(ConfigError::EmptyDatabasePath);
@@ -325,6 +337,11 @@ impl AppConfig {
         let daemon_npm_spec = daemon_npm_spec
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
+        // Blank is normalized to `None` (no launcher awaiting a frame). The value is
+        // otherwise opaque and echoed verbatim; the backend applies no shape rule.
+        let startup_generation = startup_generation
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
         Ok(Self {
             database_path,
             blobs_root,
@@ -335,6 +352,7 @@ impl AppConfig {
             signup_enabled,
             log_dir,
             bootstrap_token_path,
+            startup_generation,
         })
     }
 
@@ -376,6 +394,10 @@ impl AppConfig {
             .ok()
             .filter(|value| !value.trim().is_empty())
             .map(PathBuf::from);
+        // Opaque launcher spawn-correlation token; blank/unset means no frame is owed.
+        let startup_generation = env::var(STARTUP_GENERATION_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty());
         Self::new(
             database_path,
             blobs_root,
@@ -386,11 +408,29 @@ impl AppConfig {
             signup_enabled,
             log_dir,
             bootstrap_token_path,
+            startup_generation,
         )
     }
 
     pub fn listen_addr(&self) -> SocketAddr {
         self.listen_addr
+    }
+
+    /// The launcher-minted spawn-correlation token to echo in the stdout `bound` frame,
+    /// or `None` when no launcher is awaiting one (#task:2343).
+    pub fn startup_generation(&self) -> Option<&str> {
+        self.startup_generation.as_deref()
+    }
+
+    /// The launcher-provided event-WS allowed origins (composition may augment with the
+    /// bound loopback origin for the embedded profile — #task:2343).
+    pub fn allowed_origins(&self) -> &[AllowedOrigin] {
+        &self.allowed_origins
+    }
+
+    /// The launcher-chosen packaging profile.
+    pub fn deployment_profile(&self) -> DeploymentProfile {
+        self.deployment_profile
     }
 }
 
@@ -487,6 +527,8 @@ pub enum StartupError {
     Bind(#[source] std::io::Error),
     #[error("failed to read the bound listener address")]
     BoundListenerAddress(#[source] std::io::Error),
+    #[error("failed to emit the startup handoff frame to stdout")]
+    StartupFrame(#[source] Box<dyn Error + Send + Sync>),
     #[error("failed to provision the embedded-bootstrap token file")]
     BootstrapToken(#[source] std::io::Error),
     #[error("served backend failed")]
@@ -572,6 +614,12 @@ pub struct PreparedApp {
     /// idempotent `cleanup`, deleting an UNCONSUMED token and disarming so it can never be
     /// spent after. A bind failure occurs before minting and therefore creates no authority.
     embedded_bootstrap_token: embedded_bootstrap::EmbeddedBootstrapTokenAuthority,
+    /// #task:2343 — the launcher-minted spawn-correlation token to echo in the single
+    /// stdout `bound` startup frame, or `None` when no launcher is awaiting one (a bare
+    /// `cargo run` / standalone launch). Carried here (not read from a global) so
+    /// [`serve`] emits the frame from the SAME bound listener it serves, once, after
+    /// `mark_listen_ready` — never fabricated by a handler, never before a real bind.
+    startup_generation: Option<String>,
     /// #2234 CP7a (test-only): a clone of the ONE runtime-credential authority the
     /// `agent_products` perimeter is wrapped with. Carried so a composition test can mint a
     /// real bearer through `dispatch_start` against the SAME in-memory token store the mounted
@@ -827,6 +875,7 @@ where
         cli_audit_sink,
         agent_audit_sink,
         embedded_bootstrap_token,
+        startup_generation,
         #[cfg(test)]
             test_runtime_credentials: _,
     } = app;
@@ -836,6 +885,37 @@ where
     // method, so EVERY caller that serves a bound listener establishes the fact and no
     // caller can fake it without one — a prepared-but-unserved app stays 503.
     boot.mark_listen_ready();
+    // #task:2343 — the out-of-process Desktop launcher startup handoff. When a launcher
+    // minted a spawn generation, emit EXACTLY ONE `bound` frame on stdout carrying the
+    // REAL bound address (read from this very listener, so a `:0` spawn reports its
+    // resolved port) and the echoed generation. It is emitted here — after
+    // `mark_listen_ready`, before the accept loop — so the launcher's `/readyz` poll is
+    // the readiness gate; stdout carries ONLY this protocol (all logs go to stderr).
+    //
+    // A frame-emission failure (bad `local_addr`, oversize frame, stdout EPIPE) is a
+    // startup failure — but it MUST run the SAME cleanup tail as every other termination
+    // path (deletion/create aftermath close → transport shutdown → audit drain →
+    // bootstrap-token cleanup), never an early `?` return that leaks composition-owned
+    // resources and an unconsumed token. So the fallible emission is computed here and,
+    // on error, we fall through to the shared cleanup tail with an `Err` outcome instead
+    // of serving.
+    let frame_result: Result<(), StartupError> = match startup_generation {
+        Some(generation) => emit_startup_frame(&listener, generation),
+        None => Ok(()),
+    };
+    if let Err(frame_error) = frame_result {
+        // Never served; still close every composition-owned resource + clean the token,
+        // exactly like the signal arm, so nothing leaks (Cindy: frame failure joins the
+        // cleanup tail). Transports/aftermath were composed but not driven; closing them
+        // is the correct teardown.
+        deletion_resumer.close();
+        create_aftermath.close().await;
+        shut_down_transports(&event_controller, &daemon_controller, &presence_timers).await;
+        cli_audit_sink.close().await;
+        agent_audit_sink.close().await;
+        embedded_bootstrap_token.cleanup().await;
+        return Err(frame_error);
+    }
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
     // #2255/#2257: serve with per-connection `ConnectInfo<SocketAddr>` so the
     // embedded-bootstrap `LoopbackPeer` gate can read the real TCP peer. Every other
@@ -897,8 +977,49 @@ where
     outcome
 }
 
+/// Emit the ONE `bound` startup frame for the launcher: read the real bound address from
+/// the served listener (so `:0` reports its resolved port), build the versioned/length-
+/// bounded frame with the echoed generation, and write it as a single stdout line.
+/// Returns the typed startup error on any failure (bad `local_addr`, oversize frame,
+/// stdout EPIPE) so the caller runs the shared cleanup tail rather than early-returning.
+fn emit_startup_frame(listener: &TcpListener, generation: String) -> Result<(), StartupError> {
+    let bound_addr = listener
+        .local_addr()
+        .map_err(StartupError::BoundListenerAddress)?;
+    let frame =
+        application_orchestration::startup_protocol::BoundFrame::new(generation, bound_addr);
+    let line = frame
+        .to_stdout_line()
+        .map_err(|error| StartupError::StartupFrame(Box::new(error)))?;
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout();
+    stdout
+        .write_all(line.as_bytes())
+        .and_then(|()| stdout.flush())
+        .map_err(|error| StartupError::StartupFrame(Box::new(error)))
+}
+
+/// The production graceful-shutdown trigger. Resolves on the FIRST of SIGINT (Ctrl-C)
+/// or, on Unix, SIGTERM — the signal the Desktop embedded launcher (and any supervisor)
+/// sends to ask for an orderly stop (#task:2343). Both must run the `serve()` graceful
+/// tail (deletion/create aftermath close → transport shutdown → audit drain → bootstrap
+/// token cleanup); a SIGTERM that fell through to default process termination would skip
+/// all of it, so it is handled here rather than left to the default disposition.
 async fn shutdown_signal() -> Result<(), std::io::Error> {
-    tokio::signal::ctrl_c().await
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sigint = signal(SignalKind::interrupt())?;
+        tokio::select! {
+            _ = sigterm.recv() => Ok(()),
+            _ = sigint.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
+    }
 }
 
 pub fn describe(error: &(dyn Error + 'static)) -> String {

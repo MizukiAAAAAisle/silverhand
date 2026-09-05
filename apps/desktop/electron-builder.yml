@@ -100,6 +100,16 @@ extraResources:
   # `apps/desktop/src/main/index.ts:resolveDaemonLauncher`.
   - from: ../../packages/host/dist/daemon.js
     to: silverhand-daemon/daemon.mjs
+  # #task:2343 — the PREBUILT Rust backend sidecar + its manifest, built by
+  # scripts/package.sh (`cargo build --release`) at PACKAGE time (never at runtime). The
+  # launcher (`resolveBackendSidecarManifestPath`) reads the manifest from
+  # `resources/silverhand-backend/` and `verifySidecar` checks arch + SHA-256 before
+  # spawn. The embedded arm has no TS-backend fallback, so a missing/mismatched sidecar
+  # fails startup loudly. (electron-builder.remote-only.yml does NOT ship these.)
+  - from: ../../rust/target/release/silverhand-backend
+    to: silverhand-backend/silverhand-backend
+  - from: ../../rust/target/release/silverhand-backend.manifest.json
+    to: silverhand-backend/silverhand-backend.manifest.json
 
 mac:
   category: public.app-category.developer-tools

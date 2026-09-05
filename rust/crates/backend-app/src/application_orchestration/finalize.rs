@@ -18,10 +18,13 @@ pub(super) struct FinalAssembly {
 
 /// The one production finalize door. Consuming the witness, assembly and writer owner
 /// together makes re-finalization and rollback-after-commit unrepresentable.
+/// `startup_generation` is the launcher's echoed spawn token (#task:2343), carried onto
+/// the served app so `serve` can emit the one stdout `bound` frame.
 pub(super) fn commit(
     bound: BoundListener,
     assembly: FinalAssembly,
     audit: AuditWriters,
+    startup_generation: Option<String>,
 ) -> (tokio::net::TcpListener, PreparedApp) {
     let FinalAssembly {
         router,
@@ -47,6 +50,7 @@ pub(super) fn commit(
         cli_audit_sink,
         agent_audit_sink,
         embedded_bootstrap_token,
+        startup_generation,
         #[cfg(test)]
         test_runtime_credentials,
     };

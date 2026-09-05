@@ -1347,13 +1347,14 @@ pub(super) async fn compose_after_audit(
     );
     let agent_products = require_runtime_credential(observed_agent_products, runtime_credentials);
 
-    let event_config =
-        EventWebSocketConfig::production(config.allowed_origins.clone()).map_err(|source| {
-            StartupError::Composition {
-                name: "event websocket configuration",
-                source: Box::new(source),
-            }
-        })?;
+    let event_config = EventWebSocketConfig::production(embedded_event_ws_allowed_origins(
+        config,
+        bound_listener_addr,
+    )?)
+    .map_err(|source| StartupError::Composition {
+        name: "event websocket configuration",
+        source: Box::new(source),
+    })?;
     let (event_router, event_controller) =
         silverhand_backend_server::foundation::scope_event_transport::router(
             hub,
@@ -1482,4 +1483,134 @@ pub(super) async fn compose_after_audit(
         #[cfg(test)]
         test_runtime_credentials,
     })
+}
+
+/// #task:2343 — the event-WS origin allowlist for the composed backend.
+///
+/// The launcher-provided `SILVERHAND_ALLOWED_ORIGINS` are honored verbatim. For the
+/// EMBEDDED profile bound to a LOOPBACK address, the finalized bound loopback origin
+/// (`http://127.0.0.1:<port>` / `http://[::1]:<port>`) is ADDED to the allowlist —
+/// mirroring the TypeScript embedded backend, which pins the event-WS allowlist to the
+/// exact origin the desktop reaches it at. Embedded runs on an ephemeral `:0` port the
+/// launcher cannot know before the child binds, so the bound origin is derived HERE (from
+/// this listener's real `local_addr`) rather than pre-computed launcher-side. A non-
+/// loopback or non-embedded bind adds nothing (standalone/remote declare their allowlist
+/// explicitly). The bound origin is de-duplicated against the launcher-provided set.
+fn embedded_event_ws_allowed_origins(
+    config: &crate::AppConfig,
+    bound_listener_addr: std::net::SocketAddr,
+) -> Result<
+    Vec<silverhand_backend_server::foundation::scope_event_transport::AllowedOrigin>,
+    StartupError,
+> {
+    use silverhand_backend_server::embedded_bootstrap::is_loopback_ip;
+    use silverhand_backend_server::foundation::scope_event_transport::AllowedOrigin;
+
+    let mut origins = config.allowed_origins().to_vec();
+    let is_embedded_loopback = matches!(config.deployment_profile(), DeploymentProfile::Embedded)
+        && is_loopback_ip(bound_listener_addr.ip());
+    if is_embedded_loopback {
+        let ip = bound_listener_addr.ip();
+        let authority = if ip.is_ipv6() {
+            format!("http://[{}]:{}", ip, bound_listener_addr.port())
+        } else {
+            format!("http://{}:{}", ip, bound_listener_addr.port())
+        };
+        let bound_origin =
+            AllowedOrigin::parse(authority).map_err(|source| StartupError::Composition {
+                name: "embedded bound event-ws origin",
+                source: Box::new(source),
+            })?;
+        if !origins.iter().any(|existing| existing == &bound_origin) {
+            origins.push(bound_origin);
+        }
+    }
+    Ok(origins)
+}
+
+#[cfg(test)]
+mod event_ws_origin_tests {
+    use super::embedded_event_ws_allowed_origins;
+    use crate::AppConfig;
+    use silverhand_backend_server::foundation::deployment_profile::DeploymentProfile;
+    use silverhand_backend_server::foundation::scope_event_transport::AllowedOrigin;
+    use std::net::SocketAddr;
+
+    fn config(profile: DeploymentProfile, origins: &[&str]) -> AppConfig {
+        AppConfig::new(
+            "db.sqlite".into(),
+            "blobs".into(),
+            "127.0.0.1:0".parse().unwrap(),
+            origins
+                .iter()
+                .map(|o| AllowedOrigin::parse((*o).to_owned()).unwrap())
+                .collect(),
+            None,
+            profile,
+            true,
+            Some("logs".into()),
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    fn origin(raw: &str) -> AllowedOrigin {
+        AllowedOrigin::parse(raw.to_owned()).unwrap()
+    }
+
+    #[test]
+    fn embedded_loopback_bind_adds_the_finalized_bound_origin() {
+        let cfg = config(DeploymentProfile::Embedded, &["http://localhost:5173"]);
+        let bound: SocketAddr = "127.0.0.1:51763".parse().unwrap();
+        let origins = embedded_event_ws_allowed_origins(&cfg, bound).unwrap();
+        assert!(origins.contains(&origin("http://localhost:5173")));
+        assert!(
+            origins.contains(&origin("http://127.0.0.1:51763")),
+            "the ephemeral bound loopback origin is added (launcher cannot know :0 port pre-spawn)"
+        );
+    }
+
+    #[test]
+    fn embedded_ipv6_loopback_bind_is_bracketed() {
+        let cfg = config(DeploymentProfile::Embedded, &["http://localhost:5173"]);
+        let bound: SocketAddr = "[::1]:40001".parse().unwrap();
+        let origins = embedded_event_ws_allowed_origins(&cfg, bound).unwrap();
+        assert!(origins.contains(&origin("http://[::1]:40001")));
+    }
+
+    #[test]
+    fn embedded_bound_origin_is_not_duplicated_if_already_present() {
+        let cfg = config(DeploymentProfile::Embedded, &["http://127.0.0.1:51763"]);
+        let bound: SocketAddr = "127.0.0.1:51763".parse().unwrap();
+        let origins = embedded_event_ws_allowed_origins(&cfg, bound).unwrap();
+        let count = origins
+            .iter()
+            .filter(|o| **o == origin("http://127.0.0.1:51763"))
+            .count();
+        assert_eq!(count, 1, "no duplicate bound origin");
+    }
+
+    #[test]
+    fn remote_only_bind_adds_nothing() {
+        let cfg = config(
+            DeploymentProfile::RemoteOnly,
+            &["https://silverhand.example"],
+        );
+        let bound: SocketAddr = "127.0.0.1:51763".parse().unwrap();
+        let origins = embedded_event_ws_allowed_origins(&cfg, bound).unwrap();
+        assert_eq!(
+            origins,
+            vec![origin("https://silverhand.example")],
+            "standalone/remote declares its own allowlist; the bound origin is not injected"
+        );
+    }
+
+    #[test]
+    fn embedded_non_loopback_bind_adds_nothing() {
+        let cfg = config(DeploymentProfile::Embedded, &["http://localhost:5173"]);
+        let bound: SocketAddr = "10.0.0.5:51763".parse().unwrap();
+        let origins = embedded_event_ws_allowed_origins(&cfg, bound).unwrap();
+        assert_eq!(origins, vec![origin("http://localhost:5173")]);
+    }
 }
