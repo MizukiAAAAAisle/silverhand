@@ -275,7 +275,10 @@ async fn database_hard_link_alias_is_refused_without_releasing_lock_or_advancing
         Err(DatabaseStartupError::Backup(_))
     ));
     assert_eq!(fs::read(&path).unwrap(), original);
-    assert_eq!(fs::read(path.with_file_name("database-alias")).unwrap(), original);
+    assert_eq!(
+        fs::read(path.with_file_name("database-alias")).unwrap(),
+        original
+    );
     let mut db = connect(&path).await;
     let step: i64 = sqlx::query_scalar("SELECT MAX(version) FROM _migrations")
         .fetch_one(&mut db)
