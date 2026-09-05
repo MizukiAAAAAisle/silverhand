@@ -52,6 +52,7 @@ import type {
   AgentStartOptions,
   ConversationStartOptions,
   RuntimeActionTarget,
+  RuntimeScope,
   RuntimeStartErrorCode,
   StartOptions,
 } from '../protocol.js';
@@ -186,16 +187,17 @@ export interface RuntimeStartResolveDeps {
   resolveComputerId: () => string;
 }
 
-/** Resolve one delivery origin to its absolute action workdir. This is distinct
- * from the process cwd: AgentSlot stays rooted at Agent home while each action
- * points at the semantic target's workspace bundle (or the stable
- * workspace-less conversation directory). */
+/** Resolve the action cwd from the same runtime identity as the process cwd.
+ * Agent-scoped deliveries share the agent home across every channel/DM.
+ * Conversation-scoped deliveries retain their workspace/conversation directory. */
 export function resolveRuntimeActionWorkdir(
-  agentId: string,
+  runtimeScope: RuntimeScope,
   target: RuntimeActionTarget,
   deps: RuntimeStartResolveDeps,
 ): string {
+  const agentId = runtimeScope.agent_id;
   const homeDir = resolveAgentDir(agentId, deps);
+  if (runtimeScope.kind === 'agent') return homeDir;
   if (target.workspace === null) {
     try {
       return join(

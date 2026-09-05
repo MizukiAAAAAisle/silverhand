@@ -2671,7 +2671,7 @@ export class Supervisor implements SupervisorContract {
         'runtime_deliver',
       );
       const actionWorkdir = resolveRuntimeActionWorkdir(
-        params.agent_id,
+        params.spawn_options.runtime_scope,
         params.target,
         this.runtimeStartResolveDeps,
       );

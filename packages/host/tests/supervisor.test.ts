@@ -657,7 +657,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       supervisor.deliver({
         runtime_generation: generation,
         conversation_id: conversationId,
-        target: { conversation_id: conversationId, workspace: null },
+        target: { conversation_id: conversationId, workspace: conversationId === 'Conversation0002' ? { id: 'ws-action', name: 'Action Workspace' } : null },
         agent_id: 'a1',
         delivery_ids: [deliveryId],
         kind: 'message',
@@ -681,6 +681,8 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       });
       await waitForDeliveryConsumed(events, 22);
 
+      expect(existsSync(join(agentHome, 'conversations'))).toBe(false);
+      expect(existsSync(join(agentHome, 'workspaces'))).toBe(false);
       expect(spawnContexts).toHaveLength(2);
       expect(spawnContexts.map(ctx => ctx.workspacePath)).toEqual([
         agentHome,

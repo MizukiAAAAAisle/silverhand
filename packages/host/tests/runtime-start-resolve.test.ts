@@ -3,6 +3,7 @@ import { agentHomeWorkspaceId } from '@silverhand/shared';
 import {
   resolveAuthenticatedComputerId,
   resolveRuntimeStartPaths,
+  resolveRuntimeActionWorkdir,
   RuntimeStartResolveError,
   type RuntimeStartResolveDeps,
 } from '../src/daemon/runtime-start-resolve.js';
@@ -361,5 +362,21 @@ describe('resolveAgentWorkspaceBundleDir — sole path authority self-validates'
     const path = resolveAgentWorkspaceBundleDir('a1', 'ws1', { agentHomeRootDir: AGENTS_ROOT });
     expect(path).toBe(bundle('a1', 'ws1'));
     expect(path.startsWith(l1('a1'))).toBe(true);
+  });
+});
+
+describe('runtime action cwd follows the runtime scope', () => {
+  it('shares home for agent scope while conversation scope retains distinct target paths', () => {
+    const deps = depsWith();
+    const targets = [
+      { conversation_id: 'channel-1', workspace: { id: 'ws1', name: 'One' } },
+      { conversation_id: 'channel-2', workspace: { id: 'ws2', name: 'Two' } },
+      { conversation_id: 'direct-pair', workspace: null },
+    ];
+    for (const target of targets) {
+      expect(resolveRuntimeActionWorkdir({ kind: 'agent', agent_id: 'a1' }, target, deps)).toBe(l1('a1'));
+      const path = resolveRuntimeActionWorkdir({ kind: 'conversation', agent_id: 'a1', conversation_id: target.conversation_id }, target, deps);
+      expect(path).toBe(target.workspace ? bundle('a1', target.workspace.id) : `${l1('a1')}/conversations/direct-pair`);
+    }
   });
 });
