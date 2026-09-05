@@ -56,6 +56,7 @@ import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
 import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
 import { WorkspaceSettingsDialog } from '@/features/workspaces/WorkspaceSettingsDialog';
+import { resolveWorkspaceSettingsTarget, workspaceDeletionDestination } from '@/features/workspaces/workspace-settings-target';
 import { workspaceCapabilities } from '@/features/workspaces/workspace-capabilities';
 import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
@@ -463,7 +464,7 @@ function RegisteredAppShell({
     [agents],
   );
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
-  const settingsWorkspace = workspaces.find(w => w.id === workspaceSettingsId) ?? null;
+  const settingsWorkspace = resolveWorkspaceSettingsTarget(workspaces, workspaceSettingsId);
   // The pane owner already holds the workspace id→name authority (`workspaces`),
   // so it resolves the display name a Composer needs to spell a semantic channel
   // locator and hands it down as a SIBLING prop — no leaf lookup, mirroring how
@@ -1608,31 +1609,11 @@ function RegisteredAppShell({
   );
 
   const handleWorkspaceDeleted = (deletedId: string): void => {
-    if (deletedId !== selectedWorkspaceId) return;
-    // Pick the next workspace in the same rail group as the deleted one,
-    // wrapping to the first when the deleted entry was last. Falls back
-    // across groups if that group is now empty, then to /chat when
-    // nothing remains. Computed from the pre-invalidate snapshot — the
-    // workspaces query refetch hasn't landed yet at this point.
-    const deleted = workspaces.find(w => w.id === deletedId);
-    const sameGroup = deleted
-      ? workspaces.filter(w => isAgentSpace(w) === isAgentSpace(deleted))
-      : [];
-    const idxInGroup = deleted
-      ? sameGroup.findIndex(w => w.id === deletedId)
-      : -1;
-    const nextInGroup =
-      sameGroup.length > 1 && idxInGroup >= 0
-        ? sameGroup[(idxInGroup + 1) % sameGroup.length]
-        : null;
-    const nextOverall =
-      nextInGroup ??
-      workspaces.find(w => w.id !== deletedId) ??
-      null;
-    if (nextOverall) {
-      nav.toWorkspace(nextOverall.id);
-    } else {
-      nav.toChat();
+    const destination = workspaceDeletionDestination(workspaces, deletedId, selectedWorkspaceId);
+    switch (destination.kind) {
+      case 'stay': return;
+      case 'workspace': nav.toWorkspace(destination.workspaceId); return;
+      case 'chat': nav.toChat(); return;
     }
   };
 
