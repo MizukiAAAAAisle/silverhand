@@ -4,7 +4,8 @@
 // as pure readers), the send/agent mutations, and the read-cursor hooks. The
 // cache primitives, projection seam, agent-status buffer, unread badges, and
 // error formatting moved to sibling modules; re-exported below so the existing
-// import surface (`@/features/channels/hooks`) is unchanged.
+// import { agentRuntimeStateKey } from '@/features/agents/hooks';
+import surface (`@/features/channels/hooks`) is unchanged.
 import {
   useInfiniteQuery,
   useMutation,
@@ -1284,6 +1285,7 @@ export async function prepareSendMessageBody(opts: {
 export function useStartAgent(
   channelId: string | null,
 ) {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: async (agentId: string) => {
       if (!channelId) throw new Error('no channel selected');
@@ -1291,6 +1293,9 @@ export function useStartAgent(
       await api(path, {
         method: 'POST',
       });
+    },
+    onSuccess: (_, agentId) => {
+      void qc.invalidateQueries({ queryKey: agentRuntimeStateKey(agentId) });
     },
     onError: err => {
       toast.error(formatStartAgentError(err));
@@ -1301,11 +1306,18 @@ export function useStartAgent(
 export function useStopAgent(
   channelId: string | null,
 ) {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: async (params: { agentId: string }) => {
       if (!channelId) throw new Error('no channel selected');
       const path = apiPaths.channelAgentStop(channelId, params.agentId);
       await api(path, { method: 'POST' });
+    },
+    onSuccess: (_, { agentId }) => {
+      void qc.invalidateQueries({ queryKey: agentRuntimeStateKey(agentId) });
+    },
+    onError: () => {
+      toast.error('Failed to stop agent');
     },
   });
 }

@@ -1,7 +1,9 @@
 import * as Popover from '@radix-ui/react-popover';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, Eraser, Power, RefreshCw, UserMinus } from 'lucide-react';
+import { AlertTriangle, Eraser, Play, Power, RefreshCw, UserMinus } from 'lucide-react';
 import type { AgentDto } from '@silverhand/shared';
+import { useDirectPairs } from '@/features/direct-pairs/hooks';
+import { canControlDirectAgent, directAgentControlState } from '@/features/agents/direct-agent-control';
 import {
   useChannelAgents,
   useChannelAgentRuntime,
@@ -17,6 +19,8 @@ import {
 import { useConversationById } from '@/features/conversations/useConversationById';
 import { useConversationPaneCapabilities } from '@/features/conversations/pane-capabilities-context';
 import {
+  useAgentAvailability,
+  useAgentRuntimeState,
   projectRosterMembership,
   useAgentPresence,
 } from '@/features/agents/hooks';
@@ -107,10 +111,9 @@ const HOVER_CLOSE_DELAY_MS = 120;
  *
  * Single visual contract — the same card renders on every surface
  * (header member chip, message stream avatar/author, inline @mention).
- * Per-conversation management actions render in the top-right when the
- * placement HAS a roster (`paneCaps.hasRoster`) and a `conversationId` is
- * provided; permission gating within that is internal to
- * `AgentManagementActions`. There is no per-call
+ * Roster management and direct-pair runtime controls resolve their own
+ * permissions and state authorities when a `conversationId` is provided.
+ * There is no per-call
  * `management` switch (#task:912 review round 8 — the user noted that
  * the chip and the message-stream popover should not diverge).
  */
@@ -264,6 +267,10 @@ export function AgentInfoPopover({
                   conversationId={conversationId}
                   onDialogOpenChange={setManagementDialogOpen}
                 />
+              </div>
+            ) : conversationId && !paneCaps.hasRoster ? (
+              <div className="self-start">
+                <DirectAgentActions agent={agent} conversationId={conversationId} />
               </div>
             ) : null}
           </div>
@@ -635,5 +642,47 @@ function AgentManagementActions({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function DirectAgentActions({ agent, conversationId }: { agent: AgentDto; conversationId: string }): JSX.Element | null {
+  const { data: viewer } = useViewerUser();
+  const pair = useDirectPairs().find(pair => pair.conversation_id === conversationId);
+  const principal = viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
+  if (!canControlDirectAgent(principal, agent, pair)) return null;
+  return <DirectAgentRuntimeActions key={`${conversationId}:${agent.id}`} agent={agent} conversationId={conversationId} />;
+}
+
+function DirectAgentRuntimeActions({ agent, conversationId }: { agent: AgentDto; conversationId: string }): JSX.Element {
+  const { data: runtime } = useAgentRuntimeState(agent.id);
+  const availability = useAgentAvailability(agent.id);
+  const start = useStartAgent(conversationId);
+  const stop = useStopAgent(conversationId);
+  const state = directAgentControlState(runtime, availability);
+  const pending = start.isPending || stop.isPending;
+  const disabled = pending || !state.ready;
+  return (
+    <div className="flex shrink-0 items-center gap-0.5">
+      <button
+        type="button"
+        onClick={() => start.mutate(agent.id)}
+        disabled={disabled || !state.startable}
+        className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
+        title={`Start @${agent.name}`}
+        aria-label={`Start @${agent.name}`}
+      >
+        <Play className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={() => stop.mutate({ agentId: agent.id })}
+        disabled={disabled || !state.stoppable}
+        className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
+        title={`Stop @${agent.name}`}
+        aria-label={`Stop @${agent.name}`}
+      >
+        <Power className="size-3.5" />
+      </button>
+    </div>
   );
 }
