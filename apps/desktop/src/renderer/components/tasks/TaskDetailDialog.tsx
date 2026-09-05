@@ -19,6 +19,8 @@ import {
   type EditingField,
 } from '@/components/tasks/taskDetailShared';
 import { Markdown } from '@/components/chat/Markdown';
+import { TaskRefScope } from '@/features/tasks/TaskRefContext';
+import { taskWorkspaceId } from '@/features/tasks/taskPlace';
 import { useTaskDetail } from '@/features/tasks/hooks';
 import {
   classifyTaskDetailFailure,
@@ -420,7 +422,9 @@ function TaskDetailBody({
                   modal used to run at. */}
               <div className="min-w-0 max-w-[76ch] flex-1">
                 {detail.content.trim() ? (
-                  <Markdown content={detail.content} />
+                  <TaskRefScope conversationId={detail.place.conversation_id} workspaceId={taskWorkspaceId(detail)}>
+                    <Markdown content={detail.content} />
+                  </TaskRefScope>
                 ) : (
                   <p className="text-sm italic text-text-muted">No description.</p>
                 )}

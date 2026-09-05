@@ -12,9 +12,8 @@ import { createContext, useContext, type ReactNode } from 'react';
  * (`workspaceId` + `conversationId`) to scope their `useTaskByNumber` lookup,
  * and `onOpenTask` to open the task's detail modal when the chip is clicked.
  *
- * Missing context → `TaskRef` renders inert text. That's deliberate:
- * Saved/Search list views render messages outside any conversation
- * context and have no obvious "open which conversation's task?" answer.
+ * Source-bearing surfaces supply their own board coordinates through
+ * `TaskRefScope`; missing context leaves references inert.
  */
 export interface TaskRefContextValue {
   /** The conversation the sigil is rendered inside — the HTTP lookup anchor.
@@ -53,4 +52,18 @@ export function TaskRefContextProvider({
 
 export function useTaskRefContext(): TaskRefContextValue | null {
   return useContext(TaskRefContext);
+}
+
+/** Resolve references on the source board while retaining the host's task opener. */
+export function TaskRefScope({ conversationId, workspaceId, children }: {
+  conversationId: string;
+  workspaceId: string | null;
+  children: ReactNode;
+}): JSX.Element {
+  const host = useTaskRefContext();
+  return (
+    <TaskRefContextProvider value={{ conversationId, workspaceId, onOpenTask: host?.onOpenTask }}>
+      {children}
+    </TaskRefContextProvider>
+  );
 }

@@ -9,6 +9,8 @@ import {
   SidePanelHeaderTitle,
 } from '@/components/layout/SidePanelHeader';
 import { Markdown } from '@/components/chat/Markdown';
+import { TaskRefScope } from '@/features/tasks/TaskRefContext';
+import { taskWorkspaceId } from '@/features/tasks/taskPlace';
 import {
   FAILURE_COPY,
   InlineFieldEditor,
@@ -348,7 +350,9 @@ function PaneBody({
             onCancel={onStopEditing}
           />
         ) : detail.content.trim() ? (
-          <Markdown content={detail.content} />
+          <TaskRefScope conversationId={detail.place.conversation_id} workspaceId={taskWorkspaceId(detail)}>
+            <Markdown content={detail.content} />
+          </TaskRefScope>
         ) : (
           <p className="text-sm italic text-text-muted">No description.</p>
         )}
