@@ -396,8 +396,8 @@ export const conversationUnreadKey = (conversationId: string) =>
  * (absent root ⇒ 0).
  *
  * Unread is server-scored — the client can't optimistically derive it — so this
- * is settled from REST: remotely by the viewer-scoped `unread_updated` WS signal
- * and locally by successful observe() calls that changed this conversation.
+ * is settled from REST: remotely by viewer-scoped `unread_updated` or DM
+ * `direct_pairs_changed` signals, and locally by successful observe() calls.
  * It is NEVER inferred from message events. Scoped to THIS conversation so an
  * unrelated conversation's unread change doesn't refetch it. Human-attention
  * read path only; it never reads or writes `thread_followers` / delivery / wake.
@@ -425,6 +425,14 @@ export function useConversationUnread(conversationId: string | null) {
       }
       if (frame.type !== 'event') return;
       if (!isCurrentViewerScope(frame.scope)) return;
+      if (frame.kind === 'direct_pairs_changed') {
+        if (!isMessageUnreadUpdatedPayload(frame.payload)) return;
+        const payload = frame.payload as { conversation_id: string };
+        if (payload.conversation_id === conversationId) {
+          void qc.invalidateQueries({ queryKey, exact: true });
+        }
+        return;
+      }
       if (frame.kind !== 'unread_updated') return;
       if (!isMessageUnreadUpdatedPayload(frame.payload)) return;
       // Per-stream unread for a thread reply carries the parent CHANNEL's
