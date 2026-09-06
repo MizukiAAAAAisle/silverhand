@@ -22,7 +22,7 @@ import { AgentSchedulesCard } from './AgentSchedulesCard';
 import { AgentWorkspaceContainer, AgentWorkspacePane } from './AgentWorkspacePane';
 import { AgentMcpPane } from './AgentMcpPane';
 import { AgentActivityPane } from './AgentActivityPane';
-import { AgentActivityTimeline } from './AgentActivityTimeline';
+import { AgentActivityTimeline, AgentStreamActivityTimeline } from './AgentActivityTimeline';
 import { AgentChatsPane } from './AgentChatsPane';
 import { AGENT_PANE_INSET } from './agent-pane-layout';
 import { AgentSidebar, type AgentSection } from './AgentSidebar';
@@ -241,10 +241,9 @@ export function AgentView({
               )}
             </div>
           ) : effectiveSection === 'activity' ? (
-            // Activity is a master-detail surface (conversation rail +
-            // per-conversation timeline) that owns its own two scroll
-            // regions — like the workspace pane, no outer padding/scroll.
+            // Activity owns its scrolling for both the shared stream and conversation rail.
             <AgentActivityPane
+              sessionScope={agent.session_scope}
               agentId={agent.id}
               state={runtimeQuery.data}
               onOpenConversation={onOpenConversation}
@@ -585,7 +584,9 @@ function AgentSidePanel({
       {/* content */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {section === 'activity' ? (
-          !contextConversationId ? (
+          agent.session_scope === 'agent' ? (
+            <AgentStreamActivityTimeline key={agent.id} agentId={agent.id} />
+          ) : !contextConversationId ? (
             <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-text-muted">
               Open a channel to see this agent's activity there.
             </div>

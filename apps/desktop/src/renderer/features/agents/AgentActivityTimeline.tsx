@@ -20,7 +20,6 @@ import {
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import type {
-  ConversationActivityEvent,
   ConversationEventKind,
   ToolOutcome,
 } from '@silverhand/shared';
@@ -30,9 +29,11 @@ import {
   coalesceActivity,
   presentToolCall,
   type ActivityDisplayItem,
+  type ActivityEvent,
   type ToolDetail,
 } from './activityPresentation';
 import { mergeActivityById, useAgentActivityFeed } from './useAgentActivityFeed';
+import { useAgentStreamActivity } from './useAgentStreamActivity';
 
 // Re-exported so the existing reconcile contract test keeps its import path.
 export { mergeActivityById };
@@ -49,32 +50,22 @@ interface AgentActivityTimelineProps {
   agentId: string;
 }
 
-/**
- * The detail half of the Activity master-detail: the chronological
- * execution trace for one `(agent, conversation)` pair.
- *
- * No header: the left rail already names the selected channel and that this is
- * the Activity view, so a `Activity · <channel>` title here is redundant (shiki
- * #task:1187).
- *
- * Data contract (backend #task:1186):
- *  - backfill via `GET /api/conversations/:id/agents/:aid/activity` returns
- *    rows **ascending by id**; `next_before_id` pages older rows (rendered
- *    above via "Load earlier").
- *  - live via the `conversation_activity` WS frame on the conversation
- *    scope; the frame is conversation-wide so we filter by `agent_id`.
- *  - tool output is **marker-only** — a privacy decision, not a gap: the
- *    row records that a tool ran, never its result body.
- */
-export function AgentActivityTimeline({
-  conversationId,
-  agentId,
-}: AgentActivityTimelineProps): JSX.Element {
-  // Pure reader (#task:1255 P1c #2): the feed lives in a React Query cache the
-  // central ingestor writes live `conversation_activity` rows into; this view no
-  // longer registers `onWsFrame`.
-  const { events, nextBeforeId, phase, isLoadingMore, loadEarlier } =
-    useAgentActivityFeed(conversationId, agentId);
+/** The source owns cache identity; both source types share the same timeline renderer. */
+export function AgentActivityTimeline({ conversationId, agentId }: AgentActivityTimelineProps): JSX.Element {
+  const feed = useAgentActivityFeed(conversationId, agentId);
+  return <ActivityTimeline identity={`${conversationId}:${agentId}`} feed={feed} />;
+}
+
+export function AgentStreamActivityTimeline({ agentId }: { agentId: string }): JSX.Element {
+  const feed = useAgentStreamActivity(agentId);
+  return <ActivityTimeline identity={`agent:${agentId}`} feed={feed} />;
+}
+
+function ActivityTimeline({ identity, feed }: {
+  identity: string;
+  feed: { events: ActivityEvent[]; nextBeforeId: number | null; phase: 'loading' | 'ready' | 'error'; isLoadingMore: boolean; loadEarlier(): Promise<void> };
+}): JSX.Element {
+  const { events, nextBeforeId, phase, isLoadingMore, loadEarlier } = feed;
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // Track whether the user is pinned near the bottom so a live append
@@ -118,7 +109,7 @@ export function AgentActivityTimeline({
   useEffect(() => {
     atBottomRef.current = true;
     scheduleTailPin();
-  }, [conversationId, agentId, scheduleTailPin]);
+  }, [identity, scheduleTailPin]);
 
   useEffect(() => {
     return () => {
@@ -213,7 +204,7 @@ export function AgentActivityTimeline({
                 item.type === 'group' ? (
                   <GroupRow key={item.key} item={item} />
                 ) : (
-                  <EventRow key={item.key} event={item.event} completed={item.completed} outcome={item.outcome} />
+                  <EventRow key={item.key} event={item.event} completed={item.completed} outcome={item.outcome} output={item.output} />
                 ),
               )}
             </ol>
@@ -399,10 +390,12 @@ function EventRow({
   event,
   completed,
   outcome,
+  output,
 }: {
-  event: ConversationActivityEvent;
+  event: ActivityEvent;
   completed?: boolean;
   outcome?: ToolOutcome;
+  output?: unknown;
 }): JSX.Element {
   const { kind, payload } = event;
   let { Icon, tone } = visualForKind(kind);
@@ -432,7 +425,10 @@ function EventRow({
             ) : null}
           </span>
         }
-        preview={p.detail ? <ToolDetailView detail={p.detail} /> : null}
+        preview={p.detail || output !== undefined ? <>
+          {p.detail ? <ToolDetailView detail={p.detail} /> : null}
+          <ToolOutputView output={output} />
+        </> : null}
       />
     );
   }
@@ -537,7 +533,7 @@ function EventRow({
     title = <span className="text-text-muted">{kind}</span>;
   }
 
-  return <RowShell Icon={Icon} tone={tone} time={time} title={title} />;
+  return <RowShell Icon={Icon} tone={tone} time={time} title={title} preview={output === undefined ? null : <ToolOutputView output={output} />} />;
 }
 
 /** Renders a tool_call's optional richer body: a diff (Edit/Write), or a
@@ -555,7 +551,7 @@ function ToolDetailView({ detail }: { detail: ToolDetail }): JSX.Element {
 
 /** Edit/Write diff preview built from `tool_call.input` (old/new). Removed
  *  lines under a red rail, added under a green rail; tool RESULT output is
- *  never shown (marker-only). */
+ *  rendered separately when the producer supplied it. */
 function DiffView({
   removed,
   added,
@@ -604,5 +600,16 @@ function DiffSide({
         </div>
       ))}
     </div>
+  );
+}
+
+function ToolOutputView({ output }: { output: unknown }): JSX.Element | null {
+  if (output === undefined) return null;
+  const text = typeof output === 'string' ? output : JSON.stringify(output, null, 2);
+  return (
+    <details className="mt-1 text-text-muted">
+      <summary className="cursor-pointer text-[length:var(--text-meta)]">Output</summary>
+      <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all bg-[var(--activity-params-bg)] px-2 py-1 font-mono text-[length:var(--text-meta)]">{text}</pre>
+    </details>
   );
 }

@@ -484,6 +484,11 @@ export function applyAttentionFrame(
   }
 }
 
+export function isViewerAttentionFrame(frame: ServerFrame): boolean {
+  return (frame.type === 'event' || frame.type === 'snapshot_required')
+    && isCurrentViewerScope(frame.scope);
+}
+
 /**
  * The SINGLE attention realtime subscription — mount once, at the app level,
  * beside the other app-lifetime subscriptions. Split out from
@@ -506,8 +511,7 @@ export function useAttentionRealtime(): void {
   useEffect(() => {
     const sub = subscribeViewerScope();
     const unsub = onWsFrame(frame => {
-      const scope = 'scope' in frame ? frame.scope : null;
-      applyAttentionFrame(qc, frame, scope !== null && isCurrentViewerScope(scope));
+      applyAttentionFrame(qc, frame, isViewerAttentionFrame(frame));
     });
     return () => {
       sub.unsubscribe();
@@ -796,11 +800,7 @@ export function useActivity() {
   useEffect(() => {
     const sub = subscribeViewerScope();
     const unsub = onWsFrame(frame => {
-      // `ServerFrame` includes scope-less frames (`AuthenticatedFrame`), so the
-      // scope has to be narrowed before it can be compared — same idiom as
-      // `useAttentionRealtime` above.
-      const scope = 'scope' in frame ? frame.scope : null;
-      applyActivityFrame(qc, frame, scope !== null && isCurrentViewerScope(scope));
+      applyActivityFrame(qc, frame, isViewerAttentionFrame(frame));
     });
     return () => {
       sub.unsubscribe();

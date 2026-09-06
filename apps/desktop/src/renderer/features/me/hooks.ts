@@ -1,3 +1,4 @@
+import { agentStreamCache } from '@/features/agents/agent-stream-cache';
 import { useEffect, useState } from 'react';
 import {
   useMutation,
@@ -63,6 +64,7 @@ import { usersKey } from '@/features/users/hooks';
  * logout returns a factory-default shell", expand this function.
  */
 function clearViewerLocalState(): void {
+  agentStreamCache.clear();
   clearPlaceMemory();
   clearAvatarBlobCache();
   clearSettingsSection();

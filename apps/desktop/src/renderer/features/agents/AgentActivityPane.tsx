@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowUpRight } from 'lucide-react';
 import type {
+  AgentDto,
   AgentRuntimeParticipation,
   AgentRuntimeSeatDto,
   AgentRuntimeStateDto,
@@ -8,10 +9,11 @@ import type {
 } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { ConversationGlyph } from '@/components/ConversationGlyph';
-import { AgentActivityTimeline } from './AgentActivityTimeline';
+import { AgentActivityTimeline, AgentStreamActivityTimeline } from './AgentActivityTimeline';
 
 interface AgentActivityPaneProps {
   agentId: string;
+  sessionScope: AgentDto['session_scope'];
   state: AgentRuntimeStateDto | undefined;
   /** Jump the main view to this conversation (open in chat). */
   onOpenConversation?: (s: AgentRuntimeParticipation) => void;
@@ -68,12 +70,15 @@ function defaultSelection(groups: RosterGroups): string | null {
 }
 
 /**
- * Agent Panel → "Activity" section. Master-detail: a conversation rail on
- * the left (the channels/DMs this agent is in, the old "Runtime" roster
- * repurposed as navigation), a per-`(agent, conversation)` execution
- * timeline on the right.
+ * Agent scope has one stream; conversation scope retains its conversation rail.
  */
-export function AgentActivityPane({
+export function AgentActivityPane(props: AgentActivityPaneProps): JSX.Element {
+  return props.sessionScope === 'agent'
+    ? <AgentStreamActivityTimeline agentId={props.agentId} />
+    : <ConversationActivityPane {...props} />;
+}
+
+function ConversationActivityPane({
   agentId,
   state,
   onOpenConversation,
