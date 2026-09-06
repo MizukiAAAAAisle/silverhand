@@ -270,7 +270,7 @@ export function AgentInfoPopover({
               </div>
             ) : conversationId && !paneCaps.hasRoster ? (
               <div className="self-start">
-                <DirectAgentActions agent={agent} conversationId={conversationId} />
+                <DirectAgentActions agent={agent} conversationId={conversationId} onDialogOpenChange={setManagementDialogOpen} />
               </div>
             ) : null}
           </div>
@@ -645,44 +645,74 @@ function AgentManagementActions({
   );
 }
 
-function DirectAgentActions({ agent, conversationId }: { agent: AgentDto; conversationId: string }): JSX.Element | null {
+function DirectAgentActions({ agent, conversationId, onDialogOpenChange }: { agent: AgentDto; conversationId: string; onDialogOpenChange: (open: boolean) => void }): JSX.Element | null {
   const { data: viewer } = useViewerUser();
   const pair = useDirectPairs().find(pair => pair.conversation_id === conversationId);
   const principal = viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
   if (!canControlDirectAgent(principal, agent, pair)) return null;
-  return <DirectAgentRuntimeActions key={`${conversationId}:${agent.id}`} agent={agent} conversationId={conversationId} />;
+  return <DirectAgentRuntimeActions key={`${conversationId}:${agent.id}`} agent={agent} conversationId={conversationId} onDialogOpenChange={onDialogOpenChange} />;
 }
 
-function DirectAgentRuntimeActions({ agent, conversationId }: { agent: AgentDto; conversationId: string }): JSX.Element {
+function DirectAgentRuntimeActions({ agent, conversationId, onDialogOpenChange }: { agent: AgentDto; conversationId: string; onDialogOpenChange: (open: boolean) => void }): JSX.Element {
   const { data: runtime } = useAgentRuntimeState(agent.id);
   const availability = useAgentAvailability(agent.id);
   const start = useStartAgent(conversationId);
   const stop = useStopAgent(conversationId);
+  const clearSession = useClearAgentSession(conversationId, agent.session_scope);
+  const [clearOpen, setClearOpen] = useState(false);
   const state = directAgentControlState(runtime, availability);
-  const pending = start.isPending || stop.isPending;
+  const pending = start.isPending || stop.isPending || clearSession.isPending;
   const disabled = pending || !state.ready;
+  const action = state.startable ? 'Start' : 'Stop';
+  const setClearDialogOpen = (open: boolean): void => {
+    setClearOpen(open);
+    onDialogOpenChange(open);
+  };
   return (
-    <div className="flex shrink-0 items-center gap-0.5">
-      <button
-        type="button"
-        onClick={() => start.mutate(agent.id)}
-        disabled={disabled || !state.startable}
-        className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
-        title={`Start @${agent.name}`}
-        aria-label={`Start @${agent.name}`}
-      >
-        <Play className="size-3.5" />
-      </button>
-      <button
-        type="button"
-        onClick={() => stop.mutate({ agentId: agent.id })}
-        disabled={disabled || !state.stoppable}
-        className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
-        title={`Stop @${agent.name}`}
-        aria-label={`Stop @${agent.name}`}
-      >
-        <Power className="size-3.5" />
-      </button>
-    </div>
+    <>
+      <div className="flex shrink-0 items-center gap-0.5">
+        <button
+          type="button"
+          onClick={() => {
+            if (disabled) return;
+            if (state.startable) start.mutate(agent.id);
+            else stop.mutate({ agentId: agent.id });
+          }}
+          disabled={disabled}
+          className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
+          title={`${action} @${agent.name}`}
+          aria-label={`${action} @${agent.name}`}
+        >
+          {state.startable ? <Play className="size-3.5" /> : <Power className="size-3.5" />}
+        </button>
+        <button
+          type="button"
+          onClick={() => setClearDialogOpen(true)}
+          disabled={disabled}
+          className="inline-flex size-7 items-center justify-center rounded-[var(--control-radius)] text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
+          title={`Clear @${agent.name} session`}
+          aria-label={`Clear @${agent.name} session`}
+        >
+          <Eraser className="size-3.5" />
+        </button>
+      </div>
+      <Dialog open={clearOpen} onOpenChange={setClearDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Clear session for @{agent.name}</DialogTitle>
+            <DialogDescription>
+              The next start uses a fresh CLI session across all conversations. MEMORY, notes, and queued deliveries are kept.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClearDialogOpen(false)} disabled={pending} {...destructiveCancel()}>Cancel</Button>
+            <Button variant="danger" disabled={disabled} {...destructiveAction()} onClick={() => {
+              if (disabled) return;
+              clearSession.mutate(agent.id, { onSuccess: () => setClearDialogOpen(false) });
+            }}>{clearSession.isPending ? 'Clearing...' : 'Clear session'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

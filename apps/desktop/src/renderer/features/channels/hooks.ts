@@ -1337,6 +1337,7 @@ export function useClearAgentSession(
       return api<ClearSessionResponse>(path, { method: 'POST' });
     },
     onSuccess: (res, agentId) => {
+      void qc.invalidateQueries({ queryKey: agentRuntimeStateKey(agentId) });
       if (!channelId) return;
       qc.setQueryData<ConversationAgentDto[]>(agentsKey(channelId), prev =>
         prev
@@ -1352,6 +1353,7 @@ export function useClearAgentSession(
           : prev,
       );
     },
+    onError: (error) => { toast.error(error.message); },
   });
 }
 

@@ -3,7 +3,7 @@ import { MutationObserver, QueryClient, QueryObserver } from '@tanstack/react-qu
 import type { AgentRuntimeSeatDto, AgentRuntimeStateDto, DirectPairListItem, UserDto } from '@silverhand/shared';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
-import { useStartAgent, useStopAgent } from '@/features/channels/hooks';
+import { useClearAgentSession, useStartAgent, useStopAgent } from '@/features/channels/hooks';
 import { agentRuntimeStateKey, useAgentRuntimeState } from './hooks';
 import { canControlDirectAgent, directAgentControlState } from './direct-agent-control';
 const mocks = vi.hoisted(() => ({ client: null as unknown as QueryClient }));
@@ -57,6 +57,10 @@ describe('direct agent control mutations', () => {
       if (path === '/api/agents/agent-b/runtime-state') return runtime as never;
       expect(options).toEqual({ method: 'POST' });
       if (path === '/api/channels/dm-b/agents/agent-b/start') runtime = state([seat('active')]);
+      else if (path === '/api/agents/agent-b/clear-session') {
+        runtime = state([seat('idle')]);
+        return { ok: true, prev_cli_session_id: 'old-session', was_running: true } as never;
+      }
       else if (path === '/api/channels/dm-b/agents/agent-b/stop') runtime = state([seat('idle')]);
       else throw new Error(`Unexpected target ${path}`);
       return { ok: true } as never;
@@ -69,8 +73,11 @@ describe('direct agent control mutations', () => {
     await vi.waitFor(() => expect(observer.getCurrentResult().data?.seats[0]?.status).toBe('active'));
     await useStopAgent(pair.conversation_id).mutateAsync({ agentId: agent.id });
     await vi.waitFor(() => expect(observer.getCurrentResult().data?.seats[0]?.status).toBe('idle'));
+    await useStartAgent(pair.conversation_id).mutateAsync(agent.id);
+    await useClearAgentSession(pair.conversation_id, 'agent').mutateAsync(agent.id);
+    await vi.waitFor(() => expect(observer.getCurrentResult().data?.seats[0]?.status).toBe('idle'));
     expect(mocks.client.getQueryState(agentRuntimeStateKey('other'))?.isInvalidated).toBe(false);
-    expect(vi.mocked(api).mock.calls.filter(([, options]) => options?.method === 'POST').map(([path]) => path)).toEqual(['/api/channels/dm-b/agents/agent-b/start', '/api/channels/dm-b/agents/agent-b/stop']);
+    expect(vi.mocked(api).mock.calls.filter(([, options]) => options?.method === 'POST').map(([path]) => path)).toEqual(['/api/channels/dm-b/agents/agent-b/start', '/api/channels/dm-b/agents/agent-b/stop', '/api/channels/dm-b/agents/agent-b/start', '/api/agents/agent-b/clear-session']);
     unsub(); mocks.client.clear();
   });
   it('reports failures without claiming state update', async () => {
@@ -79,7 +86,8 @@ describe('direct agent control mutations', () => {
     vi.mocked(api).mockRejectedValue(new Error('denied'));
     await expect(useStartAgent('dm-b').mutateAsync(agent.id)).rejects.toThrow('denied');
     await expect(useStopAgent('dm-b').mutateAsync({ agentId: agent.id })).rejects.toThrow('denied');
-    expect(toast.error).toHaveBeenCalledTimes(2);
+    await expect(useClearAgentSession('dm-b', 'agent').mutateAsync(agent.id)).rejects.toThrow('denied');
+    expect(toast.error).toHaveBeenCalledTimes(3);
     expect(mocks.client.getQueryData(agentRuntimeStateKey(agent.id))).toEqual(runtime);
     expect(mocks.client.getQueryState(agentRuntimeStateKey(agent.id))?.isInvalidated).toBe(false);
     mocks.client.clear();
