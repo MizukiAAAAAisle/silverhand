@@ -278,7 +278,12 @@ export class EventWsConnection {
     if (!scope) return null;
     const viewerUserId = this.viewerUserId;
     if (!canSubscribeScope(this.ctx, viewerUserId, scope)) {
-      this.sendError('forbidden', `not allowed to subscribe to ${scope.scope}`);
+      this.send({
+        type: 'error',
+        code: 'forbidden',
+        scope: scope.scope,
+        message: `not allowed to subscribe to ${scope.scope}`,
+      });
       return null;
     }
     return scope;
@@ -384,12 +389,12 @@ export class EventWsConnection {
     }
   }
 
-  private sendError(code: ErrorFrame['code'], message: string): void {
+  private sendError(code: Exclude<ErrorFrame['code'], 'forbidden'>, message: string): void {
     this.send({ type: 'error', code, message });
   }
 
   private closeWithError(
-    code: ErrorFrame['code'],
+    code: Exclude<ErrorFrame['code'], 'forbidden'>,
     message: string,
     closeCode: number,
   ): void {

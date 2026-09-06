@@ -6010,6 +6010,9 @@ async fn agent_full_activity_has_one_http_ws_stream_across_focus_and_revocation(
     })
     .await
     .unwrap();
+    let revoked = next_json(&mut stream).await;
+    assert_eq!(revoked["code"], "forbidden");
+    assert_eq!(revoked["scope"], scope);
     assert_no_daemon_frame(&mut stream).await;
     assert_eq!(
         management_request(&fixture.agent_activity, "GET", &path, "")
@@ -6020,6 +6023,7 @@ async fn agent_full_activity_has_one_http_ws_stream_across_focus_and_revocation(
     stream.send(Message::Text(json!({"type":"resume","scopes":{scope:{"epoch":baseline["epoch"],"lastSeq":baseline["seq"]}}}).to_string().into())).await.unwrap();
     let refused = next_json(&mut stream).await;
     assert_eq!(refused["code"], "forbidden", "{refused}");
+    assert_eq!(refused["scope"], format!("agent:{AGGREGATE_AGENT}"));
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM conversation_events WHERE agent_id='agent-aggregate'",
     )

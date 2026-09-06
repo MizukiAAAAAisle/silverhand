@@ -157,16 +157,20 @@ export interface SnapshotRequiredFrame {
 }
 
 /** Server-side error (auth failure, permission denied, invalid frame, etc.). */
-export interface ErrorFrame {
+export type ErrorFrame = {
   type: 'error';
-  code:
-    | 'auth_required'
-    | 'auth_failed'
-    | 'forbidden'
-    | 'invalid_frame'
-    | 'unknown_scope';
   message: string;
-}
+} & (
+  | {
+      code: 'forbidden';
+      /** Canonical scope whose subscription was terminated. Clear only this cache. */
+      scope: string;
+    }
+  | {
+      code: 'auth_required' | 'auth_failed' | 'invalid_frame' | 'unknown_scope';
+      scope?: never;
+    }
+);
 
 export type ServerFrame =
   | AuthenticatedFrame

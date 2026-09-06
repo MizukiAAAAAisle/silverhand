@@ -1767,21 +1767,17 @@ async fn subscriptions_are_independent_for_the_complete_scope_key() {
     let viewer = relay(
         hub.subscribe(viewer_scope.clone()).unwrap(),
         hub.clone(),
-        Allows,
-        user(),
         viewer_scope,
         output.clone(),
     );
     let conversation = relay(
         hub.subscribe(conversation_scope.clone()).unwrap(),
         hub.clone(),
-        Allows,
-        user(),
         conversation_scope.clone(),
         output,
     );
 
-    viewer.abort();
+    viewer.task.abort();
     hub.publish(
         conversation_scope,
         ProductEvent::Test {
@@ -1789,11 +1785,11 @@ async fn subscriptions_are_independent_for_the_complete_scope_key() {
         },
     )
     .unwrap();
-    let ConnectionEvent::Event(event) = received.recv().await.unwrap() else {
+    let QueuedScopeEvent::Event(event) = received.recv().await.unwrap().event else {
         panic!("expected event")
     };
     assert_eq!(event.scope, "conversation:pair-1");
-    conversation.abort();
+    conversation.task.abort();
 }
 
 #[tokio::test]
@@ -1823,12 +1819,12 @@ async fn a_poisoned_registry_never_becomes_a_zero_snapshot_baseline() {
     .join();
 
     let (output, mut received) = mpsc::channel(1);
-    let task = relay(subscription, hub, Allows, user(), scope, output);
-    let ConnectionEvent::Failure(cause) = received.recv().await.unwrap() else {
+    let task = relay(subscription, hub, scope, output);
+    let QueuedScopeEvent::Failure(cause) = received.recv().await.unwrap().event else {
         panic!("registry failure must close, never emit a seq-zero snapshot")
     };
     assert_eq!(cause.to_string(), "scope event registry lock was poisoned");
-    task.await.unwrap();
+    task.task.await.unwrap();
 }
 
 #[tokio::test]
@@ -5331,4 +5327,112 @@ async fn an_authenticated_enrollment_emits_the_hint_its_own_cold_read_then_honor
 
     controller.close().await;
     server.abort();
+}
+
+/// A deterministic authority boundary for a real socket: pause one selected
+/// authorization before reading its live decision, without timing a DB/network race.
+#[derive(Clone)]
+struct RevocableScopeGate {
+    allowed: Arc<std::sync::atomic::AtomicBool>,
+    remaining: Arc<Mutex<Option<usize>>>,
+    entered: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+impl AuthorizeEventScope for RevocableScopeGate {
+    async fn authorize_event_scope(
+        &self,
+        _viewer: &UserId,
+        scope: &EventScope,
+    ) -> Result<bool, PersistenceFailure> {
+        if scope != &EventScope::Agent(AgentId::parse("agent-revoked").unwrap()) {
+            return Ok(true);
+        }
+        let pause = {
+            let mut remaining = self.remaining.lock().unwrap();
+            match *remaining {
+                Some(0) => {
+                    *remaining = None;
+                    true
+                }
+                Some(n) => {
+                    *remaining = Some(n - 1);
+                    false
+                }
+                None => false,
+            }
+        };
+        if pause {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+        Ok(self.allowed.load(Ordering::SeqCst))
+    }
+}
+
+#[tokio::test]
+async fn scoped_forbidden_cancels_live_queue_and_mid_replay_without_harming_other_scope() {
+    for during_replay in [false, true] {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let hub = ScopeEventHub::test("epoch-1");
+            let scope = EventScope::Agent(AgentId::parse("agent-revoked").unwrap());
+            let wire = scope_wire(&scope);
+            let gate = RevocableScopeGate {
+                allowed: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                remaining: Arc::new(Mutex::new(None)),
+                entered: Arc::new(tokio::sync::Notify::new()),
+                release: Arc::new(tokio::sync::Notify::new()),
+            };
+            let origin = "http://127.0.0.1";
+            let (app, controller) = router(hub.clone(), Sessions, gate.clone(), Arc::new(NoopConnectionLifecycle), EventWebSocketConfig::test(origin));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let mut socket = connect(address, origin).await;
+            assert_eq!(next_json(&mut socket).await["type"], "authenticated");
+            for selected in [&wire, "app"] {
+                socket.send(ClientMessage::Text(json!({"type":"subscribe","scope":selected}).to_string().into())).await.unwrap();
+                assert_eq!(next_json(&mut socket).await["scope"], selected);
+            }
+            if during_replay {
+                for n in 0..3 {
+                    hub.publish(scope.clone(), ProductEvent::Test { value: format!("history-{n}") }).unwrap();
+                    assert_eq!(next_json(&mut socket).await["scope"], wire);
+                }
+                // Initial resume admission + first event pass; second replay event pauses.
+                *gate.remaining.lock().unwrap() = Some(2);
+                socket.send(ClientMessage::Text(json!({"type":"resume","scopes":{wire.clone():{"epoch":"epoch-1","lastSeq":0}}}).to_string().into())).await.unwrap();
+                gate.entered.notified().await;
+                assert_eq!(next_json(&mut socket).await["seq"], 1);
+            } else {
+                *gate.remaining.lock().unwrap() = Some(0);
+                hub.publish(scope.clone(), ProductEvent::Test { value: "at-writer-boundary".into() }).unwrap();
+                gate.entered.notified().await;
+            }
+            // While the sole writer is paused, old subscription work accumulates.
+            for _ in 0..20 { hub.publish(scope.clone(), ProductEvent::Test { value: "queued-before-revocation".into() }).unwrap(); }
+            tokio::task::yield_now().await;
+            gate.allowed.store(false, Ordering::SeqCst);
+            gate.release.notify_one();
+            let denied = next_json(&mut socket).await;
+            assert_eq!(denied["type"], "error");
+            assert_eq!(denied["code"], "forbidden");
+            assert_eq!(denied["scope"], wire);
+            hub.publish(EventScope::App, ProductEvent::Test { value: "other-still-live".into() }).unwrap();
+            assert_eq!(next_json(&mut socket).await["scope"], "app");
+            // A fresh subscribe denial also carries the exact canonical scope.
+            socket.send(ClientMessage::Text(json!({"type":"subscribe","scope":wire}).to_string().into())).await.unwrap();
+            assert_eq!(next_json(&mut socket).await, denied);
+            // Regaining permission cannot resurrect the canceled relay or its queue.
+            gate.allowed.store(true, Ordering::SeqCst);
+            hub.publish(scope.clone(), ProductEvent::Test { value: "no-implicit-resubscribe".into() }).unwrap();
+            hub.publish(EventScope::App, ProductEvent::Test { value: "still-only-app".into() }).unwrap();
+            assert_eq!(next_json(&mut socket).await["scope"], "app");
+            socket.send(ClientMessage::Text(json!({"type":"subscribe","scope":wire}).to_string().into())).await.unwrap();
+            assert_eq!(next_json(&mut socket).await["type"], "subscribed");
+            hub.publish(scope.clone(), ProductEvent::Test { value: "explicit-new-subscription".into() }).unwrap();
+            assert_eq!(next_json(&mut socket).await["payload"]["value"], "explicit-new-subscription");
+            controller.close().await;
+            server.abort();
+        }).await.expect("bounded real socket refusal scenario");
+    }
 }

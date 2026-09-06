@@ -759,20 +759,35 @@ enum ServerFrame<'a> {
     Error {
         code: &'static str,
         message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
     },
 }
 
-enum ConnectionEvent {
+struct ConnectionEvent {
+    scope: EventScope,
+    token: Arc<()>,
+    event: QueuedScopeEvent,
+}
+
+enum QueuedScopeEvent {
     Event(ScopedEvent),
-    Snapshot {
-        scope: EventScope,
-        current_seq: TransportSeq,
-    },
+    Snapshot { current_seq: TransportSeq },
     Failure(Box<dyn Error + Send + Sync>),
 }
 
 struct ActiveSubscription {
     task: JoinHandle<()>,
+    token: Arc<()>,
+}
+
+fn cancel_subscription(
+    subscriptions: &mut HashMap<EventScope, ActiveSubscription>,
+    scope: &EventScope,
+) {
+    if let Some(active) = subscriptions.remove(scope) {
+        active.task.abort();
+    }
 }
 
 #[derive(Default)]
@@ -896,20 +911,34 @@ async fn connection<A, S>(
                 }
             }
             event = events_rx.recv() => {
-                match event {
-                    Some(ConnectionEvent::Event(event)) => {
+                let Some(queued) = event else { break };
+                // A canceled/replaced subscription cannot leak already queued work,
+                // including a stale lag/failure notification into its successor.
+                if !subscriptions.get(&queued.scope).is_some_and(|active| Arc::ptr_eq(&active.token, &queued.token)) {
+                    continue;
+                }
+                match authorize_or_error(&mut socket, &state.scope_authority, &viewer, &queued.scope).await {
+                    Ok(true) => {},
+                    Ok(false) => {
+                        cancel_subscription(&mut subscriptions, &queued.scope);
+                        continue;
+                    }
+                    Err(()) => break,
+                }
+                match queued.event {
+                    QueuedScopeEvent::Event(event) => {
                         if send_json(&mut socket, &event).await.is_err() { break; }
                     }
-                    Some(ConnectionEvent::Snapshot { scope, current_seq }) => {
+                    QueuedScopeEvent::Snapshot { current_seq } => {
+                        cancel_subscription(&mut subscriptions, &queued.scope);
                         if send_server(&mut socket, &ServerFrame::SnapshotRequired {
-                            scope: scope_wire(&scope),
+                            scope: scope_wire(&queued.scope),
                             reason: "gap_too_large",
                             epoch: state.hub.epoch(),
                             current_seq,
                         }).await.is_err() { break; }
-                        if let Some(active) = subscriptions.remove(&scope) { active.task.abort(); }
                     }
-                    Some(ConnectionEvent::Failure(cause)) => {
+                    QueuedScopeEvent::Failure(cause) => {
                         tracing::error!(
                             error_chain = crate::foundation::safe_log_field::safe_display(&(crate::foundation::error::describe(cause.as_ref()))),
                             "scope event delivery failed"
@@ -917,7 +946,6 @@ async fn connection<A, S>(
                         let _ = close(&mut socket, 1011, "internal_error").await;
                         break;
                     }
-                    None => break,
                 }
             }
         }
@@ -944,6 +972,7 @@ where
             let Some(scope) = parsed_scope_or_error(socket, scope, viewer).await? else {
                 return Ok(());
             };
+            cancel_subscription(subscriptions, &scope);
             if !authorize_or_error(socket, &state.scope_authority, viewer, &scope).await? {
                 return Ok(());
             }
@@ -955,8 +984,6 @@ where
                 relay(
                     subscription,
                     state.hub.clone(),
-                    state.scope_authority.clone(),
-                    viewer.clone(),
                     scope.clone(),
                     events_tx.clone(),
                 ),
@@ -981,19 +1008,21 @@ where
             Ok(())
         }
         ClientFrame::Resume { scopes } => {
-            for (raw, position) in scopes {
+            'scopes: for (raw, position) in scopes {
                 let Some(scope) =
                     parsed_scope_or_error(socket, serde_json::Value::String(raw), viewer).await?
                 else {
                     continue;
                 };
                 if !authorize_or_error(socket, &state.scope_authority, viewer, &scope).await? {
+                    cancel_subscription(subscriptions, &scope);
                     continue;
                 }
                 let Ok(epoch) = TransportEpoch::parse(position.epoch) else {
                     send_server(
                         socket,
                         &ServerFrame::Error {
+                            scope: None,
                             code: "invalid_frame",
                             message: "invalid resume position".to_owned(),
                         },
@@ -1001,31 +1030,20 @@ where
                     .await?;
                     continue;
                 };
+                cancel_subscription(subscriptions, &scope);
                 let resumed =
                     hub_or_close(socket, state.hub.resume(&scope, &epoch, position.last_seq))
                         .await?;
                 match resumed.replay {
                     Replay::Events(events) => {
                         for event in events {
-                            match state
-                                .scope_authority
-                                .authorize_event_scope(viewer, &scope)
-                                .await
+                            if !authorize_or_error(socket, &state.scope_authority, viewer, &scope)
+                                .await?
                             {
-                                Ok(true) => send_json(socket, &event).await?,
-                                Ok(false) => break,
-                                Err(cause) => {
-                                    tracing::error!(
-                                        error_chain =
-                                            crate::foundation::safe_log_field::safe_display(
-                                                &(crate::foundation::error::describe(&cause))
-                                            ),
-                                        "scope replay authorization failed"
-                                    );
-                                    close(socket, 1011, "internal_error").await?;
-                                    return Err(());
-                                }
+                                // Do not install the resumed relay after mid-replay denial.
+                                continue 'scopes;
                             }
+                            send_json(socket, &event).await?;
                         }
                         if let Some(subscription) = resumed.subscription {
                             replace_subscription(
@@ -1034,8 +1052,6 @@ where
                                 relay(
                                     subscription,
                                     state.hub.clone(),
-                                    state.scope_authority.clone(),
-                                    viewer.clone(),
                                     scope.clone(),
                                     events_tx.clone(),
                                 ),
@@ -1066,6 +1082,7 @@ where
             send_server(
                 socket,
                 &ServerFrame::Error {
+                    scope: None,
                     code: "invalid_frame",
                     message: "already authenticated".to_owned(),
                 },
@@ -1078,55 +1095,49 @@ where
 fn replace_subscription(
     subscriptions: &mut HashMap<EventScope, ActiveSubscription>,
     scope: EventScope,
-    task: JoinHandle<()>,
+    active: ActiveSubscription,
 ) {
-    if let Some(previous) = subscriptions.insert(scope, ActiveSubscription { task }) {
+    if let Some(previous) = subscriptions.insert(scope, active) {
         previous.task.abort();
     }
 }
 
-fn relay<S>(
+fn relay(
     mut subscription: Subscription,
     hub: ScopeEventHub,
-    authority: S,
-    viewer: UserId,
     scope: EventScope,
     output: mpsc::Sender<ConnectionEvent>,
-) -> JoinHandle<()>
-where
-    S: AuthorizeEventScope,
-{
-    tokio::spawn(async move {
+) -> ActiveSubscription {
+    let token = Arc::new(());
+    let queued_token = token.clone();
+    let task = tokio::spawn(async move {
         loop {
-            match subscription.receiver.recv().await {
-                Ok(event) => match authority.authorize_event_scope(&viewer, &scope).await {
-                    Ok(true) => {
-                        if output.send(ConnectionEvent::Event(event)).await.is_err() {
-                            return;
-                        }
-                    }
-                    Ok(false) => {}
-                    Err(cause) => {
-                        let _ = output.send(ConnectionEvent::Failure(Box::new(cause))).await;
-                        return;
-                    }
-                },
-                Err(broadcast::error::RecvError::Lagged(_)) => match hub.current_seq(&scope) {
-                    Ok(current_seq) => {
-                        let _ = output
-                            .send(ConnectionEvent::Snapshot { scope, current_seq })
-                            .await;
-                        return;
-                    }
-                    Err(cause) => {
-                        let _ = output.send(ConnectionEvent::Failure(Box::new(cause))).await;
-                        return;
-                    }
-                },
+            let (event, terminal) = match subscription.receiver.recv().await {
+                Ok(event) => (QueuedScopeEvent::Event(event), false),
+                Err(broadcast::error::RecvError::Lagged(_)) => (
+                    match hub.current_seq(&scope) {
+                        Ok(current_seq) => QueuedScopeEvent::Snapshot { current_seq },
+                        Err(cause) => QueuedScopeEvent::Failure(Box::new(cause)),
+                    },
+                    true,
+                ),
                 Err(broadcast::error::RecvError::Closed) => return,
+            };
+            if output
+                .send(ConnectionEvent {
+                    scope: scope.clone(),
+                    token: queued_token.clone(),
+                    event,
+                })
+                .await
+                .is_err()
+                || terminal
+            {
+                return;
             }
         }
-    })
+    });
+    ActiveSubscription { task, token }
 }
 
 async fn authorize_or_error<S>(
@@ -1144,6 +1155,7 @@ where
             send_server(
                 socket,
                 &ServerFrame::Error {
+                    scope: Some(scope_wire(scope)),
                     code: "forbidden",
                     message: format!("not allowed to subscribe to {}", scope_wire(scope)),
                 },
@@ -1192,6 +1204,7 @@ async fn parsed_scope_or_error(
         send_server(
             socket,
             &ServerFrame::Error {
+                scope: None,
                 code: "invalid_frame",
                 message: "scope must be a string".to_owned(),
             },
@@ -1205,6 +1218,7 @@ async fn parsed_scope_or_error(
             send_server(
                 socket,
                 &ServerFrame::Error {
+                    scope: None,
                     code: "unknown_scope",
                     message: format!("unknown scope: {raw}"),
                 },
@@ -1324,6 +1338,7 @@ async fn protocol_close(socket: &mut WebSocket) -> Result<(), ()> {
     let _ = send_server(
         socket,
         &ServerFrame::Error {
+            scope: None,
             code: "invalid_frame",
             message: "frame must match the event websocket contract".to_owned(),
         },
