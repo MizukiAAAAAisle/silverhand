@@ -31,10 +31,6 @@
      苔绿 `#9CBF5C` 已被 forza6 与 slack-dark **共用作 commit fill**、蓝
      `#2F5AD0` 被 studio-light 占、琥珀在三个主题里都是 `--warning`。从参照图
      纸色里取深档（橄榄 / 石板蓝）正好落在这几段上 ⇒ 空缺的是紫。
-   - 上游 buzz 的 `--primary` 是 Catppuccin mauve `#8839EF`（白底 5.41:1）。
-     收深到 `#6D28C9`（白底 7.51:1）不是因为 mauve 不过 AA，而是这一支要同时
-     当**实底 + 白字**、**白底文字**、**1px 描边**与 6px 小圆点：7.5:1 给描边和
-     小字形留了余量，一个值因此不需要再配"可读版"替身。
    - 代价明写：紫同时是品牌、commit、accent、选中洗色。所以**选中行是 12% 紫洗
      + 墨字**，不是满色紫填充 —— 白地面上一整行满色紫太响；而 studio-light
      「选中给一张白纸」那招在这里用不了（地面已经是白的）。
@@ -44,27 +40,11 @@
    ================================================================ */
 
 [data-theme='iris'] {
-  /* ── 底纸：渐变 ──
-     渐变**塞不进颜色 token**（消费点当 `background-color` 用），所以走一个旁路
-     image token：`App.tsx` 的窗口根层写
-     `background-image: var(--app-paper, none)`，其余三个主题白拿 `none`、零改动。
-     上游那套机制照抄三条（源码注释里就有我正要踩的坑）：
-       ① 一次画在 app 表面，`background-size: 100vw 100vh; no-repeat`；
-       ② 刻意**不** `background-attachment: fixed`（WKWebView 会留旧栅格）；
-       ③ 非画布的小块要能 flat opt-out —— 这里由 `--bg-app: transparent`
-          与白纸自己的实底承担。
-     `--bg-app` 的**活消费点只有两个**（titlebar 与 frame 水槽），而这两块**正是
-     要让渐变透出来的地方** ⇒ 只能 transparent。别给它填"渐变中位色"：那等于把
-     斜坡切断成一块平色。（第三处 `ChannelAttachmentsPanel` 写
-     `var(--bg-chat, var(--bg-app))`，`--bg-chat` 每个主题都定义 ⇒ 那条 fallback
-     永远走不到，不参与这个判断。） */
+  /* ── 底纸：渐变 ── */
   --app-paper: linear-gradient(to bottom, #E6E6B6, #C4D0DA);
   --bg-app: transparent;
 
-  /* ── 白纸 ──
-     sidebar 与 main 同为纯白，是**同一张纸**（原则 1）。`--bg-primary` 也留白：
-     它是 pane 级底色；需要凹一档的地方（task 列）由文件末尾的 scoped 规则
-     显式给 `--bg-elevated`，不靠把 `--bg-primary` 整体压暗。 */
+  /* ── 白纸 ── */
   --bg-base: #FFFFFF;
   /* Activity params recess: a faint neutral ink wash over the `--bg-base` pane
      (see forza6). `--bg-surface` here is a warm beige that read as too saturated
@@ -94,15 +74,7 @@
      `--buzz-active-surface` 同档。 */
   --bg-selected: rgba(31, 26, 18, 0.07);
 
-  /* ── 白纸的几何与抬起 ──
-     `--card-radius` 12px 既是白纸自己的圆角，也是纸**内部**卡片（profile
-     section / 消息气泡 / task 列）的圆角。白纸本体的投影是私有 token：
-     一层贴身 + 一层扩散，读作"一张纸浮在渐变上"而不是"一个发光块"。
-     `--frame-padding` 只管**外**水槽（窗口边 + rail 两侧），纸**内**的 pane 间距
-     是另一个 token `--pane-gap`：一张纸内部不该有缝，所以取 0。两者拆开之前
-     `[data-section-sheet]` 的 gap 是 inline 写的 `--frame-padding`，主题文件里
-     `gap: 0` 那条规则**赢不了 inline**，纸内一直残留 8px 缝 —— chat header 的
-     border-bottom 因此在左侧闭合不上（#task:1965 review 第一轮）。 */
+  /* ── 白纸的几何与抬起 ── */
   --frame-padding: 8px;
   --pane-gap: 0px;
   --card-radius: 12px;
@@ -111,14 +83,7 @@
   /* 纸**内部**小卡的抬起（task 卡、collection 卡 hover）——比纸本体轻两档。 */
   --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
 
-  /* ── Sheet：pane 级 chrome 归零（本主题独有的结构）──
-     其余三个主题里每个 section pane（NavRail / 侧栏 / main / thread）各自是一张
-     卡：自带 `--card-radius` + `--card-shadow`，靠 `--pane-gap` 的 gap 分开。
-     iris 把 sidebar 与 main 收进**一张**纸 ⇒ 这些 pane 必须是平的，否则圆角在
-     纸中央互相顶。
-     不能直接把 `--card-radius` 归零：它同时是纸内部小卡的圆角（消息气泡、
-     profile section、task 列）。所以给 pane 级 chrome 一对 narrower token，
-     消费点写 `var(--pane-radius, var(--card-radius, 0))` ⇒ 其余主题白拿旧值。 */
+  /* ── Sheet：pane 级 chrome 归零（本主题独有的结构）── */
   --pane-radius: 0;
   --pane-shadow: none;
 
@@ -302,15 +267,7 @@
   --error: #B3382C; /* 6.0:1 */
   --error-soft: rgba(179, 56, 44, 0.08);
 
-  /* ── Borders ──
-     暖墨 hairline，色温与 `--shadow-base` 同源。
-     `--border` 取 14%（roster 里最深的一档，与 forza6 同 alpha）**是被地面逼出来
-     的**：`--bg-base` 在这个主题是纯白，而它同时是所有 input / select trigger /
-     filter 框的填充色 ⇒ 这些控件在白纸上**没有填充可依靠**，只剩一条边在说
-     "这里能输入"。studio-light 能用 11% 是因为它的 `--bg-base` 是冷灰 `#F2F5F9`，
-     填充自己就在说话；照抄它的 alpha 会让 iris 的表单读作一片空白。
-     `--border-focus` 走**中性墨**而不是 accent：一般 input 的 focus 是 utility，
-     紫留给主舞台（composer）。 */
+  /* ── Borders ── */
   --border: rgba(31, 26, 18, 0.14);
   --border-subtle: rgba(31, 26, 18, 0.07);
   --border-island: rgba(31, 26, 18, 0.10);
@@ -328,7 +285,7 @@
   /* ── Overlay ── */
   --overlay-backdrop: rgba(31, 26, 18, 0.30);
 
-  /* ── Shadows（暖墨投影，与阶梯同色温）── */
+  /* ── Shadows ── */
   --shadow-base: 31, 26, 18;
   --shadow-popover: 0 4px 14px -4px rgba(var(--shadow-base), 0.16);
   --shadow-modal: 0 8px 28px -10px rgba(var(--shadow-base), 0.22);
@@ -354,9 +311,6 @@
      否则 forza6 → iris 切换会漏节日值过来）── */
   --accent-2: var(--accent);
   --text-on-accent-2: var(--text-on-accent);
-  /* 这个主题**没有**深色 chrome（rail 也是渐变），所以"深结构色"是一个只为契约
-     存在的槽：取暖墨最深一档，`--text-on-dark-pop` 是紫在这块深底上的可读版
-     （原色在 #2A2519 上只有 ~2.6:1）。 */
   --bg-structure-dark: #2A2519;
   --text-on-structure: #FDFCFA;
   --text-on-dark-pop: #C3A0F2;
@@ -376,20 +330,6 @@
   overflow: hidden;
 }
 
-/* 纸内部的分栏线（gap = 0 ⇒ 两块白之间必须有一条 hairline）。
-   画在 splitter 轨道的伪元素上而不是面板的 border 上：一条规则同时管 chat 的
-   sidebar|main、activity 的 list|channel、以及 SplitPane 的 main|thread（右 pane
-   有五种可能：Thread / Threads / Search / Saved / Archived，逐个挂 border 会漏）。
-   两个组件的轨道都已经是 `position: relative`（拖拽热区靠它定位）⇒ 伪元素直接锚在
-   轨道上。前两条边界的轨道**跨在两个面板的缝上**（`--pane-gap: 0` ⇒ 组件算出 -2px
-   负边距），组件给的 `z-index: 1` 保证线不被后一个面板的底色盖掉半条，header 的
-   border-bottom 一路走到缝上与竖线闭合；`SplitPane` 的那条**没有**负边距（它的容器
-   本来就没有 gap，4px 轨道是全主题共有的既有几何）⇒ 那条线两侧各留 2px 空白，
-   main / thread 两个 header 的下边线各差 2px 到线上。要不要把它也收成缝要动三个
-   已发主题的布局，留给 shiki 裁。轨道自身 hover 时上墨洗，线留在上面不消失。
-   线用 `--border` 而不是 `--border-subtle`：其余主题的 pane 边界由 8px 水槽 +
-   卡片投影承担，iris 把那份**结构**责任整个压到这一条线上 ⇒ 它该拿常规 hairline
-   的重量，subtle 那一档留给真正次级的分隔（avatar 描边、closed badge）。 */
 [data-theme='iris'] [role='separator'][aria-orientation='vertical']::after {
   content: '';
   position: absolute;
@@ -401,20 +341,12 @@
   pointer-events: none;
 }
 
-/* members / computers / settings 的侧栏宽度固定、右边**没有** splitter ⇒ 这三处
-   的边界线只能挂在侧栏自己身上（同上取 `--border`，是同一条结构线的另一种承载）。
-   `border-box` ⇒ 不改宽度。 */
 [data-theme='iris'] [data-section-layer] > aside[data-sidebar='members'],
 [data-theme='iris'] [data-section-layer] > aside[data-sidebar='computers'],
 [data-theme='iris'] aside[data-sidebar='settings'] {
   border-right: 1px solid var(--border);
 }
 
-/* Workspace `W` identity badge — avatar 重量的实心方块（#task:1160），
-   跟 studio-light / slack-dark 同一个判据：**不抓饱和色**。紫在这个主题里说的是
-   "要动作 / 已提交"，给一个常驻身份徽章上紫等于偷 action 预算；`--text-secondary`
-   的实心方块与下面 DM 组的 agent 头像同族，只是墨轻一级。
-   （mockup 里这枚方块画的是紫 —— 落地时按上面这条判据改成中性墨。） */
 [data-theme='iris'] [data-workspace-icon] {
   background-color: var(--text-secondary);
   color: var(--text-on-structure);
@@ -422,9 +354,6 @@
   font-size: 11px;
 }
 
-/* NavRail：active tile 是渐变纸上的 7% 墨洗 + 墨字（`--bg-selected`），
-   hover 6%。两态都不画描边 —— 组件默认给 active tile 挂 `border-accent`，
-   紫框落在渐变上是这一屏唯一多出来的一道彩色线，压掉。 */
 [data-theme='iris'] nav[aria-label='App sections'] button[aria-current='page'] {
   border-color: transparent;
 }
@@ -432,42 +361,24 @@
   border-color: transparent;
 }
 
-/* chat header 的 hero `#`：Tailwind preflight 把 `svg { display: block }`，
-   少这一句 `#` 会掉到标题下一行。另外三个主题的同名规则里也各带一份。
-   删这条规则前先把 display 挪走。 */
 [data-theme='iris'] [data-conversation-hash-icon] {
   display: inline-block;
   margin-right: 0.1em;
 }
 
-/* dialog 一律无边框（#task:1194，shiki：边框很奇怪）：白纸上的白 dialog 靠
-   `--shadow-modal` 抬起就够。小浮层（menu / popover / select）保留
-   `--floating-border` 的 1px —— 它们面积小、落点密，一条极淡的墨边是边缘定位
-   的唯一线索。 */
 [data-theme='iris'] [data-modal-shell] {
   border-width: 0;
 }
 
-/* 连续 system message 不画左规（与 studio-light 同判）：activity 事件常连着来
-   十几条，一条条挨着的左规连成一整块竖条，分组信号反而读作"这里有一大块东西"。
-   分组由缩进 + muted 排版表达。forza6 的左规在它的海报语言里是对的，不外溢。 */
 [data-theme='iris'] .system-activity-cluster {
   border-inline-start: none;
   padding-inline-start: 10px;
 }
 
-/* activity feed 把每个 status pill 降到 0.85 透明度；在这种高明度白纸上那会把
-   本已很细的 hairline 洗掉。pill 的 `-solid` 色相本身分得开，不需要额外补权重。 */
 [data-theme='iris'] .system-activity-cluster [data-task-event-status] {
   opacity: 1;
 }
 
-/* message-row 的 framed 态（hover / saved / replying / 搜索命中）。
-   **填充必须自己给**：组件用 `bg-bg-floating` 表达 framed，靠的是"浮层比正文
-   地面亮一档"——这个主题把 chat 与 floating 都提成纯白，那个前提不成立，不补
-   的话 hover 只剩一条 1px 细线，读作"没反应"。所以给它一档**下行**的暖洗
-   （白是阶梯顶端），三层等距：白 → framed `#FAF8F4` → inline code `#F4F1EA`，
-   行洗上去 code chip 仍读得出来。 */
 [data-theme='iris'] [data-message-row] {
   border-width: 1px;
 }
@@ -476,26 +387,17 @@
   background-color: var(--iris-bg-message-framed);
 }
 
-/* collection item card hover（Search / Saved / Archived / Activity / Thread /
-   Attachment 共享 `data-collection-card`）：薄洗 + 一层抬起，不动边框 ——
-   hover 用结构信号，不用色彩反转。同上，白纸上必须自己给填充。 */
 [data-theme='iris'] [data-collection-card]:hover {
   background-color: var(--bg-hover);
   box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.12);
   transform: translateY(-1px);
 }
 
-/* composer focus：主舞台输入框是这个主题唯一保留 accent 的 focus
-   （brand-anchored 例外；一般 input 走中性墨的 `--border-focus`）。 */
 [data-theme='iris'] [data-composer-shell]:focus-within {
   border-color: color-mix(in oklab, var(--accent) 45%, transparent);
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
-/* ── Task board：纸（白） > 列（凹一档） > 卡（浮）──────────────────
-   `--bg-primary` 在这个主题是白（pane 底色），所以列必须显式凹到
-   `--bg-elevated`，否则白列贴在白纸上只剩一条边。卡浮在列上带 `--card-shadow`，
-   hover 加深抬起（结构变化，不做颜色翻转）。 */
 [data-theme='iris'] [data-tasks-column] {
   background-color: var(--bg-elevated);
   border-color: var(--border);

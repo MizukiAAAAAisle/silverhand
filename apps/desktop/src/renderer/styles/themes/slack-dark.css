@@ -46,10 +46,8 @@
   /* `--bg-selected` 是 NavRail icon active / segment current 的填充；
      用 brand 蓝 fill + 白字（成对走 --text-on-selected）。*/
   --bg-selected: var(--brand-primary);
-  --bg-floating: #2C2D30;      /* popover / menu 表面 — 比 hover 更亮一档
-                                  以读出"浮层" */
-  --bg-chat: #1A1D21;          /* main read area — 等于 base，dark 主题
-                                  不像 warm 那样需要 chat 单独取暖白 */
+  --bg-floating: #2C2D30;      /* popover / menu 表面 — 比 hover 更亮一档以读出"浮层" */
+  --bg-chat: #1A1D21;          /* main read area — 等于 base，dark 主题不像 warm 那样需要 chat 单独取暖白 */
 
   /* ── Card frame ──
      8px gap 让 aubergine 暖色从 panel 缝里露出 — 这是 Slack 视觉记忆里
@@ -181,36 +179,14 @@
   --floating-radius: var(--radius-md);
   --floating-item-radius: var(--radius-sm);
 
-  /* ── Row-state border color ──
-     selected = **无边**（`transparent`）：填充已经是品牌蓝实心 + 白字，
-     那才是 "你在这" 的信号；一道低透白 hairline 叠在 #1164A3 上会合出
-     一圈更浅的蓝，读作发光的奶白圈（shiki #task:1960）。sidebar 行与
-     NavRail 当前页本来就各带一条覆写把它压成 transparent —— 现在真正
-     还在吃这个 token 的四处（Settings segment / 可见性卡 / TaskFilterBar
-     激活 chip / Activity 选中行）与它们同一条路，那两条覆写随之删掉。
-     响度不倒挂：满色填充稳稳压过 control hover 的 10% 白 hairline。
-     ⇒ 想给选中态加回可见边框之前，先问它凭什么比填充更该承担这件事。
-     hover 用 transparent — 让 bg veil 单独表达 hover，避免行扫读时
-     border 闪烁。 */
+  /* ── Row-state border color ── */
   --border-row-hover: transparent;
   --border-row-selected: transparent;
 
-  /* ── Control hover border (#task:912 review round 3) ──
-     `--border-control-hover` 是 control surface (TaskFilterBar 的 chip
-     trigger 等) hover 时的描边色 —— 与 row hover 解耦。row hover 在
-     slack-dark 走 transparent 让 bg veil 表达 hover，但 control trigger
-     没有 bg veil，描边消失就完全看不出来 hover (shiki review report)。
-     因此独立 token：
-       - forza6 = poster 黑墨 (与 row hover 同步)
-       - warm = accent 暖近黑 (与 row hover 同步)
-       - slack-dark = `--border` 10% 白 (从 resting --border-subtle 6%
-         step up，可见但不抢) */
+  /* ── Control hover border */
   --border-control-hover: var(--border);
 
-  /* ── Chrome label ──
-     Slack 实际的 sidebar group header (DM / WORKSPACES / DIRECT MESSAGES)
-     是 uppercase + sans + 0.05em tracking — 与 studio-light 同路，
-     不走 forza6 的 display 字体路线。 */
+  /* ── Chrome label ── */
   --font-chrome-label: var(--font-sans);
   --chrome-label-tracking: 0.05em;
   --chrome-label-transform: uppercase;
@@ -367,10 +343,7 @@
   /* ── Overlay ── */
   --overlay-backdrop: rgba(0, 0, 0, 0.55);
 
-  /* ── Shadows ──
-     dark 主题下浅阴影几乎不可见 —— 用纯黑 + 较高 α 才能给 popover/modal
-     真正的 lift。卡片浮在 aubergine frame 上的微阴影留弱（card-shadow
-     上面已定义）。 */
+  /* ── Shadows ── */
   --shadow-base: 0, 0, 0;
   --shadow-popover:
     0 8px 24px -8px rgba(var(--shadow-base), 0.50),
@@ -385,18 +358,12 @@
   --radius-lg: 10px;
   --radius-xl: 14px;
 
-  /* ── Fonts ──
-     macOS-native sans 栈 — Slack 历史用 Lato，2024 后大量切到 system
-     UI font (SF Pro on macOS)。我们沿 system stack，不强行 Lato。
-     mono 用 Hack（Slack 内置 code 字体）+ 系统 fallback。 */
+  /* ── Fonts ── */
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'Lato', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
   --font-serif: var(--font-sans);
   --font-mono: 'Hack', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
 
-  /* ── Markdown body sizes (cross-theme baseline) ──
-     14/14/12/0.88em 与 forza6 一致 —— design-new-theme §Q 簇说"切主题
-     不应该字号变"，slack-dark 接入时顺手对齐。正文保持 14 即便 root 是
-     16px（#task:1148 间距修复）—— 16px 只为间距整数化，不动正文。 */
+  /* ── Markdown body sizes (cross-theme baseline) ── */
   --md-prose-size: 14px;
   --md-code-size: 14px;
   --system-message-size: 12px;
@@ -435,43 +402,16 @@
   font-size: 11px;
 }
 
-/* ── #task:1195 · MessageItem bottom task chip — drop border (slack-only) ──
-   The message's own task tag (`[data-message-task-tag]`, the bottom-edge
-   `<status-icon> #n · assignee` button) inherits `border: var(--task-status-
-   X-border)` from the global `[data-task-status]` contract. shiki wants this
-   one surface borderless in slack-dark (the fill carries the status; the border
-   is noise on the message stream). Scoped to the message tag only — kanban
-   board / inline `#task` chip / activity pill keep their border. Selector
-   specificity (theme + tag attr = 0,2,0) beats the global
-   `[data-task-status='…']` (0,1,0), so `border: none` wins. forza6 untouched. */
 [data-theme='slack-dark'] [data-message-task-tag] {
   border: none;
 }
 
-/* ── slack-dark state-signal language: borderless (fill / veil / glow) ──
-   Dark twin of studio-light — SAME border language, only dark values
-   (shiki 2026-07-03: the light hairline theme & slack use borders
-   identically, one light one dark). Every STATE signal drops the
-   border/ring and carries itself with a
-   fill/veil or a soft brand glow; resting cards keep their 1px hairline
-   (option A). forza6 stays the bordered poster theme, untouched. */
-
-/* collection item card hover (Search / Saved / Archived / Activity / Thread /
-   Attachment — shared `data-collection-card`): bg veil + soft lift, no border
-   change. Resting 1px hairline stays. */
 [data-theme='slack-dark'] [data-collection-card]:hover {
   background-color: var(--bg-hover);
   box-shadow: 0 2px 8px -2px rgba(var(--shadow-base), 0.45);
   transform: translateY(-1px);
 }
 
-/* message-row hover (framed = hover / saved / replying): drop the 2px
-   accent frame; the `bg-floating` fill the component applies (lighter than
-   the chat ground) carries the state. */
-/* message-row hover (framed): keep a fine 1px hairline (fully borderless read
-   as invisible) — drop the 2px poster width to 1px across the row so
-   resting↔framed never shifts, soften the colour off the hard accent. The
-   component's `bg-floating` fill rides along. */
 [data-theme='slack-dark'] [data-message-row] {
   border-width: 1px;
 }
@@ -487,27 +427,10 @@
     color-mix(in oklab, color-mix(in oklab, var(--accent) 60%, var(--brand-primary)) 45%, transparent);
 }
 
-/* NavRail hover: the veil carries it — drop the `border-accent` ring the
-   shared TSX recipe applies, so a hovered tile never out-shouts the
-   brand-blue current tile. The current tile needs no rule of its own:
-   `--border-row-selected` is `transparent` theme-wide. Scoped to the
-   NavRail so shared sidebar-row tokens are untouched. */
 [data-theme='slack-dark'] nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-color: transparent;
 }
 
-/* ── channel `#` / Lock icon — quiet neutral ink (#task:1955) ─────────
-   Was `--accent` at `stroke-width: 2.5`. The accent is ALSO the selected row's
-   full brand fill, so one saturated hue was carrying two things at once:
-   "this is a channel" (identity — every row has it, ~20 at a time) and "you
-   are here" (state — exactly one). The 20 win by sheer count, so the state got
-   diluted, and a workspace branch of private channels read as a solid blue
-   column of Locks louder than the names beside it. Neutral ink puts the glyph
-   one notch under the row name (same weight as the Search / Saved / Archived
-   utility glyphs it shares the column with) and leaves blue to mean state only.
-   Default lucide stroke for the same reason — 2.5 was extra weight spent on
-   identity. Density-graded, NOT global: the chat-header `#` below is a single
-   hero instance and keeps the loud accent recipe. */
 [data-theme='slack-dark'] [data-channel-icon] {
   color: var(--text-muted);
 }
@@ -517,16 +440,6 @@
   color: var(--text-on-selected);
 }
 
-/* ── chat-header `#` icon — the ONE loud channel `#` (hero) ────────────
-   Every channel `#` (sidebar `[data-channel-icon]` + chat-header
-   `[data-conversation-hash-icon]`, ChannelView + screenshot export) is the
-   same lucide Hash SVG, but the colour is density-graded, not uniform
-   (#task:1955): the sidebar's ~20 glyphs went quiet neutral, and the accent
-   stayed HERE, where there is exactly one of them and it names the room you
-   are in. slack strengthens by COLOUR alone (no fill/chip): a bright-blue
-   accent glyph, bolder stroke, a hair of right margin mirroring the sidebar's
-   flex `gap-2`. The header is never on a selected/brand ground, so no
-   `data-row-selected` variant. */
 [data-theme='slack-dark'] [data-conversation-hash-icon] {
   /* Tailwind preflight sets `svg { display: block }`, which would drop the
      icon onto its own line beside the title — force it back inline. */
@@ -536,14 +449,6 @@
   margin-right: 0.1em;
 }
 
-/* ── Task-board card lift (shiki 2026-07-21: "卡片跟背景色太接近了…被淹没了") ──
-   slack's `--bg-base` == `--bg-primary` (#1A1D21), so a card on `--bg-base`
-   was the EXACT colour of its column — invisible but for the 0.06 hairline.
-   Lift it onto `--bg-floating` (#2C2D30, the brightest dark surface) with the
-   `--card-shadow` and the 10%-white `--border`, so the card reads as a raised
-   tile. Hover brightens the border to accent + deepens the shadow (structural,
-   the ground stays put). forza6 paints its own flat poster card via this same
-   selector, so this is slack-only; it also converges the two boards' cards. */
 [data-theme='slack-dark'] [data-tasks-board] [data-task-number] {
   background: var(--bg-floating);
   border-color: var(--border);
@@ -554,18 +459,6 @@
   box-shadow: var(--shadow-popover);
 }
 
-/* ── Task-board column lane (shiki 2026-07-21: "task column 的背景色和整体
-   background 太接近了") ──
-   `--bg-primary` == `--bg-base` (#1A1D21) here, so the column was the exact
-   colour of the page — invisible but for its 0.06 hairline. Lift the lane to
-   `--bg-elevated` (#232529, the one-step container surface); the card sits a
-   further step brighter on `--bg-floating` (#2C2D30, above), so the stack
-   becomes page(#1A1D21) < column(#232529) < card(#2C2D30) — Slack's own
-   ascending-elevation ladder, one step each. Firmer `--border` edge too. This
-   mirrors how forza6 differentiates its column (there a 2px ink border carries
-   it — shiki); in dark theme "raised = lighter" does the same job. (0,2,0)
-   beats the Tailwind utilities; the later global `[data-drop-target]` rule
-   still wins the drag wash on source order. */
 [data-theme='slack-dark'] [data-tasks-column] {
   background-color: var(--bg-elevated);
   border-color: var(--border);

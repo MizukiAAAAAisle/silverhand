@@ -158,38 +158,12 @@
   --text-strong: 13px;
 }
 
-/* ── Terminal skin (shiki: connect command 要"黑底绿字，就像终端那样") ──
-   Deliberately NOT part of the per-theme palette. The connection-command
-   card is not app chrome quoting a command — it is a stand-in for the
-   shell the user is about to paste into, so it should read as a terminal
-   in every theme, the way a screenshot of a terminal would. The `island`
-   family it used before is the opposite contract: it exists so each theme
-   OWNS the code surface (cool neutral / navy HUD / ink), which made the
-   card look like three different app surfaces and like no terminal.
-
-   Kept as tokens rather than hardcoded hexes in the component so a theme
-   MAY still re-skin it (forza6 could pull the phosphor toward its lime)
-   without touching TSX — but no theme overrides it today, by design. */
 :root {
   --bg-terminal: #0A0B0A;
-  /* Title strip — one step off the ground, like a terminal window bar. */
   --bg-terminal-chrome: #141715;
-  /* Phosphor green (shiki picked the hue). Spent ONLY on the command
-     itself — the title bar stays neutral (shiki: "卡片的 header 不需要一起
-     变绿"), so the green marks "this is shell output", not "this whole
-     card is decorated". */
   --text-terminal: #a9d877;
-  /* Title-bar ink: neutral on the dark chrome, so the label + actions
-     read as window chrome rather than as more command text. */
   --text-terminal-chrome: rgba(255, 255, 255, 0.62);
   --border-terminal: rgba(255, 255, 255, 0.1);
-  /* Selection inside the terminal card. The global `::selection` is
-     `--accent-soft` + `--text-primary`, i.e. a theme wash designed for the
-     app's own light/ink surfaces — on this near-black ground forza6's faint
-     magenta read as a muddy purple with near-black text (shiki). A surface
-     that opts out of the theme palette must design its own selection too:
-     a translucent phosphor wash that keeps the green text as-is, the way a
-     terminal highlights. */
   --bg-terminal-select: rgba(169, 216, 119, 0.28);
 }
 
@@ -210,13 +184,6 @@ html, body, #root {
   font-family: var(--font-sans);
   font-size: 16px;
   line-height: 1.5;
-  /* Text smoothing for the WHOLE app from here. Both properties are
-     inherited, so every descendant — and every `::before` / `::after`, which
-     inherits from its originating element — already renders with grayscale
-     antialiasing; a `*, ::before, ::after` rule would repeat this on every
-     node and change nothing (shiki asked 2026-07-28). What does NOT reach
-     here is a document that never loads this file: the startup-failure window
-     restates the pair in `main/startup-failure-exit.ts`. */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -236,16 +203,6 @@ html, body, #root {
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--bg-active); }
 
-/* Info-framed popovers & dialogs: the global thumb reads `--bg-hover`,
-   which in forza6 is a lime tile colour and looked like a "green scrollbar"
-   inside these panels (shiki feedback, the members modal's add-member picker
-   #task:1785). A scrollbar is a utility surface, so it takes the neutral
-   `--border` ink here rather than a saturated tile hue. `data-popover-frame="info"`
-   is the shared info-frame skin worn by every info popover and dialog (pickers,
-   info cards, the members modal), so all of them get the neutral thumb — not
-   just the surface that surfaced the bug. Task-filter dropdowns
-   (`[data-task-filter-panel]`) instead HIDE the scrollbar entirely via
-   `.scrollbar-hide` (#task:1927), so they're not listed here. */
 [data-popover-frame]::-webkit-scrollbar-thumb,
 [data-popover-frame] ::-webkit-scrollbar-thumb {
   background: var(--border);
@@ -255,43 +212,16 @@ html, body, #root {
 .scrollbar-hide { scrollbar-width: none; }
 .scrollbar-hide::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
-/* Previewer footer zoom steppers reuse the neutral-action control primitive
-   (frame + hover-lift + poster hook) but drop its resting ink stroke: on the
-   Image/Mermaid footers the −/+ read as quiet icon controls, not framed poster
-   actions. The width token stays so the box aligns with the framed Copy/Download
-   beside them; only the colour goes transparent, at rest and on hover. forza6
-   projects its 2px ink poster frame back in its theme file. */
 [data-zoom-stepper],
 [data-zoom-stepper]:hover:not(:disabled) {
   border-color: transparent;
 }
 
-/* Sidebar/workspace/channel rows reserve border space even when transparent;
-   themes can tune the stroke weight without touching component classes.
-   `border-radius: var(--row-radius)` lets each theme decide list-row
-   geometry — forza6 keeps `0` (chat-surface scan-line vocabulary);
-   studio-light / slack-dark use `6px` for subtle list rounding. The same
-   token also drives `[data-panel-card='row']` (schedule cards / agent
-   panel records) and is opt-in inline on NavRail buttons /
-   SavedListView item / MessageItem hover frame so the whole "row
-   vocabulary" stays cross-theme consistent. #task:912 review round 2. */
 .sidebar-row-border {
   border-width: var(--sidebar-row-border-width, 2px);
   border-radius: var(--row-radius);
 }
 
-/* Geometry-only twin of `.sidebar-row-border` (#task:1889): the SAME reserved
-   stroke width, so an element lines up with the rows below it, but NONE of the
-   row state paint — the `:hover` / `.text-text-on-selected` selectors above and
-   in every theme file key on `.sidebar-row-border` by name, and forza6 turns
-   that hover into a lime fill + drop shadow.
-   Its consumers are the sidebar's two UNPAINTED lines — the collapsible section
-   header and the container header row. Both are labels with a disclosure
-   affordance rather than rooms: hovering them swaps the glyph for the disclosure
-   triangle (plus an ink lift on the instance row), never a fill (shiki,
-   2026-08-08).
-   Use this whenever something needs the row grid but must stay unpainted; do NOT
-   add state rules to it — that is what `.sidebar-row-border` is for. */
 .sidebar-row-gutter {
   border-width: var(--sidebar-row-border-width, 2px);
   border-style: solid;
@@ -351,17 +281,6 @@ button:disabled { cursor: not-allowed; }
 /* ── Markdown body — applied to .markdown-body wrapper around <ReactMarkdown> ── */
 .markdown-body {
   min-width: 0;
-  /* Prose leading as `body + 8px` rather than a unitless `1.55`: 1.55 × 14px
-     = 21.7px, a fractional line box that propagates decimals through every
-     prose line (shiki #task:1192 "很多小数"). Subtracting/adding px off the
-     same Appearance token resolves to a whole 22px at the 14px default and
-     stays integer at any integer slider value, where a unitless ratio only
-     lands clean at select sizes. A px line-height is safe here because the
-     elements that would normally need a *proportional* (unitless) leading —
-     headings — set their own `line-height: 1.3`, and every inline child
-     (inline code, `[data-task-ref]`) is ≤ the body size, so a fixed line box
-     never crushes them; the payoff is a uniform, jitter-free line rhythm
-     (stable > adaptive). The +8px ≈ the prior 21.7px, just rounded. */
   line-height: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) + 8px);
   overflow-wrap: anywhere;
   font-family: var(--appearance-prose-font, var(--font-sans));
@@ -370,111 +289,26 @@ button:disabled { cursor: not-allowed; }
 .markdown-body > *:first-child { margin-top: 0; }
 .markdown-body > *:last-child { margin-bottom: 0; }
 
-/* Grouped-continuation leading rail (#task:1737) — the hover-revealed clock
-   time that stands in for the avatar on a message row that continues its
-   author's run. The rail sits in the avatar column (width owned by the
-   consumer) and must be exactly ONE body line tall: any taller and it pads the
-   row back out, undoing the tightening that makes a run read as one block
-   instead of N evenly spaced events.
-   So the line box is derived from the same Appearance token `.markdown-body`
-   uses above rather than a px guess, which would only line up at the default
-   font size and drift at every other slider value. `line-height` alone sets
-   the height (single line of text) and centers the smaller glyphs in it by
-   half-leading. */
 [data-message-continuation-rail] {
   line-height: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) + 8px);
 }
 
-/* ── System message row — picks up theme prose font/size like
-       `.markdown-body` does for full message bodies. The plain text
-       inside system audit rows (task events, schedule banners, rename
-       chips, etc.) inherits the user's chosen prose font + size so
-       system rows visually unify with regular messages under the
-       active theme.
-   Body containers inside the row must NOT carry their own
-   `text-xs`/`text-sm` Tailwind utilities — those `font-size`
-   declarations win over inheritance and would silently strip the
-   theme-prose-size override (Cindy PR-8 review). Chrome chips/pills
-   that explicitly set `text-[10px]` / `text-[11px]` keep their fixed
-   density; that's intentional.
-   Code-flavored leaves inside the row (Tailwind `font-mono`,
-   `<code>`) re-resolve to `--appearance-code-font` so a custom code
-   font in the theme settings reaches rename `<code>` chips, mono
-   timestamps, and any other monospace ornament without each call site
-   having to thread a CSS variable manually. */
 .system-message-row {
-  /* Theme-aware control height for inline chrome inside system audit
-     rows (TaskRef chip + TaskStatusPill on `task_status` rows).
-     `max(18px, …)` keeps the default 12px prose sizing on the 18px
-     baseline; at larger markdown font sizes chip + pill grow together
-     (1.5× the prose size, matching the row's line-height) so neither
-     crops its contents and the two stay pixel-aligned.
-     #task:1192: the third theme slot wanted these shorter at large fonts,
-     and that fix stayed in-theme (shiki: theme polish doesn't leak across
-     themes) — the then-warm theme overrode this token to a 1.3 factor
-     locally. That theme was replaced by studio-light (#task:1656), which
-     keeps the cross-theme 1.5.
-     Cindy PR-8 follow-up #3 (msg `VOGiR_K30xhSOswD`). */
   --system-message-control-height: max(18px, calc(var(--appearance-markdown-font-size, var(--system-message-size, 12px)) * 1.5));
   font-family: var(--appearance-prose-font, var(--font-sans));
   font-size: var(--appearance-markdown-font-size, var(--system-message-size, 12px));
   line-height: 1.5;
-  /* Column alignment with regular MessageItem rows. shiki PR-10
-     follow-up (msg `rhEL2UlGNYG2lgl7`) + Cindy review fix
-     (msg `adRY3Ws_QMN0bX1S`). Standalone system messages used to
-     span row-left (`px-4` body) to row-right, so they read visually
-     wider than regular messages, which sit in a content column
-     starting at the avatar+gap offset and capped to `max-w-[85%]`.
-     We mirror that geometry on both `.system-message-row` and
-     `.system-activity-cluster`:
-       margin-inline-start: 54px = 2 (MessageItem `border-2`)
-                                 + 8 (`px-2`)
-                                 + 32 (avatar `size-8`)
-                                 + 12 (`gap-3`)
-       max-width: 85%            ≈ regular content's
-                                   `max-w-[85%]` cap; binds on wide
-                                   viewports so the right edge sits
-                                   at ~54px+85% of row width
-       margin-inline-end: 16px   gracefully degrades on narrow rows
-                                 where `max-width: 85%` would still
-                                 leave the box too close to the
-                                 right edge — caps the right gap.
-     A simple `margin-inline-end: 15%` looked correct on paper but
-     compounds incorrectly: it puts the right edge at row-15%, while
-     regular's actual right edge is `54px + 85%(row-20)` ≈ 54px+85%
-     — about 54px further right on wide rows. The combined
-     max-width + margin-end form matches that two-regime behavior.
-     Per-renderer body padding (`px-4`/`px-3`/etc.) is intentionally
-     left in place — those provide internal breathing space and gap
-     from per-card left rails (context cards, schedule_fire banner,
-     mention_cc); they don't widen the row, the row's outer bounds
-     are now what defines the column. */
   margin-inline-start: 54px;
   margin-inline-end: 16px;
   max-width: 85%;
 }
-/* Info-block subtypes (schedule_fire banner, context cards, thread
-   summary, mention CC, onboarding) read as block-level dividers /
-   banners — not conversational replies — so they align to the avatar
-   column on the LEFT (taking the avatar gutter for themselves, since
-   system messages have no author avatar) and span the full row width
-   minus a small symmetric gutter on the RIGHT. This gives banners
-   and cards the horizontal weight they want, matching Slack/Discord
-   block-level system events. Cluster narration stays at the content
-   column (this attribute is set ONLY on standalone info subtypes by
-   `SystemMessage.tsx`'s `INFO_BLOCK_SUBTYPES`).
-   shiki PR-10 follow-up #7 (msg `M1prpsoXI9rSK6HQ`). */
+
 .system-message-row[data-system-layout="info"] {
   margin-inline-start: 10px;
   margin-inline-end: 10px;
   max-width: none;
 }
-/* When a system-message-row is INSIDE an activity cluster, the
-   cluster wrapper owns the column alignment (its own margin/border
-   forms the rail). Reset margin AND max-width so the inner row
-   doesn't compound the constraint and re-shrink the content column.
-   The override beats the standalone rule by virtue of an extra
-   class in the selector → specificity (0,2,0) > (0,1,0). */
+
 .system-activity-cluster .system-message-row {
   margin-inline: 0;
   max-width: none;
@@ -483,32 +317,11 @@ button:disabled { cursor: not-allowed; }
 .system-message-row .font-mono {
   font-family: var(--appearance-code-font, var(--font-mono));
 }
-/* TaskRef chip + TaskStatusPill inside a system audit row behave as
-   chrome (fixed `--system-message-control-height`) so they align
-   pixel-for-pixel on the same `task_status` row. Outside
-   `.system-message-row` (Markdown prose), the chip stays text-driven
-   so larger prose sizes don't crop it (Cindy PR-8 review #2). The
-   pill is system-row-only, so it has no out-of-system equivalent —
-   defining the rule jointly here keeps both controls tied to the
-   same theme-aware height token. */
 .system-message-row [data-task-ref],
 .system-message-row [data-task-event-status] {
   height: var(--system-message-control-height);
 }
 
-/* Task status badge — all surfaces (TaskStatusBadge in TasksSection /
-   ChannelTasksTab / status picker, TaskRef chat chip, TaskStatusPill in
-   SystemMessage task events) read color identity
-   from the same 12-token contract via the shared `[data-task-status]`
-   hook. Each theme owns its mapping; the global rule just wires the
-   tokens to CSS properties.
-
-   PR-3 (#task:348) promoted this; before PR-3 each component carried
-   its own Tailwind `bg-X text-X` utility classes and four of the five
-   surfaces had `in_progress` / `in_review` swapped vs. the popover's
-   documented intent (and vs. forza6 v5). The token migration aligns
-   all five to one mapping: in_progress = warning/HUD-live,
-   in_review = accent/loud-beacon. Cindy `zPcSb7jWheyIaaqj`. */
 [data-task-status='todo'] {
   background-color: var(--task-status-todo-bg);
   color: var(--task-status-todo-text);
@@ -535,28 +348,6 @@ button:disabled { cursor: not-allowed; }
   border: var(--task-status-closed-border);
 }
 
-/* Floating frame (PR-4 token promotion). All Radix menu surfaces
-   (`[data-radix-menu-content]` — DropdownMenu + ContextMenu) and our
-   `[data-popover-frame]` hook (AgentInfoPopover, HumanInfoPopover,
-   ManageMembersPopover, HoverPopover, dialogs, the reaction picker, the
-   selection toolbar) read a single 3-token contract for outer border +
-   outer radius + inner item radius. Each theme owns its values. The
-   attribute IS the opt-in — its value names the surface kind (`info`,
-   `toolbar`) for readability and for per-theme painting, it does not gate
-   the frame; the scrollbar rule above already reads it attribute-generic.
-   TSX intentionally still carries
-   `border border-border rounded-md` Tailwind classes; the rules below
-   sit later in CSS source order at equal specificity, so they win and
-   the values come from tokens (forza6 → 2px black + 0 radius; the
-   hairline themes → 1px subtle + radius-md / radius-sm).
-
-   Tooltip (`data-radix-tooltip-content`) and Select listbox
-   (`role='listbox'` — Radix doesn't expose a stable `data-radix-select-content`
-   attribute, the role is the reliable hook; see Select listbox rule
-   below) deliberately stay outside this rule — they're small floating
-   bubbles where a heavy poster frame over-shouts the surrounding UI
-   (forza6 v5.7.1 rationale, preserved).
-   Cindy `GZJAggfU2U8kcIV0` / `L4ApUD5JQCD8LuAQ`. */
 [data-radix-menu-content],
 [data-popover-frame] {
   border: var(--floating-border);
@@ -567,26 +358,6 @@ button:disabled { cursor: not-allowed; }
 [data-radix-menu-content] [role='menuitemradio'] {
   border-radius: var(--floating-item-radius);
 }
-
-/* Select listbox radius (PR-9 token promotion #task:361 / fix #task:363).
-   Radix `Select.Content` does NOT expose a stable `data-radix-select-content`
-   attribute (earlier comment was wrong — verified against
-   `@radix-ui/react-select@2.2.6` source, only `data-radix-select-viewport`
-   exists on the inner viewport, not the root). The reliable hook is the
-   ARIA `role` Radix sets on Select.Content (`role="listbox"`) and on each
-   Select.Item (`role="option"`).
-
-   Selector `[role='listbox']` also catches the Composer mention/channel
-   picker's inner scroll area — but there the VISIBLE frame is the outer
-   `[data-composer-picker]` div (it owns the border + fill + overflow-hidden),
-   so this rule alone rounded an invisible box and the popover stayed square
-   in every theme (shiki dogfood 2026-07-27). That frame consumes
-   `--select-content-radius` itself in Composer.tsx; keep radius on whatever
-   element paints the frame, not on whatever carries the ARIA role.
-
-   Same PR-4 boundary preserved: Select listbox only receives RADIUS,
-   not the heavy `--floating-border` 2px black frame — that's still
-   reserved for full menus (DropdownMenu / ContextMenu / info popovers). */
 [role='listbox'] {
   border-radius: var(--select-content-radius);
 }
@@ -594,32 +365,10 @@ button:disabled { cursor: not-allowed; }
   border-radius: var(--select-item-radius);
 }
 
-/* Dropdown content poster frame (#task:782). shiki asked that the
-   task-filter / message-search / archived-channels dropdowns adopt the
-   poster 2px frame in forza6 — overriding the earlier "Select listbox
-   stays light, no heavy frame" call (`L4ApUD5JQCD8LuAQ`) for these
-   dropdown popups specifically. Opt-in via `data-dropdown-frame` on the
-   visible popup frame, NOT via `[role='listbox']`: the channel combobox
-   carries `role='listbox'` on an INNER sub-list (it has a search box
-   above), so a role hook would paint a second border inside the frame.
-   Tooltips and non-listbox info popovers deliberately do NOT carry the
-   attr, so they keep their own treatment (Cindy review: don't fold them
-   into Select semantics). Reuses `--floating-border` so the width/colour
-   lives in one place per theme (forza6 → 2px black; studio-light → 1px subtle),
-   the same border the full menus already use. */
 [data-dropdown-frame] {
   border: var(--floating-border);
 }
 
-/* In-app notifications (sonner Toaster) mapped onto our theme tokens. sonner
-   styles each toast from a small CSS-var set scoped to its own light/dark
-   theme; we remap that set to our tokens so a notification wears the ACTIVE
-   theme's fill / text / border / radius instead of sonner's built-in palette.
-   The `html[data-theme]` prefix raises specificity above sonner's own
-   `[data-sonner-toaster][data-sonner-theme]` block — its <style> is injected
-   at runtime, after ours — so these win regardless of load order. `richColors`
-   is off (App.tsx): the surface stays neutral and the built-in type icon
-   carries the semantic, the same restraint as AppStatusBanner. */
 html[data-theme] [data-sonner-toaster] {
   --normal-bg: var(--bg-floating);
   --normal-text: var(--text-primary);
@@ -629,15 +378,9 @@ html[data-theme] [data-sonner-toaster] {
 html[data-theme] [data-sonner-toast][data-styled='true'] {
   box-shadow: var(--shadow-popover);
 }
-/* forza6 floating surfaces are a 2px ink frame (radius already 0 via
-   --floating-radius); sonner hardcodes a 1px border, so restate the ink
-   frame here to match every other forza6 floating panel. */
 html[data-theme='forza6'] [data-sonner-toast][data-styled='true'] {
   border: var(--floating-border);
 }
-/* Sonner's action button mapped onto our secondary-control tokens so it tracks
-   the active theme. `html[data-theme]` keeps this above Sonner's runtime-injected
-   defaults on specificity. */
 html[data-theme] [data-sonner-toast][data-styled='true'] [data-button] {
   border-radius: var(--control-radius);
   border: var(--control-border-width) solid var(--border);
@@ -660,34 +403,6 @@ html[data-theme]
   opacity: 0.5;
 }
 
-/* Row-state border color (PR-5 token promotion). Sidebar rows
-   (`.sidebar-row-border` class on WorkspaceChannels / WorkspacesPanel /
-   Sidebar / sidebar-shared — all rendered inside an
-   `aside[data-sidebar="..."]` wrapper) and NavRail buttons
-   (`nav[aria-label='App sections'] button`) share a 2-token contract
-   for the visible border in hover + selected states. Each theme owns
-   its values:
-   - studio-light: both = a neutral ink mix — hover / focus / selected
-     borders are utility signals, so they must not spend the accent's
-     "needs attention" budget (see studio-light.css §Row-state border).
-   - forza6:      both = #0A0A0A poster-sticker near-black — pixel-zero
-     vs the removed forza6-components.css per-state overrides.
-
-   The `aside[data-sidebar]` ancestor matters: `ArchivedChannelsPanel`
-   (`apps/desktop/src/renderer/components/layout/ArchivedChannelsPanel.tsx`)
-   reuses `.sidebar-row-border` for its archive list, but it lives in
-   the main content area (no `aside[data-sidebar]` wrapper) and uses
-   a different hover language (`border-accent bg-bg-hover`). Pulling
-   it into this contract would override that with forza6 near-black,
-   breaking pixel-zero. Cindy `N6tR2FJpzpebGJdb`. If a future archive
-   surface wants the same chrome contract, give it a dedicated hook
-   and document it here.
-
-   Selectors are more specific than the Tailwind utilities they
-   replace, so they win at the cascade regardless of source order
-   (0,3,1 / 0,2,1 vs 0,2,0 / 0,1,0). TSX intentionally still carries
-   `border-accent` / `border-transparent` classes — same Cindy-aligned
-   minimal-change pattern as PR-4. */
 aside[data-sidebar] .sidebar-row-border.text-text-on-selected,
 nav[aria-label='App sections'] button[aria-current='page'] {
   border-color: var(--border-row-selected);
@@ -697,32 +412,12 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-color: var(--border-row-hover);
 }
 
-/* Chrome label utility (PR-6 token promotion). Opt-in `.chrome-label`
-   class normalizes the three "chrome small-caps" properties — font
-   family, letter spacing, text transform — into a single per-theme
-   contract. Use it on any uppercase + tracked + chrome-font label
-   (group titles, table headers, badges, settings tab headers, etc.).
-   Size / weight / color stay at the call site (Tailwind utilities) —
-   the utility is intentionally narrow so the per-callsite vocabulary
-   isn't lost.
-
-   Existing call sites (~30+ TSX surfaces) are intentionally NOT
-   migrated in this commit — the utility is established first, the
-   sweep is a separate PR. forza6-components.css still carries direct
-   `font-family: var(--font-display)` overrides on several rules; once
-   their TSX adopts `.chrome-label`, those overrides can be deleted. */
 .chrome-label {
   font-family: var(--font-chrome-label);
   letter-spacing: var(--chrome-label-tracking);
   text-transform: var(--chrome-label-transform);
 }
 
-/* Task detail pane — width-adaptive metadata grid (#task:1721).
-   The conversation-anchored task pane can be dragged narrow or wide, so its
-   metadata reflows to the PANE's OWN width, not the viewport: one column when
-   narrow, two label/value pairs per row once the pane is wide enough (~460px)
-   to halve the vertical height. A container query (not a media query) is what
-   makes it track the pane — `.task-pane` names the query container. */
 .task-pane {
   container-type: inline-size;
   container-name: task-pane;
@@ -738,30 +433,11 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   }
 }
 
-
-/* Conversation surfaces (Attachments / Threads / Members) — width-adaptive.
-   Each surface renders under TWO independent hosts: the ~320px side panel and a
-   custom conversation tab that owns the whole main pane. The layout must follow
-   the SURFACE's own width, not the viewport and not which host mounted it, so
-   the content component names a query container and every width rule lives here
-   — no host-kind branch reaches the content.
-
-   These are density lists, not prose: extra width is spent on columns, so the
-   content uses the whole surface with only its own padding — no centred reading
-   measure. */
 .conversation-surface {
   container-type: inline-size;
   container-name: conversation-surface;
 }
 
-/* Attachment row, wide: the filename and the author/size/date cluster read as
-   ONE continuous content block hugging the left, and a trailing 1fr spacer puts
-   the elastic gap AFTER that block — between it and the row's right-pinned
-   actions — instead of between filename and metadata (that split let the
-   filename track swallow all the slack and stranded the cluster across a dead
-   void at wide widths). The filename track is content-sized with a cap and
-   truncates under pressure; the cluster keeps its own compact left-to-right
-   flow (no cross-row column alignment — reading continuity wins here). */
 @container conversation-surface (min-width: 720px) {
   [data-attachment-row-body] {
     display: grid;
@@ -772,9 +448,6 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 }
 
 @container conversation-surface (min-width: 620px) {
-  /* Roster: more GROUP columns, never a wider row — a wider row only buys empty
-     space to the right of every name. Fixed-width columns fill the surface as
-     they fit, so the roster grows sideways instead of stretching. */
   [data-members-groups] {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(0, 22rem));
@@ -783,38 +456,8 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   }
 }
 
-
-/* ── Activity cluster (PR-10) ──────────────────────────────────────
-   `task_* / session_cleared / rename` lifecycle events get pooled
-   into an `ActivityCluster` (see `groupMessages.ts`). The cluster
-   paints a muted narration strip — content-column aligned (skipping
-   the avatar lane), left rail anchor, tight inner stacking, outer
-   gap from real messages — instead of letting each event compete
-   with chat replies for visual weight.
-
-   Visual layering:
-   - `margin-block: 7px` separates the strip from real messages above
-     and below, so the eye reads it as "one activity segment".
-   - `margin-inline-start: 54px` (MessageItem geometry: 2 border +
-     8 `px-2` + 32 avatar + 12 gap) lines the rail up with the
-     content column, so cluster rows align to the same content
-     column as real replies.
-   - `padding-inline-start: 10px` keeps the rail visually attached but
-     gives the row text breathing space.
-   - `border-inline-start: 1px solid border-subtle` is the single
-     anchor that says "this strip is one segment". No fill bg — cards
-     are reserved for info blocks (schedule_fire, context cards,
-     mention_cc, onboarding); a tinted cluster would
-     compete and re-introduce the "everything is a card" density
-     problem PR-10 is meant to undo. */
 .system-activity-cluster {
   margin-block: 7px;
-  /* Match the regular MessageItem content column on both sides — same
-     two-regime geometry as `.system-message-row` above (54px start +
-     85% max-width with 16px margin-inline-end fallback). Cluster has
-     to share the same column so cluster + standalone system messages
-     stack visually as one consistent lane, and so the cluster's left
-     rail anchors at the avatar+gap column rather than 2px off. */
   margin-inline-start: 54px;
   margin-inline-end: 16px;
   max-width: 85%;
@@ -822,82 +465,29 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-inline-start: 1px solid var(--border-subtle);
 }
 
-/* The wrapper `[data-system-event-row="1"]` div around each renderer
-   has no padding of its own; its child (the actual row body — eg.
-   TaskEventRowEnriched, SessionClearedRow, RenameRow) carries
-   `px-4 py-1.5`-ish utilities to give the standalone row chunky
-   breathing space. Inside a cluster we don't want that — rows must
-   stack tight (2px) so the strip reads as a single segment. The
-   selector `.system-activity-cluster [data-system-event-row="1"] > *`
-   has specificity (0,2,1) — beats every Tailwind utility (0,1,0),
-   so no `!important` needed. */
 .system-activity-cluster [data-system-event-row="1"] > * {
   padding-block: 2px;
   padding-inline: 0;
 }
 
-/* Single-row demotion inside cluster ───────────────────────────────
-   Standalone task/session/rename rows mark the actor with
-   `font-medium text-text-primary` (PR-9 actor-first move). Inside
-   a cluster the actor drops to text-secondary muted regular, so the
-   per-row visual weight stays well below a real chat reply. */
 .system-activity-cluster .font-medium.text-text-primary {
   font-weight: 400;
   color: var(--text-secondary);
 }
 
-/* TaskRef chip — strip the filled `bg-bg-elevated` / `bg-accent-soft`
-   variants AND the cluster outline for a fully borderless chip. Inside
-   a cluster the chip is narration, not a headline: the WHOLE chip —
-   glyph, number, title — drops to `--text-secondary` regular (weight
-   400), matching the muted actor/verb on the same row (@shiki
-   `iiO79y4siciSkcNY` / `m4v0_aD98VW5g8IF`, #task:1760). The row already
-   carries exactly one intentional colour — the event dot (created /
-   moved) and, on a status change, the pill — so a saturated glyph on top
-   of that reads as a second, competing signal. Clickability is a utility
-   affordance, not a semantic hue: it lives entirely in hover (full accent
-   fill), not in a loud resting glyph. The glyph has no explicit colour,
-   so it inherits the chip's `currentColor` in every state — muted at
-   rest, `--text-on-accent` on hover — no per-glyph rule needed.
-   (`data-task-ref` is on the chip element itself in TaskRef.tsx.) */
 .system-activity-cluster [data-task-ref] {
   background: transparent;
   border: none;
   color: var(--text-secondary);
   font-weight: 400;
-  /* Reserve horizontal padding for the accent hover-FILL below. Unlike the
-     prose chip (a borderless underline-link, no fill → no padding, #task:1770),
-     this surface fills solid on hover, so the label needs breathing room
-     inside the tile or the text crams to the fill edge (@shiki, #task:1776).
-     Kept at rest (transparent) so the fill doesn't reflow the row on hover;
-     the negative margin pulls the padded box back into the inline flow (= the
-     old Tailwind `px-1.5 -mx-0.5`). forza6's cluster is a bare 记号笔 marker
-     with no fill, so it zeroes both — see forza6-components.css. */
   padding-inline: 0.375rem;
   margin-inline: -0.125rem;
 }
 .system-activity-cluster [data-task-ref]:hover {
-  /* This is a distinct, denser surface: fill with full accent and flip
-     text (and, via currentColor, the glyph) to `--text-on-accent` so the
-     chip stays legible on the saturated cluster ground. Lighter
-     alternatives (`--bg-hover`, `--accent-soft`) read as gray or
-     barely-visible here. NOTE the standalone prose chip no longer fills on
-     hover — it's a borderless accent link with a hover underline now
-     (#task:1725) — but that link treatment is too quiet for this surface,
-     so the cluster deliberately keeps the fill. */
   background: var(--accent);
   color: var(--text-on-accent);
 }
 
-/* TaskStatusPill — same demotion: transparent fill, current-color
-   outline. The outline + text colour is the status's SIGNATURE hue
-   (`--task-status-*-solid`, #task:1018) so the pill matches its sibling
-   TaskEventDot and the board chip in EVERY theme. Using `-solid` (not
-   the base `-text`) is what fixes forza6: there `-text` is on-fill ink
-   (the board chip is a saturated fill with ink text), so an ink outline
-   made in_review read dark instead of orange; `-solid` homes on the
-   poster `-bg` there and on the saturated `-text` in the hairline
-   themes, so one token keeps dot + pill + chip in lockstep. */
 .system-activity-cluster [data-task-event-status] {
   background: transparent;
   border: 1px solid currentColor;
@@ -919,8 +509,6 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   color: var(--task-status-closed-solid);
 }
 
-/* TaskEventDot — drops one tier (8px → 6px) so it reads as a status
-   marker rather than a focal point. */
 .system-activity-cluster [data-task-event-dot] {
   width: 6px;
   height: 6px;
@@ -958,19 +546,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-left: 3px solid var(--border);
   color: var(--text-secondary);
 }
-/* The rule bar must hug the quoted TEXT, not the paragraph's outer margins.
-   `blockquote` has vertical padding, so the child `<p>`'s `0.4em` margins
-   (`.markdown-body p`) cannot collapse out of it — they stack INSIDE and the
-   3px border grew ~1.2em taller than the words it marks (shiki #task:1835
-   "left border 太高了"). Zeroing only the first/last child's outer margin
-   keeps the border tight to the text while a multi-paragraph quote still
-   breathes between its paragraphs.
 
-   Vertical padding is 0 (shiki, #task:1835): the bar ends exactly at the
-   line box. Nothing is clipped — prose leading is `font-size + 8px`, so 4px
-   of half-leading still sits below the deepest descender. Note that ANY
-   vertical padding here re-blocks the child margin collapse above; if one is
-   ever reintroduced, the two child rules are what keep the bar tight. */
 .markdown-body blockquote > :first-child { margin-top: 0; }
 .markdown-body blockquote > :last-child { margin-bottom: 0; }
 
@@ -995,28 +571,6 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 }
 .markdown-body th { background: var(--bg-elevated); font-weight: 600; }
 
-/* Inline code — chip-style: tighter, breathes next to CJK text via
-   inline margin, and breaks anywhere so a long path can't blow out
-   the message bubble. Visual identity (background / border / radius)
-   is fully theme-driven through `--bg-inline-code` /
-   `--border-inline-code` / `--inline-code-radius` / `--text-inline-code`
-   so studio-light can keep a soft borderless cool-wash chip while
-   forza6 paints a hard lime poster sticker — all via tokens, no
-   per-theme override of this rule needed.
-
-   Size: `calc(body − 2px)` — the SAME shared inline-reference sizing as
-   `[data-task-ref]` (above). Inline code sits in the prose flow as
-   emphasis, so the chip wants cap-height ≈ surrounding body x-height. Was
-   a theme-defined `0.88em`, but `0.88em × 14px = 12.32px` is fractional
-   (shiki #task:1192 "凑整") — px-subtraction off the same Appearance token
-   `.markdown-body` reads resolves to a whole 12px at the 14px default and
-   stays integer at any integer slider value. This is absolute arithmetic
-   on the token, so unlike an `em` chained onto the already-scaled
-   `.markdown-body` it does NOT double-apply. Padding stays em
-   (`0.06em 0.30em`) so the chip-area keeps shrinking with the type.
-   Identity (bg / border / radius / colour) is still fully theme-driven
-   through `--bg-inline-code` etc. Independent of `--md-code-size` (fenced
-   code) — two surfaces, two sizes. */
 .markdown-body :not(pre) > code {
   display: inline;
   padding: 0.06em 0.30em;
@@ -1030,55 +584,11 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   overflow-wrap: anywhere;
 }
 
-/* @mention chip (Mention.tsx live `<button>`, StaticMentionRef `<span>`) —
-   hover/focus `bg-accent-soft` pill sized to the inline-code chip's height
-   (shiki #task:1730; measured over CDP against the running app). The live
-   mention is a `<button>`, and Chromium COERCES form controls to inline-block
-   and ignores `display:inline` — so the pill filled the whole prose
-   line-height box (24px) and stood taller than the 19px inline-code chip. The
-   lever that collapses an inline-block box is line-height, not display: `1.24`
-   + the same `0.06em` block padding as inline code lands the pill at 19px,
-   equal to the inline-code chip. Both scale with the Appearance font slider —
-   unitless line-height and em padding track the type. Font-size is deliberately
-   NOT set: the text keeps prose size (shiki — only the pill height matches, the
-   text must not shrink). Horizontal padding / margin / colour / weight / hover
-   fill / radius / focus stay in Tailwind; these don't touch Tailwind's `px-*`. */
 .markdown-body [data-mention-kind] {
   padding-block: 0.06em;
   line-height: 1.24;
 }
 
-/* Inline reference chips — `[data-task-ref]` (TaskRef.tsx), `[data-channel-ref-state]`
-   (ChannelRef.tsx, `#name`), and `[data-conversation-ref]` (ConversationRef.tsx,
-   `#conv:<id>`). Shared base for every theme: one rule sizes the whole
-   reference-chip family in lockstep so a channel / conversation / task chip
-   never reads a notch off from its siblings (shiki 2026-07-21 "channel chip
-   字体从 14 换成 12,和 task chip 一致").
-
-   Size is `body − <offset>` off the Appearance token `.markdown-body` reads,
-   kept as a px SUBTRACTION (not an `em` factor: `0.85em × 14px = 11.9px` was
-   fractional, shiki #task:1192 "很多小数"; px-subtraction stays integer at any
-   slider value and does NOT double-apply the way an `em` chained onto the
-   already-scaled `.markdown-body` would).
-
-   This rule is the family's DEFAULT / lighter size — offset 2px, i.e. 12px at
-   the 14px default. It governs the system-message chrome (activity clusters /
-   `.system-message-row`), which shiki wants kept lighter than running text
-   (2026-08-01 "system message 更 light,需要保持 12"), and in prose it governs
-   every chip that reads as a BOX. Only the one in-prose form that reads as
-   running text overrides it up to full body size — see the next rule for the
-   criterion, which is form, not entity kind.
-
-   line-height is intentionally NOT set — the chip inherits `.markdown-body`'s
-   line-height, matching inline code so the reference chips share one line
-   rhythm in prose (shiki). Note this chip is `inline-flex`, so the inherited
-   line-height sizes its flex box (it grows to fill the prose line); inline
-   code is `display:inline`, whose bg tracks font + padding and ignores
-   line-height — same CSS source, different box model, by design.
-
-   Themes layer identity (fill / border / radius / colour / `font-family`) on
-   top; they no longer set the size. The `.system-message-row` variant keeps
-   its own explicit `height`, unaffected by this. */
 [data-task-ref],
 [data-channel-ref-state],
 [data-conversation-ref],
@@ -1086,84 +596,20 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 2px);
 }
 
-/* In-prose reference chips: baseline alignment only — size comes from the
-   family rule above, in prose as everywhere else.
-
-   These chips are `inline-flex` and grow to fill the prose line-height box;
-   with the flex default `align-items` the glyph centres in the line box and
-   floats above the prose baseline, reading as sitting higher than the words
-   around it (shiki #task:1732; measured over CDP against the running app).
-   `baseline` aligns the flex box on its text baseline; the icon keeps its own
-   `self-center` (align-self overrides the container) so it stays vertically
-   centred against the label. Scoped to `.markdown-body` because only there is
-   the chip in a prose line — the system chrome lays its chips out itself and
-   the `.system-message-row` variant sets an explicit `height`. */
 .markdown-body [data-task-ref],
 .markdown-body [data-channel-ref-state],
 .markdown-body [data-conversation-ref],
 .markdown-body [data-locator-ref] {
   align-items: baseline;
 }
-
-/* SIZE IN PROSE IS DECIDED BY FORM, NOT BY ENTITY KIND (shiki 2026-08-06:
-   「在 forza6 中,task 是 underline,因此字体和正文是混合的,需要一样大,而
-   channel 是带有一个 chip 的,有明显的 background,内部也是 14px 会看起来很大,
-   明显比正文高」).
-
-   Two forms exist in prose:
-   - Running text — a resolved `#task:<n>` is a borderless accent link in every
-     theme (no fill, no padding; see the `[data-task-ref-state='resolved']`
-     rules below and forza6's prose override). It is mixed INTO the sentence, so
-     it takes the sentence's size: offset 0px → 14px at the default.
-   - A box — anything with a fill + horizontal padding (`#name` / `#conv:<id>`
-     pills, and the degraded task-ref states `static` / `loading` /
-     `no-context` / `resolved-no-handler`, which all carry `bg-bg-elevated
-     px-1.5`). An unresolvable task ref — an authoritative miss or a request
-     error — is NOT a box: it demotes to raw prose text (TaskRef.tsx) and never
-     reaches these rules. Fill + padding make
-     the box taller than the line it sits in, so
-     14px inside it reads oversized against the prose; it stays on the family
-     base one notch down (12px). This is why the selector below is state-scoped
-     rather than `[data-task-ref]` — a task ref that renders AS a chip is sized
-     as a chip.
-
-   Do NOT hardcode 14px: the calc subtracts from the Appearance token, so the
-   chip still tracks the font-size slider; the 0px offset is the prose knob.
-   Earlier rounds moved the whole family together (12px per #1192 / #1721; the
-   2026-07-30 full-prose experiment reverted in #1758; both at 14px on
-   2026-08-01 "正文其他文字是 14,有保持一致的需求") — the form criterion above
-   supersedes that read of "一致": consistency is with the surrounding text for
-   text-form refs and with the other chips for box-form refs. */
 .markdown-body [data-task-ref][data-task-ref-state='resolved'] {
   font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 0px);
 }
-
-/* Resolved task-ref = borderless accent link, shared across every theme
-   (#task:1725). The chip carries no fill / no border (Tailwind `text-accent`
-   only, in TaskRef.tsx); on hover it UNDERLINES the label to read as the
-   hyperlink it is. A filled slab interrupts running prose regardless of hue,
-   and hover-filling a flat link is a colour reversal that flickers in the
-   line — an underline is a structural signal that leaves the bg untouched.
-   Underline the inner label span, not the inline-flex chip: text-decoration
-   on the flex box won't paint over the icon flex-item. Scoped to
-   `.markdown-body` so the system-activity-cluster keeps its own hover-fill
-   (a distinct surface — see `.system-activity-cluster [data-task-ref]`).
-   Each theme supplies its own `--accent`; no per-theme override needed. */
 .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover > span {
   text-decoration: underline;
   text-underline-offset: 0.5px;
   text-decoration-thickness: 2px;
 }
-
-/* Code blocks — `pre` is wrapped by CodeBlock for the header chrome
-   (language tag + copy + expand). The `pre` itself is the scroll
-   container; the surrounding wrapper applies the border/rounded
-   shell so the header strip can sit flush with the top edge.
-   Background / border / pre text colour all read from the `island`
-   token family (`--bg-island` / `--text-island` / `--border-island`)
-   so each theme owns the code-block palette directly — studio-light
-   gets its cool neutral tint, forza6 gets its near-black navy
-   HUD aesthetic, no per-theme override of these rules needed. */
 .markdown-body .code-block {
   max-width: 100%;
   margin: 0.5em 0;
@@ -1177,25 +623,10 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   align-items: center;
   justify-content: space-between;
   box-sizing: border-box;
-  /* Every code/mermaid header is one fixed-height strip. The height is a single
-     authority (`--code-block-header-height`), not synthesized from the language
-     tag / view switch / action line boxes — so a long label, an icon, the
-     inherited prose line-height, or forza6's 2px segment border can neither grow
-     nor shrink it, and a plain code block and a mermaid block share one height.
-     `border-box` folds the border-bottom in (1px, or forza6's, both leave the
-     outer box constant); the flex `align-items: center` centres the contents. */
   --code-block-header-height: 32px;
   height: var(--code-block-header-height);
   padding: 0 0.6em;
-  /* The header strip sits one shade off the code body. Light themes paint it
-     pure white; slack-dark leaves this token unset and falls back to its
-     `island-deep` (a white strip on a near-black HUD would blow out). forza6
-     also has a dark body, but its white header is set explicitly in the forza6
-     component layer, not through this fallback. */
   background: var(--code-block-header-bg, var(--bg-island-deep));
-  /* Divider width tracks the theme's structural stroke authority
-     (`--control-border-width`: 1px, forza6 2px), so the header/body seam matches
-     every other themed divider instead of hard-coding a per-theme special case. */
   border-bottom: var(--control-border-width) solid var(--border-island);
   font-family: var(--appearance-code-font, var(--font-mono));
   font-size: 0.75em;
@@ -1206,9 +637,6 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   text-transform: lowercase;
   letter-spacing: 0.04em;
 }
-/* Icon-only control: no `gap` — there is no second child to space against. The
-   small symmetric padding is hit area, not visual weight; the header's fixed
-   height centres the glyph, so this padding never grows the strip. */
 .markdown-body .code-block__copy {
   display: inline-flex;
   align-items: center;
@@ -1260,14 +688,6 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   overflow-wrap: normal;
 }
 
-/* Mermaid diagrams (#task:1322). Auto-rendered ```mermaid fences. The SVG
-   carries mermaid's own theme palette (dark/light mapped from the app theme),
-   so the container stays chrome-light: a centered, horizontally-scrollable
-   block that never overflows the message column.
-
-   This chrome-less shell is now the EXPORT path's shell only (the static tree
-   injects a pre-rendered SVG into it); the live path renders `.mermaid-block`
-   below, which has a header strip because it has controls. */
 .markdown-body .mermaid-diagram {
   margin: 0.5em 0;
   max-width: 100%;
@@ -1284,20 +704,11 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   font-size: 0.85em;
   color: var(--text-muted);
 }
-
-/* Operable mermaid block: the live diagram in a `.code-block` shell with two
-   views (diagram / source) and a zoom ladder. Its header inherits the shared
-   fixed `.code-block__header` height, so switching views or stepping zoom never
-   resizes the strip. */
 .markdown-body .mermaid-block__controls {
   display: flex;
   align-items: center;
   gap: 0.35em;
 }
-/* Icon controls take the copy button's treatment verbatim (same strip, same
-   hit area) but keep their OWN class: `code-block__copy` names an action, and a
-   zoom button wearing it would make "does this block offer copy?" unanswerable
-   from the DOM. */
 .markdown-body .mermaid-block__icon {
   display: inline-flex;
   align-items: center;
@@ -1308,11 +719,6 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 .markdown-body .mermaid-block__icon:hover:not(:disabled) {
   color: var(--text-primary);
 }
-/* The view switch: two persistent segments (Mermaid / Code) that name the
-   two views and select between them. Each carries its own icon + label. Text
-   controls in a flat header strip — no fill/border at rest (a chip inside a
-   chip is one lift too many); the ACTIVE segment earns emphasis via ink weight
-   + full-strength colour, the inactive one sits muted and answers hover. */
 .markdown-body .mermaid-block__switch {
   display: flex;
   align-items: center;
@@ -1323,8 +729,6 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   align-items: center;
   gap: 0.3em;
   padding: 0 0.4em;
-  /* Height is driven by line-height, not padding: 18px is the compact strip
-     height the icon + label sit within. */
   line-height: 18px;
   color: var(--text-muted);
   font-family: inherit;
@@ -1338,69 +742,39 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   color: var(--text-primary);
   font-weight: 600;
 }
-/* Zoom level is a static READOUT (a `<span>`, not a control): it names the
-   current scale between the − / + steppers. Muted, no hover, no fill —
-   reset is by stepping down (#task:2130). */
 .markdown-body .mermaid-block__zoom {
   padding: 0.15em 0.35em;
   color: var(--text-muted);
   font-family: inherit;
   font-size: inherit;
 }
-/* A control that cannot act reads as absent-but-reserved, not as clickable:
-   the ladder's ends and the pending window both land here. Reserved rather
-   than removed so the strip's width does not twitch as you step the zoom. */
 .markdown-body .mermaid-block__controls button:disabled {
   opacity: 0.4;
   cursor: default;
 }
 .markdown-body .mermaid-block__zoom {
-  /* Tabular so 50% / 100% / 300% occupy one width — the readout sits between
-     two buttons, which would otherwise shift under the pointer mid-zoom. */
   font-variant-numeric: tabular-nums;
 }
-/* Inline Mermaid is ordinary document content at every zoom step. Fullscreen
-   owns bounded pan/zoom; the message stream remains the only inline scroll
-   owner. */
 .markdown-body .mermaid-block__viewport {
   padding: 0.7em 0.9em;
   overflow: visible;
-  /* Centre the diagram on the column axis. `text-align` centres the inline
-     pending line; the canvas block below centres via `margin-inline:auto`, so
-     pending / rendered / fullscreen-placeholder all share one centre axis and
-     the axis doesn't jump as they swap. */
   text-align: center;
-  /* The diagram renders in the theme's light/dark palette (chosen from
-     `--bg-base`), so its ground must match that palette, NOT the code island:
-     forza6's island is dark navy but its diagram palette is light, so the
-     light diagram would float on black. `--mermaid-diagram-bg` lets a theme
-     name the diagram ground (forza6 → white); others fall back to the island
-     shade they already used (#task:2130). */
   background: var(--mermaid-diagram-bg, var(--bg-island));
 }
-/* Layout zoom is set inline. `width:max-content` preserves the diagram's own
-   geometry while its zoomed height participates in the message flow. */
 .markdown-body .mermaid-block__canvas {
   width: max-content;
   max-width: 100%;
-  /* Shrink-to-fit block, so auto side margins centre it in the viewport when it
-     fits; `zoom` scales the equal margins with it, holding the centre axis. */
   margin-inline: auto;
 }
 .markdown-body .mermaid-block__canvas svg {
   max-width: 100%;
   height: auto;
 }
-/* Source fall-back when a diagram fails to render — reuses `.code-block`
-   chrome; this note just tags why the source is showing. */
 .markdown-body .mermaid-fallback__note {
   font-size: 0.9em;
   color: var(--text-muted);
 }
 
-/* Flash highlight applied by SessionView when jumping to a message
-   from the Saved view. Two pulses of accent-soft so the eye catches
-   it even if the page is already at the right scroll position. */
 @keyframes msg-jump-flash {
   0%, 100% { background-color: transparent; }
   20%, 60% { background-color: var(--accent-soft); }
@@ -1409,15 +783,6 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   animation: msg-jump-flash 3s ease-in-out;
 }
 
-/* In-conversation header find (#task:1335). Every matched keyword inside a
-   rendered message body is wrapped in `<mark class="search-hit">` by
-   `rehypeHighlightTerm`. shiki asked for a goose-yellow highlight (not the
-   accent tint — forza6's accent-soft read as an unwanted pink) with NO border.
-   The geometry is structural (lives here); the actual yellow is a per-theme
-   token (`--search-hit-bg` / `--search-hit-text`) so each theme speaks its own
-   goose-yellow. The ACTIVE match (`[data-search-active]`, set by MessageItem on
-   the current prev/next target) deepens the ground rather than adding a border
-   — a value shift, still borderless. */
 .markdown-body .search-hit {
   background-color: var(--search-hit-bg, #fff3a6);
   color: var(--search-hit-text, #0a0a0a);
@@ -1428,9 +793,6 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   background-color: var(--search-hit-bg-active, #ffde5c);
 }
 
-/* Tool-badge bump — plays when a tool call count increments or a new
-   tool type appears in the activity bubble. Applied to the whole badge
-   span so users get a clear visual signal. Disabled for reduced motion. */
 @keyframes tool-badge-bump {
   0%   { background-color: var(--accent-soft); transform: scale(1.08); }
   60%  { background-color: var(--accent-soft); transform: scale(1); }
@@ -1444,53 +806,8 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   .tool-badge-bump { animation: none; }
 }
 
-/* ── Sidebar slide animation ──────────────────────────────────────────
-   Two-layer pattern (slot + surface) so layout and paint animate on
-   independent properties. The slot owns layout (`flex-basis` collapses
-   to 0 when hidden, so the main column reflows). The surface owns
-   paint (`transform: translate3d(...)` slides off-screen) — paint
-   is GPU-promoted by `will-change: transform`, so the slide stays
-   smooth even while the slot is reflowing.
-
-   Rationale for splitting these:
-   - Width transitions cause layout thrash if applied to a panel with
-     deep React subtrees (each frame re-measures every child).
-   - Transform transitions don't trigger layout, only composite — so the
-     panel itself slides at 60fps regardless of subtree complexity.
-   - Combining the two in one element would force layout on every frame
-     of the transform animation. Decoupling preserves the perf win.
-
-   Why only `flex-basis` (not also `width`):
-   - The slot is `flex-shrink: 0`, so `flex-basis` alone determines the
-     main-axis size in the parent flex row. Animating both `flex-basis`
-     and `width` doubles the per-frame layout work for no visual gain
-     (and made hide noticeably janky once the main view started
-     carrying a ChannelView + MessageList with hundreds of messages).
-   - `will-change: flex-basis` hints the browser to keep the layout
-     pipeline warm so the reflow cascade into the main view stays
-     within the 16 ms frame budget.
-
-   `backface-visibility: hidden` on the surface forces it onto its own
-   compositor layer regardless of what its content does, so the slot's
-   per-frame layout pass doesn't drag the surface's paint with it.
-
-   Material standard easing (cubic-bezier(0.4, 0, 0.2, 1)) and 220 ms
-   duration. The earlier Apple curve concentrated motion in the second
-   half — visually fine for a 400px native sidebar, but read as
-   "stop-then-snap" on these 240 px panels. Standard ease distributes
-   motion uniformly so the slide feels continuous all the way through.
-
-   `prefers-reduced-motion` removes both transitions; the React state
-   machine in `useSidebarPane` separately collapses the four-phase
-   open/close lifecycle to a synchronous mount/unmount so the user
-   never waits 220 ms for the surface to (in)appear. */
 :root {
   --sidebar-anim-ms: 220ms;
-  /* Material standard ease — smooth, evenly distributed motion. The
-     punchier `cubic-bezier(0.32, 0.72, 0, 1)` Apple curve concentrates
-     ~70% of motion in the second half, which reads as "stop-then-snap"
-     on small (240px) panels even though it works well for large native
-     sidebars. Standard ease keeps the slide perceptually uniform. */
   --sidebar-ease: cubic-bezier(0.4, 0, 0.2, 1);
 }
 .sidebar-slot {
@@ -1499,23 +816,12 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   height: 100%;
   overflow: hidden;
 }
-/* Layout transition is OFF by default so a drag-resize that updates
-   `--sidebar-width` (and therefore the slot's `flex-basis`) reflows
-   instantly under the pointer. The hook flips `data-animating` on
-   only during the open/close phases — that's when we actually want
-   the 220 ms slide to play. Without this gate the drag stutters
-   because every pointermove kicks off a fresh 220 ms transition. */
 .sidebar-slot[data-animating='true'] {
   will-change: flex-basis, margin-right;
   transition:
     flex-basis var(--sidebar-anim-ms) var(--sidebar-ease),
     margin-right var(--sidebar-anim-ms) var(--sidebar-ease);
 }
-/* Performance isolation only. The slot commits its terminal flex-basis in one
-   layout pass while the retained surface remains visible outside the collapsed
-   slot and animates on the compositor. This deliberately exposes a visual
-   layout jump; it measures the no-per-frame-layout floor and is not a proposed
-   production interaction. */
 .sidebar-slot[data-performance-variant='compositor-isolation'] {
   overflow: visible;
   z-index: 1;
@@ -1540,69 +846,8 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   }
 }
 
-/* ── Agent / Human panel — token-driven radius contract (#task:417) ───
-   Every panel surface routes its `border-radius` through the existing
-   per-theme radius tokens declared in `themes/<name>.css`, so a theme
-   author changes one token and every panel hook follows. JSX carries
-   `data-panel-*` hooks but no `rounded-*` class, removing the cascade
-   tug-of-war with Tailwind utilities the previous override pass had
-   to fight (see #task:415 retro for the layer/specificity story).
-
-   Hooks (set in JSX, theme-neutral names):
-
-     [data-panel-card="row"]            Activity / Schedule list rows
-       Long horizontal scan-line surfaces — same vocabulary as message
-       items / saved items. Always 0; treated as records, not tiles.
-
-     [data-panel-card="placeholder"]    Empty / error state strips
-       Dashed scan-line empty states. Always 0 to match row vocabulary.
-
-     [data-panel-card="profile-section"] Profile / FileBlock /
-                                         NotesBlock static cards
-       Static block tiles → `var(--profile-section-radius,
-       var(--card-radius))`. The dedicated token lets forza6 hard-cut
-       the section to 0 (poster sticker geometry, #task:814) without
-       dragging every other `--card-radius` consumer down with it;
-       studio-light keeps the soft 8px tile by inheriting `--card-radius`.
-
-     [data-panel-pill="*"]              Status / kind / thread /
-                                         presence / path chips
-       → `var(--chip-radius)` (forza6 0, studio-light 4px).
-
-     [data-panel-tabs]                  Activity / Schedule FilterTabs
-                                         outer frame
-       → `var(--control-radius)` (forza6 0, studio-light / slack-dark
-       6px). Inner segment buttons consume `var(--tab-segment-radius)` so each theme
-       can pick: forza6 = `0` (hard wedge inside the bracket);
-       studio-light / slack-dark = `4px` (active segment reads as
-       "embedded" rather than wedged, hairline-rounded language).
-       The optional VALUE is density, not shape: `="hero"` marks a
-       page- or modal-level switch (the boot auth gate's Sign up ⇄ Log in),
-       which in forza6 earns the poster sticker — hard ink drop shadow on
-       the bracket + a 2px ink divider between wedges (#task:1833). A
-       valueless tab strip is a dense in-card filter and stays quiet:
-       the same loud recipe repeated in a list is the "用力过重" case.
-       Both match `[data-panel-tabs]`, so radius is shared either way.
-
-     [data-panel-control]               GhostInput / GhostTextarea /
-                                         Select trigger / Select content
-       → `var(--control-radius)` to align with Composer / form input
-       surfaces already on the same token.
-
-   Forza6-specific identity (2px black border, lime hover, display-caps
-   pill typography, dashed stroke on placeholder) lives in
-   `themes/forza6-components.css` and only sets non-radius properties
-   on these hooks. Warm themes pick up no overrides and read as soft
-   tile geometry.
-
-   This block is the single source of truth for panel radius. Do not
-   add `rounded-*` classes back to the JSX hooks above — the cascade
-   bug they reintroduce is the exact issue this contract removes. */
 [data-panel-card='row'],
 [data-panel-card='placeholder'] {
-  /* Routed through `--row-radius` (token contract added #task:912 review
-     round 2). forza6 = 0 (chat-surface scan-line vocab); studio-light /
-     slack-dark = 6px (subtle list rounding). */
   border-radius: var(--row-radius);
 }
 [data-panel-card='profile-section'] {
@@ -1615,20 +860,8 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-radius: var(--control-radius);
 }
 [data-panel-tabs] button {
-  /* Routed through `--tab-segment-radius` (#task:912 review round 3).
-     forza6 keeps `0` (hard wedge inside the bracket — poster
-     vocabulary); the hairline themes set `4px` so the active segment
-     reads as "embedded" inside the 6px outer rather than as a square wedge,
-     matching its hairline-rounded language. */
   border-radius: var(--tab-segment-radius);
 }
-/* Segment focus — keyboard focus on a tab wedge (auth gate's Sign up ⇄ Log in,
-   Activity / Schedule FilterTabs). These are bare `<button>`s outside the base
-   Button primitive, so they had no focus-visible at all. Outline (not ring):
-   forza6's hero track sets `box-shadow:none` on the wedge, which would eat a
-   Tailwind ring; outline is immune. `outline-offset:-2px` keeps the halo inside
-   the tight bracket instead of bleeding over it. Colour rides `--border-focus`
-   so each theme paints its own (forza6 ink / slack-dark blue / studio ink). */
 [data-panel-tabs] button:focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: -2px;
@@ -1636,31 +869,10 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 [data-panel-control] {
   border-radius: var(--control-radius);
 }
-/* Channel/thread header action focus — the right-hand icon-button cluster
-   (Search / Threads / Attachments / Members / Settings / Fullscreen / Close).
-   Bare `<button>`s, no focus-visible of their own; same outline treatment as
-   the tab wedges above, and it joins forza6's existing sticker focus family
-   (`[data-*-action]:focus-visible`) for free. Outset offset so the halo rings
-   the sticker rather than sitting inside its ink frame. */
 [data-channel-actions] button:focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
 }
-
-/* ── Unified keyboard-focus indicator (shiki 2026-08-09) ──────────────
-   Every theme shows focus as an `outline`, never a Tailwind `ring`: a ring
-   is a `box-shadow`, and forza6's poster sticker shadows (and its
-   `box-shadow:none` wedges) eat it. Outline is a separate property, immune,
-   and folds into forza6's existing sticker-focus language. Same recipe as the
-   font-size slider and the header-action / tab-wedge rules above.
-
-   Opt-in per control (`.focus-outline`) rather than a blanket `:focus-visible`
-   base rule — we don't want to outline every focusable node (menu items, links,
-   inputs). Text inputs deliberately keep their `--border-focus` border-colour
-   swap instead of an outline (no layout shift, lighter for a bordered field).
-   Colour rides `--border-focus` so each theme paints its own (forza6 ink /
-   slack-dark blue / studio ink); `.focus-outline-accent` keeps `--accent` for
-   the few emphasis-coloured focuses (task jump / drop targets). */
 .focus-outline:focus-visible,
 .focus-outline-within:focus-within {
   outline: 2px solid var(--border-focus);
@@ -1670,43 +882,6 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-
-/* ── App frame corners (shiki 2026-08-07) ─────────────────────────────
-   `--card-radius` is the TILE radius — every card inside the frame. The
-   frame's two BOTTOM corners are not tiles: they are the application
-   window's own corners, clipped by the OS on its own arc, so the card
-   that happens to sit in one has to follow the window instead (see
-   `--app-corner-radius` in `themes/forza6.css`).
-
-     bottom-LEFT  → always the NavRail, so it is owned inline in
-                    `NavRail.tsx`: the rail is unconditionally the
-                    frame's first item, there is no position to resolve.
-     bottom-RIGHT → whichever card is LAST in the section row, and that
-                    owner moves: Settings' `main`, TasksSection, the
-                    Saved / Search / Archived views, the ActivityView
-                    while no channel is picked, and inside chat the
-                    ChannelView alone vs. the SplitPane's right pane. No
-                    component can know that about itself, so this rule
-                    reads it off the DOM instead — `:last-child` of the
-                    mounted section layer IS the frame's right edge.
-
-   Two dependencies, both deliberate:
-     - `!important`: cards apply their radius as an INLINE `borderRadius`
-       shorthand (the card recipe — radius + `--card-shadow`), which a
-       normal stylesheet declaration cannot beat. This is the one place
-       that must win over it.
-     - clipping: when the last child is a layout wrapper rather than a
-       painted card (chat → the SplitPane root), rounding the wrapper is
-       what rounds the corner, because it is `overflow-hidden` and clips
-       the pane inside. Don't drop `overflow-hidden` from SplitPane's
-       root or panes.
-
-   Universal but inert outside forza6: only `themes/forza6.css` declares
-   `--app-corner-radius`, so the other themes resolve this back to their
-   own pane radius and nothing moves. iris then resolves one rung further
-   in (`--pane-radius: 0`): its panes live inside ONE white sheet whose
-   own radius rounds the frame corner, so the pane itself must stay
-   square — see `themes/iris.css` § Sheet. */
 [data-section-layer] > *:last-child {
   border-bottom-right-radius: var(
     --app-corner-radius,
@@ -1714,41 +889,6 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   ) !important;
 }
 
-/* ── Avatar ground (#task:1699) ───────────────────────────────────────
-   Every avatar square — uploaded image or fallback glyph/initial — sits on
-   this one fill, so a person without an uploaded image still reads as the
-   same regular square as their neighbours (shiki 2026-07-28: the bare
-   fallback glyph "缺少了这种规则形状").
-
-   Why an ink wash and not a `--bg-*` container token: the avatar lands on
-   every ground in the app — sidebar carriers, chat, white popovers, dialogs,
-   and inside the chat header's member chips, which forza6 deliberately
-   grounds on `--bg-elevated` itself. Any fixed surface token is therefore
-   invisible somewhere (the old `--bg-elevated` fill vanished on forza6's
-   sidebar carriers; the `bg-bg-row-hover` / `bg-bg-muted` classes other
-   call sites used to carry were never generated at all — those two tokens
-   are still unmapped, and those sites now read `bg-bg-inset` below,
-   #task:1833). A translucent ink is one step off WHATEVER is behind it, and
-   it follows the THEME for free: `--text-primary` is near-black in the light
-   themes and near-white in slack-dark, and `useAppearance` sets `data-theme`
-   on `documentElement` — the very element this `:root` block lands on, so the
-   winning theme's ink is what gets substituted here.
-
-   It does NOT follow a nested REGION, though (#task:1833, measured): the
-   `var()` below is substituted where the custom property is DECLARED, and
-   the result inherits as an already-fixed color. forza6-components
-   re-declaring `--text-primary` inside its dark regions therefore does not
-   invert this wash there — a region that needs its own ground has to
-   re-declare `--bg-avatar-ground` itself. Same for `--bg-inset` below, and
-   the same reason moving `data-theme` off `documentElement` would freeze
-   both tokens at one theme.
-
-   Utility-neutral on purpose: this is the container, not the identity —
-   the person's identity is the image (or, later, their initial). A theme
-   that wants its own avatar ground (forza6 could go for its ink-bordered
-   sticker frame) redeclares `--bg-avatar-ground` in its own file; the token
-   is also what the neighbouring `+` / `+N` chips consume, so a strip mixing
-   avatars and affordances keeps ONE visible ground. */
 :root {
   --bg-avatar-ground: color-mix(in oklab, var(--text-primary) 12%, transparent);
 }
@@ -1756,99 +896,15 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   background-color: var(--bg-avatar-ground);
 }
 
-/* ── Inset ground + faint ink (#task:1833) ────────────────────────────
-   `--bg-inset` is the recessed ground for a small area sitting ON something
-   else: the bordered icon plinths in the boot / auth gates, the sign-up ⇄
-   log-in segment track, mono read-only paths and diagnostic `<pre>`s, status
-   banner fills, and the attachment thumbnail squares. It replaces
-   `bg-bg-row-hover` / `bg-bg-muted`, two utilities that were NEVER generated
-   (neither token is mapped in `@theme inline` above), so 14 of those areas
-   had no ground at all — the class read as intent, not as pixels.
-
-   An ink wash rather than a `--bg-*` surface token, for the reason recorded
-   under §Avatar ground: these areas sit on `--bg-floating` cards in the
-   gates but also on the settings pane and the attachments panel, and forza6
-   grounds whole regions on its own sidebar carriers — any fixed surface
-   token is invisible somewhere. A translucent ink is one step off WHATEVER
-   is behind it and
-   follows the theme for free: it darkens the white cards in studio-light and
-   forza6, and lightens slack-dark's `#2C2D30`, which is what "recessed"
-   means in each. 7% sits in the same register as the themes' own code
-   surfaces (`--bg-inline-code` is 5% ink in forza6, `#ECF1F7` in
-   studio-light) and deliberately below the 12% avatar ground — that one has
-   to read as a SHAPE standing in for a person, this one only has to read as
-   "not the card".
-
-   One value for all of them on purpose: the optical job is identical, and
-   whatever must read as RAISED above it carries its own fill plus a shadow
-   (the active segment is `bg-bg-floating shadow-sm`). Grading this into
-   per-role tiers would spend a token cluster on a difference nobody can
-   point at.
-
-   `--text-faint` is the step below `--text-muted` for third-tier text — the
-   unresolved side-pane placeholder's spinner, conversation id, and hint,
-   which must stay quieter than the body line they sit under. NOT named
-   `--text-disabled` like the dead class it replaces: disabled controls are
-   expressed with `disabled:opacity-*` throughout this renderer, and a token
-   by that name would invite a second, conflicting mechanism for the same
-   state. */
 :root {
   --bg-inset: color-mix(in oklab, var(--text-primary) 7%, transparent);
   --text-faint: color-mix(in oklab, var(--text-muted) 75%, transparent);
 }
 
-/* ── Own-message bubble (#task:1838) ──────────────────────────────────
-   The fill behind the PROSE of a `user-right` own message (shiki
-   2026-08-06). Only that: attachments, reactions, the bottom adornment row
-   and the reply preview stay on the row's own ground, so the bubble reads
-   as "the words I said", not as a card around everything.
-
-   An ink wash for the reason recorded under §Inset ground, and here the
-   argument is sharper: the ground under this bubble MOVES. The message row
-   is transparent at rest and flips to `bg-bg-floating` (plus a per-theme
-   fill in studio-light, whose chat ground is already pure white) on hover /
-   saved / replying / search-hit. Any fixed `--bg-*` surface token is either
-   invisible at rest or invisible framed in at least one theme; a
-   translucent ink is one step off WHATEVER is behind it in every state.
-   Composites correctly with the inline-code chip too — that chip is its own
-   wash, so it lands darker/lighter than the bubble instead of matching it.
-
-   9% rather than the 7% inset: this is a large area, and it sits on the
-   frame fill half the time, which eats the difference. Still below the 12%
-   avatar ground — the bubble is a GROUND for text, not a shape standing in
-   for a person.
-
-   Shape is per-theme and each theme states it in its OWN file — 0 in
-   forza6 (rows and controls are hard-cut there, so a rounded bubble would
-   be the only soft corner in the read column), `--card-radius` in the other
-   two. There is deliberately no default for it here, because a default
-   cannot work: forza6's opening selector is `:root, [data-theme='forza6']`,
-   i.e. the default theme is ALSO the root layer, so its `0` reaches every
-   theme at (0,1,0) — a `:root` default written down here would be beaten by
-   source order (theme files are `@import`ed at the top) and an `html`
-   default is beaten by specificity. Both were measured: `:root` made forza6
-   round, `html` made all three square. Same trap the note beside
-   `--profile-section-radius` in slack-dark.css records (design-new-theme
-   §3.1 key 3, "新增 token 不能依赖 fallback"). New per-theme tokens get one
-   declaration per theme file, and are accepted on measured
-   `getComputedStyle` values, never on the declarations existing.
-
-   The FILL stays here: no theme overrides it, and any that later wants to
-   would win from its own file against this (0,0,1) `html` rule. */
 html {
   --bg-message-bubble: color-mix(in oklab, var(--text-primary) 9%, transparent);
 }
 
-/* Kanban column drop target (#task:784). The drag-over wash can't be a
-   Tailwind utility on the column: forza6-components.css gives
-   `[data-tasks-column]` a (0,2,0) background/border that outweighs any
-   single-class utility. So the highlight is keyed on the `data-drop-target`
-   attribute here — placed after the forza6 import, this equal-specificity
-   (0,2,0) rule wins on source order in every theme (forza6 overrides the
-   border back to its poster black + flips header ink in
-   forza6-components.css, since `--accent` ≈ the brand fill there). Header
-   label/count/icon flip to `--text-on-selected` so they stay legible on the
-   brand wash; selectors clear Tailwind's per-span text utilities (0,1,0). */
 [data-tasks-column][data-drop-target] {
   background-color: var(--bg-row-selected);
   border-color: var(--accent);

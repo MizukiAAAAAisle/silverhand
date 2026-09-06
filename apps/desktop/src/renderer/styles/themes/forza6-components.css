@@ -2,95 +2,8 @@
    Theme: Forza6 — Component-layer specialization (PR-2)
 
    This file ONLY contains `[data-theme='forza6']`-scoped overrides —
-   with no exception. The app frame used to carry a triangle texture
-   through a universal-but-inert `background-image` write in `App.tsx`;
-   both the texture and its token slot were retired in #task:1871.
-
-   Token-layer values live in `forza6.css`. This file does NOT do any
-   root-level token reassignment (the bare `[data-theme='forza6'] {}`
-   block was removed in P1 #task:788 — root tokens have a single source
-   in forza6.css). It may only (a) add component-targeted CSS and (b)
-   redefine tokens inside element-/state-scoped bundles (e.g.
-   `aside[data-sidebar]`, focus/hover states) so Tailwind utilities
-   cascade locally. It does not expand the global token contract
-   (design-new-theme.md §3 stays the PR-1 surface). See §12.5 for the
-   three-layer model.
-
-   ── PR-2 v5 — selected/focus role swap + poster-style inline code,
-      per shiki `z7QboHr4aDIoAHQX`.
-      v4 had selected=magenta + focus=lime. v5 swaps:
-        SELECTED (NavRail / sidebar row) = 酸柠绿 lime `var(--forza6-lime)`
-                                           + near-black icon/text
-                                           + 2px near-black border
-        TEXT INPUT ACTIVE = 节日粉 magenta — the chat composer shell
-                            (`[data-composer-shell]:focus-within`) swaps
-                            its border to `--brand-primary` when active
-                            (border-color only; focus elsewhere is an
-                            ink `outline`, see #task:1920).
-        INLINE CODE = lime chip + 1px solid near-black square
-                      border + near-black text. Poster-style HUD
-                      sticker: lime body, hard rectangular outline,
-                      no rounded corners.
-
-   Color weight after v5:
-     节日粉 (festival magenta `#FF2C7A`)
-       = SPACE bottom: frame + titlebar + TaskRef chip surface +
-         input focus state. Magenta brackets the active (focused)
-         + the chrome (frame), but no longer claims selected items.
-     Paper family `#FAFBF6 / #F6F7F1 / #F1F2EC`
-       = READ/NAV CARRIER: NavRail rail bg + the two sidebar grounds,
-         one warm-white stock in three steps (#task:1867; was a pale
-         lime tint, which competed with the acid-lime selection).
-     Acid lime `var(--forza6-lime)`
-       = SELECTED + INLINE CODE: the "you-are-here" wedge in
-        NavRail/sidebar + the markdown-body inline code chip.
-        Poster-style HUD: black 1px border + near-black text.
-     荧光黄 `#FFEB00` ── REMOVED FROM CHROME in v5. The locked role
-       ("counters on dark chrome / black structure") has no live
-       site in the current PR-2 surface; sidebar count uses
-       `--accent` deep magenta, inline code chip body is now lime,
-       not yellow. Token still defined in forza6.css for future use.
-
-   Architectural rules (unchanged from earlier):
-   - Every selector `[data-theme='forza6']`-scoped, no exception
-     (the App.tsx frame write that used to be one is gone, #task:1871).
-   - Stable hooks only: `data-sidebar`, `data-titlebar`, `aria-current`,
-     `data-task-ref`.
-   - Sidebar text/bg tokens redefined at `aside[data-sidebar]` so
-     Tailwind utilities cascade. CSS lazy-var keeps PR-1 formulas
-     (`--bg-row-hover: color-mix(brand 22%, var(--bg-channels-sidebar))`)
-     re-resolving per scope; SettingsPage and chat read area get
-     PR-1 root values verbatim, no leak.
-
-   Companion design notes:
-   - Token contract: docs/design-new-theme.md §3
-   - Visual reference: docs/design-new-theme.md
-   - PR-2 v1..v5 review trail: chat #conv:sCUEjGNlmqPUGmy-
-   ================================================================ */
-
-/* ── Root forza6 token re-assignments ──
-   REMOVED in P1 (#task:788). Every value this block held (`--bg-app`,
-   `--bg-nav-rail`, `--text-nav-rail`, `--text-nav-rail-hover`,
-   `--bg-nav-rail-hover`, `--border-focus`) is now defined once at the
-   forza6.css root — the live values were pulled back there so the root
-   token block is the single source of truth (no more silent
-   component-layer override of dead root tokens). */
-
-/* ── Titlebar — white ink ladder on the magenta frame ──
-   No texture: the scattered hard slivers this rule used to paint
-   (a right-anchored 600×28 SVG slab of five uneven black
-   parallelograms, v5.4b) are REMOVED — shiki 2026-08-07
-   「forza6 主题中 data-theme='forza6'] header[data-titlebar='app'] 有一个
-   background image，去掉」. Don't re-add them: the frame's flat magenta
-   is the poster ground on its own, and the slivers only competed with
-   the titlebar's actual content (window title, section chrome). The
-   `background-repeat` / `-position` / `-size` triple went with the
-   image — they existed only to anchor that slab.
-
-   What stays is the ink ladder: over the saturated magenta frame the
-   titlebar's text must be white rather than the theme's near-black
-   body ink, and hover must be a white wash rather than the pale-lime
-   row hover. */
+   with no exception.
+   */
 [data-theme='forza6'] header[data-titlebar='app'] {
   --text-muted: rgba(255, 255, 255, 0.78);
   --text-primary: #FFFFFF;
@@ -98,14 +11,6 @@
   --bg-hover: rgba(255, 255, 255, 0.12);
 }
 
-/* ── #2 NavRail selected button — lime pill + black border + 3px black notch ──
-   shiki `z7QboHr4aDIoAHQX` "navrail/sidebar 选中用 酸柠绿".
-   Lime body, near-black icon, near-black border for poster-style
-   containment, plus 3px near-black left-edge dock notch.
-   `border-color` now comes from `--border-row-selected` (PR-5 token,
-   global.css); only the lime fill + position relative for the notch
-   stay forza6-specific.
-   Specificity (0,3,0) > Tailwind utility (0,1,0). */
 [data-theme='forza6']
   nav[aria-label='App sections'] button[aria-current='page'] {
   background-color: var(--forza6-lime);
@@ -116,8 +21,7 @@
   nav[aria-label='App sections'] button[aria-current='page']::before {
   content: '';
   position: absolute;
-  left: -6px; /* rail 48 + button 36 centered → 6px padding; -6 sits
-                 the 3px notch at rail x=0..3 inside `overflow:hidden`. */
+  left: -6px;
   top: 6px;
   bottom: 6px;
   width: 3px;
@@ -125,96 +29,15 @@
   background: var(--bg-structure-dark);
 }
 
-/* ── NavRail unselected hover — black-bordered "preview of selected" ──
-   shiki `MP2j35NB7umwj1Z7` "hover 还是粉色" → `HjRObftqmRjNrc6Y`
-   "hover 太淡了" → Cindy `G_UiSSsZbvK2wPGy` "fixed color, not
-   color-mix" → shiki v5.4 `HmSkM-LYURE6O9zp` "缺少黑边". v5.3 used
-   `2px lime border`, but lime-on-pale-lime nav rail still read soft.
-   v5.4 swaps the border to `2px var(--forza6-ink)` to match selected's poster-
-   sticker black border, making hover a true preview of the same
-   sticker geometry. Ground stays `var(--forza6-lime-pale)` flat pale lime so the
-   distinction selected vs hover is fill saturation only:
-
-     hover    = pale-lime ground + 2px black border
-     selected = lime fill + 2px black border + 3px black notch
-     inline   = lime fill + 2px black border (square 0-radius)
-     send     = magenta fill + display caps SEND
-
-   Three-step "border-first, fill-next, notch-last" hardness ramp
-   that all share the same near-black structural border — Cindy
-   review #3 "hover 应该更硬，少用透明色".
-
-   `border-color` now comes from `--border-row-hover` (PR-5 token,
-   global.css); only the pale-lime ground stays forza6-specific. */
 [data-theme='forza6']
   nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   background-color: var(--forza6-lime-pale);
 }
 
-/* ── NavRail right border — 2px ink poster骨架 (P2 v6.4 #task:917) ──
-   White paper NavRail (`--forza6-paper #FAFBF6`) sits next to the
-   sidebar carrier, which since #task:1867 is the SAME paper family
-   only ~1.5% lighter apart (#F6F7F1) — the two panels have no
-   lightness boundary left at all. This 2px ink right border is
-   therefore load-bearing, not decorative: it establishes the panel
-   boundary as a poster sticker骨架 — same near-black structural
-   vocabulary as the selected lime wedge frame, inline-code chip,
-   channel-actions button frames, and chat header `#` sticker.
-   Together they form the v6.4 "poster sticker family": every chrome
-   element earns its identity by sitting inside a 1.5–2px ink frame. */
 [data-theme='forza6'] nav[aria-label='App sections'] {
   border-right: 2px solid var(--forza6-ink);
 }
 
-/* ── Sidebar token bundle — paper carrier, dark ink ──
-   `--bg-row-selected` is the festive lime selection wedge for the whole app
-   now (defined at the forza6 root), so it is NOT redefined here anymore —
-   this scope only carries the sidebar's paper surface ladder + dark text
-   tokens. `--text-on-selected` likewise comes from root (var(--forza6-ink)).
-   The carriers went from pale lime to hueless paper in #task:1867 (rationale
-   at their declaration in forza6.css); this scope is unchanged by that — it
-   only re-points the bg token at whatever the carrier is.
-
-   ── Ink ladder, re-cut #task:1947 (shiki: 「重新设计 sidebar 中的颜色」) ──
-   TWO rungs, and the whole design is how far apart they are: every ROW title is
-   `--text-secondary` (= ink), every LABEL and count is `--text-muted`. Measured
-   on the `#F6F7F1` carrier:
-     ink    #0A0A0A  18.38:1  — every row title, hover, selected descendants
-     muted  #586865   5.44:1  — section label, counts (step from a row 3.38:1)
-   Both clear AA at their sizes (muted also carries the 10px counts).
-   The row rung landed here in three moves, each one shiki reading the screen:
-   · #1A1F1E (pre-task) — 1.19:1 against ink, i.e. the same black, so the
-     #task:1946 label/row hierarchy collapsed onto font-weight alone.
-   · #3B4A47 (first cut) — bought a hover ink lift by lightening the resting row,
-     i.e. charged the element the user reads all day for a transition seen for a
-     moment. 「仍然偏灰,导致跟背景色有点相似」 (`aIHjTB_w7_xNrcPH`): sampled off his
-     screenshot it rendered #3C4B48, while the reference shot he compared it
-     against ran #020202 on a ground only 1.03× lighter.
-   · #26332F (second cut) — 12.21:1, near-ink, and it kept 1.51:1 in hand for the
-     hover lift. That left the label only 2.24:1 away from a row, and 2.24:1 does
-     not READ as a step here: shiki 2026-08-10「肉眼上这个 group 颜色还是和下面的
-     叶子太接近了」. The reason is that the label spends contrast in the opposite
-     direction at the same time — it is `font-bold` 700 caps against a row's
-     `font-medium` 500 (his call, `Y0pj72Zayj6xS-Wp`), and bold caps lay down
-     more ink per glyph, so perceived darkness ≈ colour × stroke mass and the two
-     axes cancel. Weight is fixed by him, so the colour has to buy the whole
-     distance: the row goes to ink and the step becomes 3.38:1 (+51%).
-   The label rung does NOT move to help, in either direction: it is already at
-   5.44:1 with the AA floor at 4.5:1 for the 10px counts that share it, and
-   `[data-sidebar-section-icon]` composites it at `opacity: .7` to 2.95:1 —
-   already at the 3:1 non-text floor, so lightening the label costs legibility to
-   buy ~18% of step, a bad trade next to the 51% the row rung gives for free.
-   What going to ink COSTS is the resting→hover ink lift, which is now equal on
-   both sides everywhere in the sidebar. Priced, not overlooked: the leaf rows
-   (channel / STARRED / Search-Saved-Archived) hover with a lime ground + ink
-   border + poster shadow, so ink was never their signal; the workspace / DM rows
-   carry `sidebar-row-gutter` and take no hover fill by design, but since
-   #task:1948 they reveal a trailing disclosure caret on hover — that reveal, not
-   the ink, is what says "this line collapses". If the caret ever stops being
-   enough, the fix is a hover ground scoped to those rows (NOT to the gutter
-   class, which the section header shares and which shiki ruled must stay unpainted).
-   `MutedMarker` gets better, not worse: `opacity-60` off the row's own ink now
-   composites to ~4.2:1 (was 3.71:1 at #26332F) over the 3:1 non-text floor. */
 [data-theme='forza6'] aside[data-sidebar] {
   --bg-channels-sidebar: var(--forza6-carrier-channels);
   --text-primary: var(--forza6-ink);
@@ -224,29 +47,6 @@
   --bg-elevated: rgba(0, 0, 0, 0.10);
 }
 
-/* Selected row: poster-style near-black 2px border + dark token
-   re-restore for descendants (children that opt out of
-   `currentColor` via explicit `text-text-muted` etc. stay near-black
-   on the lime selection wedge — black-on-lime is 14.8:1 AAA).
-   `border-color` now comes from `--border-row-selected` (PR-5 token,
-   global.css); only the descendant text-token re-restore stays
-   forza6-specific.
-
-   v6.4 update (shiki #task:917): poster sticker drop shadow ON
-   selected sidebar rows, mirroring the `[data-conversation-hash-icon]`
-   chat-header chip recipe. Box-shadow doesn't take layout space so
-   adding it on selected doesn't shift surrounding rows. Since 2026-08-08
-   the ROW is the only sticker in these lists — the `#` inside it stays
-   a quiet ink glyph (see the `[data-channel-icon]` block below).
-
-   #task:1950 — selected is now the `-xl` rung (2.5px) while hover keeps base
-   (1.5px), shiki `bQZYzkqIoLOZ90_U`. Both states used to share the 1.5px
-   offset, so the entire hover→selected distance was carried by lime intensity
-   alone; after #task:1947 damped the hover ground that was the second time the
-   two states differed by less than a whole step. Lift is the right dimension to
-   spend here: the committed row is the one that should read as physically ON TOP
-   of the list, and the ladder already exists (`sm` 1px / base 1.5 / `lg` 2 /
-   `xl` 2.5) so this is a rung change, not a new recipe. */
 [data-theme='forza6']
   aside[data-sidebar] .sidebar-row-border.text-text-on-selected {
   --text-primary: var(--forza6-ink);
@@ -255,34 +55,6 @@
   box-shadow: var(--forza6-poster-shadow-xl);
 }
 
-/* ── Sidebar row unselected hover — black-bordered "preview of selected" ──
-   shiki `MP2j35NB7umwj1Z7` + `HjRObftqmRjNrc6Y` + Cindy
-   `G_UiSSsZbvK2wPGy` (joint reasoning, see NavRail block above) +
-   shiki v5.4 `HmSkM-LYURE6O9zp` "缺少黑边". Same fix as NavRail:
-   border switches from `var(--forza6-lime)` lime to `var(--forza6-ink)` near-black so
-   the hover sticker shares the selected sticker's structural
-   border, making hover a true preview. Ground was `var(--forza6-lime-pale)`
-   until #task:1947 (see below).
-   `border-color` now comes from `--border-row-hover` (PR-5 token,
-   global.css); only the lime ground stays forza6-specific.
-
-   v6.4 update (shiki #task:917): poster sticker drop shadow on
-   hover too, mirroring selected row — hover is a true preview of selected, so
-   the lime fill and the drop shadow show up together. Hover STAYS on the base
-   1.5px rung (shiki `bQZYzkqIoLOZ90_U`「hover 保持 base」); selected moved up to
-   `-xl` in #task:1950, so the preview is now one rung below the commitment
-   instead of tying with it.
-
-   #task:1947 — the ground is now a lime WASH (lime mixed into the poster
-   paper) instead of `--forza6-lime-pale`. Hover keeps the hue, so it is still
-   the preview of a lime selection; what it gives up is intensity. At pale-lime
-   the two states were separated by one small step of lime saturation while
-   sharing the ink border AND the poster shadow, so a hovered row read as loud
-   as the committed one and the selection stopped winning its own list. Derived
-   from `--forza6-lime` rather than hand-picked, so re-tuning the lime moves
-   hover and selected together; `--forza6-lime-pale` itself is NOT touched
-   because it is the app-wide `--bg-option-hover` (proxy cards, task-filter
-   rows), which is a different question from this list's row hover. */
 [data-theme='forza6']
   aside[data-sidebar]
   .sidebar-row-border:not(.text-text-on-selected):hover {
@@ -290,16 +62,6 @@
   box-shadow: var(--forza6-poster-shadow);
 }
 
-/* `bg-success` status dot in SELECTED row (lime wedge): default PR-1
-   `--success #3F7A1B` deep lime collapses on lime wedge. Override
-   to near-black so the 1.5px dot reads as a HUD marker on lime.
-
-   EXCEPT the members-pane live status pip (`[data-status-pip]`, shiki
-   xXs6P3pFHqVORcrq): there the dot color IS the information (online =
-   `--success` green vs idle grey vs crashed red), so inking the green
-   on selection hid "online" while crashed stayed red — inconsistent.
-   Scope the ink override to the plain activity dot only (WorkspacesPanel
-   active marker, which carries no `data-status-pip`). */
 [data-theme='forza6']
   aside[data-sidebar]
   .sidebar-row-border.text-text-on-selected
@@ -307,50 +69,12 @@
   background-color: var(--forza6-ink);
 }
 
-/* Sidebar group title — sans caps + tighter letter-spacing.
-   Per shiki `NklHz_M9fnIuJ6P7` the sidebar should carry Space Grotesk
-   (the brand body face) end-to-end, not Rajdhani — so the section
-   header inherits `--font-sans` from the cascade. Uppercase + 0.16em
-   tracking still differentiates the header from row text without
-   switching faces. Colour cascades from the redefined `--text-muted`
-   (#586865, 5.44:1 on the paper carrier — the quiet rung of the #task:1947 ink
-   ladder, 3.38:1 away from a row title, which is what separates a label from a
-   row now that both are bold-vs-medium rather than 12px-vs-14px). */
 [data-theme='forza6']
   aside[data-sidebar] section > header {
   letter-spacing: 0.16em;
   text-transform: uppercase;
 }
 
-/* ── Sidebar group counts — yellow-on-ink HUD chip (v6.2, #task:917) ──
-   `sidebar-shared.tsx:47` paints group counts as
-   `<span className="ml-1 text-text-muted/70">{count}</span>`. The
-   /70 alpha against `--text-muted` originally diluted to ~2.87:1
-   (fail). v5.x patched this with opaque deep magenta `--accent` for
-   "festival HUD-counter feel". v6.2 (#task:917) promoted it to the
-   real poster HUD vocabulary — yellow ink on near-black structural
-   sticker — matching the reference poster's "Enthusiast" / "S1 800"
-   counter chips.
-
-   v6.5r (#task:917, shiki feedback "现在再看干扰比较严重，因为他们
-   并不是重要信息，然而却抢占了视觉焦点"): demoted from the loud
-   yellow-on-ink poster sticker back to subdued metadata. These
-   counts (Workspaces N / DM N / AGENTS N / HUMANS N / search-group
-   N) are reference info, not announcements — the same recipe an
-   unread badge uses (which IS an announcement) made the count read
-   as equally important and stole focus from the row titles. Now:
-   no fill, no border, no shadow — just monospaced muted ink at the
-   default body weight. The poster vocabulary stays exclusive to
-   the unread badge (`[data-sidebar-unread]`) and the `#` channel
-   sticker, so loud-where-it-matters / quiet-elsewhere is the
-   sidebar's single visual hierarchy.
-
-   #task:1947: the extra `opacity: 0.85` on top of muted ink is gone. It was
-   diluting an already-lightest-rung colour to 4.41:1 at 10px — under AA, the
-   same failure mode this rule was written to escape (the original `/70` alpha
-   diluted to ~2.87:1). "Subdued" is already carried by muted ink + 10px + mono
-   + weight; a second dilution only bought illegibility. Now the count sits AT
-   the muted rung: 5.44:1. */
 [data-theme='forza6']
   aside[data-sidebar] .text-text-muted\/70 {
   color: var(--text-muted);
@@ -366,109 +90,29 @@
   opacity: 1;
 }
 
-/* ── #4 Inline task-ref chip — reference, not announcement ─────────
-   Chat task-tag chip — `[data-task-ref]` (TaskRef.tsx). It sits inline
-   in the message stream as a *reference*, so its visual weight has to
-   stay subordinate to the surrounding prose. TYPEFACE follows the
-   Appearance prose font (`--appearance-prose-font`, falling back to
-   `var(--font-sans)`) — same rule as the task-event status pill.
-
-   Size: now the shared global `[data-task-ref]` base (`body − 2px`, whole
-   pixels — global.css), no longer a per-theme `0.85em`. forza6 only keeps
-   the prose-font TYPEFACE here; size + line-height come from the base.
-
-   No `text-transform: uppercase` / `letter-spacing: 0.10em` — the
-   previous spec carried both as poster-chip identity, but in 14px body
-   the uppercase Space Grotesk cap-height pushed chips into "billboard"
-   territory inside flowing prose (shiki `O61I0_ISOz_W9A8g` "感觉有点
-   别扭…太大了…很粗糙"; Cindy `OQaJL2VKARGSpM3D` "title 整段被做成印章
-   = 显粗糙"). Mixed-case + no tracking lets the chip sit in the line
-   as a tinted reference instead of a centered banner. The poster-chip
-   identity now lives entirely in colour + shape (accent-soft fill,
-   accent text, `--chip-radius`).
-
-   Was a fixed Barlow Condensed (`--forza6-font-task-ref`, since
-   removed). */
 [data-theme='forza6'] [data-task-ref] {
   font-family: var(--appearance-prose-font, var(--font-sans));
-  /* Title weight normal — not the shared base's `font-medium` (500). On
-     forza6's warm near-white bg that 500 title read heavy beside the bold
-     Rajdhani number (shiki, #task:1766). This lightens only the title; the
-     number keeps its own 700 via the more-specific `[data-task-ref-num]`
-     rule below. Scoped to forza6 so other themes keep the base 500. */
   font-weight: 400;
 }
 
-/* Number-only display face (#task:1760). The chip title keeps the prose
-   sans above; the number span alone gets Rajdhani — the same display face
-   the board / popover task stamp uses (`[data-tasks-num]` below), so a
-   `#1758` in running prose reads with the same "jersey number" identity.
-   Space Grotesk's digits (the prose default here) read poorly to shiki
-   (`10q3aesEBGlhOzP1`); Rajdhani's stand upright and clean. Lighter than
-   the board stamp's 800/.06em — this is an inline number, not a card
-   headline. No colour set: the number inherits the chip's own colour
-   (accent link in prose, muted `--text-secondary` inside a cluster).
-   Other themes have no such rule, so their number stays prose sans. */
 [data-theme='forza6'] [data-task-ref] [data-task-ref-num] {
   font-family: var(--font-display);
   font-weight: 700;
   letter-spacing: 0.01em;
 }
 
-/* Resolved task-ref chip — forza6 wears Tasks' own hue (#task:1766).
-   The shared base (#task:1725, global.css) renders the resolved chip as a
-   borderless `--accent` link (pink here) with a hover underline. In forza6
-   that left the inline task-ref as the ONE task surface NOT wearing its
-   reserved hue: the colour-allocation lock assigns `yellow = task`
-   (forza6.css `--forza6-yellow`), and the task board hero is already a
-   yellow hazard sticker (`[data-tasks-hero]` below). Pulling the inline chip
-   onto that same yellow converges it with the board identity and leaves pink
-   for channels only — inline: yellow = task, pink = channel.
-
-   Loudness is a budget: full `--forza6-yellow` is the brightest fill on the
-   warm near-white chat bg and reads as "loud" in running prose (shiki
-   `1SFFrKXElCQNGO1n`). So the RESTING fill is the SAME token diluted to a
-   pale wash (derived via `color-mix`, not a new hardcoded hex — one source of
-   truth); hover restores the full hue. The frame is a constant solid
-   `--forza6-ink` (the plan-B poster frame, same ink the board hero uses) and
-   does NOT change on hover — only the fill deepens (shiki `bnN39TJ7UmaAj0r1`:
-   "border 没有自己的 hover color，常态采用之前方案 B 的实墨框"). No hover
-   poster shadow (shiki `NCjF1i8uFjx3fE-5`). Number + title go `--forza6-ink`,
-   off the accent pink (`[data-task-ref-num]` sets no colour, so it inherits
-   this). Radius/padding stay the shared `--chip-radius` (0) / `px-1.5`.
-   Scoped to `.markdown-body` so the system-activity-cluster keeps its own
-   treatment. */
-/* Registered so the marker colour can be TRANSITIONED (a plain custom property
-   used inside a gradient won't animate; a registered `<color>` one does). Lets
-   the rest→hover "deepen" animate the band colour in step with the text. */
 @property --forza6-taskmark {
   syntax: '<color>';
   inherits: false;
   initial-value: transparent;
 }
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved'] {
-  /* forza6 dialect of the Studio-Light link model (shiki 2026-08-01,
-     #task:1766): the 记号笔 marker is present in BOTH states — picking a rest
-     TEXT colour proved thankless (bright yellow illegible, yellow⊕ink mixes to
-     olive, pink is the primary-action semantic), so instead of colouring the
-     text we keep it full ink and let the always-on marker carry identity. Text
-     stays full ink in BOTH states (a faded rest text read as low-contrast over
-     the band); only the marker deepens on hover (pale → full bright yellow).
-     No fill / border. */
   background: transparent;
   border: none;
   color: var(--forza6-ink);
-  /* Keep the chip's line box tight (the shared base leaves it unset → grows to
-     the ~1.6 prose line box, which floats the marker band low). 1.24 hugs the
-     band to the text like inline code. */
   line-height: 1.24;
 }
-/* The marker rides the LABEL span (number + title), not the inline-flex chip
-   box — a background on the flex box would sit behind the whole line box, not
-   hug the words. Present at rest in the task-identity gold `--forza6-task-gold`
-   at 66% alpha (mixed toward `transparent` so it stays true-translucent over
-   the chat ground); hover deepens it to full opacity (below), band height
-   unchanged. The gold is shared with the `[data-tasks-hero]` ✓ sticker. */
+
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved'] > span {
   --forza6-taskmark: color-mix(in srgb, var(--forza6-task-gold) 66%, transparent);
   background-image: linear-gradient(var(--forza6-taskmark), var(--forza6-taskmark));
@@ -477,36 +121,16 @@
   background-position: 0 88%;
   transition: --forza6-taskmark 130ms ease;
 }
-/* Hover DEEPENS the marker only (text colour is constant): the band goes from
-   66% to full opacity `--forza6-task-gold`. Base resolved-link hover underline
-   stays suppressed so it doesn't stack a line over the marker. */
+
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover > span {
   text-decoration: none;
   --forza6-taskmark: var(--forza6-task-gold);
 }
 
-/* Cluster task-ref — muted text at rest, ink text + gold 记号笔 on hover
-   (#task:1770). History: #1760 muted it; #1766 made it a full yellow hover
-   tile (pale wash + ink frame); #1770 drops the tile and converges the
-   cluster onto the same 记号笔 idiom as the in-prose chip above, so both
-   task-ref surfaces read as one identity. At rest the chip is quiet
-   `--text-muted` text (no fill, no border, no band); on hover the text
-   deepens to `--forza6-ink` and a `--forza6-task-gold` highlighter band
-   swipes up under the label (same 100%×42% @ 88% geometry as prose, sized
-   0→42% so it grows in rather than the old fill/frame). The band is a
-   background-image on `> span`, so it never reflows the row — no reserved
-   border needed. Title weight follows the forza6 base rule above (400); the
-   number keeps Rajdhani 700 via `[data-task-ref-num]` and inherits the chip
-   colour (muted → ink). Gold, not `--forza6-yellow`: the channel-# sticker
-   keeps the fluorescent yellow; task identity is gold. */
 [data-theme='forza6'] .system-activity-cluster [data-task-ref] {
   background: transparent;
   border: none;
   color: var(--text-muted);
-  /* No hover fill here — the marker rides the label span — so the tile
-     padding the base cluster rule reserves is dead box. Zero it (and the
-     paired negative margin) so this chip sits as bare inline text, matching
-     the prose chip (#task:1776). */
   padding-inline: 0;
   margin-inline: 0;
 }
@@ -528,74 +152,6 @@
   background-size: 100% 42%;
 }
 
-/* ── Markdown inline code ─────────────────────────────────────────
-   Promoted to the token contract in PR-3 (#task:344). The recipe lives
-   entirely in forza6.css via `--bg-inline-code` / `--border-inline-code`
-   / `--inline-code-radius` / `--text-inline-code`, consumed by the single
-   `.markdown-body :not(pre) > code` rule in global.css. No forza6-
-   scoped override here anymore. (#task:1725 quieted it from the old
-   acid-lime poster sticker to a faint neutral wash + no border.) */
-
-/* ── #v5.3 — Member-strip black HUD readout (REMOVED in v5.4) ────────
-   v5.3 wrapped `[data-member-strip]` in a black pill with a "CREW"
-   display-caps label + yellow `attr(data-member-count)` count, on
-   the theory that poster style needed at least one black structural
-   anchor and yellow needed a home.
-
-   shiki `KhxEnRh0ieXnsvS2` + `gBPMrjY_JBISUmLk` "member 黑底很突兀，
-   没有预想的效果好" + Cindy `qMNifjyzme8rlzBd` aligned: black HUD
-   in a cool-white chat header didn't fit the bright poster system
-   — too hard, didn't match titlebar/sidebar vocabulary, read as a
-   foreign element rather than HUD vocabulary. Removed entirely
-   in v5.4.
-
-   Yellow `--text-on-dark-pop` (#FFEB00) once again has no live site
-   in PR-2 chrome — same status as v5.x prior to v5.3. Token still
-   defined in forza6.css for any future surface that introduces a
-   genuine dark structural strip (per Cindy: "等有自然黑结构落点
-   再用"). Don't force it. */
-
-/* ── Add-member `+` — resting block, not a hover-only ghost ──────────
-   shiki 2026-07-27: "add icon 现在 hover 才会有背景色，在 forza6 下，我想
-   保持背景色常驻，这样可以保持 forza6 下 icon 都是 block style 的统一".
-
-   The JSX keeps the trigger deliberately low-key (transparent, hover-only
-   fill) — correct for the soft themes, wrong here: forza6 has no ghost
-   icons. Every glyph in this header is a box (member chips = filled square;
-   the right-hand action cluster = white square + 2px ink + sticker drop;
-   the `#` = pink hero sticker), so a bare `+` reads as an unfinished
-   control.
-
-   FILL ONLY — one declaration, no border, and nothing changes on hover.
-   shiki pared this back in four passes (2026-07-27: the white ground, then
-   the hover ground, then the hover border, then the resting border). What
-   survives is the minimum that makes it a block: a square of
-   `--bg-avatar-ground`, square because the JSX takes `--control-radius: 0`
-   here. The reasoning behind each cut, in case someone is tempted to add a
-   layer back:
-     - ground is the strip's avatar ground, not `--bg-floating`: white on the
-       header's `--bg-chat` is barely a block at all, and the neighbouring
-       member chips are exactly this fill (the agent chip's white is hidden
-       under its avatar image; the human fallback and the `+N` chip both take
-       `--bg-avatar-ground`, global.css #task:1699), so the row shares one
-       visible ground. It used to spell that ground `--bg-elevated`, which was
-       the same colour until the avatar squares moved to an ink wash.
-     - no border: this `+` is a utility affordance sitting next to identity
-       chips. The fill already separates it from the header; a hairline on top
-       is a second chrome layer buying nothing, and a bordered box competes
-       with the members it's meant to serve.
-     - nothing on hover: once a control carries a permanent block, hover has
-       nothing left to build — swapping the ground is a colour reversal (and
-       forza6's pale lime would make a utility `+` louder than the members),
-       and inking an outline draws chrome that the resting state doesn't have.
-       Hover is carried entirely by the glyph darkening from `text-text-muted`
-       to `text-text-primary`, which is the JSX's own
-       `hover:text-text-primary` — these rules never touch `color`.
-   The hover rule therefore exists only to PIN the fill: the JSX carries
-   `hover:bg-bg-hover`, and only this higher-specificity rule can hold it
-   still. Never `--bg-row-hover` here either, which is magenta in forza6.
-   Focus is untouched and stays the JSX's `focus-visible:ring-2` — with no
-   resting border, that ring is the only focus signal this control has. */
 [data-theme='forza6'] [data-member-chip='add'] {
   background-color: var(--bg-avatar-ground);
 }
@@ -603,18 +159,6 @@
   background-color: var(--bg-avatar-ground);
 }
 
-/* ── #v5.3 — Display caps on chrome titles ──────────────────────────
-   shiki `G-dQuqVN5-HTDi-6` "Display caps 字体扩散". Forza HUD
-   character comes from display-caps everywhere chrome labels live.
-   PR-2 v5 only put them on sidebar group titles + TaskRef chips.
-   v5.3 extends to:
-     - titlebar workspace name (`[data-workspace-name]`, Titlebar.tsx)
-     - chat header conversation title (`[data-conversation-title]`,
-       ChannelView.tsx — both regular + thread variants).
-   The hooks are theme-neutral structural names — they don't write
-   forza6 semantics into TSX (Cindy `qu_IItQwHSlsZmMo` constraint).
-   Only forza6 paints these caps; warm themes still see the original
-   `font-serif` rendering. */
 [data-theme='forza6'] [data-workspace-name],
 [data-theme='forza6'] [data-conversation-title] {
   font-family: var(--font-display);
@@ -622,29 +166,6 @@
   text-transform: uppercase;
 }
 
-/* ══ Sticker primitive ══════════════════════════════════════════════
-   forza6's poster-sticker shape language, parameterized once. A consumer
-   opts in with `data-sticker` (+ `data-sticker-tone` for its hue). Axes:
-     · `data-sticker` = ink frame + 0 radius + rest shadow.
-     · `data-sticker-size` = sm / md=default / lg. Border is sm=1px, md=lg=2px;
-       md and lg part only on the shadow rung, never on frame width.
-     · `button[data-sticker]` = interactive: fixed 1px lift, shadow raised to the
-       size's hover tier (see the peel block).
-     · `data-sticker-tone` = fill + glyph colour by MEANING; never geometry.
-       `neutral` = white paper ground + ink glyph over the default ink frame (the
-       app's framed action buttons).
-     · `data-sticker-flat` = drop the rest shadow. `data-sticker-no-frame` =
-       drop the border (a fill that IS ink, or too low-contrast against it,
-       leans on the shadow to read as a poster).
-   Per-instance layout (content-box scaling, padding, glyph `stroke-width`)
-   stays on the element's own rule. Frame colour is ink via `--sticker-frame`;
-   no tone sets it. Other themes ignore `data-sticker`. */
-/* Base is the md default AND the inheritance floor: it SETS both custom
-   properties, so a size-less sticker resolves md without inheriting an ancestor
-   sticker's `--sticker-border-w` / `--sticker-shadow`. sm / lg override; md needs
-   no rule of its own. Border is sm=1px, md=lg=`--control-border-width` (2px);
-   md and lg differ only on the shadow rung. `--sticker-frame` has no setter, so
-   its fallback can't be shadowed. */
 [data-theme='forza6'] [data-sticker] {
   --sticker-border-w: var(--control-border-width);
   --sticker-shadow: var(--forza6-poster-shadow);
@@ -665,13 +186,7 @@
 [data-theme='forza6'] [data-sticker][data-sticker-no-frame] {
   border: none;
 }
-/* Interactive peel — an INTERACTIVE sticker (a `button`) lifts a fixed 1px and
-   raises its shadow to its size's hover tier (sm 2 / md 3 / lg 4 px). Redefining
-   `--sticker-shadow` recomputes the box-shadow, so `data-sticker` +
-   `data-sticker-size` alone own BOTH states. Scoped to `button[data-sticker]` so
-   a static identity glyph (channel `#`, workspace icon) never lifts. The lift is
-   `transform: translateY`, which composes with a consumer's own `translate`
-   property (e.g. a FAB's `-translate-x-1/2` centring) rather than replacing it. */
+
 [data-theme='forza6'] button[data-sticker] {
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
@@ -685,13 +200,7 @@
 [data-theme='forza6'] button[data-sticker][data-sticker-size='lg']:hover:not(:disabled) {
   --sticker-shadow: var(--forza6-poster-shadow-hover-lg);
 }
-/* Focus ring — the gap-filler for interactive stickers with no base focus of
-   their own (channel/thread header actions, Dialog corner close, Mermaid, find,
-   jump). `:not(.focus-outline)` defers to the global `.focus-outline` class
-   wherever a consumer already opts in. Only `button` focuses; a static identity
-   glyph never does. Disabled dimming is deliberately NOT here: consumers carry
-   their own opacity floor (.30 / .35 / .40), which a primitive `.4` would
-   regress. */
+
 [data-theme='forza6'] button[data-sticker]:not(.focus-outline):focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
@@ -718,22 +227,6 @@
   color: var(--forza6-paper);
 }
 
-/* ── channel `#` icon — forza6 poster sticker (chat header + sidebar) ──
-   Every channel `#` renders as the same lucide Hash SVG painted into the
-   racing-poster sticker — yellow ground + ink glyph + ink frame + 0 radius +
-   hard offset ink shadow (shiki v6.7.1 "黑黄 box", #task:917):
-     - Sparse content lists (`[data-channel-icon]`: search / archived / task
-       filter / activity / saved) — small chip (1px border / 1px shadow),
-       painted in its own rule below. The dense nav lists opt OUT of the chip
-       entirely, in every state.
-     - Chat header (`[data-conversation-hash-icon]`, ChannelView +
-       MessageScreenshotView export) — the HERO of the family, scaled up via
-       content-box (18px viewport + 4px pad → framed chip ≈28px, ~75% taller
-       than the 16px title text); vertical-align:middle + margin-right pin it
-       beside the italic title.
-   The header `#` used to be a styled text glyph; shiki asked to unify it onto
-   the same icon as the sidebar across every theme, so the old text-sticker
-   rule was dropped and both surfaces now share the icon language. */
 [data-theme='forza6'] [data-conversation-hash-icon] {
   display: inline-block;
   vertical-align: middle;
@@ -743,75 +236,18 @@
   padding: 4px;
   margin-right: 0.4em;
   stroke-width: 2.5;
-  /* colour + poster shape via `data-sticker data-sticker-tone="channel"`
-     (default md size = 2px frame + base shadow, the hero lift). */
 }
 
-/* ── #task:491 — channel header italic (forza6 only) ─────────────────
-   shiki bfStYyhvHahhNoKa "forza6 主题的 channel header 用斜体（包括
-   前面的#号）". Originally italic was applied to BOTH the channel
-   title AND the magenta `#` glyph as one subhead unit.
-   v6.4 update (shiki #task:917): "把 channel header 的 # 号的斜体
-   取消，但是保留后面的 channel title 斜体". Once the `#` became a
-   poster sticker (pink fill + white text + ink frame + box-shadow,
-   v6.4), the synthesized oblique on the white capital `#` inside
-   the chip read as drift rather than design — poster stickers
-   typically use upright display caps. Title stays italic (event-
-   poster subhead language); the upright `#` sticker now reads as
-   a stamped chip pinned beside the italicised title.
-
-   - DOES italicize: `[data-conversation-title]` (chat header,
-     channel + thread variants).
-   - DOES NOT italicize: `[data-conversation-hash-icon]` (an SVG icon,
-     unaffected by font-style), `[data-workspace-name]` (titlebar),
-     sidebar `<Hash />` SVG icon. */
 [data-theme='forza6'] [data-conversation-title] {
   font-style: italic;
 }
 
-/* `<Hash />` channel `#` = yellow poster sticker mirror of the chat header `#`
-   (v6.4, #task:917). Lucide Hash is a 14px `size-3.5` SVG with
-   `stroke="currentColor"`; we turn the SVG itself into a sticker chip:
-     - yellow fill + ink border + 0 radius (the recipe);
-     - color: ink so currentColor pushes the Hash strokes to ink;
-     - box-sizing: content-box so the Tailwind `size-3.5` stays 14×14 inside
-       while padding/border grows the visible chip a few px each side (final
-       chip ≈ 18×18). With border-box (the global default) the 1px border + 1px
-       padding would chew the 14px size class down to a 10px Hash.
-     - stroke-width 2 — the yellow fill carries the weight, strokes lighten.
-
-   This is the DEFAULT: the sparse content-area lists (search / archived / task
-   filter / activity / saved) KEEP the colour pop — a `#` there is one accent in
-   a varied list, not repeated noise (shiki #task:1441: "这些地方需要一些色彩点缀").
-   No drop-shadow at rest: the forza6 `#` sticker is FLAT by default; the shadow
-   lift is SPECIAL (chat-header hero) only — shiki #task:1441. */
 [data-theme='forza6'] [data-channel-icon] {
   stroke-width: 2;
   box-sizing: content-box;
   padding: 1px;
-  /* colour + shape via `data-sticker data-sticker-tone="channel"
-     data-sticker-size="sm" data-sticker-flat` — small chip, FLAT at rest
-     (the lift is the chat-header hero only). */
 }
 
-/* Dense NAVIGATION lists (the browse tree + agent-activity roster) drop the
-   sticker in EVERY state — repeated down a long list the yellow fill reads heavy
-   and borrows Tasks' fluorescent yellow as mere row decoration, spending the
-   tasks hue budget. Quiet ink glyph (mirrors warm/slack, which strengthen the `#`
-   by COLOUR alone); selection is carried by the ROW, not by the icon (see the
-   selected-row note below). Scoped to these two containers only — every other
-   surface keeps the pop. (shiki #task:1441, extended to the selected row
-   2026-08-08)
-
-   The container hook is `[data-sidebar='workspaces']` — the ONE browse column
-   since #task:1889 folded the channel column into it. It was `'channels'` (the
-   retired `ChannelsSidebar`'s aside), which after the merge matched nothing, so
-   every channel row fell through to the loud default and the sidebar read as
-   "all rows selected" (shiki, #task:1889 review). STARRED rows are unaffected
-   either way: their `#` is a `ChannelIcon variant="utility"` and carries no
-   `data-channel-icon` hook at all.
-   The chat-header `#` (`[data-conversation-hash-icon]`) is a SEPARATE hook and
-   stays a hero sticker — the single-instance surface where loudness belongs. */
 [data-theme='forza6'] [data-sidebar='workspaces'] [data-channel-icon],
 [data-theme='forza6'] [data-agent-activity] [data-channel-icon] {
   background-color: transparent;
@@ -821,81 +257,16 @@
   color: var(--forza6-ink);
 }
 
-/* No selected-row override in those two lists: the `#` stays the quiet ink glyph
-   in every state (shiki, 2026-08-08). The selected ROW is already the sticker —
-   lime fill + ink frame (+ poster shadow in the sidebar) — so re-stickering the
-   icon inside it nests a second ink frame 3px in and reads as two focal points in
-   one row; the default move when something reads heavy is to remove a layer.
-   The harder reason is hue: that chip's fill was `--forza6-yellow`, which in this
-   theme is the TASKS semantic, so a selected channel row was spending the tasks
-   hue budget on nav decoration — the same reason the resting glyph was quieted in
-   the first place (#task:1441), applied to the one state it had been left out of.
-   Dropping the override also removes the old geometry jump: the sticker was
-   content-box + border + padding, so the `#` inflated ~5px on selection and
-   nudged the title. Both dense nav lists lose it together — it was one recipe.
-   The chat-header hero `#` and the sparse content lists are untouched. */
-
-/* Task-filter channel TRIGGER: the sticker identity, TIGHTENED to the shared
-   14px trigger-glyph box so it sits height-uniform with its sibling triggers
-   (workspace / assignee / from) instead of inflating to ~18px (shiki #task:1441
-   review — "我需要一致"). The default sticker is content-box + 1px border + 1px
-   padding = ~18px. We keep content-box (border-box on an <svg> with a `width`
-   attribute doesn't reliably shrink it) and instead SHRINK the glyph: an
-   explicit 12px viewport (overriding the 14px `size` attribute) + 0 padding, so
-   12px glyph + 1px ink frame each side = 14px total. The Hash reads a touch
-   smaller but the fill + frame still say "poster sticker". Compact-control
-   tightening only — the general sticker geometry stays padded for identity
-   surfaces. */
 [data-theme='forza6'] [data-channel-icon].task-filter-channel-hash {
   width: 12px;
   height: 12px;
   padding: 0;
 }
 
-/* ── Workspace `W` identity badge — filled ink square (#task:1160) ──
-   WorkspacesPanel renders a bare serif `W` (`[data-workspace-icon]`) for
-   PINNED / WORKSPACES / ARCHIVED rows. In base themes it inherits the row's
-   muted ink, so next to DM rows — which carry a filled square avatar — the
-   workspace glyph reads as plain text and gets lost in the list (shiki).
-
-   Fix: paint it as a FILLED square badge so a workspace row gets the same
-   "identity object" weight as a DM avatar — and nothing more. Deliberately NO
-   poster shadow / border: the `#` channel chip is a sticker (it earns the hard
-   ink shadow as a primary nav target), but the workspace badge only needs to
-   match an avatar's weight, and avatars carry no shadow. The first cut added
-   the sticker shadow (rest + a heavier selected lift) and read as over-
-   designed (shiki) — so this is just fill + glyph. Hue allocation in forza6 is
-   fully spent (yellow=tasks/`#`, pink=accent/unread, lime=selection, orange=
-   in_review, teal=hosts, indigo=code/closed), so we use a neutral ink fill +
-   paper glyph rather than grabbing a festival hue; it still pops on the cream/
-   lime ground and rhymes with the near-ink Codex/Cursor avatar squares. Square
-   (radius 0), glyph shrinks to sit inside the fill rather than flush. */
 [data-theme='forza6'] [data-workspace-icon] {
   font-size: 11px;
-  /* ink fill + paper glyph + square via `data-sticker
-     data-sticker-tone="workspace" data-sticker-no-frame data-sticker-flat`
-     — near-sticker: fill + glyph only, no frame/shadow (shiki: fill+glyph,
-     not over-designed). */
 }
 
-/* ── Sidebar single-row count badges — subdued metadata (v6.5r, #task:917) ─
-   `Sidebar.tsx` Saved row renders a count span at the right edge
-   tagged `data-sidebar-count`. The group-count rule above (lines
-   289-301) targets `.text-text-muted/70` and only catches the
-   collapsible WorkspaceGroup headers; this rule catches the new
-   per-row HUD chip locations.
-
-   v6.5 first painted this with the same yellow-on-ink poster sticker
-   recipe as the section-group counts. v6.5r demoted both back to
-   monospaced muted text for the reasons documented on the group-count
-   rule above (shiki "干扰严重"). Saved-row counts and section-group
-   counts share one quiet metadata vocabulary; the loud poster
-   sticker is reserved for `[data-sidebar-unread]` and the `#`
-   channel chip.
-
-   #task:1947 dropped the `opacity: 0.85` here for the same reason as the
-   group-count rule above: two dilutions of the lightest ink rung at 10px put it
-   under AA. It stays quiet on muted ink alone. */
 [data-theme='forza6']
   aside[data-sidebar] [data-sidebar-count] {
   color: var(--text-muted);
@@ -911,78 +282,20 @@
   opacity: 1;
 }
 
-/* ── Sidebar unread badge — square poster sticker (v6.5c, #task:917) ──
-   `sidebar-shared.tsx:149` paints the unread count as a pill with
-   `rounded-full` + pink fill. shiki: "unread badge 现在是圆形的，
-   不是正方形". Forza6 chrome is poster hard-cut everywhere else
-   (every chip in this file resolves to 0 radius), so the round pill
-   reads as a foreign system component.
-
-   Fix: data-sidebar-unread hook, forza6 paints it as a square
-   sticker — 0 radius, 1px ink border, 1px ink box-shadow投影.
-   Keeps the pink `bg-accent` fill from the renderer (unread is the
-   attention beacon slot — same role pink owns in the chat header
-   `#` sticker; the colour signals "look here", the geometry signals
-   "I'm a sticker"). White-ish text on pink ≈ 3.6:1, AA-large at
-   10px bold. The 1px border + 1px box-shadow match the sidebar
-   `[data-channel-icon]` chip's offset family (small chip → thin
-   border, thin shadow).
-
-   方形圆角现由 consumer 读 `--pill-radius`（forza6=0）提供，不再靠本规则
-   `!important` 压 Tailwind `.rounded-full`；本规则只留 1px ink 边框 + 投影。 */
 [data-theme='forza6'] [data-sidebar-unread] {
   border: 1px solid var(--forza6-ink);
   box-shadow: var(--forza6-poster-shadow-sm);
 }
 
-/* v-#task:1870: the QUIET tier (Mentions only) keeps the square poster geometry
-   and the ink border — it is still the same sticker family — but drops the 1px
-   投影. The shadow is the "lift" budget, and lift is exactly what separates the
-   beacon from the reference count; a quiet badge that still lifts reads as loud
-   with a missing fill. Same low-end reasoning as [data-thread-unread='dot']
-   below (bare square, no shadow). The renderer already withholds the accent
-   fill, so no colour is overridden here. */
 [data-theme='forza6'] [data-sidebar-unread][data-unread-tier='quiet'] {
   box-shadow: none;
 }
 
-/* ── Threads-list per-thread unread — forza6 square vocabulary (#task:1226) ──
-   ChannelThreadsPanel's ThreadRow maps thread unread to one of two weights
-   off `viewer_following`, on a single locked hue (pink `bg-accent`); shape +
-   presence-of-count carry the weight, never a second colour:
-     - followed (strong, actionable) → `data-thread-unread="sticker"`: a
-       filled count sticker. Same square-poster treatment as the sidebar
-       unread badge above (0 radius + ink border + 1px ink投影), so the two
-       "counted" beacons read as one family.
-     - non-followed (weak, ambient) → `data-thread-unread="dot"`: a tiny
-       hint dot, no count. Squared to forza6 vocabulary but NO border/shadow
-       — at 6px a border would dominate and lift it to sticker weight; the
-       bare square keeps it the low-key end of the ladder.
-   两档方形圆角现由 consumer 读 `--pill-radius`（forza6=0）；本规则只留
-   sticker 档的 ink 边框 + 投影，dot 档除圆角外无覆写，已随之删除。 */
 [data-theme='forza6'] [data-thread-unread='sticker'] {
   border: 1px solid var(--forza6-ink);
   box-shadow: var(--forza6-poster-shadow-sm);
 }
 
-/* ── Collection item card — poster hard-cut + structural hover ──────────────
-   ONE rule for every side-panel list card: Search / Saved / Archived /
-   Activity / Thread / Attachment rows, all rendered through
-   `<CollectionItemCard>` which carries `data-collection-card` (was three
-   parallel hooks list-row / thread-row / attachment-row, now consolidated).
-
-   Forza6 paint:
-     - Resting: square corners come from the card's own
-       `rounded-[var(--row-radius)]` (forza6 `--row-radius: 0`); no radius
-       override is needed here (dropped a redundant `border-radius: 0` that
-       merely restated the token). The inner icon has no radius utility, so
-       it is square by default too.
-     - Hover: STRUCTURAL only — ink border + 1.5px ink drop shadow + 1px lift,
-       NO ground colour change. The `!important` pins the ground to
-       `--bg-floating` so the poster stays paper on hover (markdown previews /
-       inline-code chips inside never flicker) regardless of any theme bg-hover
-       default. Hover is the ONLY shared state painted here; focus stays on each
-       consumer's own interactive element, and no consumer has a selected state. */
 [data-theme='forza6'] [data-collection-card] {
   transition: transform 150ms var(--ease, ease),
     border-color 150ms ease,
@@ -995,18 +308,6 @@
   transform: translateY(-1px);
 }
 
-/* ── #v5.3 — Send button as poster sticker ───────────────────────────
-   shiki later promoted Composer's icon-only send button to a default
-   text button. For forza6 this block now only keeps the theme's
-   poster treatment: magenta surface, near-black text, square corners,
-   and display caps.
-
-   #task:1128: corners are fully square (0, not the old 2px). The send
-   button is the left half of a split send-button; a 2px radius here
-   rounded the inner (seam) corner against the square caret half, so
-   the two halves read as mismatched. forza6's 0-radius poster vocab
-   wants hard corners anyway. The caret half (`send-more`) is already
-   square via its Tailwind classes. */
 [data-theme='forza6'] [data-composer-action='send'] {
   background-color: var(--brand-primary);
   color: var(--text-on-brand);
@@ -1024,42 +325,10 @@
   background-color: var(--brand-primary);
 }
 
-/* ── #v5.4 — Composer textarea right padding for wider send button ───
-   Kept as a small guard because forza6 display caps and letter
-   spacing make the default text button slightly wider than the base
-   Composer layout. */
 [data-theme='forza6'] [data-composer-input] {
   padding-right: 5.5rem;
 }
 
-/* ── Form-field poster lift (shiki 2026-08-09, #task:1922) ───────────
-   forza6 form controls ARE printed stickers at rest: an ink frame + a
-   base ink drop, together so the frame and drop share one hue (a base
-   ink drop under the default GRAY border read as mismatched — shiki
-   2026-08-09, so the resting border goes ink here). focus deepens the
-   drop to `xl`; hover is unchanged (the field already reads as a
-   sticker). `disabled` drops back to a flat gray box.
-
-   The hook is `[data-input]` — the neutral marker on the BORDERED FIELD
-   SURFACE, which is the control element itself for `Input`/`Textarea`
-   but the FRAME WRAPPER for composite pickers (the `Combobox` primitive
-   div, the `SEARCH_FIELD_FRAME` member-picker `<label>`), because those
-   put the border on a wrapper around a borderless inner `<input>`. Plus
-   `button[role='combobox']` — the role every Radix `Select.Trigger`
-   carries, so ALL selects get it uniformly. It is scoped to `button`
-   on purpose: a bare `[role='combobox']` also matches the borderless
-   inner `<input>` of a combobox / dropdown search box, which would drop
-   a frameless shadow onto transparent text (shiki 2026-08-09 "Agent
-   model 不对" / channel-dropdown search) — the frame lives on the
-   wrapper, hooked above, not on that input.
-
-   Width / radius come from control tokens (`--control-border-width:
-   2px`, `--control-radius: 0`); this rule owns the ink frame + drop.
-   Focus rides `:focus-within` so a wrapper lights up when its inner
-   input takes focus (on a bare input it is equivalent to `:focus`); a
-   Select trigger holds the raised state on `[data-state='open']` while
-   its listbox is open. Private art — other themes leave these flat. The
-   composer textarea is its own main-stage surface, handled below. */
 [data-theme='forza6'] :is([data-input], button[role='combobox']) {
   border-color: var(--forza6-ink);
   box-shadow: var(--forza6-poster-shadow);
@@ -1077,28 +346,6 @@
   box-shadow: none;
 }
 
-/* Select dropdown panel — the printed sheet the sticker trigger opens
-   (shiki 2026-08-09). Radix `Select.Content` sets `role='listbox'` on
-   the popper content element itself — the DIRECT child of the popper
-   wrapper — so `>` reaches every Select dropdown (shared filter selects
-   + bespoke ones) plus any hand-rolled Popover that likewise puts
-   role='listbox' on its Content (the task-board assignee/creator/
-   workspace filters), with no per-consumer hook.
-
-   The `>` is load-bearing: the two channel pickers (task-filter +
-   create-task) are hand-rolled Popovers whose role='listbox' sits on an
-   INNER scroll div — a GRANDCHILD of the wrapper — and a descendant
-   combinator would wrongly wrap that list in the ink sticker. Those
-   pickers instead carry the sticker on the SEARCH INPUT inside the panel,
-   not on the list (shiki 2026-08-09 "我要的是 input 效果，而不是那一 list
-   channel"). Menus/tooltips carry role=menu/tooltip, never matched.
-
-   The `Combobox` primitive is a Radix *Popover*, not a Select, so its
-   list has no `role='listbox'` — it carries the explicit
-   `[data-field-dropdown]` hook instead (the model picker's suggestion
-   sheet). Ink 2px frame to match the trigger + the base poster drop —
-   the soft `shadow-popover` the consumers ship is replaced here (forza6
-   only) by the hard ink offset. */
 [data-theme='forza6'] [data-radix-popper-content-wrapper] > [role='listbox'],
 [data-theme='forza6'] [data-field-dropdown] {
   border-width: var(--control-border-width);
@@ -1106,66 +353,16 @@
   box-shadow: var(--forza6-poster-shadow);
 }
 
-/* ── Non-member Join button — press stamp ────────────────────────────
-   The composer-slot Join affordance a workspace user sees while browsing a
-   public channel they have not joined (`ChannelJoinBar`). It is a primary CTA
-   and takes its whole poster identity from `[data-primary-action='commit']`
-   below — green fill, 2px ink frame, hard ink shadow, hover peel. This hook is
-   left with the ONE thing that is specific to it: a full-width composer-slot
-   button is big enough to feel like a physical stamp, so pressing it collapses
-   the lift. (It used to duplicate the frame + shadow here on top of a
-   `--bg-row-selected` fill; the fill was the selection identity, not a commit,
-   and the duplicated geometry drifted from the family by half a pixel.) */
 [data-theme='forza6'] [data-channel-join]:active:not(:disabled) {
   transform: translate(1px, 1px);
   box-shadow: var(--forza6-poster-shadow-sm);
 }
 
-/* ── #v5.5 — Multi-line fenced code block as dark HUD island ────────
-   shiki `GpO6aSc83fIkGZ-1` "多行 ``` 围栏代码块需要处理" + Cindy
-   `VGm9HpWGWyDx5bhf` "深色 HUD/code island，保留可读性，lime/粉只
-   做边框或小标题，不要把大段代码染成高饱和底".
-
-   PR-2 token promotion (#task:346) moves the structural recipe to
-   the global rule via the `island` token family — forza6.css sets
-   `--bg-island` (near-black navy `--forza6-code-island`, was deep teal
-   `#0F2F2C` before #task:1835) / `--text-island` / `--border-island`,
-   so `.markdown-body .code-block` and
-   `.code-block pre` pick those up directly. What stays in this
-   forza6-only block:
-     - Poster sticker geometry: 2px near-black outline + 0 radius — the
-       same hard-cut poster vocabulary as inline-code
-       (`--inline-code-radius: 0`), floating frames (`--floating-radius:
-       0`) and controls (`--control-radius: 0`).
-     - Header is a full-bleed cap, NOT a slab framed inside the outline.
-       The header carries a `-2px` top/left/right margin so it
-       overlaps the 2px black frame and meets the island's outer edge,
-       which needs `overflow: visible` on the island (safe at radius 0 —
-       the rounded-corner clip the base rule relied on is moot here, and
-       `pre` keeps its own `overflow:auto`). The black frame then reads
-       as the body's border only, so the island reads as two parts:
-       white header cap + framed code body. Not a code-island role — a
-       forza6 chrome role.
-     - Header strip: WHITE cap with ink foreground + an ink hairline dividing
-       it from the navy body. slack-dark is the only theme that keeps a dark
-       header now. Header bg stays forza6-scoped because it
-       overrides the global `--code-block-header-bg` token this rule ignores.
-     - ink small label for the language tag (lime is unreadable on white;
-       lime/粉 survives only on the body border + the mermaid active
-       segment).
-     - lime-tinted hover on the expand toggle to match the rest of
-       the forza6 hover vocabulary. */
 [data-theme='forza6'] .markdown-body .code-block {
   border: 2px solid var(--forza6-ink);
   border-radius: var(--control-radius);
 }
 [data-theme='forza6'] .markdown-body .code-block__header {
-  /* WHITE cap inside the 2px ink frame. On a light page a white cap has no
-     boundary of its own, so it takes the block frame's outline plus an ink
-     border-bottom to divide it from the navy body. Not box-in-box: the header
-     carries no inset border of its own, it fills flush to the frame's inner
-     edge. Only the colour is forza6's here — the width comes from the shared
-     `--control-border-width` on the base rule. */
   background: #FFFFFF;
   border-bottom-color: var(--forza6-ink);
 }
@@ -1180,8 +377,6 @@
   color: var(--forza6-ink);
 }
 [data-theme='forza6'] .markdown-body .code-block__copy:hover {
-  /* Peel to a lime chip on hover — the forza6 interactive vocabulary, and
-     ink-on-lime holds contrast where lime text on white would not. */
   color: var(--forza6-ink);
   background: var(--forza6-lime);
 }
@@ -1197,20 +392,6 @@
   background: var(--forza6-lime);
 }
 
-/* ── Mermaid header controls — forza6 poster stickers ───
-   Each control opts in with `data-sticker` (inert in every other theme — the
-   primitive at the top of this file only paints under `[data-theme='forza6']`),
-   so it inherits the shared poster geometry there: 0 radius + ink frame + hard
-   offset shadow at the `md` size (2px border, base rest shadow). This block
-   supplies only what the primitive leaves open — the FILL and interior padding.
-
-   Utility controls (zoom / fullscreen) and the INACTIVE view segment take a
-   NEUTRAL paper fill: they wear the poster SHAPE without spending the accent
-   hue on chrome. The ACTIVE view segment earns the lime fill — a genuine
-   selected state, the one place loud is paid for. Hover does NOT swap the fill:
-   it only deepens the poster's offset shadow and lifts 1px, so the accent stays
-   reserved for the selected segment. The extra header gap keeps each sticker's
-   offset shadow off its neighbour. */
 [data-theme='forza6'] .markdown-body .mermaid-block__controls,
 [data-theme='forza6'] .markdown-body .mermaid-block__switch {
   gap: 0.3em;
@@ -1220,13 +401,9 @@
   background: var(--forza6-paper);
   color: var(--forza6-ink);
   padding: 0.1em 0.3em;
-  /* Only fill / padding / typography live here. Frame width, rest + hover
-     shadow, lift and transition are owned by the sticker primitive + the `md`
-     size on the buttons — no private `--sticker-*` override. */
 }
 [data-theme='forza6'] .markdown-body .mermaid-block__controls .mermaid-block__icon[data-sticker],
 [data-theme='forza6'] .markdown-body .mermaid-block__controls .code-block__copy[data-sticker] {
-  /* Icon-only controls stay square — symmetric hit area, not text padding. */
   padding: 0.15em;
 }
 [data-theme='forza6'] .markdown-body .mermaid-block__switch .mermaid-block__seg[data-sticker] {
@@ -1235,70 +412,20 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
-/* Active view segment = lime poster sticker (earned selected state). Wins over
-   the neutral paper fill above by the same specificity + later source order. */
 [data-theme='forza6'] .markdown-body .mermaid-block__switch .mermaid-block__seg[data-sticker][data-active='true'] {
   background: var(--forza6-lime);
   color: var(--forza6-ink);
 }
 
-/* ── Fullscreen viewer modals — forza6 dividers + footer stickers ──
-   The modal ink frame is the shared `[data-modal-shell]` rule (below, near the
-   poster shadow) — every forza6 modal wears one frame. These rules only add the
-   header/footer dividers and the footer −/+ stickers.
-
-   Modal header/footer dividers render ink here, not the faint `--border-subtle`
-   the base classes carry: on forza6's paper a structural seam is ink, matching
-   the code-block header and the poster frame. Width still comes from the shared
-   `--control-border-width`; other themes keep their subtle divider. */
 [data-theme='forza6'] [data-modal-divider] {
   border-color: var(--forza6-ink);
 }
-/* The fullscreen viewers' footer −/+ steppers are the shared control primitive
-   (base `Button` + `neutralAction`), so forza6 already frames them through the
-   `[data-neutral-action]` poster rule — same border/paper/ink/shadow as the
-   Copy/Download buttons beside them. The steppers are borderless by default
-   (global.css); on forza6's paper they take the ink frame back so the footer
-   reads as one control family — width still from `--control-border-width`. */
+
 [data-theme='forza6'] [data-zoom-stepper],
 [data-theme='forza6'] [data-zoom-stepper]:hover:not(:disabled) {
   border-color: var(--forza6-ink);
 }
 
-/* ── #v5.5b — Forza6 code island syntax palette (dark) ───────────────
-   Cindy `z06bLIkQ7jnxc17V` blocker. global.css:23 imports
-   `highlight.js/styles/github.css` (light theme); rehype-highlight
-   wraps fenced code tokens in `.hljs-*` spans whose github-light
-   colors (e.g. `.hljs-string {color:#032f62}` deep blue) become
-   nearly invisible on the dark island ground (≈ 1.5:1 contrast — fails
-   AA). Ground was deep-teal `#0F2F2C` when this was written; it is now
-   near-black navy `--forza6-code-island` (#task:1835) — the github-light
-   problem this palette solves holds on either.
-
-   Fix: scope a small dark palette inside `[data-theme='forza6']
-   .markdown-body .code-block` only — this leaves github.css
-   untouched globally so warm themes / inline-code outside the
-   island stay correct (Cindy "不要换全局 highlight theme").
-
-   PR-7 (#task:357) promoted the literal colours into theme-private
-   `--forza6-syntax-*` tokens in `forza6.css`. Selectors stay here
-   because this remains forza6-only — see Cindy `9_55SzDv3OjHYxYD`:
-   "scope 以 theme-private cleanup 计，不计入跨主题 token promotion".
-
-   Palette borrows from the mockup's `.island .k/.s/.c` recipe so
-   the code island reads as a Forza HUD readout:
-     - keyword / built_in / title / tag → lime (energy)
-     - string / attr / variable        → soft pink (mockup .island .s)
-     - number / literal / symbol       → cyan
-     - comment / quote                 → muted white 0.45 (mockup .island .c)
-     - meta                            → muted white 0.55
-     - addition (diff)                 → lime
-     - deletion (diff)                 → coral (mockup .tool-body .del)
-   All contrasts on the `--forza6-code-island` ground are AA+ except
-   comments, which stay 0.45 alpha as the mockup intends — de-emphasized by
-   design, and they still clear the 3:1 UI-component floor (≈4.5:1 composited).
-   The #task:1835 move from teal `#0F2F2C` to navy `#07111F` LOWERED the
-   ground's luminance, so every light-on-dark ratio here only went up. */
 [data-theme='forza6'] .markdown-body .code-block .hljs,
 [data-theme='forza6'] .markdown-body .code-block .hljs * {
   color: var(--forza6-syntax-base);
@@ -1338,15 +465,6 @@
 [data-theme='forza6'] .markdown-body .code-block .hljs-meta-string {
   color: var(--forza6-indigo-meta);
 }
-
-/* Content selection inside the code island — indigo highlight (#task:762
-   placement A). Scoped to `.code-block` so it does NOT touch the global
-   `::selection` (which stays `--accent-soft` for prose) and never goes
-   through `--bg-hover` (would tint the scrollbar). Deep indigo ground +
-   white text reads ~8:1; selecting over a lime keyword or the indigo
-   header slab both stay legible because the white text overrides the
-   token colour while selected. shiki `kQv1HDktm-y_HA1n` asked the
-   selection colour be designed to match, not left on the system blue. */
 [data-theme='forza6'] .markdown-body .code-block ::selection {
   background: var(--forza6-indigo-select);
   color: #FFFFFF;
@@ -1366,44 +484,13 @@
   font-weight: 700;
 }
 
-/* ── Chat header action cluster — layout only ───────────────────────
-   The cluster itself has no frame / paint; it carries only gap / flow. Each
-   action button declares its own sticker axes (`data-sticker` + size + tone),
-   so there is no button-painting rule here to drift. */
+/* ── Chat header action cluster — layout only ─────────────────────── */
 [data-theme='forza6'] [data-channel-actions] {
   border: 0;
   border-radius: var(--control-radius);
   padding: 0;
   background: transparent;
 }
-/* ── Primary CTA — the filled poster sticker (#task:1623) ─────────────
-   Every solid-filled commit in the app: the settings modals' `Save`, the
-   Create agent / workspace / channel confirms, New computer's Finish,
-   `Save settings`, Switch runtime, the connect / retry gates. One hook
-   (`[data-primary-action]`, see `features/common/PrimaryAction.ts`) after
-   shiki 2026-07-26: "遇到这类 button 在 forza6 下没有 post sticker 以及
-   hover 效果的一起加上" — the avocado fill alone left these reading as flat
-   rectangles beside ink-framed stickers. This replaces two divergent
-   one-offs (`[data-channel-settings-save]`, `[data-host-action='commit']`);
-   don't add a third — consume the hook.
-
-   PRIMARY BY FILL, not by shape: the base `default` variant's
-   `--bg-control-primary` fill and its label colour are left untouched (no
-   `background-color` at REST — that would flatten the fill to neutral), and
-   this rule contributes only the poster chrome the other stickers share:
-   2px ink frame, hard corners, hard ink drop shadow.
-
-   On HOVER the fill is PINNED back to the resting `--bg-control-primary`,
-   cancelling the variant's `hover:bg-[--bg-control-primary-hover]` shift, so
-   hover is a pure poster PEEL — the shadow grows 1.5px → 2.5px against the
-   consumer's 1px lift, exactly like `[data-destructive-action]` and
-   `[data-host-action]`. A fill that also changed hue would be a second,
-   redundant hover channel on top of the peel.
-
-   Motion lives at the consumer (`primaryAction()`), NOT here: Tailwind v4's
-   `-translate-y-px` writes the `translate` property while a theme
-   `transform: translateY()` is a separate property, so declaring the lift in
-   both places stacks them into a 2px jump. Identity here, motion there. */
 [data-theme='forza6'] [data-primary-action='commit'] {
   border: var(--control-border-width) solid var(--forza6-ink);
   border-radius: var(--control-radius);
@@ -1413,39 +500,11 @@
   background-color: var(--bg-control-primary);
   box-shadow: var(--forza6-poster-shadow-xl);
 }
-/* Focus is an `outline`, never a ring: the sticker's `box-shadow` and the
-   Button primitive's Tailwind focus ring are the same property, and the base
-   already declared `outline-none` — so the sticker silently swallowed the ring
-   and tab showed nothing at all (the bug `[data-sticker-close]` /
-   `[data-destructive-action]` already fixed the same way). Ink joins the
-   sticker's own hue set. */
 [data-theme='forza6'] [data-primary-action='commit']:focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
 }
-/* The Cancel peer of this commit (`[data-primary-action='cancel']`) is NOT
-   painted here — it is the SAME ink sticker as the destructive pair's Cancel and
-   shares its rules verbatim further down in this file (search
-   `data-destructive-action='cancel'`). One definition on purpose: a Cancel
-   answers a green Create and a red Delete identically, so the two must not be
-   able to drift apart by a half-pixel of shadow. */
-/* aria-pressed buttons in the cluster (conv-header Threads toggle, and
-   the Thread-header follow/unfollow toggle) get NO forza6 active fill —
-   shiki `rkfn6GQ1O7G8OBaL` (#task:1126): a filled "selected" ground on a
-   header utility icon toggle is too loud (reads as navigation-level
-   identity selection). The active state is carried quietly by the JSX
-   glyph colour (`text-text-muted` → `text-text-primary` when active) and,
-   for follow, the Bell → BellOff icon swap. (Earlier #1109 painted an
-   inverted-ink fill here; intentionally dropped.) */
 
-/* ── Corner-action disabled floor ────────────────────────────────────
-   The close ✕ and its corner peers (`data-task-view-jump`,
-   `data-dialog-corner-action`) now ride the shared `data-sticker` primitive
-   for frame / tone / shadow / peel / focus — each consumer also carries
-   `data-sticker data-sticker-tone="neutral"`. Only the disabled floor stays
-   bespoke: primitive guarantees `:disabled` won't peel but sets no opacity, so
-   a settling bulk action whose consumer forgot a `disabled:opacity-*` class
-   still can't look live while inert. */
 [data-theme='forza6']
   :is(
     [data-sticker-close],
@@ -1455,62 +514,8 @@
   opacity: 0.4;
 }
 
-/* ── Inline find bar actions — ride the sticker primitive ────────────
-   The bar's actions (prev / next / Advanced / close) ride the shared
-   `data-sticker` primitive (`data-sticker data-sticker-tone="neutral"`); the
-   leading search glyph stays a plain mode marker. No bespoke disabled floor:
-   prev/next degrade via their JSX `disabled:opacity-30`. */
-
-/* ── Attachment row action stamps — the one attachment-only inner level ──
-   The row's two right-side actions (Download, Show) now ride the shared
-   `data-sticker` primitive (`data-sticker data-sticker-tone="neutral"`); the
-   row frame itself is still the `[data-collection-card]` poster rule above.
-   `.focus-outline` (JSX) paints the outline only and never touches box-shadow,
-   so the primitive's rest shadow carries through focus with no re-assert. */
-
-/* ── #v5.6 — Task panel (global section + per-conversation Tasks tab) poster polish ────────
-   shiki `kx1DNk-PwdkIcQ_Y` "先做核心 4 个". ChannelTasksTab.tsx
-   and TasksSection.tsx render the same kanban surface (4-column
-   board: todo / in_progress / in_review / done). v5.6 wraps the
-   board with `[data-tasks-board]` and each column with
-   `[data-tasks-column][data-status="..."]`, so a single CSS pass
-   covers both views. All hooks are theme-neutral structural names
-   per Cindy `qu_IItQwHSlsZmMo`.
-
-   Four poster moves:
-     1. Column header → display caps + status-coloured top accent
-        strip (border-top 3px in the column's status colour). The
-        strip declares "this column's tone" the way the mockup's
-        chrome strips do.
-     2. Task card → 2px black border + 2px radius (poster sticker
-        family — same border vocabulary as selected sidebar row,
-        inline code, send button, channel-actions cluster). Hover
-        switches to lime preview ground `var(--forza6-lime-pale)` + 2px lime border
-        to match the rest of the forza6 hover language.
-     3. Task number `#nnn` → magenta + `--font-display` caps + a
-        slight font-size bump, mirroring the chat header `#`
-        (consistent festival anchor across surfaces).
-     4. Status badge — colour rebalance per "freshness", with a
-        deliberate split between "in motion" (cyan, HUD live signal)
-        and "passed / resolved" (green). Lime never represents
-        in_progress because lime reads as success/done in normal UX
-        vocabulary (shiki `mwG1XaIaLcruSe55`).
-          todo        → transparent + 2px black border + black text
-          in_progress → solid cyan `#22B7E0` + black text + black
-                        border (the "you're working on it" HUD live)
-          in_review   → solid magenta + white text + black border
-                        (loud "needs review" beacon)
-          done        → muted dark green tint + dark green text
-                        (de-emphasised, the past — green = passed).
-        Both `TaskStatusBadge` (inline pill on cards) and any other
-        `[data-task-status]` consumer get the same recipe via a
-        single block. */
 [data-theme='forza6'] [data-tasks-column] {
   border: 2px solid var(--forza6-ink);
-  /* Radius is token-driven at the consumer (`rounded-[var(--card-radius)]`,
-     forza6 2px); this block keeps only the poster frame paint. */
-  /* Status-coloured top accent: 3px strip on top, sits inside the
-     2px black border and sells the column's tone at a glance. */
   border-top-width: 5px;
   background-color: var(--bg-elevated);
 }
@@ -1546,15 +551,6 @@
   font-weight: 700;
 }
 
-/* Drop target (#task:784). The base block above forces the column bg to
-   `--bg-elevated` and the header count span to brand magenta — both wrong on
-   the selection wash. The column fill comes from the global
-   `[data-tasks-column][data-drop-target]` rule (→ `--bg-row-selected`, now
-   festive lime at the forza6 root). These higher-specificity overrides only
-   add what global can't reach: keep the poster black frame (global sets it to
-   `--accent` ≈ wine-magenta, which muddies on lime) and flip both header
-   spans to `--text-on-selected` so the brand-magenta count span becomes
-   legible near-black on lime. */
 [data-theme='forza6'] [data-tasks-column][data-drop-target] {
   border-color: var(--forza6-ink);
 }
@@ -1563,13 +559,8 @@
   color: var(--text-on-selected);
 }
 
-/* Task card — poster sticker + lime hover preview. Selectors target
-   `[data-tasks-board] [data-task-number]` so they apply to both the
-   per-conversation Tasks tab and the TasksSection without affecting any other element
-   that happens to use `[data-task-number]` outside a tasks board. */
 [data-theme='forza6'] [data-tasks-board] [data-task-number] {
   border: 2px solid var(--forza6-ink);
-  /* Radius token-driven at the consumer (`rounded-[var(--card-radius)]`). */
   background-color: var(--bg-floating);
   transition: background-color 120ms ease, border-color 120ms ease;
 }
@@ -1578,15 +569,6 @@
   background-color: var(--forza6-lime-pale);
 }
 
-/* Task number `#nnn` — festival anchor, same family as chat header.
-   The font-display + uppercase + larger size make `#325` read as a
-   poster stamp rather than a fine-print id.
-   v6.5k (#task:917): margin-left -1px compensates Rajdhani's wider
-   left side-bearing on `#`, so the stamp visually aligns with the
-   title text in the row below (which uses the default sans body
-   font with a tighter left bearing). Without it the title text
-   appears to start 1-2px left of the `#`, breaking the card's
-   vertical rhythm — shiki "编号和 title 不对齐". */
 [data-theme='forza6'] [data-tasks-num] {
   color: var(--task-num);
   font-family: var(--font-display);
@@ -1596,31 +578,6 @@
   margin-left: -1px;
 }
 
-/* Column-header icons — re-home all 5 statuses to `-bg` token
-   (v6.5l, #task:917) ──
-   `TasksSection.tsx:362` + `ChannelTasksTab.tsx` paint each
-   column header icon with `text-[color:var(--task-status-<status>-text)]`.
-   The `-text` token in the forza6 task-status family is the ON-FILL
-   foreground designed for the saturated chip ground inside cards —
-   todo/done/closed are ON-FILL white, in_progress/in_review are
-   ON-FILL ink. None of those resolve to the status's actual identity
-   colour, so on the canvas column header the icon either disappears
-   (white → pale lime) or collapses to generic ink (in_progress's
-   cyan identity becomes black).
-
-   v6.5l completes v6.5k's partial re-home: ALL FIVE icons now point
-   at the `-bg` token (the saturated colour family). Result: the
-   column-top accent strip, the icon, and the inline status badge
-   all share the same colour for a given status — single semantic
-   colour per status across the three surfaces (shiki #task:917
-   "列头颜色，和 task status 以及 列头的 icon 颜色 三者保持一致").
-   Same column-top-accent rule now also reads from `var(--task-status-
-   X-bg)` instead of literal hex, so the colour source is unified.
-
-   The selector targets `[data-tasks-column-icon]` (the status glyph) and
-   NOT every `> svg`: the header is a collapse toggle button (#task:1169)
-   that also holds a neutral chevron — the per-status colour must hit only
-   the status icon, never the chevron. */
 [data-theme='forza6']
   [data-tasks-column][data-status='todo'] > [data-tasks-column-header] > [data-tasks-column-icon] {
   color: var(--task-status-todo-bg);
@@ -1642,94 +599,21 @@
   color: var(--task-status-closed-bg);
 }
 
-/* Status badge typography is forza6-only: poster-display caps with
-   tight tracking and zero corner radius (poster hard-cut; shiki
-   #task:778 — all 5 status tags share one square solid form). Per-status
-   colours live in the `--task-status-*` token family (see forza6.css);
-   colour application happens in global.css's `[data-task-status]`
-   rules so warm themes get the same structural contract.
-
-   Was 0.10em — at the 9-10px badge size that distance was making
-   letters perceptually merge on the busiest fills. 0.06em matches
-   the `[data-tasks-num]` `#nnn` magenta number's tracking, so the
-   two display-caps elements that anchor the row sit on the same
-   vertical-rhythm vocabulary. */
 [data-theme='forza6'] [data-task-status] {
   font-family: var(--font-display);
   letter-spacing: 0.06em;
   font-weight: 700;
 }
 
-/* The system-event status pill (TaskStatusPill, `[data-task-event-status]`)
-   lives in the chat stream — its row (`.system-message-row`) already runs
-   on the Appearance prose font (`--appearance-prose-font`), but the rule
-   above forces every `[data-task-status]` consumer onto the forza6 poster
-   display face (Rajdhani), so the event pill stayed locked and ignored
-   the font setting (shiki). Re-home just the EVENT pill to the prose font
-   so it tracks Appearance like the surrounding "moved" text. Board badges
-   (TaskStatusBadge — `[data-task-status]` WITHOUT `[data-task-event-status]`)
-   keep the poster caps. Equal specificity to the rule above, wins on
-   source order; the poster tracking / weight still apply. Radius is
-   theme-token now — the whole task-status family (event pill, board
-   badge, message task tag) reads `--task-status-radius`, one capsule form
-   (shiki 2026-08-09); forza6 hard-cuts them all to 0. */
 [data-theme='forza6'] [data-task-event-status] {
   font-family: var(--appearance-prose-font, var(--font-sans));
 }
 
-/* ── Radix popper surfaces (v5.7) ──────────────────────────────────
-   Every Radix floating surface (DropdownMenu / ContextMenu /
-   Popover / HoverCard / Select / Tooltip) wraps its content in
-   `[data-radix-popper-content-wrapper]`. Inside that wrapper we
-   redefine `--bg-hover` so the existing
-   `data-[highlighted]:bg-bg-hover` and `hover:bg-bg-hover` Tailwind
-   utilities (used by AppContextMenu's MENU_ITEM_CLASS, Select.Item,
-   AgentInfoPopover buttons, etc.) resolve to forza6's lime preview
-   `var(--forza6-lime-pale)` — the same hover language as NavRail /
-   inline-code stickers. The sidebar TREE forked off it in #task:1947 (a lighter
-   lime wash, so a hovered row stops matching the committed selection in a list
-   that repeats hundreds of rows); these sparse, transient surfaces keep the
-   full pale lime.
-
-   Lazy-substitution architecture identical to the sidebar pattern
-   from PR-2 R2: a single scoped redefinition flows down through
-   every consumer, no per-component overrides, warm three themes
-   pixel-zero.
-
-   shiki `5b3SIirxQZa1VgnQ` — popper/context-menu hover was still
-   inheriting the global cool `--bg-hover: #DAE0DA`, which read as
-   "untouched / not adapted". Lime + near-black text (forza6 root
-   `--text-primary: #0F1F1D`) gives ~14:1 contrast AAA. */
 [data-theme='forza6'] [data-radix-popper-content-wrapper] {
   --bg-hover: var(--forza6-lime-pale);
 }
 
-/* Composer @mention / #channel picker (#task:505) ───────────────────
-   The mention/channel autocomplete in `Composer.tsx` (PickerMenu) is a
-   hand-rolled floating `<div role="listbox">`, NOT a Radix Popover/
-   Select — so it sits outside `[data-radix-popper-content-wrapper]`
-   and does not inherit the lime `--bg-hover` substitution above. Its
-   keyboard-active row uses `bg-bg-hover` to mark the selection; with
-   the global cool `#DAE0DA` on `--bg-floating: #FFFFFF` (~1.05:1) the
-   highlight is effectively invisible against the popover background.
-
-   PR-1 attempted a scoped `--bg-hover` substitution on the picker
-   container (mirroring the Radix-wrapper pattern). That worked for the
-   active row, but it ALSO bled into `::-webkit-scrollbar-thumb` —
-   `global.css:131` paints the thumb with `var(--bg-hover)`, so the
-   picker scrollbar turned lime too. shiki `oL3Z1aUepvUbFDKg` flagged
-   the scrollbar tint as off-pattern and asked to retry with festival
-   pink (the same brand identity NavRail / sidebar selected rows use).
-
-   PR-2 (this rule) targets the row element directly instead of the
-   variable, so only the active row repaints. Uses `--brand-primary`
-   (#FF2C7A) + `--text-on-brand` (var(--forza6-ink) near-black, AA ~5.56:1) — the
-   same selected-state vocabulary as `--bg-selected` / NavRail icon /
-   sidebar row. Row descendants carry their own `text-text-primary` /
-   `text-text-muted` utilities, so the follow-up rule explicitly lifts
-   the muted meta line and channel hash icon back to the selected-row
-   foreground. Scrollbar thumb stays the default cool wash; no
-   component-layer churn; the other themes pixel-zero. */
+/* Composer @mention / #channel picker (#task:505) ─────────────────── */
 [data-theme='forza6'] [data-composer-picker] [role='option'][aria-selected='true'] {
   background-color: var(--brand-primary);
   color: var(--text-on-brand);
@@ -1740,84 +624,21 @@
   color: var(--text-on-brand);
 }
 
-/* Poster sticker frame for menus + popovers — values now live in the
-   `--floating-border` / `--floating-radius` / `--floating-item-radius`
-   token contract (forza6.css + global.css rules). The surface scope
-   choices (`[data-radix-menu-content]`, `[data-popover-frame]`,
-   inner items by role) are documented in global.css's floating-frame
-   block. Tooltip and Select listbox stay soft on purpose — they sit
-   outside the global rule for the same reason they used to sit outside
-   the forza6 override. */
-
-/* ── Agent / Human panel — forza6 poster identity (#task:417) ─────────
-   Radius for every panel hook is now defined in `global.css` against
-   the per-theme tokens (`--card-radius` / `--chip-radius` /
-   `--control-radius`). This block keeps only the forza6-only
-   *non-radius* identity layered on top of those hooks: the 2px black
-   poster frame, lime hover preview on rows, dashed stroke on
-   placeholders, display-caps typography on pills, the AgentSidebar
-   selected = lime + 2px black recipe.
-
-   See `global.css` "Agent / Human panel — token-driven radius
-   contract" for the radius source of truth. The history of how this
-   contract evolved (#task:411 hard-coded 2px → #task:414 token
-   refactor → #task:415 cascade-layer lock → #task:417 token-only
-   refactor that retired the lock) is captured in
-   `#conv:m-jmqBPrOO8gkYsp`. */
 [data-theme='forza6'] [data-panel-card='row'] {
-  /* #task:815 — same hover-reveal grammar as `profile-section`
-     (#task:814): gray default that recedes, near-black on hover.
-     The earlier "always 2px var(--forza6-ink)" gave every row the sticker
-     identity even at rest, which read as ad-banner the same way
-     profile-section did before its #task:814 fix. Now the structural
-     2px width stays (poster geometry), but border-color animates
-     `--border-subtle` → `--forza6-ink` on hover so the stack reads
-     as a quiet ledger until you pick a row out of it. The lime fill
-     (`background-color: var(--forza6-lime-pale)`) and ink text recolor stay — those
-     are the row's "selected-preview" identity, distinct from the
-     border-only treatment profile-section uses. */
   border: 2px solid var(--border-subtle);
   transition: border-color 150ms ease, background-color 150ms ease,
     color 150ms ease;
 }
 [data-theme='forza6'] [data-panel-card='placeholder'] {
-  /* Empty / error state — keeps the always-black 2px structural frame
-     because dashed-on-gray would read as a non-functional draft.
-     Dashed stroke is the only forza6-specific identity beyond the
-     frame; corners are squared via `--card-radius`-free declaration
-     in global.css. */
   border: 2px solid var(--forza6-ink);
   border-style: dashed;
 }
 [data-theme='forza6'] [data-panel-card='row']:hover {
-  /* Lime preview — same vocabulary as task card / sidebar / NavRail
-     hover. Bump the priority over Tailwind's `hover:bg-bg-hover/60`.
-     Border simultaneously snaps to `--forza6-ink` so the row reveals
-     a full poster sticker (lime fill + ink frame + ink text) on
-     hover, distinguishing it crisply from the gray-bordered rest. */
   border-color: var(--forza6-ink);
   background-color: var(--forza6-lime-pale);
   color: var(--forza6-ink);
 }
-/* `data-panel-card="profile-section"` — Identity / Capabilities /
-   Metadata cards in Agent / Human profile (ProfileSection wraps every
-   one). #task:814 reinstates a poster-style 2px frame, but unlike the
-   v5 "always near-black" treatment that shiki `FDv3rR0UhmOEIPaE`
-   rejected as ad-banner, the new vocabulary is a hover reveal:
 
-     default = `--border-subtle` gray (recedes — the section reads as
-               an information block, not a sticker)
-     hover   = `--forza6-ink` near-black (poster reveal — same hover
-               grammar as NavRail / sidebar rows / inline TaskRef chip)
-
-   Geometry is poster hard-cut — square corners come from the
-   `--profile-section-radius: 0` token routed through global.css
-   (radius contract lives there, not here). This rule ships only the
-   non-radius identity: 2px structural border-width, gray-default
-   border-color, ink-black hover, smooth 150ms transition. The
-   renderer side ships a softer baseline (`border-border-subtle` +
-   `hover:border-border` + transition) so warm keeps its rounded
-   soft-card feel; this rule is the theme amplification, not the spec. */
 [data-theme='forza6'] [data-panel-card='profile-section'] {
   border-width: 2px;
   border-color: var(--border-subtle);
@@ -1826,72 +647,31 @@
 [data-theme='forza6'] [data-panel-card='profile-section']:hover {
   border-color: var(--forza6-ink);
 }
-
 [data-theme='forza6'] [data-panel-pill] {
   /* Pill identity is type + saturation — caps + heavier tracking. */
   font-family: var(--font-display);
   letter-spacing: 0.06em;
   font-weight: 700;
 }
-
-/* `data-panel-pill="schedule-spec"` (cron expression / interval chip) —
-   colour now driven by JSX classes (`bg-warning` for cron,
-   `bg-success` for interval) so the chip color-keys to its KindPill
-   and KindTile (#task:822, shiki `LI8UlqKBuXtWw_gm`). This rule only
-   resets the generic `[data-panel-pill]` display-caps treatment back
-   to mono — cron expressions like `0 10 * * 0` and `every 60s` are
-   code-island content, stylized caps would mangle the values.
-   Background / border / foreground are NOT touched here so the kind
-   semantic stays the single source of color truth. */
 [data-theme='forza6'] [data-panel-pill='schedule-spec'] {
   font-family: var(--font-mono);
   letter-spacing: 0;
   font-weight: 400;
 }
-
-/* `data-panel-pill="schedule-target"` (target conversation chip) —
-   #task:817. shiki: 'tag 背景色没有主题适配。在 forza6 下是灰色,
-   试试 --forza6-indigo-slab.' Target is the "where it fires" pointer,
-   not kind-keyed, so it keeps the saturated indigo-slab landmark
-   (warm theme keeps its softer `bg-bg-surface` baseline from the
-   renderer). Border and background match colors so no visible
-   hairline — the chip reads as a single block of color. White ink
-   reads ~8:1 on `--forza6-indigo-slab`. See
-   `forza6.css --forza6-indigo-slab` doc for scope rationale. */
 [data-theme='forza6'] [data-panel-pill='schedule-target'] {
   background-color: var(--forza6-indigo-slab);
   border-color: var(--forza6-indigo-slab);
   color: #FFFFFF;
-  /* Reset the generic pill display-caps treatment above — same
-     rationale as schedule-spec: structured config text in mono. */
   font-family: var(--font-mono);
   letter-spacing: 0;
   font-weight: 400;
 }
 
 [data-theme='forza6'] [data-panel-tabs] {
-  /* Outer poster bracket only — radius drops to 0 via
-     `--control-radius` in global.css. */
   border: 2px solid var(--forza6-ink);
   padding: 0;
 }
 
-/* ── Hero tab strip — poster sticker (#task:1833) ──
-   shiki: "Create account 的那个 tabs 还能做一下 poster sticker 效果吗?"
-   The `="hero"` density (global.css `[data-panel-tabs]` doc) is the boot
-   auth gate's Sign up ⇄ Log in switch: one modal-level widget, so the
-   sticker goes on the TRACK, not on the active wedge — a sticker is a
-   widget's identity, and which half is on is state inside it. The bracket
-   and the 0 radius are already there from the rule above; the hard ink
-   shadow is what turns that bracket into a sticker.
-
-   The wedge therefore has to go quiet, or the strip carries two lift
-   layers at once: `shadow-sm` on the active segment is the warm themes'
-   embedded-wedge cue and stays theirs, but a soft halo inside a hard
-   bracket reads muddy here (same "半透墨水晕不好" rule as the modal
-   shell above). State is carried by fill + ink text instead, and the
-   divider makes the two halves read as poster cells rather than one
-   field with a lighter end. */
 [data-theme='forza6'] [data-panel-tabs='hero'] {
   box-shadow: var(--forza6-poster-shadow-lg);
 }
@@ -1902,13 +682,6 @@
   border-left: 2px solid var(--forza6-ink);
 }
 
-/* AgentSidebar buttons — control-surface semantics (the rail is a
-   navigation control, not a tile). Selected = lime fill + 2px black
-   border + `--control-radius` (= 0 in forza6); hover (unselected) =
-   lime preview ground so hover reads as a preview of the selected
-   state. Radius is supplied by the global rule on
-   `[data-panel-control]`-style controls; here we only paint the
-   forza6 lime/black surface treatment. */
 [data-theme='forza6'] aside[aria-label='Agent sections'] button {
   border: 2px solid transparent;
 }
@@ -1927,100 +700,13 @@
   border-color: var(--forza6-ink);
 }
 
-/* ── Pane hero stickers — extend the `#` recipe to other key product
-   semantics (v6.6, #task:917, shiki "几个重点产品语义的地方都加上类
-   似风格的 icon, 通过这几个强化的 icon 来培养用户对功能的直觉")
-
-   The chat header `[data-conversation-hash-icon]` taught users that pink
-   square = channel. v6.6 extends the same poster-sticker family to
-   two more product semantics so each pane has a memorable visual
-   anchor:
-     - Tasks  → YELLOW sticker (✓ on hazard yellow). `--forza6-yellow`
-                was dormant until now; semantic fits "highlighter /
-                checklist / racing flag" instantly. Used for the right-
-                pane TasksSection header AND the channel-scoped Tasks
-                tab header so the icon stamps wherever "tasks" live.
-     - Hosts  → DEEP TEAL sticker (Monitor/Globe on poster-teal-deep,
-                paper stroke). v6.6 first tried ink black; shiki feedback
-                "现在这个太黑了, 一个大黑块, 换一个颜色" — replaced with
-                `--forza6-poster-teal-deep` (was NavRail bg in v6.1-v6.3,
-                dormant since v6.4 → perfect revival for hosts identity).
-                Industrial / HUD-readout vibe with hue, not just darkness.
-                Used at HostDetailView hero only (80×80 stamp); the
-                ComputersPanel sidebar rows revert to plain icons —
-                v6.6 first stickered them too but shiki review "不需要
-                改", they read fine as plain glyphs against the small
-                paper sidebar row.
-
-   Color allocation lock-in (post v6.7.1):
-     yellow + ink → channel `#` AND tasks ✓ identity. v6.7 first tried
-                    inverted twin (channel ink-ground + yellow-glyph
-                    vs tasks yellow-ground + ink-glyph); v6.7.1 flipped
-                    channel to share the SAME yellow-ground recipe as
-                    tasks. The two stickers now read as one "loud HUD
-                    marker" family, with the glyph (# vs ✓) carrying the
-                    semantic distinction — like road signs with shared
-                    yellow ground and different symbols
-     poster-teal  → hosts identity (HostDetailView hero only)
-     pink         → unread badge + general brand accent (no longer
-                    `#`-exclusive after v6.7) */
-
-/* Tasks hero — gold sticker, ink CheckSquare icon (22×22).
-   v6.6.1 sized DOWN from the 28×28 chat-header `#` proportion: the
-   tasks-pane header lives in a 36px-tall titlebar (`var(--titlebar-
-   height)`), not the chat header's 48px h-12 surface, so the 28×28
-   sticker only had ~3px of vertical breathing room. Sized to 22×22
-   + 1px ink border + 1px ink shadow = 24px visual footprint.
-
-   v6.7.3 (#task:917, shiki "更可靠的不是 css 覆盖, 而是在不同的地方
-   用不同的外层样式来控制"): v6.6.1 also added a blanket
-   `margin-left: -10px` on the shared hook to compensate for
-   TasksSection's `px-4` (16px) left padding — but the
-   ChannelTasksTab header has different proportions (`px-4 py-3`,
-   no fixed titlebar height) where -10px over-shifted the sticker
-   into the pane edge. Removed: shared icon style only paints
-   identity (colour, border, shadow), each consumer controls its own
-   outer geometry via its header's Tailwind padding instead. See
-   TasksSection.tsx (pl-[6px]) vs ChannelTasksTab.tsx (px-4).
-
-   Used in:
-     - TasksSection.tsx header (`/tasks` right pane title bar)
-     - ChannelTasksTab.tsx header (channel-scoped Tasks tab) */
 [data-theme='forza6'] [data-tasks-hero] {
   width: 22px;
   height: 22px;
   padding: 3px;
-  /* Lucide SVG strokes use currentColor; bumping width gives the
-     poster-stamp weight on the small chip. */
   stroke-width: 2.25;
-  /* gold fill + shape via `data-sticker data-sticker-tone="task"
-     data-sticker-size="sm"` — task-identity gold (see forza6.css token). */
 }
 
-/* Host hero (right-pane HostDetailView): deep-teal fill + paper icon via
-   `data-sticker data-sticker-tone="host" data-sticker-no-frame
-   data-sticker-size="lg"`. NO border (deep-teal vs ink only ~1.4:1 — too
-   weak to read); the 2px ink shadow (lg) alone frames it. Paper-on-teal-deep
-   ≈ 7.6:1 AA + AAA Large. 80×80 footprint stays on the consumer's `size-20`. */
-
-/* ── Members pane refinements (v6.8, #task:917) ────────────────────
-   shiki review of members pane: "runtime tag claude/codex 应该是
-   enum 标签不是普通小字". Wrap the runtime string in `data-agent-
-   runtime` at the MembersPanel call site so forza6 can paint it as
-   a HUD readout — mono caps + tracking — without making the consumer
-   theme-aware. Other themes leave the span styling alone, runtime
-   renders as plain text.
-
-   v6.9.1 sibling: `data-host-kind-tag` on the ComputersPanel sidebar
-   subtitle gets the SAME treatment so the host-kind enum (local /
-   remote / future kinds) reads as a tag, not as muted prose —
-   `subtitle="this computer"` for the viewer's own machine stays
-   prose, every other host's subtitle is the kind tag.
-
-   v6.9.7 sibling: `data-participant-kind` covers the @-mention
-   picker's "what kind of participant" enum — human / future kinds
-   sit alongside the agent's `data-agent-runtime` on the same row,
-   so reusing the rule keeps the picker visually one family. */
 [data-theme='forza6'] [data-agent-runtime],
 [data-theme='forza6'] [data-host-kind-tag],
 [data-theme='forza6'] [data-participant-kind] {
@@ -2030,47 +716,15 @@
   font-size: 9px;
   font-weight: 600;
 }
-
-/* SidebarSection header leading icon (v6.8). MembersPanel passes
-   Users/User lucide icons for AGENTS/HUMANS section identity. Kept
-   restrained per the v6.5r principle (section headers = reference
-   info, not announcement) — small muted ink glyph, no sticker.
-   v6.9: ComputersPanel joins with `Monitor` — same restraint, same
-   hook, no new rule needed. */
 [data-theme='forza6'] [data-sidebar-section-icon] {
   color: var(--forza6-ink);
   opacity: 0.7;
 }
 
-/* ── Computer pane refinements (v6.9, #task:917) ───────────────────
-   shiki review of computer pane: status chip → pill, system facts +
-   proxy URL → mono/tabular HUD readout. The base components already
-   ship the geometry (PresencePill-style outline pill, `tabular-nums`
-   on `<dd>`, `font-mono` on the URL input); forza6 just layers the
-   poster typography on top.
-
-   - `data-panel-pill="host-status"`: outline pill carries READY /
-     DISCONNECTED etc. Tone signal lives in the inner 6px dot's
-     background. forza6 squares the dot (matches the v6.8 sidebar
-     `data-status-pip` treatment) and weights the border/text up
-     slightly so the outline reads as a HUD-frame, not just a body
-     of muted secondary text.
-   - `data-host-system-list`: the 4-row System `<dl>` (OS / Daemon /
-     PID / Uptime). Labels already pick up uppercase tracking via the
-     SystemField component; forza6 paints the values mono + tabular
-     so digits/strings line up as a tight readout.
-   - `data-host-proxy-url`: the Proxy URL `<input>`. Base already
-     ships `font-mono`; forza6 nudges letter-spacing for poster feel
-     and aligns the placeholder/value to the same mono cascade so
-     the field looks like a config slot, not free-form text. */
-
 [data-theme='forza6'] [data-panel-pill='host-status'] {
   border-color: var(--forza6-ink);
   color: var(--forza6-ink);
 }
-/* The inner tone dot carries `data-status-pip`; its square corner now
-   comes from the consumer's `rounded-[var(--pill-radius)]` (forza6=0),
-   so no per-pill radius override is needed in `[data-panel-*]` scope. */
 
 [data-theme='forza6'] [data-host-system-list] [data-host-system-value] {
   font-family: var(--appearance-code-font, var(--font-mono));
@@ -2085,18 +739,6 @@
   letter-spacing: 0.02em;
 }
 
-/* Runtime selection tile — fix the v6.9 pink-border-on-lime-ground
-   clash (v6.9.2, #task:917, shiki "runtime 选中 background 和
-   border 不搭"). The generic `border-accent` class maps to brand
-   pink, which fights the `--bg-row-selected` (acid lime) ground.
-   Swap to ink stroke so the selected tile reads as a poster-sticker
-   family member — lime ground + 1px ink frame, the same syntax the
-   channel `#` and tasks ✓ stickers use with yellow.
-
-   The inner check chip also flips from accent-fill (pink) to ink-
-   fill with paper checkmark, so the chip stops competing with the
-   surrounding lime — high-contrast, single-hue badge embedded in
-   the bright tile. */
 [data-theme='forza6'] [data-runtime-tile][data-checked] {
   border-color: var(--forza6-ink);
 }
@@ -2106,39 +748,7 @@
   color: var(--forza6-paper);
 }
 
-/* ── Settings page (v6.9.3, #task:917) ─────────────────────────────
-   shiki audit of the Appearance pane: hardcoded 6/8/10/999px radii
-   throughout the page collide with forza6's 0-radius poster vocab;
-   the section icon chip's `bg-bg-elevated` resolves to pale-lime in
-   forza6 so it nearly vanishes against paper; selected font-preset
-   pill uses `bg-accent` (pink) which fights the rest of the poster
-   palette; the native range slider has no theme treatment.
-
-   Three theme-neutral hooks let forza6 layer poster styling without
-   touching non-forza6 themes (which keep their polished rounded
-   defaults):
-
-     - `data-settings-icon-chip` — the 28×28 chip behind Palette /
-        Type / Code2 icons. forza6 paints it as a low-intensity
-        poster sticker (paper fill + 1px ink frame + 1px ink shadow):
-        same recipe as the chat header `#` but smaller / quieter
-        because settings ≠ shouting.
-     - `data-settings-pill` + `data-selected` — font-preset pill row.
-        Selected state flips to ink-fill + paper-text (mirroring the
-        v6.9.2 runtime-tile checkbox treatment); both selected and
-        unselected get squared corners.
-     - `data-settings-slider` — the Font size range input. Paints as
-        a poster bar: 4px ink track + 14px square yellow thumb with
-        ink stroke + ink shadow. WebKit pseudos only (Electron =
-        Chromium). Other themes keep the browser default. */
-
-/* (1) Card surfaces — radius is token-driven at the consumer
-   (`rounded-[var(--card-radius)]`, forza6 = 2px hard-cut tile). The old
-   forza6 `data-settings-card { border-radius: 0 }` override fought that
-   token and was the hook's only rule, so both the override and the now-
-   dead `data-settings-card` attribute were removed (#task:1916). */
-
-/* (2) Section icon chip — poster sticker, low intensity. */
+/* ── Settings page (v6.9.3, #task:917) ───────────────────────────── */
 [data-theme='forza6'] [data-settings-icon-chip] {
   background-color: var(--forza6-paper);
   color: var(--forza6-ink);
@@ -2147,14 +757,12 @@
   box-shadow: var(--forza6-poster-shadow-sm);
 }
 
-/* (3) Font preset pill — ink-fill when selected（方形圆角由 --pill-radius 提供）. */
 [data-theme='forza6'] [data-settings-pill][data-selected] {
   background-color: var(--forza6-ink);
   border-color: var(--forza6-ink);
   color: var(--forza6-paper);
 }
 
-/* (4) Font size slider — ink track, square yellow thumb. */
 [data-theme='forza6'] [data-settings-slider] {
   appearance: none;
   -webkit-appearance: none;
@@ -2178,7 +786,6 @@
   background: var(--forza6-yellow);
   border: 1.5px solid var(--forza6-ink);
   border-radius: var(--control-radius);
-  /* Center the 14px thumb on the 4px track: (4 - 14) / 2 = -5px. */
   margin-top: -5px;
   box-shadow: var(--forza6-poster-shadow-sm);
   cursor: grab;
@@ -2195,25 +802,6 @@
   outline-offset: 1px;
 }
 
-/* ── Composer shell (v6.9.7, #task:917) ────────────────────────────
-   Radius is token-driven at the consumer (`rounded-[var(--control-
-   radius)]`), so forza6's 0 comes straight from the token — no
-   forza6-scoped radius override (#task:1916).
-
-   #task:1922 (shiki 2026-08-09 "composer 也需要这个效果"): the composer
-   joins the poster-field family — an ink 2px frame + base ink drop at
-   rest, deepening to the ink `xl` drop on focus, exactly like every
-   other field.
-
-   #task:1924 (shiki 2026-08-09): focus reverted from brand magenta back
-   to ink. An earlier pass (#task:920) treated the composer as the one
-   brand-anchored main stage and lit its focus frame + drop festival
-   magenta; shiki pulled that back so the composer reads as an ordinary
-   ink poster field — focus is a utility signal here too, no saturated
-   hue. Focus-within only deepens the ink drop; the frame stays the
-   resting ink (forza6 `--border-focus = --forza6-ink`), no per-element
-   border override. Stays forza6-scoped — studio-light / slack-dark
-   composers keep their own `--border-focus` painting unchanged. */
 [data-theme='forza6'] [data-composer-shell] {
   border-width: var(--control-border-width);
   border-color: var(--forza6-ink);
@@ -2226,72 +814,11 @@
   box-shadow: var(--forza6-poster-shadow-xl);
 }
 
-/* ── Focus colour (v6.10.2, #task:920) ─────────────────────────────
-   Border + keyboard-focus outline both read solid ink via
-   `--border-focus: var(--forza6-ink)` in forza6.css alone — no
-   decoupling needed. v6.10.1 first tried a translucent ink halo
-   (`--tw-ring-color: rgba(10,10,10,0.45)`) on the theory that the
-   solid 2px ink ring would feel "too heavy"; shiki review "半透墨水
-   晕不好, 直接用 ink 即可" — the half-tone halo read as soft / muddy
-   next to the solid frame, the cleaner read is two layers of the
-   same ink (border + focus outline), hard-stamped. Focus is now
-   drawn app-wide with `outline` (not a box-shadow ring — forza6
-   poster shadows ate the ring; see #task:1920); the outline color
-   inherits `--border-focus` directly, so both layers paint solid
-   `--forza6-ink`. */
-
-/* ── Dialog modal shell ─────────────────────────────────────────────
-   `data-modal-shell` is the single opt-in hook for a forza6 modal's
-   frame + shadow: this one rule paints the ink border and the hard
-   poster shadow, identical on every opt-in shell (the generic Dialog,
-   the three startup gates, `ImagePreviewModal`, `Lightbox`, the Mermaid
-   modal) — no per-shell branch, so no forza6 modal drifts frameless.
-   The poster shadow REPLACES the soft `--shadow-modal` halo rather than
-   stacking (soft + hard on one surface reads muddy). `data-popover-frame`
-   still supplies the cross-theme radius / base frame (warm, slack-dark),
-   but forza6's final modal frame is this rule. Other themes project
-   their own via their own `[data-modal-shell]` rule (iris/studio-light
-   zero it; slack-dark omits it). */
 [data-theme='forza6'] [data-modal-shell] {
   border: var(--control-border-width) solid var(--forza6-ink);
   box-shadow: var(--forza6-poster-shadow-lg);
 }
 
-/* ── Computer footer action stack — poster sticker (#task:1619) ──
-   shiki 2026-07-26: "forza6 加上 poster sticker,同时加上与主题适配的
-   hover 效果". The two page-level computer actions (`Copy diagnostics`
-   + the terminal verb) are now full-width rows in one group, which is
-   what makes them large enough to carry a poster identity — a
-   self-start pill couldn't.
-
-   Everything except the shadow is already token-driven at the
-   consumer (`host-action-button.ts`): forza6's
-   `--control-border-width: 2px` gives the ink frame,
-   `--control-radius: 0` the hard corners, and the hover pair
-   `--border-control-hover` (ink) + `--bg-option-hover` (pale lime)
-   is the cross-theme hover language — of which forza6 keeps only the
-   frame half (the ground is cancelled below, see "peel only"). This
-   rule adds the one thing that has no cross-theme token — the hard
-   ink drop shadow of the poster sticker family (chat-header `#` chip,
-   sidebar selected row, dialog shell).
-
-   Shadow at REST, not earned on hover: unlike a repeated list row,
-   these are exactly two instances at the page footer, and they ARE
-   the page's terminal actions — the surface the sticker language is
-   for.
-
-   Hover GROWS that one shadow 1.5px → 2.5px against
-   `CONTROL_HOVER_LIFT`'s 1px translate, so the gap opens and the
-   sticker peels off the paper — the same hover the destructive
-   sticker below uses (shiki 2026-07-26: "对 cancel 也做一下"). It is
-   still ONE shadow layer changing size, not a second layer stacked on
-   the first. The peel is the WHOLE hover: the ground the consumer's
-   hover pair would paint is cancelled just below, so no button in this
-   family changes colour under the cursor — only the frame recolours
-   and the sticker lifts.
-
-   Identity only — width and spacing stay with the consumer, so the
-   next surface that adopts `data-host-action` can size itself. */
 [data-theme='forza6'] [data-host-action] {
   box-shadow: var(--forza6-poster-shadow);
   transition:
@@ -2301,15 +828,6 @@
 [data-theme='forza6'] [data-host-action]:hover:not(:disabled) {
   box-shadow: var(--forza6-poster-shadow-xl);
 }
-/* Hover is the PEEL ONLY — no ground change (shiki 2026-07-26: "这俩 action
-   button 都保持 hover 无背景色"). `CONTROL_SURFACE_BUTTON` ships the canonical
-   control-hover PAIR (`--border-control-hover` + `--bg-option-hover`), which is
-   right in studio-light / slack-dark where nothing else moves on hover. Here the
-   sticker already answers with a growing shadow against a 1px lift, so the pale
-   lime block was a second, redundant hover channel on top of it — and the frame
-   still recolours, so the affordance doesn't depend on the ground. Held at the
-   variant's RESTING paper (`--bg-floating`, what `outline` sits on) rather than
-   `transparent`, so the button keeps its own surface over whatever it's on. */
 [data-theme='forza6'] [data-host-action='neutral']:hover:not(:disabled),
 [data-theme='forza6'] [data-destructive-action='cancel']:hover:not(:disabled),
 [data-theme='forza6'] [data-primary-action='cancel']:hover:not(:disabled),
@@ -2317,46 +835,6 @@
   background-color: var(--bg-floating);
 }
 
-/* ── Destructive commit — the RED poster sticker ─────────────────────
-   shiki 2026-07-26: every red confirm ("Delete 这类的红色弹窗") should
-   look like the Delete Computer button at the page footer — white paper,
-   red sticker, a hover background change — reached through ONE hook so
-   later destructive surfaces just consume it.
-
-   `[data-destructive-action]` (see `features/common/DestructiveAction.ts`)
-   is the whole family: the page-footer Delete trigger and every dialog
-   CTA that actually performs a delete / revoke. Painting it HERE and not
-   at the consumer is what lets other themes keep their solid `danger`
-   fill — in studio-light / slack-dark a white outline CTA would rank equal
-   to its own Cancel peer, while forza6 can invert it because the red
-   frame + red shadow out-shout an ink-framed Cancel by hue alone.
-
-   The shadow follows the FRAME's hue, never the ink default: a hard ink
-   shadow under a red frame reads as two unrelated decisions stacked on
-   one element (shiki, same day). The poster recipe transfers across
-   semantics only when frame + label + shadow swap hue as a SET — a hue
-   swap, never an alpha or blur change.
-
-   HOVER IS THE PEEL, NOT THE GROUND. Two grounds were tried and both
-   failed on the same element, which is what settled it:
-     · `--error-soft` (16% red) → on white paper that IS `#F6D6E0`, a
-       pastel — the only pastel in a theme whose other hover grounds are
-       flat inked blocks. shiki: "hover 之后有点不协调".
-     · solid `--error` → shiki: "背景色和 border 和 post sticker 颜色完全
-       重叠" — fill, frame and hard shadow collapse into one red mass and
-       the sticker loses its structure.
-   The two failures bracket the whole channel: keeping the red LABEL legible
-   (≥4.5:1) forces any red ground to be pale, and any ground dark enough to
-   read as inked coincides with the frame it sits inside. So this sticker's
-   hover is the poster peel: the hard shadow GROWS one rung (error →
-   error-xl) while the consumer's 1px lift moves the sticker the other
-   way, so the gap opens and it reads as peeling off the paper. Geometry and
-   hard shadow are exactly what shiki asked to keep ("我需要 poster sticker
-   的几何与硬投影效果") — this makes them the hover, instead of decorating
-   them with a colour that has nowhere safe to land. Paper, frame, label and
-   hue set never move; `transition` is restated here because box-shadow is
-   not in the consumer's list and a snapping shadow next to a moving
-   element is a visible off-beat. */
 [data-theme='forza6'] [data-destructive-action='commit'] {
   background-color: var(--bg-floating);
   color: var(--error);
@@ -2367,28 +845,10 @@
     box-shadow 150ms ease;
 }
 [data-theme='forza6'] [data-destructive-action='commit']:hover:not(:disabled) {
-  /* Hold the paper: the page-footer trigger's own `hover:bg-error-soft`
-     (correct in studio-light / slack-dark, where the sticker doesn't exist)
-     would otherwise put the rejected pastel back under this frame. */
   background-color: var(--bg-floating);
   box-shadow: var(--forza6-poster-shadow-error-xl);
 }
 
-/* The Cancel that stands beside it (shiki 2026-07-26: "cancel 的样式也需要
-   跟上,比如 Delete agent 的 cancel 样式就没有匹配"). A red sticker next to a
-   bare ghost button reads as one styled button and one unstyled one, so
-   the pair ships together: the commit above is the red sticker, this is
-   the same sticker in ink. Ranking is by HUE, not by one side being
-   unstyled — the frame + hover ground come from `CONTROL_SURFACE_BUTTON`
-   at the consumer, so this rule only adds the hard ink drop shadow that
-   has no cross-theme token.
-
-   Same sticker means the same MOTION too (shiki 2026-07-26: "刚才你对
-   Delete 的 hover 抬起 box-shadow,对 cancel 也做一下"): the ink shadow
-   grows 1.5px → 2.5px on hover exactly like the red one, so a pair whose
-   halves peel by different amounts can't happen. `transition` is restated
-   for the same reason as the commit — box-shadow is not in the consumer's
-   transition list. */
 [data-theme='forza6'] [data-destructive-action='cancel'],
 [data-theme='forza6'] [data-primary-action='cancel'],
 [data-theme='forza6'] [data-neutral-action] {
@@ -2402,15 +862,6 @@
 [data-theme='forza6'] [data-neutral-action]:hover:not(:disabled) {
   box-shadow: var(--forza6-poster-shadow-xl);
 }
-
-/* Keyboard focus for the whole poster-action family. These sticker rules
-   set `box-shadow`, and the Button primitive's focus signal is a Tailwind
-   `ring` — which is ALSO box-shadow, at lower specificity, on a base that
-   already declared `outline-none`. So the sticker silently swallowed the
-   focus ring: nothing at all was visible on tab. An `outline` is the one
-   channel the shadow can't contest. Ink for the
-   neutral half, `--error` for the destructive commit, so focus joins each
-   sticker's hue set instead of introducing a third colour. */
 [data-theme='forza6'] [data-destructive-action='commit']:focus-visible {
   outline: 2px solid var(--error);
   outline-offset: 2px;
@@ -2422,24 +873,6 @@
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
 }
-
-/* The confirm modal's brand-filled NEUTRAL CTA — the retry that stands in
-   for the commit when the impact read failed (shiki 2026-07-26: "Delete
-   Computer Modal 的 action button 也加上一样的效果") — is now the app-wide
-   `[data-primary-action]` sticker above, not a `data-host-action` rank of its
-   own (#task:1623). It was the second copy of "primary by fill + ink frame",
-   and two copies of one recipe drift. Its Cancel peer keeps `neutral` (framed
-   surface + shared hover), and a destructive commit still takes
-   `[data-destructive-action]`. */
-
-/* ── Task detail metadata column ──
-   The detail modal's right column is separated by a hairline in the other two
-   themes (`border-border-subtle`), which in forza6 is `rgba(15,31,29,.10)` and
-   would read as a smudge next to the modal's own 2px ink frame and hard shadow.
-   A 2px ink edge instead, joining the poster-sticker family (NavRail's right
-   border above uses the same recipe). The consumer only declares the DOM role
-   (`data-task-meta-panel`); the paint lives here, so the other themes keep the
-   hairline without knowing this rule exists. */
 [data-theme='forza6'] [data-task-meta-panel] {
   border-left: 2px solid var(--forza6-ink);
 }
