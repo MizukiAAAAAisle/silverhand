@@ -21,6 +21,7 @@
  *                                   conversation_activity / members_changed) —
  *                                   cursor-inert, self-healing via own REST /
  *                                   invalidate (Stage-2, docs/event-ws-transport-v1.md §4.2).
+ *   agent:{agentId}               — canonical agent-scoped detailed activity; agent visibility ACL
  *   viewer:{userId}               — viewer-private (notifications, unread)
  */
 
@@ -205,4 +206,12 @@ export function parseConversationSideScope(scope: string): string | null {
   return scope.startsWith('conversation-side:')
     ? scope.slice('conversation-side:'.length)
     : null;
+}
+
+/** Full detailed stream; subscribe only after agent visibility admission. */
+export function agentActivityScope(agentId: string): string {
+  return `agent:${agentId}`;
+}
+export function parseAgentActivityScope(scope: string): string | null {
+  return scope.startsWith('agent:') && scope.length > 6 ? scope.slice(6) : null;
 }

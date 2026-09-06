@@ -607,3 +607,10 @@ describe('OpenCodeDriver ACP event mapping', () => {
     }
   });
 });
+
+
+it('retains ACP structured raw output on tool completion', () => {
+  const output = { content: [{ type: 'text', text: 'complete result' }] };
+  const events = new OpenCodeDriver().parseLine(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'output-session', update: { sessionUpdate: 'tool_call_update', toolCallId: 'output-call', status: 'completed', rawOutput: output } } }));
+  expect(events).toContainEqual(expect.objectContaining({ kind: 'tool_output', toolCallId: 'output-call', output }));
+});

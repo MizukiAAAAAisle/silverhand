@@ -3,7 +3,7 @@
 use std::future::Future;
 
 use crate::{
-    foundation::identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
 };
 
@@ -14,6 +14,7 @@ use crate::{
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum EventScope {
     App,
+    Agent(AgentId),
     Workspace(WorkspaceId),
     Conversation(ConversationId),
     ConversationSide(ConversationId),

@@ -787,6 +787,7 @@ where
             }
         };
         let agent = principal.agent().clone();
+        let activity_scope = principal.scope();
         let observed_at = event.ts;
         let result = self
             .events
@@ -807,6 +808,7 @@ where
             {
                 if let Some(activity_id) = result.activity_id()
                     && let Err(cause) = self.events.complete_consumed(
+                        activity_scope,
                         &conversation,
                         &agent,
                         result.presence_viewers(),

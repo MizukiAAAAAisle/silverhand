@@ -219,3 +219,138 @@ async fn lookahead_rows_are_fully_decoded_before_page_slicing() {
             .is_ok()
     );
 }
+
+#[tokio::test]
+async fn agent_stream_uses_existing_viewer_arms_without_channel_slicing_and_rechecks_revocation() {
+    use silverhand_backend_core::{
+        conversation_messaging::messaging::collaboration::conversation_agent_activity::{
+            ActivityBefore, AgentActivityReadPort,
+        },
+        foundation::scope_event::{AuthorizeEventScope, EventScope},
+    };
+    use silverhand_backend_sqlite::foundation::scope_event::SqliteEventScopeAuthority;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("agent-stream.sqlite");
+    seed(&path).await;
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    db.execute("PRAGMA foreign_keys=ON").await.unwrap();
+    db.execute("INSERT INTO agents(id,name,runtime,host_id,created_by_user_id,session_scope,created_at,updated_at,display_name) VALUES ('stream','stream','codex','h','member','agent',1,1,'Stream')").await.unwrap();
+    db.execute(
+        "INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES ('w','stream',1)",
+    )
+    .await
+    .unwrap();
+    db.execute("INSERT INTO conversation_events(conversation_id,agent_id,kind,payload,created_at) VALUES ('private','stream','thinking','{\"text\":\"private thought\"}',1),('public','stream','tool_call','{\"name\":\"shell\",\"input\":{}}',2),('pair','stream','tool_output','{\"outcome\":\"output\"}',3)").await.unwrap();
+    let port = MessagingStore::open(&path)
+        .await
+        .unwrap()
+        .conversation_agent_activity();
+    let agent = AgentId::parse("stream").unwrap();
+    let viewer = UserId::parse("browser").unwrap(); // workspace member, no channel membership
+    let first = port
+        .read_agent_activity(&viewer, &agent, ActivityPageRequest::new(2, None).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.events().len(), 2);
+    assert_eq!(first.events()[0].conversation().as_str(), "public");
+    assert_eq!(first.events()[1].conversation().as_str(), "pair");
+    let prior = port
+        .read_agent_activity(
+            &viewer,
+            &agent,
+            ActivityPageRequest::new(
+                2,
+                Some(ActivityBefore::Persisted(first.next_before().unwrap())),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(prior.events().len(), 1);
+    assert_eq!(prior.events()[0].conversation().as_str(), "private");
+    let authority = SqliteEventScopeAuthority::open(&path).await.unwrap();
+    assert!(
+        authority
+            .authorize_event_scope(&viewer, &EventScope::Agent(agent.clone()))
+            .await
+            .unwrap()
+    );
+    assert!(
+        port.read_agent_activity(
+            &UserId::parse("other").unwrap(),
+            &agent,
+            ActivityPageRequest::new(10, None).unwrap()
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    db.execute("DELETE FROM workspace_users WHERE user_id='browser'")
+        .await
+        .unwrap();
+    assert!(
+        port.read_agent_activity(&viewer, &agent, ActivityPageRequest::new(10, None).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        !authority
+            .authorize_event_scope(&viewer, &EventScope::Agent(agent.clone()))
+            .await
+            .unwrap()
+    );
+    // Creator remains admitted after workspace revocation; a human direct pair is its own arm.
+    assert!(
+        port.read_agent_activity(
+            &UserId::parse("member").unwrap(),
+            &agent,
+            ActivityPageRequest::new(10, None).unwrap()
+        )
+        .await
+        .unwrap()
+        .is_some()
+    );
+    db.execute("INSERT INTO conversations(id,placement_kind,roster_policy,endpoint_a_kind,endpoint_a_id,endpoint_b_kind,endpoint_b_id,title,status,visibility,created_at,updated_at) VALUES ('stream-dm','direct_pair','fixed','agent','stream','human','browser','','idle','private',1,1)").await.unwrap();
+    assert!(
+        authority
+            .authorize_event_scope(&viewer, &EventScope::Agent(agent.clone()))
+            .await
+            .unwrap()
+    );
+    db.execute("DELETE FROM conversations WHERE id='stream-dm'")
+        .await
+        .unwrap();
+    assert!(
+        !authority
+            .authorize_event_scope(&viewer, &EventScope::Agent(agent.clone()))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !authority
+            .authorize_event_scope(
+                &viewer,
+                &EventScope::Agent(AgentId::parse("target").unwrap())
+            )
+            .await
+            .unwrap()
+    );
+    // No backfill or reassignment: original rows retain their source and count.
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM conversation_events WHERE agent_id='target'")
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+    assert_eq!(count, 4);
+    use sqlx::Row;
+    let plan=sqlx::query("EXPLAIN QUERY PLAN SELECT id FROM conversation_events WHERE agent_id='stream' ORDER BY id DESC LIMIT 3").fetch_all(&mut db).await.unwrap();
+    assert!(plan.iter().any(|row| {
+        row.get::<String, _>("detail")
+            .contains("idx_conversation_events_stream")
+    }));
+}

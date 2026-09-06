@@ -728,3 +728,16 @@ export const ArchivedChannelsDtoSchema = z.object({
   channels: z.array(ArchivedChannelListItemDtoSchema),
 });
 export type ArchivedChannelsDto = z.infer<typeof ArchivedChannelsDtoSchema>;
+
+/** Canonical agent-scoped activity: id is an upsert key across generations. */
+export const AgentStreamActivityEventSchema = ConversationActivityEventSchema
+  .omit({ conversation_id: true })
+  .extend({ agent_id: z.string() });
+export type AgentStreamActivityEvent = z.infer<typeof AgentStreamActivityEventSchema>;
+export const AgentStreamActivityListResponseSchema = z.object({
+  agent_id: z.string(),
+  runtime_scope: z.literal('agent'),
+  events: z.array(AgentStreamActivityEventSchema),
+  next_before_id: z.number().int().nullable(),
+});
+export type AgentStreamActivityListResponse = z.infer<typeof AgentStreamActivityListResponseSchema>;

@@ -4462,6 +4462,7 @@ const SUPPORTED_EVENT_KINDS: &[&str] = &[
     "compaction_stale",
     "agent_event",
     "conversation_activity",
+    "agent_stream_activity",
     "agent_presence_changed",
     "agent_availability_changed",
     "agent_changed",
@@ -4494,6 +4495,7 @@ fn wire_kind(event: &ProductEvent) -> &'static str {
         ProductEvent::CompactionStale(_) => "compaction_stale",
         ProductEvent::AgentEvent(_) => "agent_event",
         ProductEvent::ConversationActivity(_) => "conversation_activity",
+        ProductEvent::AgentStreamActivity(_) => "agent_stream_activity",
         ProductEvent::AgentPresenceChanged { .. } => "agent_presence_changed",
         ProductEvent::AgentAvailabilityChanged { .. } => "agent_availability_changed",
         ProductEvent::AgentChanged { .. } => "agent_changed",
@@ -4538,6 +4540,7 @@ fn the_supported_wire_kinds_are_a_closed_named_set() {
         ProductEvent::CompactionStale(json!({ "message_id": "m-1" })),
         ProductEvent::AgentEvent(json!({ "event": "tool_use" })),
         ProductEvent::ConversationActivity(json!({ "message_id": "m-1" })),
+        ProductEvent::AgentStreamActivity(json!({ "id": 1, "agent_id": "a" })),
         ProductEvent::AgentPresenceChanged {
             agent_id: "agent-1".to_owned(),
         },

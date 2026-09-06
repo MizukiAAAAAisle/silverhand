@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use silverhand_backend_core::{
     conversation_messaging::messaging::collaboration::conversation_agent_activity::{
         ActivityBefore, ActivityEventId, ActivityPageRequest, ActivityPayload,
-        BoundConversationAgentActivityPage, ConversationActivityEvent,
+        AgentActivityReadPort, BoundConversationAgentActivityPage, ConversationActivityEvent,
         ConversationAgentActivityReadPort, ConversationAgentActivityRefusal,
     },
     foundation::identity::{AgentId, ConversationId, UserId},
@@ -251,4 +251,58 @@ fn internal() -> Response {
 mod tests {
     use super::*;
     include!("conversation_agent_activity_tests.rs");
+}
+
+/// Canonical detailed stream for immutable agent-scoped agents.
+pub fn agent_router<P>(port: P) -> Router
+where
+    P: AgentActivityReadPort + 'static,
+{
+    Router::new()
+        .route("/api/agents/{aid}/activity", get(read_agent::<P>))
+        .with_state(ActivityState(Arc::new(port)))
+}
+async fn read_agent<P: AgentActivityReadPort>(
+    State(state): State<ActivityState<P>>,
+    principal: Option<Extension<UserId>>,
+    Path(raw): Path<String>,
+    Query(query): Query<ActivityQuery>,
+) -> Response {
+    let Some(Extension(viewer)) = principal else {
+        return error(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    let Ok(agent) = AgentId::parse(raw) else {
+        return error(StatusCode::BAD_REQUEST, "invalid agent id");
+    };
+    let page = match page_request(&query) {
+        Ok(v) => v,
+        Err(_) => return error(StatusCode::BAD_REQUEST, "invalid pagination"),
+    };
+    match state.0.read_agent_activity(&viewer, &agent, page).await {
+        Ok(Some(page)) if page.bind(&viewer, &agent).is_ok() => {
+            let events = page
+                .events()
+                .iter()
+                .map(|event| {
+                    let mut wire = event_wire(event)?;
+                    wire.as_object_mut()
+                        .expect("event object")
+                        .remove("conversation_id");
+                    Ok(wire)
+                })
+                .collect::<Result<Vec<_>, ActivityWireError>>();
+            match events {
+                Ok(events) => Json(json!({
+                    "agent_id": agent.as_str(),
+                    "runtime_scope": "agent",
+                    "events": events,
+                    "next_before_id": page.next_before().map(ActivityEventId::get),
+                }))
+                .into_response(),
+                Err(_) => internal(),
+            }
+        }
+        Ok(None) => error(StatusCode::NOT_FOUND, "agent not found"),
+        _ => internal(),
+    }
 }

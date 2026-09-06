@@ -1091,6 +1091,9 @@ pub(super) async fn compose_after_audit(
             // delivery runtime by construction, so this line cannot fork the
             // HTTP reader onto an owner other than the one delivery writes into.
             .merge(daemon_runtime.agent_run_states_router(agent_run_states_admission))
+            .merge(conversation_agent_activity::agent_router(
+                conversation_agent_activity_read.clone(),
+            ))
             .merge(conversation_agent_activity::router(
                 conversation_agent_activity_read,
             ))

@@ -428,6 +428,7 @@ impl SqliteRuntimeDeliveryStore {
                     "message_received",
                     Some(&payload),
                     observed_at_ms,
+                    principal.custody().generation().as_i64(),
                 )
                 .await?;
                 (Some(id), viewers)
@@ -1181,7 +1182,10 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
         };
         let _ = lease_cleanup;
         let activity_id = if let Some(activity) = event.pending_activity() {
-            Some(insert_activity(&mut tx, activity).await?)
+            Some(
+                insert_activity(&mut tx, activity, principal.custody().generation().as_i64())
+                    .await?,
+            )
         } else {
             None
         };
@@ -1286,7 +1290,12 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
             },
             event.observed_at(),
         );
-        let activity_id = insert_activity(&mut tx, &activity).await?;
+        let activity_id = insert_activity(
+            &mut tx,
+            &activity,
+            principal.custody().generation().as_i64(),
+        )
+        .await?;
         let status_targets = status_targets_for(&mut tx, principal, event.conversation()).await?;
         tx.commit().await.map_err(persistence)?;
         Ok(Some(RuntimeSessionInitCommitResult::new(
@@ -1386,7 +1395,12 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
         }
         let viewers =
             stamp_agent_presence(&mut tx, event.agent(), presence_at.as_unix_millis()).await?;
-        let id = insert_activity(&mut tx, &event).await?;
+        let id = insert_activity(
+            &mut tx,
+            &event,
+            admission.principal().custody().generation().as_i64(),
+        )
+        .await?;
         tx.commit().await.map_err(persistence)?;
         Ok(Some(RuntimeActivityCommitResult::new(id, viewers)))
     }
@@ -1431,7 +1445,17 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
             }
             previous_id
         } else {
-            insert_activity(&mut tx, event.event()).await?
+            insert_activity(
+                &mut tx,
+                event.event(),
+                event
+                    .admission()
+                    .principal()
+                    .custody()
+                    .generation()
+                    .as_i64(),
+            )
+            .await?
         };
         tx.commit().await.map_err(persistence)?;
         Ok(Some(RuntimeActivityCommitResult::new(id, viewers)))
@@ -1456,13 +1480,25 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
         let Some(row) = sqlx::query(
             "SELECT id, payload, created_at
                FROM conversation_events
-              WHERE conversation_id = ? AND agent_id = ? AND kind = 'tool_call'
-                AND json_extract(payload, '$.tool_call_id') = ?
+              WHERE (? OR conversation_id = ?) AND agent_id = ? AND kind = 'tool_call'
+                AND json_extract(payload, '$.tool_call_id') = ? AND runtime_generation = ?
               ORDER BY id DESC LIMIT 1",
         )
+        .bind(matches!(
+            event.admission().principal().scope(),
+            RuntimeScope::AgentSlot { .. }
+        ))
         .bind(event.conversation().as_str())
         .bind(event.agent().as_str())
         .bind(event.tool_call_id())
+        .bind(
+            event
+                .admission()
+                .principal()
+                .custody()
+                .generation()
+                .as_i64(),
+        )
         .fetch_optional(&mut *tx)
         .await
         .map_err(persistence)?
@@ -1762,6 +1798,7 @@ async fn insert_runtime_projection_event(
 async fn insert_activity(
     tx: &mut Transaction<'_, Sqlite>,
     event: &RuntimeActivityFact,
+    generation: i64,
 ) -> Result<i64, PersistenceFailure> {
     let payload = activity_payload_json(event.payload())?;
     insert_activity_row(
@@ -1771,6 +1808,7 @@ async fn insert_activity(
         event.kind().as_str(),
         payload.as_deref(),
         event.created_at().as_unix_millis(),
+        generation,
     )
     .await
 }
@@ -1782,16 +1820,18 @@ async fn insert_activity_row(
     kind: &str,
     payload: Option<&str>,
     created_at: i64,
+    generation: i64,
 ) -> Result<i64, PersistenceFailure> {
     let result = sqlx::query(
-        "INSERT INTO conversation_events (conversation_id, agent_id, kind, payload, created_at)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO conversation_events (conversation_id, agent_id, kind, payload, created_at, runtime_generation)
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(conversation)
     .bind(agent)
     .bind(kind)
     .bind(payload)
     .bind(created_at)
+    .bind(generation)
     .execute(&mut **tx)
     .await
     .map_err(persistence)?;
@@ -1817,8 +1857,15 @@ fn activity_payload_json(
             name,
             tool_call_id,
             outcome,
+            output_json,
         } => {
-            serde_json::json!({ "name": name, "tool_call_id": tool_call_id, "outcome": outcome })
+            let mut value =
+                serde_json::json!({"name":name,"tool_call_id":tool_call_id,"outcome":outcome});
+            if let Some(raw) = output_json {
+                value["output"] =
+                    serde_json::from_str(raw).map_err(PersistenceFailure::from_source)?;
+            }
+            value
         }
         RuntimeActivityPayload::ApiResponse { status, message } => {
             serde_json::json!({ "status": status, "message": message })

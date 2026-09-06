@@ -5,7 +5,7 @@
     {
       "epoch": 69,
       "firstStep": 69,
-      "lastStep": 89,
+      "lastStep": 90,
       "released": false
     }
   ],
@@ -14,8 +14,8 @@
     "packages/shared/src/conversation-title-audit.ts": "36d75a99f6b29e7f0302739a368fe6ecb26be4fb5c067a00b7cec93eac2bbce0",
     "packages/shared/src/conversation-title.ts": "74e08fa0290476e633508b05958d9be88a412c0ae468e29a9b60bebb9b43a3db",
     "packages/shared/src/db/baseline-schema.ts": "7e5b7e9a0aca9b79fa433dca341d68ef4f761c5a545069c6005a4519851130e6",
-    "packages/shared/src/db/migrations.ts": "4abd95b0c4e0b65d910ec25b887ec95f19d1d3881c87d9fca79ad33abaaa6b30",
-    "packages/shared/src/db/schema-epochs.ts": "4f1f8f931df8062a8ccf58360fb05699b62e6ccc281a66e03f7d1aedb73dc566",
+    "packages/shared/src/db/migrations.ts": "f0e5b8e2a98d7cde38a0f74670f1ed219310e9472e58ec896fa626faeb70a80d",
+    "packages/shared/src/db/schema-epochs.ts": "f70a6a8817e1e27d870d866cb6c2c5f4bc387647fcfe6543cd8a1ad76231a375",
     "packages/shared/src/display-name-charset.ts": "13ad82b9e92e562014322c569df15476a8ef5d7863f541f79207a5403d542410",
     "packages/shared/src/unicode-case-fold.ts": "b5cb75d46582dc93b640434ad78fe8f0a741e5e1aa183adbb27368ce2aceb120",
     "packages/shared/src/unicode-name-charset.ts": "bbcda81d89d738fdfe6a9ff0dd4dad633a79a84cd8f82e203753910196967879",
@@ -342,6 +342,13 @@
       "version": 89,
       "name": "workspaces_drop_retired_starred_sort_scope",
       "up": "\n      DELETE FROM user_list_sort_mode\n       WHERE list_key = 'workspaces' AND scope = 'starred';\n    ",
+      "foreignKeyEscape": false,
+      "precondition": false
+    },
+    {
+      "version": 90,
+      "name": "agent_activity_stream_coordinates",
+      "up": "\n      ALTER TABLE conversation_events ADD COLUMN runtime_generation INTEGER CHECK(runtime_generation IS NULL OR runtime_generation > 0);\n      CREATE INDEX idx_conversation_events_stream ON conversation_events(agent_id, id);\n    ",
       "foreignKeyEscape": false,
       "precondition": false
     }

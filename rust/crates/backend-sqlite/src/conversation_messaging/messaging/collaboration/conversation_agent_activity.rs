@@ -9,7 +9,8 @@ use silverhand_backend_core::{
             channel_lifecycle::ChannelLifecyclePlacement,
             conversation_agent_activity::{
                 ActivityCreatedAt, ActivityEventId, ActivityPageRequest, ActivityPayload,
-                ConversationActivityEvent, ConversationActivityKind, ConversationAgentActivityPage,
+                AgentActivityPage, AgentActivityReadPort, ConversationActivityEvent,
+                ConversationActivityKind, ConversationAgentActivityPage,
                 ConversationAgentActivityReadPort, ConversationAgentActivityRefusal,
             },
         },
@@ -140,34 +141,7 @@ impl SqliteConversationAgentActivityRead {
         .fetch_all(&mut *tx)
         .await?;
 
-        // Decode every selected row, including the look-ahead row, before
-        // slicing or reversing. A malformed has-more candidate cannot vanish
-        // behind pagination.
-        let mut decoded = Vec::with_capacity(selected.len());
-        for row in selected {
-            let id = ActivityEventId::new(row.try_get("id")?)
-                .map_err(|_| ConversationAgentActivityStoreError::EventId)?;
-            let conversation = ConversationId::parse(row.try_get::<String, _>("conversation_id")?)
-                .map_err(|_| ConversationAgentActivityStoreError::Identity)?;
-            let agent = row
-                .try_get::<Option<String>, _>("agent_id")?
-                .map(AgentId::parse)
-                .transpose()
-                .map_err(|_| ConversationAgentActivityStoreError::Identity)?;
-            let kind = ConversationActivityKind::parse(&row.try_get::<String, _>("kind")?)
-                .map_err(|_| ConversationAgentActivityStoreError::Kind)?;
-            let payload = decode_payload(row.try_get("payload")?)?;
-            let created_at = ActivityCreatedAt::new(row.try_get("created_at")?)
-                .map_err(|_| ConversationAgentActivityStoreError::CreatedAt)?;
-            decoded.push(ConversationActivityEvent::projected(
-                id,
-                conversation,
-                agent,
-                kind,
-                payload,
-                created_at,
-            ));
-        }
+        let mut decoded = decode_rows(selected)?;
 
         let limit = usize::from(page.limit());
         let has_more = decoded.len() > limit;
@@ -270,4 +244,82 @@ fn decode_payload(
         )),
         _ => Ok(ActivityPayload::Null),
     }
+}
+
+impl AgentActivityReadPort for SqliteConversationAgentActivityRead {
+    async fn read_agent_activity(
+        &self,
+        viewer: &UserId,
+        target: &AgentId,
+        page: ActivityPageRequest,
+    ) -> Result<Option<AgentActivityPage>, PersistenceFailure> {
+        self.read_agent_inner(viewer, target, page)
+            .await
+            .map_err(PersistenceFailure::from)
+    }
+}
+impl SqliteConversationAgentActivityRead {
+    async fn read_agent_inner(
+        &self,
+        viewer: &UserId,
+        target: &AgentId,
+        page: ActivityPageRequest,
+    ) -> Result<Option<AgentActivityPage>, ConversationAgentActivityStoreError> {
+        let mut tx = self.pool.begin_with("BEGIN DEFERRED").await?;
+        if !crate::identity_access::agent_view_acl::may_read_agent_stream(&mut tx, viewer, target)
+            .await?
+        {
+            tx.commit().await?;
+            return Ok(None);
+        }
+        let selected = sqlx::query("SELECT id,conversation_id,agent_id,kind,payload,created_at FROM conversation_events WHERE agent_id=? AND (? IS NULL OR id < ?) ORDER BY id DESC LIMIT ?")
+            .bind(target.as_str()).bind(page.before().and_then(|v| v.persisted_value()))
+            .bind(page.before().and_then(|v| v.persisted_value())).bind(i64::from(page.limit())+1)
+            .fetch_all(&mut *tx).await?;
+        let mut decoded = decode_rows(selected)?;
+
+        let has_more = decoded.len() > usize::from(page.limit());
+        decoded.truncate(usize::from(page.limit()));
+        decoded.reverse();
+        let result =
+            AgentActivityPage::projected(viewer.clone(), target.clone(), decoded, has_more)
+                .map_err(|_| ConversationAgentActivityStoreError::Page)?;
+        tx.commit().await?;
+        Ok(Some(result))
+    }
+}
+
+fn decode_rows(
+    selected: Vec<sqlx::sqlite::SqliteRow>,
+) -> Result<Vec<ConversationActivityEvent>, ConversationAgentActivityStoreError> {
+    // Decode every selected row, including the look-ahead row, before
+    // slicing or reversing. A malformed has-more candidate cannot vanish
+    // behind pagination.
+    let mut decoded = Vec::with_capacity(selected.len());
+    for row in selected {
+        let id = ActivityEventId::new(row.try_get("id")?)
+            .map_err(|_| ConversationAgentActivityStoreError::EventId)?;
+        let conversation = ConversationId::parse(row.try_get::<String, _>("conversation_id")?)
+            .map_err(|_| ConversationAgentActivityStoreError::Identity)?;
+        let agent = row
+            .try_get::<Option<String>, _>("agent_id")?
+            .map(AgentId::parse)
+            .transpose()
+            .map_err(|_| ConversationAgentActivityStoreError::Identity)?;
+        let kind = ConversationActivityKind::parse(&row.try_get::<String, _>("kind")?)
+            .map_err(|_| ConversationAgentActivityStoreError::Kind)?;
+        let payload = decode_payload(row.try_get("payload")?)?;
+        let created_at = ActivityCreatedAt::new(row.try_get("created_at")?)
+            .map_err(|_| ConversationAgentActivityStoreError::CreatedAt)?;
+        decoded.push(ConversationActivityEvent::projected(
+            id,
+            conversation,
+            agent,
+            kind,
+            payload,
+            created_at,
+        ));
+    }
+
+    Ok(decoded)
 }

@@ -1449,3 +1449,100 @@ async fn a_stored_runtime_outside_the_closed_set_fails_both_decode_sites() {
          agent's own runtime legal"
     );
 }
+
+#[tokio::test]
+async fn tool_refinement_never_rewrites_previous_generation_or_legacy_rows() {
+    use silverhand_backend_core::host_runtime::{
+        runtime_credential::{FinalizeRuntimeCustody, RuntimeFinalStatus},
+        runtime_event::RefineRuntimeToolCallInput,
+    };
+    let fixture = fixture().await;
+    let old = claim_runtime(&fixture, "daemon-old-tool").await;
+    let record = |principal| {
+        fixture.delivery.record_activity(
+            RuntimeEventAdmission::new("host-1".into(), principal),
+            RuntimeActivityFact::new(
+                ConversationId::parse(CONVERSATION).unwrap(),
+                AgentId::parse(AGENT).unwrap(),
+                RuntimeActivityKind::ToolCall,
+                RuntimeActivityPayload::ToolCall {
+                    name: "shell".into(),
+                    input_json: "{}".into(),
+                    tool_call_id: Some("reused-tool-id".into()),
+                },
+                RuntimeEventTime::from_unix_millis(20),
+            ),
+            RuntimeEventTime::from_unix_millis(20),
+        )
+    };
+    let old_id = record(old.clone()).await.unwrap().unwrap().id();
+    fixture
+        .custody
+        .finalize(FinalizeRuntimeCustody::new(
+            old.clone(),
+            RuntimeFinalStatus::Idle,
+            RuntimeEventTime::from_unix_millis(21),
+        ))
+        .await
+        .unwrap();
+    let current = claim_runtime(&fixture, "daemon-current-tool").await;
+    assert!(current.custody().generation().as_i64() > old.custody().generation().as_i64());
+    let refine = |principal| {
+        fixture
+            .delivery
+            .refine_tool_call_input(RefineRuntimeToolCallInput::new(
+                RuntimeEventAdmission::new("host-1".into(), principal),
+                ConversationId::parse(CONVERSATION).unwrap(),
+                AgentId::parse(AGENT).unwrap(),
+                "reused-tool-id".into(),
+                "{\"command\":\"current only\"}".into(),
+                RuntimeEventTime::from_unix_millis(30),
+            ))
+    };
+    assert!(
+        refine(current.clone())
+            .await
+            .unwrap()
+            .unwrap()
+            .refined()
+            .is_none()
+    );
+    let current_id = record(current.clone()).await.unwrap().unwrap().id();
+    let mut db = open(&fixture.path).await;
+    // A newer legacy row sharing the tool id must not hide the current call.
+    let legacy_id:i64=sqlx::query_scalar("INSERT INTO conversation_events(conversation_id,agent_id,kind,payload,created_at) VALUES(?,?,'tool_call','{\"name\":\"shell\",\"tool_call_id\":\"reused-tool-id\",\"input\":{}}',40) RETURNING id")
+        .bind(CONVERSATION).bind(AGENT).fetch_one(&mut db).await.unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            refine(current.clone())
+                .await
+                .unwrap()
+                .unwrap()
+                .refined()
+                .unwrap()
+                .id(),
+            current_id
+        );
+    }
+    assert!(refine(old.clone()).await.unwrap().is_none());
+    assert!(record(old).await.unwrap().is_none());
+    for id in [old_id, legacy_id] {
+        let payload: String =
+            sqlx::query_scalar("SELECT payload FROM conversation_events WHERE id=?")
+                .bind(id)
+                .fetch_one(&mut db)
+                .await
+                .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&payload).unwrap()["input"],
+            serde_json::json!({})
+        );
+    }
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM conversation_events WHERE agent_id=?")
+            .bind(AGENT)
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+    assert_eq!(count, 3);
+}

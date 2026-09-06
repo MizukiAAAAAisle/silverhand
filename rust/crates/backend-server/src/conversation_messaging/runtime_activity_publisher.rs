@@ -1,4 +1,4 @@
-//! Conversation-scoped runtime activity projection onto the scope-event wire.
+//! Runtime activity projection onto the scope-event wire, keyed by runtime scope.
 
 use serde_json::{Value, json};
 use silverhand_backend_core::host_runtime::runtime_event::RuntimeActivityPayload;
@@ -25,6 +25,15 @@ impl ConversationRuntimeProjectionPort for HubRuntimeActivityPublisher {
         &self,
         fact: ConversationRuntimeProjectionFact,
     ) -> Result<(), LiveProjectionFailure> {
+        let agent_scope = match &fact {
+            ConversationRuntimeProjectionFact::AgentEvent { scope, .. }
+            | ConversationRuntimeProjectionFact::Activity { scope, .. }
+            | ConversationRuntimeProjectionFact::RefinedToolCall { scope, .. } => match scope {
+                silverhand_backend_core::host_runtime::runtime_credential::RuntimeScope::AgentSlot { agent } => Some(EventScope::Agent(agent.clone())),
+                _ => None,
+            },
+            _ => None,
+        };
         let (conversation, event) = match fact {
             ConversationRuntimeProjectionFact::AgentActivity {
                 conversation,
@@ -69,6 +78,7 @@ impl ConversationRuntimeProjectionPort for HubRuntimeActivityPublisher {
                 })),
             ),
             ConversationRuntimeProjectionFact::AgentEvent {
+                scope: _,
                 conversation,
                 agent,
                 event,
@@ -79,7 +89,7 @@ impl ConversationRuntimeProjectionPort for HubRuntimeActivityPublisher {
                     "event": event,
                 })),
             ),
-            ConversationRuntimeProjectionFact::Activity { id, fact } => {
+            ConversationRuntimeProjectionFact::Activity { id, fact, .. } => {
                 let conversation = fact.conversation().clone();
                 let payload = activity_payload_value(fact.payload())?;
                 (
@@ -95,6 +105,7 @@ impl ConversationRuntimeProjectionPort for HubRuntimeActivityPublisher {
                 )
             }
             ConversationRuntimeProjectionFact::RefinedToolCall {
+                scope: _,
                 conversation,
                 agent,
                 activity,
@@ -114,8 +125,20 @@ impl ConversationRuntimeProjectionPort for HubRuntimeActivityPublisher {
                 )
             }
         };
+        let event = match (agent_scope.is_some(), event) {
+            (true, ProductEvent::ConversationActivity(mut payload)) => {
+                if let Some(object) = payload.as_object_mut() {
+                    object.remove("conversation_id");
+                }
+                ProductEvent::AgentStreamActivity(payload)
+            }
+            (_, event) => event,
+        };
         self.0
-            .publish(EventScope::ConversationSide(conversation), event)
+            .publish(
+                agent_scope.unwrap_or(EventScope::ConversationSide(conversation)),
+                event,
+            )
             .map_err(LiveProjectionFailure::from_source)
     }
 }
@@ -140,9 +163,15 @@ fn activity_payload_value(
             name,
             tool_call_id,
             outcome,
-        } => json!({
-            "name": name, "tool_call_id": tool_call_id, "outcome": outcome,
-        }),
+            output_json,
+        } => {
+            let mut value = json!({"name":name,"tool_call_id":tool_call_id,"outcome":outcome});
+            if let Some(raw) = output_json {
+                value["output"] =
+                    serde_json::from_str(raw).map_err(LiveProjectionFailure::from_source)?;
+            }
+            value
+        }
         RuntimeActivityPayload::ApiResponse { status, message } => {
             json!({ "status": status, "message": message })
         }

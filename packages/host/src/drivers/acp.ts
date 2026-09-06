@@ -286,6 +286,7 @@ export class AcpClient {
             kind: 'tool_output',
             ...(toolCallId ? { toolCallId } : {}),
             outcome: acpToolOutcome(update.status),
+            ...(update.rawOutput !== undefined ? { output: update.rawOutput } : update.content !== undefined ? { output: update.content } : {}),
           });
         }
         break;
@@ -316,6 +317,7 @@ export class AcpClient {
             kind: 'tool_output',
             ...(toolCallId ? { toolCallId } : {}),
             outcome: acpToolOutcome(update.status),
+            ...(update.rawOutput !== undefined ? { output: update.rawOutput } : update.content !== undefined ? { output: update.content } : {}),
           });
         }
         break;

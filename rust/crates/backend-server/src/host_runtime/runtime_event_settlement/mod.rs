@@ -79,15 +79,18 @@ pub(crate) enum ConversationRuntimeProjectionFact {
         elapsed_ms: i64,
     },
     AgentEvent {
+        scope: RuntimeScope,
         conversation: ConversationId,
         agent: AgentId,
         event: ParsedEventWire,
     },
     Activity {
+        scope: RuntimeScope,
         id: i64,
         fact: RuntimeActivityFact,
     },
     RefinedToolCall {
+        scope: RuntimeScope,
         conversation: ConversationId,
         agent: AgentId,
         activity: RefinedRuntimeActivity,
@@ -952,6 +955,7 @@ where
 
     pub(crate) fn complete_consumed(
         &self,
+        scope: RuntimeScope,
         conversation: &ConversationId,
         agent: &AgentId,
         presence_viewers: &[silverhand_backend_core::foundation::identity::UserId],
@@ -961,6 +965,7 @@ where
     ) -> Result<(), DaemonRuntimeEventError> {
         let presence = self.publish_presence(presence_viewers, agent);
         let activity = self.publish_conversation(ConversationRuntimeProjectionFact::Activity {
+            scope,
             id: activity_id,
             fact: RuntimeActivityFact::new(
                 conversation.clone(),
@@ -1097,6 +1102,7 @@ where
         let sanitized = event.parsed.sanitized();
         debug_assert_eq!(sanitized.kind(), parsed_kind);
         let agent_event = ConversationRuntimeProjectionFact::AgentEvent {
+            scope: event.coordinate.scope()?,
             conversation: event.coordinate.conversation()?,
             agent: event.coordinate.agent()?,
             event: sanitized,
@@ -1125,7 +1131,7 @@ where
             let committed = self
                 .durable
                 .commit_session_init(CommitRuntimeSessionInit::new(
-                    admission,
+                    admission.clone(),
                     conversation.clone(),
                     agent.clone(),
                     session_id.clone(),
@@ -1137,6 +1143,7 @@ where
             let presence = self.publish_presence(committed.presence_viewers(), &agent);
             let agent_projection = self.publish_conversation(agent_event);
             let activity = self.publish_conversation(ConversationRuntimeProjectionFact::Activity {
+                scope: admission.principal().scope(),
                 id: committed.activity_id(),
                 fact: RuntimeActivityFact::new(
                     conversation.clone(),
@@ -1196,7 +1203,7 @@ where
                 let Some(committed) = self
                     .durable
                     .refine_tool_call_input(RefineRuntimeToolCallInput::new(
-                        admission,
+                        admission.clone(),
                         event.coordinate.conversation()?,
                         event.coordinate.agent()?,
                         tool_call_id.clone(),
@@ -1212,6 +1219,7 @@ where
                 let agent_projection = self.publish_conversation(agent_event.clone());
                 let activity = if let Some(refined) = committed.refined() {
                     self.publish_conversation(ConversationRuntimeProjectionFact::RefinedToolCall {
+                        scope: admission.principal().scope(),
                         conversation: event.coordinate.conversation()?,
                         agent: event.coordinate.agent()?,
                         activity: refined.clone(),
@@ -1357,6 +1365,7 @@ where
         let presence = self.publish_presence(id.presence_viewers(), fact.agent());
         let agent_projection = self.publish_conversation(agent_event);
         let activity = self.publish_conversation(ConversationRuntimeProjectionFact::Activity {
+            scope: admission.principal().scope(),
             id: id.id(),
             fact,
         });
@@ -1372,7 +1381,7 @@ where
         let id = self
             .durable
             .record_activity(
-                admission,
+                admission.clone(),
                 fact.clone(),
                 RuntimeEventTime::from_unix_millis(presence_now()),
             )
@@ -1383,6 +1392,7 @@ where
             .map(|event| self.publish_conversation(event))
             .unwrap_or(Ok(()));
         let activity = self.publish_conversation(ConversationRuntimeProjectionFact::Activity {
+            scope: admission.principal().scope(),
             id: id.id(),
             fact,
         });
@@ -1826,6 +1836,8 @@ pub(crate) enum ParsedEventWire {
         tool_call_id: Option<String>,
         #[serde(default)]
         outcome: ToolOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<Value>,
     },
     TurnEnd {
         #[serde(rename = "sessionId")]
@@ -1986,11 +1998,13 @@ impl ParsedEventWire {
                 name,
                 tool_call_id,
                 outcome,
+                output,
             } => (
                 RuntimeActivityKind::ToolOutput,
                 RuntimeActivityPayload::ToolOutput {
                     name: name.clone(),
                     tool_call_id: tool_call_id.clone(),
+                    output_json: output.as_ref().map(serde_json::to_string).transpose()?,
                     outcome: serde_json::to_value(outcome)?
                         .as_str()
                         .unwrap_or("completed")

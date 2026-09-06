@@ -147,6 +147,16 @@ impl AuthorizeEventScope for SqliteEventScopeAuthority {
     ) -> Result<bool, PersistenceFailure> {
         match scope {
             EventScope::App => Ok(true),
+            EventScope::Agent(agent) => {
+                let mut tx = self.pool.begin().await.map_err(persistence)?;
+                let allowed = crate::identity_access::agent_view_acl::may_read_agent_stream(
+                    &mut tx, viewer, agent,
+                )
+                .await
+                .map_err(persistence)?;
+                tx.commit().await.map_err(persistence)?;
+                Ok(allowed)
+            }
             EventScope::Viewer(owner) => Ok(owner == viewer),
             EventScope::Workspace(workspace) => {
                 self.workspace_member(workspace.as_str(), viewer).await

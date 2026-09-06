@@ -1019,3 +1019,14 @@ function collectCArgs(args: string[]): Map<string, string> {
   }
   return out;
 }
+
+
+describe('complete tool output activity', () => {
+  it.each([
+    { type: 'commandExecution', aggregatedOutput: 'stdout\nstderr', expected: 'stdout\nstderr' },
+    { type: 'mcpToolCall', server: 'example', tool: 'read', result: { content: [{ type: 'text', text: 'full result' }] }, expected: { content: [{ type: 'text', text: 'full result' }] } },
+  ])('retains output for $type', ({ expected, ...item }) => {
+    const events = new CodexDriver().parseLine(JSON.stringify({ jsonrpc: '2.0', method: 'item/completed', params: { item: { id: 'complete-output', status: 'completed', exitCode: 0, ...item } } }));
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool_output', toolCallId: 'complete-output', output: expected }));
+  });
+});

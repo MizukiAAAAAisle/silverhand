@@ -66,6 +66,8 @@
   "AgentSendMessageOutputSchema",
   "AgentSendStaleResolutionReasonSchema",
   "AgentStaleResolutionReasonSchema",
+  "AgentStreamActivityEventSchema",
+  "AgentStreamActivityListResponseSchema",
   "AgentWorkspaceFileReadSchema",
   "AgentWorkspaceTreeNodeSchema",
   "AgentWorkspaceTreeSchema",

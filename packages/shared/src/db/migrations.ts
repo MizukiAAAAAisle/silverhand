@@ -4111,6 +4111,16 @@ export const migrations: Migration[] = [
        WHERE list_key = 'workspaces' AND scope = 'starred';
     `,
   },
+  {
+    version: 90,
+    name: 'agent_activity_stream_coordinates',
+    // Agent scope reads the existing single-copy rows by agent, never by focus.
+    // No historical conversation coordinate or content is rewritten.
+    up: `
+      ALTER TABLE conversation_events ADD COLUMN runtime_generation INTEGER CHECK(runtime_generation IS NULL OR runtime_generation > 0);
+      CREATE INDEX idx_conversation_events_stream ON conversation_events(agent_id, id);
+    `,
+  },
 ];
 
 /**

@@ -514,3 +514,68 @@ mod tests {
         assert!(ConversationActivityKind::parse("future_kind").is_err());
     }
 }
+
+/// One ordered agent-owned stream. Conversation ids remain provenance, not ACL keys.
+#[derive(Clone, Debug)]
+pub struct AgentActivityPage {
+    viewer: UserId,
+    agent: AgentId,
+    events: Vec<ConversationActivityEvent>,
+    next_before: Option<ActivityEventId>,
+}
+impl AgentActivityPage {
+    pub fn projected(
+        viewer: UserId,
+        agent: AgentId,
+        events: Vec<ConversationActivityEvent>,
+        has_more: bool,
+    ) -> Result<Self, MalformedConversationAgentActivityPage> {
+        if !events.windows(2).all(|p| p[0].id < p[1].id)
+            || events.iter().any(|e| e.agent.as_ref() != Some(&agent))
+            || (has_more && events.is_empty())
+        {
+            return Err(MalformedConversationAgentActivityPage);
+        }
+        let next_before = if has_more {
+            events.first().map(|e| e.id)
+        } else {
+            None
+        };
+        Ok(Self {
+            viewer,
+            agent,
+            events,
+            next_before,
+        })
+    }
+    pub fn bind(
+        &self,
+        viewer: &UserId,
+        agent: &AgentId,
+    ) -> Result<(), ConversationAgentActivityIdentityMismatch> {
+        if &self.viewer == viewer && &self.agent == agent {
+            Ok(())
+        } else {
+            Err(ConversationAgentActivityIdentityMismatch)
+        }
+    }
+    pub fn events(&self) -> &[ConversationActivityEvent] {
+        &self.events
+    }
+    pub fn next_before(&self) -> Option<ActivityEventId> {
+        self.next_before
+    }
+}
+pub trait AgentActivityReadPort: Send + Sync {
+    fn read_agent_activity(
+        &self,
+        viewer: &UserId,
+        agent: &AgentId,
+        page: ActivityPageRequest,
+    ) -> impl Future<
+        Output = Result<
+            Option<AgentActivityPage>,
+            crate::foundation::persistence::PersistenceFailure,
+        >,
+    > + Send;
+}

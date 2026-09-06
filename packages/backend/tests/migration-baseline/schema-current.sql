@@ -1341,3 +1341,7 @@ CREATE TRIGGER agent_runtime_slots_participation_insert
             'runtime slot requires participation in its conversation'
           );
         END;
+
+CREATE INDEX idx_conversation_events_stream ON conversation_events(agent_id, id);
+
+ALTER TABLE conversation_events ADD COLUMN runtime_generation INTEGER CHECK(runtime_generation IS NULL OR runtime_generation > 0);

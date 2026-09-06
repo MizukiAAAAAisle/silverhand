@@ -169,6 +169,7 @@ struct Fixture {
     effects: Effects,
     runtime_control: RuntimeControl,
     run_states: Router,
+    agent_activity: Router,
     agent_profile_mcp: AgentProfileMcp,
     workspace_files: ProductionWorkspaceDataPlane,
     settlement_calls: Arc<AtomicUsize>,
@@ -300,6 +301,7 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
             .unwrap()
             .channel_lifecycle(),
     );
+    let agent_activity = silverhand_backend_server::conversation_messaging::messaging::collaboration::conversation_agent_activity::agent_router(MessagingStore::open(&path).await.unwrap().conversation_agent_activity());
     let agent_profile_mcp =
         runtime.agent_profile_mcp_data_plane(SqliteHostAgentStore::open(&path).await.unwrap());
     let workspace_files = runtime.workspace_data_plane();
@@ -332,6 +334,7 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
         effects,
         runtime_control,
         run_states,
+        agent_activity,
         agent_profile_mcp,
         workspace_files,
         settlement_calls,
@@ -5766,7 +5769,266 @@ async fn a_forged_workspace_kind_cannot_enlarge_an_ordinary_pending_response() {
     )
     .await;
     expect_close(&mut socket, CloseCode::Size, "frame_too_large").await;
-    assert!(!matches!(probing.await.unwrap(), RuntimeCatalogOutcome::Detected(_)));
+    assert!(!matches!(
+        probing.await.unwrap(),
+        RuntimeCatalogOutcome::Detected(_)
+    ));
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn agent_full_activity_has_one_http_ws_stream_across_focus_and_revocation() {
+    const AGGREGATE_AGENT: &str = "agent-aggregate";
+    const SECOND: &str = "conversation0002";
+    const PAIR: &str = "activity-dm";
+    const SECRET: &str = "secret-origin";
+    let fixture = fixture("daemon-agent-slot-status.sqlite").await;
+    let mut db = open(&fixture.path).await;
+    sqlx::raw_sql(
+        "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('stream-peer','stream-peer','Stream Peer',1,1);
+         INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, created_by_user_id, session_scope)
+         VALUES ('agent-aggregate', 'agent-aggregate', 'codex', 'host-1', 1, 1, 'Aggregate Agent', 'stream-peer', 'agent');
+         INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES ('workspace-1', 'agent-aggregate', 1);
+         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0001', 'agent-aggregate', 1);
+         INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at)
+         VALUES ('conversation0002', 'workspace-1', 'workspace', 'fixed', 'Second', 'second', 'active', 1, 1);
+         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0002', 'agent-aggregate', 1);
+         INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES ('conversation0002', 'user-1', 1);
+         INSERT INTO conversations(id,placement_kind,roster_policy,title,endpoint_a_kind,endpoint_a_id,endpoint_b_kind,endpoint_b_id,status,visibility,created_at,updated_at)
+         VALUES('activity-dm','direct_pair','fixed','','agent','agent-aggregate','human','stream-peer','idle','private',1,1);
+         INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at)
+         VALUES('secret-origin','workspace-1','workspace','open','Secret','secret','idle','private',1,1);
+         INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('secret-origin','agent-aggregate',1);
+         INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq, created_at)
+         VALUES ('aggregate-message', 'conversation0001', 'user', 'user-1', 'wake aggregate', 2, 2);
+         INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id, created_at, delivery_kind)
+         VALUES ('conversation0001', 'agent-aggregate', 'aggregate-message', 2, 'turn');",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    let scope = format!("agent:{AGGREGATE_AGENT}");
+    let (mut stream, baseline) = connect_event_scope_with_ack(fixture.address, &scope).await;
+    let mut daemon = connect(fixture.address).await;
+    complete_attachment(&mut daemon, &fixture.controller).await;
+    let effects = fixture.effects.clone();
+    let start = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGGREGATE_AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let start_command = next_json(&mut daemon).await;
+    let generation = start_command["params"]["runtime_generation"]
+        .as_i64()
+        .unwrap();
+    respond(
+        &mut daemon,
+        &start_command,
+        json!({ "started": true, "pid": 8, "started_at": 100 }),
+    )
+    .await;
+    start.await.unwrap().unwrap();
+
+    // Shared workspace alone suffices, even with no creator, DM or channel relation.
+    sqlx::raw_sql("DELETE FROM conversation_users WHERE user_id='user-1';")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    let mut activities = Vec::new();
+    for (source, parsed) in [
+        (
+            CONVERSATION,
+            json!({"kind":"thinking","text":"one shared thought"}),
+        ),
+        (
+            SECOND,
+            json!({"kind":"tool_call","name":"shell","toolCallId":"stream-tool","input":{}}),
+        ),
+        (
+            PAIR,
+            json!({"kind":"tool_call_input","toolCallId":"stream-tool","input":{"command":"complete input"}}),
+        ),
+        (
+            CONVERSATION,
+            json!({"kind":"tool_output","name":"shell","toolCallId":"stream-tool","outcome":"success","output":"complete output"}),
+        ),
+    ] {
+        send_product(
+            &mut daemon,
+            product_frame_for(
+                "runtime_parsed_event",
+                Some(generation),
+                json!({"parsed":parsed,"ts":20}),
+                AGGREGATE_AGENT,
+                source,
+                "agent",
+            ),
+        )
+        .await;
+        loop {
+            let frame = next_json(&mut stream).await;
+            if frame["kind"] == "agent_stream_activity" {
+                activities.push(frame);
+                break;
+            }
+        }
+    }
+    assert_eq!(
+        activities[1]["payload"]["id"],
+        activities[2]["payload"]["id"]
+    );
+    assert_eq!(
+        activities[2]["payload"]["payload"]["input"]["command"],
+        "complete input"
+    );
+    assert!(
+        activities
+            .iter()
+            .all(|e| e["scope"] == scope && e["payload"].get("conversation_id").is_none())
+    );
+    let path = format!("/api/agents/{AGGREGATE_AGENT}/activity");
+    let unauthenticated = fixture
+        .agent_activity
+        .clone()
+        .oneshot(Request::builder().uri(&path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        management_request(
+            &fixture.agent_activity,
+            "GET",
+            &format!("/api/agents/{AGENT}/activity"),
+            ""
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    for query in ["limit=0", "limit=abc", "before_id=0"] {
+        assert_eq!(
+            management_request(
+                &fixture.agent_activity,
+                "GET",
+                &format!("{path}?{query}"),
+                ""
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let (status, page) = management_request(&fixture.agent_activity, "GET", &path, "").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(
+        page["events"],
+        json!([
+            activities[0]["payload"],
+            activities[2]["payload"],
+            activities[3]["payload"]
+        ])
+    );
+    let (status, tail) = management_request(
+        &fixture.agent_activity,
+        "GET",
+        &format!("{path}?limit=2"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let before = tail["next_before_id"].as_i64().unwrap();
+    let (_, head) = management_request(
+        &fixture.agent_activity,
+        "GET",
+        &format!("{path}?before_id={before}"),
+        "",
+    )
+    .await;
+    assert_eq!(head["events"], json!([activities[0]["payload"]]));
+    // Resume intentionally replays duplicates with the same transport/event identity.
+    stream.send(Message::Text(json!({"type":"resume","scopes":{scope.clone():{"epoch":baseline["epoch"],"lastSeq":baseline["seq"]}}}).to_string().into())).await.unwrap();
+    for original in &activities {
+        loop {
+            let replay = next_json(&mut stream).await;
+            if replay["kind"] == "agent_stream_activity" {
+                assert_eq!(&replay, original);
+                break;
+            }
+        }
+    }
+    send_product(
+        &mut daemon,
+        product_frame_for(
+            "runtime_parsed_event",
+            Some(generation + 1),
+            json!({"parsed":{"kind":"text","text":"stale must not enter"},"ts":21}),
+            AGGREGATE_AGENT,
+            SECRET,
+            "agent",
+        ),
+    )
+    .await;
+    assert_no_daemon_frame(&mut stream).await;
+    let (_, unchanged) = management_request(&fixture.agent_activity, "GET", &path, "").await;
+    assert_eq!(unchanged, page);
+    sqlx::query(
+        "DELETE FROM workspace_users WHERE workspace_id='workspace-1' AND user_id='user-1'",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    // Revocation must cut the already-open live subscription, not merely a new read.
+    send_product(
+        &mut daemon,
+        product_frame_for(
+            "runtime_parsed_event",
+            Some(generation),
+            json!({"parsed":{"kind":"thinking","text":"after revocation"},"ts":22}),
+            AGGREGATE_AGENT,
+            SECOND,
+            "agent",
+        ),
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM conversation_events WHERE agent_id='agent-aggregate'",
+            )
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+            if count == 4 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_no_daemon_frame(&mut stream).await;
+    assert_eq!(
+        management_request(&fixture.agent_activity, "GET", &path, "")
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    stream.send(Message::Text(json!({"type":"resume","scopes":{scope:{"epoch":baseline["epoch"],"lastSeq":baseline["seq"]}}}).to_string().into())).await.unwrap();
+    let refused = next_json(&mut stream).await;
+    assert_eq!(refused["code"], "forbidden", "{refused}");
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM conversation_events WHERE agent_id='agent-aggregate'",
+    )
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(count, 4);
+    daemon.close(None).await.unwrap();
+    stream.close(None).await.unwrap();
     fixture.controller.close().await;
     fixture.server.abort();
 }

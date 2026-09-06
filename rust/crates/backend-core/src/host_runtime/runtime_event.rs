@@ -98,6 +98,7 @@ pub enum RuntimeActivityPayload {
         name: Option<String>,
         tool_call_id: Option<String>,
         outcome: String,
+        output_json: Option<String>,
     },
     ApiResponse {
         status: String,

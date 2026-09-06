@@ -25,7 +25,7 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize};
 use silverhand_backend_core::{
-    foundation::identity::{ConversationId, UserId, WorkspaceId},
+    foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::scope_event::{AuthorizeEventScope, EventScope},
     identity_access::auth::{AuthenticateHumanSession, SessionBearer},
 };
@@ -1224,6 +1224,9 @@ fn parse_scope(raw: &str, viewer: &UserId) -> Result<EventScope, ()> {
         return Err(());
     }
     match prefix {
+        "agent" => AgentId::parse(id.to_owned())
+            .map(EventScope::Agent)
+            .map_err(|_| ()),
         "workspace" => WorkspaceId::parse(id.to_owned())
             .map(EventScope::Workspace)
             .map_err(|_| ()),
@@ -1244,6 +1247,7 @@ fn parse_scope(raw: &str, viewer: &UserId) -> Result<EventScope, ()> {
 fn scope_wire(scope: &EventScope) -> String {
     match scope {
         EventScope::App => "app".to_owned(),
+        EventScope::Agent(id) => format!("agent:{}", id.as_str()),
         EventScope::Workspace(id) => format!("workspace:{}", id.as_str()),
         EventScope::Conversation(id) => format!("conversation:{}", id.as_str()),
         EventScope::ConversationSide(id) => {

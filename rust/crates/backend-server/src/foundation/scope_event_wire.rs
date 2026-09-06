@@ -22,6 +22,7 @@ pub(crate) enum ProductEvent {
     CompactionStale(Value),
     AgentEvent(Value),
     ConversationActivity(Value),
+    AgentStreamActivity(Value),
     AgentPresenceChanged {
         agent_id: String,
     },

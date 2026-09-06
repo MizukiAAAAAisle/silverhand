@@ -409,6 +409,7 @@ export const apiPaths = {
    *  human viewer-scoped. */
   attentionModes: '/api/attention/modes',
   conversationLogDebug: (id: string) => `/api/conversations/${id}/log-debug`,
+  agentActivity: (agentId: string) => `/api/agents/${encodeURIComponent(agentId)}/activity`,
   conversationAgentActivity: (id: string, agentId: string) =>
     `/api/conversations/${id}/agents/${agentId}/activity`,
 
