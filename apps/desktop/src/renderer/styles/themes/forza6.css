@@ -277,3 +277,8 @@
        contrast disappears and the festival HUD vibe breaks. */
   --text-on-dark-pop: var(--forza6-yellow);
 }
+
+[data-theme='forza6'] {
+  --message-activity-color: var(--bg-control-primary);
+  --message-activity-radius: 0;
+}

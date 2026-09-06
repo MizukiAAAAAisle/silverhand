@@ -350,3 +350,8 @@
   background-color: var(--bg-elevated);
   border-color: var(--border);
 }
+
+[data-theme='studio-light'] {
+  --message-activity-color: var(--accent);
+  --message-activity-radius: 3px;
+}

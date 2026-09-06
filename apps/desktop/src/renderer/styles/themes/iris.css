@@ -411,3 +411,8 @@
   border-color: var(--border-control-hover);
   box-shadow: var(--shadow-popover);
 }
+
+[data-theme='iris'] {
+  --message-activity-color: var(--accent);
+  --message-activity-radius: 4px;
+}

@@ -463,3 +463,8 @@
   background-color: var(--bg-elevated);
   border-color: var(--border);
 }
+
+[data-theme='slack-dark'] {
+  --message-activity-color: var(--accent);
+  --message-activity-radius: 3px;
+}
