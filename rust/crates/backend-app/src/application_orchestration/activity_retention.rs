@@ -1,7 +1,10 @@
 //! Process-owned activity retention: sweep at boot and while idle, for both
 //! deployment shapes. No persisted scheduling state or per-agent coordinator.
 use chrono::{TimeZone, Utc};
-use std::{sync::Mutex, time::Duration};
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 use silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_agent_activity::ACTIVITY_RETENTION_MS;
 use silverhand_backend_server::foundation::{
@@ -85,18 +88,23 @@ async fn sweep(
     hub: &ScopeEventHub,
     now: i64,
 ) -> Result<(), crate::StartupError> {
-    store
-        .prune_expired_activity(now)
-        .await
-        .map_err(|source| crate::StartupError::Composition {
+    let started = Instant::now();
+    let deleted_count = store.prune_expired_activity(now).await.map_err(|source| {
+        crate::StartupError::Composition {
             name: "activity retention",
             source: Box::new(source),
-        })?;
+        }
+    })?;
     hub.prune_activity_before(now.saturating_sub(ACTIVITY_RETENTION_MS))
         .map_err(|source| crate::StartupError::Composition {
             name: "activity replay retention",
             source: Box::new(source),
         })?;
+    tracing::info!(target: "activity_retention",
+        deleted_count,
+        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+        "activity retention sweep completed"
+    );
     Ok(())
 }
 
@@ -122,6 +130,68 @@ fn next_shanghai_six(now: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn successful_sweeps_log_actual_counts_and_failure_does_not() {
+        use silverhand_backend_server::{
+            conversation_messaging::messaging::collaboration::conversation_log_debug::ProductionConversationLogDebugControl,
+            foundation::clock::SystemProcessClock,
+        };
+        use sqlx::{Connection, Executor};
+        use tracing::instrument::WithSubscriber;
+        use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("retention.sqlite");
+        let mut db = sqlx::SqliteConnection::connect_with(
+            &sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+        db.execute("CREATE TABLE conversation_events(id INTEGER PRIMARY KEY,created_at INTEGER,payload TEXT); INSERT INTO conversation_events VALUES(1,9,'private-activity-marker'),(2,10,'private-activity-marker'),(3,11,'private-activity-marker')").await.unwrap();
+        let store = MessagingStore::open(&path).await.unwrap();
+        let hub = ScopeEventHub::production().unwrap();
+        let log = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+        let file = std::sync::Arc::new(log.reopen().unwrap());
+        let subscriber = tracing_subscriber::registry().with(crate::production_json_layer(
+            EnvFilter::new("error,activity_retention=info"),
+            ProductionConversationLogDebugControl::process(),
+            SystemProcessClock,
+            move || file.try_clone().unwrap(),
+        ));
+        async {
+            sweep(&store, &hub, ACTIVITY_RETENTION_MS + 10)
+                .await
+                .unwrap();
+            sweep(&store, &hub, ACTIVITY_RETENTION_MS + 10)
+                .await
+                .unwrap();
+            db.execute("DROP TABLE conversation_events").await.unwrap();
+            assert!(
+                sweep(&store, &hub, ACTIVITY_RETENTION_MS + 10)
+                    .await
+                    .is_err()
+            );
+        }
+        .with_subscriber(subscriber)
+        .await;
+        let text = std::fs::read_to_string(log.path()).unwrap();
+        assert!(!text.contains("private-activity-marker"));
+        assert!(!text.contains("next_run"));
+        let events: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(events.len(), 2, "no success for failed deletion");
+        for (event, count) in events.iter().zip([1, 0]) {
+            assert_eq!(event["target"], "activity_retention");
+            assert!(event["timestamp"].is_string());
+            assert_eq!(event["fields"]["deleted_count"], count);
+            assert!(event["fields"]["elapsed_ms"].as_f64().unwrap() >= 0.0);
+            assert_eq!(event["fields"].as_object().unwrap().len(), 3);
+        }
+    }
+
     #[test]
     fn daily_deadline_is_strictly_next_shanghai_six() {
         let six = chrono_tz::Asia::Shanghai

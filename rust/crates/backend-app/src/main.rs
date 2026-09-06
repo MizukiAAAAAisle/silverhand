@@ -24,7 +24,13 @@ async fn main() -> ExitCode {
     };
     tracing_subscriber::registry()
         .with(production_json_layer(
-            EnvFilter::from_default_env(),
+            // Keep the requested daily retention summary visible without
+            // enabling unrelated INFO logs at the default ERROR floor.
+            EnvFilter::from_default_env().add_directive(
+                "activity_retention=info"
+                    .parse()
+                    .expect("static log directive"),
+            ),
             ProductionConversationLogDebugControl::process(),
             SystemProcessClock,
             file_writer.and(std::io::stderr),
