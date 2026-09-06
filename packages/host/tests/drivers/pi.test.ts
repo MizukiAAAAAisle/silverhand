@@ -56,15 +56,24 @@ describe('Pi RPC driver', () => {
     expect(good.lines.at(-1)).toMatchObject({ type: 'set_thinking_level', level: 'high' });
     good.reply({}); expect(good.reply({ sessionId: good.id, thinkingLevel: 'off' })[0]).toMatchObject({ fatal: true });
   });
-  it('deduplicates tool starts, bounds input, and never forwards output bodies', () => {
+  it('deduplicates tool starts, preserves structured input, and never forwards output bodies', () => {
     const { d } = fixture();
     const tool = { type: 'tool_execution_start', toolCallId: 'call', toolName: 'bash', args: { command: 'x'.repeat(50_000) } };
     const event = d.parseLine(JSON.stringify(tool))[0]!;
-    expect(event.kind).toBe('tool_call'); expect(JSON.stringify(event).length).toBeLessThan(17_000);
+    expect(event.kind).toBe('tool_call'); expect(event).toMatchObject({ input: tool.args });
     expect(d.parseLine(JSON.stringify(tool))).toEqual([]);
     const end = d.parseLine(JSON.stringify({ type: 'tool_execution_end', toolCallId: 'call', toolName: 'bash', isError: false, result: { content: 'private result' } }));
     expect(end).toEqual([{ kind: 'tool_output', toolCallId: 'call', name: 'bash', outcome: 'success' }]);
     for (const e of [event, ...end]) expect(ParsedEventSchema.safeParse(e).success).toBe(true);
+  });
+  it('preserves large arrays and complete text/thinking deltas for common downstream limits', () => {
+    const { d } = fixture();
+    const input = Array.from({ length: 60 }, (_, i) => ({ index: i, text: 'x'.repeat(1000) }));
+    expect(d.parseLine(JSON.stringify({ type: 'tool_execution_start', toolCallId: 'array', toolName: 'tool', args: input }))[0]).toMatchObject({ input });
+    for (const type of ['text_delta', 'thinking_delta']) {
+      const delta = 'x'.repeat(20000) + 'END';
+      expect(d.parseLine(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type, delta } }))[0]).toMatchObject({ text: delta });
+    }
   });
   it('cancels extension dialogs explicitly and clears queues before abort', () => {
     const { d, lines, reply, id } = fixture(); reply({ sessionId: id });

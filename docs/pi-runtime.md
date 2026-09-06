@@ -27,7 +27,9 @@ The driver's interrupt encoding clears the queue before abort. Production runtim
 stop uses the existing process termination/reaping path. No separate scheduler,
 consumption identity protocol or accepted settlement state was added.
 
-Text/thinking deltas and tool input use the existing 16,384-character bound.
+Text/thinking deltas and structured tool input pass through the driver unchanged.
+The existing common activity sanitizer applies its string/key/array/depth limits
+to tool input; no Pi-only JSON-to-string conversion or per-delta clipping occurs.
 Tool execution publishes only `tool_output` identity/outcome markers; tool result
 bodies are not copied into parsed activity. Existing backend truncation, scope,
 custody, generation and replay rules remain authoritative.
@@ -88,7 +90,7 @@ running Silverhand UI test. Test-only flags disable extensions to keep the fixtu
 isolated; production args do not.
 
 Driver tests cover unpersisted coordinates, minimum version, model thinking
-validation, asynchronous refusal, bounded diagnostic correlation, input truncation
+validation, asynchronous refusal, bounded diagnostic correlation, structured input preservation, common sanitizer truncation
 and extension cancellation. The SQLite migration test upgrades a real step-92
 store with an in-flight lock and child foreign key; both TS and Rust schema
 oracles cover the resulting schema. Historical user data is not rewritten.

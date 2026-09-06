@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import type { Driver, DriverIO, DriverSpawnContext, ParsedEvent } from './index.js';
 import { versionAtLeast } from './version-gate.js';
 
-const LIMIT = 16_384;
 type Frame = Record<string, any>;
 
 /** Pi owns steering execution; Silverhand settles only its successful write. */
@@ -132,7 +131,7 @@ export class PiDriver implements Driver {
       case 'message_update': {
         const d = f.assistantMessageEvent;
         if (d?.type === 'text_delta' || d?.type === 'thinking_delta') {
-          if (typeof d.delta === 'string') events.push({ kind: d.type === 'text_delta' ? 'text' : 'thinking', text: d.delta.slice(0, LIMIT) });
+          if (typeof d.delta === 'string') events.push({ kind: d.type === 'text_delta' ? 'text' : 'thinking', text: d.delta });
         } else if (d?.type === 'toolcall_end') this.toolCall(events, d.toolCall?.id, d.toolCall?.name, d.toolCall?.arguments);
         break;
       }
@@ -152,7 +151,8 @@ export class PiDriver implements Driver {
     if (typeof id !== 'string' || !id || typeof name !== 'string' || !name || this.calls.has(id)) return;
     if (this.calls.size >= 1024) return;
     this.calls.set(id, name);
-    const text = JSON.stringify(input ?? null);
-    events.push({ kind: 'tool_call', toolCallId: id, name, input: text.length > LIMIT ? text.slice(0, LIMIT) : input ?? null });
+    // Preserve the JSON value for the common activity sanitizer. Driver-local
+    // clipping would destroy object/array structure and its truncation markers.
+    events.push({ kind: 'tool_call', toolCallId: id, name, input: input ?? null });
   }
 }
