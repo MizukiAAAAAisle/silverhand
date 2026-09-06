@@ -36,3 +36,15 @@ describe('CreateAgentDialog submit contract', () => {
     });
   });
 });
+
+describe('Pi create payload', () => {
+  it.each(['', '  ', 'provider/model-id'])('preserves the optional free-text model %j', model => {
+    const input = createAgentInputFromDraft({
+      name: ' pi-agent ', runtime: 'pi', model, hostId: 'host-pi', sessionScope: 'agent',
+    });
+    expect(input).toEqual({
+      name: 'pi-agent', runtime: 'pi', host_id: 'host-pi', session_scope: 'agent',
+      ...(model.trim() ? { model: model.trim() } : {}),
+    });
+  });
+});

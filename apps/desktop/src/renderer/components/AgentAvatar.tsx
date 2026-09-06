@@ -5,6 +5,7 @@ import {
   CursorIcon,
   GeminiIcon,
   OPENCODE_LOGO_DATA_URI,
+  PI_LOGO_DATA_URI,
   QODER_LOGO_DATA_URI,
 } from '@/icons/agents';
 import { cn } from '@/lib/cn';
@@ -49,11 +50,12 @@ const ICONS: Partial<
   gemini: GeminiIcon,
 };
 
-// Full-color raster brand logos that carry their own background + corner
+// Full-color brand logos that carry their own background + corner
 // radius — rendered edge-to-edge (like an uploaded avatar), no badge tint.
 const BRAND_LOGOS: Partial<Record<RuntimeKind, string>> = {
   opencode: OPENCODE_LOGO_DATA_URI,
   qoder: QODER_LOGO_DATA_URI,
+  pi: PI_LOGO_DATA_URI,
 };
 
 // Tints picked to match each brand's primary color when one exists.

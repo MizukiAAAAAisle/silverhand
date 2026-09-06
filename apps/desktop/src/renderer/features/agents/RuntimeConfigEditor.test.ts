@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentDto } from '@silverhand/shared';
+import { runtimeCatalogEntry, type AgentDto } from '@silverhand/shared';
 import {
   buildSwitchPayload,
   buildTuningPatch,
@@ -562,5 +562,45 @@ describe('RuntimeConfigEditor source invariants', () => {
     // availability host list.
     expect(src).toMatch(/enabled:\s*editing\s*&&\s*allSettled\s*&&\s*hostAvailable/);
     expect(src).toMatch(/editing\s*\?\s*\[agent\.host_id\]\s*:\s*\[\]/);
+  });
+});
+
+describe('Pi runtime configuration', () => {
+  const draft: RuntimeConfigDraft = {
+    runtime: 'pi', modelChoice: 'default', modelValue: '',
+    reasoning: '__default__', fastMode: '',
+  };
+
+  it('serializes CLI defaults and discards unsupported fast mode', () => {
+    expect(canSaveRuntimeConfig(baseAgent, draft)).toBe(true);
+    expect(buildSwitchPayload({ ...draft, fastMode: 'true' })).toEqual({
+      runtime: 'pi', model: null, reasoning_effort: null, fast_mode: null,
+    });
+    expect(runtimeCatalogEntry('pi').supportsProfileMcp).toBe(false);
+    expect(runtimeCatalogEntry('pi').supportsFastMode).toBe(false);
+  });
+
+  it.each(['off', 'minimal', 'low', 'medium', 'high'])('serializes %s reasoning with a free-text model', reasoning => {
+    const configured = { ...draft, modelChoice: 'specify' as const, modelValue: ' provider/model-id ', reasoning };
+    expect(canSaveRuntimeConfig(baseAgent, configured)).toBe(true);
+    expect(buildSwitchPayload(configured)).toEqual({
+      runtime: 'pi', model: 'provider/model-id', reasoning_effort: reasoning, fast_mode: null,
+    });
+  });
+
+  it('rejects foreign reasoning and resets tuning across runtime changes', () => {
+    expect(canSaveRuntimeConfig(baseAgent, { ...draft, reasoning: 'ultra' })).toBe(false);
+    expect(canSaveRuntimeConfig(baseAgent, { ...draft, reasoning: 'none' })).toBe(false);
+    expect(draftAfterRuntimeChange(baseAgent, 'pi')).toEqual({
+      runtime: 'pi', modelChoice: 'unset', modelValue: '', reasoning: '', fastMode: '',
+    });
+    expect(draftAfterRuntimeChange(baseAgent, 'codex')).toEqual(draftFromAgent(baseAgent));
+  });
+
+  it('patches an existing Pi agent without carrying unsupported tuning', () => {
+    const agent = { ...baseAgent, runtime: 'pi' as const, model: null, reasoning_effort: null, fast_mode: null };
+    const next = { ...draftFromAgent(agent), reasoning: 'minimal' };
+    expect(canSaveRuntimeConfig(agent, next)).toBe(true);
+    expect(buildTuningPatch(agent, next)).toEqual({ reasoning_effort: 'minimal' });
   });
 });
