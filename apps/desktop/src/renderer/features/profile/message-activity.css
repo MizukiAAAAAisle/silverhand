@@ -21,3 +21,7 @@
 .message-activity-legend i { display: block; width: 12px; height: 12px; }
 .message-activity-legend span:first-child { margin-right: 4px; }
 .message-activity-legend span:last-child { margin-left: 4px; }
+[data-theme='forza6'] .message-activity-cell:hover {
+  border: var(--control-border-width) solid var(--forza6-ink);
+  box-shadow: var(--forza6-poster-shadow-hover-sm);
+}
