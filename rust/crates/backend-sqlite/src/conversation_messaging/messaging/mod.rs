@@ -3110,6 +3110,19 @@ fn metadata_json(attachments: &[AttachmentSnapshot]) -> Result<Option<String>, S
         .map_err(|error| infrastructure(MessagingStoreError::Serialization(error)))
 }
 
+// Canonical admitted request, not mutable resolved mentions or attachment snapshots.
+// Preserve attachment order and normalized labels; destinations stay explicit.
+fn client_request_json(command: &SendMessage) -> String {
+    let destination = match command.destination() {
+        SendDestination::MainLine => serde_json::json!(["main"]),
+        SendDestination::Reply(id) => serde_json::json!(["reply", id.as_str()]),
+        SendDestination::Thread(id) => serde_json::json!(["thread", id.as_str()]),
+    };
+    serde_json::json!({"conversation": command.target_conversation().as_str(),
+        "destination": destination, "content": command.content().as_str(),
+        "attachments": command.attachment_refs().iter().map(|a| serde_json::json!([a.id.as_str(), a.label])).collect::<Vec<_>>()}).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4129,17 +4142,4 @@ mod tests {
             .await
             .expect_err("a closed store is not a writable one");
     }
-}
-
-// Canonical admitted request, not mutable resolved mentions or attachment snapshots.
-// Preserve attachment order and normalized labels; destinations stay explicit.
-fn client_request_json(command: &SendMessage) -> String {
-    let destination = match command.destination() {
-        SendDestination::MainLine => serde_json::json!(["main"]),
-        SendDestination::Reply(id) => serde_json::json!(["reply", id.as_str()]),
-        SendDestination::Thread(id) => serde_json::json!(["thread", id.as_str()]),
-    };
-    serde_json::json!({"conversation": command.target_conversation().as_str(),
-        "destination": destination, "content": command.content().as_str(),
-        "attachments": command.attachment_refs().iter().map(|a| serde_json::json!([a.id.as_str(), a.label])).collect::<Vec<_>>()}).to_string()
 }

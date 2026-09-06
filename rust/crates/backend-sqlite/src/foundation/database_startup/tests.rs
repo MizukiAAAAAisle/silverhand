@@ -70,6 +70,12 @@ async fn snapshot(
         let quoted = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
         let projection = columns
             .iter()
+            // Compare pre-existing columns; step92's newly nullable correlation
+            // fields are asserted separately on the upgraded legacy message.
+            .filter(|c| {
+                table != "messages"
+                    || !matches!(c.as_str(), "client_message_id" | "client_request_json")
+            })
             .map(|c| format!("quote({})", quoted(c)))
             .collect::<Vec<_>>()
             .join(",");
@@ -186,6 +192,17 @@ async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
         snapshot(&mut live, false).await,
         expected,
         "all non-retired business rows and fields preserved"
+    );
+    let correlation: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT client_message_id,client_request_json FROM messages WHERE id='message-1'",
+    )
+    .fetch_one(&mut live)
+    .await
+    .unwrap();
+    assert_eq!(
+        correlation,
+        (None, None),
+        "legacy rows gain no invented retry identity"
     );
     live.close().await.unwrap();
     assert_eq!(
