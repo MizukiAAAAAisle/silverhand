@@ -1,3 +1,4 @@
+import { createLogicalSend, executeLogicalSend, matchesLogicalSend, prepareLogicalSend, type LogicalSend } from './logical-send';
 // Channel read-model hooks (#task:1292). After the split this file holds the
 // public reader hooks (useChannelMessages / cluster / thread-root / followers /
 // agents / run-states — all fenced by hooks/realtime-ingestion-read-inert.test.ts
@@ -964,6 +965,7 @@ export function useChannelAgentRuntime(channelId: string | null) {
 }
 
 export interface SendMessageInput {
+  logicalSend?: LogicalSend;
   content: string;
   /** Uploaded attachments to reference. Each carries an optional compose-time
    *  `label` (`Image #N` / `File #N`) — the stable identity assigned when the
@@ -1020,23 +1022,17 @@ export function useSendMessage(
   return useMutation({
     mutationFn: async (input: SendMessageInput) => {
       if (!channelId) throw new Error('no channel selected');
-      const path = apiPaths.channelMessages(channelId);
-      const body = await prepareSendMessageBody({
-        channelId,
-        input,
-        threadRootId,
+      const logical = input.logicalSend ??= createLogicalSend(channelId, threadRootId ?? null);
+      if (logical.conversationId !== channelId || logical.threadRootId !== (threadRootId ?? null)) {
+        throw new Error('Send target changed');
+      }
+      return executeLogicalSend(qc, logical, async () => {
+        const prepared = await prepareLogicalSend(logical, () => prepareSendMessageBody({ channelId, input, threadRootId }));
+        return api<MessageSendAck>(apiPaths.channelMessages(channelId), {
+          method: 'POST',
+          body: JSON.stringify({ ...prepared, client_message_id: logical.id }),
+        });
       });
-      // `MessageSendAck`, not `MessageEventPayload`: the ACK is a superset of
-      // the broadcast payload and additionally carries this sender's own
-      // `unresolved_references` — the references in the body that addressed
-      // nobody (#task:2021 P4-5-b). Typed here so the client HOLDS the answer;
-      // the apply seam below consumes only the committed fields, and whether the
-      // composer renders it is a separate call.
-      const res = await api<MessageSendAck>(
-        path,
-        { method: 'POST', body: JSON.stringify(body) },
-      );
-      return res;
     },
     // Optimistic update: show the message immediately on Enter, before
     // the HTTP response arrives. The temp message uses a `pending-` id;
@@ -1046,6 +1042,10 @@ export function useSendMessage(
       input: SendMessageInput,
     ): Promise<SendMutationContext | undefined> => {
       if (!channelId || !targetKey) return undefined;
+      const logical = input.logicalSend ??= createLogicalSend(channelId, threadRootId ?? null);
+      if (logical.userId !== getCurrentUserId() || logical.conversationId !== channelId || logical.threadRootId !== (threadRootId ?? null)) {
+        throw new Error('Send identity changed');
+      }
       // Gate 1 — fail-closed optimistic author. The pending row's author is the
       // current viewer, built COMPLETELY from the hydrated `['me']` carrier (a
       // known-true identity, only ever `active`). If the viewer has not
@@ -1062,6 +1062,12 @@ export function useSendMessage(
       const key = targetKey;
       await qc.cancelQueries({ queryKey: key });
       const prev = qc.getQueryData<MessagesCache>(key);
+      const known = prev?.pages.flatMap(page => page.messages).find(row =>
+        isCommittedMessage(row) && matchesLogicalSend(logical, row));
+      if (known && isCommittedMessage(known)) {
+        logical.confirmed = known;
+        return {};
+      }
       // Invariant: never append optimistic messages to a non-tail
       // window. If the user is browsing an `around_message_id` window
       // (or any other state where `lastPage.has_more_after === true`),
@@ -1093,7 +1099,7 @@ export function useSendMessage(
           pageParams: [undefined as MessagesPageParam],
         });
       }
-      const tempId = `pending-${crypto.randomUUID()}`;
+      const tempId = `pending-${logical.id}`;
       const snapshots: AttachmentSnapshot[] | null =
         input.attachments && input.attachments.length > 0
           ? input.attachments.map(a => ({
@@ -1108,6 +1114,7 @@ export function useSendMessage(
           : null;
       const tempMsg: PendingMessage = {
         id: tempId,
+        client_message_id: logical.id,
         conversation_id: channelId,
         from_kind: 'user',
         from_agent_id: null,

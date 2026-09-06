@@ -307,3 +307,15 @@ export function rollbackOptimisticSend(
   }
   return removeMessageFromCache(current, tempId);
 }
+
+/** Only this authenticated sender's exact logical send can replace a pending row. */
+export function reconcilePendingMessage(
+  data: MessagesCache | undefined, msg: MessageDto, userId: string | null,
+): MessagesCache | undefined {
+  if (!userId || msg.from_kind !== 'user' || msg.from_user_id !== userId || !msg.client_message_id) return data;
+  const pending = data?.pages.flatMap(page => page.messages).find(row =>
+    isPendingMessage(row) && row.from_user_id === userId
+    && row.conversation_id === msg.conversation_id && row.thread_root_id === msg.thread_root_id
+    && row.client_message_id === msg.client_message_id);
+  return pending ? replacePendingMessageInCache(data, pending.id, msg) : data;
+}

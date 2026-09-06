@@ -1,3 +1,5 @@
+import { confirmLogicalSend } from '@/features/channels/logical-send';
+import { messagesKey, clusterMessagesKey, reconcilePendingMessage, type MessagesCache } from '@/features/channels/message-cache-core';
 import { useEffect } from 'react';
 import { useQueryClient, notifyManager } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
@@ -540,9 +542,12 @@ export function applyCommittedMessage(
   // payload triggers is flushed to observers as ONE notification, so count +
   // preview tail + threads-list absolute merges are atomically visible. The async
   // refetch settles resolve outside the batch and gate the WS floor via the result.
-  const settles = notifyManager.batch(() =>
-    committedMessageEffects(qc, channelId, msg, projections),
-  );
+  const settles = notifyManager.batch(() => {
+    confirmLogicalSend(qc, msg);
+    const key = msg.thread_root_id ? clusterMessagesKey(channelId, msg.thread_root_id) : messagesKey(channelId);
+    qc.setQueryData<MessagesCache | undefined>(key, data => reconcilePendingMessage(data, msg, getCurrentUserId()));
+    return committedMessageEffects(qc, channelId, msg, projections);
+  });
   return Promise.allSettled(settles);
 }
 

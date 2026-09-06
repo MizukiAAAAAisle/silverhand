@@ -1,3 +1,5 @@
+import { getCurrentUserId } from '@/lib/current-user';
+import { createLogicalSend, type LogicalSend } from '@/features/channels/logical-send';
 import {
   Fragment,
   useEffect,
@@ -64,6 +66,7 @@ import {
 import {
   assignAttachmentLabel,
   clearComposerDraft,
+  clearComposerSendAttempt,
   dropSentAttachmentsFromDraft,
   hasComposerDraftInFlightUpload,
   patchComposerDraftText,
@@ -215,6 +218,7 @@ export function Composer({
   const draftRef = useRef(draft);
   const caretRef = useRef(caret);
   const pendingRef = useRef<PendingAttachment[]>(pending);
+  const retrySendRef = useRef<LogicalSend | undefined>(initialDraft?.sendAttempt);
   const editGenerationRef = useRef(0);
   const mountedRef = useRef(true);
   const submittingSnapshotRef = useRef<SubmittingSnapshot | null>(null);
@@ -268,6 +272,8 @@ export function Composer({
   }
 
   function detachSubmittingDraftForEdit(): void {
+    retrySendRef.current = undefined;
+    clearComposerSendAttempt(draftKey);
     const submitting = submittingSnapshotRef.current;
     if (!submitting) return;
     dropSentAttachmentsFromDraft(
@@ -303,6 +309,7 @@ export function Composer({
   useEffect(() => {
     return subscribeComposerDraft(draftKey, event => {
       if (event.type === 'clear') {
+        retrySendRef.current = undefined;
         draftRef.current = '';
         caretRef.current = 0;
         pendingRef.current = [];
@@ -335,6 +342,7 @@ export function Composer({
           ? submitting.snapshot
           : {
               conversationId: draftKey,
+              sendAttempt: retrySendRef.current,
               text: draftRef.current,
               caret: caretRef.current,
               pending: pendingRef.current,
@@ -701,7 +709,10 @@ export function Composer({
     if (pendingAttachmentsBlockSend(pending)) return;
     const submittedPending = pending.filter(p => p.state === 'done' && p.attachment);
     const sentAttachmentIds = ready.map(item => item.id);
+    const logicalSend = retrySendRef.current ?? createLogicalSend(conversationId, threadRootId ?? null);
+    retrySendRef.current = undefined;
     const submittedSnapshot: ComposerDraftSnapshot = {
+      sendAttempt: logicalSend,
       conversationId: draftKey,
       // The SHORTHAND, not the rewritten body: a failed send restores the draft,
       // and the author must get back the bytes they typed. Restoring the
@@ -728,9 +739,11 @@ export function Composer({
      *  it is a no-op once the user has started the next message — and idempotent,
      *  because it clears the ref it tests. */
     const restoreDraft = (): void => {
+      if (logicalSend.userId !== getCurrentUserId()) return;
       const submitting = submittingSnapshotRef.current;
       if (submitting?.editGeneration !== editGeneration) return;
       submittingSnapshotRef.current = null;
+      retrySendRef.current = logicalSend;
       if (mountedRef.current) {
         draftRef.current = submittedSnapshot.text;
         caretRef.current = submittedSnapshot.caret;
@@ -747,11 +760,14 @@ export function Composer({
       for (const item of submittedSnapshot.pending) {
         upsertComposerDraftAttachment(draftKey, item);
       }
+      writeComposerDraft(submittedSnapshot);
     };
     const dispatch = (storedContent: string): void => {
+      logicalSend.canonicalContent ??= storedContent;
       void send
-        .mutateAsync({ content: storedContent, attachments: ready })
+        .mutateAsync({ content: logicalSend.canonicalContent, attachments: ready, logicalSend })
         .then(() => {
+          if (logicalSend.userId !== getCurrentUserId()) return;
           const submitting = submittingSnapshotRef.current;
           if (submitting?.editGeneration !== editGeneration) return;
           clearComposerDraft(draftKey, { sentAttachmentIds });
@@ -759,6 +775,10 @@ export function Composer({
         })
         .catch(restoreDraft);
     };
+    if (logicalSend.canonicalContent !== undefined) {
+      dispatch(logicalSend.canonicalContent);
+      return;
+    }
     // Authoring bytes and stored bytes differ here, on purpose (#task:2001,
     // shiki's ruling): the textarea keeps showing `@Alice` because that is what
     // the author typed, while the body that ships spells every resolvable

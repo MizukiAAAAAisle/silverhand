@@ -1,3 +1,4 @@
+import type { LogicalSend } from '@/features/channels/logical-send';
 import type { AttachmentDto } from '@silverhand/shared';
 import {
   apiPaths,
@@ -62,6 +63,8 @@ export function pendingAttachmentsBlockSend(
 }
 
 export type ComposerDraftSnapshot = {
+  /** Shared in-memory attempt identity; cloning the draft must preserve confirmation. */
+  sendAttempt?: LogicalSend;
   conversationId: string;
   text: string;
   caret: number;
@@ -90,6 +93,11 @@ const drafts = new Map<string, ComposerDraftEntry>();
 const inFlightUploads = new Map<string, Promise<void>>();
 const abandonedUploads = new Set<string>();
 const listeners = new Map<string, Set<DraftListener>>();
+
+export function clearComposerSendAttempt(conversationId: string): void {
+  const entry = drafts.get(conversationId);
+  if (entry) delete entry.sendAttempt;
+}
 
 export function readComposerDraft(
   conversationId: string,
@@ -193,6 +201,7 @@ export function patchComposerDraftText(
   caret: number,
 ): void {
   const entry = ensureEntry(conversationId);
+  if (entry.text !== text) delete entry.sendAttempt;
   entry.text = text;
   entry.caret = caret;
   entry.updatedAt = Date.now();

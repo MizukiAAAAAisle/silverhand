@@ -465,17 +465,16 @@ export function useDirectPairsSync(): void {
  * On success we invalidate `directPairsKey` so a freshly minted pair appears in
  * the DIRECT MESSAGES list even for a viewer whose cached list predates it; the
  * caller reads `ack.message.conversation_id` to navigate to the new line. The
- * mint is idempotent (get-or-create → one row) but the POST is not — a
- * double-submit sends two messages into the same pair, so callers must guard the
- * submit affordance rather than rely on this hook to dedupe.
+ * caller retains one client_message_id while retrying the unedited draft;
+ * the server binds it to the authenticated human and admitted request.
  */
 export function useInitiateDirectMessage(agentId: string) {
   const qc = useQueryClient();
-  return useMutation<MessageSendAck, Error, { content: string }>({
-    mutationFn: async ({ content }) =>
+  return useMutation<MessageSendAck, Error, { content: string; client_message_id: string }>({
+    mutationFn: async ({ content, client_message_id }) =>
       api<MessageSendAck>(apiPaths.agentDirectMessages(agentId), {
         method: 'POST',
-        body: JSON.stringify({ content } satisfies { content: string }),
+        body: JSON.stringify({ content, client_message_id }),
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: directPairsKey });

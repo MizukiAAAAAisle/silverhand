@@ -1,3 +1,4 @@
+import { getCurrentUserId } from '@/lib/current-user';
 /**
  * The direct line with an agent BEFORE it exists (#task:2039) — the primary pane
  * behind `/chat/d/new/:agentId`.
@@ -60,6 +61,7 @@ export function DirectPairDraftPane({
   const agent = agentQuery.data;
   const initiate = useInitiateDirectMessage(agentId);
   const [draft, setDraft] = useState('');
+  const attemptRef = useRef<{ id: string; userId: string; agentId: string }>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pairs = useDirectPairs();
   const existingPair = findAgentDirectPair(pairs, agentId);
@@ -96,9 +98,16 @@ export function DirectPairDraftPane({
 
   const submit = (): void => {
     if (sendDisabled) return;
+    const userId = getCurrentUserId();
+    if (!userId) return;
+    if (!attemptRef.current || attemptRef.current.userId !== userId || attemptRef.current.agentId !== agentId) {
+      attemptRef.current = { id: crypto.randomUUID(), userId, agentId };
+    }
     void initiate
-      .mutateAsync({ content: trimmed })
+      .mutateAsync({ content: trimmed, client_message_id: attemptRef.current.id })
       .then(ack => {
+        if (getCurrentUserId() !== userId) return;
+        attemptRef.current = undefined;
         setDraft('');
         onOpenPair(ack.message.conversation_id);
       })
@@ -192,7 +201,7 @@ export function DirectPairDraftPane({
             value={draft}
             data-composer-input
             disabled={initiate.isPending}
-            onChange={e => setDraft(e.target.value)}
+            onChange={e => { attemptRef.current = undefined; setDraft(e.target.value); }}
             onKeyDown={onKeyDown}
             onCompositionStart={() => setComposing(true)}
             onCompositionEnd={() => setComposing(false)}
