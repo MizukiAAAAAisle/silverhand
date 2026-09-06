@@ -4161,6 +4161,31 @@ export const migrations: Migration[] = [
         WHERE client_message_id IS NOT NULL;
     `,
   },
+  {
+    version: 93,
+    name: 'pi_runtime_transition_target',
+    // Replace the closed column CHECK without rebuilding the referenced parent
+    // agents table. Preserve in-flight locks and enforce both fields on updates.
+    up: `
+      DROP TRIGGER agents_runtime_transition_pair_insert;
+      DROP TRIGGER agents_runtime_transition_pair_update;
+      ALTER TABLE agents RENAME COLUMN runtime_transition_target TO runtime_transition_target_previous;
+      ALTER TABLE agents ADD COLUMN runtime_transition_target TEXT;
+      UPDATE agents SET runtime_transition_target = runtime_transition_target_previous;
+      ALTER TABLE agents DROP COLUMN runtime_transition_target_previous;
+      CREATE TRIGGER agents_runtime_transition_pair_insert BEFORE INSERT ON agents
+      WHEN (NEW.runtime_transition_target IS NULL) != (NEW.runtime_transition_started_at IS NULL)
+        OR (NEW.runtime_transition_target IS NOT NULL AND NEW.runtime_transition_target NOT IN
+          ('claude','codex','cursor','gemini','qoder','opencode','pi'))
+      BEGIN SELECT RAISE(ABORT, 'invalid agents runtime transition lock'); END;
+      CREATE TRIGGER agents_runtime_transition_pair_update
+      BEFORE UPDATE OF runtime_transition_target, runtime_transition_started_at ON agents
+      WHEN (NEW.runtime_transition_target IS NULL) != (NEW.runtime_transition_started_at IS NULL)
+        OR (NEW.runtime_transition_target IS NOT NULL AND NEW.runtime_transition_target NOT IN
+          ('claude','codex','cursor','gemini','qoder','opencode','pi'))
+      BEGIN SELECT RAISE(ABORT, 'invalid agents runtime transition lock'); END;
+    `,
+  },
 ];
 
 /**

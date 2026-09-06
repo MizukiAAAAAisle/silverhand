@@ -176,15 +176,9 @@ CREATE TABLE agents (
         DEFAULT 'active'
         CHECK (materialization_status IN (
           'pending_materialization', 'active', 'failed'
-        )), materialization_failed_code TEXT, materialization_failed_at INTEGER, idempotency_key TEXT, runtime_transition_started_at INTEGER, runtime_transition_target TEXT
-        CHECK (
-          (runtime_transition_target IS NULL AND runtime_transition_started_at IS NULL)
-          OR
-          (runtime_transition_target IN ('claude','codex','cursor','gemini','qoder','opencode')
-           AND runtime_transition_started_at IS NOT NULL)
-        ), deletion_started_at INTEGER, session_scope TEXT NOT NULL
+        )), materialization_failed_code TEXT, materialization_failed_at INTEGER, idempotency_key TEXT, runtime_transition_started_at INTEGER, deletion_started_at INTEGER, session_scope TEXT NOT NULL
         DEFAULT 'conversation'
-        CHECK (session_scope IN ('conversation', 'agent')), last_activity_at INTEGER,
+        CHECK (session_scope IN ('conversation', 'agent')), last_activity_at INTEGER, runtime_transition_target TEXT,
         CHECK (
           (avatar_storage_key IS NULL AND avatar_content_type IS NULL)
           OR
@@ -558,22 +552,6 @@ CREATE TRIGGER conversation_reads_root_update
             WHEN (SELECT thread_root_id FROM messages WHERE id = NEW.thread_root_id) IS NOT NULL
             THEN RAISE(ABORT, 'conversation_reads root must not itself be a reply')
           END;
-        END;
-
-CREATE TRIGGER agents_runtime_transition_pair_insert
-        BEFORE INSERT ON agents
-        WHEN (NEW.runtime_transition_target IS NULL) !=
-             (NEW.runtime_transition_started_at IS NULL)
-        BEGIN
-          SELECT RAISE(ABORT, 'agents runtime transition lock must be a pair');
-        END;
-
-CREATE TRIGGER agents_runtime_transition_pair_update
-        BEFORE UPDATE OF runtime_transition_target, runtime_transition_started_at ON agents
-        WHEN (NEW.runtime_transition_target IS NULL) !=
-             (NEW.runtime_transition_started_at IS NULL)
-        BEGIN
-          SELECT RAISE(ABORT, 'agents runtime transition lock must be a pair');
         END;
 
 CREATE INDEX idx_messages_thread_root_id
@@ -1347,3 +1325,16 @@ CREATE INDEX idx_conversation_events_created_at ON conversation_events(created_a
 
 CREATE UNIQUE INDEX idx_messages_client_identity ON messages(from_user_id, client_message_id)
         WHERE client_message_id IS NOT NULL;
+
+CREATE TRIGGER agents_runtime_transition_pair_insert BEFORE INSERT ON agents
+      WHEN (NEW.runtime_transition_target IS NULL) != (NEW.runtime_transition_started_at IS NULL)
+        OR (NEW.runtime_transition_target IS NOT NULL AND NEW.runtime_transition_target NOT IN
+          ('claude','codex','cursor','gemini','qoder','opencode','pi'))
+      BEGIN SELECT RAISE(ABORT, 'invalid agents runtime transition lock'); END;
+
+CREATE TRIGGER agents_runtime_transition_pair_update
+      BEFORE UPDATE OF runtime_transition_target, runtime_transition_started_at ON agents
+      WHEN (NEW.runtime_transition_target IS NULL) != (NEW.runtime_transition_started_at IS NULL)
+        OR (NEW.runtime_transition_target IS NOT NULL AND NEW.runtime_transition_target NOT IN
+          ('claude','codex','cursor','gemini','qoder','opencode','pi'))
+      BEGIN SELECT RAISE(ABORT, 'invalid agents runtime transition lock'); END;

@@ -17,6 +17,7 @@ const DETECT_BINARIES: Record<RuntimeKind, string> = {
   gemini: 'gemini',
   qoder: 'qodercli',
   opencode: 'opencode',
+  pi: 'pi',
 };
 
 const DEFAULT_RUNTIME_DETECTION_CACHE_TTL_MS = 30_000;

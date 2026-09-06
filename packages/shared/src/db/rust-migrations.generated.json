@@ -5,7 +5,7 @@
     {
       "epoch": 69,
       "firstStep": 69,
-      "lastStep": 92,
+      "lastStep": 93,
       "released": false
     }
   ],
@@ -14,8 +14,8 @@
     "packages/shared/src/conversation-title-audit.ts": "36d75a99f6b29e7f0302739a368fe6ecb26be4fb5c067a00b7cec93eac2bbce0",
     "packages/shared/src/conversation-title.ts": "74e08fa0290476e633508b05958d9be88a412c0ae468e29a9b60bebb9b43a3db",
     "packages/shared/src/db/baseline-schema.ts": "7e5b7e9a0aca9b79fa433dca341d68ef4f761c5a545069c6005a4519851130e6",
-    "packages/shared/src/db/migrations.ts": "afb4e28dffd1b15297f6175431a68f5d4ad8a57caefe985d43875adac62d19d6",
-    "packages/shared/src/db/schema-epochs.ts": "2d275e0730068d87820edfd3a3de3a195b81919d4310d5cf7e004b96dc5718e2",
+    "packages/shared/src/db/migrations.ts": "7e1da986421f7ca7f9f8fe72c2c12ecf426faa81ec71f74c044e08ed4d301b6f",
+    "packages/shared/src/db/schema-epochs.ts": "fd47335b2fb2a324a2eb693cdf32ea0b4f7b8c141c1d7624d27080d00c27caae",
     "packages/shared/src/display-name-charset.ts": "13ad82b9e92e562014322c569df15476a8ef5d7863f541f79207a5403d542410",
     "packages/shared/src/unicode-case-fold.ts": "b5cb75d46582dc93b640434ad78fe8f0a741e5e1aa183adbb27368ce2aceb120",
     "packages/shared/src/unicode-name-charset.ts": "bbcda81d89d738fdfe6a9ff0dd4dad633a79a84cd8f82e203753910196967879",
@@ -363,6 +363,13 @@
       "version": 92,
       "name": "human_message_retry_identity",
       "up": "\n      ALTER TABLE messages ADD COLUMN client_message_id TEXT;\n      ALTER TABLE messages ADD COLUMN client_request_json TEXT;\n      CREATE UNIQUE INDEX idx_messages_client_identity ON messages(from_user_id, client_message_id)\n        WHERE client_message_id IS NOT NULL;\n    ",
+      "foreignKeyEscape": false,
+      "precondition": false
+    },
+    {
+      "version": 93,
+      "name": "pi_runtime_transition_target",
+      "up": "\n      DROP TRIGGER agents_runtime_transition_pair_insert;\n      DROP TRIGGER agents_runtime_transition_pair_update;\n      ALTER TABLE agents RENAME COLUMN runtime_transition_target TO runtime_transition_target_previous;\n      ALTER TABLE agents ADD COLUMN runtime_transition_target TEXT;\n      UPDATE agents SET runtime_transition_target = runtime_transition_target_previous;\n      ALTER TABLE agents DROP COLUMN runtime_transition_target_previous;\n      CREATE TRIGGER agents_runtime_transition_pair_insert BEFORE INSERT ON agents\n      WHEN (NEW.runtime_transition_target IS NULL) != (NEW.runtime_transition_started_at IS NULL)\n        OR (NEW.runtime_transition_target IS NOT NULL AND NEW.runtime_transition_target NOT IN\n          ('claude','codex','cursor','gemini','qoder','opencode','pi'))\n      BEGIN SELECT RAISE(ABORT, 'invalid agents runtime transition lock'); END;\n      CREATE TRIGGER agents_runtime_transition_pair_update\n      BEFORE UPDATE OF runtime_transition_target, runtime_transition_started_at ON agents\n      WHEN (NEW.runtime_transition_target IS NULL) != (NEW.runtime_transition_started_at IS NULL)\n        OR (NEW.runtime_transition_target IS NOT NULL AND NEW.runtime_transition_target NOT IN\n          ('claude','codex','cursor','gemini','qoder','opencode','pi'))\n      BEGIN SELECT RAISE(ABORT, 'invalid agents runtime transition lock'); END;\n    ",
       "foreignKeyEscape": false,
       "precondition": false
     }

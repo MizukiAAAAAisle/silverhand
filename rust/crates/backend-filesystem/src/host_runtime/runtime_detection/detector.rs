@@ -160,12 +160,13 @@ async fn walk_machine(machine: &MachineFacts) -> RuntimeCatalog {
         let directories = Arc::clone(&directories);
         tokio::spawn(async move { detect_one(kind, &directories, platform).await })
     });
-    let [first, second, third, fourth] = passes;
+    let [first, second, third, fourth, fifth] = passes;
     RuntimeCatalog::from_detections([
         concluded(first).await,
         concluded(second).await,
         concluded(third).await,
         concluded(fourth).await,
+        concluded(fifth).await,
     ])
 }
 

@@ -137,6 +137,7 @@ export const KNOWN_CAPABILITIES_V1 = [
   'runtime.codex',
   'runtime.cursor',
   'runtime.opencode',
+  'runtime.pi',
   'runtime.qoder',
   'runtime.codex.reasoning.v1',
   'transport.unix_socket',

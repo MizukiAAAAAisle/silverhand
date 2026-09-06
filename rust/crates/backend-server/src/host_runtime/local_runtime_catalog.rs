@@ -232,6 +232,7 @@ mod tests {
             },
             RuntimeDetection::Absent,
             RuntimeDetection::ProbeFailed,
+            RuntimeDetection::Absent,
         ])
     }
 
@@ -302,7 +303,8 @@ mod tests {
                         "installed": false,
                         "binary": null,
                         "version": null
-                    }
+                    },
+                    {"kind":"pi","state":"absent","reason":"not_found","installed":false,"binary":null,"version":null}
                 ]
             })
         );

@@ -3,19 +3,28 @@
     "Shared TS<->Rust signer for WHICH runtimes the product offers (#task:2195, root ops).",
     "The product decision has two halves, and they are compared differently on purpose:",
     "",
-    "  offered        — the create/profile picker list, ORDER-SENSITIVE. TS derives it as",
+    "  offered        \u2014 the create/profile picker list, ORDER-SENSITIVE. TS derives it as",
     "                   RUNTIME_CATALOG.filter(e => e.selectable).map(e => e.kind), i.e.",
     "                   RUNTIME_ORDER filtered by the selectable flag; Rust derives it as",
     "                   backend-core `SELECTABLE_RUNTIMES`. Both must equal this sequence.",
-    "  vocabularyOnly — kinds a row may hold that the product does not offer, compared as a",
+    "  vocabularyOnly \u2014 kinds a row may hold that the product does not offer, compared as a",
     "                   SORTED SET. Display order is a TS-only fact (RUNTIME_ORDER); Rust's",
     "                   `RuntimeKind::ALL` is the closed vocabulary in its own order, so",
     "                   asserting an order here would pin something neither side owns.",
     "",
     "Neither side hand-writes these names in a test: each derives its answer from its own",
-    "authority and is held to this artifact, so a runtime offered on one side only — or",
-    "reordered in the picker on one side only — fails on both."
+    "authority and is held to this artifact, so a runtime offered on one side only \u2014 or",
+    "reordered in the picker on one side only \u2014 fails on both."
   ],
-  "offered": ["claude", "codex", "qoder", "opencode"],
-  "vocabularyOnly": ["cursor", "gemini"]
+  "offered": [
+    "claude",
+    "codex",
+    "qoder",
+    "opencode",
+    "pi"
+  ],
+  "vocabularyOnly": [
+    "cursor",
+    "gemini"
+  ]
 }

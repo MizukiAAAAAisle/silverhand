@@ -62,7 +62,7 @@ async fn snapshot(
     let mut result = vec![];
     for table in tables {
         let columns: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM pragma_table_info(?) ORDER BY cid")
+            sqlx::query_scalar("SELECT name FROM pragma_table_info(?) ORDER BY name")
                 .bind(&table)
                 .fetch_all(&mut *db)
                 .await
@@ -104,9 +104,9 @@ async fn empty_store_runs_shared_history_without_ts_then_current_is_noop() {
     let path = root.path().join("data/database.sqlite");
     let first = prepare_database(&path, false).await.unwrap();
     assert_eq!(first.before_step, 0);
-    assert_eq!(first.after_step, 92);
+    assert_eq!(first.after_step, 93);
     assert_eq!(first.after_epoch, 69);
-    assert_eq!(first.applied_steps, (44..=92).collect::<Vec<_>>());
+    assert_eq!(first.applied_steps, (44..=93).collect::<Vec<_>>());
     assert!(first.backup_path.is_none());
     let second = prepare_database(&path, false).await.unwrap();
     assert!(second.applied_steps.is_empty());
@@ -182,10 +182,10 @@ async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
     .unwrap();
     assert!(matches!(
         prepare_database(&path, false).await,
-        Err(DatabaseStartupError::UpgradeDisabled { from: 87, to: 92 })
+        Err(DatabaseStartupError::UpgradeDisabled { from: 87, to: 93 })
     ));
     let upgraded = prepare_database(&path, true).await.unwrap();
-    assert_eq!(upgraded.applied_steps, vec![88, 89, 90, 91, 92]);
+    assert_eq!(upgraded.applied_steps, vec![88, 89, 90, 91, 92, 93]);
     let backup = upgraded.backup_path.unwrap();
     let mut live = connect(&path).await;
     assert_eq!(
@@ -229,7 +229,7 @@ async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
             .await
             .unwrap()
             .after_step,
-        92
+        93
     );
     // Optional export for the real-process smoke; fixture generation remains a
     // test-only activity, never a production startup fallback.
@@ -275,7 +275,7 @@ async fn failed_step_rolls_back_sql_and_ledger_before_restart() {
     assert_eq!(version, 44);
     db.close().await.unwrap();
     let restarted = prepare_database(&path, true).await.unwrap();
-    assert_eq!(restarted.applied_steps, (45..=92).collect::<Vec<_>>());
+    assert_eq!(restarted.applied_steps, (45..=93).collect::<Vec<_>>());
     assert!(restarted.backup_path.is_some());
 }
 
@@ -303,11 +303,11 @@ async fn retired_workspace_starred_mode_upgrades_from_87_and_88_without_losing_o
         assert_ne!(before, expected);
         db.close().await.unwrap();
         assert!(matches!(prepare_database(&path, false).await,
-            Err(DatabaseStartupError::UpgradeDisabled { from, to: 92 }) if from == previous));
+            Err(DatabaseStartupError::UpgradeDisabled { from, to: 93 }) if from == previous));
         let outcome = prepare_database(&path, true).await.unwrap();
         assert_eq!(
             outcome.applied_steps,
-            ((previous + 1)..=92).collect::<Vec<_>>()
+            ((previous + 1)..=93).collect::<Vec<_>>()
         );
         let mut db = connect(&path).await;
         assert_eq!(snapshot(&mut db, false).await, expected);
@@ -542,7 +542,7 @@ async fn agent_stream_upgrade_preserves_history_without_guessing_generation() {
     db.close().await.unwrap();
     assert_eq!(
         prepare_database(&path, true).await.unwrap().applied_steps,
-        vec![90, 91, 92]
+        vec![90, 91, 92, 93]
     );
     let mut db = connect(&path).await;
     let row:(String,String,i64,Option<i64>)=sqlx::query_as("SELECT conversation_id,payload,created_at,runtime_generation FROM conversation_events WHERE id=101").fetch_one(&mut db).await.unwrap();

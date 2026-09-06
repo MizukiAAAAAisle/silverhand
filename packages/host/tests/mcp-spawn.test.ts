@@ -5,6 +5,7 @@ import {
   rmSync,
   writeFileSync,
   chmodSync,
+  readdirSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,6 +66,18 @@ beforeEach(() => {
 });
 
 describe('buildProfileMcpSpawnArgs', () => {
+  it('Pi preserves profile MCP bytes without copying credentials or injecting configuration', async () => {
+    const raw = JSON.stringify({ mcpServers: { private: { command: 'fixture', env: { TOKEN: 'fixture-secret' } } } });
+    const path = join(homeDir, 'mcp.json');
+    writeFileSync(path, raw);
+    const { logger, warns } = captureLogger();
+    const before = readdirSync(spawnDir);
+    const result = await buildProfileMcpSpawnArgs({ runtimeKind: 'pi', agentHomeDir: homeDir, spawnDir, systemPromptPath, agentId: AGENT_ID, logger });
+    expect(result).toEqual({ args: [] });
+    expect(readFileSync(path, 'utf8')).toBe(raw);
+    expect(readdirSync(spawnDir)).toEqual(before);
+    expect(JSON.stringify(warns)).not.toContain('fixture-secret');
+  });
   it('returns [] silently when no mcp.json exists (the normal case)', async () => {
     const { logger, warns } = captureLogger();
     const r = await buildProfileMcpSpawnArgs({

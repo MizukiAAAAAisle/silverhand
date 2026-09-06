@@ -146,6 +146,18 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     supportsProfileMcp: true,
     modelSuggestions: [],
   },
+  pi: {
+    kind: 'pi',
+    label: 'Pi',
+    cliLabel: 'Pi',
+    selectable: true,
+    reasoningEffortOptions: ['off', 'minimal', 'low', 'medium', 'high'],
+    supportsFastMode: false,
+    // User-installed Pi extensions remain enabled. This flag describes only
+    // Silverhand profile-config injection, which needs an extension contract.
+    supportsProfileMcp: false,
+    modelSuggestions: [],
+  },
   cursor: {
     kind: 'cursor',
     label: 'Cursor',
@@ -179,6 +191,7 @@ const RUNTIME_ORDER: readonly RuntimeKind[] = [
   'codex',
   'qoder',
   'opencode',
+  'pi',
   'cursor',
   'gemini',
 ];

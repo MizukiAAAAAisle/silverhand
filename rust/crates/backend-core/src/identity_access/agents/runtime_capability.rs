@@ -45,6 +45,7 @@ fn baseline_reasoning_effort_options(kind: RuntimeKind) -> &'static [&'static st
         RuntimeKind::Claude | RuntimeKind::Opencode | RuntimeKind::Cursor | RuntimeKind::Gemini => {
             &[]
         }
+        RuntimeKind::Pi => &["off", "minimal", "low", "medium", "high"],
         RuntimeKind::Codex => &["low", "medium", "high", "xhigh"],
         RuntimeKind::Qoder => &["none", "low", "medium", "high", "xhigh", "max"],
     }
@@ -70,7 +71,8 @@ fn per_model_reasoning_effort_options(
         | RuntimeKind::Qoder
         | RuntimeKind::Opencode
         | RuntimeKind::Cursor
-        | RuntimeKind::Gemini => None,
+        | RuntimeKind::Gemini
+        | RuntimeKind::Pi => None,
     }
 }
 
@@ -132,7 +134,8 @@ pub fn runtime_default_model(kind: RuntimeKind) -> Option<&'static str> {
         | RuntimeKind::Codex
         | RuntimeKind::Opencode
         | RuntimeKind::Cursor
-        | RuntimeKind::Gemini => None,
+        | RuntimeKind::Gemini
+        | RuntimeKind::Pi => None,
     }
 }
 

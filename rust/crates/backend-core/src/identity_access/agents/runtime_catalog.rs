@@ -46,11 +46,12 @@ use crate::identity_access::agents::runtime::RuntimeKind;
 /// constant to a checked-in artifact the TypeScript half signs from the real product
 /// catalogue, so offering a runtime — or reordering the picker — on one side only fails
 /// on both.
-pub const SELECTABLE_RUNTIMES: [RuntimeKind; 4] = [
+pub const SELECTABLE_RUNTIMES: [RuntimeKind; 5] = [
     RuntimeKind::Claude,
     RuntimeKind::Codex,
     RuntimeKind::Qoder,
     RuntimeKind::Opencode,
+    RuntimeKind::Pi,
 ];
 
 /// How many runtimes a detection pass must answer for. Named so an adapter states
@@ -123,7 +124,7 @@ pub struct DetectedRuntime {
 ///
 /// ```compile_fail
 /// use silverhand_backend_core::identity_access::agents::runtime_catalog::{RuntimeCatalog, RuntimeDetection};
-/// // Three answers for four offered runtimes — there is no arm of the type that
+/// // Three answers for five offered runtimes — there is no arm of the type that
 /// // could say which one was skipped, so this must not build a catalogue.
 /// let _ = RuntimeCatalog::from_detections([
 ///     RuntimeDetection::Absent,
@@ -141,6 +142,7 @@ pub struct DetectedRuntime {
 ///     RuntimeCatalog, RuntimeDetection, SELECTABLE_RUNTIMES,
 /// };
 /// let catalog = RuntimeCatalog::from_detections([
+///     RuntimeDetection::Absent,
 ///     RuntimeDetection::Absent,
 ///     RuntimeDetection::Absent,
 ///     RuntimeDetection::Absent,
@@ -227,6 +229,7 @@ mod tests {
             },
             RuntimeDetection::Absent,
             RuntimeDetection::ProbeFailed,
+            RuntimeDetection::Absent,
         ]);
         let paired: Vec<(RuntimeKind, Option<&str>)> = catalog
             .entries()
@@ -240,6 +243,7 @@ mod tests {
                 (RuntimeKind::Codex, Some("/second")),
                 (RuntimeKind::Qoder, None),
                 (RuntimeKind::Opencode, None),
+                (RuntimeKind::Pi, None),
             ]
         );
     }
