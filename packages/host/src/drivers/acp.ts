@@ -41,8 +41,6 @@ export interface AcpPermissionPolicy {
    * full-access or feature-dedup posture.
    */
   shouldAllow(params: unknown): boolean;
-  /** Preferred affirmative option; other adapters retain allow_once by default. */
-  preferredAllowKind?: 'allow_once' | 'allow_always';
 }
 
 export interface AcpRuntimeAdapter {
@@ -379,7 +377,7 @@ export class AcpClient {
       ? (recordField(params).options as unknown[])
       : [];
     const allowed = this.adapter.permissionPolicy?.shouldAllow(params) === true;
-    const selected = selectPermissionOption(options, allowed, this.adapter.permissionPolicy?.preferredAllowKind);
+    const selected = selectPermissionOption(options, allowed);
     if (selected) return { outcome: 'selected', optionId: selected };
     return { outcome: 'cancelled' };
   }
@@ -477,12 +475,9 @@ function planSummary(entries: unknown): string | null {
 function selectPermissionOption(
   options: unknown[],
   allowed: boolean,
-  preferredAllowKind: 'allow_once' | 'allow_always' = 'allow_once',
 ): string | null {
   const wanted = allowed
-    ? (preferredAllowKind === 'allow_always'
-        ? ['allow_always', 'allow_once']
-        : ['allow_once', 'allow_always'])
+    ? ['allow_always', 'allow_once']
     : ['reject_once', 'reject_always'];
   for (const kind of wanted) {
     const found = options.find(option => recordField(option).kind === kind);

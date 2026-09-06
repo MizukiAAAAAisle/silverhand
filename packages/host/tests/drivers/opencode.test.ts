@@ -643,10 +643,10 @@ it.each([
 });
 
 it.each([
-  { policy: {shouldAllow: () => true}, selected: 'allow_once' },
-  { policy: {shouldAllow: () => false, preferredAllowKind: 'allow_always'}, selected: 'reject_once' },
+  { policy: {shouldAllow: () => true}, selected: 'allow_always' },
+  { policy: {shouldAllow: () => false}, selected: 'reject_once' },
   { policy: undefined, selected: 'reject_once' },
-] satisfies Array<{policy: AcpPermissionPolicy | undefined; selected: string}>)('preserves the shared ACP policy: $selected', async ({policy, selected}) => {
+] satisfies Array<{policy: AcpPermissionPolicy | undefined; selected: string}>)('uses the common ACP allow order while preserving denial: $selected', async ({policy, selected}) => {
   const {ctx, cleanup} = makeSpawnCtx();
   try {
     const client = new AcpClient({runtimeLabel: 'test adapter', permissionPolicy: policy,
