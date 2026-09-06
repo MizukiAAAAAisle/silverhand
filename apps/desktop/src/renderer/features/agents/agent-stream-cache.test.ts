@@ -4,7 +4,6 @@ import type { AgentStreamActivityEvent, AgentStreamActivityListResponse, ServerF
 import { ApiError } from '@/lib/api';
 import type { WsClientStatus } from '@/lib/ws-client';
 import { createAgentStreamCache, upsertAgentStream } from './agent-stream-cache';
-import { coalesceActivity } from './activityPresentation';
 
 const row = (id: number, payload: AgentStreamActivityEvent['payload'] = { text: String(id) }, agentId = 'a'): AgentStreamActivityEvent => ({ id, agent_id: agentId, kind: 'thinking', payload, created_at: 100 });
 const page = (events: AgentStreamActivityEvent[], cursor: number | null = null): AgentStreamActivityListResponse => ({ agent_id: 'a', runtime_scope: 'agent', events, next_before_id: cursor });
@@ -110,13 +109,5 @@ describe('agent-scoped shared activity', () => {
     h.event(row(11)); h.reads[1]!.reject(new Error('offline')); await loading;
     expect(a.getSnapshot()).toMatchObject({ phase: 'ready', isLoadingMore: false, nextBeforeId: 10 });
     expect(a.getSnapshot().events.map(r => r.id)).toEqual([10, 11]); h.cache.clear();
-  });
-  it('preserves optional JSON tool output without attaching a later reused call id to an earlier call', () => {
-    const call = (id: number): AgentStreamActivityEvent => ({ ...row(id), kind: 'tool_call', payload: { tool_call_id: 'repeat', name: 'tool' } });
-    const output: AgentStreamActivityEvent = { ...row(2), kind: 'tool_output', payload: { tool_call_id: 'repeat', output: { result: ['ok'] } } };
-    const items = coalesceActivity([call(1), output, call(3)]);
-    expect(items[0]).toMatchObject({ type: 'event', completed: true, output: { result: ['ok'] } });
-    expect(items[1]).toMatchObject({ type: 'event', completed: false });
-    expect(coalesceActivity([{ ...output, payload: { tool_call_id: 'orphan' } }])[0]).toMatchObject({ output: undefined });
   });
 });

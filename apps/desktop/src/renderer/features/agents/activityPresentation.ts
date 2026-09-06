@@ -10,7 +10,8 @@ export type ActivityEvent = ConversationActivityEvent | AgentStreamActivityEvent
  *
  * Scope contract (#task:1187, agreed with Cindy/Alice): this is a pure
  * PRESENTATION layer over the raw `conversation_events` rows. It never mutates
- * the event stream or invents absent tool results. The codex fragment coalescing here
+ * the event stream, never invents tool RESULT bodies (those stay marker-only —
+ * the privacy decision from #task:1186), and the codex fragment coalescing here
  * is a DISPLAY fallback only — the durable retention/pagination fix lives in a
  * separate backend coalescer (Cindy).
  */
@@ -430,7 +431,6 @@ export type ActivityDisplayItem =
        *  a neutral "done" — a finished call whose success we cannot prove is
        *  never upgraded to green. Absent while the call is still in flight. */
       outcome?: ToolOutcome;
-      output?: unknown;
     };
 
 function textOf(e: ActivityEvent): string {
@@ -468,10 +468,10 @@ function sessionIdOf(e: ActivityEvent): string | null {
  *    thinking↔text switch, so distinct passes never merge across a tool call.
  *    A whitespace-only `text` group is dropped (codex's empty end-of-turn
  *    assistant block, which used to render as a bare "(message)" placeholder).
- *  - a `tool_output` is folded into its call when available, carrying optional
- *    result content. When its `tool_call_id` matches a `tool_call`
+ *  - a `tool_output` is NOT shown on its own (the marker-only body carries no
+ *    information — #task:1186). When its `tool_call_id` matches a `tool_call`
  *    in the window the output is dropped and the call is flagged `completed`,
- *    carrying the output's result and `outcome` so the row paints an honest marker (green ✓
+ *    carrying the output's `outcome` so the row paints an honest marker (green ✓
  *    only for a proven `success`; neutral otherwise — see the `outcome` field on
  *    ActivityDisplayItem); an orphan output (no matching call, e.g. its call
  *    paged out) degrades to one light `returned` line.
@@ -493,17 +493,17 @@ function sessionIdOf(e: ActivityEvent): string | null {
 export function coalesceActivity(
   events: ReadonlyArray<ActivityEvent>,
 ): ActivityDisplayItem[] {
-  // Match each output to the nearest preceding call; call ids may recur in later runs.
-  const calls = new Map<string, ActivityEvent>();
-  const outputs = new Map<number, ActivityEvent>();
-  const foldedOutputs = new Set<number>();
+  // Pass 1: correlate tool_call ⇄ tool_output by id within the window.
+  const callIds = new Set<string>();
+  const outputIds = new Set<string>();
+  const outcomeById = new Map<string, ToolOutcome>();
   for (const e of events) {
     const id = callIdOf(e);
     if (id === null) continue;
-    if (e.kind === 'tool_call') calls.set(id, e);
+    if (e.kind === 'tool_call') callIds.add(id);
     else if (e.kind === 'tool_output') {
-      const call = calls.get(id);
-      if (call) { outputs.set(call.id, e); foldedOutputs.add(e.id); }
+      outputIds.add(id);
+      outcomeById.set(id, outcomeOf(e));
     }
   }
 
@@ -576,24 +576,25 @@ export function coalesceActivity(
     flush();
 
     if (e.kind === 'tool_output') {
+      const id = callIdOf(e);
       // Folded into its tool_call → drop. Orphan (its call paged out by
       // retention) → light row that still carries the verdict: a failed/cancelled
       // orphan is the only surviving record of that outcome, so it must not
       // render as a neutral success.
-      if (foldedOutputs.has(e.id)) continue;
-      out.push({ type: 'event', key: String(e.id), event: e, outcome: outcomeOf(e), output: e.payload?.['output'] });
+      if (id !== null && callIds.has(id)) continue;
+      out.push({ type: 'event', key: String(e.id), event: e, outcome: outcomeOf(e) });
       continue;
     }
 
     if (e.kind === 'tool_call') {
-      const output = outputs.get(e.id);
-      const completed = output !== undefined;
+      const id = callIdOf(e);
+      const completed = id !== null && outputIds.has(id);
       out.push({
         type: 'event',
         key: String(e.id),
         event: e,
         completed,
-        ...(output ? { outcome: outcomeOf(output), output: output.payload?.['output'] } : {}),
+        ...(completed && id !== null ? { outcome: outcomeById.get(id) } : {}),
       });
       continue;
     }

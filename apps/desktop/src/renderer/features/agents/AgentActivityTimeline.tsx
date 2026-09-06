@@ -204,7 +204,7 @@ function ActivityTimeline({ identity, feed }: {
                 item.type === 'group' ? (
                   <GroupRow key={item.key} item={item} />
                 ) : (
-                  <EventRow key={item.key} event={item.event} completed={item.completed} outcome={item.outcome} output={item.output} />
+                  <EventRow key={item.key} event={item.event} completed={item.completed} outcome={item.outcome} />
                 ),
               )}
             </ol>
@@ -390,12 +390,10 @@ function EventRow({
   event,
   completed,
   outcome,
-  output,
 }: {
   event: ActivityEvent;
   completed?: boolean;
   outcome?: ToolOutcome;
-  output?: unknown;
 }): JSX.Element {
   const { kind, payload } = event;
   let { Icon, tone } = visualForKind(kind);
@@ -425,10 +423,7 @@ function EventRow({
             ) : null}
           </span>
         }
-        preview={p.detail || output !== undefined ? <>
-          {p.detail ? <ToolDetailView detail={p.detail} /> : null}
-          <ToolOutputView output={output} />
-        </> : null}
+        preview={p.detail ? <ToolDetailView detail={p.detail} /> : null}
       />
     );
   }
@@ -533,7 +528,7 @@ function EventRow({
     title = <span className="text-text-muted">{kind}</span>;
   }
 
-  return <RowShell Icon={Icon} tone={tone} time={time} title={title} preview={output === undefined ? null : <ToolOutputView output={output} />} />;
+  return <RowShell Icon={Icon} tone={tone} time={time} title={title} />;
 }
 
 /** Renders a tool_call's optional richer body: a diff (Edit/Write), or a
@@ -551,7 +546,7 @@ function ToolDetailView({ detail }: { detail: ToolDetail }): JSX.Element {
 
 /** Edit/Write diff preview built from `tool_call.input` (old/new). Removed
  *  lines under a red rail, added under a green rail; tool RESULT output is
- *  rendered separately when the producer supplied it. */
+ *  never shown (marker-only). */
 function DiffView({
   removed,
   added,
@@ -600,16 +595,5 @@ function DiffSide({
         </div>
       ))}
     </div>
-  );
-}
-
-function ToolOutputView({ output }: { output: unknown }): JSX.Element | null {
-  if (output === undefined) return null;
-  const text = typeof output === 'string' ? output : JSON.stringify(output, null, 2);
-  return (
-    <details className="mt-1 text-text-muted">
-      <summary className="cursor-pointer text-[length:var(--text-meta)]">Output</summary>
-      <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all bg-[var(--activity-params-bg)] px-2 py-1 font-mono text-[length:var(--text-meta)]">{text}</pre>
-    </details>
   );
 }
