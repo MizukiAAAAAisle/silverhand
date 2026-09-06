@@ -61,7 +61,7 @@ export function AttachmentHtmlPreview({
   }, [onPinch]);
 
   return (
-    <div className="h-full w-full overflow-hidden bg-white">
+    <div className="h-full w-full overflow-hidden bg-white p-1">
       <iframe
         ref={iframeRef}
         title={title}

@@ -257,14 +257,14 @@ function AttachmentTabBody({
   const kind = attachmentPreviewKind(state.contentType || fallbackContentType, filename);
   if (kind === 'html') {
     return (
-      <div className="min-h-0 flex-1 p-1">
+      <div className="min-h-0 flex-1">
         <AttachmentHtmlPreview html={state.text} title={filename} zoom={htmlZoom} onPinch={onPinch} />
       </div>
     );
   }
   if (kind === 'markdown') {
     return (
-      <div className="min-h-0 flex-1 overflow-auto p-1">
+      <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
         <Markdown content={state.text} />
       </div>
     );
