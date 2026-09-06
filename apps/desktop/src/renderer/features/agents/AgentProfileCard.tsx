@@ -1,3 +1,4 @@
+import { ProfileMessageActivity } from '@/features/profile/ProfileMessageActivity';
 import { useState, type JSX } from 'react';
 import { Lock } from 'lucide-react';
 import dayjs from 'dayjs';
@@ -159,6 +160,8 @@ export function AgentProfileCard({
           />
         )}
       </ProfileSection>
+
+      <ProfileMessageActivity subject={{ kind: 'agent', id: agent.id }} />
 
       <ProfileSection
         title="Runtime configuration"

@@ -1,3 +1,4 @@
+import { ProfileMessageActivity } from '@/features/profile/ProfileMessageActivity';
 import dayjs from 'dayjs';
 import { Lock, Pencil, User as UserIcon } from 'lucide-react';
 import type { UserDto } from '@silverhand/shared';
@@ -92,6 +93,8 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
           </div>
         </div>
       </ProfileSection>
+
+      <ProfileMessageActivity subject={{ kind: 'user', id: user.id }} />
 
       <ProfileSection title="Metadata" muted>
         <MetadataList
