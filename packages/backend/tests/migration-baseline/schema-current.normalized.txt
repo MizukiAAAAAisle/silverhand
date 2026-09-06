@@ -36,6 +36,8 @@ index idx_messages_cc_dedupe: CREATE UNIQUE INDEX idx_messages_cc_dedupe ON mess
 index idx_messages_client_identity: CREATE UNIQUE INDEX idx_messages_client_identity ON messages(from_user_id, client_message_id) WHERE client_message_id IS NOT NULL
 index idx_messages_conversation: CREATE INDEX idx_messages_conversation ON messages(conversation_id, seq)
 index idx_messages_conversation_from_kind: CREATE INDEX idx_messages_conversation_from_kind ON messages(conversation_id, from_kind, seq)
+index idx_messages_profile_agent: CREATE INDEX idx_messages_profile_agent ON messages(from_agent_id, created_at) WHERE from_kind='agent' AND cc_source_message_id IS NULL
+index idx_messages_profile_user: CREATE INDEX idx_messages_profile_user ON messages(from_user_id, created_at) WHERE from_kind='user' AND cc_source_message_id IS NULL
 index idx_messages_thread_root: CREATE INDEX idx_messages_thread_root ON messages(conversation_id, thread_root_id, seq)
 index idx_messages_thread_root_id: CREATE INDEX idx_messages_thread_root_id ON messages(thread_root_id)
 index idx_notifications_conversation_unread: CREATE INDEX idx_notifications_conversation_unread ON notifications(conversation_id, read_at, created_at DESC)

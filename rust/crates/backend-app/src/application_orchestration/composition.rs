@@ -371,6 +371,13 @@ pub(super) async fn compose_after_audit(
     // seeds and starts member runtimes; it reuses the SAME durable inbox-ensure +
     // daemon delivery/start seams as workspace-create onboarding (fresh cheap handles).
     let agent_create_channel_message_ensure = messaging_store.committed_message_inbox_ensure();
+    let profile_message_counts =
+        silverhand_backend_server::identity_access::profile_message_counts::router(
+            messaging_store.clone(),
+            user_store.clone(),
+            agent_detail_cold_read.clone(),
+            SystemProcessClock,
+        );
     let (human_writes, agent_writes) = aftermath.write_doors(messaging_store, target_address);
 
     let host = host_runtime::router(
@@ -869,7 +876,8 @@ pub(super) async fn compose_after_audit(
         committed_effect: schedule_driver_handle,
     }));
     let human_products = require_human_session(
-        host.merge(human_writes)
+        host.merge(profile_message_counts)
+            .merge(human_writes)
             .merge(lane_human_products)
             // Wave 3A checkpoint A6 (#2203): `POST /api/agents/{id}/direct-messages`, the
             // human direct-pair initiation write door, is not merged here — it arrives

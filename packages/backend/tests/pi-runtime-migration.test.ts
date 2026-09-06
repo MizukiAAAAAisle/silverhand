@@ -16,7 +16,7 @@ it('preserves an in-flight runtime lock and foreign keys while admitting Pi targ
       INSERT INTO fixture_agent_child VALUES('a');`);
     const before = db.prepare('SELECT * FROM agents').get();
     expect(() => db.exec("UPDATE agents SET runtime_transition_target='pi'")).toThrow();
-    const result = runMigrations(db); expect(result.appliedSteps).toEqual([93]);
+    const result = runMigrations(db); expect(result.appliedSteps).toEqual([93, 94]);
     expect(db.prepare('SELECT * FROM agents').get()).toEqual(before);
     expect(db.prepare('SELECT * FROM fixture_agent_child').all()).toEqual([{ agent_id: 'a' }]);
     db.exec("UPDATE agents SET runtime_transition_target='pi'");

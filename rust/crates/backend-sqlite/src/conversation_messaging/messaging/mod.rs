@@ -4143,3 +4143,5 @@ mod tests {
             .expect_err("a closed store is not a writable one");
     }
 }
+
+mod profile_message_counts;

@@ -3,6 +3,7 @@ import { DAEMON_ADMISSION } from '../daemon-admission.generated.js';
 
 export const apiPaths = {
   health: '/api/health',
+  profileMessageCounts: (kind: 'user' | 'agent', id: string) => `/api/profiles/${kind}/${encodeURIComponent(id)}/message-counts`,
   serverInfo: '/api/server/info',
   runtimes: '/api/runtimes',
   eventWebSocket: BACKEND_ADMISSION.eventWebSocketPath,

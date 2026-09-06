@@ -4186,6 +4186,16 @@ export const migrations: Migration[] = [
       BEGIN SELECT RAISE(ABORT, 'invalid agents runtime transition lock'); END;
     `,
   },
+  {
+    version: 94,
+    name: 'profile_message_count_indexes',
+    up: `
+      CREATE INDEX idx_messages_profile_user ON messages(from_user_id, created_at)
+        WHERE from_kind='user' AND cc_source_message_id IS NULL;
+      CREATE INDEX idx_messages_profile_agent ON messages(from_agent_id, created_at)
+        WHERE from_kind='agent' AND cc_source_message_id IS NULL;
+    `,
+  },
 ];
 
 /**

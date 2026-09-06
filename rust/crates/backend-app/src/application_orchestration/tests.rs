@@ -12040,3 +12040,21 @@ async fn client_message_identity_survives_concurrent_http_ws_ack_and_cold_read()
     shutdown_tx.send(()).unwrap();
     running.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn profile_message_counts_mounts_behind_the_real_human_perimeter() {
+    let fixture = fixture(true).await;
+    seed_human(&fixture.path).await;
+    let app = prepare(&config(fixture.path.clone())).await.unwrap();
+    let path = "/api/profiles/user/user-1/message-counts?year=2024";
+    assert_eq!(
+        request(&app.router, "GET", path, None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let bearer = format!("Bearer {TOKEN}");
+    let (status, body) = request(&app.router, "GET", path, Some(&bearer)).await;
+    assert_eq!(status, StatusCode::OK);
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(value["days"].as_array().unwrap().len(), 366);
+    assert_eq!(value["subject"]["id"], "user-1");
+}

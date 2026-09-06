@@ -35,3 +35,5 @@ pub mod workspace_face;
 pub mod workspace_metadata_write;
 pub mod workspace_name;
 pub mod workspace_name_availability;
+
+pub mod profile_message_counts;

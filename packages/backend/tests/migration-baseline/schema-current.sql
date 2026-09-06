@@ -1338,3 +1338,9 @@ CREATE TRIGGER agents_runtime_transition_pair_update
         OR (NEW.runtime_transition_target IS NOT NULL AND NEW.runtime_transition_target NOT IN
           ('claude','codex','cursor','gemini','qoder','opencode','pi'))
       BEGIN SELECT RAISE(ABORT, 'invalid agents runtime transition lock'); END;
+
+CREATE INDEX idx_messages_profile_user ON messages(from_user_id, created_at)
+        WHERE from_kind='user' AND cc_source_message_id IS NULL;
+
+CREATE INDEX idx_messages_profile_agent ON messages(from_agent_id, created_at)
+        WHERE from_kind='agent' AND cc_source_message_id IS NULL;
