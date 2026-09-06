@@ -3175,22 +3175,27 @@ export type LooseAnyFrame = z.infer<typeof LooseAnyFrameSchema>;
 
 // ── Wire encoding ───────────────────────────────────────────────────
 
-/** Hard cap on one frame's encoded size. Guards both directions from
- *  pathological payloads and gives us a clean error to surface
- *  instead of letting the splitter buffer grow without bound.
- *  1 MiB is generous for PR-2's intent surface — `runtime_deliver`
- *  carries one stream-json line, which is well under the cap in practice. */
-export const MAX_FRAME_BYTES = 1 * 1024 * 1024;
+/** Ordinary complete JSON frame budget, independent of product file limits. */
+export const MAX_FRAME_BYTES = 1024 * 1024;
+/** 512KiB preview × six-byte JSON escaping + 1MiB envelope allowance. */
+export const MAX_WORKSPACE_FILE_FRAME_BYTES = 4 * 1024 * 1024;
+
+export function responseFrameBudget(intent: string | undefined, success: boolean): number {
+  return success && intent === 'agent_workspace_file_read'
+    ? MAX_WORKSPACE_FILE_FRAME_BYTES : MAX_FRAME_BYTES;
+}
 
 /** Encode an outgoing frame to its NDJSON wire form (single line +
  *  trailing newline). Throws if the encoded payload would exceed the
  *  per-frame cap so we fail loud at the caller instead of silently
  *  emitting an oversized line the peer will reject. */
-export function encodeFrame(frame: AnyFrame): string {
+export function encodeFrame(frame: AnyFrame, responseIntent?: string): string {
   const line = JSON.stringify(frame);
-  if (Buffer.byteLength(line, 'utf8') > MAX_FRAME_BYTES) {
+  const budget = responseFrameBudget(responseIntent,
+    'result' in frame && !('error' in frame) && !('intent' in frame));
+  if (Buffer.byteLength(line, 'utf8') > budget) {
     throw new Error(
-      `host frame exceeds MAX_FRAME_BYTES (${MAX_FRAME_BYTES})`,
+      `host frame exceeds MAX_FRAME_BYTES budget (${budget})`,
     );
   }
   return `${line}\n`;
@@ -3203,7 +3208,7 @@ export function encodeFrame(frame: AnyFrame): string {
  *
  * The buffer is held by the caller. We return UTF-8 string frames; the
  * caller JSON.parses + schema-validates each one. Lines longer than
- * `MAX_FRAME_BYTES` are reported via `overflow` so the caller can
+ * the supplied physical budget (ordinary `MAX_FRAME_BYTES` by default) are reported via `overflow` so the caller can
  * close the socket with a typed reason rather than letting the buffer
  * grow without bound.
  */
@@ -3218,7 +3223,7 @@ export interface SplitResult {
   overflow: boolean;
 }
 
-export function splitNdjson(buffer: string, chunk: string): SplitResult {
+export function splitNdjson(buffer: string, chunk: string, maxBytes = MAX_FRAME_BYTES): SplitResult {
   const combined = buffer + chunk;
   const frames: string[] = [];
   let start = 0;
@@ -3229,7 +3234,7 @@ export function splitNdjson(buffer: string, chunk: string): SplitResult {
     const line = combined.slice(start, nl);
     start = nl + 1;
     if (line.length === 0) continue;
-    if (Buffer.byteLength(line, 'utf8') > MAX_FRAME_BYTES) {
+    if (Buffer.byteLength(line, 'utf8') > maxBytes) {
       overflow = true;
       // Stop accumulating further frames once we detect overflow; the
       // caller is contractually required to tear down the socket.
@@ -3241,7 +3246,7 @@ export function splitNdjson(buffer: string, chunk: string): SplitResult {
   // Defensive: if the still-unterminated tail already exceeds the cap,
   // we will never close it (no `\n` will arrive in time). Signal
   // overflow now so the caller drops the connection.
-  if (Buffer.byteLength(leftover, 'utf8') > MAX_FRAME_BYTES) {
+  if (Buffer.byteLength(leftover, 'utf8') > maxBytes) {
     return { frames, leftover: '', overflow: true };
   }
   return { frames, leftover, overflow };

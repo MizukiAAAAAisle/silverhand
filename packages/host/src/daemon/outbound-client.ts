@@ -1,3 +1,4 @@
+import { MAX_FRAME_BYTES, MAX_WORKSPACE_FILE_FRAME_BYTES } from '../protocol.js';
 import {
   chmodSync,
   mkdirSync,
@@ -338,6 +339,7 @@ export class OutboundDaemonClient {
     // closes.
     const owner = `outbound:${++this.ownerSeq}`;
     const ws = new WebSocket(config.wsUrl, {
+      maxPayload: MAX_WORKSPACE_FILE_FRAME_BYTES,
       headers: {
         Authorization: `Bearer ${config.raw.host_token}`,
       },
@@ -437,6 +439,11 @@ export class OutboundDaemonClient {
   }
 
   private handleMessage(data: RawData): void {
+    // All server requests/heartbeats remain ordinary frames; no result allowance.
+    if (Buffer.byteLength(rawDataToString(data), 'utf8') > MAX_FRAME_BYTES) {
+      this.closeProtocolError('frame_too_large');
+      return;
+    }
     const parsed = parseJsonFrame(data);
     if (!parsed) {
       this.closeProtocolError('invalid_json');
@@ -532,7 +539,7 @@ export class OutboundDaemonClient {
     }
     let encoded: string;
     try {
-      encoded = encodeOutboundFrame(response);
+      encoded = encodeOutboundFrame(response, command);
     } catch (err) {
       this.opts.logger.warn(
         {

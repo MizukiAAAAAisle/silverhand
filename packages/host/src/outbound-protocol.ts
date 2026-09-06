@@ -57,7 +57,7 @@ import {
   HostRuntimeCatalogResultSchema,
   HostStatusParamsSchema,
   HostStatusResultSchema,
-  MAX_FRAME_BYTES,
+  responseFrameBudget,
   ResponseErrorSchema,
   RuntimeClearSessionParamsSchema,
   RuntimeClearSessionResultSchema,
@@ -954,10 +954,13 @@ export const OutboundFrameSchema = z.union([
 ]);
 export type OutboundFrame = z.infer<typeof OutboundFrameSchema>;
 
-export function encodeOutboundFrame(frame: OutboundFrame): string {
+export function encodeOutboundFrame(frame: OutboundFrame, responseCommand?: OutboundServerToDaemonCommandFrame): string {
   const line = JSON.stringify(frame);
-  if (Buffer.byteLength(line, 'utf8') > MAX_FRAME_BYTES) {
-    throw new Error(`encoded outbound frame exceeds MAX_FRAME_BYTES=${MAX_FRAME_BYTES}`);
+  const budget = responseFrameBudget(typeof responseCommand?.kind === 'string' ? responseCommand.kind : undefined,
+    frame.type === 'command_response' && 'result' in frame && !('error' in frame)
+    && frame.id === responseCommand?.id && frame.kind === responseCommand?.kind);
+  if (Buffer.byteLength(line, 'utf8') > budget) {
+    throw new Error(`encoded outbound frame exceeds MAX_FRAME_BYTES budget=${budget}`);
   }
   return line;
 }

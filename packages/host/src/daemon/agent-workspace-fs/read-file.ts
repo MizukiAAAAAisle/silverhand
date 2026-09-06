@@ -42,19 +42,9 @@ import {
 export interface ReadAgentWorkspaceFileDeps
   extends ResolveAgentWorkspaceBaseDeps {}
 
-/**
- * Read cap for one file preview. This is a WIRE bound, not a UI one: the
- * result travels back inside a single protocol frame, and `encodeFrame` /
- * `encodeOutboundFrame` throw above `MAX_FRAME_BYTES` (1 MiB) — a read that
- * overflows the frame fails the request outright rather than degrading.
- *
- * So the cap is the frame ceiling with room for JSON escaping and the envelope:
- * `"` / `\` / newline each encode to 2 bytes, so 512KiB of ordinary markdown
- * lands around 530-560KiB on the wire, and even a quote-dense file stays under
- * 1 MiB. (Raised from 64KiB — shiki 2026-07-26: a workspace file preview should
- * not be capped at chat-message size. Going the whole 1 MiB would require
- * raising `MAX_FRAME_BYTES` in both transports, which is a protocol change.)
- */
+/** Product preview cap. Transport independently allows a complete successful
+ * workspace-file result up to 4MiB: 6 × 512KiB worst JSON escaping plus
+ * 1MiB envelope allowance. Ordinary protocol messages remain at 1MiB. */
 const MAX_PREVIEW_BYTES = 512 * 1024;
 /**
  * In-band end-of-content marker. It states the bare fact and nothing else:

@@ -31,6 +31,7 @@ import { Socket } from 'node:net';
 import {
   LooseAnyFrameSchema,
   splitNdjson,
+  MAX_WORKSPACE_FILE_FRAME_BYTES,
   type LooseResponseFrame,
   type EventFrame,
 } from '../protocol.js';
@@ -155,7 +156,7 @@ export class SocketTransport implements Transport {
       // node's type defs still type `data` as `Buffer` — coerce
       // defensively in case anything ever upstream-toggles encoding.
       const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      const { frames, leftover, overflow } = splitNdjson(this.buffer, text);
+      const { frames, leftover, overflow } = splitNdjson(this.buffer, text, MAX_WORKSPACE_FILE_FRAME_BYTES);
       this.buffer = leftover;
       if (overflow) {
         for (const h of this.handlers.overflow) h();
@@ -163,6 +164,7 @@ export class SocketTransport implements Transport {
         return;
       }
       for (const line of frames) {
+        if (socket.destroyed) break;
         this.deliverFrame(line);
       }
     });
@@ -191,7 +193,7 @@ export class SocketTransport implements Transport {
       return;
     }
     const decoded: DecodedFrame = validated.data as LooseResponseFrame | EventFrame;
-    for (const h of this.handlers.frame) h(decoded);
+    for (const h of this.handlers.frame) h(decoded, Buffer.byteLength(line, 'utf8'));
   }
 
   private fireDisconnect(reason: string): void {

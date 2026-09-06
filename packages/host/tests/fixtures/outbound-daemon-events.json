@@ -2,7 +2,7 @@
   "valid": [
     {
       "direction": "daemon_to_server", "type": "event", "kind": "ready",
-      "protocol_version": 10, "daemon_version": "test", "daemon_id": "local",
+      "protocol_version": 11, "daemon_version": "test", "daemon_id": "local",
       "instance_id": "instance-1", "host_descriptor": { "name": "local", "kind": "local" },
       "capabilities": [], "daemon_pid": 123, "started_at": 1700000000000
     },
@@ -166,7 +166,7 @@
     ]
   },
   "invalid": [
-    { "name": "ready_extra_key", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "ready", "protocol_version": 10, "daemon_version": "test", "daemon_id": "local", "instance_id": "instance-1", "host_descriptor": { "name": "local", "kind": "local" }, "capabilities": [], "daemon_pid": 123, "started_at": 1, "extra": true } },
+    { "name": "ready_extra_key", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "ready", "protocol_version": 11, "daemon_version": "test", "daemon_id": "local", "instance_id": "instance-1", "host_descriptor": { "name": "local", "kind": "local" }, "capabilities": [], "daemon_pid": 123, "started_at": 1, "extra": true } },
     { "name": "shutting_down_wrong_reason", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "shutting_down", "reason": 1 } },
     { "name": "state_invalid_status", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_state", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "state": { "runId": "run-1", "agentId": "agent-1", "conversationId": "conversation0001", "status": "running", "startedAt": 1, "updatedAt": 2, "lastActivityAt": 2 }, "ts": 2 } },
     { "name": "state_outer_coordinate_mismatch", "frame": { "direction": "daemon_to_server", "type": "event", "kind": "runtime_state", "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" }, "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1, "state": { "runId": "run-1", "agentId": "agent-2", "conversationId": "conversation0001", "status": "thinking", "startedAt": 1, "updatedAt": 2, "lastActivityAt": 2 }, "ts": 2 } },

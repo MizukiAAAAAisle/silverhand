@@ -508,7 +508,7 @@ export class LocalOutboundFrameServer {
 
     let encoded: string;
     try {
-      encoded = `${encodeOutboundFrame(response)}\n`;
+      encoded = `${encodeOutboundFrame(response, command)}\n`;
     } catch (err) {
       this.logger.warn(
         {

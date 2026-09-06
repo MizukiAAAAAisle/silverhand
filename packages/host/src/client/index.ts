@@ -42,6 +42,7 @@ import { randomBytes } from 'node:crypto';
 import {
   HOST_PROTOCOL_VERSION,
   encodeFrame,
+  responseFrameBudget,
   intentErrorSchema,
   intentSchemas,
   type EventFrame,
@@ -554,7 +555,7 @@ export class HostClient {
     if (this.closed) return;
     const transport = this.transportFactory();
     this.transport = transport;
-    transport.on('frame', frame => this.handleFrame(frame));
+    transport.on('frame', (frame, bytes) => this.handleFrame(frame, bytes));
     transport.on('disconnect', reason => this.handleDisconnect(reason));
     transport.on('overflow', () => {
       this.logger.warn({}, 'daemon sent oversize frame; reconnecting');
@@ -620,7 +621,12 @@ export class HostClient {
     });
   }
 
-  private handleFrame(frame: DecodedFrame): void {
+  private handleFrame(frame: DecodedFrame, encodedBytes = Buffer.byteLength(JSON.stringify(frame), 'utf8')): void {
+    const intent = 'id' in frame ? this.pending.get(frame.id)?.intent : undefined;
+    if (encodedBytes > responseFrameBudget(intent, 'result' in frame && !('error' in frame))) {
+      this.transport?.close();
+      return;
+    }
     if ('event' in frame) {
       // PR-1 events are informational; we log and move on. The
       // `shutting_down` event hints reconnect will fail until the

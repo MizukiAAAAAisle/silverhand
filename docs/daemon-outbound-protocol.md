@@ -49,6 +49,27 @@ Frames are JSON objects with three layers:
 This avoids mixing command names and event names into one namespace while
 keeping frames readable in logs.
 
+### Encoded frame budgets
+
+Ordinary complete JSON frames remain limited to 1MiB in either direction.
+Only a successful `agent_workspace_file_read` result has a 4MiB budget:
+512KiB raw preview × six-byte worst-case JSON escaping, plus 1MiB for the
+complete response envelope. Message bodies stay at 64KiB, attachment files at
+10MiB, and workspace previews at 512KiB; these are separate product limits.
+
+WebSocket message/frame reassembly is bounded at 4MiB; ordinary messages are
+then checked against 1MiB. A large response must match a live pending request
+on the same connection, including its id, actual command kind, and deadline.
+A claimed wire kind alone grants no allowance; errors, unsolicited events,
+expired/unknown responses and all server requests retain the ordinary budget.
+Local HostClient responses use the pending intent with the same rule. Local
+request-only ingress can enforce the stricter 1MiB bound before decoding.
+NDJSON counts the complete JSON line, excluding its delimiter.
+
+This contract requires host epoch 12 / outbound epoch 11, each one above the
+last published daemon-v0.2.0 (11 / 10). Existing equality admission rejects
+mixed old/new peers before commands; no old package is rewritten.
+
 ### One outbound frame adapter, not a fork
 
 Both deployment shapes dispatch the **same** outbound frame schemas

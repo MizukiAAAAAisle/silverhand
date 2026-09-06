@@ -92,7 +92,7 @@ describe('HostClient — protocol handshake', () => {
     await client.close();
   });
 
-  it('throws ProtocolVersionMismatchError on protocol version mismatch and closes the transport', async () => {
+  it.each([-1, 1])('rejects older/newer daemon hello before commands (%s)', async delta => {
     const { transport, peer } = createFakeTransportPair({ autoHello: false });
     const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
     const connect = client.connect();
@@ -102,7 +102,7 @@ describe('HostClient — protocol handshake', () => {
     peer.send({
       id: peer.received[0]!.id,
       result: {
-        protocol_version: HOST_PROTOCOL_VERSION + 1,
+        protocol_version: HOST_PROTOCOL_VERSION + delta,
         daemon_version: 'future-daemon',
         daemon_id: 'local',
         instance_id: 'future-instance',
@@ -115,11 +115,12 @@ describe('HostClient — protocol handshake', () => {
     await expect(connect).rejects.toMatchObject({
       code: 'protocol_mismatch',
       expected: HOST_PROTOCOL_VERSION,
-      actual: HOST_PROTOCOL_VERSION + 1,
+      actual: HOST_PROTOCOL_VERSION + delta,
       daemonVersion: 'future-daemon',
       reason: 'version_mismatch',
     });
     expect(client.isConnected()).toBe(false);
+    expect(peer.received.map(request => request.intent)).toEqual(['hello']);
     await client.close();
   });
 

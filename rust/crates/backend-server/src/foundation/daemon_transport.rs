@@ -38,6 +38,7 @@ use self::command::{CapabilityRefusalAdmission, EncodedDaemonCommand, IssuedDaem
 include!(concat!(env!("OUT_DIR"), "/daemon_admission.rs"));
 
 const MAX_DAEMON_FRAME_BYTES: usize = 1024 * 1024;
+const MAX_WORKSPACE_FILE_FRAME_BYTES: usize = 4 * 1024 * 1024;
 /// The highest `protocol_version` this server will read out of a `ready` envelope
 /// before knowing the schema, mirroring the deployed bound. Above it the number is
 /// not treated as a version at all: an unbounded integer from an unauthenticated
@@ -705,8 +706,15 @@ async fn send_dequeued_command<S: CommandWireSink>(
         "kind": command.kind.as_wire(),
         "params": command.params,
     });
+    let encoded = frame.to_string();
+    if encoded.len() > MAX_DAEMON_FRAME_BYTES {
+        let _ = command
+            .response
+            .send(Err(CommandDispatchError::ProvenNotDispatched));
+        return DequeuedCommandSend::Skipped;
+    }
     match sink
-        .send(Message::Text(frame.to_string().into()), command.deadline)
+        .send(Message::Text(encoded.into()), command.deadline)
         .await
     {
         InterruptibleSend::Sent => DequeuedCommandSend::Sent {
@@ -1327,8 +1335,8 @@ async fn daemon_websocket(
         }
     };
     websocket
-        .max_message_size(MAX_DAEMON_FRAME_BYTES)
-        .max_frame_size(MAX_DAEMON_FRAME_BYTES)
+        .max_message_size(MAX_WORKSPACE_FILE_FRAME_BYTES)
+        .max_frame_size(MAX_WORKSPACE_FILE_FRAME_BYTES)
         .on_upgrade(move |socket| {
             connection(
                 socket,
@@ -1529,7 +1537,15 @@ async fn connection(
                         }))).await;
                         break;
                     }
-                    match parse_daemon_frame(&text) {
+                    let decoded = parse_daemon_frame(&text);
+                    if !daemon_frame_fits_budget(text.len(), decoded.as_ref().ok(), &pending) {
+                        let _ = socket.send(Message::Close(Some(CloseFrame {
+                            code: 1009,
+                            reason: "frame_too_large".into(),
+                        }))).await;
+                        break;
+                    }
+                    match decoded {
                         Ok(DaemonFrame::Ready(ReadyFrame {
                             protocol_version,
                             instance_id,
@@ -1898,6 +1914,32 @@ fn valid_ready_frame(value: &Value) -> bool {
             .is_some_and(|items| items.iter().all(Value::is_string))
 }
 
+/// Large results require a live request on THIS connection, not a claimed wire kind.
+fn daemon_frame_fits_budget(
+    bytes: usize,
+    frame: Option<&DaemonFrame>,
+    pending: &HashMap<String, PendingCommand>,
+) -> bool {
+    if bytes <= MAX_DAEMON_FRAME_BYTES {
+        return true;
+    }
+    if bytes > MAX_WORKSPACE_FILE_FRAME_BYTES {
+        return false;
+    }
+    let Some(DaemonFrame::CommandResponse(response)) = frame else {
+        return false;
+    };
+    response.result.is_some()
+        && response.error.is_none()
+        && pending.get(&response.id).is_some_and(|command| {
+            matches!(
+                command.kind,
+                IssuedDaemonCommandKind::AgentWorkspaceFileRead
+            ) && command.kind.as_wire() == response.kind
+                && Instant::now() < command.deadline
+        })
+}
+
 fn valid_command_response_envelope(value: &Value) -> bool {
     value
         .get("id")
@@ -1940,6 +1982,77 @@ fn signed_unix_millis(time: SystemTime) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn workspace_frame_budget_requires_live_correlated_success_and_complete_envelope() {
+        use super::*;
+        let (tx, _rx) = oneshot::channel();
+        let mut pending = HashMap::from([(
+            "read-1".to_owned(),
+            PendingCommand {
+                kind: IssuedDaemonCommandKind::AgentWorkspaceFileRead,
+                capability_refusal: command::rejects_every_capability_refusal,
+                response: tx,
+                deadline: Instant::now() + Duration::from_secs(30),
+            },
+        )]);
+        let wire = json!({"direction":"daemon_to_server", "type":"command_response", "id":"read-1",
+            "kind":"agent_workspace_file_read", "result":{"content":"\u{1}".repeat(512*1024)}})
+        .to_string();
+        assert!(wire.len() > 3 * 1024 * 1024);
+        let frame = parse_daemon_frame(&wire).unwrap();
+        assert!(daemon_frame_fits_budget(wire.len(), Some(&frame), &pending));
+        assert!(daemon_frame_fits_budget(
+            MAX_WORKSPACE_FILE_FRAME_BYTES,
+            Some(&frame),
+            &pending
+        ));
+        assert!(!daemon_frame_fits_budget(
+            MAX_WORKSPACE_FILE_FRAME_BYTES + 1,
+            Some(&frame),
+            &pending
+        ));
+        assert!(!daemon_frame_fits_budget(
+            wire.len(),
+            Some(&frame),
+            &HashMap::new()
+        ));
+        pending.get_mut("read-1").unwrap().kind = IssuedDaemonCommandKind::HostStatus;
+        assert!(!daemon_frame_fits_budget(
+            wire.len(),
+            Some(&frame),
+            &pending
+        ));
+        pending.get_mut("read-1").unwrap().kind = IssuedDaemonCommandKind::AgentWorkspaceFileRead;
+        pending.get_mut("read-1").unwrap().deadline = Instant::now();
+        assert!(!daemon_frame_fits_budget(
+            wire.len(),
+            Some(&frame),
+            &pending
+        ));
+        pending.get_mut("read-1").unwrap().deadline = Instant::now() + Duration::from_secs(30);
+        let error = parse_daemon_frame(
+            &json!({"direction":"daemon_to_server", "type":"command_response", "id":"read-1",
+            "kind":"agent_workspace_file_read", "error":{"code":"internal_error", "message":"x"}})
+            .to_string(),
+        )
+        .unwrap();
+        assert!(!daemon_frame_fits_budget(
+            MAX_DAEMON_FRAME_BYTES + 1,
+            Some(&error),
+            &pending
+        ));
+        assert!(daemon_frame_fits_budget(
+            MAX_DAEMON_FRAME_BYTES,
+            Some(&error),
+            &pending
+        ));
+        assert!(!daemon_frame_fits_budget(
+            MAX_DAEMON_FRAME_BYTES + 1,
+            None,
+            &pending
+        ));
+    }
+
     use std::ops::Range;
 
     use silverhand_backend_core::{

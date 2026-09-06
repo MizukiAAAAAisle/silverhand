@@ -11,6 +11,7 @@ import {
 } from '../src/outbound-protocol.js';
 import {
   splitNdjson,
+  MAX_WORKSPACE_FILE_FRAME_BYTES,
   HOST_PROTOCOL_VERSION,
   type EventFrame,
 } from '../src/protocol.js';
@@ -137,7 +138,7 @@ class RawClient {
     socket.setEncoding('utf8');
     socket.on('data', (chunk: string | Buffer) => {
       const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      const { frames, leftover } = splitNdjson(this.buffer, text);
+      const { frames, leftover } = splitNdjson(this.buffer, text, MAX_WORKSPACE_FILE_FRAME_BYTES);
       this.buffer = leftover;
       for (const line of frames) {
         let parsed: unknown;
@@ -256,9 +257,11 @@ function agentMaterializeCommand(id: string): OutboundServerToDaemonCommandFrame
 
 describe('deriveLocalOutboundFrameSocketPath', () => {
   it('derives ~/.silverhand/run/daemon-outbound.sock from a home dir', () => {
+    vi.stubEnv('SILVERHAND_DIR', undefined);
     expect(deriveLocalOutboundFrameSocketPath('/home/x')).toBe(
       '/home/x/.silverhand/run/daemon-outbound.sock',
     );
+    vi.unstubAllEnvs();
   });
 });
 
@@ -656,4 +659,11 @@ describe('LocalOutboundFrameServer — heartbeat (#task:1588 slice 2)', () => {
     expect(client.closed).toBe(false);
     expect(logger.entries.some(e => e.action === 'frame_invalid')).toBe(false);
   });
+});
+
+it('carries a worst-escaped workspace preview through the real local socket', async () => {
+  const result = { ok: true, file: { path: 'MEMORY.md', content: '\u0001'.repeat(512 * 1024), size: 512 * 1024, mtime: 1, truncated: false } };
+  const { client } = await makeHarness(async command => ({ id: command.id, result }));
+  client.sendCommand({ direction: 'server_to_daemon', type: 'command', id: 'large-read', kind: 'agent_workspace_file_read', params: { agent_id: 'agent', path: 'MEMORY.md' } });
+  expect(await client.nextFrame()).toMatchObject({ id: 'large-read', result });
 });

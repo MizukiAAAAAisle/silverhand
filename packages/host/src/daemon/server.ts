@@ -343,7 +343,7 @@ export class DaemonServer {
       // reserved was NOT delivered. Settle failed BEFORE writing so the
       // failure ordering cannot race the peer's retry.
       try {
-        socket.write(encodeFrame(response));
+        socket.write(encodeFrame(response, request.intent));
       } catch (err) {
         this.logger.warn(
           { err: (err as Error).message, id: request.id },
@@ -364,7 +364,7 @@ export class DaemonServer {
       // `socket.destroyed` term here would restore + redeliver bodies
       // the peer already has (review round-3 note).
       try {
-        socket.write(encodeFrame(response), err => {
+        socket.write(encodeFrame(response, request.intent), err => {
           handoff(err == null);
         });
       } catch (err) {
@@ -377,7 +377,7 @@ export class DaemonServer {
       return;
     }
     try {
-      socket.write(encodeFrame(response));
+      socket.write(encodeFrame(response, request.intent));
     } catch (err) {
       this.logger.warn(
         { err: (err as Error).message, id: request.id },

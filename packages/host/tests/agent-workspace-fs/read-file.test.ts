@@ -16,7 +16,7 @@ import {
   readAgentWorkspaceFile,
 } from '../../src/daemon/agent-workspace-fs/index.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
-import { AgentWorkspaceFileReadParamsSchema } from '../../src/protocol.js';
+import { AgentWorkspaceFileReadParamsSchema, encodeFrame } from '../../src/protocol.js';
 
 /**
  * Integration tests for the new `agent_workspace_file_read` daemon
@@ -62,6 +62,17 @@ describe('readAgentWorkspaceFile', () => {
     } catch {
       /* best-effort */
     }
+  });
+
+  it('reads a worst-escaped cap+1 file and encodes the entire truncated preview', async () => {
+    mkdirSync(agentDir(), { recursive: true });
+    writeFileSync(join(agentDir(), 'MEMORY.md'), '\u0001'.repeat(MAX_PREVIEW_BYTES + 1));
+    const result = await readAgentWorkspaceFile({ agent_id: AGENT_ID, path: 'MEMORY.md' }, { agentHomeRootDir });
+    expect(result.file.truncated).toBe(true);
+    expect(result.file.content).toBe('\u0001'.repeat(MAX_PREVIEW_BYTES) + TRUNCATED_SUFFIX);
+    const wire = encodeFrame({ id: 'read-1', result }, 'agent_workspace_file_read');
+    expect(Buffer.byteLength(wire)).toBeGreaterThan(3 * 1024 * 1024);
+    expect(JSON.parse(wire).result).toEqual(result);
   });
 
   it('reads a top-level file and echoes the virtual path', async () => {

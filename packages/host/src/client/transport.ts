@@ -34,7 +34,7 @@ import type { LooseResponseFrame, EventFrame } from '../protocol.js';
 export type DecodedFrame = LooseResponseFrame | EventFrame;
 
 export interface TransportEvents {
-  frame: (frame: DecodedFrame) => void;
+  frame: (frame: DecodedFrame, encodedBytes?: number) => void;
   disconnect: (reason: string) => void;
   overflow: () => void;
 }

@@ -396,6 +396,30 @@ describe('outbound daemon websocket client', () => {
     });
   });
 
+  it.each([1024 * 1024, 4 * 1024 * 1024])('refuses oversized requests before dispatch at %s bytes', async bytes => {
+    const server = await FakeOutboundServer.start();
+    cleanup.push(() => server.close());
+    const dispatchCommand = vi.fn(async command => ({ id: command.id, result: {} }));
+    const { client } = startClient(server.url, { dispatchCommand });
+    cleanup.push(() => client.stop('test_done'));
+    const first = await server.waitForConnectionCount(1);
+    first.ws.send(JSON.stringify({ direction: 'server_to_daemon', type: 'command', id: 'oversize', kind: 'agent_workspace_file_read', params: { agent_id: 'agent', path: 'x'.repeat(bytes) } }));
+    await server.waitForCloseCount(1);
+    expect(dispatchCommand).not.toHaveBeenCalled();
+    expect(server.closes[0]!.code).toBe(bytes === 1024 * 1024 ? 1002 : 1009);
+  });
+
+  it('sends a complete worst-escaped workspace preview over the real WebSocket', async () => {
+    const server = await FakeOutboundServer.start();
+    cleanup.push(() => server.close());
+    const result = { ok: true, file: { path: 'MEMORY.md', content: '\u0001'.repeat(512 * 1024), size: 512 * 1024, mtime: 1, truncated: false } };
+    const { client } = startClient(server.url, { dispatchCommand: async command => ({ id: command.id, result }) });
+    cleanup.push(() => client.stop('test_done'));
+    const first = await server.waitForConnectionCount(1);
+    first.ws.send(encodeOutboundFrame({ direction: 'server_to_daemon', type: 'command', id: 'large-read', kind: 'agent_workspace_file_read', params: { agent_id: 'agent', path: 'MEMORY.md' } }));
+    expect(await server.waitForFrame(frame => frame.type === 'command_response' && frame.id === 'large-read')).toMatchObject({ result });
+  });
+
   it('dispatches server command frames and returns correlated responses', async () => {
     const server = await FakeOutboundServer.start();
     cleanup.push(() => server.close());

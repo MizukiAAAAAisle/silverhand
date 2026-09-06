@@ -1,3 +1,5 @@
+use silverhand_backend_core::workspace_data_plane::WorkspaceDataPlane;
+use silverhand_backend_server::workspace_data_plane::ProductionWorkspaceDataPlane;
 #[path = "../../backend-sqlite/tests/support/current_schema_snapshot.rs"]
 mod current_schema;
 #[path = "support/log_capture.rs"]
@@ -168,6 +170,7 @@ struct Fixture {
     runtime_control: RuntimeControl,
     run_states: Router,
     agent_profile_mcp: AgentProfileMcp,
+    workspace_files: ProductionWorkspaceDataPlane,
     settlement_calls: Arc<AtomicUsize>,
     clear_settlement_calls: Arc<AtomicUsize>,
     controller: DaemonDeliveryController,
@@ -299,6 +302,7 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
     );
     let agent_profile_mcp =
         runtime.agent_profile_mcp_data_plane(SqliteHostAgentStore::open(&path).await.unwrap());
+    let workspace_files = runtime.workspace_data_plane();
     let effects = runtime.effects();
     let controller = runtime.controller();
     let daemon_router = runtime.router(Arc::new(NullHostReady));
@@ -329,6 +333,7 @@ async fn build_fixture(name: &str, seed_inbox: bool) -> Fixture {
         runtime_control,
         run_states,
         agent_profile_mcp,
+        workspace_files,
         settlement_calls,
         clear_settlement_calls,
         controller,
@@ -5708,6 +5713,60 @@ async fn daemon_shutdown_clears_only_its_process_projection_before_reattach() {
     live.close(None).await.unwrap();
     second_daemon.close(None).await.unwrap();
     fixture.event_controller.close().await;
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn workspace_large_result_crosses_real_ws_only_for_its_pending_command() {
+    let fixture = fixture("workspace-frame-budget.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+    let plane = fixture.workspace_files.clone();
+    let reading = tokio::spawn(async move {
+        plane
+            .read_file(
+                &AgentId::parse(AGENT).unwrap(),
+                &host_id("host-1"),
+                None,
+                "MEMORY.md",
+            )
+            .await
+    });
+    let command = next_json(&mut socket).await;
+    assert_eq!(command["kind"], "agent_workspace_file_read");
+    let content = "\u{1}".repeat(512 * 1024);
+    let result = json!({"ok":true,"file":{"path":"MEMORY.md","content":content,"size":512*1024,"mtime":1700000000123.456,"truncated":false}});
+    respond(&mut socket, &command, result.clone()).await;
+    let file = reading.await.unwrap().unwrap();
+    assert_eq!(file.content, content);
+    // A duplicate has no pending command and must not gain the large allowance.
+    respond(&mut socket, &command, result).await;
+    expect_close(&mut socket, CloseCode::Size, "frame_too_large").await;
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn a_forged_workspace_kind_cannot_enlarge_an_ordinary_pending_response() {
+    let fixture = fixture("forged-workspace-budget.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+    let dispatch = fixture.controller.owning_host_data_plane();
+    let probing = probe_in_background(
+        &dispatch,
+        catalog_request(custody(&dispatch, "host-1"), true),
+    );
+    let mut command = next_json(&mut socket).await;
+    command["kind"] = json!("agent_workspace_file_read");
+    respond(
+        &mut socket,
+        &command,
+        json!({"content":"x".repeat(1024*1024)}),
+    )
+    .await;
+    expect_close(&mut socket, CloseCode::Size, "frame_too_large").await;
+    assert!(!matches!(probing.await.unwrap(), RuntimeCatalogOutcome::Detected(_)));
     fixture.controller.close().await;
     fixture.server.abort();
 }
