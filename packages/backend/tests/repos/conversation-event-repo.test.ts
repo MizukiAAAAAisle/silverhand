@@ -397,19 +397,19 @@ describe('ConversationEventRepo', () => {
     }
   });
 
-  it('prunes expired rows for the same conversation-agent pair', () => {
+  it.each([1, undefined])('prunes expired rows with retentionDays=%s (default seven days)', (retentionDays) => {
     const t = bootstrap();
     try {
       const repo = new ConversationEventRepo(t.db, {
         maxEventsPerConversationAgent: 2_000,
-        retentionDays: 1,
+        retentionDays,
       });
       const now = 1_700_000_000_000;
       repo.recordParsedEvent({
         conversationId: t.channel.id,
         agentId: t.agent.id,
         event: { kind: 'text', text: 'expired' },
-        createdAt: now - 2 * 24 * 60 * 60 * 1_000,
+        createdAt: now - ((retentionDays ?? 7) + 1) * 24 * 60 * 60 * 1_000,
       });
       repo.recordParsedEvent({
         conversationId: t.channel.id,

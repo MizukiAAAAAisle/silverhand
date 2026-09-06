@@ -1801,6 +1801,7 @@ async fn a_poisoned_registry_never_becomes_a_zero_snapshot_baseline() {
     for seq in 1..=(LIVE_CAPACITY * 2) {
         sender
             .send(ScopedEvent {
+                published_at: 0,
                 frame_type: "event",
                 scope: scope_wire(&scope),
                 seq: TransportSeq(seq as u64),
@@ -5765,4 +5766,180 @@ async fn agent_dm_thread_unread_is_immediate_before_wait_or_mainline_send() {
         wait_until_drained(&controller).await;
         server.abort();
     }
+}
+
+#[test]
+fn retention_replay_holes_require_snapshot_without_resetting_scope_sequence() {
+    let hub = ScopeEventHub::test("retention-epoch");
+    let scope = EventScope::Agent(AgentId::parse("retention-agent").unwrap());
+    hub.publish(
+        scope.clone(),
+        ProductEvent::AgentStreamActivity(json!({"id":1,"created_at":100})),
+    )
+    .unwrap();
+    hub.publish(
+        scope.clone(),
+        ProductEvent::AgentStreamActivity(json!({"id":2,"created_at":99})),
+    )
+    .unwrap();
+    hub.publish(
+        scope.clone(),
+        ProductEvent::AgentStreamActivity(json!({"id":3,"created_at":101})),
+    )
+    .unwrap();
+    hub.prune_activity_before(100).unwrap();
+    let epoch = TransportEpoch::parse("retention-epoch").unwrap();
+    assert!(matches!(
+        hub.resume(&scope, &epoch, TransportSeq(0)).unwrap().replay,
+        Replay::SnapshotRequired {
+            reason: "gap_too_large",
+            ..
+        }
+    ));
+    match hub.resume(&scope, &epoch, TransportSeq(2)).unwrap().replay {
+        Replay::Events(events) => {
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].seq, TransportSeq(3));
+        }
+        _ => panic!("retained tail should resume"),
+    }
+    hub.prune_activity_before(102).unwrap();
+    assert!(matches!(
+        hub.resume(&scope, &epoch, TransportSeq(2)).unwrap().replay,
+        Replay::SnapshotRequired { .. }
+    ));
+    assert!(
+        matches!(hub.resume(&scope,&epoch,TransportSeq(3)).unwrap().replay, Replay::Events(events) if events.is_empty())
+    );
+    hub.publish(
+        scope.clone(),
+        ProductEvent::AgentStreamActivity(json!({"id":4,"created_at":103})),
+    )
+    .unwrap();
+    assert_eq!(hub.current_seq(&scope).unwrap(), TransportSeq(4));
+}
+
+#[tokio::test]
+async fn retention_expired_ws_cursor_requires_cold_read_and_retained_tail_resumes() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let hub = ScopeEventHub::test("epoch-1");
+        let scope = EventScope::Agent(AgentId::parse("retention-agent").unwrap());
+        let wire = scope_wire(&scope);
+        hub.publish(
+            scope.clone(),
+            ProductEvent::AgentStreamActivity(
+                json!({"id":1,"created_at":99,"payload":{"text":"expired"}}),
+            ),
+        )
+        .unwrap();
+        hub.publish(
+            scope.clone(),
+            ProductEvent::AgentStreamActivity(
+                json!({"id":2,"created_at":100,"payload":{"text":"retained"}}),
+            ),
+        )
+        .unwrap();
+        hub.publish(
+            EventScope::App,
+            ProductEvent::Test {
+                value: "other-history".into(),
+            },
+        )
+        .unwrap();
+        hub.prune_activity_before(100).unwrap();
+        let origin = "http://127.0.0.1";
+        let (app, controller) = router(
+            hub.clone(),
+            Sessions,
+            Allows,
+            Arc::new(NoopConnectionLifecycle),
+            EventWebSocketConfig::test(origin),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut socket = connect(address, origin).await;
+        assert_eq!(next_json(&mut socket).await["type"], "authenticated");
+        socket
+            .send(ClientMessage::Text(
+                json!({"type":"resume","scopes":{wire.clone():{"epoch":"epoch-1","lastSeq":0}}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let frame = next_json(&mut socket).await;
+        assert_eq!(frame["type"], "snapshot_required");
+        assert_eq!(frame["scope"], wire);
+        assert_eq!(frame["reason"], "gap_too_large");
+        socket
+            .send(ClientMessage::Text(
+                json!({"type":"resume","scopes":{wire.clone():{"epoch":"epoch-1","lastSeq":1}}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let frame = next_json(&mut socket).await;
+        assert_eq!(frame["payload"]["id"], 2);
+        assert_eq!(frame["seq"], 2);
+        socket
+            .send(ClientMessage::Text(
+                json!({"type":"resume","scopes":{"app":{"epoch":"epoch-1","lastSeq":0}}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(next_json(&mut socket).await["scope"], "app");
+        hub.publish(
+            scope,
+            ProductEvent::AgentStreamActivity(json!({"id":3,"created_at":101})),
+        )
+        .unwrap();
+        let live = next_json(&mut socket).await;
+        assert_eq!(live["seq"], 3);
+        assert_eq!(live["payload"]["id"], 3);
+        controller.close().await;
+        server.abort();
+    })
+    .await
+    .unwrap();
+}
+
+#[test]
+fn retention_covers_conversation_and_diagnostic_copies_but_not_chat_events() {
+    let hub = ScopeEventHub::test("retention-epoch");
+    let scope = EventScope::ConversationSide(conversation());
+    hub.publish(
+        scope.clone(),
+        ProductEvent::ConversationActivity(json!({"created_at":1})),
+    )
+    .unwrap();
+    hub.publish(
+        scope.clone(),
+        ProductEvent::AgentEvent(json!({"event":{"text":"diagnostic"}})),
+    )
+    .unwrap();
+    hub.publish(
+        scope.clone(),
+        ProductEvent::Message(json!({"created_at":1,"content":"chat"})),
+    )
+    .unwrap();
+    let mut scopes = hub.scopes.lock().unwrap();
+    let state = scopes.get_mut(&scope).unwrap();
+    state.replay[1].published_at = 2;
+    assert!(
+        serde_json::to_value(&state.replay[1])
+            .unwrap()
+            .get("published_at")
+            .is_none()
+    );
+    drop(scopes);
+    hub.prune_activity_before(3).unwrap();
+    let scopes = hub.scopes.lock().unwrap();
+    let state = scopes.get(&scope).unwrap();
+    assert_eq!(state.replay.len(), 1);
+    assert!(matches!(&state.replay[0].event, ProductEvent::Message(_)));
+    assert_eq!(state.seq, TransportSeq(3));
 }

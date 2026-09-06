@@ -354,3 +354,106 @@ async fn agent_stream_uses_existing_viewer_arms_without_channel_slicing_and_rech
             .contains("idx_conversation_events_stream")
     }));
 }
+
+#[tokio::test]
+async fn retention_seven_day_boundary_shared_stream_and_expired_page_cursor() {
+    use silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_agent_activity::{
+        ACTIVITY_RETENTION_MS, ActivityBefore, ActivityEventId, AgentActivityReadPort,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("retention.sqlite");
+    seed(&path).await;
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    let now = ACTIVITY_RETENTION_MS + 100;
+    // Deliberately non-monotone timestamps: retention is time-based, not an id cutoff.
+    db.execute("UPDATE conversation_events SET created_at=CASE id WHEN 1 THEN 100 WHEN 2 THEN 99 WHEN 3 THEN 101 ELSE 99 END").await.unwrap();
+    db.execute("INSERT INTO agents(id,name,runtime,host_id,created_by_user_id,session_scope,created_at,updated_at) VALUES ('stream','stream','codex','h','member','agent',1,1)").await.unwrap();
+    db.execute("INSERT INTO conversation_events(id,conversation_id,agent_id,kind,payload,created_at) VALUES (5,'private','stream','thinking','{\"text\":\"expired\"}',99),(6,'public','stream','text','{\"text\":\"boundary\"}',100),(7,'pair','stream','tool_output',NULL,101)").await.unwrap();
+    db.execute("INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at,author_id,author_name) VALUES('kept-message','private','user','member','keep',1,1,'member','member')").await.unwrap();
+    let store = MessagingStore::open(&path).await.unwrap();
+    let port = store.conversation_agent_activity();
+    assert_eq!(store.prune_expired_activity(now).await.unwrap(), 3);
+    assert_eq!(store.prune_expired_activity(now).await.unwrap(), 0);
+    let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM conversation_events ORDER BY id")
+        .fetch_all(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(ids, [1, 3, 6, 7]);
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT content FROM messages WHERE id='kept-message'")
+            .fetch_one(&mut db)
+            .await
+            .unwrap(),
+        "keep"
+    );
+    let page = read(&path, "member", "private", "target", 10, Some(2))
+        .await
+        .unwrap()
+        .unwrap()
+        .bind(
+            &UserId::parse("member").unwrap(),
+            &ConversationId::parse("private").unwrap(),
+            &AgentId::parse("target").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        page.events()
+            .iter()
+            .map(|e| e.id().get())
+            .collect::<Vec<_>>(),
+        [1]
+    );
+    // The removed cursor itself is not looked up; no deleted row is resurrected.
+    let page = port
+        .read_agent_activity(
+            &UserId::parse("member").unwrap(),
+            &AgentId::parse("stream").unwrap(),
+            ActivityPageRequest::new(
+                10,
+                Some(ActivityBefore::Persisted(ActivityEventId::new(5).unwrap())),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(page.events().is_empty());
+    let page = port
+        .read_agent_activity(
+            &UserId::parse("member").unwrap(),
+            &AgentId::parse("stream").unwrap(),
+            ActivityPageRequest::new(10, None).unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        page.events()
+            .iter()
+            .map(|e| e.id().get())
+            .collect::<Vec<_>>(),
+        [6, 7]
+    );
+    assert_eq!(store.prune_expired_activity(now + 1).await.unwrap(), 2); // boundary now expired
+    assert_eq!(store.prune_expired_activity(now + 2).await.unwrap(), 2); // entire table now empty
+    db.execute("INSERT INTO conversation_events(conversation_id,agent_id,kind,payload,created_at) VALUES('public','stream','turn_end',NULL,102)").await.unwrap();
+    assert!(
+        sqlx::query_scalar::<_, i64>("SELECT MAX(id) FROM conversation_events")
+            .fetch_one(&mut db)
+            .await
+            .unwrap()
+            > 7
+    );
+    assert!(
+        port.read_agent_activity(
+            &UserId::parse("other").unwrap(),
+            &AgentId::parse("stream").unwrap(),
+            ActivityPageRequest::new(10, None).unwrap()
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+}

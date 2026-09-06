@@ -180,6 +180,8 @@ pub(super) async fn compose_after_audit(
     // above is moved into its own router.
     let conversation_agent_runtime_read = messaging_store.conversation_agent_runtime();
     let conversation_agent_activity_read = messaging_store.conversation_agent_activity();
+    let activity_retention_store = messaging_store.clone();
+    let activity_retention_hub = hub.clone();
     let activity_read_model = messaging_store.activity_read_model();
     let agent_run_states_admission = messaging_store.channel_lifecycle();
     // #2234 CP4: the two runtime write faces' messaging-store dependencies, captured (like
@@ -1436,7 +1438,14 @@ pub(super) async fn compose_after_audit(
             token: embedded_bootstrap_token.clone(),
         });
 
+    let activity_retention = super::activity_retention::ActivityRetention::start(
+        activity_retention_store,
+        activity_retention_hub,
+        SystemProcessClock,
+    )
+    .await?;
     Ok(FinalAssembly {
+        activity_retention,
         router: Router::new()
             .merge(human_products)
             // #2223 CP3: the five human identity/session routes mount at the top level,

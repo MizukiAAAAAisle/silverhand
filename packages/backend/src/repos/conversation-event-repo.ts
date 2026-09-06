@@ -10,7 +10,7 @@ import type {
 import { sanitizeParsedEventForBroadcast, sanitizeRawAgentEventValue } from '../runtime/event-sanitize.js';
 
 const DEFAULT_MAX_EVENTS_PER_CONVERSATION_AGENT = 2_000;
-const DEFAULT_RETENTION_DAYS = 30;
+const DEFAULT_RETENTION_DAYS = 7;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export interface ConversationActivityRetentionOptions {

@@ -20,18 +20,6 @@ CREATE TABLE workspace_members (
 
 CREATE INDEX idx_workspace_members_agent ON workspace_members(agent_id);
 
-CREATE TABLE conversation_events (
-        id               INTEGER PRIMARY KEY,
-        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-        agent_id         TEXT REFERENCES agents(id) ON DELETE SET NULL,
-        kind             TEXT NOT NULL,
-        payload          TEXT,
-        created_at       INTEGER NOT NULL
-      );
-
-CREATE INDEX idx_conversation_events
-        ON conversation_events(conversation_id, id);
-
 CREATE TABLE conversation_inboxes (
         id               INTEGER PRIMARY KEY,
         conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -518,9 +506,6 @@ CREATE TABLE user_list_sort_mode (
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (user_id, list_key, scope)
       );
-
-CREATE INDEX idx_conversation_events_agent
-        ON conversation_events(conversation_id, agent_id, id);
 
 CREATE TABLE "conversation_reads" (
         user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1342,6 +1327,20 @@ CREATE TRIGGER agent_runtime_slots_participation_insert
           );
         END;
 
+CREATE TABLE "conversation_events" (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL,
+        payload TEXT,
+        created_at INTEGER NOT NULL,
+        runtime_generation INTEGER CHECK(runtime_generation IS NULL OR runtime_generation > 0)
+      );
+
+CREATE INDEX idx_conversation_events ON conversation_events(conversation_id, id);
+
+CREATE INDEX idx_conversation_events_agent ON conversation_events(conversation_id, agent_id, id);
+
 CREATE INDEX idx_conversation_events_stream ON conversation_events(agent_id, id);
 
-ALTER TABLE conversation_events ADD COLUMN runtime_generation INTEGER CHECK(runtime_generation IS NULL OR runtime_generation > 0);
+CREATE INDEX idx_conversation_events_created_at ON conversation_events(created_at);

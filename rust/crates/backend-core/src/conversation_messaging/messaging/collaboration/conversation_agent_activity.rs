@@ -8,6 +8,9 @@ use std::{error::Error, future::Future};
 
 use crate::foundation::identity::{AgentId, ConversationId, UserId};
 
+/// Activity records expire by their original creation instant, never by refinement.
+pub const ACTIVITY_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ActivityEventId(i64);
 

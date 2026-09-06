@@ -33,6 +33,20 @@ pub struct SqliteConversationAgentActivityRead {
 }
 
 impl<E> MessagingStore<E> {
+    /// The only durable activity table serves both runtime scopes. Never touch
+    /// messages, tasks, memory, generations or the AUTOINCREMENT ledger.
+    pub async fn prune_expired_activity(&self, now_ms: i64) -> Result<u64, sqlx::Error> {
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_agent_activity::ACTIVITY_RETENTION_MS;
+        let cutoff = now_ms.saturating_sub(ACTIVITY_RETENTION_MS);
+        Ok(
+            sqlx::query("DELETE FROM conversation_events WHERE created_at < ?")
+                .bind(cutoff)
+                .execute(&self.pool)
+                .await?
+                .rows_affected(),
+        )
+    }
+
     pub fn conversation_agent_activity(&self) -> SqliteConversationAgentActivityRead {
         SqliteConversationAgentActivityRead {
             pool: self.pool.clone(),

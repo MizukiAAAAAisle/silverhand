@@ -36,7 +36,10 @@ use tokio::{
     time::{Instant, Sleep},
 };
 
-use super::scope_event_wire::ProductEvent;
+use super::{
+    clock::{ProcessClock, SystemProcessClock},
+    scope_event_wire::ProductEvent,
+};
 
 include!(concat!(env!("OUT_DIR"), "/backend_admission.rs"));
 
@@ -55,6 +58,8 @@ pub(crate) struct TransportSeq(pub(crate) u64);
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub(crate) struct ScopedEvent {
+    #[serde(skip)]
+    pub(crate) published_at: i64,
     #[serde(rename = "type")]
     pub(crate) frame_type: &'static str,
     pub(crate) scope: String,
@@ -325,6 +330,7 @@ impl ScopeEventHub {
         state.seq = cursor;
         for (event, seq) in events.into_iter().zip(reserved) {
             let frame = ScopedEvent {
+                published_at: SystemProcessClock.now_unix_millis(),
                 frame_type: "event",
                 scope: wire_scope.clone(),
                 seq,
@@ -336,6 +342,27 @@ impl ScopeEventHub {
             }
             state.replay.push_back(frame.clone());
             let _ = state.live.send(frame);
+        }
+        Ok(())
+    }
+
+    /// Retention also removes replay copies; a resumed cursor spanning a hole
+    /// must cold-read instead of resurrecting an expired activity payload.
+    pub fn prune_activity_before(&self, cutoff: i64) -> Result<(), ScopeEventHubError> {
+        let mut scopes = self
+            .scopes
+            .lock()
+            .map_err(|_| ScopeEventHubError::RegistryPoisoned)?;
+        for state in scopes.values_mut() {
+            state.replay.retain(|frame| match &frame.event {
+                ProductEvent::ConversationActivity(value)
+                | ProductEvent::AgentStreamActivity(value) => !value
+                    .get("created_at")
+                    .and_then(serde_json::Value::as_i64)
+                    .is_some_and(|at| at < cutoff),
+                ProductEvent::AgentEvent(_) => frame.published_at >= cutoff,
+                _ => true,
+            });
         }
         Ok(())
     }
@@ -372,8 +399,14 @@ impl ScopeEventHub {
                 subscription: None,
             });
         }
-        let earliest = state.replay.front().map_or(state.seq, |event| event.seq);
-        if last_seq.0.saturating_add(1) < earliest.0 {
+        // Count the contiguous tail after this cursor. Retention may leave
+        // interior holes, unlike capacity eviction which only drops a prefix.
+        let available = state
+            .replay
+            .iter()
+            .filter(|event| event.seq > last_seq)
+            .count() as u64;
+        if last_seq.0 < state.seq.0 && available != state.seq.0 - last_seq.0 {
             return Ok(Resume {
                 replay: Replay::SnapshotRequired {
                     reason: "gap_too_large",

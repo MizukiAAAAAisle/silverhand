@@ -98,9 +98,9 @@ async fn empty_store_runs_shared_history_without_ts_then_current_is_noop() {
     let path = root.path().join("data/database.sqlite");
     let first = prepare_database(&path, false).await.unwrap();
     assert_eq!(first.before_step, 0);
-    assert_eq!(first.after_step, 90);
+    assert_eq!(first.after_step, 91);
     assert_eq!(first.after_epoch, 69);
-    assert_eq!(first.applied_steps, (44..=90).collect::<Vec<_>>());
+    assert_eq!(first.applied_steps, (44..=91).collect::<Vec<_>>());
     assert!(first.backup_path.is_none());
     let second = prepare_database(&path, false).await.unwrap();
     assert!(second.applied_steps.is_empty());
@@ -176,10 +176,10 @@ async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
     .unwrap();
     assert!(matches!(
         prepare_database(&path, false).await,
-        Err(DatabaseStartupError::UpgradeDisabled { from: 87, to: 90 })
+        Err(DatabaseStartupError::UpgradeDisabled { from: 87, to: 91 })
     ));
     let upgraded = prepare_database(&path, true).await.unwrap();
-    assert_eq!(upgraded.applied_steps, vec![88, 89, 90]);
+    assert_eq!(upgraded.applied_steps, vec![88, 89, 90, 91]);
     let backup = upgraded.backup_path.unwrap();
     let mut live = connect(&path).await;
     assert_eq!(
@@ -212,7 +212,7 @@ async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
             .await
             .unwrap()
             .after_step,
-        90
+        91
     );
     // Optional export for the real-process smoke; fixture generation remains a
     // test-only activity, never a production startup fallback.
@@ -258,7 +258,7 @@ async fn failed_step_rolls_back_sql_and_ledger_before_restart() {
     assert_eq!(version, 44);
     db.close().await.unwrap();
     let restarted = prepare_database(&path, true).await.unwrap();
-    assert_eq!(restarted.applied_steps, (45..=90).collect::<Vec<_>>());
+    assert_eq!(restarted.applied_steps, (45..=91).collect::<Vec<_>>());
     assert!(restarted.backup_path.is_some());
 }
 
@@ -286,11 +286,11 @@ async fn retired_workspace_starred_mode_upgrades_from_87_and_88_without_losing_o
         assert_ne!(before, expected);
         db.close().await.unwrap();
         assert!(matches!(prepare_database(&path, false).await,
-            Err(DatabaseStartupError::UpgradeDisabled { from, to: 90 }) if from == previous));
+            Err(DatabaseStartupError::UpgradeDisabled { from, to: 91 }) if from == previous));
         let outcome = prepare_database(&path, true).await.unwrap();
         assert_eq!(
             outcome.applied_steps,
-            ((previous + 1)..=90).collect::<Vec<_>>()
+            ((previous + 1)..=91).collect::<Vec<_>>()
         );
         let mut db = connect(&path).await;
         assert_eq!(snapshot(&mut db, false).await, expected);
@@ -379,7 +379,7 @@ async fn unsupported_gapped_and_malformed_ledgers_fail_without_recreating_data()
             "schema_too_old",
         ),
         (
-            "CREATE TABLE _migrations(version INTEGER); INSERT INTO _migrations VALUES(91)",
+            "CREATE TABLE _migrations(version INTEGER); INSERT INTO _migrations VALUES(9999)",
             "schema_too_new",
         ),
         (
@@ -525,7 +525,7 @@ async fn agent_stream_upgrade_preserves_history_without_guessing_generation() {
     db.close().await.unwrap();
     assert_eq!(
         prepare_database(&path, true).await.unwrap().applied_steps,
-        vec![90]
+        vec![90, 91]
     );
     let mut db = connect(&path).await;
     let row:(String,String,i64,Option<i64>)=sqlx::query_as("SELECT conversation_id,payload,created_at,runtime_generation FROM conversation_events WHERE id=101").fetch_one(&mut db).await.unwrap();
@@ -545,5 +545,22 @@ async fn agent_stream_upgrade_preserves_history_without_guessing_generation() {
     .await
     .unwrap();
     assert_eq!(columns, ["agent_id", "id"]);
+    let retention_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM pragma_index_info('idx_conversation_events_created_at') ORDER BY seqno",
+    )
+    .fetch_all(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(retention_columns, ["created_at"]);
+    db.execute("DELETE FROM conversation_events").await.unwrap();
+    db.execute("INSERT INTO conversation_events(conversation_id,kind,created_at) VALUES('conv-open','turn_end',13)").await.unwrap();
+    let next_id: i64 = sqlx::query_scalar("SELECT id FROM conversation_events")
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+    assert!(
+        next_id > 101,
+        "migration must preserve the previous identity high-water mark"
+    );
     db.close().await.unwrap();
 }

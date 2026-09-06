@@ -599,6 +599,7 @@ type ProductionAgentDeletionResumer = AgentDeletionResumer<
 >;
 
 pub struct PreparedApp {
+    activity_retention: application_orchestration::activity_retention::ActivityRetention,
     pub router: Router,
     /// The live boot facts the `/readyz` router reads. Carried out of bound-listener
     /// finalization so [`serve`] can mark `listen_ready` as a witnessed consequence of
@@ -659,6 +660,7 @@ pub struct PreparedApp {
 
 impl PreparedApp {
     pub async fn close_connections(&self) {
+        self.activity_retention.close().await;
         // The resumer stops scheduling FIRST, synchronously, while the daemon controller
         // and the SQLite owner it holds are both still alive — a stopped worker cannot
         // start a new attempt during the transport teardown below.
@@ -853,6 +855,7 @@ where
     E: Error + Send + Sync + 'static,
 {
     let PreparedApp {
+        activity_retention,
         router,
         boot,
         event_controller,
@@ -896,6 +899,7 @@ where
         // exactly like the signal arm, so nothing leaks (Cindy: frame failure joins the
         // cleanup tail). Transports/aftermath were composed but not driven; closing them
         // is the correct teardown.
+        activity_retention.close().await;
         deletion_resumer.close();
         create_aftermath.close().await;
         shut_down_transports(&event_controller, &daemon_controller, &presence_timers).await;
@@ -931,7 +935,8 @@ where
             // #2234 CP3: the resumer stops scheduling FIRST — synchronously, while the
             // daemon controller and its SQLite owner are both still alive — so no attempt
             // can be started during the transport teardown that follows.
-            deletion_resumer.close();
+            activity_retention.close().await;
+        deletion_resumer.close();
             // #2234 CP6: the create-aftermath boundary closes alongside it — same window,
             // ahead of transport teardown — cancelling any in-flight leg and awaiting its
             // future to drop before the daemon it drives is torn down.
@@ -954,6 +959,7 @@ where
     // are never lost to a bare object drop, and it runs after the transports the signal
     // arm tore down. Idempotent, so it is a safe no-op if any other entry point already
     // closed the shared instance.
+    activity_retention.close().await;
     cli_audit_sink.close().await;
     // #2254/#2257: the agent-chat audit sink drains on the SAME last-step footing —
     // idempotent.

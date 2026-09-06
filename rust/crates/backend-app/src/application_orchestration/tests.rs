@@ -9966,7 +9966,7 @@ mod runtime_activity_activation {
     }
     impl ConversationAgentRunStateSource for RuntimeActivityCountingPort {
         type Error = std::convert::Infallible;
-        fn snapshot(
+        async fn snapshot(
             &self,
             _: &ConversationId,
         ) -> Result<Vec<AgentRunStateProjection>, Self::Error> {
@@ -11760,4 +11760,92 @@ mod schedule_create_router_construction {
         // that the route is callable with the real production cron implementation.
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
+}
+
+#[tokio::test]
+async fn activity_retention_sweeps_idle_database_and_stops_with_its_owner() {
+    use std::sync::{Arc, atomic::{AtomicI64, Ordering}};
+    use silverhand_backend_server::foundation::clock::ProcessClock;
+    use silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_agent_activity::ACTIVITY_RETENTION_MS;
+    #[derive(Clone)]
+    struct Clock(Arc<AtomicI64>);
+    impl ProcessClock for Clock {
+        fn now_unix_millis(&self) -> i64 {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+    let f = fixture(true).await;
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", f.path.display()))
+        .await
+        .unwrap();
+    db.execute(ENROLLMENT_SEED_SQL).await.unwrap();
+    db.execute("INSERT INTO conversation_events(conversation_id,agent_id,kind,created_at) VALUES('conv-open','agent-1','turn_end',100)").await.unwrap();
+    let clock = Clock(Arc::new(AtomicI64::new(ACTIVITY_RETENTION_MS + 100)));
+    let store = MessagingStore::open(&f.path).await.unwrap();
+    let retention = super::activity_retention::ActivityRetention::start_with_interval(
+        store,
+        ScopeEventHub::production().unwrap(),
+        clock.clone(),
+        std::time::Duration::from_millis(10),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversation_events")
+            .fetch_one(&mut db)
+            .await
+            .unwrap(),
+        1
+    );
+    clock.0.store(ACTIVITY_RETENTION_MS + 101, Ordering::SeqCst);
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    // The wall clock is injected; only the maintenance timer runs at test cadence.
+    for _ in 0..100 {
+        if sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversation_events")
+            .fetch_one(&mut db)
+            .await
+            .unwrap()
+            == 0
+        {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversation_events")
+            .fetch_one(&mut db)
+            .await
+            .unwrap(),
+        0
+    );
+    retention.close().await;
+    retention.close().await;
+    db.execute("INSERT INTO conversation_events(conversation_id,agent_id,kind,created_at) VALUES('conv-open','agent-1','turn_end',1)").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversation_events")
+            .fetch_one(&mut db)
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn activity_retention_is_wired_into_real_preparation() {
+    let f = fixture(true).await;
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", f.path.display()))
+        .await
+        .unwrap();
+    db.execute(ENROLLMENT_SEED_SQL).await.unwrap();
+    db.execute("INSERT INTO conversation_events(conversation_id,agent_id,kind,created_at) VALUES('conv-open','agent-1','turn_end',1)").await.unwrap();
+    let app = prepare(&config(f.path.clone())).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversation_events")
+            .fetch_one(&mut db)
+            .await
+            .unwrap(),
+        0
+    );
+    app.close_connections().await;
 }

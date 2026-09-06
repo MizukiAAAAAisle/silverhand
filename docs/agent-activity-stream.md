@@ -23,13 +23,21 @@ Resume using the existing scope epoch/sequence protocol. An epoch change or repl
 
 ## Persistence and producer contract
 
-The stream reads existing `conversation_events` once by agent id. It creates no per-channel copies and does not rewrite historical conversation ids. Those ids remain internal provenance and are omitted from the canonical DTO, not treated as activity ownership or source ACLs. Existing retention and deletion semantics still apply.
+The stream reads existing `conversation_events` once by agent id. It creates no per-channel copies and does not rewrite historical conversation ids. Those ids remain internal provenance and are omitted from the canonical DTO, not treated as activity ownership or source ACLs. Activity retention is specified below; other deletion semantics remain unchanged.
 
 Unreleased schema epoch 69 adds step 90: an `(agent_id, id)` index and nullable `runtime_generation`. New activity rows stamp the admitted generation. Tool refinement searches the same agent stream only for agent-scoped runtimes and only in the current generation; legacy rows with unknown generation and older generations cannot be rewritten by a reused tool-call id. Conversation-scoped refinement remains constrained to its conversation. Existing host, custody, and generation admission gates run before persistence and projection.
 
-Tool output events retain their existing marker/outcome semantics: name, tool-call identity, and terminal outcome, without output bodies. Thinking, text, and tool input content remain unchanged, including the existing 16,384-character accumulated text/thinking truncation and protocol size/drop behavior. Existing historical rows are not rewritten or cleaned.
+Tool output events retain their existing marker/outcome semantics: name, tool-call identity, and terminal outcome, without output bodies. Thinking, text, and tool input content remain unchanged, including the existing 16,384-character accumulated text/thinking truncation and protocol size/drop behavior. Historical payloads are not rewritten; the retention sweep removes expired rows.
 
 Renderer integration, publication, formal packaging, and user-instance testing are outside this backend delivery. Use matched source builds to exercise the new read and subscription contract.
+
+## Seven-day retention
+
+Canonical activity records in `conversation_events`, for both agent and conversation scopes, roll off when their original `created_at` is older than seven days. Refinement does not extend that deadline. The Rust application sweeps once during startup and every 60 seconds while running, including when no new activity arrives; physical expiry can lag by one sweep interval. A startup sweep failure fails preparation; periodic failures are logged and retried on the next tick. Shutdown stops the owned worker after any in-flight sweep. This affects activity records only, not chat messages, tasks, or agent memory.
+
+Step 91 adds a creation-time index and rebuilds the activity table with SQLite AUTOINCREMENT, preserving every existing id, timestamp, generation, and payload. Plain rowid would recycle an identity after retention emptied the table or removed its largest id. No application watermark is added. Expiry also removes canonical activity copies from the WS replay buffer. Diagnostic `agent_event` copies expire by their server publication time, kept only as internal metadata. A cursor crossing an expired replay entry receives the existing scoped `snapshot_required` / `gap_too_large` contract and must reload HTTP; transport sequences are not reset. An HTTP `before_id` remains an exclusive numeric boundary even if that row expired, and may return an empty page. IDs are not recycled, so the existing identity/deduplication contract remains valid. Other scopes and non-activity events retain their replay history.
+
+This is server-side data retention. It does not remotely erase already delivered client caches or logs. The retained TS repository's default is also seven days; its existing insertion-triggered pruning and count cap are unchanged.
 
 ## Scoped refusal and subscription lifetime
 

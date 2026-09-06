@@ -4121,6 +4121,36 @@ export const migrations: Migration[] = [
       CREATE INDEX idx_conversation_events_stream ON conversation_events(agent_id, id);
     `,
   },
+  {
+    version: 91,
+    name: 'activity_retention_identity_and_created_at',
+    // Retention can empty the table or remove its largest id. Plain rowid would
+    // then recycle an HTTP/WS upsert identity. SQLite owns the monotone sequence;
+    // no application watermark or retention coordinator is needed.
+    // No table references conversation_events, so this child-table rebuild runs
+    // with foreign_keys ON; preserve every original row and all four indexes.
+    up: `
+      CREATE TABLE conversation_events_retained (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL,
+        payload TEXT,
+        created_at INTEGER NOT NULL,
+        runtime_generation INTEGER CHECK(runtime_generation IS NULL OR runtime_generation > 0)
+      );
+      INSERT INTO conversation_events_retained
+        (id, conversation_id, agent_id, kind, payload, created_at, runtime_generation)
+        SELECT id, conversation_id, agent_id, kind, payload, created_at, runtime_generation
+        FROM conversation_events;
+      DROP TABLE conversation_events;
+      ALTER TABLE conversation_events_retained RENAME TO conversation_events;
+      CREATE INDEX idx_conversation_events ON conversation_events(conversation_id, id);
+      CREATE INDEX idx_conversation_events_agent ON conversation_events(conversation_id, agent_id, id);
+      CREATE INDEX idx_conversation_events_stream ON conversation_events(agent_id, id);
+      CREATE INDEX idx_conversation_events_created_at ON conversation_events(created_at);
+    `,
+  },
 ];
 
 /**

@@ -4,6 +4,7 @@ use crate::*;
 /// The infallible output of post-audit composition. It contains only the served graph and
 /// its runtime owners; the bound socket and audit lifecycle remain uniquely outside.
 pub(super) struct FinalAssembly {
+    pub(super) activity_retention: super::activity_retention::ActivityRetention,
     pub(super) router: Router,
     pub(super) boot: BootProgress,
     pub(super) event_controller: EventWebSocketController,
@@ -27,6 +28,7 @@ pub(super) fn commit(
     startup_generation: Option<String>,
 ) -> (tokio::net::TcpListener, PreparedApp) {
     let FinalAssembly {
+        activity_retention,
         router,
         boot,
         event_controller,
@@ -40,6 +42,7 @@ pub(super) fn commit(
     } = assembly;
     let (cli_audit_sink, agent_audit_sink) = audit.into_parts();
     let app = PreparedApp {
+        activity_retention,
         router,
         boot,
         event_controller,
