@@ -5,15 +5,14 @@ import { createContext, useContext, type ReactNode } from 'react';
  *
  * Threaded through React context (rather than props) because Markdown
  * is rendered from many call sites (MessageItem, QuotedMessagePreview,
- * SystemMessage, SavedListView, AgentWorkspaceCard…) and prop-drilling
+ * SystemMessage, AgentWorkspaceCard…) and prop-drilling
  * the workspace + open handler everywhere bloats the API surface.
  *
  * Consumers (the inline `TaskRef` chip) read the conversation-placement coords
  * (`workspaceId` + `conversationId`) to scope their `useTaskByNumber` lookup,
  * and `onOpenTask` to open the task's detail modal when the chip is clicked.
  *
- * Source-bearing surfaces supply their own board coordinates through
- * `TaskRefScope`; missing context leaves references inert.
+ * Chat panes supply their board coordinates; missing context leaves references inert.
  */
 export interface TaskRefContextValue {
   /** The conversation the sigil is rendered inside — the HTTP lookup anchor.
@@ -52,18 +51,4 @@ export function TaskRefContextProvider({
 
 export function useTaskRefContext(): TaskRefContextValue | null {
   return useContext(TaskRefContext);
-}
-
-/** Resolve references on the source board while retaining the host's task opener. */
-export function TaskRefScope({ conversationId, workspaceId, children }: {
-  conversationId: string;
-  workspaceId: string | null;
-  children: ReactNode;
-}): JSX.Element {
-  const host = useTaskRefContext();
-  return (
-    <TaskRefContextProvider value={{ conversationId, workspaceId, onOpenTask: host?.onOpenTask }}>
-      {children}
-    </TaskRefContextProvider>
-  );
 }

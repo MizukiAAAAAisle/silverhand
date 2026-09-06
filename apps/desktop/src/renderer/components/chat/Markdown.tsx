@@ -75,6 +75,8 @@ interface MarkdownProps {
    *  this map instead so `#task:<n>` can still show `#<n> · title`
    *  without mounting query/popover components. */
   taskRefsByNumber?: Map<number, StaticTaskRefSummary>;
+  /** Task descriptions and message excerpts keep task-number text literal. */
+  taskReferences?: 'resolve' | 'raw';
   /** Set to `false` for export / screenshot rendering. When false:
    *  - fenced code blocks render as a bare `<pre>` (no copy / expand
    *    buttons, no overflow useEffect)
@@ -158,6 +160,7 @@ function MarkdownInner({
   conversationRefsById,
   onOpenConversationRef,
   taskRefsByNumber,
+  taskReferences = 'resolve',
   interactive = true,
   mermaidSvgByCode,
   searchQuery,
@@ -182,7 +185,10 @@ function MarkdownInner({
   // the cost is negligible. Memoizing it doesn't help because react-
   // markdown also memoizes the pipeline by reference equality of the
   // plugins array.
-  const plugins = useMemo(() => [remarkGfm, remarkBreaks, remarkRefs], []);
+  const plugins = useMemo<NonNullable<ComponentProps<typeof ReactMarkdown>['remarkPlugins']>>(
+    () => [remarkGfm, remarkBreaks, [remarkRefs, { taskReferences }]],
+    [taskReferences],
+  );
 
   // Keyword highlight is opt-in: only when the header find is active do we
   // append `rehypeHighlightTerm` after `rehype-highlight`. Recreated when the
@@ -704,9 +710,9 @@ function conversationDisplayName(conversation: WorkspaceChannelReference): strin
 // point where the source is in hand — the `a` override downstream sees a hast
 // property. Hence the second parameter, and hence `markReferenceAutolink`
 // stamping the destinations it admits.
-function remarkRefs() {
+function remarkRefs({ taskReferences = 'resolve' }: { taskReferences?: 'resolve' | 'raw' } = {}) {
   return (tree: unknown, file: { toString(): string }): void => {
-    walk(tree as MdastNode, file.toString());
+    walk(tree as MdastNode, file.toString(), taskReferences);
   };
 }
 
@@ -776,7 +782,7 @@ function stampAuthoredHref(node: MdastNode, url: string): void {
   };
 }
 
-function walk(node: MdastNode, source: string): void {
+function walk(node: MdastNode, source: string, taskReferences: 'resolve' | 'raw'): void {
   if (!node.children || node.children.length === 0) return;
   const next: MdastNode[] = [];
   for (const child of node.children) {
@@ -794,10 +800,10 @@ function walk(node: MdastNode, source: string): void {
       typeof child.value === 'string' &&
       (child.value.includes('@') || child.value.includes('#'))
     ) {
-      pushSplit(child.value, next);
+      pushSplit(child.value, next, taskReferences);
       continue;
     }
-    walk(child, source);
+    walk(child, source, taskReferences);
     next.push(child);
   }
   node.children = next;
@@ -882,7 +888,7 @@ const REF_RE = new RegExp(
   'g',
 );
 
-function pushSplit(text: string, out: MdastNode[]): void {
+function pushSplit(text: string, out: MdastNode[], taskReferences: 'resolve' | 'raw'): void {
   let last = 0;
   let lastRefEnd = -1;
   let m: RegExpExecArray | null;
@@ -910,7 +916,9 @@ function pushSplit(text: string, out: MdastNode[]): void {
     }
     const taskNumber = m[2];
     if (taskNumber) {
-      out.push(pluginLink(`${TASK_PREFIX}${taskNumber}`, `#task:${taskNumber}`));
+      out.push(taskReferences === 'raw'
+        ? { type: 'text', value: m[0] }
+        : pluginLink(`${TASK_PREFIX}${taskNumber}`, `#task:${taskNumber}`));
       last = refEnd;
       lastRefEnd = refEnd;
       continue;
@@ -934,7 +942,9 @@ function pushSplit(text: string, out: MdastNode[]): void {
     // reproduces the original prose verbatim.
     const bareTaskNumber = m[5]!;
     out.push(
-      pluginLink(`${BARE_TASK_PREFIX}${bareTaskNumber}`, `#${bareTaskNumber}`),
+      taskReferences === 'raw'
+        ? { type: 'text', value: m[0] }
+        : pluginLink(`${BARE_TASK_PREFIX}${bareTaskNumber}`, `#${bareTaskNumber}`),
     );
     last = refEnd;
     lastRefEnd = refEnd;

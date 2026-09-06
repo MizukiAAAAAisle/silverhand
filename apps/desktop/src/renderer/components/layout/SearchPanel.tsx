@@ -830,7 +830,7 @@ function buildExcerpt(content: string, query: string): string {
   return `${start > 0 ? '…' : ''}${flat.slice(start, end)}${end < flat.length ? '…' : ''}`;
 }
 
-function highlightText(text: string, query: string): ReactNode {
+export function highlightText(text: string, query: string): ReactNode {
   const needle = query.trim();
   if (!needle) return text;
   const index = text.toLowerCase().indexOf(needle.toLowerCase());

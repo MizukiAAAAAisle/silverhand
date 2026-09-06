@@ -3,7 +3,6 @@ import { Bookmark, Clock, Layers } from 'lucide-react';
 import dayjs from 'dayjs';
 import type { AgentDto, SavedMessageDto } from '@silverhand/shared';
 import { Markdown } from '@/components/chat/Markdown';
-import { TaskRefScope } from '@/features/tasks/TaskRefContext';
 import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
@@ -438,12 +437,7 @@ function SavedItem({
         </header>
 
         <div className="text-sm text-text-primary">
-          <TaskRefScope
-            conversationId={place.conversation_id}
-            workspaceId={place.kind === 'workspace_channel' ? place.workspace_id : null}
-          >
-            <Markdown content={item.message.content} />
-          </TaskRefScope>
+          <Markdown content={item.message.content} taskReferences="raw" />
         </div>
       </CollectionItemCard>
     </li>
