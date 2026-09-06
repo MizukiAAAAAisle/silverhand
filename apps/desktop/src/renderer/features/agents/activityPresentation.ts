@@ -493,17 +493,20 @@ function sessionIdOf(e: ActivityEvent): string | null {
 export function coalesceActivity(
   events: ReadonlyArray<ActivityEvent>,
 ): ActivityDisplayItem[] {
-  // Pass 1: correlate tool_call ⇄ tool_output by id within the window.
-  const callIds = new Set<string>();
-  const outputIds = new Set<string>();
-  const outcomeById = new Map<string, ToolOutcome>();
+  // Call ids can recur across runs; only the nearest preceding call owns an outcome.
+  const calls = new Map<string, number>();
+  const outcomeByRow = new Map<number, ToolOutcome>();
+  const foldedOutputs = new Set<number>();
   for (const e of events) {
     const id = callIdOf(e);
     if (id === null) continue;
-    if (e.kind === 'tool_call') callIds.add(id);
+    if (e.kind === 'tool_call') calls.set(id, e.id);
     else if (e.kind === 'tool_output') {
-      outputIds.add(id);
-      outcomeById.set(id, outcomeOf(e));
+      const callRow = calls.get(id);
+      if (callRow !== undefined) {
+        outcomeByRow.set(callRow, outcomeOf(e));
+        foldedOutputs.add(e.id);
+      }
     }
   }
 
@@ -576,25 +579,24 @@ export function coalesceActivity(
     flush();
 
     if (e.kind === 'tool_output') {
-      const id = callIdOf(e);
       // Folded into its tool_call → drop. Orphan (its call paged out by
       // retention) → light row that still carries the verdict: a failed/cancelled
       // orphan is the only surviving record of that outcome, so it must not
       // render as a neutral success.
-      if (id !== null && callIds.has(id)) continue;
+      if (foldedOutputs.has(e.id)) continue;
       out.push({ type: 'event', key: String(e.id), event: e, outcome: outcomeOf(e) });
       continue;
     }
 
     if (e.kind === 'tool_call') {
-      const id = callIdOf(e);
-      const completed = id !== null && outputIds.has(id);
+      const outcome = outcomeByRow.get(e.id);
+      const completed = outcome !== undefined;
       out.push({
         type: 'event',
         key: String(e.id),
         event: e,
         completed,
-        ...(completed && id !== null ? { outcome: outcomeById.get(id) } : {}),
+        ...(outcome !== undefined ? { outcome } : {}),
       });
       continue;
     }

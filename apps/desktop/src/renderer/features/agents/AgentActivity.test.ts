@@ -380,6 +380,21 @@ describe('coalesceActivity', () => {
     expect(item.type === 'event' && item.event.kind).toBe('tool_call');
   });
 
+  it('pairs reused call ids by preceding row without completing a later running call', () => {
+    const call = (id: number) => ev(id, { kind: 'tool_call', payload: { name: 'Bash', tool_call_id: 'repeat' } });
+    const result = (id: number, outcome: string) => ev(id, { kind: 'tool_output', payload: { tool_call_id: 'repeat', outcome } });
+    const items = coalesceActivity([call(1), result(2, 'failed'), call(3), result(4, 'success'), call(5)]);
+    expect(items).toHaveLength(3);
+    expect(items[0]).toMatchObject({ key: '1', completed: true, outcome: 'failed' });
+    expect(items[1]).toMatchObject({ key: '3', completed: true, outcome: 'success' });
+    expect(items[2]).toMatchObject({ key: '5', completed: false });
+    expect(items[2]).not.toHaveProperty('outcome');
+    for (const item of items) expect(item).not.toHaveProperty('output');
+    const orphan = coalesceActivity([result(1, 'cancelled'), call(2)]);
+    expect(orphan[0]).toMatchObject({ key: '1', outcome: 'cancelled' });
+    expect(orphan[1]).toMatchObject({ key: '2', completed: false });
+  });
+
   it('keeps an orphan tool_output (no matching call) as a single light row', () => {
     const items = coalesceActivity([ev(1, { kind: 'tool_output', payload: { name: 'X' } })]);
     expect(items).toHaveLength(1);
