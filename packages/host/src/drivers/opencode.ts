@@ -16,6 +16,7 @@ const OPENCODE_PERMISSION_POLICY: AcpPermissionPolicy = {
   // trusted with machine access, while Silverhand's own capability buckets stay
   // the authorization boundary.
   shouldAllow: () => true,
+  preferredAllowKind: 'allow_always',
 };
 
 class OpenCodeAcpAdapter implements AcpRuntimeAdapter {

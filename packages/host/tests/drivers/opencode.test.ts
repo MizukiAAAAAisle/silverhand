@@ -5,6 +5,7 @@ import { SILVERHAND_OPENCODE_AGENT } from '@silverhand/shared';
 import { describe, expect, it } from 'vitest';
 
 import type { DriverIO, DriverSpawnContext } from '../../src/drivers/index.js';
+import { AcpClient, type AcpPermissionPolicy } from '../../src/drivers/acp.js';
 import { OpenCodeDriver } from '../../src/drivers/opencode.js';
 
 interface CapturedIO extends DriverIO {
@@ -615,4 +616,49 @@ it('keeps ACP result bodies out of parsed events', () => {
     expect(events.some(event => event.kind === 'tool_output')).toBe(true);
     expect(JSON.stringify(events)).not.toContain('private body');
   }
+});
+
+
+it.each([
+  { kinds: ['allow_once', 'allow_always', 'reject_once'], selected: 'allow_always' },
+  { kinds: ['allow_always', 'allow_once'], selected: 'allow_always' },
+  { kinds: ['allow_once'], selected: 'allow_once' },
+  { kinds: ['reject_once'], selected: null },
+  { kinds: [], selected: null },
+])('OpenCode permission preference: $kinds', async ({ kinds, selected }) => {
+  const {ctx, cleanup} = makeSpawnCtx();
+  try {
+    const driver = new OpenCodeDriver();
+    const io = makeIO(ctx);
+    driver.bindIO(io);
+    await tick();
+    driver.parseLine(JSON.stringify({jsonrpc: '2.0', id: 91, method: 'session/request_permission', params: {
+      options: kinds.map(kind => ({kind, optionId: kind, name: kind})),
+    }}));
+    await tick();
+    expect(parseLast(io)).toEqual({jsonrpc: '2.0', id: 91, result: {outcome:
+      selected ? {outcome: 'selected', optionId: selected} : {outcome: 'cancelled'},
+    }});
+  } finally { cleanup(); }
+});
+
+it.each([
+  { policy: {shouldAllow: () => true}, selected: 'allow_once' },
+  { policy: {shouldAllow: () => false, preferredAllowKind: 'allow_always'}, selected: 'reject_once' },
+  { policy: undefined, selected: 'reject_once' },
+] satisfies Array<{policy: AcpPermissionPolicy | undefined; selected: string}>)('preserves the shared ACP policy: $selected', async ({policy, selected}) => {
+  const {ctx, cleanup} = makeSpawnCtx();
+  try {
+    const client = new AcpClient({runtimeLabel: 'test adapter', permissionPolicy: policy,
+      buildInitializeParams: () => ({}), buildSessionParams: () => ({}),
+    });
+    const io = makeIO(ctx);
+    client.bindIO(io);
+    await tick();
+    client.parseLine(JSON.stringify({jsonrpc: '2.0', id: 92, method: 'session/request_permission', params: {
+      options: ['allow_always', 'allow_once', 'reject_always', 'reject_once'].map(kind => ({kind, optionId: kind, name: kind})),
+    }}));
+    await tick();
+    expect(parseLast(io)).toEqual({jsonrpc: '2.0', id: 92, result: {outcome: {outcome: 'selected', optionId: selected}}});
+  } finally { cleanup(); }
 });
