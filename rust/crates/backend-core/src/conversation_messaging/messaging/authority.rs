@@ -58,7 +58,7 @@ pub enum ConversationRefusal {
     Archived,
     #[error("the other endpoint of this direct conversation no longer exists")]
     EndpointGone,
-    #[error("conversation-scoped agents cannot use direct messages; use a shared channel")]
+    #[error("Conversation-scoped agents do not support DMs. Use a shared channel.")]
     DirectMessageScope,
 }
 

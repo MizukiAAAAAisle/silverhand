@@ -1505,3 +1505,101 @@ async fn historical_pair_remains_resolvable_for_reads_but_loses_send_capability(
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn dm_scope_hint_requires_the_existing_peer_read_horizon_and_capability() {
+    for scoped in [AGENT, PEER, HIDDEN] {
+        let mut fixture = Fixture::with_conversation_agent(Some(scoped)).await;
+        let store = fixture.store().await;
+        let address = store.target_address(Opened::default(), Refusals::default());
+        sqlx::query("INSERT INTO workspace_agent_capabilities(workspace_id,agent_id,capability) VALUES(?,?,'read_messages')")
+            .bind(WORKSPACE).bind(AGENT).execute(&mut fixture.db).await.unwrap();
+        let handle = if scoped == HIDDEN {
+            "dm:@hidden"
+        } else {
+            "dm:@peer"
+        };
+        for allocation in [
+            DirectPairAllocation::Permitted,
+            DirectPairAllocation::Forbidden,
+        ] {
+            let refused = address
+                .resolve(&agent(), handle, allocation, DeliveryIntent::Write)
+                .await
+                .unwrap();
+            assert_eq!(
+                refused,
+                Err(if scoped == HIDDEN {
+                    AddressRefusal::Unresolved
+                } else {
+                    AddressRefusal::DirectMessageScope
+                })
+            );
+        }
+        assert_eq!(
+            address
+                .resolve(
+                    &agent(),
+                    "dm:@unknown",
+                    DirectPairAllocation::Permitted,
+                    DeliveryIntent::Write
+                )
+                .await
+                .unwrap(),
+            Err(AddressRefusal::Unresolved)
+        );
+        assert_eq!(
+            address
+                .resolve(
+                    &agent(),
+                    handle,
+                    DirectPairAllocation::Forbidden,
+                    DeliveryIntent::Read
+                )
+                .await
+                .unwrap(),
+            Err(AddressRefusal::Unresolved)
+        );
+        // Membership alone cannot disclose a profile without read_messages.
+        sqlx::query("DELETE FROM workspace_agent_capabilities WHERE agent_id=? AND capability='read_messages'").bind(AGENT).execute(&mut fixture.db).await.unwrap();
+        assert_eq!(
+            address
+                .resolve(
+                    &agent(),
+                    handle,
+                    DirectPairAllocation::Permitted,
+                    DeliveryIntent::Write
+                )
+                .await
+                .unwrap(),
+            Err(AddressRefusal::Unresolved)
+        );
+        // Nor may a capability without the caller's workspace horizon disclose it.
+        sqlx::query("INSERT INTO workspace_agent_capabilities(workspace_id,agent_id,capability) VALUES(?,?,'read_messages')").bind(WORKSPACE).bind(AGENT).execute(&mut fixture.db).await.unwrap();
+        sqlx::query("DELETE FROM workspace_members WHERE workspace_id=? AND agent_id=?")
+            .bind(WORKSPACE)
+            .bind(AGENT)
+            .execute(&mut fixture.db)
+            .await
+            .unwrap();
+        assert_eq!(
+            address
+                .resolve(
+                    &agent(),
+                    handle,
+                    DirectPairAllocation::Permitted,
+                    DeliveryIntent::Write
+                )
+                .await
+                .unwrap(),
+            Err(AddressRefusal::Unresolved)
+        );
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM conversations WHERE placement_kind='direct_pair'",
+        )
+        .fetch_one(&mut fixture.db)
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
+    }
+}

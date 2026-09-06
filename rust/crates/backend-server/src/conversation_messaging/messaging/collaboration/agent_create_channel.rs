@@ -308,6 +308,11 @@ fn address_refusal(refusal: AddressRefusal) -> Response {
             "a direct message needs another participant",
             "self_pair_not_addressable",
         ),
+        AddressRefusal::DirectMessageScope => (
+            StatusCode::FORBIDDEN,
+            "Conversation-scoped agents do not support DMs. Use a shared channel.",
+            "direct_message_scope_forbidden",
+        ),
         AddressRefusal::Unresolved => (
             StatusCode::NOT_FOUND,
             "target names no stream you can use",

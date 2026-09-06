@@ -262,6 +262,7 @@ pub(crate) fn address_refusal(refusal: AddressRefusal) -> Response {
         AddressRefusal::Malformed => TargetRefusalWire::Malformed,
         AddressRefusal::SelfPair => TargetRefusalWire::SelfPairNotAddressable,
         AddressRefusal::Unresolved => TargetRefusalWire::Unresolved,
+        AddressRefusal::DirectMessageScope => TargetRefusalWire::DirectMessageScope,
         AddressRefusal::ThreadNotInTarget => TargetRefusalWire::ThreadNotInTarget,
     };
     refusal.into_response()

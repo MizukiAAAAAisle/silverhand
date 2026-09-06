@@ -35,6 +35,8 @@ pub enum AddressRefusal {
     SelfPair,
     #[error("target names no stream the caller may use")]
     Unresolved,
+    #[error("Conversation-scoped agents do not support DMs. Use a shared channel.")]
+    DirectMessageScope,
     #[error("target names no reply cluster of that conversation")]
     ThreadNotInTarget,
 }
@@ -54,6 +56,7 @@ pub enum TargetAddressOperatorReason {
     NotParticipant,
     UnknownHandle,
     DirectPairNotFound,
+    DirectMessageScope,
     SelfPair,
     ThreadRootNotFound,
     ThreadRootNotARoot,
@@ -70,6 +73,7 @@ impl TargetAddressOperatorReason {
             Self::NotParticipant => "not_participant",
             Self::UnknownHandle => "unknown_handle",
             Self::DirectPairNotFound => "direct_pair_not_found",
+            Self::DirectMessageScope => "direct_message_scope_forbidden",
             Self::SelfPair => "self_pair",
             Self::ThreadRootNotFound => "thread_root_not_found",
             Self::ThreadRootNotARoot => "thread_root_not_a_root",

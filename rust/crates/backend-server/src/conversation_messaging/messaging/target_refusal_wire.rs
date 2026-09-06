@@ -17,6 +17,7 @@ pub(crate) enum TargetRefusalWire {
     Malformed,
     SelfPairNotAddressable,
     Unresolved,
+    DirectMessageScope,
     ThreadNotInTarget,
     ThreadSuffixUnsupported,
     SlotOutOfScope,
@@ -34,6 +35,11 @@ impl TargetRefusalWire {
                 StatusCode::BAD_REQUEST,
                 "self_pair_not_addressable",
                 "a direct message needs another participant",
+            ),
+            Self::DirectMessageScope => (
+                StatusCode::FORBIDDEN,
+                "direct_message_scope_forbidden",
+                "Conversation-scoped agents do not support DMs. Use a shared channel.",
             ),
             Self::Unresolved => (
                 StatusCode::NOT_FOUND,

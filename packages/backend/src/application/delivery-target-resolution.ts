@@ -246,6 +246,8 @@ export type DeliveryTargetRefusalCode =
   /** The address names no stream this principal may use — unknown and
    *  unauthorized COLLAPSED (module docblock). */
   | 'target_unresolved'
+  /** Visible peer scope refusal, emitted by the Rust resolver. */
+  | 'direct_message_scope_forbidden'
   /** The thread suffix names no reply cluster of the resolved conversation. */
   | 'thread_not_in_target'
   /** `dm:@<own handle>`: a DM has two participants (§4.1). */

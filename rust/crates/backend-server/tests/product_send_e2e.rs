@@ -1415,3 +1415,97 @@ fn reported_tokens(fields: &Value) -> Value {
         .expect("the report carries its tokens");
     serde_json::from_str(text).expect("the tokens are that array's JSON")
 }
+
+#[tokio::test]
+async fn visible_conversation_scoped_dm_target_has_actionable_refusal_without_allocation() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("dm-scope-wording.sqlite");
+    let store = opened(&path).await;
+    let mut db = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .unwrap();
+    for (id, scope) in [
+        ("dm-sender", "agent"),
+        ("dm-visible", "conversation"),
+        ("dm-hidden", "conversation"),
+        ("dm-legal", "agent"),
+    ] {
+        sqlx::query("INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,display_name,created_by_user_id,session_scope) VALUES(?,?,'codex','host-1',1,1,?,'user-1',?)")
+            .bind(id).bind(id).bind(id).bind(scope).execute(&mut db).await.unwrap();
+        if id != "dm-hidden" {
+            sqlx::query("INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES('workspace-1',?,1)").bind(id).execute(&mut db).await.unwrap();
+        }
+    }
+    sqlx::query("INSERT INTO workspace_agent_capabilities(workspace_id,agent_id,capability) VALUES('workspace-1','dm-sender','read_messages')").execute(&mut db).await.unwrap();
+    let app = send_router(SendState {
+        channel_access: store.clone(),
+        target_address: store.target_address(NoOpened, TargetAddressRefusalLog),
+        capability: store.clone(),
+        authority: store.clone(),
+        unit_of_work: store,
+        aftermath: NoAftermath,
+    });
+    let request = |target: &str| {
+        let mut req = Request::post("/internal/agents/dm-sender/send-message")
+            .body(Body::from(
+                serde_json::json!({"target":target,"content":"scope check"}).to_string(),
+            ))
+            .unwrap();
+        req.extensions_mut().insert(RuntimePrincipal::AgentSlot {
+            agent: AgentId::parse("dm-sender").unwrap(),
+            custody: RuntimeCustody::new(
+                RuntimeGeneration::new(1).unwrap(),
+                DaemonInstanceId::parse("daemon-1").unwrap(),
+            ),
+        });
+        req
+    };
+    const SLOT_SNAPSHOT: &str = "SELECT json_object('id',id,'agent',agent_id,'conversation',conversation_id,'generation',generation,'daemon',claimed_by_daemon_instance_id,'status',observed_status,'pid',observed_pid,'session',cli_session_id) FROM agent_runtime_slots WHERE agent_id IN ('dm-sender','dm-visible','dm-hidden') ORDER BY id";
+    let slots_before: Vec<String> = sqlx::query_scalar(SLOT_SNAPSHOT)
+        .fetch_all(&mut db)
+        .await
+        .unwrap();
+    let (status, body) = answered(app.clone(), request("dm:@dm-visible")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        body,
+        serde_json::json!({"code":"direct_message_scope_forbidden","error":"Conversation-scoped agents do not support DMs. Use a shared channel."})
+    );
+    let hidden = answered(app.clone(), request("dm:@dm-hidden")).await;
+    let unknown = answered(app.clone(), request("dm:@does-not-exist")).await;
+    assert_eq!(hidden, unknown);
+    assert_eq!(hidden.0, StatusCode::NOT_FOUND);
+    assert_eq!(hidden.1["code"], "target_unresolved");
+    sqlx::query("DELETE FROM workspace_agent_capabilities WHERE agent_id='dm-sender' AND capability='read_messages'").execute(&mut db).await.unwrap();
+    assert_eq!(
+        answered(app.clone(), request("dm:@dm-visible")).await,
+        unknown
+    );
+    let pairs: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM conversations WHERE placement_kind='direct_pair'")
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+    let writes: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM messages WHERE from_agent_id='dm-sender'")
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+    assert_eq!((pairs, writes), (0, 0));
+    let slots_after: Vec<String> = sqlx::query_scalar(SLOT_SNAPSHOT)
+        .fetch_all(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(
+        slots_after, slots_before,
+        "birth-created seats must remain byte-for-byte unchanged"
+    );
+    let (status, body) = answered(app, request("dm:@dm-legal")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let pairs: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM conversations WHERE placement_kind='direct_pair'")
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+    assert_eq!(pairs, 1);
+}

@@ -116,6 +116,8 @@ export type ErrorSubkind =
    * published set ever grows past this list. */
   /** The address names no stream this agent may use. */
   | 'target_unresolved'
+  /** A visible conversation-scoped agent cannot use DMs. */
+  | 'direct_message_scope_forbidden'
   /** The `/thread:<root>` suffix names no reply cluster of that conversation. */
   | 'thread_not_in_target'
   /** `dm:@<own handle>` — a direct message needs another participant. */

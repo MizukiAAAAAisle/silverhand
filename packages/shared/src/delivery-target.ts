@@ -511,6 +511,8 @@ export function formatDirectPairLabel(otherHandle: string): string {
 export const DELIVERY_TARGET_REFUSAL_CODES = [
   'target_malformed',
   'target_unresolved',
+  // Only for a peer whose profile the caller may already read.
+  'direct_message_scope_forbidden',
   'thread_not_in_target',
   'self_pair_not_addressable',
 ] as const;

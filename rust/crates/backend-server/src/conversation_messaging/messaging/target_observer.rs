@@ -48,6 +48,7 @@ fn refusal_code(refusal: AddressRefusal) -> &'static str {
         AddressRefusal::Malformed => "target_malformed",
         AddressRefusal::SelfPair => "self_pair_not_addressable",
         AddressRefusal::Unresolved => "target_unresolved",
+        AddressRefusal::DirectMessageScope => "direct_message_scope_forbidden",
         AddressRefusal::ThreadNotInTarget => "thread_not_in_target",
     }
 }

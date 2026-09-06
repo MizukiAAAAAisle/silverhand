@@ -51,7 +51,7 @@ const refusalBody = (code: string, message = 'refused'): string =>
  */
 const PUBLISHED: ReadonlyArray<{ code: string; statuses: readonly number[] }> = [
   ...[...DELIVERY_TARGET_REFUSAL_CODES, CONVERSATION_TARGET_SUFFIX_REFUSAL_CODE].map(
-    code => ({ code, statuses: [400, 404] as const }),
+    code => ({ code, statuses: code === 'direct_message_scope_forbidden' ? [403] as const : [400, 404] as const }),
   ),
   { code: SLOT_REACH_REFUSAL_CODE, statuses: [403] as const },
 ];
@@ -131,8 +131,20 @@ describe('a published address refusal reaches the agent as a subkind', () => {
     const suspicious = DELIVERY_TARGET_REFUSAL_CODES.filter(
       code =>
         code !== 'target_unresolved'
+        && code !== 'direct_message_scope_forbidden' // only after peer visibility, covered by resolver tests
         && /not_found|forbidden|not_participant|unknown|missing/.test(code),
     );
     expect(suspicious).toEqual([]);
   });
+});
+
+
+it('keeps the manual DM instruction, stable scope code and stop exit', () => {
+  const message = 'Conversation-scoped agents do not support DMs. Use a shared channel.';
+  const error = mapHttpError(403, refusalBody('direct_message_scope_forbidden', message));
+  expect(error.message).toBe(message);
+  expect(error.subkind).toBe('direct_message_scope_forbidden');
+  expect(error.code).toBe('forbidden');
+  expect(exitCodeFor(error.code)).toBe(3);
+  expect(error.retriable).toBe(false);
 });

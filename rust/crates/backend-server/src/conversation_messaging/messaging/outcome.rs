@@ -139,7 +139,7 @@ fn conversation(refusal: &ConversationRefusal) -> Response {
         // client to retry a state that cannot change.
         ConversationRefusal::DirectMessageScope => told(
             StatusCode::FORBIDDEN,
-            "conversation-scoped agents cannot use direct messages; use a shared channel",
+            "Conversation-scoped agents do not support DMs. Use a shared channel.",
             "direct_message_scope_forbidden",
         ),
         ConversationRefusal::EndpointGone => told(
@@ -358,7 +358,7 @@ mod tests {
                 ConversationRefusal::DirectMessageScope.into(),
                 StatusCode::FORBIDDEN,
                 serde_json::json!({
-                    "error": "conversation-scoped agents cannot use direct messages; use a shared channel",
+                    "error": "Conversation-scoped agents do not support DMs. Use a shared channel.",
                     "code": "direct_message_scope_forbidden"
                 }),
             ),

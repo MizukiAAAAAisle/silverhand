@@ -663,6 +663,7 @@ where
         agent: &AgentId,
         target: &str,
         allocation: DirectPairAllocation,
+        intent: DeliveryIntent,
     ) -> Result<Result<ResolvedStream, RejectedTarget>, TargetAddressStoreError<O::Error, R::Error>>
     {
         let Some(parsed) = parse_target(target) else {
@@ -821,6 +822,24 @@ where
                         TargetAddressOperatorReason::SelfPair,
                     )));
                 }
+                // A scope hint is target information: disclose it only through the
+                // existing peer-profile workspace horizon + read_messages authority.
+                // Reads and invisible handles retain their opaque resolution contract.
+                if intent == DeliveryIntent::Write {
+                    if let PrincipalIdentity::Agent(peer) = &other {
+                        if self
+                            .store
+                            .visible_peer_dm_scope_refusal(agent, peer)
+                            .await
+                            .map_err(TargetAddressStoreError::Persistence)?
+                        {
+                            return Ok(Err(RejectedTarget::new(
+                                AddressRefusal::DirectMessageScope,
+                                TargetAddressOperatorReason::DirectMessageScope,
+                            )));
+                        }
+                    }
+                }
                 let participants = DirectPairParticipants::between(me, other).map_err(|_| {
                     TargetAddressStoreError::Persistence(corrupt("direct_pair.participants"))
                 })?;
@@ -898,7 +917,10 @@ where
         allocation: DirectPairAllocation,
         intent: DeliveryIntent,
     ) -> Result<Result<ResolvedStream, AddressRefusal>, Self::Error> {
-        match self.resolve_unobserved(agent, target, allocation).await? {
+        match self
+            .resolve_unobserved(agent, target, allocation, intent)
+            .await?
+        {
             Ok(stream) => Ok(Ok(stream)),
             Err(rejected) => {
                 self.refusals
@@ -1846,5 +1868,53 @@ mod tests {
                 ..
             })
         ));
+    }
+}
+
+impl<E: Send + Sync> MessagingStore<E> {
+    async fn visible_peer_dm_scope_refusal(
+        &self,
+        caller: &AgentId,
+        peer: &AgentId,
+    ) -> Result<bool, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN DEFERRED")
+            .await
+            .map_err(driver)?;
+        let blocked: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agents WHERE (id=? OR id=?) AND session_scope='conversation')")
+            .bind(caller.as_str()).bind(peer.as_str()).fetch_one(&mut *tx).await.map_err(driver)?;
+        if blocked == 0 {
+            return Ok(false);
+        }
+        let workspaces: Vec<String> =
+            sqlx::query_scalar("SELECT workspace_id FROM workspace_members WHERE agent_id=?")
+                .bind(peer.as_str())
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(driver)?;
+        for workspace in workspaces {
+            let reachable: Option<i64> = sqlx::query_scalar(AGENT_WORKSPACE_MEMBERSHIP)
+                .bind(caller.as_str())
+                .bind(caller.as_str())
+                .bind(&workspace)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(driver)?;
+            if reachable != Some(1) {
+                continue;
+            }
+            let readable: Option<i64> = sqlx::query_scalar(AGENT_READ_MESSAGES_CAPABILITY)
+                .bind(caller.as_str())
+                .bind(caller.as_str())
+                .bind(&workspace)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(driver)?;
+            if readable == Some(1) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }

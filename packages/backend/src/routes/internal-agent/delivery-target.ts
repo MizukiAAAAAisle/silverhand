@@ -54,10 +54,12 @@ import type { InternalRouteDeps } from './deps.js';
  * non-participant therefore learns nothing beyond "not for you", which is what
  * they would also get for an id nobody ever held.
  */
-const REFUSAL_STATUS: Record<DeliveryTargetRefusalCode, 400 | 404> = {
+// Scope refusal is 403 only after the peer visibility gate has passed.
+const REFUSAL_STATUS: Record<DeliveryTargetRefusalCode, 400 | 403 | 404> = {
   target_malformed: 400,
   self_pair_not_addressable: 400,
   target_unresolved: 404,
+  direct_message_scope_forbidden: 403,
   thread_not_in_target: 404,
 };
 
@@ -65,6 +67,7 @@ const REFUSAL_MESSAGE: Record<DeliveryTargetRefusalCode, string> = {
   target_malformed: 'target is not an address',
   self_pair_not_addressable: 'a direct message needs another participant',
   target_unresolved: 'target names no stream you can use',
+  direct_message_scope_forbidden: 'Conversation-scoped agents do not support DMs. Use a shared channel.',
   thread_not_in_target: 'target names no reply cluster of that conversation',
 };
 

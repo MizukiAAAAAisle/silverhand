@@ -387,7 +387,9 @@ where
                 return Ok(Err(match refusal {
                     AddressRefusal::Malformed => TaskTargetRefusal::Malformed,
                     AddressRefusal::SelfPair => TaskTargetRefusal::SelfPairNotAddressable,
-                    AddressRefusal::Unresolved => TaskTargetRefusal::Unresolved,
+                    AddressRefusal::Unresolved | AddressRefusal::DirectMessageScope => {
+                        TaskTargetRefusal::Unresolved
+                    }
                     AddressRefusal::ThreadNotInTarget => TaskTargetRefusal::ThreadNotInTarget,
                 }));
             }
@@ -454,7 +456,9 @@ where
             }),
             Err(AddressRefusal::Malformed) => Err(ScheduleTargetRefusal::Malformed),
             Err(AddressRefusal::SelfPair) => Err(ScheduleTargetRefusal::SelfPairNotAddressable),
-            Err(AddressRefusal::Unresolved) => Err(ScheduleTargetRefusal::Unresolved),
+            Err(AddressRefusal::Unresolved | AddressRefusal::DirectMessageScope) => {
+                Err(ScheduleTargetRefusal::Unresolved)
+            }
             Err(AddressRefusal::ThreadNotInTarget) => Err(ScheduleTargetRefusal::ThreadNotInTarget),
         })
     }
