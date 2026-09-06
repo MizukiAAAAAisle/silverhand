@@ -94,9 +94,9 @@ pub use authority::{
     ThreadRootRefusal, assert_post_authority, direct_pair_is_read_only_for_survivor,
 };
 pub use command::{
-    ContentTooLong, DirectLineAuthority, DirectLineGrants, MAX_MESSAGE_CONTENT_BYTES,
-    MessageContent, SendActor, SendDestination, SendMessage, SendMessageDraft, SendMessageError,
-    SendMessageUnitOfWork,
+    ClientMessageId, ContentTooLong, DirectLineAuthority, DirectLineGrants,
+    MAX_MESSAGE_CONTENT_BYTES, MessageContent, SendActor, SendDestination, SendMessage,
+    SendMessageDraft, SendMessageError, SendMessageUnitOfWork,
 };
 pub use direct_pair::{
     DirectPairMint, DirectPairMintIdentityMismatch, DirectPairMinted, DirectPairOpenedFact,

@@ -11868,3 +11868,175 @@ async fn activity_retention_is_wired_into_real_preparation() {
     );
     app.close_connections().await;
 }
+
+#[tokio::test]
+async fn client_message_identity_survives_concurrent_http_ws_ack_and_cold_read() {
+    let fixture = fixture(true).await;
+    seed_human(&fixture.path).await;
+    seed_workspace_conversation(&fixture.path).await;
+    let db = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE conversations SET status='idle'")
+        .execute(&db)
+        .await
+        .unwrap();
+    db.close().await;
+    let app = prepare(&config(fixture.path.clone())).await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let running = tokio::spawn(serve(listener, app, async move {
+        let _ = shutdown_rx.await;
+        Ok::<(), std::io::Error>(())
+    }));
+
+    let mut websocket_request = format!("ws://{address}{EVENT_WEBSOCKET_PATH}")
+        .into_client_request()
+        .unwrap();
+    websocket_request
+        .headers_mut()
+        .insert(ORIGIN, "http://localhost:5173".parse().unwrap());
+    websocket_request.headers_mut().insert(
+        COOKIE,
+        format!("{EVENT_WS_SESSION_COOKIE}={TOKEN}")
+            .parse()
+            .unwrap(),
+    );
+    websocket_request
+        .headers_mut()
+        .insert(DESKTOP_API_EPOCH_HEADER, MINIMUM_CLIENT_API_EPOCH.into());
+    let (mut socket, _) = connect_async(websocket_request).await.unwrap();
+    let authenticated = socket.next().await.unwrap().unwrap();
+    let ClientMessage::Text(authenticated) = authenticated else {
+        panic!("authenticated frame must be text");
+    };
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&authenticated).unwrap()["type"],
+        "authenticated"
+    );
+    socket
+        .send(ClientMessage::Text(
+            serde_json::json!({
+                "type": "subscribe",
+                "scope": format!("conversation:{CONVERSATION_ID}"),
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let subscribed = socket.next().await.unwrap().unwrap();
+    let ClientMessage::Text(subscribed) = subscribed else {
+        panic!("subscribed frame must be text");
+    };
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&subscribed).unwrap()["type"],
+        "subscribed"
+    );
+
+    let path = format!("/api/channels/{CONVERSATION_ID}/messages");
+    let bearer = format!("Bearer {TOKEN}");
+    let body = r#"{"content":"composed hello","client_message_id":"12345678-1234-4234-8234-123456789abc"}"#;
+    let (first, second) = tokio::join!(
+        http_over_tcp(address, "POST", &path, Some(&bearer), body),
+        http_over_tcp(address, "POST", &path, Some(&bearer), body)
+    );
+    let ack = |response: &str| {
+        assert!(
+            response.starts_with("HTTP/1.1 201 Created\r\n"),
+            "{response}"
+        );
+        serde_json::from_str::<serde_json::Value>(response.split("\r\n\r\n").nth(1).unwrap())
+            .unwrap()
+    };
+    let first = ack(&first);
+    let second = ack(&second);
+    assert_eq!(first["message"], second["message"]);
+    assert_eq!(
+        first["message"]["client_message_id"],
+        "12345678-1234-4234-8234-123456789abc"
+    );
+    let event = socket.next().await.unwrap().unwrap();
+    let ClientMessage::Text(event) = event else {
+        panic!("message event must be text");
+    };
+    let event: serde_json::Value = serde_json::from_str(&event).unwrap();
+    assert_eq!(event["scope"], format!("conversation:{CONVERSATION_ID}"));
+    assert_eq!(event["kind"], "message");
+    assert_eq!(event["payload"]["message"]["content"], "composed hello");
+
+    let pool = SqlitePoolOptions::new()
+        .connect(fixture.path.to_str().unwrap())
+        .await
+        .unwrap();
+    let committed: (String, String) =
+        sqlx::query_as("SELECT id, content FROM messages WHERE conversation_id = ?")
+            .bind(CONVERSATION_ID)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(committed.1, "composed hello");
+    assert_eq!(event["payload"]["message"]["id"], committed.0);
+    assert_eq!(event["payload"]["message"], first["message"]);
+    // A lost ACK retry returns the same committed fact without another event.
+    assert_eq!(
+        ack(&http_over_tcp(address, "POST", &path, Some(&bearer), body).await)["message"],
+        first["message"]
+    );
+    let cold = http_over_tcp(address, "GET", &path, Some(&bearer), "").await;
+    assert!(
+        cold.contains("12345678-1234-4234-8234-123456789abc"),
+        "{cold}"
+    );
+    let conflict = http_over_tcp(
+        address,
+        "POST",
+        &path,
+        Some(&bearer),
+        &body.replace("composed hello", "different"),
+    )
+    .await;
+    assert!(conflict.starts_with("HTTP/1.1 409"), "{conflict}");
+    assert!(conflict.contains("client_message_conflict"));
+    // Drain any non-message projection frames; no second message may be published.
+    let duplicate = tokio::time::timeout(std::time::Duration::from_millis(100), async {
+        while let Some(Ok(ClientMessage::Text(frame))) = socket.next().await {
+            if serde_json::from_str::<serde_json::Value>(&frame).unwrap()["kind"] == "message" {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert!(duplicate.is_err(), "duplicate message publication");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM messages")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    // Post authority is rechecked on retry after access is removed.
+    sqlx::query("DELETE FROM workspace_users WHERE user_id=?")
+        .bind("user-1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM conversation_users WHERE user_id=?")
+        .bind("user-1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let denied = http_over_tcp(address, "POST", &path, Some(&bearer), body).await;
+    assert!(
+        denied.starts_with("HTTP/1.1 403") || denied.starts_with("HTTP/1.1 404"),
+        "{denied}"
+    );
+    pool.close().await;
+
+    socket.close(None).await.unwrap();
+    shutdown_tx.send(()).unwrap();
+    running.await.unwrap().unwrap();
+}

@@ -44,7 +44,7 @@ use super::{
 // `pub(crate)`: the message column list and its linked-task joins are reused verbatim
 // by the agent-audit read adapter, which selects rows in `mode=all` (no mainline/thread
 // filter) but decodes them through the same [`RawMessage::decode`].
-pub(crate) const MESSAGE_COLUMNS: &str = "m.id AS message_id,m.conversation_id AS message_conversation_id,\
+pub(crate) const MESSAGE_COLUMNS: &str = "m.client_message_id,m.id AS message_id,m.conversation_id AS message_conversation_id,\
      m.from_kind,m.from_agent_id,m.from_user_id,m.author_id,m.author_name,\
      m.author_display_name,m.content,m.metadata,m.seq,m.created_at,m.thread_root_id,\
      lt.id AS task_id,lt.conversation_id AS task_conversation_id,lt.task_number,\
@@ -604,6 +604,7 @@ fn closed_false_boundary(
 /// [`decode`](Self::decode)/[`seal`](Self::seal).
 #[derive(Clone)]
 pub(crate) struct RawMessage {
+    client_message_id: Option<String>,
     id: MessageId,
     conversation: ConversationId,
     pub(crate) author: AuthorEvidence,
@@ -620,6 +621,7 @@ impl RawMessage {
     pub(crate) fn decode(row: &SqliteRow) -> Result<Self, ConversationMessageWindowStoreError> {
         let metadata_json: Option<String> = row.try_get("metadata")?;
         Ok(Self {
+            client_message_id: row.try_get("client_message_id")?,
             id: message_id(row, "message_id")?,
             conversation: conversation_id(row, "message_conversation_id")?,
             author: author_evidence(row, "")?,
@@ -640,6 +642,7 @@ impl RawMessage {
     ) -> Result<SelectedWindowMessage, ConversationMessageWindowStoreError> {
         let author = author_fact(&self.author, resolved)?;
         SelectedWindowMessage::seal(WindowMessageProjection {
+            client_message_id: self.client_message_id,
             id: self.id,
             conversation: self.conversation,
             author,
@@ -1038,7 +1041,7 @@ fn decode_linked_task(
     )))
 }
 
-pub(super) fn decode_attachments(
+pub(crate) fn decode_attachments(
     raw: Option<&str>,
 ) -> Result<Vec<AttachmentSnapshot>, ConversationMessageWindowStoreError> {
     let Some(raw) = raw else {

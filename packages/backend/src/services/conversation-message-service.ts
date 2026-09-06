@@ -18,6 +18,7 @@ import { collectUnresolvedReferences } from '../application/reference-addressing
 import { resolveSnapshotsFromSources } from './attachment/snapshot-resolution.js';
 import type { MessageTxScope, MessageUnitOfWork } from './conversation-message/ports.js';
 import {
+  ClientMessageConflict,
   POLICIES,
   REPLIED,
   ConversationError,
@@ -42,6 +43,7 @@ import type { AgentSendStaleResolutionReason } from '@silverhand/shared';
 // Re-export the previously-public taxonomy + types so external importers keep
 // importing from `conversation-message-service.js` (the split is internal).
 export {
+  ClientMessageConflict,
   ConversationError,
   ActorError,
   TargetError,
@@ -200,6 +202,22 @@ export class ConversationMessageService {
             ? this.requireConversation(tx, destination.stream.conversationId)
             : sourceConversation;
         this.assertPostAuthority(tx, targetConversation, input.actor);
+        const clientRequest = JSON.stringify({
+          attachments: (input.attachmentRefs ?? []).map(a => [a.id, a.label ?? null]),
+          content: input.content,
+          conversation: targetConversation.id,
+          destination: destination.kind === 'own_main_line' ? ['main'] : destination.kind === 'own_reply_cluster' ? ['reply', destination.messageId] : ['thread', destination.stream.threadRootId],
+        });
+        if (input.clientMessageId) {
+          if (input.actor.kind !== 'user') throw new ClientMessageConflict();
+          const prior = tx.messages.findClientMessage(input.actor.userId, input.clientMessageId);
+          if (prior) {
+            if (prior.request !== clientRequest) throw new ClientMessageConflict();
+            return {sourceConversation, targetConversation, message: prior.message, replay: true, projections: null,
+              mentionCc: null, recipients: [], threadDelivery: null, unresolvedReferences: [], bypassedFreshness: false};
+          }
+        }
+
         const threadRootId = this.resolveThreadRootForDestination(
           tx,
           targetConversation.id,
@@ -223,6 +241,10 @@ export class ConversationMessageService {
             threadRootId,
             snapshots,
           });
+        if (input.clientMessageId) {
+          tx.messages.bindClientMessage(message.id, input.clientMessageId, clientRequest);
+          message.client_message_id = input.clientMessageId;
+        }
         // Reply-cluster durable semantics (§6): when this send is a thread
         // reply, register auto-followers and backfill prior thread history
         // into newly-followed agents' inboxes — all inside this transaction
@@ -371,6 +393,8 @@ export class ConversationMessageService {
       }
       throw err;
     }
+
+    if (txResult.replay) return { committed: {message: txResult.message}, targetConversationId: txResult.targetConversation.id, unresolvedReferences: [] };
 
     if (txResult.bypassedFreshness) {
       this.logger.warn(

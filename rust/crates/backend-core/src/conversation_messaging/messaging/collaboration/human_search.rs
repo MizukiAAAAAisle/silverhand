@@ -1139,6 +1139,7 @@ mod tests {
         created: i64,
     ) -> SelectedWindowMessage {
         SelectedWindowMessage::seal(WindowMessageProjection {
+            client_message_id: None,
             id: message(id),
             conversation: conversation(conversation_id),
             author: WindowAuthorFact::sealed(FromKind::System, None, None, None, None, None, None)
@@ -1430,6 +1431,7 @@ mod tests {
         .unwrap();
         let make = |viewer: &str, id: &str, seq: i64, created: i64| {
             let message = SelectedWindowMessage::seal(WindowMessageProjection {
+                client_message_id: None,
                 id: message(id),
                 conversation: conversation("c"),
                 author: author.clone(),

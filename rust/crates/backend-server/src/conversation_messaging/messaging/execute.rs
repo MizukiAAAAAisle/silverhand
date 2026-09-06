@@ -95,9 +95,13 @@ where
     };
 
     let source_conversation = draft.source_conversation.clone();
-    let command = SendMessage::prepare(draft, positions, authority).await?;
+    let command = SendMessage::prepare(draft, positions, authority)
+        .await?
+        .with_client_message_id(payload.client_message_id);
     let outcome = unit_of_work.send_message(command).await?;
-    aftermath.announce(&outcome).await;
+    if !outcome.is_replay() {
+        aftermath.announce(&outcome).await;
+    }
     report_unresolved_references(&source_conversation, &outcome);
     Ok(outcome)
 }
@@ -275,6 +279,7 @@ mod tests {
 
     fn committed_outcome() -> SendMessageOutcome {
         let message = CreatedMessage {
+            client_message_id: None,
             id: MessageId::parse("message-1").unwrap(),
             conversation_id: conversation(),
             from_kind: FromKind::User,

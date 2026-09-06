@@ -991,6 +991,7 @@ export function createConversationMessagingApp(
         conversationId: channel.id,
         actor: getUserPrincipal(c),
         content: input.content,
+        clientMessageId: input.client_message_id,
         attachmentRefs: normalizeAttachmentRefs(input.attachment_ids),
         // A person's client posts where the person is LOOKING, so the human door
         // can only express a placement inside this conversation — never a foreign

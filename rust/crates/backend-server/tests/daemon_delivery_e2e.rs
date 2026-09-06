@@ -1509,6 +1509,7 @@ async fn respond_error(socket: &mut Socket, command: &Value, error: Value) {
 
 fn created_message() -> CreatedMessage {
     CreatedMessage {
+        client_message_id: None,
         id: MessageId::parse("message-1").unwrap(),
         conversation_id: ConversationId::parse(CONVERSATION).unwrap(),
         from_kind: FromKind::User,

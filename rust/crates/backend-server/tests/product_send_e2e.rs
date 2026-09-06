@@ -1509,3 +1509,36 @@ async fn visible_conversation_scoped_dm_target_has_actionable_refusal_without_al
             .unwrap();
     assert_eq!(pairs, 1);
 }
+
+#[tokio::test]
+async fn client_message_id_admission_and_normalization_reach_the_real_write() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("client-id.sqlite");
+    let app = mounted(&path, false).await;
+    for invalid in [
+        Value::Null,
+        serde_json::json!(7),
+        serde_json::json!(""),
+        serde_json::json!("12345678-1234-1234-8234-123456789abc"),
+        serde_json::json!("12345678-1234-4234-7234-123456789abc"),
+    ] {
+        let (status, _) = answered(
+            app.clone(),
+            authenticated_human(serde_json::json!({"content":"one", "client_message_id":invalid})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let send = |id: &str| {
+        authenticated_human(
+            serde_json::json!({"content":"one", "client_message_id":id, "attachment_ids":["att-1"]}),
+        )
+    };
+    let (_, first) = answered(app.clone(), send("12345678-1234-4234-8234-123456789ABC")).await;
+    let (_, second) = answered(app, send("12345678-1234-4234-8234-123456789abc")).await;
+    assert_eq!(first["message"], second["message"]);
+    assert_eq!(
+        first["message"]["client_message_id"],
+        "12345678-1234-4234-8234-123456789abc"
+    );
+}

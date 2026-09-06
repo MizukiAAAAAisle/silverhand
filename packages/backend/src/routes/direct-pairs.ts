@@ -208,6 +208,7 @@ export function createDirectPairsApp(deps: DirectPairsRouteDeps): Hono<AppEnv> {
         conversationId: conversation.id,
         actor: getUserPrincipal(c),
         content: parsed.data.content,
+        clientMessageId: parsed.data.client_message_id,
         attachmentRefs: normalizeAttachmentRefs(parsed.data.attachment_ids),
         // The first message opens the line's main stream; there is no other
         // placement a first send could name (the reply-cluster case was refused

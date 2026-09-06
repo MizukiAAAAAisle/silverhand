@@ -23,7 +23,10 @@ import {
 import { MessageSeqSchema } from '../seq.js';
 import { UnresolvedReferencesSchema } from './message-reference.js';
 
+export const ClientMessageIdSchema = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i).transform((id) => id.toLowerCase());
+
 export const MessageDtoSchema = z.object({
+  client_message_id: ClientMessageIdSchema.optional(),
   id: z.string(),
   conversation_id: z.string(),
   from_kind: FromKindSchema,
@@ -329,6 +332,7 @@ export type ThreadFollowMutationDto = z.infer<
 >;
 
 export const SendMessageInputSchema = z.object({
+  client_message_id: ClientMessageIdSchema.optional(),
   content: z.string(),
   /** Optional attachment ids previously returned by the upload endpoint.
    *  Server validates each id belongs to the same channel as the

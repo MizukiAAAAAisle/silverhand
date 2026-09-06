@@ -303,7 +303,7 @@ pub(crate) fn message(
                 .collect(),
         )
     };
-    Ok(json!({
+    let mut dto = json!({
         "id": projection.id.as_str(),
         "conversation_id": projection.conversation.as_str(),
         "from_kind": from_kind_word(projection.author.from_kind()),
@@ -318,7 +318,11 @@ pub(crate) fn message(
         "created_at": projection.created_at_ms,
         "thread_root_id": projection.thread_root.as_ref().map(|id| id.as_str()),
         "linked_task": projection.linked_task.as_ref().map(linked_task),
-    }))
+    });
+    if let Some(id) = &projection.client_message_id {
+        dto["client_message_id"] = json!(id);
+    }
+    Ok(dto)
 }
 
 fn linked_task(task: &WindowLinkedTask) -> Value {

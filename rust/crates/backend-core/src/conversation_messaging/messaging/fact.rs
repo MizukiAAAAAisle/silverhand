@@ -93,6 +93,7 @@ impl MessageCreatedFact {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CreatedMessage {
+    pub client_message_id: Option<String>,
     pub id: MessageId,
     pub conversation_id: ConversationId,
     pub from_kind: FromKind,
@@ -126,11 +127,19 @@ pub struct CreatedMessage {
 /// not an absence. Only the wire decides to omit it when empty.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SendMessageOutcome {
+    replay: bool,
     committed: MessageCreatedFact,
     unresolved_references: Vec<MessageReference>,
 }
 
 impl SendMessageOutcome {
+    pub fn as_replay(mut self) -> Self {
+        self.replay = true;
+        self
+    }
+    pub fn is_replay(&self) -> bool {
+        self.replay
+    }
     /// Assembled by the unit of work that committed the send, from what it read inside the same
     /// atomic unit. The unresolved set is decided there, against the TARGET conversation's roster
     /// and the mention copies this send actually made — never re-derived afterwards, when a
@@ -140,6 +149,7 @@ impl SendMessageOutcome {
         unresolved_references: Vec<MessageReference>,
     ) -> Self {
         Self {
+            replay: false,
             committed,
             unresolved_references,
         }

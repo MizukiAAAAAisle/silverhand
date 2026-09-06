@@ -76,7 +76,7 @@ macro_rules! message_candidates {
             human_participation_source!("c", "p.viewer"),
             " AS source_viewer,m.id AS message_id,m.conversation_id AS \
              message_conversation_id,m.from_kind,m.from_agent_id,m.from_user_id,m.author_id,\
-             m.author_name,m.author_display_name,m.content,m.metadata,m.seq,m.created_at AS \
+             m.client_message_id,m.author_name,m.author_display_name,m.content,m.metadata,m.seq,m.created_at AS \
              message_created_at,m.thread_root_id,c.id AS conversation_id,c.placement_kind,\
              c.roster_policy,c.title,c.workspace_id AS conversation_workspace_id,c.closed_at,\
              c.created_at AS conversation_created_at,w.id AS joined_workspace_id,w.name AS \
@@ -451,6 +451,7 @@ fn bind_message_query<'q>(
 
 #[derive(Clone)]
 struct RawSearchMessage {
+    client_message_id: Option<String>,
     source_viewer: UserId,
     conversation: HumanSearchConversationRef,
     id: MessageId,
@@ -466,6 +467,7 @@ struct RawSearchMessage {
 impl RawSearchMessage {
     fn decode(row: &SqliteRow) -> Result<Self, HumanSearchStoreError> {
         Ok(Self {
+            client_message_id: row.try_get("client_message_id")?,
             source_viewer: user_id(row, "source_viewer")?,
             conversation: decode_conversation_ref(row)?,
             id: message_id(row, "message_id")?,
@@ -490,6 +492,7 @@ impl RawSearchMessage {
             HumanSearchStoreError::Author(PersistenceFailure::from_source(error))
         })?;
         let selected = SelectedWindowMessage::seal(WindowMessageProjection {
+            client_message_id: self.client_message_id,
             id: self.id,
             conversation: self.message_conversation,
             author,

@@ -363,6 +363,8 @@ export function createSqliteConversationPersistence(
     // Delegated method-by-method on purpose: the transaction closure is then
     // literally the list below, auditable without reading MessageRepo (R3).
     messages: {
+      findClientMessage: (sender, token) => messages.findClientMessage(sender, token),
+      bindClientMessage: (id, token, request) => messages.bindClientMessage(id, token, request),
       insertForConversation: args => messages.insertForConversation(args),
       getInConversation: (conversationId, messageId) =>
         messages.getInConversation(conversationId, messageId),

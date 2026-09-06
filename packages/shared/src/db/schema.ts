@@ -641,6 +641,8 @@ export interface ConversationUserMemberRow {
 }
 
 export interface MessageRow {
+  client_message_id?: string | null;
+  client_request_json?: string | null;
   id: string;
   conversation_id: string;
   from_kind: FromKind;

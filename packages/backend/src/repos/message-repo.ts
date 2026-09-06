@@ -299,6 +299,7 @@ export function messageRowToDto(
     ? (JSON.parse(row.metadata) as Record<string, unknown>)
     : null;
   return {
+    ...(row.client_message_id ? { client_message_id: row.client_message_id } : {}),
     id: row.id,
     conversation_id: row.conversation_id,
     from_kind: row.from_kind,
@@ -409,6 +410,16 @@ function parseMessageMetadata(metadata: string | null): Record<string, unknown> 
 }
 
 export class MessageRepo {
+  findClientMessage(sender: string, token: string): { message: MessageDto; request: string } | null {
+    const row = this.db.prepare('SELECT id, client_request_json FROM messages WHERE from_user_id=? AND client_message_id=?').get(sender, token) as {id: string; client_request_json: string} | undefined;
+    if (!row) return null;
+    const message = this.getById(row.id);
+    return message ? { message, request: row.client_request_json } : null;
+  }
+  bindClientMessage(id: string, token: string, request: string): void {
+    this.db.prepare('UPDATE messages SET client_message_id=?,client_request_json=? WHERE id=?').run(token, request, id);
+  }
+
   constructor(private readonly db: Db) {}
 
   listForConversation(conversationId: string, limit = 200): MessageDto[] {

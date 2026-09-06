@@ -57,6 +57,32 @@ pub struct ContentTooLong {
     pub max_bytes: usize,
 }
 
+/// A logical human send identity. UUID v4 is case-normalized before comparison.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClientMessageId(String);
+impl ClientMessageId {
+    pub fn parse(raw: String) -> Result<Self, &'static str> {
+        let b = raw.as_bytes();
+        if b.len() != 36
+            || b[14] != b'4'
+            || !matches!(b[19], b'8' | b'9' | b'a' | b'A' | b'b' | b'B')
+            || !b.iter().enumerate().all(|(i, c)| {
+                if [8, 13, 18, 23].contains(&i) {
+                    *c == b'-'
+                } else {
+                    c.is_ascii_hexdigit()
+                }
+            })
+        {
+            return Err("invalid client_message_id");
+        }
+        Ok(Self(raw.to_ascii_lowercase()))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Who is asking to write. Identity is resolved at the boundary; this layer only
 /// receives the resolved principal.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -79,6 +105,8 @@ impl SendActor {
 /// about the request.
 #[derive(Debug, thiserror::Error)]
 pub enum SendMessageError {
+    #[error("client_message_id was already used for a different request")]
+    ClientMessageConflict,
     #[error(transparent)]
     Conversation(#[from] ConversationRefusal),
     #[error(transparent)]
@@ -171,6 +199,7 @@ pub trait DirectLineAuthority {
 /// inside it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SendMessage {
+    client_message_id: Option<ClientMessageId>,
     source_conversation: ConversationId,
     target_conversation: ConversationId,
     actor: SendActor,
@@ -183,6 +212,13 @@ pub struct SendMessage {
 }
 
 impl SendMessage {
+    pub fn with_client_message_id(mut self, id: Option<ClientMessageId>) -> Self {
+        self.client_message_id = id;
+        self
+    }
+    pub fn client_message_id(&self) -> Option<&ClientMessageId> {
+        self.client_message_id.as_ref()
+    }
     /// Derives what the body addresses, then asks the authority which of those the
     /// author may open a line to. An agent author asks nothing: a direct line is a
     /// person's to open, so the grants are empty by construction rather than by a
@@ -205,6 +241,7 @@ impl SendMessage {
         };
 
         Ok(Self {
+            client_message_id: None,
             source_conversation: draft.source_conversation,
             target_conversation: draft.target_conversation,
             actor: draft.actor,

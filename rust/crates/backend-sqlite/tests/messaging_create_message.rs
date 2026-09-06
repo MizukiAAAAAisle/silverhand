@@ -4767,3 +4767,154 @@ async fn conversation_scoped_pair_refuses_both_senders_inside_the_write_transact
     assert_eq!(fixture.count("SELECT count(*) FROM messages").await, 0);
     assert_eq!(fixture.latest_seq(PAIR_ID).await, 0);
 }
+
+#[tokio::test]
+async fn client_message_identity_is_sender_scoped_and_request_exact() {
+    use silverhand_backend_core::conversation_messaging::messaging::ClientMessageId;
+    let mut f = Fixture::new().await;
+    let store = f.store_with(HostEnvironment).await;
+    let token = ClientMessageId::parse("12345678-1234-4234-8234-123456789abc".into()).unwrap();
+    let make = |body: &str, target: &str| {
+        prepared(draft(
+            SendActor::User(UserId::parse(USER_ID).unwrap()),
+            target,
+            body,
+        ))
+        .with_client_message_id(Some(token.clone()))
+    };
+    let first = store.send_message(make("same", CHANNEL_ID)).await.unwrap();
+    let seq = f.latest_seq(CHANNEL_ID).await;
+    let retry = store.send_message(make("same", CHANNEL_ID)).await.unwrap();
+    assert!(retry.is_replay());
+    assert_eq!(first.committed().message(), retry.committed().message());
+    assert_eq!(f.latest_seq(CHANNEL_ID).await, seq);
+    assert!(matches!(
+        store.send_message(make("changed", CHANNEL_ID)).await,
+        Err(SendMessageError::ClientMessageConflict)
+    ));
+    assert!(matches!(
+        store.send_message(make("same", OTHER_CHANNEL_ID)).await,
+        Err(SendMessageError::ClientMessageConflict)
+    ));
+    let mut reply = draft(
+        SendActor::User(UserId::parse(USER_ID).unwrap()),
+        CHANNEL_ID,
+        "same",
+    );
+    reply.destination = SendDestination::Reply(first.committed().message().id.clone());
+    assert!(matches!(
+        store
+            .send_message(prepared(reply.clone()).with_client_message_id(Some(token.clone())))
+            .await,
+        Err(SendMessageError::ClientMessageConflict)
+    ));
+    let second_token =
+        ClientMessageId::parse("12345678-1234-4234-8234-123456789abd".into()).unwrap();
+    let reply = prepared(reply).with_client_message_id(Some(second_token));
+    let sent = store.send_message(reply.clone()).await.unwrap();
+    let retried = store.send_message(reply).await.unwrap();
+    assert_eq!(sent.committed().message(), retried.committed().message());
+    assert!(retried.is_replay());
+    // A different logical send with the same body is a distinct row.
+    let distinct = store
+        .send_message(make("same", CHANNEL_ID).with_client_message_id(Some(
+            ClientMessageId::parse("12345678-1234-4234-8234-123456789abe".into()).unwrap(),
+        )))
+        .await
+        .unwrap();
+    assert_ne!(
+        first.committed().message().id,
+        distinct.committed().message().id
+    );
+    // A different authenticated author owns a separate token namespace.
+    sqlx::query("INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('u2','second','Second',0,0)").execute(&mut f.db).await.unwrap();
+    sqlx::query("INSERT INTO workspace_users(workspace_id,user_id,joined_at) VALUES(?,'u2',0)")
+        .bind(WORKSPACE_ID)
+        .execute(&mut f.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO conversation_users(conversation_id,user_id,joined_at) VALUES(?,'u2',0)",
+    )
+    .bind(CHANNEL_ID)
+    .execute(&mut f.db)
+    .await
+    .unwrap();
+    let other = prepared(draft(
+        SendActor::User(UserId::parse("u2").unwrap()),
+        CHANNEL_ID,
+        "same",
+    ))
+    .with_client_message_id(Some(token));
+    assert!(!store.send_message(other).await.unwrap().is_replay());
+}
+
+#[tokio::test]
+async fn client_message_identity_covers_dm_attachments_and_ends_at_hard_delete() {
+    use silverhand_backend_core::conversation_messaging::messaging::ClientMessageId;
+    let mut f = Fixture::with_scope("agent").await;
+    let store = f.store_with(HostEnvironment).await;
+    let token = ClientMessageId::parse("12345678-1234-4234-8234-123456789abc".into()).unwrap();
+    let dm = prepared(draft(
+        SendActor::User(UserId::parse(USER_ID).unwrap()),
+        PAIR_ID,
+        "DM",
+    ))
+    .with_client_message_id(Some(token.clone()));
+    let a = store.send_message(dm.clone()).await.unwrap();
+    assert_eq!(
+        store
+            .send_message(dm.clone())
+            .await
+            .unwrap()
+            .committed()
+            .message()
+            .id,
+        a.committed().message().id
+    );
+    // Tokens live on the message, not an eternal receipt table. Physical deletion
+    // deliberately ends the retry guarantee; it never resurrects the old identity.
+    sqlx::query("DELETE FROM messages WHERE id=?")
+        .bind(a.committed().message().id.as_str())
+        .execute(&mut f.db)
+        .await
+        .unwrap();
+    let after_delete = store.send_message(dm).await.unwrap();
+    assert_ne!(
+        after_delete.committed().message().id,
+        a.committed().message().id
+    );
+    let mut attached = draft(
+        SendActor::User(UserId::parse(USER_ID).unwrap()),
+        CHANNEL_ID,
+        "attachment",
+    );
+    attached.attachment_refs.push(AttachmentRef {
+        id: AttachmentId::parse("att-here").unwrap(),
+        label: None,
+    });
+    let token = ClientMessageId::parse("12345678-1234-4234-8234-123456789abd".into()).unwrap();
+    let original = prepared(attached.clone()).with_client_message_id(Some(token.clone()));
+    let first = store.send_message(original.clone()).await.unwrap();
+    // The message snapshot remains the committed content after the source changes.
+    sqlx::query("UPDATE attachments SET filename='changed.txt' WHERE id='att-here'")
+        .execute(&mut f.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .send_message(original)
+            .await
+            .unwrap()
+            .committed()
+            .message(),
+        first.committed().message()
+    );
+    attached.attachment_refs.clear();
+    assert!(matches!(
+        store
+            .send_message(prepared(attached).with_client_message_id(Some(token)))
+            .await,
+        Err(SendMessageError::ClientMessageConflict)
+    ));
+}

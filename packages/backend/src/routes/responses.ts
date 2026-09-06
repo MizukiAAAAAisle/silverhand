@@ -23,6 +23,7 @@ import {
   ActorError as MessageActorError,
   AttachmentError as MessageAttachmentError,
   ConversationError,
+  ClientMessageConflict,
   MessageStaleError,
   PolicyError,
   TargetError,
@@ -335,6 +336,7 @@ export function conversationMessageServiceErrorResponse(
   c: Context,
   err: unknown,
 ): Response | null {
+  if (err instanceof ClientMessageConflict) return c.json({error: err.message, code: 'client_message_conflict'}, 409);
   if (err instanceof ConversationError) {
     // 404 for "no such conversation"; 403 for the `direct_pair` narrowing, whose
     // fact is an AUTHORIZATION one and is what `canPostToConversation` already

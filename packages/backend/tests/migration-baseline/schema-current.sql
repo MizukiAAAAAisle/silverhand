@@ -104,7 +104,7 @@ CREATE TABLE messages (
         metadata                TEXT,
         seq                     INTEGER NOT NULL,
         created_at              INTEGER NOT NULL,
-        thread_root_id TEXT REFERENCES messages(id) ON DELETE CASCADE, author_id           TEXT, author_name         TEXT, author_display_name TEXT, cc_source_message_id TEXT);
+        thread_root_id TEXT REFERENCES messages(id) ON DELETE CASCADE, author_id           TEXT, author_name         TEXT, author_display_name TEXT, cc_source_message_id TEXT, client_message_id TEXT, client_request_json TEXT);
 
 CREATE INDEX idx_messages_conversation
         ON messages(conversation_id, seq);
@@ -1344,3 +1344,6 @@ CREATE INDEX idx_conversation_events_agent ON conversation_events(conversation_i
 CREATE INDEX idx_conversation_events_stream ON conversation_events(agent_id, id);
 
 CREATE INDEX idx_conversation_events_created_at ON conversation_events(created_at);
+
+CREATE UNIQUE INDEX idx_messages_client_identity ON messages(from_user_id, client_message_id)
+        WHERE client_message_id IS NOT NULL;

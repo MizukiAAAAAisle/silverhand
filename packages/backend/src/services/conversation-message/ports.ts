@@ -76,6 +76,8 @@ export interface MessageInsertArgs {
 
 /** Message reads + writes available INSIDE a transaction. */
 export interface MessageTxMessagesPort {
+  findClientMessage(sender: string, token: string): { message: MessageDto; request: string } | null;
+  bindClientMessage(id: string, token: string, request: string): void;
   insertForConversation(args: MessageInsertArgs): MessageDto;
   getInConversation(conversationId: string, messageId: string): MessageDto | null;
   replyCountsByRoot(

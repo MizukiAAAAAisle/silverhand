@@ -93,6 +93,11 @@ const STALE_MESSAGE: &str = "message is stale: this runtime has undelivered inpu
 /// there is no default arm to absorb it.
 pub(crate) fn refused_send(cause: &SendMessageError) -> Response {
     match cause {
+        SendMessageError::ClientMessageConflict => told(
+            StatusCode::CONFLICT,
+            "client_message_id was already used for a different request",
+            "client_message_conflict",
+        ),
         SendMessageError::Conversation(refusal) => conversation(refusal),
         SendMessageError::Actor(refusal) => actor(refusal),
         SendMessageError::ReplyTarget(_) => told(

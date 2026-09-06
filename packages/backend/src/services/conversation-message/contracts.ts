@@ -65,7 +65,12 @@ export type SendMessageDestination =
   | { kind: 'own_main_line' }
   | { kind: 'own_reply_cluster'; messageId: string };
 
+export class ClientMessageConflict extends Error {
+  constructor() { super("client_message_id was already used for a different request"); }
+}
+
 export interface SendMessageInput {
+  clientMessageId?: string;
   /** Stable conversation id resolved from the absolute destination address.
    *  Runtime custody is carried separately; it is never inferred from this id. */
   conversationId: string;
@@ -463,6 +468,7 @@ export interface ThreadDeliveryPlan {
 }
 
 export interface SendMessageTxResult {
+  replay?: boolean;
   sourceConversation: ConversationDto;
   targetConversation: ConversationDto;
   message: MessageDto;

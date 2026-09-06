@@ -20,7 +20,7 @@ async fn materializes_the_full_snapshot_with_constraints_and_triggers() {
     .await
     .unwrap();
     assert_eq!(counts.get::<i64, _>("tables"), 33);
-    assert_eq!(counts.get::<i64, _>("indexes"), 75);
+    assert_eq!(counts.get::<i64, _>("indexes"), 76);
     assert_eq!(counts.get::<i64, _>("triggers"), 47);
 
     let foreign_key = sqlx::query(

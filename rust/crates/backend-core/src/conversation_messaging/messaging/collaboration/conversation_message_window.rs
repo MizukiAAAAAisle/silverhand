@@ -560,6 +560,7 @@ impl WindowReaction {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WindowMessageProjection {
+    pub client_message_id: Option<String>,
     pub id: MessageId,
     pub conversation: ConversationId,
     pub author: WindowAuthorFact,
@@ -1424,6 +1425,7 @@ mod tests {
             Vec::new()
         };
         SelectedWindowMessage::seal(WindowMessageProjection {
+            client_message_id: None,
             id: message_id(id),
             conversation: conversation(conversation_id),
             author: author_fact("author"),

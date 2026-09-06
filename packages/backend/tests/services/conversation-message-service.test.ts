@@ -3194,3 +3194,22 @@ describe('the follower funnels — follower ⊆ live participant (P4-5)', () => 
     }
   });
 });
+
+it('client message retries keep one commit and one publication/delivery', async () => {
+  const t = bootstrap();
+  try {
+    const seen: unknown[] = [];
+    const unsubscribe = t.events.subscribe(t.channel.id, e => { if (e.kind === 'message') seen.push(e.payload); });
+    const input = {conversationId: t.channel.id, actor: {kind: 'user' as const, userId: 'local'}, destination: {kind: 'own_main_line' as const}, content: 'one', clientMessageId: '12345678-1234-4234-8234-123456789abc'};
+    const [a,b] = await Promise.all([t.service.sendMessage(input),t.service.sendMessage(input)]);
+    expect(a.committed.message).toEqual(b.committed.message);
+    expect(a.committed.message.client_message_id).toBe(input.clientMessageId);
+    expect(t.messages.getById(a.committed.message.id)?.client_message_id).toBe(input.clientMessageId);
+    expect(seen).toHaveLength(1);
+    expect(t.fake.delivered).toHaveLength(2);
+    await expect(t.service.sendMessage({...input, content: 'changed'})).rejects.toThrow('client_message_id was already used');
+    const c = await t.service.sendMessage({...input, clientMessageId: '12345678-1234-4234-8234-123456789abd'});
+    expect(c.committed.message.id).not.toBe(a.committed.message.id);
+    unsubscribe();
+  } finally { t.cleanup(); }
+});

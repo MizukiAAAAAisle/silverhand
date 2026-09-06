@@ -26,10 +26,10 @@ use silverhand_backend_core::conversation_messaging::messaging::{
     self, ActiveAuthor, ConversationEndpoint, ConversationFacts, ConversationRefusal,
     CreatedMessage, DirectPairEndpoints, DirectPairMint, DirectPairMinted, DirectPairOpenedPort,
     DirectPairParticipants, EndpointPrincipalReads, EnvironmentUnavailable, FromKind, InvalidSeq,
-    MessageAuthor, MessageCreatedFact, MessageId, MessageReference, MessageSeq, NotificationId,
-    OpenDirectPairError, ParticipantHandle, PostAuthorityReads, PrincipalIdentity, PrincipalKind,
-    ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy, SendMessage,
-    SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, ThreadFollowerSource,
+    MessageAuthor, MessageContent, MessageCreatedFact, MessageId, MessageReference, MessageSeq,
+    NotificationId, OpenDirectPairError, ParticipantHandle, PostAuthorityReads, PrincipalIdentity,
+    PrincipalKind, ReplyTargetRefusal, SendActor, SendClock, SendDestination, SendEntropy,
+    SendMessage, SendMessageError, SendMessageOutcome, SendMessageUnitOfWork, ThreadFollowerSource,
     ThreadListEntry, ThreadReplyFact, ThreadRootId, ThreadRootRefusal,
     attachments::{AttachmentLabel, AttachmentSnapshot, AttachmentSource},
     freshness::{FreshnessGate, FreshnessGuardInvariant, StaleEventId},
@@ -1548,6 +1548,10 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             messaging::assert_post_authority(self, command.target_conversation(), command.actor())
                 .await?;
 
+        if let Some(replayed) = self.replay_client_message(&command).await? {
+            return Ok(replayed);
+        }
+
         let thread_root = self
             .resolve_thread_root(&facts.id, command.destination())
             .await?;
@@ -1570,6 +1574,17 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                 snapshots,
             )
             .await?;
+        if let Some(id) = command.client_message_id() {
+            sqlx::query(
+                "UPDATE messages SET client_message_id=?, client_request_json=? WHERE id=?",
+            )
+            .bind(id.as_str())
+            .bind(client_request_json(&command))
+            .bind(message.id.as_str())
+            .execute(&mut *self.tx)
+            .await
+            .map_err(driver)?;
+        }
         self.bump_stream_head(&facts.id, message.thread_root_id.as_ref(), seq)
             .await?;
 
@@ -1657,6 +1672,74 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
                 mention_copies,
             ),
             unresolved,
+        ))
+    }
+
+    // Called after the same mutable post-authority gate as a new send, under
+    // BEGIN IMMEDIATE. A replay neither reserves a sequence nor constructs effects.
+    async fn replay_client_message(
+        &mut self,
+        command: &SendMessage,
+    ) -> Result<Option<SendMessageOutcome>, SendMessageError> {
+        let Some(token) = command.client_message_id() else {
+            return Ok(None);
+        };
+        let SendActor::User(user) = command.actor() else {
+            return Err(SendMessageError::ClientMessageConflict);
+        };
+        let row =
+            sqlx::query("SELECT * FROM messages WHERE from_user_id=? AND client_message_id=?")
+                .bind(user.as_str())
+                .bind(token.as_str())
+                .fetch_optional(&mut *self.tx)
+                .await
+                .map_err(driver)?;
+        let Some(row) = row else { return Ok(None) };
+        let request: Option<String> = row.try_get("client_request_json").map_err(driver)?;
+        if request.as_deref() != Some(client_request_json(command).as_str()) {
+            return Err(SendMessageError::ClientMessageConflict);
+        }
+        let metadata: Option<String> = row.try_get("metadata").map_err(driver)?;
+        let attachments =
+            collaboration::conversation_message_window::decode_attachments(metadata.as_deref())
+                .map_err(|e| SendMessageError::Persistence(PersistenceFailure::from_source(e)))?;
+        let root: Option<String> = row.try_get("thread_root_id").map_err(driver)?;
+        let message = CreatedMessage {
+            client_message_id: Some(token.as_str().to_owned()),
+            id: MessageId::parse(row.try_get::<String, _>("id").map_err(driver)?)
+                .map_err(|_| SendMessageError::ClientMessageConflict)?,
+            conversation_id: command.target_conversation().clone(),
+            from_kind: FromKind::User,
+            from_agent_id: None,
+            from_user_id: Some(user.clone()),
+            author: self.author_snapshot(command.actor()).await?,
+            content: MessageContent::parse(row.try_get::<String, _>("content").map_err(driver)?)
+                .map_err(|_| SendMessageError::ClientMessageConflict)?,
+            attachments,
+            seq: MessageSeq::try_from(row.try_get::<i64, _>("seq").map_err(driver)?)
+                .map_err(|_| SendMessageError::ClientMessageConflict)?,
+            created_at_ms: row.try_get("created_at").map_err(driver)?,
+            thread_root_id: root
+                .map(ThreadRootId::parse)
+                .transpose()
+                .map_err(|_| SendMessageError::ClientMessageConflict)?,
+        };
+        Ok(Some(
+            SendMessageOutcome::committed_send(
+                MessageCreatedFact::committed(
+                    message,
+                    None,
+                    PostCommitPlan::committed(
+                        None,
+                        DeliveryPlan::MainLine(MainDeliveryPlan::committed(Vec::new(), Vec::new())),
+                        Vec::new(),
+                    ),
+                    false,
+                    Vec::new(),
+                ),
+                Vec::new(),
+            )
+            .as_replay(),
         ))
     }
 
@@ -1980,6 +2063,7 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .map_err(driver)?;
 
         Ok(CreatedMessage {
+            client_message_id: command.client_message_id().map(|id| id.as_str().to_owned()),
             id,
             conversation_id: conversation.clone(),
             from_kind: command.actor().from_kind(),
@@ -4045,4 +4129,17 @@ mod tests {
             .await
             .expect_err("a closed store is not a writable one");
     }
+}
+
+// Canonical admitted request, not mutable resolved mentions or attachment snapshots.
+// Preserve attachment order and normalized labels; destinations stay explicit.
+fn client_request_json(command: &SendMessage) -> String {
+    let destination = match command.destination() {
+        SendDestination::MainLine => serde_json::json!(["main"]),
+        SendDestination::Reply(id) => serde_json::json!(["reply", id.as_str()]),
+        SendDestination::Thread(id) => serde_json::json!(["thread", id.as_str()]),
+    };
+    serde_json::json!({"conversation": command.target_conversation().as_str(),
+        "destination": destination, "content": command.content().as_str(),
+        "attachments": command.attachment_refs().iter().map(|a| serde_json::json!([a.id.as_str(), a.label])).collect::<Vec<_>>()}).to_string()
 }

@@ -36,7 +36,7 @@
 use garde::Validate;
 use serde::Deserialize;
 use silverhand_backend_core::conversation_messaging::messaging::{
-    AttachmentId, MessageContent, MessageId,
+    AttachmentId, ClientMessageId, MessageContent, MessageId,
     attachments::{AttachmentLabel, AttachmentRef},
 };
 use silverhand_backend_core::foundation::cli_invoke_audit::CliStaleResolutionReason;
@@ -50,6 +50,7 @@ pub(crate) const MAX_MESSAGE_ATTACHMENTS: usize = 20;
 /// list, and carrying something to say. No principal has been considered.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ValidatedSendPayload {
+    pub(crate) client_message_id: Option<ClientMessageId>,
     content: MessageContent,
     attachments: Vec<AttachmentRef>,
 }
@@ -88,6 +89,7 @@ pub(crate) struct UnsealedSendPayload {
 /// distinction is the difference between a reply and a top-level message.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ValidatedHumanSend {
+    client_message_id: Option<ClientMessageId>,
     unsealed: UnsealedSendPayload,
     reply_to: Option<MessageId>,
 }
@@ -104,7 +106,9 @@ impl ValidatedHumanSend {
     /// either restating a rule. Both stages fail with the same [`PayloadRefusal`], so a
     /// door maps them to the wire uniformly.
     pub(crate) fn seal(self) -> Result<ValidatedSendPayload, PayloadRefusal> {
-        seal(self.unsealed)
+        let mut payload = seal(self.unsealed)?;
+        payload.client_message_id = self.client_message_id;
+        Ok(payload)
     }
 }
 
@@ -225,6 +229,9 @@ struct LabeledAttachmentInput {
 /// a present `null` natively (a `Vec` is not a `null`), and is bounded here.
 #[derive(Debug, Deserialize, Validate)]
 struct HumanSendBody {
+    #[serde(default)]
+    #[garde(skip)]
+    client_message_id: RequiredPatchField<String>,
     #[garde(skip)]
     content: String,
     #[serde(default)]
@@ -342,7 +349,14 @@ impl TryFrom<HumanSendBody> for ValidatedHumanSend {
                 Some(MessageId::parse(raw).map_err(|_| PayloadRefusal::Invalid)?)
             }
         };
+        let client_message_id = match raw.client_message_id {
+            RequiredPatchField::Missing => None,
+            RequiredPatchField::Value(id) => {
+                Some(ClientMessageId::parse(id).map_err(|_| PayloadRefusal::Invalid)?)
+            }
+        };
         Ok(ValidatedHumanSend {
+            client_message_id,
             unsealed: refine(raw.content, attachments)?,
             reply_to,
         })
@@ -482,6 +496,7 @@ fn seal(unsealed: UnsealedSendPayload) -> Result<ValidatedSendPayload, PayloadRe
         })?;
 
     Ok(ValidatedSendPayload {
+        client_message_id: None,
         content,
         attachments,
     })

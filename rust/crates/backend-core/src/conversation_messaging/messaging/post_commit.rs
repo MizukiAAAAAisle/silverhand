@@ -1174,6 +1174,7 @@ mod tests {
 
     fn created_message() -> CreatedMessage {
         CreatedMessage {
+            client_message_id: None,
             id: MessageId::parse("source-message").unwrap(),
             conversation_id: ConversationId::parse("conv-1").unwrap(),
             from_kind: FromKind::User,

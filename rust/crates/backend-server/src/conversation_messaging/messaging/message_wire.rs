@@ -41,7 +41,7 @@ use super::author_wire::author_dto;
 /// ACK and the broadcast frame both project from.
 pub(crate) fn message_dto(message: &CreatedMessage) -> Value {
     let attachments = attachment_list(&message.attachments);
-    json!({
+    let mut dto = json!({
         "id": message.id.as_str(),
         "conversation_id": message.conversation_id.as_str(),
         // RAW provenance, kept beside the resolved `author` rather than replaced by it: this is
@@ -68,7 +68,11 @@ pub(crate) fn message_dto(message: &CreatedMessage) -> Value {
         "created_at": message.created_at_ms,
         "thread_root_id": optional_str(message.thread_root_id.as_ref().map(|id| id.as_str())),
         "linked_task": Value::Null,
-    })
+    });
+    if let Some(id) = &message.client_message_id {
+        dto["client_message_id"] = json!(id);
+    }
+    dto
 }
 
 /// The authoritative deltas a reply produced, both read off the ONE committed cluster

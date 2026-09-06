@@ -211,6 +211,7 @@ impl SendMessageUnitOfWork for FailingUnit {
 
 fn committed_outcome() -> SendMessageOutcome {
     let message = CreatedMessage {
+        client_message_id: None,
         id: MessageId::parse("message-1").unwrap(),
         conversation_id: conversation("pair-1"),
         from_kind: FromKind::User,

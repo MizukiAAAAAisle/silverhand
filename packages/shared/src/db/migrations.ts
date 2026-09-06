@@ -4151,6 +4151,16 @@ export const migrations: Migration[] = [
       CREATE INDEX idx_conversation_events_created_at ON conversation_events(created_at);
     `,
   },
+  {
+    version: 92,
+    name: 'human_message_retry_identity',
+    up: `
+      ALTER TABLE messages ADD COLUMN client_message_id TEXT;
+      ALTER TABLE messages ADD COLUMN client_request_json TEXT;
+      CREATE UNIQUE INDEX idx_messages_client_identity ON messages(from_user_id, client_message_id)
+        WHERE client_message_id IS NOT NULL;
+    `,
+  },
 ];
 
 /**

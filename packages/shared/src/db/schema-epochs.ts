@@ -102,7 +102,7 @@ export const SCHEMA_EPOCH_MANIFEST: readonly SchemaEpochEntry[] = [
   {
     epoch: 69,
     firstStep: 69,
-    lastStep: 91,
+    lastStep: 92,
     released: false,
   },
 ];
