@@ -609,8 +609,10 @@ describe('OpenCodeDriver ACP event mapping', () => {
 });
 
 
-it('retains ACP structured raw output on tool completion', () => {
-  const output = { content: [{ type: 'text', text: 'complete result' }] };
-  const events = new OpenCodeDriver().parseLine(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'output-session', update: { sessionUpdate: 'tool_call_update', toolCallId: 'output-call', status: 'completed', rawOutput: output } } }));
-  expect(events).toContainEqual(expect.objectContaining({ kind: 'tool_output', toolCallId: 'output-call', output }));
+it('keeps ACP result bodies out of parsed events', () => {
+  for (const sessionUpdate of ['tool_call', 'tool_call_update']) {
+    const events = new OpenCodeDriver().parseLine(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'marker-session', update: { sessionUpdate, toolCallId: 'marker-call', status: 'completed', rawOutput: 'private body', content: [{ type: 'text', text: 'private body' }] } } }));
+    expect(events.some(event => event.kind === 'tool_output')).toBe(true);
+    expect(JSON.stringify(events)).not.toContain('private body');
+  }
 });

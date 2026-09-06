@@ -428,7 +428,6 @@ export class CodexDriver implements Driver {
             name: 'shell',
             ...(callId ? { toolCallId: callId } : {}),
             outcome: codexToolOutcome(item, true),
-            ...(item.aggregatedOutput !== undefined ? { output: item.aggregatedOutput } : {}),
           });
         }
         break;
@@ -491,7 +490,6 @@ export class CodexDriver implements Driver {
             name: toolName,
             ...(callId ? { toolCallId: callId } : {}),
             outcome: codexToolOutcome(item, false),
-            ...(item.result !== undefined ? { output: item.result } : item.error !== undefined ? { output: item.error } : {}),
           });
         }
         break;

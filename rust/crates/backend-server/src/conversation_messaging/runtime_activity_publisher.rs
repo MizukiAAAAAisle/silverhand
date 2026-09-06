@@ -163,15 +163,9 @@ fn activity_payload_value(
             name,
             tool_call_id,
             outcome,
-            output_json,
-        } => {
-            let mut value = json!({"name":name,"tool_call_id":tool_call_id,"outcome":outcome});
-            if let Some(raw) = output_json {
-                value["output"] =
-                    serde_json::from_str(raw).map_err(LiveProjectionFailure::from_source)?;
-            }
-            value
-        }
+        } => json!({
+            "name": name, "tool_call_id": tool_call_id, "outcome": outcome,
+        }),
         RuntimeActivityPayload::ApiResponse { status, message } => {
             json!({ "status": status, "message": message })
         }

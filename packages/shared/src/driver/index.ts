@@ -122,8 +122,6 @@ export const ParsedEventSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('tool_output'),
-      /** Structured output when supplied by the runtime; existing frame budget applies. */
-      output: z.unknown().optional(),
       name: z.string().min(1).optional(),
       toolCallId: z.string().min(1).optional(),
       /** Terminal outcome — REQUIRED on the emit type (`z.infer` output makes

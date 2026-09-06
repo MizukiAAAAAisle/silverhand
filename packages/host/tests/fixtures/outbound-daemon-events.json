@@ -79,7 +79,7 @@
       "direction": "daemon_to_server", "type": "event", "kind": "runtime_parsed_event",
       "runtime_scope": { "kind": "conversation", "conversation_id": "conversation0001", "agent_id": "agent-1" },
       "conversation_id": "conversation0001", "agent_id": "agent-1", "runtime_generation": 1,
-      "parsed": { "kind": "tool_output", "name": "Bash", "toolCallId": "tool-1", "outcome": "success", "output": {"content": "full output"} }, "ts": 12
+      "parsed": { "kind": "tool_output", "name": "Bash", "toolCallId": "tool-1", "outcome": "success" }, "ts": 12
     },
     {
       "direction": "daemon_to_server", "type": "event", "kind": "runtime_parsed_event_dropped",
@@ -98,7 +98,7 @@
     { "kind": "text", "text": "answer" },
     { "kind": "tool_call", "name": "Bash", "input": {}, "toolCallId": "tool-1" },
     { "kind": "tool_call_input", "toolCallId": "tool-1", "input": { "cmd": "true" } },
-    { "kind": "tool_output", "name": "Bash", "toolCallId": "tool-1", "outcome": "success", "output": {"content": "full output"} },
+    { "kind": "tool_output", "name": "Bash", "toolCallId": "tool-1", "outcome": "success" },
     { "kind": "turn_end", "sessionId": "session-1" },
     { "kind": "compaction_started" },
     { "kind": "compaction_finished" },

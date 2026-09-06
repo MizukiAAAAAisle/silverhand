@@ -1021,12 +1021,12 @@ function collectCArgs(args: string[]): Map<string, string> {
 }
 
 
-describe('complete tool output activity', () => {
-  it.each([
-    { type: 'commandExecution', aggregatedOutput: 'stdout\nstderr', expected: 'stdout\nstderr' },
-    { type: 'mcpToolCall', server: 'example', tool: 'read', result: { content: [{ type: 'text', text: 'full result' }] }, expected: { content: [{ type: 'text', text: 'full result' }] } },
-  ])('retains output for $type', ({ expected, ...item }) => {
-    const events = new CodexDriver().parseLine(JSON.stringify({ jsonrpc: '2.0', method: 'item/completed', params: { item: { id: 'complete-output', status: 'completed', exitCode: 0, ...item } } }));
-    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool_output', toolCallId: 'complete-output', output: expected }));
-  });
+it('emits only terminal markers for command and MCP results', () => {
+  for (const item of [{ type: 'commandExecution', aggregatedOutput: 'private body' }, { type: 'mcpToolCall', server: 'example', tool: 'read', result: { content: 'private body' } }]) {
+    const events = new CodexDriver().parseLine(JSON.stringify({ jsonrpc: '2.0', method: 'item/completed', params: { item: { id: 'marker-call', status: 'completed', exitCode: 0, ...item } } }));
+    const marker = events.find(event => event.kind === 'tool_output');
+    expect(marker).toBeDefined();
+    expect(marker).not.toHaveProperty('output');
+    expect(JSON.stringify(events)).not.toContain('private body');
+  }
 });

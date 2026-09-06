@@ -369,7 +369,7 @@ describe('QoderDriver.parseLine', () => {
     );
 
     expect(events).toEqual([
-      { kind: 'tool_output', name: undefined, toolCallId: 'call_1', outcome: 'success', output: 'hi' },
+      { kind: 'tool_output', name: undefined, toolCallId: 'call_1', outcome: 'success' },
     ]);
   });
 

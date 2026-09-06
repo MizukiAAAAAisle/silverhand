@@ -1836,8 +1836,6 @@ pub(crate) enum ParsedEventWire {
         tool_call_id: Option<String>,
         #[serde(default)]
         outcome: ToolOutcome,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        output: Option<Value>,
     },
     TurnEnd {
         #[serde(rename = "sessionId")]
@@ -1998,13 +1996,11 @@ impl ParsedEventWire {
                 name,
                 tool_call_id,
                 outcome,
-                output,
             } => (
                 RuntimeActivityKind::ToolOutput,
                 RuntimeActivityPayload::ToolOutput {
                     name: name.clone(),
                     tool_call_id: tool_call_id.clone(),
-                    output_json: output.as_ref().map(serde_json::to_string).transpose()?,
                     outcome: serde_json::to_value(outcome)?
                         .as_str()
                         .unwrap_or("completed")
@@ -2749,5 +2745,20 @@ impl RuntimeProductEvent {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tool_output_marker_contract {
+    use super::*;
+    #[test]
+    fn new_output_bodies_are_rejected_before_settlement() {
+        let marker =
+            serde_json::json!({"kind":"tool_output","toolCallId":"call-one","outcome":"success"});
+        let parsed: ParsedEventWire = serde_json::from_value(marker.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap()["outcome"], "success");
+        let mut body = marker;
+        body["output"] = serde_json::json!("unrequested body");
+        assert!(serde_json::from_value::<ParsedEventWire>(body).is_err());
     }
 }

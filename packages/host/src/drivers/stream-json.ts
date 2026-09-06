@@ -129,7 +129,6 @@ export function parseStreamJsonLine(
                   : 'completed';
             events.push({
               kind: 'tool_output',
-              ...(block.content !== undefined ? { output: block.content } : {}),
               name: typeof block.name === 'string' ? block.name : undefined,
               toolCallId:
                 typeof block.tool_use_id === 'string' ? block.tool_use_id : undefined,

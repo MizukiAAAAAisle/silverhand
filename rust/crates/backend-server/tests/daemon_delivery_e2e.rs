@@ -5854,7 +5854,7 @@ async fn agent_full_activity_has_one_http_ws_stream_across_focus_and_revocation(
         ),
         (
             CONVERSATION,
-            json!({"kind":"tool_output","name":"shell","toolCallId":"stream-tool","outcome":"success","output":"complete output"}),
+            json!({"kind":"tool_output","name":"shell","toolCallId":"stream-tool","outcome":"success"}),
         ),
     ] {
         send_product(
@@ -5889,6 +5889,10 @@ async fn agent_full_activity_has_one_http_ws_stream_across_focus_and_revocation(
         activities
             .iter()
             .all(|e| e["scope"] == scope && e["payload"].get("conversation_id").is_none())
+    );
+    assert_eq!(
+        activities[3]["payload"]["payload"],
+        json!({"name":"shell", "tool_call_id":"stream-tool", "outcome":"success"})
     );
     let path = format!("/api/agents/{AGGREGATE_AGENT}/activity");
     let unauthenticated = fixture
