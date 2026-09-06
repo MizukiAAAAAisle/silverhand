@@ -127,9 +127,11 @@ function ProfileMcpScope({
           <h2 className="font-serif text-lg font-semibold leading-tight text-text-primary">
             Profile MCP
           </h2>
-          <p className="mt-1 text-sm text-text-muted">
-            Global MCP servers, loaded on top of the runtime's own.
-          </p>
+          {runtime !== 'pi' ? (
+            <p className="mt-1 text-sm text-text-muted">
+              Global MCP servers, loaded on top of the runtime's own.
+            </p>
+          ) : null}
         </div>
         {supported ? <ConfigCheckButton raw={raw} runtime={runtime} /> : null}
       </header>
@@ -143,9 +145,15 @@ function ProfileMcpScope({
         <div className="flex items-start gap-2 border border-border-subtle bg-bg-floating/50 px-3 py-2 text-xs leading-relaxed text-text-secondary">
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-error" />
           <span>
-            Profile MCP is not loaded for <strong>{runtimeLabel(runtime)}</strong>{' '}
-            yet. The servers below are kept but{' '}
-            <strong>ignored at the next spawn</strong>.
+            {runtime === 'pi' ? (
+              <>Configure MCP through Pi extensions. Profile MCP settings are not passed to Pi.</>
+            ) : (
+              <>
+                Profile MCP is not loaded for <strong>{runtimeLabel(runtime)}</strong>{' '}
+                yet. The servers below are kept but{' '}
+                <strong>ignored at the next spawn</strong>.
+              </>
+            )}
           </span>
         </div>
       )}
