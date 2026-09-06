@@ -1,4 +1,5 @@
-// Production launcher smoke. Optional argument: final packaged Resources directory.
+// Explicit production launcher acceptance: pnpm smoke:embedded-backend [Resources | --sidecar-stage <dir>].
+// Never invoked by ordinary build/package; all runtime data below is isolated.
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -78,6 +79,7 @@ try {
   });
   socket.terminate();
   await handle.close();
+  console.error('[smoke] expected bad-config rejection follows: empty allowedOrigins; the missing SILVERHAND_ALLOWED_ORIGINS diagnostic is intentional');
   await assert.rejects(startDesktopEmbeddedBackend(location, { ...config, allowedOrigins: [] }, undefined),
     (error: unknown) => typeof error === 'object' && error !== null && 'kind' in error &&
       ['child-exited-early', 'eof-before-frame'].includes(String(error.kind)),

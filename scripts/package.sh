@@ -358,13 +358,7 @@ else
 MANIFEST
   echo "[package] embedded Rust backend sidecar target=$BACKEND_TARGET sha256=${SIDECAR_SHA256:0:12} manifest written"
 
-  # #task:2343 — real-process smoke against the just-built sidecar: let Rust prepare an
-  # ISOLATED (workspace-local gitignored) SILVERHAND_DIR, spawn the binary, verify the
-  # bound frame / readyz / server-info / a mounted route / event WS / clean shutdown, plus
-  # the bad-config failure arm. Runs at PACKAGE time (not runtime) via the tsx in
-  # packages/cli. Fails the package on any regression.
-  echo "[package] embedded Rust backend real-process smoke"
-  ( cd "$ROOT_DIR" && ./packages/cli/node_modules/.bin/tsx scripts/smoke-embedded-rust-backend.mts --sidecar-stage "$SIDECAR_STAGE" )
+
 fi
 
 if [[ "$REMOTE_ONLY" == "1" ]]; then
@@ -514,12 +508,8 @@ verify_packaged_daemon \
 
 verify_packaged_app_version "$PACKAGED_APP_PATH" "$CANONICAL_VERSION"
 
-if [[ "$REMOTE_ONLY" != "1" ]]; then
-  ./packages/cli/node_modules/.bin/tsx scripts/smoke-embedded-rust-backend.mts "$PACKAGED_APP_PATH/Contents/Resources"
-fi
-
-# This must remain the final package smoke. afterPack verifies the signature at
-# signing time; this second gate proves no later builder or smoke step changed a
+# This must remain the final static package verification. afterPack verifies the signature at
+# signing time; this second gate proves no later builder step changed a
 # sealed bundle byte before the artifact is handed off.
 verify_packaged_code_signature "$PACKAGED_APP_PATH"
 

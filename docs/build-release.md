@@ -35,14 +35,34 @@ Artifacts land in `apps/desktop/release/`:
 
 ---
 
+## Explicit embedded backend acceptance
+
+`pnpm build` runs package build scripts (`pnpm -r build`). It does not call the release packager or start the embedded backend smoke.
+
+`pnpm package` / `pnpm package:dir` build release artifacts. They retain sidecar target/manifest/hash checks, packaged daemon and version verification, and code-signature verification. They do not start a backend service for acceptance, either before or after packaging.
+
+Run process acceptance explicitly, using one of these commands from the repository root:
+
+```sh
+pnpm smoke:embedded-backend --sidecar-stage /absolute/path/to/sidecar-stage
+pnpm smoke:embedded-backend /absolute/path/to/Silverhand.app/Contents/Resources
+```
+
+The stage must contain the executable and matching `silverhand-backend.manifest.json`. Without an argument, the existing development sidecar resolution is used; the smoke does not build a binary. Use artifacts from the matching source generation.
+
+The smoke creates a fresh repository-local `.cache/embedded-smoke/<uuid>` tree and supplies isolated application data, database, logs, and temporary paths. Its success path supplies allowed origins and checks startup, readiness, API epoch, bootstrap, an authenticated HTTP route, WebSocket admission, and clean shutdown. It then deliberately passes empty allowed origins: the logged `SILVERHAND_ALLOWED_ORIGINS missing` is an expected rejection test, announced before execution. The expected typed rejection and cleanup are asserted; unexpected failures still fail the command.
+
+A successful build/package is not process acceptance. Run the explicit smoke before release when that evidence is required. No existing user instance or database is used.
+
 ## How the pieces fit
 
 ```
 scripts/package.sh
-   ├── pnpm -r build              # tsc + esbuild for backend / shared / CLI
+   ├── selected shared / CLI / host / daemon builds
    ├── pnpm --filter @silverhand/desktop build   # electron-vite → out/{main,preload,renderer}
-   ├── ensure_binding ELECTRON_ABI ...           # swap better-sqlite3 .node to electron ABI
-   └── electron-builder --mac --config electron-builder.yml
+   ├── cargo build --release + sidecar manifest/hash (embedded package only)
+   ├── electron-builder --mac --config ...
+   └── static daemon / version / signature verification
               ↓
        apps/desktop/release/
 ```

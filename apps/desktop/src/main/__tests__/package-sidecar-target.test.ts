@@ -56,11 +56,15 @@ describe('package.sh embedded Rust sidecar — host-target manifest identity', (
     expect(src).not.toMatch(/unknown-linux-gnu/);
   });
 
-  it('runs production smoke without mutating a native SQLite binding', () => {
-    const smoke = src.indexOf('tsx scripts/smoke-embedded-rust-backend.mts');
-    expect(smoke).toBeGreaterThan(0);
+  it('keeps process smoke explicit while retaining static artifact checks', () => {
+    expect(src).not.toContain('smoke-embedded-rust-backend.mts');
     expect(src).not.toContain('ensure_binding');
     expect(src).not.toContain('electron-rebuild');
-    expect(src).toContain('scripts/smoke-embedded-rust-backend.mts "$PACKAGED_APP_PATH/Contents/Resources"');
+    expect(src).toContain('SIDECAR_SHA256=');
+    expect(src).toContain('verify_packaged_code_signature "$PACKAGED_APP_PATH"');
+    expect(src).toContain('verify_packaged_app_version "$PACKAGED_APP_PATH"');
+    const root = JSON.parse(readFileSync(new URL('../../../../../package.json', import.meta.url), 'utf8'));
+    expect(root.scripts.build).toBe('pnpm -r build');
+    expect(root.scripts['smoke:embedded-backend']).toBe('./packages/cli/node_modules/.bin/tsx scripts/smoke-embedded-rust-backend.mts');
   });
 });

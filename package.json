@@ -17,6 +17,7 @@
     "test": "./scripts/test.sh",
     "package": "./scripts/package.sh",
     "package:dir": "./scripts/package.sh --dir",
+    "smoke:embedded-backend": "./packages/cli/node_modules/.bin/tsx scripts/smoke-embedded-rust-backend.mts",
     "clean": "pnpm -r exec rm -rf dist node_modules/.cache",
     "perf:client": "node scripts/client-performance/run.mjs"
   },
