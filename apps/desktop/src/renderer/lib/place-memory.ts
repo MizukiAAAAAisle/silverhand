@@ -348,8 +348,7 @@ function loadFunctionalTabs(): Tab[] {
 }
 
 let functionalTabs = loadFunctionalTabs();
-let activeFunctionalKey: string | null = null;
-const activeAttachmentByConversation = new Map<string, string>(
+const activeTabByConversation = new Map<string, string>(
   Array.from(tabsByConversation).flatMap(([id, tabs]) => {
     const first = tabs[0];
     return first?.kind === 'attachment' ? [[id, tabKey(first)] as const] : [];
@@ -396,23 +395,17 @@ export function getConversationTabs(conversationId: string): Tab[] {
 
 export function getConversationActiveTab(conversationId: string): string {
   const tabs = getConversationTabs(conversationId);
-  const local = activeAttachmentByConversation.get(conversationId);
-  if (local && tabs.some(tab => tabKey(tab) === local)) return local;
-  return resolveActiveTabKey(tabs, activeFunctionalKey ?? firstTabKey(functionalTabs));
+  const key = resolveActiveTabKey(tabs, activeTabByConversation.get(conversationId) ?? firstTabKey(functionalTabs));
+  // Remember the initial choice too, so a later shared reorder does not switch it.
+  activeTabByConversation.set(conversationId, key);
+  return key;
 }
 
-/** Functional selection is session-wide; selecting a file only affects its conversation. */
+/** Every active selection belongs to its conversation, including functional tabs. */
 export function recordConversationActiveTab(conversationId: string, key: string): void {
-  const tab = getConversationTabs(conversationId).find(tab => tabKey(tab) === key);
-  if (!tab) return;
-  if (tab.kind === 'attachment') {
-    if (activeAttachmentByConversation.get(conversationId) === key) return;
-    activeAttachmentByConversation.set(conversationId, key);
-  } else {
-    const cleared = activeAttachmentByConversation.delete(conversationId);
-    if (!cleared && activeFunctionalKey === key) return;
-    activeFunctionalKey = key;
-  }
+  if (!getConversationTabs(conversationId).some(tab => tabKey(tab) === key)) return;
+  if (activeTabByConversation.get(conversationId) === key) return;
+  activeTabByConversation.set(conversationId, key);
   notifyConversationTabs();
 }
 
@@ -425,11 +418,11 @@ export function recordConversationTabs(conversationId: string, tabs: Tab[]): voi
     || JSON.stringify(prev ?? []) !== JSON.stringify(isDefaultTabs(normalized) ? [] : normalized);
   if (!changed) return;
   functionalTabs = nextFunctional;
-  activeFunctionalKey = resolveActiveTabKey(functionalTabs, activeFunctionalKey);
-  const localActive = activeAttachmentByConversation.get(conversationId);
-  if (localActive && !normalized.some(tab => tabKey(tab) === localActive)) activeAttachmentByConversation.delete(conversationId);
   if (isDefaultTabs(normalized)) tabsByConversation.delete(conversationId);
   else tabsByConversation.set(conversationId, normalized);
+  for (const [id, key] of activeTabByConversation) {
+    activeTabByConversation.set(id, resolveActiveTabKey(getConversationTabs(id), key));
+  }
   persistConversationTabs();
   notifyConversationTabs();
 }
@@ -447,8 +440,7 @@ export function clearPlaceMemory(): void {
   closeWatermarkByChannel.clear();
   tabsByConversation.clear();
   functionalTabs = normalizeTabs([]);
-  activeFunctionalKey = null;
-  activeAttachmentByConversation.clear();
+  activeTabByConversation.clear();
   notifyConversationTabs();
   try {
     localStorage.removeItem(LAST_WORKSPACE_KEY);

@@ -481,28 +481,44 @@ describe('place-memory', () => {
       expect(getConversationTabs('a')).toEqual([{ kind: 'tasks' }, { kind: 'chat' }, withAttachment[2]]);
     });
 
-    it('shares active functional selection while restoring each conversation file selection', () => {
+    it('keeps functional and file selection independent for each conversation', () => {
       recordConversationTabs('a', withAttachment);
+      expect(getConversationActiveTab('a')).toBe('chat');
+      expect(getConversationActiveTab('b')).toBe('chat');
       recordConversationActiveTab('a', 'tasks');
-      expect(getConversationActiveTab('b')).toBe('tasks');
+      expect(getConversationActiveTab('b')).toBe('chat');
+      recordConversationActiveTab('b', 'tasks');
       recordConversationActiveTab('a', 'attachment:att-1');
       expect(getConversationActiveTab('a')).toBe('attachment:att-1');
       expect(getConversationActiveTab('b')).toBe('tasks');
-      recordConversationActiveTab('b', 'chat');
-      expect(getConversationActiveTab('a')).toBe('attachment:att-1');
+      recordConversationActiveTab('a', 'chat');
+      expect(getConversationActiveTab('b')).toBe('tasks');
       expect(getConversationActiveTab('c')).toBe('chat');
-      recordConversationTabs('a', [{ kind: 'chat' }, { kind: 'tasks' }]);
+    });
+
+    it('keeps an initially active tab stable across another conversation reorder', () => {
+      expect(getConversationActiveTab('a')).toBe('chat');
+      recordConversationTabs('b', [{ kind: 'tasks' }, { kind: 'chat' }]);
+      expect(getConversationTabs('a')).toEqual([{ kind: 'tasks' }, { kind: 'chat' }]);
       expect(getConversationActiveTab('a')).toBe('chat');
     });
 
-    it('drops a closed functional selection instead of reviving it when reopened', () => {
+    it('falls back locally when a shared panel closes, without reviving it on reopen', () => {
       const panel: Tab = { kind: 'panel', panel: 'attachments' };
-      recordConversationTabs('a', [{ kind: 'chat' }, { kind: 'tasks' }, panel]);
+      recordConversationTabs('a', [withAttachment[2]!, { kind: 'chat' }, { kind: 'tasks' }, panel]);
       recordConversationActiveTab('a', 'panel:attachments');
+      recordConversationActiveTab('b', 'panel:attachments');
+      recordConversationActiveTab('c', 'tasks');
       recordConversationTabs('b', [{ kind: 'chat' }, { kind: 'tasks' }]);
-      expect(getConversationActiveTab('a')).toBe('chat');
+      expect(getConversationActiveTab('a')).toBe('attachment:att-1');
+      expect(getConversationActiveTab('b')).toBe('chat');
+      expect(getConversationActiveTab('c')).toBe('tasks');
       recordConversationTabs('b', [{ kind: 'chat' }, { kind: 'tasks' }, panel]);
+      expect(getConversationActiveTab('a')).toBe('attachment:att-1');
+      expect(getConversationActiveTab('b')).toBe('chat');
+      recordConversationTabs('a', [{ kind: 'chat' }, { kind: 'tasks' }, panel]);
       expect(getConversationActiveTab('a')).toBe('chat');
+      expect(getConversationActiveTab('c')).toBe('tasks');
     });
 
     it('notifies other consumers of selection and clears shared state on logout', () => {

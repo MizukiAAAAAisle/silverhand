@@ -9,7 +9,7 @@
  * removable.
  *
  * Functional tab order and open state are shared by this client's user.
- * Attachment previews remain conversation-bound. The persistence and active
+ * Attachment previews and active selection remain conversation-bound. The persistence and active
  * selection store lives in `place-memory.ts` and resets on logout.
  *
  * PURE module: no React, no localStorage, no queries. The persistence half
