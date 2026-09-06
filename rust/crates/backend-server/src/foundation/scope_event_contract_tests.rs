@@ -5436,3 +5436,114 @@ async fn scoped_forbidden_cancels_live_queue_and_mid_replay_without_harming_othe
         }).await.expect("bounded real socket refusal scenario");
     }
 }
+
+#[tokio::test]
+async fn thread_reply_announces_unread_through_production_aftermath() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("thread-live.sqlite");
+    seed_fanout(&path).await;
+    let mut db = SqliteConnection::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE conversations SET status='active'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    sqlx::raw_sql("INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES('workspace-1','agent-1',1); INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('conversation-1','agent-1',1);").execute(&mut db).await.unwrap();
+    db.close().await.unwrap();
+    let store = MessagingStore::open(&path).await.unwrap();
+    let root = store.send_message(plain_command()).await.unwrap();
+    let root_id = root.committed().message().id.clone();
+    mark_all_read(&path, "user-1", "conversation-1").await;
+    follow_thread(&path, "user-1", "conversation-1", root_id.as_str()).await;
+    let hub = ScopeEventHub::test("epoch-1");
+    let aftermath = hub.messaging_aftermath(
+        OtherEffects::default(),
+        store.clone(),
+        SqliteUnreadReadModel::open(&path).await.unwrap(),
+    );
+    let origin = "http://127.0.0.1";
+    let (app, controller) = router(
+        hub.clone(),
+        Sessions,
+        silverhand_backend_sqlite::foundation::scope_event::SqliteEventScopeAuthority::open(&path)
+            .await
+            .unwrap(),
+        Arc::new(NoopConnectionLifecycle),
+        EventWebSocketConfig::test(origin),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut socket = connect(address, origin).await;
+    assert_eq!(next_json(&mut socket).await["type"], "authenticated");
+    subscribe_scope(&mut socket, "viewer:self").await;
+    let cold = crate::conversation_messaging::messaging::collaboration::conversation_unread::router(
+        store.conversation_unread(),
+    );
+    // No conversation/thread subscription is needed for the closed-thread badge.
+    for (expected, actor) in [
+        (1, SendActor::User(mentioned())),
+        (2, SendActor::User(mentioned())),
+        (1, SendActor::User(mentioned())),
+        (2, SendActor::Agent(agent())),
+    ] {
+        if expected == 1 && !scope_events(&hub, EventScope::Viewer(user())).is_empty() {
+            mark_thread_read(&path, "user-1", "conversation-1", root_id.as_str()).await;
+        }
+        let command = SendMessage::prepare(
+            SendMessageDraft {
+                source_conversation: channel(),
+                target_conversation: channel(),
+                actor,
+                content: MessageContent::parse("fresh reply").unwrap(),
+                destination: SendDestination::Reply(root_id.clone()),
+                attachment_refs: Vec::new(),
+                freshness_bypass: true,
+            },
+            &AllReferences,
+            &DirectLinesToExternal,
+        )
+        .await
+        .unwrap();
+        let outcome = store.send_message(command).await.unwrap();
+        crate::conversation_messaging::messaging::aftermath::SendAftermath::announce(
+            &aftermath, &outcome,
+        )
+        .await;
+        let frame = next_json(&mut socket).await;
+        assert_eq!(frame["kind"], "unread_updated", "{frame}");
+        assert_eq!(
+            frame["payload"]["conversation_unread_count"], expected,
+            "{frame}"
+        );
+        assert_eq!(
+            next_json(&mut socket).await["kind"],
+            "attention_badge_updated"
+        );
+        let probe = silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_unread::ConversationUnreadReadPort::read(&store.conversation_unread(), &user(), &channel()).await;
+        assert!(probe.is_ok(), "read failure: {probe:?}");
+        let mut request = axum::http::Request::builder()
+            .uri("/api/conversations/conversation-1/unread")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(user());
+        let response = cold.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let page: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            page["threads"][root_id.as_str()]["unread_count"],
+            expected,
+            "{page}"
+        );
+        assert_eq!(page["followed_thread_unread"], true);
+    }
+    socket.close(None).await.unwrap();
+    wait_until_drained(&controller).await;
+    server.abort();
+}
