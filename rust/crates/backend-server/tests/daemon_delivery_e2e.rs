@@ -740,7 +740,7 @@ async fn connect_event_scope_with_ack(
     );
     request
         .headers_mut()
-        .insert(DESKTOP_API_EPOCH_HEADER, "3".parse().unwrap());
+        .insert(DESKTOP_API_EPOCH_HEADER, "4".parse().unwrap());
     let (mut socket, _) = connect_async(request).await.unwrap();
     assert_eq!(next_json(&mut socket).await["type"], "authenticated");
     socket

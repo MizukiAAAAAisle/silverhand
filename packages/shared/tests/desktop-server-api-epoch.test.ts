@@ -67,6 +67,18 @@ describe('desktop-server-api-epoch contract root', () => {
     expect(MINIMUM_SERVER_API_EPOCH).toBe(DESKTOP_SERVER_API_EPOCH);
   });
 
+  it('refuses deployed epoch 3 in both directions and accepts epoch 4 peers', () => {
+    const classify = (clientEpoch: number, serverEpoch: number) =>
+      classifyDesktopServerApiCompatibility({
+        clientEpoch, serverEpoch,
+        minimumClientEpoch: MINIMUM_CLIENT_API_EPOCH,
+        minimumServerEpoch: MINIMUM_SERVER_API_EPOCH,
+      });
+    expect(classify(3, DESKTOP_SERVER_API_EPOCH)).toBe('client_too_old');
+    expect(classify(DESKTOP_SERVER_API_EPOCH, 3)).toBe('server_too_old');
+    expect(classify(4, 4)).toBe('compatible');
+  });
+
   it('parses the dedicated admission header: absent/malformed/repeated → 0, canonical decimal → value', () => {
     expect(parseDesktopApiEpochHeader(undefined)).toBe(0);
     expect(parseDesktopApiEpochHeader('')).toBe(0);

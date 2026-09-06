@@ -144,7 +144,7 @@ async fn cookie_origin_session_and_epoch_are_all_required_in_order() {
             "valid",
             Some(VALID),
             Some(ORIGIN_VALUE),
-            Some("3"),
+            Some("4"),
             None,
             StatusCode::SWITCHING_PROTOCOLS,
         ),
@@ -152,7 +152,7 @@ async fn cookie_origin_session_and_epoch_are_all_required_in_order() {
             "unknown",
             Some("unknown"),
             Some(ORIGIN_VALUE),
-            Some("3"),
+            Some("4"),
             None,
             StatusCode::UNAUTHORIZED,
         ),
@@ -160,7 +160,7 @@ async fn cookie_origin_session_and_epoch_are_all_required_in_order() {
             "revoked",
             Some(REVOKED),
             Some(ORIGIN_VALUE),
-            Some("3"),
+            Some("4"),
             None,
             StatusCode::UNAUTHORIZED,
         ),
@@ -168,7 +168,7 @@ async fn cookie_origin_session_and_epoch_are_all_required_in_order() {
             "expired",
             Some(EXPIRED),
             Some(ORIGIN_VALUE),
-            Some("3"),
+            Some("4"),
             None,
             StatusCode::UNAUTHORIZED,
         ),
@@ -176,7 +176,7 @@ async fn cookie_origin_session_and_epoch_are_all_required_in_order() {
             "missing-origin",
             Some(VALID),
             None,
-            Some("3"),
+            Some("4"),
             None,
             StatusCode::FORBIDDEN,
         ),
@@ -184,7 +184,7 @@ async fn cookie_origin_session_and_epoch_are_all_required_in_order() {
             "foreign-origin",
             Some(VALID),
             Some("http://evil.test"),
-            Some("3"),
+            Some("4"),
             None,
             StatusCode::FORBIDDEN,
         ),
@@ -192,9 +192,17 @@ async fn cookie_origin_session_and_epoch_are_all_required_in_order() {
             "authorization-only",
             None,
             Some(ORIGIN_VALUE),
-            Some("3"),
+            Some("4"),
             Some("Bearer valid-token"),
             StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "previous-epoch",
+            Some(VALID),
+            Some(ORIGIN_VALUE),
+            Some("3"),
+            None,
+            StatusCode::UPGRADE_REQUIRED,
         ),
         (
             "old-epoch",
@@ -273,7 +281,7 @@ async fn auth_store_failure_is_one_safe_preupgrade_error() {
         .with_writer(logs.clone())
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
-    let error = connect(address, Some(VALID), Some(ORIGIN_VALUE), Some("3"), None)
+    let error = connect(address, Some(VALID), Some(ORIGIN_VALUE), Some("4"), None)
         .await
         .unwrap_err();
     assert_eq!(http_status(error), StatusCode::INTERNAL_SERVER_ERROR);

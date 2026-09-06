@@ -119,6 +119,22 @@ Review checklist line: *"Does this diff change any REST DTO / event shape /
 behavioral semantics in a way an old desktop would misread? If yes, are ALL
 THREE epoch constants bumped to the same value in this same commit?"*
 
+## Desktop 0.4.0 source boundary
+
+Desktop 0.4.0 uses API current/minimum-client/minimum-server **4/4/4**.
+This closes the previously deployed epoch-3 compatibility gap for agent activity
+subscriptions, scoped permission denials, and human-send correlation/retry
+semantics. Epoch-3 peers require an update; no compatibility bridge is provided.
+The version source is `apps/desktop/package.json`; packaging derives its version
+from that file. Regenerating the pnpm lockfile does not change it for this
+workspace package's own version.
+
+Daemon wire versions remain independently **host 12 / outbound 11**. The daemon
+package metadata remains **0.2.0** in this source update: a new public daemon
+package version must be chosen before publishing a changed daemon package;
+Desktop 0.4.0 does not assign that independent package version. This update
+performs no packaging, publication, tags, pushes, or deployment.
+
 ## 4. Release procedure (plan A — default)
 
 1. Land the breaking change + atomic triple bump (one commit).
