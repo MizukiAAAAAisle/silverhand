@@ -6040,3 +6040,148 @@ async fn agent_full_activity_has_one_http_ws_stream_across_focus_and_revocation(
     fixture.controller.close().await;
     fixture.server.abort();
 }
+
+#[tokio::test]
+async fn initial_and_refined_tool_inputs_share_ts_limits_in_both_activity_scopes() {
+    const INPUT_AGENT: &str = "input-agent";
+    let cases: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../../packages/backend/tests/fixtures/activity-input-sanitizer.json"
+    ))
+    .unwrap();
+    for scope_kind in ["conversation", "agent"] {
+        let fixture = fixture("input-limits.sqlite").await;
+        let mut db = open(&fixture.path).await;
+        sqlx::query("INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,display_name,created_by_user_id,session_scope) VALUES('input-agent','input-agent','codex','host-1',1,1,'Input Agent','user-1',?)")
+            .bind(scope_kind).execute(&mut db).await.unwrap();
+        sqlx::raw_sql("INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES('workspace-1','input-agent',1);
+            INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('conversation0001','input-agent',1);
+            INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at) VALUES('input-wake','conversation0001','user','user-1','wake',2,2);
+            INSERT INTO conversation_inboxes(conversation_id,agent_id,message_id,created_at,delivery_kind) VALUES('conversation0001','input-agent','input-wake',2,'turn');")
+            .execute(&mut db).await.unwrap();
+        let historical =
+            json!({"name":"test", "tool_call_id":"call-0", "input":"historic".repeat(200)})
+                .to_string();
+        let legacy_id = sqlx::query("INSERT INTO conversation_events(conversation_id,agent_id,kind,payload,created_at) VALUES(?,?,'tool_call',?,1)")
+            .bind(CONVERSATION).bind(INPUT_AGENT).bind(&historical).execute(&mut db).await.unwrap().last_insert_rowid();
+        let scope = if scope_kind == "agent" {
+            format!("agent:{INPUT_AGENT}")
+        } else {
+            format!("conversation-side:{CONVERSATION}")
+        };
+        let (mut live, _) = connect_event_scope_with_ack(fixture.address, &scope).await;
+        let mut daemon = connect(fixture.address).await;
+        complete_attachment(&mut daemon, &fixture.controller).await;
+        let effects = fixture.effects.clone();
+        let start = tokio::spawn(async move {
+            IdleStart::start_if_idle(
+                &effects,
+                &AgentId::parse(INPUT_AGENT).unwrap(),
+                &ConversationId::parse(CONVERSATION).unwrap(),
+            )
+            .await
+        });
+        let command = next_json(&mut daemon).await;
+        let generation = command["params"]["runtime_generation"].as_i64().unwrap();
+        respond(
+            &mut daemon,
+            &command,
+            json!({"started":true,"pid":8,"started_at":100}),
+        )
+        .await;
+        start.await.unwrap().unwrap();
+        let reads = MessagingStore::open(&fixture.path)
+            .await
+            .unwrap()
+            .conversation_agent_activity();
+        let (http, path) = if scope_kind == "agent" {
+            (silverhand_backend_server::conversation_messaging::messaging::collaboration::conversation_agent_activity::agent_router(reads), format!("/api/agents/{INPUT_AGENT}/activity"))
+        } else {
+            (silverhand_backend_server::conversation_messaging::messaging::collaboration::conversation_agent_activity::router(reads), format!("/api/conversations/{CONVERSATION}/agents/{INPUT_AGENT}/activity"))
+        };
+        for index in 0..cases.len() {
+            let mut original_id = None;
+            for (kind, case) in [
+                ("tool_call", &cases[index]),
+                ("tool_call_input", &cases[1 - index]),
+            ] {
+                let mut parsed =
+                    json!({"kind":kind,"toolCallId":format!("call-{index}"),"input":case["input"]});
+                if kind == "tool_call" {
+                    parsed["name"] = json!("test");
+                }
+                send_product(
+                    &mut daemon,
+                    product_frame_for(
+                        "runtime_parsed_event",
+                        Some(generation),
+                        json!({"parsed":parsed,"ts":20}),
+                        INPUT_AGENT,
+                        CONVERSATION,
+                        scope_kind,
+                    ),
+                )
+                .await;
+                let activity = loop {
+                    let frame = next_json(&mut live).await;
+                    if frame["kind"] == "agent_event" {
+                        assert_eq!(frame["payload"]["event"]["input"], case["expected"]);
+                    }
+                    if frame["kind"] == "conversation_activity"
+                        || frame["kind"] == "agent_stream_activity"
+                    {
+                        break frame;
+                    }
+                };
+                let id = activity["payload"]["id"].as_i64().unwrap();
+                let stored: String =
+                    sqlx::query_scalar("SELECT payload FROM conversation_events WHERE id=?")
+                        .bind(id)
+                        .fetch_one(&mut db)
+                        .await
+                        .unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(&stored).unwrap()["input"],
+                    case["expected"],
+                    "{scope_kind} {kind} {} first durable payload",
+                    case["name"]
+                );
+                let (status, page) = management_request(&http, "GET", &path, "").await;
+                assert_eq!(status, StatusCode::OK, "{page}");
+                let row = page["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["id"] == id)
+                    .unwrap();
+                assert_eq!(row["payload"]["input"], case["expected"]);
+                assert_eq!(activity["payload"]["payload"]["input"], case["expected"]);
+                if let Some(original) = original_id {
+                    assert_eq!(id, original);
+                } else {
+                    original_id = Some(id);
+                }
+            }
+        }
+        let retained: String =
+            sqlx::query_scalar("SELECT payload FROM conversation_events WHERE id=?")
+                .bind(legacy_id)
+                .fetch_one(&mut db)
+                .await
+                .unwrap();
+        assert_eq!(retained, historical);
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM conversation_events WHERE agent_id=? AND kind='tool_call'",
+        )
+        .bind(INPUT_AGENT)
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+        assert_eq!(
+            count, 3,
+            "one legacy row plus two calls; refinements keep identity"
+        );
+        fixture.event_controller.close().await;
+        fixture.controller.close().await;
+        fixture.server.abort();
+    }
+}

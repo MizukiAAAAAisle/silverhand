@@ -1985,7 +1985,7 @@ impl ParsedEventWire {
                 RuntimeActivityKind::ToolCall,
                 RuntimeActivityPayload::ToolCall {
                     name: name.clone(),
-                    input_json: serde_json::to_string(input)?,
+                    input_json: serde_json::to_string(&sanitize_json_value(input, 0))?,
                     tool_call_id: tool_call_id.clone(),
                 },
             ),
