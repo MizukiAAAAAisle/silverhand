@@ -60,11 +60,9 @@ fi
 
 echo "[dev] starting electron-vite"
 pnpm --filter @silverhand/cli build
-# PR-1 silverhand-daemon: Electron main spawns
-# `packages/host/dist/daemon.js` at startup, so we need a fresh bundle
-# before every dev run. esbuild step is ~20ms — same cost as the CLI
-# build above.
 pnpm --filter @silverhand/host build
+# Desktop and user-managed computers use the same daemon package, including
+# its sibling CLI bundle required by runtime_start.
 # User-managed computer dogfood: backend-generated connection commands should
 # run before the public npm package exists. In dev, point npx at the local file
 # package; production keeps the default @silverhand-ai/daemon@latest spec.

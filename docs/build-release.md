@@ -35,6 +35,12 @@ Artifacts land in `apps/desktop/release/`:
 
 ---
 
+## Development daemon launcher
+
+`pnpm dev` builds `@silverhand-ai/daemon` before starting Desktop. Desktop launches `packages/silverhand-daemon/dist/daemon.js`, whose sibling `cli.js` supplies the daemon-local CLI for `runtime_start`. The host-only `packages/host/dist/daemon.js` bundle does not have that sibling and is not the Desktop dev entry.
+
+Both Desktop layouts pin `ELECTRON_RUN_AS_NODE=1` in the CLI shim, so tool shells that scrub inherited environment can still invoke the Electron binary as Node. Daemon-local launchers retain priority over server-supplied launchers; missing both remains an explicit error. This does not change the packaged Resources layout or remote launcher authority.
+
 ## Explicit embedded backend acceptance
 
 `pnpm build` runs package build scripts (`pnpm -r build`). It does not call the release packager or start the embedded backend smoke.

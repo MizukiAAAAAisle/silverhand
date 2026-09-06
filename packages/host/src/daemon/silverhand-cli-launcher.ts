@@ -42,7 +42,9 @@ export function resolveLocalSilverhandCliLauncher(input: {
     // NPM package layout:
     //   node_modules/@silverhand-ai/daemon/dist/daemon.js
     //   node_modules/@silverhand-ai/daemon/dist/cli.js
-    { entry: resolve(entryDir, 'cli.js') },
+    // Desktop dev also uses this layout with Electron as its Node host.
+    // Pin Node mode in the shim even when a runtime shell scrubs its env.
+    { entry: resolve(entryDir, 'cli.js'), env: { ELECTRON_RUN_AS_NODE: '1' } },
     // Release layout:
     //   Resources/silverhand-daemon/daemon.mjs
     //   Resources/silverhand-cli/cli.mjs

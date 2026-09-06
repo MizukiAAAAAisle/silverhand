@@ -123,6 +123,7 @@ describe('daemon silverhand CLI launcher', () => {
       ).toEqual({
         command: '/node',
         args: [cliEntry],
+        env: { ELECTRON_RUN_AS_NODE: '1' },
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

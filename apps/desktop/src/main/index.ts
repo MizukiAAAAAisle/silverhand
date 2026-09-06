@@ -1,3 +1,4 @@
+import { desktopDaemonLauncher } from './daemon-launcher';
 import { app, BrowserWindow, Menu, session as electronSession, shell, type MenuItemConstructorOptions } from 'electron';
 import { execFileSync, spawn as spawnChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -541,36 +542,13 @@ function patchPathFromLoginShell(): { ok: boolean; detail: string } {
   }
 }
 
-/**
- * Resolve how to launch the `silverhand-daemon` child process from
- * Electron main. Same trick as the daemon/CLI launchers: reuse the
- * Electron binary as a Node host via `ELECTRON_RUN_AS_NODE=1`.
- *  - dev: the daemon entry runs via tsx (installed in
- *    `packages/host/node_modules/.bin/tsx`); we launch it through the
- *    same Electron-as-Node host so `process.execPath` stays the
- *    single canonical Node interpreter for everything we spawn.
- *  - release: the daemon is bundled to `dist/daemon.mjs` and shipped
- *    next to `silverhand-cli/cli.mjs` under `resourcesPath`.
- *
- * PR-1 dev path: we just point at `packages/host/dist/daemon.js`
- * produced by the host's `build` script. Devs run `pnpm --filter
- * @silverhand/host build` once; subsequent `pnpm dev` cycles pick up
- * the bundle. (Wiring this into `scripts/dev.sh` so it's automatic is
- * a follow-up; see TODO at the bottom of this file.)
- */
-function resolveDaemonLauncher(): {
-  command: string;
-  args: string[];
-  env?: Record<string, string>;
-} {
-  const entry = app.isPackaged
-    ? join(process.resourcesPath, 'silverhand-daemon', 'daemon.mjs')
-    : join(resolve(app.getAppPath(), '../..'), 'packages/host/dist/daemon.js');
-  return {
-    command: process.execPath,
-    args: [entry],
-    env: { ELECTRON_RUN_AS_NODE: '1' },
-  };
+function resolveDaemonLauncher() {
+  return desktopDaemonLauncher({
+    isPackaged: app.isPackaged,
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    execPath: process.execPath,
+  });
 }
 
 interface DaemonPaths {
