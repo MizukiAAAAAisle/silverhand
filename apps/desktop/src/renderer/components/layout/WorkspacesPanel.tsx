@@ -2,7 +2,7 @@ import * as Popover from '@radix-ui/react-popover';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { AgentDto, SortGroup } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
-import { ChevronDown, LayoutGrid, MessagesSquare, MoreHorizontal, Plus, Settings } from 'lucide-react';
+import { ChevronDown, LayoutGrid, MessagesSquare, MoreVertical, Plus, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import {
@@ -729,7 +729,7 @@ function WorkspaceActions({ title, onCreate, onSettings }: { title: string; onCr
           show();
           if (keyboardOpen.current) contentRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
         }}>
-          <MoreHorizontal className="size-3.5" />
+          <MoreVertical className="size-3.5" />
         </Button>
       </Popover.Trigger>
       <Popover.Portal>
