@@ -5547,3 +5547,222 @@ async fn thread_reply_announces_unread_through_production_aftermath() {
     wait_until_drained(&controller).await;
     server.abort();
 }
+
+/// DM replies owe a viewer invalidation even when no thread content is open.
+/// Waiting and a later mainline send must not be prerequisites for the cold unread fact.
+#[tokio::test]
+async fn agent_dm_thread_unread_is_immediate_before_wait_or_mainline_send() {
+    for send_mainline in [false, true] {
+        let (_directory, path) = direct_pair_database().await;
+        let store = MessagingStore::open(&path).await.unwrap();
+        let hub = ScopeEventHub::test("epoch-1");
+        let pair = store
+            .open_direct_pair(&hub.messaging_events(), pair_participants(), 10)
+            .await
+            .unwrap();
+        let aftermath = hub.messaging_aftermath(
+            OtherEffects::default(),
+            store.clone(),
+            SqliteUnreadReadModel::open(&path).await.unwrap(),
+        );
+        let make_command = |actor, destination| SendMessageDraft {
+            source_conversation: pair.clone(),
+            target_conversation: pair.clone(),
+            actor,
+            content: MessageContent::parse("isolated DM message").unwrap(),
+            destination,
+            attachment_refs: Vec::new(),
+            freshness_bypass: true,
+        };
+        let root = store
+            .send_message(
+                SendMessage::prepare(
+                    make_command(SendActor::User(user()), SendDestination::MainLine),
+                    &AllReferences,
+                    &DirectLinesToExternal,
+                )
+                .await
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let root_id = root.committed().message().id.clone();
+        let origin = "http://127.0.0.1";
+        let (app, controller) = router(
+            hub.clone(),
+            Sessions,
+            silverhand_backend_sqlite::foundation::scope_event::SqliteEventScopeAuthority::open(
+                &path,
+            )
+            .await
+            .unwrap(),
+            Arc::new(NoopConnectionLifecycle),
+            EventWebSocketConfig::test(origin),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut socket = connect(address, origin).await;
+        assert_eq!(next_json(&mut socket).await["type"], "authenticated");
+        subscribe_scope(&mut socket, "viewer:self").await;
+        let cold =
+            crate::conversation_messaging::messaging::collaboration::conversation_unread::router(
+                store.conversation_unread(),
+            );
+        let read = || async {
+            let mut request = axum::http::Request::builder()
+                .uri(format!("/api/conversations/{}/unread", pair.as_str()))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            request.extensions_mut().insert(user());
+            let response = cold.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            serde_json::from_slice::<Value>(
+                &axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(read().await["threads"], json!({}));
+        let reply = store
+            .send_message(
+                SendMessage::prepare(
+                    make_command(
+                        SendActor::Agent(agent()),
+                        SendDestination::Reply(root_id.clone()),
+                    ),
+                    &AllReferences,
+                    &DirectLinesToExternal,
+                )
+                .await
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        crate::conversation_messaging::messaging::aftermath::SendAftermath::announce(
+            &aftermath, &reply,
+        )
+        .await;
+        let frame = next_json(&mut socket).await;
+        assert_eq!(frame["kind"], "direct_pairs_changed", "{frame}");
+        assert_eq!(frame["scope"], "viewer:user-1");
+        assert_eq!(frame["payload"], json!({"conversation_id":pair.as_str()}));
+        let immediate = read().await;
+        assert_eq!(
+            immediate["threads"][root_id.as_str()]["unread_count"],
+            1,
+            "{immediate}"
+        );
+        if send_mainline {
+            let sent = store
+                .send_message(
+                    SendMessage::prepare(
+                        make_command(SendActor::User(user()), SendDestination::MainLine),
+                        &AllReferences,
+                        &DirectLinesToExternal,
+                    )
+                    .await
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            crate::conversation_messaging::messaging::aftermath::SendAftermath::announce(
+                &aftermath, &sent,
+            )
+            .await;
+            assert_eq!(next_json(&mut socket).await["kind"], "direct_pairs_changed");
+        } else {
+            // A bounded idle comparison; no read/write/observe or synthetic refresh.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(read().await, immediate);
+        mark_thread_read(&path, "user-1", pair.as_str(), root_id.as_str()).await;
+        assert_eq!(read().await["threads"], json!({}));
+        let reply = store
+            .send_message(
+                SendMessage::prepare(
+                    make_command(
+                        SendActor::Agent(agent()),
+                        SendDestination::Reply(root_id.clone()),
+                    ),
+                    &AllReferences,
+                    &DirectLinesToExternal,
+                )
+                .await
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        crate::conversation_messaging::messaging::aftermath::SendAftermath::announce(
+            &aftermath, &reply,
+        )
+        .await;
+        assert_eq!(next_json(&mut socket).await["kind"], "direct_pairs_changed");
+        assert_eq!(read().await["threads"][root_id.as_str()]["unread_count"], 1);
+        let other_root = store
+            .send_message(
+                SendMessage::prepare(
+                    make_command(SendActor::User(user()), SendDestination::MainLine),
+                    &AllReferences,
+                    &DirectLinesToExternal,
+                )
+                .await
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let other_id = other_root.committed().message().id.clone();
+        let other_reply = store
+            .send_message(
+                SendMessage::prepare(
+                    make_command(
+                        SendActor::Agent(agent()),
+                        SendDestination::Reply(other_id.clone()),
+                    ),
+                    &AllReferences,
+                    &DirectLinesToExternal,
+                )
+                .await
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        crate::conversation_messaging::messaging::aftermath::SendAftermath::announce(
+            &aftermath,
+            &other_reply,
+        )
+        .await;
+        assert_eq!(next_json(&mut socket).await["kind"], "direct_pairs_changed");
+        let two_threads = read().await;
+        assert_eq!(two_threads["threads"][root_id.as_str()]["unread_count"], 1);
+        assert_eq!(two_threads["threads"][other_id.as_str()]["unread_count"], 1);
+        assert_eq!(two_threads["mainline"]["unread_count"], 0);
+        let mut request = axum::http::Request::builder()
+            .uri(format!("/api/conversations/{}/unread", pair.as_str()))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(UserId::parse("unrelated-user").unwrap());
+        assert_eq!(
+            cold.clone().oneshot(request).await.unwrap().status(),
+            axum::http::StatusCode::FORBIDDEN
+        );
+        assert!(
+            scope_events(
+                &hub,
+                EventScope::Viewer(UserId::parse("unrelated-user").unwrap())
+            )
+            .is_empty()
+        );
+        assert!(
+            scope_events(&hub, EventScope::Viewer(user()))
+                .iter()
+                .all(|event| matches!(event, ProductEvent::DirectPairsChanged { .. }))
+        );
+        socket.close(None).await.unwrap();
+        wait_until_drained(&controller).await;
+        server.abort();
+    }
+}
