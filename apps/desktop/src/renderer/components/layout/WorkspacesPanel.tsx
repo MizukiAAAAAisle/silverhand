@@ -734,8 +734,8 @@ function WorkspaceActions({ title, onCreate, onSettings }: { title: string; onCr
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content ref={contentRef} align="end" sideOffset={4} onMouseEnter={cancelClose} onMouseLeave={hide} onOpenAutoFocus={event => { if (!keyboardOpen.current) event.preventDefault(); }} onCloseAutoFocus={event => { if (!keyboardOpen.current) event.preventDefault(); }} data-popover-frame="menu" className="z-[var(--z-dialog)] min-w-40 bg-bg-floating p-1 shadow-popover">
-          <button type="button" className="flex w-full items-center gap-2 rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left text-sm text-text-primary hover:bg-bg-hover" onClick={() => { setOpen(false); onCreate(); }}><Plus className="size-3.5" />Create channel</button>
-          {onSettings ? <button type="button" className="flex w-full items-center gap-2 rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left text-sm text-text-primary hover:bg-bg-hover" onClick={() => { setOpen(false); onSettings(); }}><Settings className="size-3.5" />Settings</button> : null}
+          <button type="button" className="flex w-full items-center gap-2 rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover" onClick={() => { setOpen(false); onCreate(); }}><Plus className="size-3.5" />Create channel</button>
+          {onSettings ? <button type="button" className="flex w-full items-center gap-2 rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover" onClick={() => { setOpen(false); onSettings(); }}><Settings className="size-3.5" />Settings</button> : null}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
