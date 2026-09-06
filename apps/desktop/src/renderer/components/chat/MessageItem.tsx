@@ -1439,13 +1439,8 @@ function AttachmentTile({
   onOpenAttachment?: (attachment: AttachmentSnapshot) => void;
 }): JSX.Element {
   const isImage = attachment.content_type.startsWith('image/');
-  // A md/html attachment opens in the in-app previewer tab (#task:2122),
-  // replacing open-with-OS as this CARD's main click — but only when the parent
-  // wired a tab controller. This is not a global single destination: the
-  // Attachments panel and the thread pane still OS-open md/html (see the panel
-  // and thread ancestors), so the previewer is the sole viewer only for the
-  // member-main-pane message card. Classification tolerates legacy rows that
-  // persisted a generic `content_type` (falls back to the suffix).
+  // The owner supplies the destination tab controller, directly or via a sibling
+  // pane relay. Legacy generic MIME types still classify by filename suffix.
   const previewable =
     onOpenAttachment != null
     && attachmentPreviewKind(attachment.content_type, attachment.filename) != null;

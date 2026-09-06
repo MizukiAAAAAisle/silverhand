@@ -47,7 +47,7 @@ import {
   useUnfollowThread,
 } from '@/features/channels/hooks';
 import { isCommittedMessage } from '@/features/channels/pending-message';
-import type { MessageSeq } from '@silverhand/shared';
+import type { AttachmentSnapshot, MessageSeq } from '@silverhand/shared';
 import type { ComposerDirectory } from '@/features/conversations/pane-mode';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
@@ -95,6 +95,7 @@ interface ThreadPanelProps {
    *  fail open. */
   gate: ChannelGate;
   onClose: () => void;
+  onOpenAttachment: (attachment: AttachmentSnapshot) => void;
   /** "View in channel": close this panel and scroll-locate + flash the
    *  root message in the main channel stream. Wired by App to
    *  `requestJump` + `closeThread`. Omitted = button hidden. */
@@ -174,6 +175,7 @@ export function ThreadPanel({
   gate,
   onClose,
   onViewInChannel,
+  onOpenAttachment,
   conversationRefsById,
   onOpenConversationRef,
   onOpenChannelRef,
@@ -809,6 +811,7 @@ export function ThreadPanel({
         key={m.id}
         message={m}
         conversationId={channelId}
+        onOpenAttachment={onOpenAttachment}
         canReact={!closed && !archived && canParticipate}
         canParticipate={canParticipate}
         canMutateLinkedTask={!closed && !archived && gate.allowMutations}

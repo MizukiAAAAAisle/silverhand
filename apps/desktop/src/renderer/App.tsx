@@ -2245,6 +2245,12 @@ function RegisteredAppShell({
           // deep link never assumes a channel namespace.
           directory={primaryThreadComposerDirectory}
           rootMessageId={threadRoot}
+          onOpenAttachment={attachment =>
+            setPaneAttachmentRequest({
+              conversationId: threadChannelId,
+              attachment,
+            })
+          }
           parentTitle={selectedChannel?.title ?? null}
           closed={selectedChannelDescriptor?.closed_at != null}
           archived={selectedChannelDescriptor?.archived_at != null}
