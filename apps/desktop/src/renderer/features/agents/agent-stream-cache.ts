@@ -100,7 +100,14 @@ export function createAgentStreamCache(deps: Dependencies) {
         } else if (frame.type === 'snapshot_required') {
           epoch = frame.epoch;
           lastSeq = frame.currentSeq;
-          void read(null);
+          acknowledged = false;
+          cancel();
+          publish(empty());
+          // Snapshot refusal drops the server relay. The transport has already
+          // cleared this non-content scope's resume floor before dispatching it.
+          release?.();
+          const handle = deps.retain(scope, `agent-activity:${userId}:${agentId}`);
+          release = () => handle.release();
         } else if (frame.type === 'event' && frame.kind === 'agent_stream_activity') {
           if (epoch !== frame.epoch) {
             epoch = frame.epoch;

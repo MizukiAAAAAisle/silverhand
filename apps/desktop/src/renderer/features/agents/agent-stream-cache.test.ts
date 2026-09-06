@@ -69,6 +69,8 @@ describe('agent-scoped shared activity', () => {
     h.reads[0]!.resolve(page([row(10)], 10)); await settle(); void a.loadEarlier();
     h.frame({ type: 'snapshot_required', scope: 'agent:a', epoch: decodeTransportEpoch('e'), currentSeq: decodeTransportSeq(0), reason: 'gap_too_large' });
     expect(h.reads[1]!.signal.aborted).toBe(true); expect(a.getSnapshot().events).toEqual([]);
+    expect(h.reads).toHaveLength(2); expect(h.retain).toHaveBeenCalledTimes(2);
+    h.ack();
     h.reads[1]!.resolve(page([row(1)])); h.event(row(12)); h.reads[2]!.resolve(page([row(11)])); await settle();
     expect(a.getSnapshot().events.map(r => r.id)).toEqual([11, 12]); h.cache.clear();
   });

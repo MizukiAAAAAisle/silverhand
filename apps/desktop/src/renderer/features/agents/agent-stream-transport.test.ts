@@ -11,10 +11,31 @@ class Socket {
   static OPEN = 1;
   readyState = 1;
   sent: Record<string, unknown>[] = [];
+  live = false;
+  epoch = 'e';
+  pendingSubscribe = false;
   listeners = new Map<string, ((event: unknown) => void)[]>();
   constructor() { socket = this; }
   addEventListener(kind: string, fn: (event: unknown) => void) { this.listeners.set(kind, [...this.listeners.get(kind) ?? [], fn]); }
-  send(raw: string) { this.sent.push(JSON.parse(raw)); }
+  send(raw: string) {
+    const request = JSON.parse(raw) as Record<string, unknown>;
+    this.sent.push(request);
+    if (request.type === 'subscribe') this.pendingSubscribe = true;
+    if (request.type === 'unsubscribe') { this.live = false; this.pendingSubscribe = false; }
+  }
+  acknowledge(epoch: string, seq: number) {
+    expect(this.pendingSubscribe).toBe(true);
+    this.pendingSubscribe = false; this.live = true; this.epoch = epoch;
+    this.frame({ type: 'subscribed', scope: 'agent:a', epoch, seq });
+  }
+  snapshot(reason: 'epoch_mismatch' | 'gap_too_large') {
+    this.live = false;
+    if (reason === 'epoch_mismatch') this.epoch = 'next';
+    this.frame({ type: 'snapshot_required', scope: 'agent:a', epoch: this.epoch, currentSeq: 30, reason });
+  }
+  publish(seq: number, payload: AgentStreamActivityEvent) {
+    if (this.live) this.frame({ type: 'event', scope: 'agent:a', epoch: this.epoch, seq, kind: 'agent_stream_activity', payload });
+  }
   close() { this.readyState = 3; }
   frame(frame: unknown) { for (const fn of this.listeners.get('message') ?? []) fn({ data: JSON.stringify(frame) }); }
 }
@@ -24,7 +45,7 @@ const row = (id: number, text: string): AgentStreamActivityEvent => ({ id, kind:
 const page = (events: AgentStreamActivityEvent[]): AgentStreamActivityListResponse => ({ agent_id: 'a', runtime_scope: 'agent', events, next_before_id: null });
 
 describe('agent stream through event transport', () => {
-  it('uses transport replay ordering and duplicate suppression, then recovers from a snapshot gap', async () => {
+  it.each(['epoch_mismatch', 'gap_too_large'] as const)('resubscribes after %s removes the server relay', async reason => {
     vi.stubGlobal('WebSocket', Socket);
     const client = new EventWsClient();
     const registry = createInterestRegistry(scope => client.subscribe(scope));
@@ -34,12 +55,12 @@ describe('agent stream through event transport', () => {
       onFrame: fn => client.onFrame(fn), onStatus: fn => client.onStatus(fn),
       read: () => new Promise(resolve => pending.push(resolve)),
     });
-    const entry = cache.get('u', 'a'); entry.subscribe(vi.fn());
+    const entry = cache.get('u', 'a'); entry.subscribe(vi.fn()); entry.subscribe(vi.fn());
     client.connect();
     await vi.waitFor(() => expect(socket).toBeDefined());
     socket.frame({ type: 'authenticated', user_id: 'u' });
     expect(socket.sent).toContainEqual({ type: 'subscribe', scope: 'agent:a' });
-    socket.frame({ type: 'subscribed', scope: 'agent:a', epoch: 'e', seq: 0 });
+    socket.acknowledge('e', 0);
     pending[0]!(page([row(1, 'old')])); await Promise.resolve();
     const event = (seq: number, text: string) => ({ type: 'event', scope: 'agent:a', epoch: 'e', seq, kind: 'agent_stream_activity', payload: row(1, text) });
     socket.frame(event(1, 'new')); socket.frame(event(1, 'duplicate stale'));
@@ -48,10 +69,24 @@ describe('agent stream through event transport', () => {
     expect(socket.sent).toContainEqual({ type: 'resume', scopes: { 'agent:a': { epoch: 'e', lastSeq: 1 } } });
     socket.frame(event(2, 'second')); socket.frame(event(3, 'future'));
     expect(entry.getSnapshot().events[0]?.payload).toEqual({ text: 'future' });
-    socket.frame({ type: 'snapshot_required', scope: 'agent:a', epoch: 'next', currentSeq: 30, reason: 'epoch_mismatch' });
+    socket.snapshot(reason);
     expect(entry.getSnapshot().events).toEqual([]);
-    pending[1]!(page([row(8, 'reloaded')])); await Promise.resolve();
-    expect(entry.getSnapshot().events.map(e => e.id)).toEqual([8]);
+    expect(socket.sent.filter(frame => frame.type === 'subscribe')).toHaveLength(2);
+    expect(socket.sent.filter(frame => frame.type === 'resume')).toHaveLength(1);
+    expect(pending).toHaveLength(1);
+    socket.publish(31, row(9, 'no relay yet'));
+    expect(entry.getSnapshot().events).toEqual([]);
+    socket.acknowledge(socket.epoch, 30);
+    expect(pending).toHaveLength(2);
+    socket.publish(31, row(9, 'during cold read'));
+    socket.publish(32, row(8, 'refined during read'));
+    pending[1]!(page([row(8, 'stale page')])); await Promise.resolve();
+    expect(entry.getSnapshot().events).toEqual([row(8, 'refined during read'), row(9, 'during cold read')]);
+    socket.publish(33, row(10, 'after cold read'));
+    socket.publish(34, row(8, 'refined after read'));
+    expect(entry.getSnapshot().events).toEqual([row(8, 'refined after read'), row(9, 'during cold read'), row(10, 'after cold read')]);
+    expect(socket.sent.filter(frame => frame.type === 'subscribe')).toHaveLength(2);
+    expect(pending).toHaveLength(2);
     cache.clear(); client.disconnect();
   });
 });
