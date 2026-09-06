@@ -1,7 +1,8 @@
-import { Fragment, type ReactNode } from 'react';
+import * as Popover from '@radix-ui/react-popover';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { AgentDto, SortGroup } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
-import { ChevronDown, LayoutGrid, MessagesSquare, Plus, Settings } from 'lucide-react';
+import { ChevronDown, LayoutGrid, MessagesSquare, MoreHorizontal, Plus, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import {
@@ -15,7 +16,7 @@ import {
   MutedMarker,
   useSidebarSectionExpanded,
 } from './sidebar-shared';
-import { ChannelSortMenu, WorkspaceChannels } from './WorkspaceChannels';
+import { WorkspaceChannels } from './WorkspaceChannels';
 import { WorkspaceContextMenu } from './WorkspaceContextMenu';
 import { agentSpaceRecognitionName } from '@/lib/workspace-name';
 import {
@@ -654,51 +655,16 @@ function WorkspaceHeaderRow({
           />
         </span>
       </button>
-      {/* No unread badge here (#task:1939): the workspace row shows NO unread number
-          or dot. The old aggregate badge was UNANSWERABLE — a channel moved into
-          STARRED still counts in it, so a collapsed workspace could show a number
-          with no row to point at on expand (shiki). The count still lives on the rail
-          as `workspace.unread` (`attentionBadges.by_workspace`), now only as the
-          INVISIBLE wake gate that pokes the loud rows out below (see
-          `WorkspaceBranch`). The presence dot is a separate liveness hint — kept, and
-          still shown only when there is no unread. The sort menu and `+` reveal on
-          branch hover / keyboard focus via `hoverOnly` — same `ghost` icon Button
-          recipe (h-6 w-6), reveal on a WRAPPER so its `transition-opacity` can't merge
-          away the Button's own `transition-colors`. */}
       <span className="flex shrink-0 items-center gap-1 pl-1">
         {!expanded && !(unread && unread > 0) && workspace.active ? (
           <span className="size-1.5 rounded-full bg-success" />
         ) : null}
-        {expanded ? (
-          <span className={hoverOnly}>
-            <ChannelSortMenu workspaceId={workspace.id} />
-          </span>
-        ) : null}
-        {!isAgentSpace(workspace) ? (
-          <span className={hoverOnly}>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              onClick={() => ctx.onOpenWorkspaceSettings(workspace.id)}
-              aria-label={`Settings for ${title}`}
-              title="Workspace settings"
-            >
-              <Settings className="size-3.5" />
-            </Button>
-          </span>
-        ) : null}
         <span className={hoverOnly}>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => ctx.onCreateChannel(workspace.id)}
-            aria-label={`New channel in ${title}`}
-            title="New channel"
-          >
-            <Plus className="size-3.5" />
-          </Button>
+          <WorkspaceActions
+            title={title}
+            onCreate={() => ctx.onCreateChannel(workspace.id)}
+            onSettings={isAgentSpace(workspace) ? undefined : () => ctx.onOpenWorkspaceSettings(workspace.id)}
+          />
         </span>
       </span>
     </div>
@@ -743,4 +709,35 @@ function canMuteWorkspace(workspace: WorkspaceItem): boolean {
  *  through Settings. */
 function canLeaveWorkspaceRow(workspace: WorkspaceItem): boolean {
   return !isAgentSpace(workspace) && !workspace.archived;
+}
+
+function WorkspaceActions({ title, onCreate, onSettings }: { title: string; onCreate: () => void; onSettings?: () => void }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout>>();
+  const keyboardOpen = useRef(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const cancelClose = (): void => { clearTimeout(closeTimer.current); };
+  const show = (): void => { cancelClose(); setOpen(true); };
+  const hide = (): void => { cancelClose(); closeTimer.current = setTimeout(() => setOpen(false), 150); };
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <Button variant="ghost" size="icon" className="h-6 w-6" aria-label={`Actions for ${title}`} onMouseEnter={show} onMouseLeave={hide} onClick={event => {
+          event.preventDefault();
+          keyboardOpen.current = event.detail === 0;
+          show();
+          if (keyboardOpen.current) contentRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+        }}>
+          <MoreHorizontal className="size-3.5" />
+        </Button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content ref={contentRef} align="end" sideOffset={4} onMouseEnter={cancelClose} onMouseLeave={hide} onOpenAutoFocus={event => { if (!keyboardOpen.current) event.preventDefault(); }} onCloseAutoFocus={event => { if (!keyboardOpen.current) event.preventDefault(); }} data-popover-frame="menu" className="z-[var(--z-dialog)] min-w-40 bg-bg-floating p-1 shadow-popover">
+          <button type="button" className="flex w-full items-center gap-2 rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left text-sm text-text-primary hover:bg-bg-hover" onClick={() => { setOpen(false); onCreate(); }}><Plus className="size-3.5" />Create channel</button>
+          {onSettings ? <button type="button" className="flex w-full items-center gap-2 rounded-[var(--floating-item-radius)] px-2 py-1.5 text-left text-sm text-text-primary hover:bg-bg-hover" onClick={() => { setOpen(false); onSettings(); }}><Settings className="size-3.5" />Settings</button> : null}
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
 }
