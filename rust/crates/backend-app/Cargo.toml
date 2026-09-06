@@ -10,6 +10,8 @@ name = "silverhand-backend"
 path = "src/main.rs"
 
 [dependencies]
+chrono.workspace = true
+chrono-tz.workspace = true
 axum.workspace = true
 futures-util.workspace = true
 http-body-util.workspace = true

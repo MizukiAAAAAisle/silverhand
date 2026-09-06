@@ -1,5 +1,6 @@
 //! Process-owned activity retention: sweep at boot and while idle, for both
 //! deployment shapes. No persisted scheduling state or per-agent coordinator.
+use chrono::{TimeZone, Utc};
 use std::{sync::Mutex, time::Duration};
 
 use silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_agent_activity::ACTIVITY_RETENTION_MS;
@@ -28,23 +29,31 @@ impl ActivityRetention {
         store: MessagingStore,
         hub: ScopeEventHub,
         clock: C,
-        interval: Duration,
+        wake_cap: Duration,
     ) -> Result<Self, crate::StartupError> {
         sweep(&store, &hub, clock.now_unix_millis()).await?;
         let (stop, mut stopped) = watch::channel(false);
         let task = tokio::spawn(async move {
-            let mut timer = tokio::time::interval(interval);
-            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            timer.tick().await;
+            let mut deadline = next_shanghai_six(clock.now_unix_millis());
             loop {
+                // Recheck wall time on bounded wakes, including clock adjustments.
+                // Only reaching the calendar deadline performs a sweep.
+                let now = clock.now_unix_millis();
+                let delay =
+                    Duration::from_millis(deadline.saturating_sub(now).max(1) as u64).min(wake_cap);
                 tokio::select! {
                     biased;
                     _ = stopped.changed() => break,
-                    _ = timer.tick() => {}
+                    _ = tokio::time::sleep(delay) => {}
                 }
-                if let Err(error) = sweep(&store, &hub, clock.now_unix_millis()).await {
-                    tracing::warn!(%error, "activity retention sweep failed; next tick retries");
+                let now = clock.now_unix_millis();
+                if now < deadline {
+                    continue;
                 }
+                if let Err(error) = sweep(&store, &hub, now).await {
+                    tracing::warn!(%error, "activity retention sweep failed; next daily deadline retries");
+                }
+                deadline = next_shanghai_six(clock.now_unix_millis());
             }
         });
         Ok(Self {
@@ -89,4 +98,39 @@ async fn sweep(
             source: Box::new(source),
         })?;
     Ok(())
+}
+
+/// Strictly future local 06:00, independent of startup and sweep duration.
+fn next_shanghai_six(now: i64) -> i64 {
+    let local = chrono::DateTime::<Utc>::from_timestamp_millis(now)
+        .expect("process clock is a representable timestamp")
+        .with_timezone(&chrono_tz::Asia::Shanghai);
+    let mut date = local.date_naive();
+    loop {
+        let next = chrono_tz::Asia::Shanghai
+            .from_local_datetime(&date.and_hms_opt(6, 0, 0).unwrap())
+            .single()
+            .expect("Shanghai 06:00 is unambiguous")
+            .timestamp_millis();
+        if next > now {
+            return next;
+        }
+        date = date.succ_opt().expect("next calendar day");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn daily_deadline_is_strictly_next_shanghai_six() {
+        let six = chrono_tz::Asia::Shanghai
+            .with_ymd_and_hms(2026, 9, 7, 6, 0, 0)
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(next_shanghai_six(six - 1), six);
+        assert_eq!(next_shanghai_six(six), six + 86_400_000);
+        assert_eq!(next_shanghai_six(six + 1), six + 86_400_000);
+        assert_eq!(next_shanghai_six(six + 20 * 3_600_000), six + 86_400_000);
+    }
 }

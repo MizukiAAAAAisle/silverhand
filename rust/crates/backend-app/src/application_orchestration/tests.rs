@@ -11780,7 +11780,13 @@ async fn activity_retention_sweeps_idle_database_and_stops_with_its_owner() {
         .unwrap();
     db.execute(ENROLLMENT_SEED_SQL).await.unwrap();
     db.execute("INSERT INTO conversation_events(conversation_id,agent_id,kind,created_at) VALUES('conv-open','agent-1','turn_end',100)").await.unwrap();
-    let clock = Clock(Arc::new(AtomicI64::new(ACTIVITY_RETENTION_MS + 100)));
+    let six = 1788732000000i64;
+    sqlx::query("UPDATE conversation_events SET created_at=?")
+        .bind(six - 1 - ACTIVITY_RETENTION_MS)
+        .execute(&mut db)
+        .await
+        .unwrap();
+    let clock = Clock(Arc::new(AtomicI64::new(six - 1)));
     let store = MessagingStore::open(&f.path).await.unwrap();
     let retention = super::activity_retention::ActivityRetention::start_with_interval(
         store,
@@ -11797,7 +11803,9 @@ async fn activity_retention_sweeps_idle_database_and_stops_with_its_owner() {
             .unwrap(),
         1
     );
-    clock.0.store(ACTIVITY_RETENTION_MS + 101, Ordering::SeqCst);
+    // An idle wake before 06:00 does not prune the exact boundary.
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    clock.0.store(six, Ordering::SeqCst);
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     // The wall clock is injected; only the maintenance timer runs at test cadence.
     for _ in 0..100 {
@@ -11818,6 +11826,17 @@ async fn activity_retention_sweeps_idle_database_and_stops_with_its_owner() {
             .unwrap(),
         0
     );
+    // Staying at 06:00 must not repeatedly sweep the same deadline.
+    db.execute("INSERT INTO conversation_events(conversation_id,agent_id,kind,created_at) VALUES('conv-open','agent-1','turn_end',1)").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM conversation_events")
+            .fetch_one(&mut db)
+            .await
+            .unwrap(),
+        1
+    );
+    db.execute("DELETE FROM conversation_events").await.unwrap();
     retention.close().await;
     retention.close().await;
     db.execute("INSERT INTO conversation_events(conversation_id,agent_id,kind,created_at) VALUES('conv-open','agent-1','turn_end',1)").await.unwrap();
