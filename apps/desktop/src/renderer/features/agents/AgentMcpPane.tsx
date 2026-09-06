@@ -146,7 +146,7 @@ function ProfileMcpScope({
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-error" />
           <span>
             {runtime === 'pi' ? (
-              <>Configure MCP through Pi extensions. Profile MCP settings are not passed to Pi.</>
+              <>MCP is configured through Pi extensions. Profile MCP settings do not apply to Pi.</>
             ) : (
               <>
                 Profile MCP is not loaded for <strong>{runtimeLabel(runtime)}</strong>{' '}
