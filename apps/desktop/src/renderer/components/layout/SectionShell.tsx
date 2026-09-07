@@ -29,27 +29,6 @@ interface SectionShellProps {
   children?: ReactNode;
 }
 
-/**
- * The `sidebar | page` shell shared by the non-chat NavRail sections
- * (members / computers / settings / activity) — #task:1970, shiki
- * 「右侧的 sidebar | page 应该是一个通用 shell component」.
- *
- * It owns the one thing those four hand-copied: the sidebar `aside` — its
- * `data-sidebar` hook, the `--bg-channels-sidebar` ground, pane chrome
- * (rounding + lift via `paneChrome`) and `overflow: hidden`. The page and the
- * optional splitter are passed through as siblings.
- *
- * Renders a Fragment, NOT a wrapping div, on purpose: these sections mount
- * inside `SectionLayer` (`display: contents`), and the sidebar / splitter /
- * page must stay direct flex children of the section sheet's row. A wrapper
- * would inject a flex item and break the frame layout (same reason
- * `SectionLayer` itself is `display: contents`).
- *
- * Chat is deliberately NOT a consumer (shiki): its sidebar is a collapsible
- * slot with its own animate/inert layout hacks and its page is a 4-state
- * switch with deferred mounting — special-casing that here would bloat the
- * shell for the one section that least fits it.
- */
 export function SectionShell({
   name,
   label,
@@ -65,7 +44,7 @@ export function SectionShell({
         data-sidebar={name}
         aria-label={label}
         className={cn(
-          'flex h-full flex-col bg-[var(--bg-channels-sidebar)]',
+          'flex h-full flex-col bg-bg-base',
           fill ? 'min-w-0 flex-1' : 'shrink-0',
         )}
         style={{ ...paneChrome, overflow: 'hidden', width: fill ? undefined : width }}

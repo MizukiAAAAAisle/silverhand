@@ -1106,14 +1106,8 @@ function RegisteredAppShell({
     nav.go(routes.membersAgent(target), { replace: true });
   }, [agents, appSection, nav, selectedAgentId, selectedUserId]);
 
-  // #task:808 slice 4 — host list + auto-default selection. ComputersPanel
-  // takes the data as props; HostDetailView gets the resolved selectedHost
-  // directly.
   const hostsQuery = useHostsQuery();
-  // `pollProtocolCompatibility` keeps the outbound-protocol skew field
-  // (#task:1462) fresh via a 30s + window-focus refetch, so a future
-  // server protocol bump surfaces in `AppStatusBanner` without the
-  // user having to retry an agent action first.
+
   const backendInfoQuery = useBackendInfoSnapshot({
     pollProtocolCompatibility: true,
   });
@@ -1172,28 +1166,6 @@ function RegisteredAppShell({
   );
   const parentChannelMembership = parentMembership.membership;
 
-  // The Attachments (`?files=1`) and Threads-list (`?threads=1`) panes are
-  // member-only aggregates. Gating the header toggles that open them is NOT a
-  // mount guard: a non-member can hand-write / restore the query flag, or a
-  // member's status can be revoked while the pane is open — either way the
-  // ungated branch would still MOUNT the panel and fire its member-only
-  // readers. So the mount itself is gated here, at the secondary-view owner, on
-  // the authoritative parent membership (`member` only; `nonmember`/`unknown`
-  // fail closed). The single `?thread=` pane and inline attachment preview are
-  // NOT gated — reading an existing thread is allowed for a non-member. The
-  // same gated flags feed the ⌘W responder below so a stale flag never occupies
-  // a close rung for a pane that isn't rendered.
-  //
-  // Both are CHANNEL-scoped indexes the backend resolves through `getChannelLike`,
-  // which spans EVERY top-level placement — a workspace channel and a
-  // workspace-less `direct_pair` alike — gated only by `canViewConversation`,
-  // never a classifier (#task:2096; `conversation-repo.ts` getChannelLike +
-  // `conversation-persistence.ts` "intentionally spans every top-level
-  // placement"). So the index exists for any OPEN top-level conversation, which is
-  // exactly `selectedChannelId != null`: both arms put the open conversation's id
-  // there, and only a `/chat/d/new` draft (no conversation yet) has none. What has
-  // NO channel-scoped index is a *secondary* thread / dm-side / `?side` pane —
-  // excluded at its own render branch, not here.
   const channelIndexesAvailable = selectedChannelId !== null;
   const filesListMounted =
     channelIndexesAvailable &&
@@ -1227,23 +1199,7 @@ function RegisteredAppShell({
     (deferredChannelId != null &&
       deferredSelectedChannel == null &&
       activeChannelsLoading);
-  // Same decoupling at the TOP-LEVEL view axis (#task:1168). The NavRail
-  // highlight reads urgent `appSection` (instant), while the heavy main-view
-  // branch (TasksSection's cross-workspace fetch + 5-column kanban, Settings,
-  // members/computers detail) renders off `deferredSection` — so clicking the
-  // Tasks rail paints the highlight first and the board mounts in a low-
-  // priority pass AFTER, instead of jamming both into one commit. Only the
-  // BRANCH SELECTION defers; effect guards, focus targets, and titlebar
-  // callbacks (lines ~506/713/838/1407/1707) stay on urgent `appSection` so
-  // they reflect the true target section. Cross-section switches are the only
-  // thing affected — channel↔channel stays 'chat' so `deferredChannelId`
-  // alone governs it.
-  //
-  // #task:1170 refines this for the chat section specifically: chat's cheap
-  // shell (the two sidebars + splitters) is lifted onto urgent `appSection` so
-  // a rail click paints it instantly, while only the heavy conversation pane
-  // stays gated on `deferredSection`. See the section-render block below for the
-  // full mount-vs-visibility split.
+
   const deferredSection = useDeferredValue(appSection);
   const conversationRefsById = useMemo(() => {
     // `channels` is the CURRENT WORKSPACE's channel list — that scope is what
@@ -1522,10 +1478,10 @@ function RegisteredAppShell({
     // it POSTs `markRead` (an irreversible server write that clears the
     // conversation's unread) and stashes a `jumpTarget` that later scroll-locates
     // whichever conversation next opens. So a target we are going to REFUSE must
-    // do none of that (@Paul P1) — the fail-closed branch returns ABOVE
+    // do none of that — the fail-closed branch returns ABOVE
     // `requestJump`, not below it.
     //
-    // Inline channel find (#task:1335) is the ONE exemption: it never navigates,
+    // Inline channel find is the ONE exemption: it never navigates,
     // priming IS its whole function, and it must NOT consult the pair list —
     // `ChannelView` passes a DM's own `workspace_id ?? undefined`, so a DM inline
     // find is workspace-less and would otherwise fail-closed during any pair-list
@@ -1533,7 +1489,7 @@ function RegisteredAppShell({
     const isInlineFind = !!params.preserveSidePanel && !params.threadRootId;
     // A jump target carries no placement — only ids — so a workspace-less
     // conversation is classified against the one carrier that knows: the viewer's
-    // direct-pair AUTHORITY (#task:2052). It rides `directPairAuthority`, not the
+    // direct-pair AUTHORITY. It rides `directPairAuthority`, not the
     // raw `directPairIds` set, because a cold/failed pair read holds an EMPTY set
     // that a bare `.has()` cannot tell apart from "answered, not a pair"; guessing
     // the selected workspace for a pair id builds a channel URL under a workspace
@@ -1552,20 +1508,9 @@ function RegisteredAppShell({
     if (jumpNav === 'fail-closed') return false;
 
     requestJump(params);
-    // Inline channel find (#task:1335): a main-stream ensure-visible on the
-    // ALREADY-open channel. `requestJump` above primes + scroll-locates; running
-    // the route navigation below would drop the `?thread` query and collapse an
-    // open thread side panel (shiki/Cindy). The channel is already selected (the
-    // find bar lives in it), so no nav is needed. Fail-closed on `!threadRootId`
-    // so the flag can ONLY skip nav for a main-channel target — a thread target
-    // that mistakenly carries it still runs `withThreadQuery` below (Cindy).
+
     if (isInlineFind) return false;
-    // Which pane, and the cluster to open with it. Both arms take their thread
-    // coordinate from ONE place (#task:2102) — the direct arm used to drop it,
-    // which is why a DM attachment sourced from a thread opened the pair's main
-    // line and never located the message. A pair HAS reply clusters since
-    // #task:2096 (`ThreadPanel` mounts on the workspace-less route with a null
-    // workspace), so there is nothing left to special-case here.
+
     const route = resolveJumpRoute({
       decision: jumpNav === 'to-direct' ? 'to-direct' : 'workspace-resolve',
       channelId: params.channelId,
@@ -1573,34 +1518,13 @@ function RegisteredAppShell({
       threadRootId: params.threadRootId,
     });
     if (!route) return false;
-    // Section-aware base path (#task:1394 / #task:2115): an Activity-list jump
-    // stays in `/activity/...` for BOTH placements — a DirectPair keeps the
-    // Activity shell/list exactly like a channel item, rather than falling back
-    // to `/chat/d/:id` and leaving the section. The section→prefix and
-    // placement→workspace-segment decisions compose in one pure function.
+
     const basePath = jumpBasePath(appSection, route);
-    // Navigate pane + `?thread` ATOMICALLY — a `toDirect`/`toChannel` followed by
-    // an `openThread` would build the thread query off the PRE-navigation
-    // location and drop it. `withThreadQuery` on a null root serializes to the
-    // bare path (empty params), so the main-line arm is byte-identical to the
-    // plain route; on a non-null root it also clears the mutually exclusive
-    // secondary panes (`?files`, `?side`, …), which is the same replace
-    // semantics opening a thread has everywhere else.
     nav.go(withThreadQuery(basePath, '', route.threadRootId));
+
     return true;
   };
 
-  // Stable identity for the jump handler handed to a long-list section
-  // (ActivityView), so this agent-heavy app's frequent SSE-driven App
-  // re-renders don't invalidate every row's props on the way down. Introduced
-  // for the deferred-section path (#task:1168), where an unstable handler
-  // re-rendered ~1356 Tasks cards at high priority and repeatedly restarted the
-  // low-priority switch-to-chat transition (Alice CDP: 3.5s on-screen freeze);
-  // the Tasks board no longer takes a jump handler at all (#task:1715 moved
-  // that action into the detail modal), but the same hazard applies to Activity.
-  // A ref-backed callback gives a stable identity without the stale-closure
-  // risk of useCallback-wrapping the big handler below. Mirrors the stable
-  // refs ChannelView relies on for the same reason (L1068).
   const jumpToMessageRef = useRef(handleJumpToMessage);
   jumpToMessageRef.current = handleJumpToMessage;
   const handleJumpToMessageStable = useCallback(
@@ -1619,14 +1543,6 @@ function RegisteredAppShell({
 
   const buildChannelDescriptor = useCallback(
     (s: ChannelListItem | null): ConversationPaneDescriptor | null =>
-      // Placement (agent-scoped-session-v1 §4.1): `workspace_id` is nullable on
-      // the wire because only the workspace arm of a placement carries one. This
-      // builder covers the WORKSPACE arm only — a channel LIST is keyed by
-      // workspace, so a workspace-less placement could only appear in one by
-      // mistake, and the pane declines to mount rather than render with a
-      // fabricated coordinate. The workspace-less pane has its own carrier and
-      // its own builder (`directPairPaneDescriptor`, #task:2035), which is why
-      // this narrowing stays an honest `null` and not a `!`.
       s && isWorkspacePlaced(s)
         ? {
             id: s.id,
@@ -1649,13 +1565,6 @@ function RegisteredAppShell({
     nav.closeSide();
   }, [nav.closeSide]);
 
-  // The agent page's `Message` entry, from BOTH its full page and its side panel
-  // (#task:2039). One destination model, one interface: an existing line opens at
-  // its own route, and an agent the viewer has never messaged opens the same chat
-  // surface as a DRAFT (`/chat/d/new/:agentId`) whose first send mints the pair
-  // through the initiation door. Nothing is allocated by clicking — a viewer whose
-  // pair list is still cold falls through to the draft, and that draft's first
-  // send converges on the same pair via get-or-create.
   const handleMessageAgent = useCallback(
     (agentId: string): void => {
       const existing = findAgentDirectPair(directPairs, agentId);
@@ -2314,24 +2223,6 @@ function RegisteredAppShell({
     <div
       className="flex h-screen w-screen flex-col overflow-hidden"
       style={{
-        // Window paper (#task:1965). A theme whose chrome is a GRADIENT
-        // can't express it through the colour tokens — every consumer of
-        // `--bg-app` / `--bg-base` reads them as `background-color` — so
-        // the gradient arrives through its own image slot. Themes that
-        // don't fill it resolve `none` and paint nothing, which is why
-        // this is one declaration and not a per-theme branch.
-        //
-        // Three constraints, all inherited from the upstream this is
-        // modelled on (block/buzz):
-        //   • painted ONCE, here — this node is the only full-viewport,
-        //     non-scrolling surface, so a gradient on it can't be dragged
-        //     by a scroll container or repeated per pane;
-        //   • sized `100vw 100vh` explicitly rather than left to `cover`,
-        //     so the ramp is anchored to the window and not to whatever
-        //     this box's content height happens to be;
-        //   • deliberately NOT `background-attachment: fixed` — WKWebView
-        //     keeps a stale raster of fixed backgrounds through window
-        //     resizes, which shows up as a torn gradient.
         backgroundImage: 'var(--app-paper, none)',
         backgroundSize: '100vw 100vh',
         backgroundRepeat: 'no-repeat',
@@ -2347,12 +2238,6 @@ function RegisteredAppShell({
       <div
         className="flex min-w-0 flex-1 overflow-hidden"
         style={{
-          // Frame layer: `--bg-app` fills the gutter around the panels.
-          // There used to be a second `backgroundImage` write here for a
-          // per-theme texture slot (`--bg-pattern-image`); forza6 was the
-          // only theme that ever filled it, and both the texture and the
-          // slot were retired in #task:1871 — the poster language is
-          // carried by ink frames and flat paper, not a background weave.
           backgroundColor: 'var(--bg-app, transparent)',
           padding: '0 var(--frame-padding, 0) var(--frame-padding, 0)',
           gap: 'var(--frame-padding, 0)',
@@ -2370,71 +2255,11 @@ function RegisteredAppShell({
             else nav.toComputers();
           }}
         />
-        {/* Section sheet — the layer every section view lives in, one
-          * step inside the frame (#task:1965). It exists so a theme can
-          * decide whether the panes are separate cards floating in the
-          * gutter or ONE surface.
-          *
-          * The gap is its own token: `--pane-gap` is the gap BETWEEN PANES,
-          * `--frame-padding` stays the OUTER gutter (window edge + around
-          * the rail). Every theme declares it explicitly (fence-enforced in
-          * appearance.test) — it's load-bearing geometry for both splitters,
-          * the sidebar collapse, and the titlebar chrome width, so it must not
-          * hide behind a `--frame-padding` fallback (#task:1972). It has to be
-          * a token rather than a theme-file override because this
-          * declaration is inline: a `[data-theme=x] [data-section-sheet]
-          * { gap: 0 }` rule loses to it on specificity, silently leaving
-          * the panes 8px apart (#task:1965 review round 1 — that stray gap
-          * is what stopped the chat header's border-bottom from closing
-          * against the sidebar divider).
-          *
-          * iris sets `--pane-gap: 0px` and paints this node as the single
-          * white sheet holding sidebar + main, which is why the rail stays
-          * OUTSIDE it — the rail is the one pane left standing on the
-          * gradient paper.
-          *
-          * Deliberately NO `overflow-hidden` here: the card themes let
-          * their panes' `--card-shadow` spill into the gutter, and clipping
-          * it at this boundary would shave the shadow off the outer edges.
-          * iris opts INTO clipping in `themes/iris.css` (its panes are
-          * square, so only the sheet's own corners need to cut). */}
         <div
           data-section-sheet=""
           className="flex min-w-0 flex-1"
           style={{ gap: 'var(--pane-gap)' }}
         >
-          {/* ===== Top-level section views (#task:1168 + #task:1170) =====
-            *
-            * Rendered as INDEPENDENT conditional siblings (not a mutually-
-            * exclusive ternary) so that during a section switch the outgoing and
-            * incoming sections can briefly coexist — one visible, one hidden —
-            * which is what lets the chat shell paint instantly without dragging
-            * the previous section's teardown onto the click commit.
-            *
-            * Two axes, deliberately driven by DIFFERENT section values (this is
-            * intentional, not a typo — see the three invariants in #task:1170):
-            *
-            *   • MOUNT / UNMOUNT  ← `deferredSection` (low-priority).
-            *     Each `deferredSection === X` guard mounts a section and, once the
-            *     deferred value moves off X, truly UNMOUNTS it on the deferred
-            *     commit. So a heavy teardown (TasksSection's 274-card dnd-kit
-            *     cleanup; ChannelView's effects) never runs on the urgent click
-            *     commit that must paint the rail highlight. NB: this is a real
-            *     unmount, NOT keep-alive — display:none below only spans the
-            *     transition frames; a section is never left permanently
-            *     mounted-but-hidden (that would resurrect the mark-read side
-            *     effect we rejected, ChannelView.tsx:248-260).
-            *
-            *   • VISIBILITY  ← urgent `appSection`, via <SectionLayer> toggling
-            *     display:contents↔none. The rail click updates `appSection`
-            *     synchronously, so the click commit instantly flips WHICH mounted
-            *     section is shown, even though the deferred mount/unmount lags a
-            *     step behind.
-            *
-            * Non-chat sections are hidden only while `appSection === 'chat'` (chat
-            * is urgently taking over on top); during non-chat→non-chat switches
-            * the outgoing one stays visible until the incoming one mounts, so we
-            * never flash blank. */}
           {deferredSection === 'settings' && (
             <SectionLayer visible={appSection !== 'chat'}>
               <SettingsPage />
@@ -2524,26 +2349,10 @@ function RegisteredAppShell({
             </SectionShell>
             </SectionLayer>
           )}
-          {/* ACTIVITY: NavRail top-level section (#task:1394). Three columns:
-            * Activity-list navigator | full ChannelView | full ThreadPanel. The
-            * browse sidebars are intentionally absent — the Activity list column
-            * replaces them (the "省下一个 sidebar"). Mounts/unmounts on
-            * `deferredSection` like the other non-chat sections. */}
           {deferredSection === 'activity' && (
             <SectionLayer visible={appSection !== 'chat'}>
             <SectionShell
               name="activity"
-              /* Two layout states, both a pure projection of the route
-               * (#task:1394, shiki): with NO channel in the route (bare
-               * `/activity`, incl. the caught-up empty state) the list FILLS
-               * the content area — no page, no splitter, so we never carry
-               * back an implicit "unselected but a conversation surface
-               * exists" state. Once a row is clicked the route gains
-               * `/w/:wid/c/:cid` and it collapses to a resizable column beside
-               * the reused ChannelView — the SAME progressive-disclosure
-               * primitive as chat's ChannelView→ThreadPanel (app-layout.md §1).
-               * Width is its OWN `--activity-list-width` (never chat's
-               * `--sidebar-width`) with an independent clamp + persisted pref. */
               fill={selectedChannelId == null}
               width="var(--activity-list-width)"
               sidebar={
@@ -2562,14 +2371,6 @@ function RegisteredAppShell({
                 ) : null
               }
             >
-              {/* The page is gated on URGENT `appSection === 'activity'` (not
-                * just the deferred mount): during an activity↔chat transition
-                * both blocks are briefly mounted, so this ensures only ONE
-                * renders the shared ChannelView, avoiding a transient
-                * double-mount of its effects; the hidden side shows the
-                * skeleton. Right side = the SAME `parentView` / `secondaryView`
-                * chat renders — route-driven reuse is what makes
-                * "无条件自动同步" structural. */}
               {selectedChannelId != null ? (
                 appSection === 'activity' ? (
                   secondaryView &&
@@ -2589,15 +2390,6 @@ function RegisteredAppShell({
             </SectionShell>
             </SectionLayer>
           )}
-          {/* CHAT: the cheap shell (workspace + channel sidebars + their
-            * splitters) mounts on URGENT `appSection` so a rail click paints it
-            * immediately (~5ms render, Alice CDP). It is mounted while EITHER
-            * value is 'chat': `appSection === 'chat'` covers instant ENTRY;
-            * `deferredSection === 'chat'` keeps the shell on screen for the
-            * one-step EXIT (chat→X) until the destination mounts, so we never
-            * flash blank. Whenever it's mounted it's the section to show, so it's
-            * always visible. The heavy conversation pane inside is gated
-            * separately on `deferredSection` with a skeleton (see below). */}
           {(appSection === 'chat' || deferredSection === 'chat') && (
             <SectionLayer visible>
             <>
@@ -2747,24 +2539,6 @@ function RegisteredAppShell({
                 />
               ) : (
                 <>
-                  {/* Heavy conversation pane — the only part of the chat section
-                    * kept on `deferredSection`. While the deferred value hasn't
-                    * caught up to 'chat' (i.e. we just entered chat and the shell
-                    * above is already painted), show a skeleton instead of
-                    * mounting ChannelView, so the mount's ~hundreds-of-ms commit
-                    * work stays off the click critical path.
-                    *
-                    * The gate is `deferredSection === 'chat'` — keyed by
-                    * DESTINATION, not predecessor. That's deliberate: on entry
-                    * `appSection` is already 'chat' but `deferredSection` still
-                    * names the previous section; gating on the predecessor would
-                    * briefly mount this pane over the half-torn-down old section.
-                    * Keying on the destination shows the skeleton for exactly the
-                    * frames before the conv is ready, never stale previous
-                    * content. (PERCEPTION win only — the deferred mount/teardown
-                    * longtask still runs a beat later behind the painted shell;
-                    * it does NOT reduce that CPU work, so don't drop the defer on
-                    * the assumption it does.) */}
                   {deferredSection === 'chat' ? (
                     secondaryView &&
                     shouldSecondaryFullscreen(secondaryDescriptor, routeFullscreen) ? (
@@ -2800,18 +2574,6 @@ function RegisteredAppShell({
         onCreated={hostId => setSelectedHostId(hostId)}
       />
       <CreateChannelDialog
-        // Target workspace comes from the row that opened the dialog, not from the
-        // route (#task:1889) — a `+` on any row in the merged tree creates there,
-        // and the new channel is opened in ITS parent, not the current one.
-        //
-        // Both the target id and the capabilities come from the SAME resolved row
-        // (Paul, #task:2066): the row can disappear while the dialog is open (the
-        // owning agent is hard-deleted, or the workspace is archived/deleted from
-        // elsewhere). Reading the id from the raw `createChannelWorkspaceId` there
-        // left a live target paired with the `null` → regular-workspace fallback,
-        // i.e. an Agent Space that grows a member picker and a visibility choice,
-        // with only the server's 400/404 to stop the submit. Sharing one row makes
-        // that state "no target, nothing actionable" instead.
         open={createChannelWorkspaceId !== null}
         onOpenChange={open => {
           if (!open) setCreateChannelWorkspaceId(null);
@@ -2832,11 +2594,6 @@ function RegisteredAppShell({
         archivedAt={settingsWorkspace?.archived_at ?? null}
         onDeleted={() => { if (workspaceSettingsId) handleWorkspaceDeleted(workspaceSettingsId); }}
       />
-      {/* Task detail modal — the NON-pane half of the `?task` split (#task:1721):
-        * a board card or a cold deep-link outside chat, where there is no
-        * conversation for a side pane to anchor to. In a channel chat the same
-        * pointer renders `TaskDetailPanel` instead (`taskModalId` is null then),
-        * so exactly one surface shows the task. */}
       <TaskDetailDialog
         taskId={taskModalId}
         onOpenChange={next => {
@@ -2871,14 +2628,6 @@ function RegisteredAppShell({
         mobileOffset={TOAST_MOBILE_OFFSET}
       />
 
-      {/* #task:1462 — single app-status banner slot. Mounted INSIDE the
-        * registered shell on purpose: boot-time unreachability is the
-        * BackendUnreachableGate's full-screen job; this is the non-blocking
-        * mid-session arm. It collapses two signals that share one fixed
-        * slot — backend unreachable (ApiError.kind === 'backend_unreachable')
-        * and outbound-protocol skew (BackendInfo.outbound_protocol_
-        * compatibility) — into one banner, priority unreachable > skew.
-        * Renders nothing when neither signal is active. */}
       <AppStatusBanner />
 
       {/* Shutdown progress overlay — shown during graceful quit so the

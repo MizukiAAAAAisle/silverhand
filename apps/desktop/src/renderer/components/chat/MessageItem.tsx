@@ -243,9 +243,6 @@ export interface MessageItemProps {
  *   the message has an open thread. Carries real information, so it
  *   earns persistent space.
  *
- * Hover affordance: `--bg-floating` (pure white in the default theme)
- * background + 1px `--border-subtle` outline, square corners.
- *
  * Layout: respects `useMessageLayoutMode`. In `'user-right'` mode the
  * current user's messages flush right; in `'all-left'` everything is
  * left-aligned.
@@ -282,19 +279,6 @@ export function MessageItem(props: MessageItemProps): JSX.Element | null {
   return null; // 'system' — parents route these to SystemMessage.
 }
 
-/**
- * The fail-closed path for a row whose author carrier is a data-contract breach
- * — absent for a non-system row, or a `from_kind`/`author.kind` mismatch
- * (#task:1792, Alice + Cindy). Neither is reachable on a healthy path (the
- * resolver derives `author.kind` from `from_kind`, and every non-system message
- * carries a resolved author), so this is a defensive surface, not a display
- * state. It is its OWN component so it never shares `ActorMessageItem`'s hook
- * lifecycle, and it makes the breach OBSERVABLE at the boundary (a logged
- * contract violation) instead of hiding the row as a silent gap — while still
- * refusing to fabricate the name / avatar the removed `?? unresolvedAuthorFor`
- * used to invent. There is deliberately no user-facing identity for an
- * unreachable corruption state; the signal is for whoever broke the contract.
- */
 function MissingAuthorRow({
   message,
   reason,
@@ -390,10 +374,7 @@ function ActorMessageItem({
         ? viewer ?? humansById?.get(presentation.navigableId ?? '')
         : humansById?.get(presentation.navigableId ?? '')
       : undefined;
-  // The byline avatar's bytes come from the author-DTO-derived batch (#task:1792
-  // B2 — keyed by the active author's own id, never the live directory), and a
-  // self-send prefers the viewer's resolved blob so it matches the composer.
-  // Neutral arms (deleted / unresolved) fetch nothing.
+
   const viewerAvatarOverride =
     isCurrentUser && viewerAvatarObjectUrl ? viewerAvatarObjectUrl : undefined;
   const bylineAvatarUrl =
@@ -402,24 +383,14 @@ function ActorMessageItem({
       : presentation.avatar.variant === 'user'
         ? viewerAvatarOverride ?? authorUserAvatarUrls?.get(presentation.avatar.id) ?? null
         : null;
-  // Absolute time stamp (shiki #task:918): the header shows the literal
-  // wall-clock value (`MM/DD HH:mm`) instead of "3 分钟前", and the
-  // tooltip carries the fuller `YYYY-MM-DD HH:mm:ss` for precise
-  // reference. Computed inline — no minute-tick re-render needed since
-  // the absolute value is immutable.
+
   const createdAt = dayjs(message.created_at);
   const timeLabel = createdAt.format('MM/DD HH:mm');
   const timeTooltip = createdAt.format('YYYY-MM-DD HH:mm:ss');
-  // Continuation rail (#task:1737) — clock only, no date: a group never spans
-  // a day boundary, so the head's `MM/DD` already dates every row under it,
-  // and `HH:mm` is what fits the avatar-width rail.
+
   const continuationTimeLabel = createdAt.format('HH:mm');
   const { openAgentPanel, toMembersUser } = useNav();
-  // Clicking an agent avatar/name in the message stream opens the agent's
-  // compact side panel (`?agent=`) instead of jumping to the full members
-  // page — so the channel stays put and Activity reads beside it
-  // (dual-screen, #task:1189). The full page is still reachable via the
-  // panel's ⤢ expand button or the Members section.
+
   const navigateToAgent = useCallback(
     (agentId: string) => openAgentPanel(agentId),
     [openAgentPanel],

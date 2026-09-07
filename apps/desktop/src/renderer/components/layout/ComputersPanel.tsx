@@ -1,29 +1,3 @@
-/**
- * `#task:808` slice 4 — host list for the Computers nav section.
- *
- * Renders ALL hosts the viewer owns (not just `kind === 'local'`),
- * so when remote-host support lands no UI change is required — shiki:
- * "功能应是 hosts 主语的通用功能，不是 local only". Sorting:
- *   1. local host first (anchor — the user almost always starts here),
- *   2. then by `display_label ?? name` (case-insensitive) for stable
- *      ordering across renders.
- *
- * **Inputs come as props.** Data ownership lives in the parent (`App`)
- * so the right-pane `HostDetailView` can resolve the selected host
- * from the same in-memory list — single source of truth across the
- * master/detail split, no double React Query subscription, no comment
- * needed about deduping.
- *
- * **One availability path for every row.** Each row reads live
- * availability from `GET /api/hosts/:id/status` via `describeHostStatus`
- * — the SAME mapper the detail-view hero pill uses — so the rail's
- * pip/label and the detail pill never disagree (shiki dogfood: "online
- * status ... 没有完全一致"). The app-managed local computer goes through
- * the identical path; provenance is a badge, never a separate pip source.
- * Liveness is push-based (`host-connection-sync` invalidates the
- * `host-status` cache on connect/disconnect frames), so no polling — the
- * per-row fetch is one cheap request on mount, then event-driven.
- */
 import type { JSX } from 'react';
 import { Monitor, Plus } from 'lucide-react';
 import type { HostDto } from '@silverhand/shared';
@@ -57,17 +31,6 @@ export function ComputersPanel({
   onSelectHost,
   onAddComputer,
 }: ComputersPanelProps): JSX.Element {
-  // The rail shows only FINALIZED computers. A computer is a modal-scoped
-  // draft until the user confirms creation (names + Done → `finalized_at`);
-  // its whole pre-finalize lifecycle — `pending` (minted, not yet
-  // connected) and `attached` (daemon connected, not yet finalized) — lives
-  // inside the Add-computer dialog (shiki 2026-07-06: "那个只在 Modal 确认
-  // create 了之后才出现"; Alice's finalized_at three-state model). The
-  // backend GET list already excludes un-finalized drafts, so this is
-  // belt-and-braces + forward-compatible: it stays correct when the
-  // `attached` state lands in the enum, and keeps a draft trivially
-  // unplaceable at the UI layer. Rail = `active` (finalized) + `revoked`
-  // (audit history).
   const sorted = sortHostsForSidebar(
     hosts.filter(
       host => host.status === 'active' || host.status === 'revoked',
@@ -76,16 +39,6 @@ export function ComputersPanel({
   );
 
   return (
-    // v6.9 #task:917: SidebarSection now accepts a leading `icon` slot
-    // (added in v6.8 for AGENTS/HUMANS). COMPUTERS gets `Monitor` — same
-    // glyph the local host already uses in its row, so the section header
-    // reads as "computers live here" with one visual anchor. forza6 paints
-    // it as a small muted ink mark via `data-sidebar-section-icon`; other
-    // themes pass it through as plain lucide.
-    // #task:1348: the `+` action on the right mints a new computer. Use
-    // a custom `action` with an h-6 icon button (matching the CHANNELS
-    // header precedent) rather than the default `onAdd` — the default's
-    // `size="icon"` is h-8/32px and would stretch the 24px header.
     <SidebarSection
       label="COMPUTERS"
       icon={<Monitor className="size-3.5" />}

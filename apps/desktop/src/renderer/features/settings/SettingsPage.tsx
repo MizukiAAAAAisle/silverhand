@@ -77,33 +77,11 @@ const THEME_META: Record<
     surface: string;
     text: string;
     accent: string;
-    /** Idle (non-active) tile border color. Per-theme so the preview
-     *  carries that theme's identity instead of the *current* viewer
-     *  theme's `--border-subtle`. forza6's near-black poster border
-     *  was nearly invisible against the magenta side of its
-     *  lime→magenta gradient because the global subtle is only ~10%
-     *  alpha — looked like the border had "disappeared" along the
-     *  bottom-right (@shiki feedback `h45zG6elM7NVgPzQ`).
-     *
-     *  v6.9.5 note: an earlier `radius` field tried the same per-
-     *  theme treatment for the card's own corner radius, but stacking
-     *  three different radii in a 3-tile grid read as "inconsistent
-     *  design" (@shiki "圆角都不一致了, 固定一个圆角数值就好"). Card
-     *  radius is now a single fixed value across all three cards (see
-     *  the `rounded-[10px]` Tailwind class on the button below) —
-     *  the colour/gradient swatch is what previews the theme, the
-     *  card chrome stays uniform so the grid reads as one set. */
     border: string;
   }
 > = {
   'studio-light': {
     label: 'Studio Light',
-    // Cool-neutral chrome + pure-white work surface + a deep blue
-    // accent (#task:1656). The 4 dots preview the theme's whole
-    // argument: the app tray (#DEE3EB, the deepest light layer) → the
-    // sidebar carrier (#F2F5F9) → ink text → the accent. Idle tile
-    // border is the tray colour so the card reads as one cool set
-    // instead of borrowing the viewer's current-theme hairline.
     bg: '#F2F5F9',
     surface: '#DEE3EB',
     text: '#111725',
@@ -112,12 +90,6 @@ const THEME_META: Record<
   },
   forza6: {
     label: 'Forza6',
-    // Swatch refreshed for PR-2 v5.x final palette: pale lime sidebar
-    // carrier + festival magenta frame + acid lime selected/inline-code
-    // + near-black text. The original v1-era teal `#0F847B` no longer
-    // has a live site after the v5 selected/focus role swap (deep teal
-    // sidebars were dropped in favour of pale lime). shiki
-    // `30FgGvhGzEJztabr` "卡片色系还有青色，更新一下".
     bg: '#F4F8E8',
     surface: '#FF2C7A',
     text: '#0A0A0A',
@@ -126,13 +98,6 @@ const THEME_META: Record<
   },
   'slack-dark': {
     label: 'Slack Dark',
-    // Cool blue-black chrome (sidebar #19171D) + aubergine app frame
-    // (#350D36, the warm Slack-记忆点) + light gray primary text +
-    // brand blue accent. The 4 swatch dots show the dark surface
-    // ladder (sidebar/chat bg + frame) and the two primary signals
-    // (text + accent). idle tile border is the aubergine — the only
-    // warm beat in the palette, lets the swatch read as "Slack" at
-    // a glance.
     bg: '#19171D',
     surface: '#350D36',
     text: '#E2E3E3',
@@ -141,16 +106,6 @@ const THEME_META: Record<
   },
   iris: {
     label: 'Iris',
-    // The only theme whose chrome is a GRADIENT, so the preview card's own
-    // `135deg` ramp doubles as a literal sample of the window paper: the
-    // two swatch stops ARE `--app-paper`'s endpoints (#task:1965). Picking
-    // the ramp over the white sheet is deliberate — the sheet is what this
-    // theme shares with Studio Light, the yellow-green → slate ramp is
-    // what tells them apart at 92px. Idle tile border is a warm ink
-    // hairline rather than a palette colour: the card's gradient ENDS in
-    // `#C4D0DA`, so a border in that colour would disappear along the
-    // bottom-right — the same way forza6's near-black vanished into its
-    // magenta side before it was repicked.
     bg: '#E6E6B6',
     surface: '#C4D0DA',
     text: '#1F1A12',
@@ -176,21 +131,6 @@ export function SettingsPage(): JSX.Element {
     persistSettingsSection(section);
   }, [section]);
 
-  /* Two islands, exactly the Computers / Members shape (shiki 2026-08-06
-     「采用 computer rail 那种两栏 island 布局方式」): the section list is its
-     own card at `--sidebar-width`, the panes are the content card, and the
-     section sheet's own `gap: var(--pane-gap)` separates
-     them (0 in iris, where the sheet IS one sheet — hence this pane's
-     `border-right` in `themes/iris.css`). The shared `SectionShell` owns the
-     list's `aside[data-sidebar]` island (Fragment, not a wrapper div, so the
-     two cards stay siblings in the sheet's flex row under
-     `SectionLayer`'s `display: contents`) — exactly the
-     `aside[data-sidebar="computers"]` + `HostDetailView` pair.
-
-     As a real `aside[data-sidebar]` the list inherits every per-theme sidebar
-     rule (carrier ground, ink ladder, row sticker states) instead of needing a
-     parallel `[data-settings-nav]` scope and a `--bg-settings-nav` token — the
-     ground and the rows are the rail's, not a copy of it. */
   return (
     <SectionShell
       name="settings"
@@ -199,23 +139,9 @@ export function SettingsPage(): JSX.Element {
       sidebar={<SettingsRailNav section={section} onSelect={setSection} />}
     >
       <main
-        className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
+        className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-base"
         style={paneChrome}
       >
-        {/* The card header names the OPEN pane, not the page (shiki 2026-08-06
-            「右侧的 header 不要固定写 "settings" 文案,还是跟着选中的 nav 切换」)
-            — master/detail, like `HostDetailView` titling the selected computer.
-            Shape is the app's content-card header (Activity / Saved / Archived
-            Channels): accent glyph + serif name, nothing else. Both glyph and
-            name come from `SECTION_CHROME`, the same source the rail rows read,
-            so the header can't drift from the row it mirrors.
-
-            The old section-agnostic sentence ("Application preferences, account
-            access, and server connection.") is gone with the fixed title: per
-            section it would only restate the pane's own description. The panes
-            keep their own headings — shiki 2026-08-06「顶 header 给
-            Appearance/Account 不意味着下面的 h2 就要去掉」: this strip is section
-            chrome at titlebar scale, the pane's h2 opens its content. */}
         <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-5">
           <span className="flex shrink-0 items-center text-accent">
             {SECTION_CHROME[section].icon}
@@ -225,11 +151,6 @@ export function SettingsPage(): JSX.Element {
           </span>
         </header>
 
-        {/* The pane column stays centred inside its card at the width it has
-            always had (`max-w-[49rem]` = the old centred `60rem` pair minus the
-            nav's 11rem), so no pane's content width changes as the nav moves
-            out. `min-h-0` on both wrappers is what lets AppearancePane's own
-            `overflow-y-auto` scroll instead of stretching the page. */}
         <div className="flex min-h-0 min-w-0 flex-1 justify-center">
           <div className="flex min-h-0 w-full min-w-0 max-w-[49rem] flex-col">
             {section === 'appearance' ? (
@@ -253,46 +174,12 @@ export function SettingsPage(): JSX.Element {
   );
 }
 
-/** Label + icon per section. Order is NOT here: the rail walks
- *  `SETTINGS_SECTIONS`, which is also what the landing default is derived
- *  from, so reordering the rail can't drift from where Settings opens.
- *
- *  Account's glyph is the person, not a key (shiki 2026-08-06「Account 换个
- *  icon,不要用这个🔑」+「Account 用这个 lucide user」): the pane is the viewer's
- *  own identity — avatar, display name, username, sign-out — and a key reads as
- *  credentials/permissions, a thing this pane does not hold. Bare `User`, not
- *  the circled variant: the rail rows and the card header are all bare glyphs
- *  (gear, palette, server), so an enclosed one would read as its own chrome.
- *  Same glyph the AccountPane heading shows. */
 const SECTION_CHROME: Record<SettingsSection, { label: string; icon: ReactNode }> = {
   account: { label: 'Account', icon: <User className="size-3.5" /> },
   appearance: { label: 'Appearance', icon: <Palette className="size-3.5" /> },
   connection: { label: 'Connection', icon: <Server className="size-3.5" /> },
 };
 
-/** The Settings rail — one of the app's two-card sections, structurally
- *  identical to Computers / Members: it lives inside the shared
- *  `SectionShell`'s `aside[data-sidebar="settings"]` island at
- *  `--sidebar-width` on the sidebar carrier ground, with the frame's own gap
- *  separating it from the content card (shiki 2026-08-06「采用 computer rail
- *  那种两栏 island 布局方式」). This is only the rail's CONTENT (the nav); the
- *  `aside` shell + pane chrome is the shell's.
- *
- *  Rows are the shared `SidebarRow`, not a look-alike — the whole point of
- *  living inside `aside[data-sidebar]` is that the per-theme row painting
- *  (reserved stroke, `--border-row-*` colours, carrier hover ground, forza6's
- *  poster-sticker shadow, the dark-on-lime descendant ink) keys on that
- *  ancestor and now reaches these rows for free. Nothing here restates it.
- *
- *  Header is the shared `SidebarSection` (shiki 2026-08-06「setting side nav
- *  顶部给一个 settings 文案」) — same uppercase muted label as COMPUTERS /
- *  AGENTS / CHANNELS, same gear as the NavRail entry that opens this section.
- *  No count: three fixed sections, so a number states nothing. It also gives
- *  the word a fixed home now that the content card's title follows the
- *  selection instead of saying "Settings".
- *
- *  `aria-current` marks the open pane for AT; `SidebarRow`'s `selected`
- *  carries the visual state. */
 function SettingsRailNav({
   section,
   onSelect,
@@ -361,35 +248,7 @@ function AppearancePane({
                   <button
                     key={id}
                     type="button"
-                    // v6.9.5 #task:917 (shiki "圆角都不一致了, 固定一个
-                    // 圆角数值就好"): the three theme cards live as a
-                    // single grid, so the GRID needs to read as one set.
-                    // Two earlier iterations got the geometry wrong:
-                    //   v6.9.3 used `data-settings-card` → radius
-                    //     followed the viewer theme, cards morphed on
-                    //     toggle.
-                    //   v6.9.4 pinned per-target `meta.radius` → cards
-                    //     stopped morphing but the 3-tile row showed
-                    //     12px / 6px / 0 side-by-side, reading as
-                    //     "inconsistent UI", not "preview tiles".
-                    // The colour gradient + 4-dot swatch already carry
-                    // the theme's identity; the card chrome should be
-                    // uniform scaffolding. Fixed `rounded-[10px]` across
-                    // all three, no hook, no per-target override.
                     onClick={() => setTheme(id)}
-                    // Hover moves the card, it does not recolour it (shiki
-                    // 2026-07-27: "hover 不要改变任何 border，直接去掉，使用
-                    // hover 上移 1px 效果"). The old `hover:border-accent` was
-                    // both wrong and dead: wrong because the border here is
-                    // IDENTITY — the idle tile paints the previewed theme's own
-                    // border and the active tile paints `accent` to mark "you
-                    // are here", so a hover recolour would impersonate the
-                    // selected state; dead because the idle border arrives as
-                    // an inline `style.borderColor`, which outranks any
-                    // Tailwind hover class. Motion is the honest channel:
-                    // `CONTROL_HOVER_LIFT` is the app's shared 1px lift plus
-                    // the transition tuple it needs (a bare
-                    // `transition-colors` would not animate transform).
                     className={cn(
                       'group relative flex min-h-[92px] flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left focus-outline',
                       CONTROL_HOVER_LIFT,
@@ -397,12 +256,6 @@ function AppearancePane({
                     )}
                     style={{
                       background: `linear-gradient(135deg, ${meta.bg}, ${meta.surface})`,
-                      // Idle tiles override the global `border-border-subtle`
-                      // with a per-theme border so the preview carries the
-                      // previewed theme's identity (forza6 = poster near-black,
-                      // warm = soft black @ 10%). Active tiles fall through
-                      // to the `border-accent` class so the current theme's
-                      // accent still marks "you are here".
                       ...(active ? null : { borderColor: meta.border }),
                     }}
                   >
@@ -487,25 +340,6 @@ function AppearancePane({
   );
 }
 
-/** Message alignment — the user-side switch for `useMessageLayoutMode`
- *  (shiki 2026-08-06「这个 mode 没有真实的用户侧开关,把他做到设置页中」,
- *  #task:1841).
- *
- *  It sits in Appearance rather than in a section of its own: one row does
- *  not carry a section header, and "how the app looks" already covers row
- *  arrangement. Unlike the theme controls it takes no props — the mode is a
- *  module store (a chat row is the reader and this is the writer, so the
- *  value cannot live in either surface's `useState`), and reading it here
- *  through the same hook is what makes the selection and every mounted
- *  message row flip together.
- *
- *  Two named options rather than a checkbox: both alignments are real
- *  layouts with a name, and the labels state the scope that an on/off box
- *  would leave the user guessing at. Recipe is the app's two-option
- *  radiogroup (see `CreateChannelDialog`) — selected paints the app-wide
- *  selected-row pair (`--bg-row-selected` / `--border-row-selected`), the
- *  same vocabulary as the sub-nav beside it, so it never invents a second
- *  way to say "this one". */
 const MESSAGE_LAYOUT_META: Record<
   MessageLayoutMode,
   { label: string; icon: typeof AlignLeft }
@@ -561,34 +395,11 @@ function MessageAlignmentControl(): JSX.Element {
   );
 }
 
-/** Account pane — the viewer's own profile plus user-session
- *  operations. Display name and avatar editing lives here (shiki
- *  2026-08-06: the Members panel didn't match IM intuition and users
- *  couldn't find it); `ViewerProfileEditor` owns the `/api/me` writes,
- *  so this pane composes the surface rather than re-implementing it, and
- *  the Members card is read-only — one long-lived ownership site, moved,
- *  not duplicated. Computer lifecycle (revoke, refresh credentials,
- *  delete) stays on Computer Detail (`features/hosts/HostDetailView`)
- *  because sessions are user-level and independent of it.
- *
- *  Log out wears the DESTRUCTIVE rank (shiki 2026-07-26: "Settings → Account 的
- *  Log out,用 Delete 语义,因为也是 danger 操作") — red frame on paper, the same
- *  `DESTRUCTIVE_TRIGGER` recipe as `Delete computer` / `Revoke`, not a solid fill
- *  (this is a settings page, and a filled red would out-rank every other pane's
- *  primary). What the red buys is that the one irreversible-feeling verb in
- *  Settings is not dressed as a reversible one; the profile block above it
- *  carries no accent at all, so the two never compete. */
 function AccountPane(): JSX.Element {
   const viewer = useViewerUser();
   const logout = useLogout();
   const [error, setError] = useState<string | null>(null);
 
-  // AccountPane only mounts after registration and below the update
-  // gate (App.tsx gates the shell behind <RegistrationGate /> /
-  // <UpdateRequiredGate />), so any marker shape here is a transient
-  // race during refetch. Narrow once to the real user row — the profile
-  // editor needs it — and treat every marker as `undefined` for the
-  // rest of the pane.
   const dto =
     viewer.data
     && !isRegistrationRequired(viewer.data)
@@ -622,11 +433,6 @@ function AccountPane(): JSX.Element {
   }
 
   return (
-    // The pane keeps its own h2 even though the card header now reads "Account"
-    // (shiki 2026-08-06「顶 header 给 Appearance/Account 不意味着下面的 h2 就要
-    // 去掉」): the header is section chrome at titlebar scale, the h2 opens the
-    // pane's content — two levels, not one word twice. Same heading object as
-    // Appearance / Connection, chip included (shiki:「同一个风格」).
     <section className="flex min-w-0 flex-1 flex-col gap-5 px-5 py-5">
       <SettingsHeading icon={<User className="size-4" />} title="Account" />
 
@@ -705,9 +511,6 @@ function SharedFontSizeControl({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
-          {/* Live numeric readout — sized up and accent-colored when an
-              override is active so the current value reads at a glance
-              from anywhere on the row, not buried in the subtitle. */}
           <span
             aria-live="polite"
             className={cn(
@@ -724,9 +527,6 @@ function SharedFontSizeControl({
             type="button"
             onClick={onReset}
             disabled={!isOverride}
-            // Hover border = `--border-control-hover` (ink in every theme),
-            // not `accent` — see the font-preset pill below for why the
-            // saturated hue can't be spent on a utility state.
             className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
           >
             <RotateCcw className="size-3.5" />
@@ -882,13 +682,6 @@ function MarkdownFontControl({
               <button
                 key={`${title}-${preset.label}`}
                 type="button"
-                // v6.9.3 #task:917 (shiki settings audit "B"):
-                // `data-settings-pill` + `data-selected` let forza6
-                // override the generic `border-accent bg-accent` pink
-                // fill with the v6.9.2 ink-fill + paper-text recipe
-                // and square the 999px radius — keeps the rest of
-                // the pill (sizing, hover) intact and other themes
-                // untouched.
                 data-settings-pill
                 data-selected={isSelected || undefined}
                 onClick={() => onFontChange(preset.value)}
@@ -896,15 +689,6 @@ function MarkdownFontControl({
                   'rounded-[var(--pill-radius)] border px-2 py-1 text-[length:var(--text-meta)] font-medium transition-colors focus-outline',
                   isSelected
                     ? 'border-accent bg-accent text-text-on-accent'
-                    // Hover is a UTILITY state, so its border rides the
-                    // canonical control token, never `accent` (shiki
-                    // 2026-07-27: in forza6 `--accent` is MAGENTA, so
-                    // `hover:border-accent` put a hot pink frame around an
-                    // unselected font pill and read as a selection signal).
-                    // `--border-control-hover` is ink in every theme
-                    // (forza6 near-black / warm dark brown / slack neutral),
-                    // which keeps the saturated hue budget for the SELECTED
-                    // pill above.
                     : 'border-border-subtle bg-bg-primary text-text-secondary hover:border-[color:var(--border-control-hover)] hover:text-text-primary',
                 )}
               >
@@ -928,18 +712,6 @@ function MarkdownFontControl({
   );
 }
 
-/** One titled group inside a pane. Title / icon are REQUIRED even though the
- *  card header now names the open section (shiki 2026-08-06「顶 header 给
- *  Appearance/Account 不意味着下面的 h2 就要去掉」): the header is section chrome
- *  at titlebar scale, this is where the pane's content opens. Making them
- *  optional to skip the first group's heading was the wrong read of that
- *  duplication, and a knob nobody should use is the next misuse.
- *
- *  No description line — the group's own controls state their scope (shiki
- *  2026-08-06「h2 下的 description 去掉」).
- *
- *  The heading itself is the shared {@link SettingsHeading} — the same object
- *  the Account and Connection panes open with. */
 function SettingsSection({
   id,
   icon,
@@ -954,10 +726,6 @@ function SettingsSection({
   return (
     <section
       id={id}
-      // No rule between sections (shiki 2026-08-06 「Appearance section 下面
-      // 加了一个 divider 吗?去掉」): the icon chip + serif heading already
-      // opens a section, so the line was a second separator doing the same
-      // job. Spacing is the parent's `space-y-8` alone.
       className="scroll-mt-6 grid gap-4"
     >
       <SettingsHeading icon={icon} title={title} />

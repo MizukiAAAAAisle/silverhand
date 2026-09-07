@@ -414,18 +414,11 @@ export function Composer({
     for (const w of workspacesQuery.data ?? []) m.set(w.id, w.name);
     return m;
   }, [workspacesQuery.data]);
-  // Roster read for the workspace arm's `@` sectioning only. The viewer and
-  // withheld arms have no conversation roster to consult, so they pass null and the
-  // query never starts (withheld's contract: no directory read at all).
+
   const conversationMembers = useConversationMembers(
     isWorkspaceArm ? conversationId : null,
   );
-  // #task:876 (2026-06-03): the viewer's own row in the mention picker
-  // is noise — you can't @-mention yourself meaningfully. Resolve the
-  // viewer id once so the human candidate list filter below can drop
-  // it. `useViewerUser()` returns either the resolved UserDto or the
-  // registration-required / backend-unreachable arms; we only need the
-  // id, which only exists on the UserDto arm.
+
   const viewerQuery = useViewerUser();
   const viewerId =
     viewerQuery.data
@@ -433,12 +426,7 @@ export function Composer({
     && !isBackendUnreachable(viewerQuery.data) && !isUpdateRequired(viewerQuery.data)
       ? viewerQuery.data.id
       : null;
-  // Membership sets used to split the mention picker into "In this
-  // channel" vs "Other channels" groups (#task:876). While the roster is
-  // unresolved these stay empty — but that is "membership UNKNOWN", not
-  // "confirmed nobody in this channel", so the picker must not emit a
-  // (mis-grouped) candidate list yet; `selectMentionCandidates` gates on
-  // `rosterResolved` below (#task:1720 review).
+
   const rosterResolved = conversationMembers.status === 'resolved';
   const { agentMemberIds, humanMemberIds } = useMemo(() => {
     const a = new Set<string>();
@@ -779,8 +767,8 @@ export function Composer({
       dispatch(logicalSend.canonicalContent);
       return;
     }
-    // Authoring bytes and stored bytes differ here, on purpose (#task:2001,
-    // shiki's ruling): the textarea keeps showing `@Alice` because that is what
+    // Authoring bytes and stored bytes differ here, on purpose:
+    // the textarea keeps showing `@Alice` because that is what
     // the author typed, while the body that ships spells every resolvable
     // shorthand as `<silverhand://agent/Alice>` — the only form that addresses
     // anyone. The rewrite is prose-position-aware, so a handle inside a code span,
@@ -975,20 +963,6 @@ export function Composer({
     }
   }, [trigger, dismissedPos]);
 
-  /**
-   * Toolbar affordance for the two pickers (#task:2118, shiki:「composer 中现在有
-   * attachment button，还需要增加 @ 和 # button」): type the trigger FOR the user
-   * and let the ordinary path take over — {@link detectTrigger} sees the same
-   * character it would have seen from the keyboard, so there is no second picker
-   * state, no second insert idiom, and the button can never disagree with typing.
-   *
-   * Two details the keyboard gets for free and a button does not:
-   *   - a boundary is required in front of the trigger (`me@x` must stay quiet),
-   *     so pad with a space when the caret sits right after a word char or `/`;
-   *   - Escape suppression is keyed to the token's position, and clicking the
-   *     button IS a request to see the menu, so clear it rather than insert a
-   *     trigger that opens nothing.
-   */
   const insertTriggerAtCaret = (kind: '@' | '#'): void => {
     const el = ref.current;
     const pos = el?.selectionStart ?? caretRef.current;
@@ -1009,10 +983,6 @@ export function Composer({
   };
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>): void {
-    // While the picker is visible, Escape dismisses it whether or not it has
-    // navigable rows — a `#` picker showing only the loading / partial-error marker
-    // must still close (#task:2148). Arrow/Enter/Tab need rows, so they are gated
-    // separately below and never index into an empty list.
     if (menuOpen && !dismissed) {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -1059,7 +1029,7 @@ export function Composer({
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       className={
-        'shrink-0 border-t border-border-subtle bg-bg-primary px-3 py-3 ' +
+        'shrink-0 border-t border-border-subtle bg-bg-chat px-3 py-3 ' +
         (dragOver ? '[outline:2px_solid_var(--border-focus)] [outline-offset:-2px]' : '')
       }
     >
@@ -1099,32 +1069,10 @@ export function Composer({
             humanAvatarUrls={humanAvatarUrls}
           />
         ) : null}
-        {/* Composer shell: border + bg + focus-ring live on the
-         *  wrapper, not the textarea, so the bottom toolbar joins the
-         *  same box. Previously the Send/attachment buttons floated
-         *  absolutely on top of the textarea (with `pb-11 pr-20` on
-         *  the textarea to dodge them); long messages would scroll
-         *  underneath and visually collide with "Send". Stacking them
-         *  as siblings means the textarea no longer needs reserved
-         *  padding and text can occupy its full width. Wrapper carries
-         *  `focus-within:` ring so the focused-textarea outline still
-         *  encloses both rows.
-         *
-         *  v6.9.7 #task:917 (shiki composer audit C): the shell's
-         *  radius is token-driven via `--control-radius` — forza6's 0
-         *  comes straight from the token (poster vocab), studio-light /
-         *  slack-dark get their 6px. #task:1916 dropped the earlier
-         *  `data-composer-shell` radius override; the hook now only
-         *  carries forza6's brand focus-within border. */}
         <div
           data-composer-shell
           className="flex flex-col overflow-hidden rounded-[var(--control-radius)] border border-border-subtle bg-bg-floating focus-within:border-border-focus"
         >
-          {/* Identity self-sourced (#task:1731): the header resolves agent
-              name/avatar from the global directory internally — it must NOT
-              share the mention picker's workspace-scoped `agents` roster,
-              which is empty for dm_channels (agent_home workspaces have no
-              workspace_members rows by schema). */}
           <ComposerActivityHeader
             conversationId={conversationId}
             restrictToAgentIds={activityAgentIds}
@@ -1360,9 +1308,6 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
-/** Grow a composer textarea with its content up to `MAX_TEXTAREA_HEIGHT`, then
- *  scroll. Exported because the pre-mint direct-line composer (#task:2039) sizes
- *  its textarea by the same rule — one autosize behaviour, not two that drift. */
 export function resizeTextarea(el: HTMLTextAreaElement | null): void {
   if (!el) return;
   el.style.height = 'auto';
@@ -1491,28 +1436,13 @@ interface ComposerMentionSource {
   resolveShorthand: ShorthandResolver;
 }
 
-/** The `#` channel directory for the current arm. `offersChannels` gates the
- *  toolbar `#` button and the placeholder hint — a control that opens on nothing
- *  is worse than no control. `select` carries `status` so the picker can show an
- *  explicit loading / partial-error / complete projection rather than reading a
- *  partial fan-out (one workspace's slice pending or errored) as the whole set. */
 interface ComposerChannelSource {
   offersChannels: boolean;
   select: (query: string) => ChannelPickerResult;
 }
 
-/** How settled the `#` source behind a picker page is. The three settledness
- *  outcomes stay DISTINCT all the way to presentation — never re-folded to a bool,
- *  which would report an errored fan-out as "still loading" forever (#task:2148):
- *   - `complete`      — every slice succeeded (and the workspace list settled).
- *   - `loading`       — some slice still pending, none errored.
- *   - `partial_error` — at least one slice (or the workspace list) errored.
- *  Error DOMINATES a mixed state: "this workspace's channels are unavailable" is
- *  terminal and will not change on its own, so it wins over a still-pending sibling. */
 export type ChannelSourceStatus = 'complete' | 'loading' | 'partial_error';
 
-/** A `#` picker page plus its source's settledness. `status !== 'complete'` ⇒ the
- *  page is a progressive slice, not the whole set. */
 export interface ChannelPickerResult extends PickerResult {
   status: ChannelSourceStatus;
 }
@@ -1552,39 +1482,6 @@ export function buildShorthandResolver(
   return handle => kinds.get(handle) ?? null;
 }
 
-/**
- * Whether this body can be spelled as canonical references with the roster we
- * currently hold — i.e. whether `submit()` may go straight to the network
- * (#task:2001 review, @Cindy).
- *
- * The bug this closes: an unloaded member query is not an empty workspace. With
- * `rosterKnown` false every handle resolves to `null`, every shorthand is left as
- * authored, and the send SUCCEEDS — screen says `@Alice`, stored body says
- * `@Alice`, and the message names nobody. What that costs depends on where it was
- * sent (@Cindy, 2026-08-13):
- *  - **main line**: still delivered to every channel member, idle agents still
- *    auto-start, but the targeting is gone — no notification or unread for a
- *    human, no mention CC, and a recipient agent reads the batch as
- *    undirected/broadcast rather than aimed at it. Nothing looks wrong, which is
- *    exactly why nothing else can catch it.
- *  - **thread reply**: worse — delivery is follower-gated, and a reference is
- *    what would have added the named member to the follower set this reply is
- *    planned against, so the intended recipient may not receive the reply at all.
- * The window is small (cold start, deep link, HMR, a restored draft sent before
- * the roster lands) but every path into it ends in a message that looks addressed
- * on screen while addressing nobody, and there is no later surface that could
- * notice: the server never rewrites a body, so the composer is the only place
- * this can be caught.
- *
- * `findShorthandCandidates` rather than a substring test, on purpose: `@` is an
- * ordinary character in an email address, a code span, or a quote of someone
- * else's words, and none of those could have addressed anyone. Stalling a send
- * over them would trade a rare silent miss for a common visible stall. The
- * position predicate is the same one the rewrite uses, so the two cannot drift.
- *
- * Ordered so the normal path never pays: a known roster returns true before the
- * body is parsed, leaving exactly one Markdown parse per send.
- */
 export function canResolveShorthandNow(
   content: string,
   rosterKnown: boolean,
@@ -1592,12 +1489,6 @@ export function canResolveShorthandNow(
   return rosterKnown || findShorthandCandidates(content).length === 0;
 }
 
-/**
- * Map this workspace's human members into mention candidates, dropping
- * the viewer's own row (you can't @-mention yourself meaningfully —
- * #task:876). Pure so the picker's candidate boundary is testable
- * without the DOM (#task:1720).
- */
 export function buildMentionHumans(
   humans: WorkspaceHumanMember[],
   viewerId: string | null,
@@ -1615,28 +1506,6 @@ export function buildMentionHumans(
   return out;
 }
 
-/**
- * Filter and group the mention picker candidate set.
- *
- * Candidate boundary (#task:1720): `agents` / `humans` are already
- * scoped to the current workspace by the caller, so this only orders and
- * groups — it never widens the set. Grouping (#task:876, 2026-06-03):
- * rows are split into two visual sections by `inConversation` — "In this
- * channel" rows first, then the remaining workspace members ("Other
- * channels") underneath in a dimmer text color. Each section is
- * internally sorted humans-first so multi-human installs surface the
- * relevant humans before the agent fleet. The whole stack stays a flat
- * `PickerItem[]` so keyboard nav (`active` index) doesn't have to skip
- * section headers — `PickerMenu` inserts the divider before the first
- * `!inConversation` row at render time.
- *
- * Caps: each section is capped at 5 (total max 10). The cap keeps the
- * picker short and scannable — it rewards narrowing by typing over
- * scrolling a long list (the menu scrolls, so this is a UX choice, not a
- * height constraint). Whatever the cap drops is counted into
- * `hiddenCount` so `PickerMenu` can surface a "+N more" footer rather
- * than truncating silently.
- */
 export function filterMentionPeople(
   agents: AgentDto[],
   humans: HumanMentionCandidate[],
@@ -1722,34 +1591,6 @@ export function selectMentionCandidates(
   );
 }
 
-/**
- * Filter the workspace's conversation list down to the channels the picker
- * offers for `#` mentions.
- *
- * - `roster_policy === 'open'` only. This is a deliberate PRODUCT policy keyed on
- *   the roster — "which channels are worth offering" — and NOT an identity claim:
- *   an agent space's fixed-roster `dm_channel` IS a channel and would render a
- *   perfectly correct `#` chip if it were listed (#task:1373). Whether to offer
- *   those rows here is @shiki's call (#task:2077); the exclusion is frozen until
- *   then.
- * - Skip archived AND closed channels: both resolve to inert / dim
- *   refs on the receiving end (see ChannelRef's `closed_at`-driven
- *   `dim` class), so offering them in the picker would invite dead
- *   refs and inflate the menu with rows the user almost never wants.
- *
- * Why the key cannot be swapped mechanically, even though every other reader in
- * #task:2077 moved to `placement_kind`: here `roster_policy` doubles as the TYPE
- * discriminant. `ChannelListItem` is `ChannelConversationDto |
- * FixedRosterConversationDto`, and only `ChannelConversationDto` pins
- * `roster_policy: 'open'` — so the predicate below narrows by proof.
- * `placement_kind === 'workspace'` proves nothing here: the fixed-roster arm
- * ENUMERATES `'workspace'` in its own placement union (#task:2074), because an
- * agent home's Onboarding channel is exactly `workspace` + `fixed`. The same
- * predicate would therefore become an unchecked assertion. Changing the key means
- * changing the element type as well: widen `onlyLive` to `ChannelListItem[]` and
- * admit `placement_kind === 'workspace' && archived_at === null &&
- * closed_at === null`. Behaviour change, so it waits for the call above.
- */
 export function filterChannels(
   channels: ChannelListItem[],
   workspaceName: string | null,
@@ -1848,26 +1689,6 @@ export interface ChannelSlice {
   data?: ChannelListItem[];
 }
 
-/**
- * The viewer arm's `#` candidates (#task:2148): every channel the viewer is
- * CURRENTLY a member of, across ALL their workspaces, flattened from the
- * per-workspace fan-out.
- *
- *  - `is_member === true` only — the per-viewer discovery bit. A public channel
- *    the viewer merely browses is not "theirs" to reference from a DM.
- *  - Same live-channel product policy as the workspace arm's {@link filterChannels}:
- *    open roster, not archived, not closed.
- *  - Each surviving candidate is stamped with its OWN workspace name (from its own
- *    `workspace_id` via `workspaceNameById`), so a cross-workspace locator spells
- *    the right coordinate and same-named channels stay distinguishable.
- *
- * Items are PROGRESSIVE — built from whatever slices have already succeeded. The
- * fan-out's settledness is NOT decided here: {@link viewerChannelPickerResult} is
- * the one authority that projects it onto {@link ChannelSourceStatus}, so there is
- * never a second completion judgement to drift against. A `#` pick inserts a full
- * canonical locator carrying the candidate's own coordinate, so a partial list
- * never mis-addresses. Pure.
- */
 export function filterViewerChannels(
   slices: readonly ChannelSlice[],
   workspaceNameById: ReadonlyMap<string, string>,
@@ -2020,14 +1841,6 @@ function PickerMenu({
     : -1;
   return (
     <div
-      // Radius belongs on THIS element — the visible frame. The global
-      // `[role='listbox']` radius rule (global.css) lands on the inner
-      // scroll area below, which is invisible: this outer div owns the
-      // border (`data-dropdown-frame`), the fill and `overflow-hidden`,
-      // so a rounded inner list is clipped square by a square frame. The
-      // token is the dropdown one (`--select-content-radius`, forza6 = 0 /
-      // the hairline themes = 6px), same as every other `data-dropdown-frame`
-      // popup — NOT the full-menu `--floating-radius`.
       className="absolute bottom-full left-0 mb-1.5 w-64 overflow-hidden rounded-[var(--select-content-radius)] bg-bg-floating shadow-popover"
       data-composer-picker=""
       data-dropdown-frame
@@ -2084,15 +1897,6 @@ function PickerMenu({
           +{hiddenCount} more
         </div>
       ) : null}
-      {/* Source-settledness marker (#task:2148). The `#` channel source has not
-          fully settled, so the rows above are a progressive slice, not the whole
-          set. This is a CORRECTNESS state, not a visual nudge like the truncation
-          footer above: a screen-reader user must not read the partial slice as the
-          complete candidate set, so it carries `role="status"` (a polite live
-          region) and is NOT `aria-hidden`. Loading and partial-error stay DISTINCT:
-          an errored workspace is terminal, so saying "still loading" would be a lie
-          that never resolves. Shown even with zero rows, so an empty-but-unsettled
-          `#` picker announces its real state, never "no channels". */}
       {channelStatus === 'loading' ? (
         <div
           role="status"
@@ -2112,11 +1916,6 @@ function PickerMenu({
   );
 }
 
-/**
- * Pill-style section divider. Compact; uppercase tracking matches the
- * sidebar's section labels so the picker feels of-a-piece with the
- * surrounding chrome.
- */
 function SectionHeader({ label }: { label: string }): JSX.Element {
   return (
     <div
@@ -2141,31 +1940,17 @@ function Row({
   active: boolean;
   onPick: () => void;
   onHover: () => void;
-  /** Name the channel's workspace on a channel row (viewer arm's cross-workspace
-   *  `#` list, #task:2148). Ignored for agent/human rows. */
   showChannelWorkspace: boolean;
   agentAvatarUrl: string | null;
   humanAvatarUrl: string | null;
 }): JSX.Element {
-  // #task:876 (2026-06-03): NOT IN rows are dimmed — shiki "NOT IN 的
-  // 颜色浅一点". Channels don't carry an inConversation flag, so they're
-  // always at full opacity. We use a single `opacity-60` wrapper rather
-  // than swapping every text color: it pulls the avatar, primary name,
-  // and meta line down together, and `active` (keyboard/hover) still
-  // overrides with the brighter `bg-bg-hover text-text-primary` pair so
-  // the user always sees which row will commit on Enter.
   const dimmed =
     (item.kind === 'agent' || item.kind === 'human') && !item.inConversation;
   const cls =
     'flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left ' +
     (active ? 'bg-bg-hover text-text-primary' : 'text-text-secondary')
     + (dimmed && !active ? ' opacity-60' : '');
-  // Keep the keyboard-highlighted row inside the scrollable menu.
-  // Without this, ↑/↓ past the menu's visible window leaves the
-  // selection invisible — the user has no idea their arrow press
-  // moved anywhere. `block: 'nearest'` only scrolls when actually
-  // needed, so hover-driven activation in the middle of the list
-  // doesn't jerk the scroll position.
+
   const rowRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!active) return;
@@ -2201,14 +1986,6 @@ function Row({
             <div className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
               <span className="truncate font-mono">@{item.agent.name}</span>
               <span aria-hidden>·</span>
-              {/* v6.9.7 #task:917 (shiki composer audit B): runtime
-                  label here wears the same `data-agent-runtime` HUD
-                  tag landed in v6.8 for the Members pane, so the
-                  agent-runtime visual identity stays uniform across
-                  every place the app surfaces it (Members rows,
-                  mention picker, future Hosts). Other themes inherit
-                  the wrapping parent's `text-[length:var(--text-meta)] text-text-muted`
-                  unchanged. */}
               <span data-agent-runtime className="shrink-0">
                 {item.agent.runtime}
               </span>
@@ -2229,12 +2006,6 @@ function Row({
             <div className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
               <span className="truncate font-mono">@{item.human.name}</span>
               <span aria-hidden>·</span>
-              {/* Same HUD-tag treatment as the agent runtime above.
-                  `data-participant-kind` is a sibling hook in the
-                  forza6 rule that already covers `data-agent-runtime`
-                  / `data-host-kind-tag` — semantic naming for the
-                  "what kind of participant is this" enum (agent
-                  runtime / human / future kinds). */}
               <span data-participant-kind className="shrink-0">
                 human
               </span>
@@ -2242,14 +2013,6 @@ function Row({
           </div>
         </>
       ) : (
-        // Channel rows are intentionally one line: the Hash glyph in
-        // front already says "this is a channel", so we drop both the
-        // literal `#` prefix on the title AND the fixed `channel` /
-        // `closed` meta line. Less noise, faster scan. (Closed
-        // channels are filtered upstream in `filterChannels`.) The viewer
-        // arm's cross-workspace list adds a muted workspace sub-line
-        // (`showChannelWorkspace`) so same-named channels in different
-        // workspaces stay distinguishable (#task:2148).
         <>
           <Hash className="size-4 shrink-0 text-text-muted" />
           {showChannelWorkspace && item.workspaceName ? (

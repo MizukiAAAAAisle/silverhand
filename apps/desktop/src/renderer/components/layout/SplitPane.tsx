@@ -297,12 +297,6 @@ export function SplitPane({
       </div>
       {shellOpen ? (
         <>
-          {/* Same track primitive as the sidebar seams (VerticalSplitter),
-            * but driven imperatively: `data-active` is toggled directly on
-            * `dividerRef` during the rAF drag (onPointerDown/Up) so no
-            * re-render fires mid-drag and the divider tracks the cursor 1:1.
-            * Paint, geometry (`--pane-gap` straddle) and a11y all live in
-            * SplitterTrack. */}
           <SplitterTrack
             ref={dividerRef}
             onPointerDown={onPointerDown}
@@ -311,25 +305,6 @@ export function SplitPane({
             onPointerCancel={onPointerUp}
           />
           <div
-            // Same containment for the right pane — and we deliberately
-            // delay rendering `right` until after the width transition
-            // completes so the heavy mount (queries, message list,
-            // etc.) doesn't compete with the animation for the main
-            // thread. While `right` is unmounted, the wrapper paints
-            // `bg-bg-chat` so the 220ms gap matches the destination
-            // ChannelView's background instead of revealing the App's
-            // `bg-bg-base` underneath.
-            //
-            // `borderRadius` mirrors the inner card chrome
-            // (`--card-radius`) so the same-coloured filler doesn't
-            // square off the inner ChannelView's rounded corners. Without
-            // this, the wrapper's sharp rectangle paints into the corner
-            // area that the inner card visually rounds away — producing
-            // asymmetric header radii (left pane keeps its rounded
-            // corners against App `bg-bg-base`, right pane looks square).
-            // Radius only — deliberately NOT the full `paneChrome`: this
-            // wrapper is a filler behind a real pane, and lifting it too
-            // would double the shadow under the inner one.
             style={{
               contain: 'layout paint',
               borderRadius: PANE_RADIUS,

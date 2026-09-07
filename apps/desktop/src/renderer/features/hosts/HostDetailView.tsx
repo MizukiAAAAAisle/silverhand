@@ -206,12 +206,6 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
     [statusQuery.data],
   );
 
-  // shiki dogfood `CEq57Kisu3w2d-Pl` + Cindy `Fjg86GQM5qwoEjl7`:
-  // show the stable `host.name` in the meta line ONLY when the user
-  // has renamed the host AND the rename differs from the underlying
-  // name. Otherwise the title (which falls back to `host.name`) and
-  // meta would print the same string twice — the "two local" problem
-  // shiki originally flagged, just without the kind label.
   const trimmedLabel = host.display_label?.trim() ?? '';
   const showStableName =
     trimmedLabel.length > 0 && trimmedLabel !== host.name;
@@ -238,7 +232,7 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
 
   return (
     <main
-      className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-bg-floating"
+      className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-bg-base"
       style={paneChrome}
     >
       <HostHero
