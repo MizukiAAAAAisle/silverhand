@@ -3,7 +3,7 @@ import { SectionLayer } from '@/components/layout/SectionLayer';
 import { ActivityView } from '@/components/layout/ActivityView';
 import { VerticalSplitter } from '@/components/layout/VerticalSplitter';
 import { useResizableWidth } from '@/hooks/useResizableWidth';
-import type { ConversationShellModel } from '@/features/conversation-shell/use-conversation-shell';
+import type { ActivityShellModel } from '@/features/conversation-shell/conversation-shell-models';
 import type { ConversationContent } from '@/features/conversation-shell/conversation-content';
 import { ConversationStage } from '@/features/conversation-shell/conversation-stage';
 
@@ -12,7 +12,7 @@ export function ActivityShell({
   content,
   fullscreen,
 }: {
-  model: ConversationShellModel['activity'];
+  model: ActivityShellModel;
   content: ConversationContent;
   fullscreen: boolean;
 }) {

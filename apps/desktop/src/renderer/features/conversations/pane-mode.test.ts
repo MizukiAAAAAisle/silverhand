@@ -35,9 +35,7 @@ import {
 //      capability into the data, where the next placement with a non-empty roster
 //      silently inherits channel behaviour.
 
-function descriptor(
-  over: Partial<ConversationPaneDescriptor> = {},
-): ConversationPaneDescriptor {
+function descriptor(over: Partial<ConversationPaneDescriptor> = {}): ConversationPaneDescriptor {
   return {
     id: 'c-1',
     title: 'general',
@@ -50,8 +48,7 @@ function descriptor(
   };
 }
 
-const PLACEMENTS: readonly ConversationPlacementKind[] =
-  ConversationPlacementKindSchema.options;
+const PLACEMENTS: readonly ConversationPlacementKind[] = ConversationPlacementKindSchema.options;
 
 const MODE_SAMPLES: Record<ConversationPaneMode['kind'], ConversationPaneMode> = {
   workspace_channel: { kind: 'workspace_channel', workspaceId: 'w-1' },
@@ -81,7 +78,7 @@ describe('projectConversationPaneMode — total over the placement union', () =>
 
   it('maps the two known shapes and nothing else', () => {
     expect(
-      PLACEMENTS.map(p => [
+      PLACEMENTS.map((p) => [
         p,
         projectConversationPaneMode(descriptor({ placement_kind: p })).kind,
       ]),
@@ -114,9 +111,7 @@ describe('projectConversationPaneMode — total over the placement union', () =>
     for (const kind of MODE_KINDS) {
       const mode = MODE_SAMPLES[kind];
       expect(
-        projectConversationPaneMode(
-          descriptor({ placement_kind: placementOfPaneMode(mode) }),
-        ).kind,
+        projectConversationPaneMode(descriptor({ placement_kind: placementOfPaneMode(mode) })).kind,
       ).toBe(kind);
     }
   });
@@ -126,9 +121,10 @@ describe('projectConversationPaneMode — total over the placement union', () =>
       kind: 'workspace_channel',
       workspaceId: 'w-1',
     });
-    expect(
-      projectConversationPaneMode(descriptor({ workspace_id: null })),
-    ).toEqual({ kind: 'workspace_channel', workspaceId: null });
+    expect(projectConversationPaneMode(descriptor({ workspace_id: null }))).toEqual({
+      kind: 'workspace_channel',
+      workspaceId: null,
+    });
   });
 
   it('carries the counterpart a pair resolved, and null when none was', () => {
@@ -177,20 +173,20 @@ describe('paneCapabilities — every affordance, both directions', () => {
     // The inverse assertion, and the one that catches the failure this seam
     // exists for: a new mode inheriting the member strip / members button /
     // add-member picker by default.
-    expect(MODE_KINDS.filter(k => paneCapabilities(MODE_SAMPLES[k]).hasRoster)).toEqual([
+    expect(MODE_KINDS.filter((k) => paneCapabilities(MODE_SAMPLES[k]).hasRoster)).toEqual([
       'workspace_channel',
     ]);
   });
 
   it('gives each mode its own header identity — no two share one', () => {
-    const identities = MODE_KINDS.map(k => paneCapabilities(MODE_SAMPLES[k]).headerIdentity);
+    const identities = MODE_KINDS.map((k) => paneCapabilities(MODE_SAMPLES[k]).headerIdentity);
     expect(new Set(identities).size).toBe(MODE_KINDS.length);
     expect(identities).toEqual(['channel_hash', 'counterpart', 'title_only']);
   });
 
   it('scopes workspace-only affordances to the workspace mode', () => {
     expect(
-      MODE_KINDS.filter(k => paneCapabilities(MODE_SAMPLES[k]).workspaceScope !== null),
+      MODE_KINDS.filter((k) => paneCapabilities(MODE_SAMPLES[k]).workspaceScope !== null),
     ).toEqual(['workspace_channel']);
     // And a workspace mode with no coordinate withholds them too — the pane
     // paints what it was handed instead of asserting one.
@@ -213,7 +209,7 @@ describe('rosterQueryTarget — the capability turns the READS off, not just the
     // each call site: the placement having no roster, and the viewer not being a
     // member of one that does (a non-member browsing a public channel).
     expect(
-      PLACEMENTS.flatMap(p => [
+      PLACEMENTS.flatMap((p) => [
         [p, true, target(p, true)],
         [p, false, target(p, false)],
       ]),
@@ -226,7 +222,7 @@ describe('rosterQueryTarget — the capability turns the READS off, not just the
   });
 
   it('yields a conversation to read for EXACTLY the placement that has a roster', () => {
-    expect(PLACEMENTS.filter(p => target(p, true) !== null)).toEqual(['workspace']);
+    expect(PLACEMENTS.filter((p) => target(p, true) !== null)).toEqual(['workspace']);
   });
 
   it('returns the id it was handed — the gate never invents a target', () => {
@@ -305,7 +301,7 @@ describe('inheritedPaneCapabilities — a thread is its parent (#task:2098)', ()
     // Same composition the pane uses. `hasRoster` gates the query, so the DM thread
     // never starts the read whose empty response was being painted as `Not here`.
     expect(
-      PLACEMENTS.map(p => [
+      PLACEMENTS.map((p) => [
         p,
         rosterQueryTarget(inheritedPaneCapabilities(parent(p)), 'c-1', true),
       ]),
@@ -332,7 +328,7 @@ describe('composerDirectory — the three-arm authority, exhaustive over the mod
   it('projects every mode kind into a named arm — nothing folds', () => {
     // The `hasRoster:false` collision is the whole reason for three arms: the two
     // modes that share it must NOT share a directory arm.
-    expect(MODE_KINDS.map(k => composerDirectory(MODE_SAMPLES[k], COORD).kind)).toEqual([
+    expect(MODE_KINDS.map((k) => composerDirectory(MODE_SAMPLES[k], COORD).kind)).toEqual([
       'workspace',
       'viewer',
       'withheld',
@@ -350,10 +346,13 @@ describe('composerDirectory — the three-arm authority, exhaustive over the mod
     // unresolved — not resolved-empty. It withholds rather than settling the
     // workspace arm with a null id (which would leak a source-known-empty read).
     expect(
-      composerDirectory({ kind: 'workspace_channel', workspaceId: null }, {
-        workspaceName: null,
-        hasChannelNamespace: false,
-      }),
+      composerDirectory(
+        { kind: 'workspace_channel', workspaceId: null },
+        {
+          workspaceName: null,
+          hasChannelNamespace: false,
+        },
+      ),
     ).toEqual({ kind: 'withheld' });
   });
 
@@ -435,12 +434,12 @@ describe('composerDirectory — the three-arm authority, exhaustive over the mod
     // mode that reads the viewer's own directory, and withheld is where an
     // unresolved/unsupported placement fails safe (empty, source-unknown), never
     // the viewer directory by default.
-    expect(MODE_KINDS.filter(k => composerDirectory(MODE_SAMPLES[k], COORD).kind === 'viewer')).toEqual([
-      'direct_message',
-    ]);
-    expect(MODE_KINDS.filter(k => composerDirectory(MODE_SAMPLES[k], COORD).kind === 'withheld')).toEqual([
-      'unsupported',
-    ]);
+    expect(
+      MODE_KINDS.filter((k) => composerDirectory(MODE_SAMPLES[k], COORD).kind === 'viewer'),
+    ).toEqual(['direct_message']);
+    expect(
+      MODE_KINDS.filter((k) => composerDirectory(MODE_SAMPLES[k], COORD).kind === 'withheld'),
+    ).toEqual(['unsupported']);
   });
 });
 
@@ -477,9 +476,7 @@ describe('inheritedComposerDirectory — a thread is its parent (#task:2098)', (
 /** Source with comments removed, so a probe that comments a gate out cannot pass.
  *  (Only `//` that does not follow a `:` is stripped, so a `scheme://` survives.) */
 function code(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 function read(relative: string): string {
   return code(readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8'));
@@ -499,12 +496,8 @@ describe('the pane gates its roster reads on the capability (the wiring half)', 
     expect(viewSource).toContain('useChannelAgentRuntime(rosterTarget)');
     // The shape that shipped and the review rejected: membership alone starting
     // the reads, with the placement's capability only hiding the surfaces.
-    expect(viewSource).not.toContain(
-      'useChannelAgents(gate.allowMemberEffects',
-    );
-    expect(viewSource).not.toContain(
-      'useChannelAgentRuntime(gate.allowMemberEffects',
-    );
+    expect(viewSource).not.toContain('useChannelAgents(gate.allowMemberEffects');
+    expect(viewSource).not.toContain('useChannelAgentRuntime(gate.allowMemberEffects');
   });
 
   it('provides the capability once, at the pane boundary, from its own projection', () => {
@@ -528,7 +521,7 @@ describe('the pane gates its roster reads on the capability (the wiring half)', 
     expect(popoverSource).toContain('presenceAuthorityFor(hasRoster)');
   });
 
-  it('reads a roster placement\'s presence from the runtime slot, not Availability', () => {
+  it("reads a roster placement's presence from the runtime slot, not Availability", () => {
     // The #task:2123 bug in structural form: the roster arm's member case used to
     // fall through to `GlobalPresenceInline`, so the card contradicted the chip it
     // was opened from. The projection is now the member arm's only source, and
@@ -556,7 +549,9 @@ describe('the pane gates its roster reads on the capability (the wiring half)', 
     // missing provider could surface. Containment is asserted, not adjacency: the
     // panel has to sit between the provider's tags, since a provider that merely
     // appears in the file is the bug all over again.
-    const appSource = read('../conversation-shell/conversation-content.tsx') + read('../conversation-shell/use-conversation-shell.ts');
+    const appSource =
+      read('../conversation-shell/conversation-content.tsx') +
+      read('../conversation-shell/use-conversation-read-model.ts');
     const open = appSource.indexOf(
       '<ConversationPaneCapabilitiesProvider value={primaryPaneCapabilities}>',
     );
@@ -571,7 +566,9 @@ describe('the pane gates its roster reads on the capability (the wiring half)', 
     // boolean. The capability is projected from `primaryPaneDescriptor` — the same
     // object passed to `ChannelView` as `conversation` — so the two panes read one
     // source of truth for the placement.
-    const appSource = read('../conversation-shell/conversation-content.tsx') + read('../conversation-shell/use-conversation-shell.ts');
+    const appSource =
+      read('../conversation-shell/conversation-content.tsx') +
+      read('../conversation-shell/use-conversation-read-model.ts');
     expect(appSource).toContain('inheritedPaneCapabilities(primaryPaneDescriptor)');
     expect(appSource).toContain('conversation={primaryPaneDescriptor}');
   });

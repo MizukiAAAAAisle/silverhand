@@ -22,7 +22,7 @@ import {
 // Only `api` is replaced so the query policy's cost can be COUNTED; everything
 // else in `@/lib/api` stays real (nothing here depends on the rest, but a bare
 // `vi.mock` would auto-mock `ApiError` too).
-vi.mock('@/lib/api', async importOriginal => {
+vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
   return { ...actual, api: vi.fn() };
 });
@@ -75,14 +75,10 @@ function settled(rows: readonly DirectPairListItem[]): DirectPairListQueryFacts 
  *  comment and stay green. (Only `//` that does not follow a `:` is stripped, so a
  *  `scheme://` literal survives.) */
 function code(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 function read(relative: string): string {
-  return code(
-    readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8'),
-  );
+  return code(readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8'));
 }
 
 describe('findAgentDirectPair — existing line, or a draft', () => {
@@ -111,9 +107,7 @@ describe('findAgentDirectPair — existing line, or a draft', () => {
 
   it('finds the line the viewer already has with that agent', () => {
     const mine = agentPair('c-mine', 'a-target');
-    expect(
-      findAgentDirectPair([agentPair('c-other', 'a-other'), mine], 'a-target'),
-    ).toEqual(mine);
+    expect(findAgentDirectPair([agentPair('c-other', 'a-other'), mine], 'a-target')).toEqual(mine);
   });
 
   it('finds it even when the agent is gone — history beats a door that answers 404', () => {
@@ -184,9 +178,7 @@ describe('decideDirectPairsInvalidation — which viewer frame re-reads the list
 
   it('ignores non-event frames and an event with no kind', () => {
     for (const type of ['ack', 'subscribed', 'pong', 'error']) {
-      expect(
-        decideDirectPairsInvalidation({ type, kind: 'direct_pairs_changed' }),
-      ).toBe(false);
+      expect(decideDirectPairsInvalidation({ type, kind: 'direct_pairs_changed' })).toBe(false);
     }
     expect(decideDirectPairsInvalidation({ type: 'event' })).toBe(false);
   });
@@ -341,7 +333,9 @@ describe('projectDirectPairAssignee — the DM task-assignee domain (#task:2041,
   });
 
   it('offers the active counterpart when it is NOT the current assignee', () => {
-    expect(projectDirectPairAssignee(activeAgentPane('a-1', 'alice', 'Alice'), 'someone-else')).toEqual({
+    expect(
+      projectDirectPairAssignee(activeAgentPane('a-1', 'alice', 'Alice'), 'someone-else'),
+    ).toEqual({
       status: 'ready',
       candidates: [{ id: 'a-1', name: 'alice', displayName: 'Alice', isCurrent: false }],
     });
@@ -395,7 +389,10 @@ describe('projectDirectPairAssignee — the DM task-assignee domain (#task:2041,
         created_at: 1,
       },
     };
-    expect(projectDirectPairAssignee(deletedPane, null)).toEqual({ status: 'ready', candidates: [] });
+    expect(projectDirectPairAssignee(deletedPane, null)).toEqual({
+      status: 'ready',
+      candidates: [],
+    });
   });
 
   it('reports loading for the non-answers (resolving / idle), never "no agent"', () => {
@@ -492,7 +489,7 @@ describe('directPairPaneProps — every state has a rendering (the consumer half
       { kind: 'error' },
       { kind: 'absent' },
     ];
-    const rendered = states.map(s => JSON.stringify(props(s)));
+    const rendered = states.map((s) => JSON.stringify(props(s)));
     expect(new Set(rendered).size).toBe(states.length);
   });
 });
@@ -557,9 +554,9 @@ describe('decideDraftHandoff — when the draft pane may leave for the real pair
     expect(decideDraftHandoff(facts({ sendFailed: true }))).toEqual({
       kind: 'stay',
     });
-    expect(
-      decideDraftHandoff(facts({ sendFailed: true, draftDirty: true })),
-    ).toEqual({ kind: 'stay' });
+    expect(decideDraftHandoff(facts({ sendFailed: true, draftDirty: true }))).toEqual({
+      kind: 'stay',
+    });
   });
 
   it('carries the pair id through untouched — the pane never invents a destination', () => {
@@ -574,7 +571,7 @@ describe('the draft pane is per-agent, and defers to the pure handoff rule', () 
   const paneSource = read('./DirectPairDraftPane.tsx');
   const appSource = read('../../App.tsx');
   const contentSource = read('../conversation-shell/conversation-content.tsx');
-  const controllerSource = read('../conversation-shell/use-conversation-shell.ts');
+  const controllerSource = read('../conversation-shell/use-conversation-read-model.ts');
   const signalsSource = read('../app-shell/application-signals.ts');
 
   it('remounts on agent identity — a draft written to A can never be sent to B', () => {
@@ -595,12 +592,10 @@ describe('the live-discovery subscription is mounted once, by the session', () =
   const hooksSource = read('./hooks.ts');
   const appSource = read('../../App.tsx');
   const contentSource = read('../conversation-shell/conversation-content.tsx');
-  const controllerSource = read('../conversation-shell/use-conversation-shell.ts');
+  const controllerSource = read('../conversation-shell/use-conversation-read-model.ts');
   const signalsSource = read('../app-shell/application-signals.ts');
   const shellSource = read('../app-shell/effects.ts');
-  const panelSource = read(
-    '../../components/layout/DirectMessagesPanel.tsx',
-  );
+  const panelSource = read('../../components/layout/DirectMessagesPanel.tsx');
 
   /** The body of a top-level `function <name>(`, up to the next top-level
    *  declaration. Lets a count be attributed to ONE component instead of to a
@@ -614,18 +609,12 @@ describe('the live-discovery subscription is mounted once, by the session', () =
   }
 
   it('the comment stripper actually strips — otherwise the counts below prove nothing', () => {
-    expect(code('a\n// useDirectPairsSync();\nb')).not.toContain(
-      'useDirectPairsSync',
-    );
-    expect(code('/* useDirectPairsSync(); */')).not.toContain(
-      'useDirectPairsSync',
-    );
-    expect(code("const u = 'silverhand://agent/alice';")).toContain(
-      'silverhand://agent/alice',
-    );
+    expect(code('a\n// useDirectPairsSync();\nb')).not.toContain('useDirectPairsSync');
+    expect(code('/* useDirectPairsSync(); */')).not.toContain('useDirectPairsSync');
+    expect(code("const u = 'silverhand://agent/alice';")).toContain('silverhand://agent/alice');
   });
 
-  it('the function slicer actually slices — a neighbour\'s body must not count', () => {
+  it("the function slicer actually slices — a neighbour's body must not count", () => {
     const src = 'function A() {\n  mount();\n}\nfunction B() {\n  mount();\n}\n';
     expect(topLevelFunction(src, 'A').split('mount()').length - 1).toBe(1);
   });
@@ -642,7 +631,10 @@ describe('the live-discovery subscription is mounted once, by the session', () =
     // gates have each returned first.
     const shellComponent = topLevelFunction(appSource, 'RegisteredAppShell');
     expect(shellComponent.split('useApplicationSignals()').length - 1).toBe(1);
-    expect(topLevelFunction(signalsSource, 'useApplicationSignals').split('useAppShellGlobalSync()').length - 1).toBe(1);
+    expect(
+      topLevelFunction(signalsSource, 'useApplicationSignals').split('useAppShellGlobalSync()')
+        .length - 1,
+    ).toBe(1);
     // And nowhere else in App — a second call would double every invalidation,
     // and a call in a pre-auth branch would subscribe with no viewer.
     expect(appSource.split('useApplicationSignals()').length - 1).toBe(1);
@@ -679,9 +671,7 @@ describe('the live-discovery subscription is mounted once, by the session', () =
     // handed to the pane rather than dropped.
     expect(controllerSource).toContain('directPairPaneProps(');
     expect(contentSource).toContain('notFound={directPairNotFound}');
-    expect(read('../../components/layout/ChannelView.tsx')).toContain(
-      'props.notFound',
-    );
+    expect(read('../../components/layout/ChannelView.tsx')).toContain('props.notFound');
   });
 });
 
@@ -786,9 +776,7 @@ describe('DIRECT_PAIRS_QUERY_POLICY — one more reader costs no request', () =>
     // mount refetch invisibly: whichever hook mounts first owns the entry, so
     // neither call site would look wrong.
     const hooksSource = read('./hooks.ts');
-    expect(hooksSource).toContain(
-      'useQuery<DirectPairListResponse>(directPairsQueryOptions())',
-    );
+    expect(hooksSource).toContain('useQuery<DirectPairListResponse>(directPairsQueryOptions())');
     expect(hooksSource.split('staleTime:').length - 1).toBe(1);
     expect(hooksSource).toContain('staleTime: DIRECT_PAIRS_QUERY_POLICY.staleMs');
     // The policy is a value, not a literal buried in the query config.

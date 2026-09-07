@@ -15,7 +15,7 @@ import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDial
 import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
 import { WorkspaceSettingsDialog } from '@/features/workspaces/WorkspaceSettingsDialog';
 import { workspaceCapabilities } from '@/features/workspaces/workspace-capabilities';
-import type { ConversationShellModel } from '@/features/conversation-shell/use-conversation-shell';
+import type { ChatShellModel } from '@/features/conversation-shell/conversation-shell-models';
 import type { ConversationContent } from '@/features/conversation-shell/conversation-content';
 import { ConversationStage } from '@/features/conversation-shell/conversation-stage';
 
@@ -24,7 +24,7 @@ export function ChatShell({
   content,
   fullscreen,
 }: {
-  model: ConversationShellModel['chat'];
+  model: ChatShellModel;
   content: ConversationContent;
   fullscreen: boolean;
 }) {

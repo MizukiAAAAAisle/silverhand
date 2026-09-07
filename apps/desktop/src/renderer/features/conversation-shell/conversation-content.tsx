@@ -8,9 +8,9 @@ import { AgentView } from '@/features/agents/AgentView';
 import { SideUnresolvedPlaceholder } from '@/components/layout/SideUnresolvedPlaceholder';
 import { ConversationPaneCapabilitiesProvider } from '@/features/conversations/pane-capabilities-context';
 import { DirectPairDraftPane } from '@/features/direct-pairs/DirectPairDraftPane';
-import type { ConversationShellModel } from './use-conversation-shell';
+import type { ConversationPanesModel } from './conversation-shell-models';
 
-export function renderConversationPanes(model: ConversationShellModel['panes']) {
+export function renderConversationPanes(model: ConversationPanesModel) {
   const {
     nav,
     selectedWorkspaceId,
@@ -20,7 +20,7 @@ export function renderConversationPanes(model: ConversationShellModel['panes']) 
     agentPanelId,
     requestJump,
     workspaceNameById,
-    archiveChannel,
+    archivePending,
     handleOpenAdvancedSearch,
     directPair,
     directPairLoadFailed,
@@ -130,7 +130,7 @@ export function renderConversationPanes(model: ConversationShellModel['panes']) 
       onRenameChannel={handleRenameChannelMutation}
       onSetChannelVisibility={handleSetChannelVisibilityMutation}
       onLeaveChannel={handleLeaveChannelMutation}
-      archivePending={archiveChannel.isPending}
+      archivePending={archivePending}
       conversationRefsById={conversationRefsById}
       onOpenConversationRef={nav.openSide}
       onOpenChannelRef={handleOpenChannelByName}
@@ -268,7 +268,7 @@ export function renderConversationPanes(model: ConversationShellModel['panes']) 
           // not the primary's.
           onArchiveChannel={handleArchiveSecondaryChannelMutation}
           onRenameChannel={handleRenameSecondaryChannelMutation}
-          archivePending={archiveChannel.isPending}
+          archivePending={archivePending}
           conversationRefsById={conversationRefsById}
           onOpenConversationRef={nav.openSide}
           onOpenChannelRef={handleOpenChannelByName}
