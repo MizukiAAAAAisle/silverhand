@@ -5,15 +5,6 @@
    NavRail / titlebar / 四周水槽都不给自己的纸，直接站在渐变上。定位是"有天光的
    亮色工作台"：整屏只有一块饱和色（紫），其余全是暖中性墨。
 
-   来源与取样纪律（2026-08-11，shiki 给的参照图 `buzz.png`）：图出自开源
-   **block/buzz**，所以渐变值不是目测而是从上游 token 抄的
-   （`desktop/src/shared/styles/globals/theme.css` 的
-   `--buzz-gradient-light-top` / `-bottom`）：`#e6e6b6 → #c4d0da`，纯两档
-   `to bottom`。取样只用来校验（我实测两端各差 1~2/255）—— "三档还是两档"这种
-   结构只有源码能给，取样会把噪声读成中间停靠点。
-   沿窗口右/下边缘逐 px 探过之后才发现白色工作区其实是**内缩的圆角白纸**，
-   这条构造同时满足了他两句看似矛盾的要求：「两边都白」+「背景要渐变」。
-
    三条创始原则：
    1. **两层纸，层级由"哪张纸"决定，不由明度阶梯决定**：渐变纸（chrome）→
       白纸（内容）。白纸内部**没有 gap**，所以内部分区靠 1px hairline，
@@ -25,18 +16,6 @@
       （为白纸调的白/暖中性填充压到渐变上会读成一块补丁）。
    3. **utility 不吃 accent**：hover / focus / 分隔线 / splitter / row-hover 一律
       中性墨。唯一例外是 composer（brand-anchored 主舞台）的 focus 光。
-
-   accent 为什么是这一支紫（判据是 grep 出来的 hue 预算，不是品味）：
-   - 先把 roster 的五个语义 token 逐主题列出来，才发现最直觉的做法全撞：
-     苔绿 `#9CBF5C` 已被 forza6 与 slack-dark **共用作 commit fill**、蓝
-     `#2F5AD0` 被 studio-light 占、琥珀在三个主题里都是 `--warning`。从参照图
-     纸色里取深档（橄榄 / 石板蓝）正好落在这几段上 ⇒ 空缺的是紫。
-   - 代价明写：紫同时是品牌、commit、accent、选中洗色。所以**选中行是 12% 紫洗
-     + 墨字**，不是满色紫填充 —— 白地面上一整行满色紫太响；而 studio-light
-     「选中给一张白纸」那招在这里用不了（地面已经是白的）。
-
-   与另外三个槽的分工：forza6 = 响亮亮色海报，slack-dark = 暗色，
-   studio-light = 安静冷白，iris = 有天光的暖白（唯一一个 chrome 不是纯色的）。
    ================================================================ */
 
 [data-theme='iris'] {
