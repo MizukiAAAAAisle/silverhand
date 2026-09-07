@@ -34,11 +34,13 @@ export function messageActivityCalendar(
   const end = new Date(`${range.end}T00:00:00Z`);
   const offset = first.getUTCDay();
   const length = Math.ceil(((end.getTime() - first.getTime()) / 86_400_000 + 1 + offset) / 7) * 7;
-  const counts = new Map(days.map(day => [day.date, day.count]));
+  const counts = new Map(days.map((day) => [day.date, day.count]));
   return Array.from({ length }, (_, index) => {
-    const date = new Date(first.getTime() + (index - offset) * 86_400_000).toISOString().slice(0, 10);
+    const date = new Date(first.getTime() + (index - offset) * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
     const visible = date >= range.start && date <= range.end && date <= today;
-    return { date, count: visible ? counts.get(date) ?? 0 : 0, visible };
+    return { date, count: visible ? (counts.get(date) ?? 0) : 0, visible };
   });
 }
 
