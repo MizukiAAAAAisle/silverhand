@@ -19,11 +19,14 @@
     "package:dir": "./scripts/package.sh --dir",
     "smoke:embedded-backend": "./packages/cli/node_modules/.bin/tsx scripts/smoke-embedded-rust-backend.mts",
     "clean": "pnpm -r exec rm -rf dist node_modules/.cache",
-    "perf:client": "node scripts/client-performance/run.mjs"
+    "perf:client": "node scripts/client-performance/run.mjs",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check"
   },
   "devDependencies": {
     "@types/node": "^22.7.5",
     "node-abi": "^4.28.0",
+    "oxfmt": "0.66.0",
     "typescript": "^5.6.3",
     "ws": "^8.20.0"
   }
